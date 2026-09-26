@@ -297,8 +297,15 @@ export function buildPluginManifestRegistry(
       }));
   const discovered = new Set(discovery.diagnostics);
   const diagnostics: PluginDiagnostic[] = [...discovered];
-  const candidates: PluginCandidate[] = discovery.candidates;
+  // Decide explicit overrides before diagnosing lower-precedence collisions.
+  const candidates = discovery.candidates.toSorted(
+    (left, right) =>
+      Number(right.origin === "config" || right.configSelected === true) -
+      Number(left.origin === "config" || left.configSelected === true),
+  );
   const seenIds = new Map<string, SeenIdEntry>();
+  const manifestWarnings = new Map<string, string[]>();
+  const reportedExplicitOverrides = new Set<string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
   const explicitConfiguredFileSources = new Set(
     normalized.loadPaths
@@ -364,6 +371,9 @@ export function buildPluginManifestRegistry(
           : {}),
       });
       continue;
+    }
+    if ("warnings" in manifestRes && manifestRes.warnings) {
+      manifestWarnings.set(manifestRes.manifestPath, manifestRes.warnings);
     }
     const manifest = manifestRes.manifest;
     const effectivePluginId = candidate.effectivePluginId ?? manifest.id;
@@ -546,13 +556,24 @@ export function buildPluginManifestRegistry(
           env,
           installRecords: getInstallRecords(),
         });
+      const explicitOverride =
+        !staleForeignPin &&
+        Math.min(candidateRank, existingRank) === 0 &&
+        candidateRank !== existingRank;
+      if (explicitOverride) {
+        if (reportedExplicitOverrides.has(effectivePluginId)) {
+          continue;
+        }
+        reportedExplicitOverrides.add(effectivePluginId);
+      }
       diagnostics.push({
-        level: "warn",
+        level: explicitOverride ? "info" : "warn",
+        ...(explicitOverride ? { code: "explicit-config-plugin-selection" as const } : {}),
         pluginId: effectivePluginId,
         source: overriddenCandidate.source,
         message: staleForeignPin
           ? `stale plugin install record: "${effectivePluginId}" is pinned to ${overriddenCandidate.rootDir}, which belongs to a different OpenClaw installation. This installation's bundled plugin is being used instead. No uninstall is needed to use the bundled plugin. Uninstalling, even with \`--keep-files\`, removes plugin configuration; re-enabling does not restore it.`
-          : winnerCandidate.origin === "config"
+          : explicitOverride
             ? `duplicate plugin id resolved by explicit config-selected plugin; ${overriddenCandidate.origin} plugin will be overridden by config plugin (${winnerCandidate.source})`
             : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
       });
@@ -565,6 +586,14 @@ export function buildPluginManifestRegistry(
   const records = [...seenIds.values()].map(({ record }) => record);
   const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
   for (const record of plugins) {
+    for (const warning of manifestWarnings.get(record.manifestPath) ?? []) {
+      diagnostics.push({
+        level: "warn",
+        pluginId: sanitizeForLog(record.id),
+        source: sanitizeForLog(record.manifestPath),
+        message: sanitizeForLog(warning),
+      });
+    }
     pushNonBundledChannelConfigDescriptorDiagnostic({ record, diagnostics, normalized });
   }
   const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };

@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -28,6 +29,7 @@ import {
   summarizeMockInferenceRequest,
   type MockInferenceFacts,
 } from "./e2e/lib/mock-inference-facts.ts";
+import { createActivitySummaryDiagnostics } from "./lib/gateway-bench-activity-summary.ts";
 import {
   startGatewayBrowserProbe,
   type BrowserSessionClick,
@@ -136,6 +138,9 @@ type MainProfileArtifacts = {
 };
 
 type BenchmarkRun = {
+  activitySummaryDiagnostics?: ReturnType<
+    ReturnType<typeof createActivitySummaryDiagnostics>["finish"]
+  >;
   agentCoverage?: {
     configuredAgentIds: string[];
     activeTurnAgentIds: string[];
@@ -210,6 +215,51 @@ type BenchmarkRun = {
   turnsDurationMs: number;
 };
 
+type BenchmarkFailurePhase = "workload" | "diagnostics" | "cleanup";
+
+type BenchmarkPartialRun = Partial<
+  Omit<
+    BenchmarkRun,
+    | "memory"
+    | "freshConnection"
+    | "cpuUsage"
+    | "probeWarmup"
+    | "loadWindow"
+    | "agentWarmup"
+    | "liveProof"
+  >
+> & {
+  memory: {
+    before: GatewayMemorySample | null;
+    after: GatewayMemorySample | null;
+    peakRssMb: number | null;
+  };
+  freshConnection: FreshConnectionProbe | null;
+  cpuUsage: GatewayCpuUsage | null;
+  probeWarmup: { durationMs: number | null; samples: GatewaySample[] };
+  liveProof?: BenchmarkRun["liveProof"] | ReturnType<LiveGatewayEvidence["snapshot"]>;
+  loadWindow?: { startMonotonicMicros: number; endMonotonicMicros: number | null };
+  agentWarmup?: Omit<BenchmarkRun["agentWarmup"], "turnEvidence"> & {
+    turnEvidence: BenchmarkRun["turnEvidence"] | null;
+  };
+};
+
+type BenchmarkAttempt =
+  | { status: "success"; run: BenchmarkRun }
+  | {
+      status: "failure";
+      errors: Array<{ phase: BenchmarkFailurePhase; error: string }>;
+      partialRun: BenchmarkPartialRun;
+      cleanup: { rootRemoved: boolean | null };
+      mockProviderExit?: Awaited<ReturnType<typeof stopChild>>;
+      mockProviderProcess?: BenchmarkRun["gatewayProcess"];
+    };
+
+type FailedBenchmarkAttempt = Extract<BenchmarkAttempt, { status: "failure" }> & {
+  phase: "warmup" | "measured";
+  index: number;
+};
+
 type CliOptions = {
   provider: "mock" | "openai";
   agentCount: number;
@@ -224,6 +274,7 @@ type CliOptions = {
   loadCpuProfDir?: string;
   heapProfDir?: string;
   diagnosticsTimeline: boolean;
+  activitySummaryDiagnostics: boolean;
   entry: string;
   historyBurst: number;
   historyClients: number;
@@ -292,6 +343,7 @@ const BOOLEAN_FLAGS = new Set([
   "--json",
   "--control-plane",
   "--no-diagnostics-timeline",
+  "--activity-summary-diagnostics",
   "--tool-events",
   "--visible-observer",
   "--workspace-fanout",
@@ -398,6 +450,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     loadCpuProfDir: resolveOutputPath(parseFlagValue(argv, "--load-cpu-prof-dir")),
     heapProfDir: resolveOutputPath(parseFlagValue(argv, "--heap-prof-dir")),
     diagnosticsTimeline: !hasFlag(argv, "--no-diagnostics-timeline"),
+    activitySummaryDiagnostics: hasFlag(argv, "--activity-summary-diagnostics"),
     entry: resolveEntry(parseFlagValue(argv, "--entry"), DEFAULT_ENTRY),
     historyBurst: parseBoundedPositiveInt(
       parseFlagValue(argv, "--history-burst"),
@@ -516,6 +569,9 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     ),
     workspaceFanout: hasFlag(argv, "--workspace-fanout"),
   };
+  if (options.activitySummaryDiagnostics && provider !== "mock") {
+    throw new CliArgumentError("--activity-summary-diagnostics requires the mock provider");
+  }
   if (options.gatewayCpus !== undefined && !/^\d+(?:,\d+)*$/u.test(options.gatewayCpus)) {
     throw new CliArgumentError("--gateway-cpus requires comma-separated CPU numbers");
   }
@@ -602,6 +658,7 @@ Options:
   --history-burst <n> Parallel history requests per prefetch client (default: 5)
   --subscribers <n> Dedicated session-message subscription clients
   --stream-chunk-delay-ms <n> Mock-provider delay between stream chunks (default: ${MOCK_RESPONSE_CHUNK_DELAY_MS})
+  --activity-summary-diagnostics Retain bounded passive recap states/errors (mock only; changes logging, not performance proof)
   --visible-observer Mark subscribed clients visible to exercise session observation
   --no-diagnostics-timeline Disable diagnostics timeline file writes
   --plugin-count <n> Configure synthetic plugins through plugins.load.paths (default: 0)
@@ -609,7 +666,7 @@ Options:
   --workspace-fanout Bind each session to a distinct workspace
   --max-control-ms   Fail when any load-phase health/control probe exceeds this bound
   --max-handshake-ms Fail when a fresh authenticated connection exceeds this bound
-  --output <path>    Write machine-readable JSON to a file
+  --output <path>    Write JSON, including partial evidence when an attempt fails
   --json             Emit machine-readable JSON
   --help, -h         Show this text
 `);
@@ -770,7 +827,10 @@ async function requestHttp(params: {
   });
 }
 
-function describeProbeError(error: unknown): string {
+function describeProbeError(error: unknown, activitySummaryDiagnostics = false): string {
+  if (activitySummaryDiagnostics) {
+    return "Probe failed; error details omitted in activity-summary diagnostics mode";
+  }
   return sliceUtf16Safe(error instanceof Error ? error.message : String(error), 0, 500);
 }
 
@@ -792,9 +852,14 @@ function tailLines(output: string, lineCount: number): string {
   return output.trimEnd().split(/\r?\n/u).slice(-lineCount).join("\n");
 }
 
-function captureChildOutput(child: ChildProcess): {
+function captureChildOutput(
+  child: ChildProcess,
+  onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void,
+): {
   readOutput: () => string;
   readStderrTail: () => string;
+  readFailureOutput: () => string;
+  suppressFailureOutput: boolean;
 } {
   if (!child.stdout || !child.stderr) {
     throw new Error("Gateway benchmark children require piped stdout and stderr");
@@ -804,28 +869,45 @@ function captureChildOutput(child: ChildProcess): {
   const appendOutput = (chunk: Buffer) => {
     output = sliceUtf16Safe(`${output}${chunk.toString("utf8")}`, -64 * 1_024);
   };
-  child.stdout.on("data", appendOutput);
+  child.stdout.on("data", (chunk: Buffer) => {
+    appendOutput(chunk);
+    onOutput?.("stdout", chunk);
+  });
   child.stderr.on("data", (chunk: Buffer) => {
     appendOutput(chunk);
     stderr = sliceUtf16Safe(`${stderr}${chunk.toString("utf8")}`, -64 * 1_024);
+    onOutput?.("stderr", chunk);
   });
   return {
     readOutput: () => output,
-    readStderrTail: () => tailLines(stderr, GATEWAY_STDERR_TAIL_LINES),
+    suppressFailureOutput: Boolean(onOutput),
+    // Debug JSON carries arbitrary error metadata; only the bounded projector may retain it.
+    readStderrTail: () => (onOutput ? "" : tailLines(stderr, GATEWAY_STDERR_TAIL_LINES)),
+    readFailureOutput: () =>
+      onOutput ? "Gateway diagnostic output omitted; inspect activitySummaryDiagnostics" : output,
   };
 }
 
 function formatRunFailure(
   error: unknown,
-  gatewayOutput: { readOutput: () => string; readStderrTail: () => string },
+  gatewayOutput: {
+    readOutput: () => string;
+    readStderrTail: () => string;
+    readFailureOutput?: () => string;
+    suppressFailureOutput?: boolean;
+  },
   mockOutput: { readOutput: () => string },
 ): string {
+  if (gatewayOutput.suppressFailureOutput) {
+    return "Gateway benchmark failed; raw output omitted in activity-summary diagnostics mode";
+  }
+  const output = gatewayOutput.readFailureOutput?.() ?? gatewayOutput.readOutput();
   return [
     error instanceof Error ? error.message : String(error),
     gatewayOutput.readStderrTail()
       ? `gateway stderr tail:\n${gatewayOutput.readStderrTail()}`
       : "gateway stderr tail: (empty)",
-    gatewayOutput.readOutput() ? `gateway output tail:\n${gatewayOutput.readOutput()}` : "",
+    output ? `gateway output tail:\n${output}` : "",
     mockOutput.readOutput() ? `mock provider output tail:\n${mockOutput.readOutput()}` : "",
   ]
     .filter(Boolean)
@@ -1067,6 +1149,7 @@ function buildConfig(
   browserSessionClicks: number,
   agentIds: string[],
   provider: CliOptions["provider"],
+  activitySummaryDiagnostics = false,
 ): string {
   const controlUiRoot = path.join(root, "control-ui");
   mkdirSync(controlUiRoot, { recursive: true });
@@ -1089,6 +1172,9 @@ function buildConfig(
   }
 
   const config = structuredClone(BASE_GATEWAY_BENCH_CONFIG) as Record<string, unknown>;
+  if (activitySummaryDiagnostics) {
+    config.logging = { consoleLevel: "debug", consoleStyle: "json" };
+  }
   config.gateway = {
     ...(config.gateway as Record<string, unknown>),
     controlUi: { enabled: true, root: controlUiRoot },
@@ -1096,6 +1182,8 @@ function buildConfig(
   if (provider === "openai") {
     configureLiveGatewayBenchmark(config, root, concurrency);
   } else {
+    // The mock emits shell exec calls, not Code Mode JavaScript cells.
+    config.tools = { codeMode: false };
     applyMockOpenAiModelConfig(config, {
       mockPort,
       modelRef: "openai/gpt-5.6-luna",
@@ -1156,8 +1244,6 @@ async function connectGateway(
     url: `ws://127.0.0.1:${port}`,
     onEvent,
   });
-  await client.waitOpen();
-
   const requestRpc = async <T>(
     method: string,
     params: unknown,
@@ -1184,47 +1270,53 @@ async function connectGateway(
     return response.payload as T;
   };
 
-  await requestRpc("connect", {
-    minProtocol: protocolVersion,
-    maxProtocol: protocolVersion,
-    client: {
-      id: "gateway-client",
-      displayName: "gateway-concurrency-benchmark",
-      version: "1.0.0",
-      platform: process.platform,
-      mode: "backend",
-    },
-    role: "operator",
-    scopes: ["operator.read", "operator.write", "operator.admin"],
-    caps: [],
-  });
-  if (subscribeSessions) {
-    await requestRpc("sessions.subscribe", {});
+  try {
+    await client.waitOpen();
+    await requestRpc("connect", {
+      minProtocol: protocolVersion,
+      maxProtocol: protocolVersion,
+      client: {
+        id: "gateway-client",
+        displayName: "gateway-concurrency-benchmark",
+        version: "1.0.0",
+        platform: process.platform,
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.read", "operator.write", "operator.admin"],
+      caps: [],
+    });
+    if (subscribeSessions) {
+      await requestRpc("sessions.subscribe", {});
+    }
+    return {
+      close: client.close,
+      waitClosed: () =>
+        new Promise<void>((resolve, reject) => {
+          if (client.ws.readyState === client.ws.CLOSED) {
+            resolve();
+            return;
+          }
+          const onClose = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          const timer = setTimeout(() => {
+            client.ws.off("close", onClose);
+            reject(new Error("benchmark event client did not close"));
+          }, HTTP_TIMEOUT_MS);
+          timer.unref();
+          client.ws.once("close", onClose);
+        }),
+      request: requestRpc,
+      setDeadlineAt: (value: number) => {
+        requestDeadlineAt = value;
+      },
+    };
+  } catch (error) {
+    client.close();
+    throw error;
   }
-  return {
-    close: client.close,
-    waitClosed: () =>
-      new Promise<void>((resolve, reject) => {
-        if (client.ws.readyState === client.ws.CLOSED) {
-          resolve();
-          return;
-        }
-        const onClose = () => {
-          clearTimeout(timer);
-          resolve();
-        };
-        const timer = setTimeout(() => {
-          client.ws.off("close", onClose);
-          reject(new Error("benchmark event client did not close"));
-        }, HTTP_TIMEOUT_MS);
-        timer.unref();
-        client.ws.once("close", onClose);
-      }),
-    request: requestRpc,
-    setDeadlineAt: (value: number) => {
-      requestDeadlineAt = value;
-    },
-  };
 }
 
 function readGatewayProcessRssMb(pid: number | undefined): number | null {
@@ -1249,6 +1341,7 @@ async function timeRpcProbe(
   method: string,
   params: unknown,
   runStartedAt: number,
+  activitySummaryDiagnostics = false,
 ): Promise<TimedProbe> {
   const startedAt = performance.now();
   try {
@@ -1262,7 +1355,7 @@ async function timeRpcProbe(
   } catch (error) {
     return {
       atMs: startedAt - runStartedAt,
-      error: describeProbeError(error),
+      error: describeProbeError(error, activitySummaryDiagnostics),
       latencyMs: performance.now() - startedAt,
       ok: false,
     };
@@ -1500,9 +1593,13 @@ async function runSessionTurns(
     evidence?: ReturnType<typeof createTurnEvidence>;
     accounting?: BenchmarkRun["turnAccounting"];
     live?: LiveGatewayEvidence;
+    stopped?: () => boolean;
   },
 ): Promise<number> {
   for (let turn = 0; turn < options.turnsPerSession; turn += 1) {
+    if (options.stopped?.()) {
+      return turn;
+    }
     requireRemainingMs(deadlineAt, `starting session ${index + 1} turn ${turn + 1}`);
     await runTurn(rpc, index * options.turnsPerSession + turn, deadlineAt, options.toolEvents, {
       sessionKey: options.sessionKey,
@@ -1522,6 +1619,7 @@ async function sampleGateway(params: {
   rpc: GatewayRpc;
   runStartedAt: number;
   serial?: boolean;
+  activitySummaryDiagnostics?: ReturnType<typeof createActivitySummaryDiagnostics>;
 }): Promise<GatewaySample> {
   const atMs = performance.now() - params.runStartedAt;
   const safeHttpProbe = async (pathValue: string, accept: string) => {
@@ -1540,7 +1638,7 @@ async function sampleGateway(params: {
     } catch (error) {
       return {
         body: "",
-        error: describeProbeError(error),
+        error: describeProbeError(error, Boolean(params.activitySummaryDiagnostics)),
         latencyMs: performance.now() - startedAt,
         ok: false,
         status: 0,
@@ -1557,10 +1655,12 @@ async function sampleGateway(params: {
         {},
         Math.min(HTTP_TIMEOUT_MS, requireRemainingMs(params.deadlineAt, "probing sessions.list")),
       );
-      return { error: null, latencyMs: performance.now() - startedAt, ok: true, payload };
+      const latencyMs = performance.now() - startedAt;
+      params.activitySummaryDiagnostics?.onProbe(payload);
+      return { error: null, latencyMs, ok: true, payload };
     } catch (error) {
       return {
-        error: describeProbeError(error),
+        error: describeProbeError(error, Boolean(params.activitySummaryDiagnostics)),
         latencyMs: performance.now() - startedAt,
         ok: false,
         payload: null,
@@ -1620,9 +1720,10 @@ async function warmGatewayProbes(params: {
   sample: (deadlineAt: number) => Promise<GatewaySample>;
   retryDelayMs?: number;
   targetMs?: number;
+  samples?: GatewaySample[];
 }): Promise<{ durationMs: number; samples: GatewaySample[] }> {
   const startedAt = performance.now();
-  const samples: GatewaySample[] = [];
+  const samples = params.samples ?? [];
   const targetMs = params.targetMs ?? PROBE_WARMUP_TARGET_MS;
   while (remainingMs(params.deadlineAt) > 0) {
     const sample = await params.sample(params.deadlineAt);
@@ -1685,6 +1786,29 @@ async function runProbeRounds(params: {
   return completed;
 }
 
+function observeBenchmarkChild(child: ChildProcess) {
+  let exitEvent: GatewayChildExit | undefined;
+  let closeEvent: GatewayChildExit | undefined;
+  const observation = (exitCode: number | null, signal: string | null) => ({
+    atMonotonicMicros: Number(process.hrtime.bigint() / 1_000n),
+    exitCode,
+    signal,
+  });
+  child.once("exit", (code, signal) => {
+    exitEvent = observation(code, signal);
+  });
+  child.once("close", (code, signal) => {
+    closeEvent = observation(code, signal);
+  });
+  return () => ({
+    pid: child.pid,
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+    exitEvent,
+    closeEvent,
+  });
+}
+
 async function runGatewaySample(options: {
   provider: CliOptions["provider"];
   output?: string;
@@ -1698,6 +1822,7 @@ async function runGatewaySample(options: {
   controlPlane: boolean;
   deadlineAt: number;
   diagnosticsTimeline: boolean;
+  activitySummaryDiagnostics: boolean;
   entry: string;
   cpuProfDir?: string;
   loadCpuProfDir?: string;
@@ -1718,59 +1843,79 @@ async function runGatewaySample(options: {
   turnsPerSession: number;
   visibleObserver: boolean;
   workspaceFanout: boolean;
-}): Promise<BenchmarkRun> {
-  if (options.provider === "openai" && !process.env.OPENAI_API_KEY?.trim()) {
-    throw new Error("OpenAI benchmark requires OPENAI_API_KEY");
-  }
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-concurrency-"));
-  const [port, mockPort] = await Promise.all([
-    getFreePort(),
-    options.provider === "mock" ? getFreePort() : Promise.resolve(0),
-  ]);
-  const runStartedAt = performance.now();
+}): Promise<BenchmarkAttempt> {
+  let runStartedAt = performance.now();
+  const partialRun: BenchmarkPartialRun = {
+    controlPlane: [],
+    controlUi: [],
+    history: [],
+    readyz: [],
+    sessionsList: [],
+    sessionUpdates: [],
+    messageSubscriptions: [],
+    messageSubscriptionsDuringLoad: [],
+    memory: { before: null, after: null, peakRssMb: null },
+    freshConnection: null,
+    cpuUsage: null,
+    probeWarmup: { durationMs: null, samples: [] },
+  };
+  const errors: Array<{ phase: BenchmarkFailurePhase; error: string }> = [];
+  const cleanup: { rootRemoved: boolean | null } = { rootRemoved: null };
+  let root: string | undefined;
+  let activityDiagnostics: ReturnType<typeof createActivitySummaryDiagnostics> | undefined;
+  let live: LiveGatewayEvidence | undefined;
   const agentIds = Array.from({ length: options.agentCount }, (_, index) =>
     index === 0 ? "main" : `bench-agent-${index + 1}`,
   );
-  const live =
-    options.provider === "openai"
-      ? createLiveGatewayEvidence(agentIds, options.turnsPerSession)
-      : undefined;
-  const timelinePath = path.join(root, "diagnostics-timeline.jsonl");
-  const requestLogPath = path.join(root, "mock-provider-requests.jsonl");
-  const responseControlPath = path.join(root, "mock-provider-responses.json");
-  const heapProfilePath = options.heapProfDir
-    ? path.resolve(options.heapProfDir, `gateway-load-${randomUUID()}.heapprofile`)
-    : undefined;
-  const loadCpuProfilePath = options.loadCpuProfDir
-    ? path.resolve(options.loadCpuProfDir, `gateway-load-${randomUUID()}.cpuprofile`)
-    : undefined;
-  const protocolVersion = await readGatewayProtocolVersion(options.entry);
   let gateway: ChildProcess | undefined;
   let mockProvider: ChildProcessWithoutNullStreams | undefined;
+  const spawnedChildren: ChildProcess[] = [];
   let client: Awaited<ReturnType<typeof connectGateway>> | undefined;
   let browserProbe: Awaited<ReturnType<typeof startGatewayBrowserProbe>> | undefined;
   const auxiliaryClients: Array<Awaited<ReturnType<typeof connectGateway>>> = [];
   let probesStopped = false;
-  const probeJobs: Promise<unknown>[] = [];
-  let gatewayOutput = { readOutput: () => "", readStderrTail: () => "" };
+  const pendingWork: Promise<unknown>[] = [];
+  const concurrently = <T>(work: readonly Promise<T>[]) => {
+    pendingWork.push(...work);
+    return Promise.all(work);
+  };
+  const ownClient = (connected: Awaited<ReturnType<typeof connectGateway>>) => {
+    if (probesStopped) {
+      connected.close();
+      throw new Error("benchmark attempt is stopping");
+    }
+    auxiliaryClients.push(connected);
+    return connected;
+  };
+  let gatewayOutput = {
+    readOutput: () => "",
+    readStderrTail: () => "",
+    readFailureOutput: () => "",
+    suppressFailureOutput: options.activitySummaryDiagnostics,
+  };
   let mockOutput = { readOutput: () => "", readStderrTail: () => "" };
-  let result: Omit<
-    BenchmarkRun,
-    "mockRequests" | "turnEvidence" | "providerRequests" | "agentWarmup"
-  >;
+  let result:
+    | Omit<BenchmarkRun, "mockRequests" | "turnEvidence" | "providerRequests" | "agentWarmup">
+    | undefined;
+  let completedRun: BenchmarkRun | undefined;
   const mockCheckpoints: MockRequestSnapshot[] = [];
   const turnEvidence = createTurnEvidence(options.toolEvents);
   let gatewayExit: Awaited<ReturnType<typeof stopChild>> | undefined;
-  let gatewayExitEvent: GatewayChildExit | undefined;
-  let gatewayCloseEvent: GatewayChildExit | undefined;
-  const readGatewayProcess = () => ({
-    pid: gateway?.pid,
-    exitCode: gateway?.exitCode,
-    signalCode: gateway?.signalCode,
-    exitEvent: gatewayExitEvent,
-    closeEvent: gatewayCloseEvent,
-  });
+  let readGatewayProcess: ReturnType<typeof observeBenchmarkChild> | undefined;
+  let readMockProviderProcess: ReturnType<typeof observeBenchmarkChild> | undefined;
+  let mockProviderExit: Awaited<ReturnType<typeof stopChild>> | undefined;
+  const recordFailure = (phase: BenchmarkFailurePhase, error: unknown) => {
+    errors.push({ phase, error: formatRunFailure(error, gatewayOutput, mockOutput) });
+  };
+  const captureFailure = async (phase: BenchmarkFailurePhase, work: () => void | Promise<void>) => {
+    try {
+      await work();
+    } catch (error) {
+      recordFailure(phase, error);
+    }
+  };
   let timelineWindow: { from: number; through: number } | undefined;
+  let timelineWindowComplete = false;
   const turnAccounting = { launched: 0, terminalOk: 0, verified: 0 };
   const agentWarmup = {
     durationMs: 0,
@@ -1780,19 +1925,52 @@ async function runGatewaySample(options: {
     beforeOrdinal: 0,
     afterOrdinal: 0,
   };
+  let agentWarmupStarted = false;
   let providerBeforeLoad: number | undefined;
   let providerAfterLoad: number | undefined;
 
   try {
+    if (options.provider === "openai" && !process.env.OPENAI_API_KEY?.trim()) {
+      throw new Error("OpenAI benchmark requires OPENAI_API_KEY");
+    }
+    const fixtureRoot = mkdtempSync(
+      path.join(realpathSync(tmpdir()), "openclaw-gateway-concurrency-"),
+    );
+    root = fixtureRoot;
+    cleanup.rootRemoved = false;
+    const [port, mockPort] = await Promise.all([
+      getFreePort(),
+      options.provider === "mock" ? getFreePort() : Promise.resolve(0),
+    ]);
+    runStartedAt = performance.now();
+    activityDiagnostics =
+      options.activitySummaryDiagnostics && options.provider === "mock"
+        ? createActivitySummaryDiagnostics(runStartedAt)
+        : undefined;
+    live =
+      options.provider === "openai"
+        ? createLiveGatewayEvidence(agentIds, options.turnsPerSession)
+        : undefined;
+    const timelinePath = path.join(fixtureRoot, "diagnostics-timeline.jsonl");
+    const requestLogPath = path.join(fixtureRoot, "mock-provider-requests.jsonl");
+    const responseControlPath = path.join(fixtureRoot, "mock-provider-responses.json");
+    const heapProfilePath = options.heapProfDir
+      ? path.resolve(options.heapProfDir, `gateway-load-${randomUUID()}.heapprofile`)
+      : undefined;
+    const loadCpuProfilePath = options.loadCpuProfDir
+      ? path.resolve(options.loadCpuProfDir, `gateway-load-${randomUUID()}.cpuprofile`)
+      : undefined;
+    const protocolVersion = await readGatewayProtocolVersion(options.entry);
     try {
       const configPath = buildConfig(
-        root,
+        fixtureRoot,
         mockPort,
         options.concurrency,
         options.pluginCount,
         options.browserSessionClicks,
         agentIds,
         options.provider,
+        Boolean(activityDiagnostics),
       );
       if (!live) {
         writeFileSync(
@@ -1822,7 +2000,9 @@ async function runGatewaySample(options: {
             SUCCESS_MARKER: STREAM_SUCCESS_MARKER,
           },
         });
+        readMockProviderProcess = observeBenchmarkChild(mockProvider);
         await once(mockProvider, "spawn");
+        spawnedChildren.push(mockProvider);
         mockOutput = captureChildOutput(mockProvider);
         await waitForMockServer(mockPort, options.deadlineAt);
         mockCheckpoints.push(await readMockRequests(mockPort, options.deadlineAt));
@@ -1859,7 +2039,7 @@ async function runGatewaySample(options: {
           detached: process.platform !== "win32",
           stdio: ["pipe", "pipe", "pipe", "ipc"],
           env: {
-            ...createGatewayBenchEnv(root, configPath, {
+            ...createGatewayBenchEnv(fixtureRoot, configPath, {
               caseEnv: {
                 ...(options.diagnosticsTimeline
                   ? {
@@ -1874,23 +2054,11 @@ async function runGatewaySample(options: {
           },
         },
       );
-      gateway.once("exit", (exitCode, signal) => {
-        gatewayExitEvent = {
-          atMonotonicMicros: Number(process.hrtime.bigint() / 1_000n),
-          exitCode,
-          signal,
-        };
-      });
-      gateway.once("close", (exitCode, signal) => {
-        gatewayCloseEvent = {
-          atMonotonicMicros: Number(process.hrtime.bigint() / 1_000n),
-          exitCode,
-          signal,
-        };
-      });
+      readGatewayProcess = observeBenchmarkChild(gateway);
       // A failed launch emits error instead of exit; reject into teardown before polling readiness.
       await once(gateway, "spawn");
-      gatewayOutput = captureChildOutput(gateway);
+      spawnedChildren.push(gateway);
+      gatewayOutput = captureChildOutput(gateway, activityDiagnostics?.onOutput);
       const ready = await waitForInitialProbe({
         deadlineAt: options.deadlineAt,
         isDone: () => gateway?.exitCode != null || gateway?.signalCode != null,
@@ -1899,10 +2067,11 @@ async function runGatewaySample(options: {
         startAt: runStartedAt,
       });
       if (ready.status !== 200) {
-        throw new Error(`gateway did not become ready\n${gatewayOutput.readOutput()}`);
+        throw new Error(`gateway did not become ready\n${gatewayOutput.readFailureOutput()}`);
       }
       await waitForGatewayDispatchReady(gatewayOutput.readOutput, options.deadlineAt);
       client = await connectGateway(port, options.deadlineAt, protocolVersion, true, (event) => {
+        activityDiagnostics?.onEvent(event);
         turnEvidence.onEvent(event);
         live?.onEvent(event);
       });
@@ -1917,6 +2086,7 @@ async function runGatewaySample(options: {
       const probeWarmupDeadlineAt = performance.now() + PROBE_WARMUP_TIMEOUT_MS;
       client.setDeadlineAt(probeWarmupDeadlineAt);
       const probeWarmup = await warmGatewayProbes({
+        samples: partialRun.probeWarmup.samples,
         deadlineAt: probeWarmupDeadlineAt,
         sample: (deadlineAt) =>
           sampleGateway({
@@ -1924,8 +2094,10 @@ async function runGatewaySample(options: {
             port,
             rpc,
             runStartedAt,
+            activitySummaryDiagnostics: activityDiagnostics,
           }),
       });
+      partialRun.probeWarmup = probeWarmup;
       const setupDeadlineAt = performance.now() + options.timeoutMs;
       const setupStartedAt = performance.now();
       if (!live) {
@@ -1953,16 +2125,16 @@ async function runGatewaySample(options: {
       if (prepareSessions) {
         let nextSessionIndex = 0;
         let seededSessionCount = 0;
-        await Promise.all(
+        await concurrently(
           Array.from({ length: Math.min(MAX_SESSION_SEED_CONCURRENCY, sessionCount) }, async () => {
             for (;;) {
               const index = nextSessionIndex++;
               const sessionKey = sessionKeys[index];
-              if (!sessionKey) {
+              if (!sessionKey || probesStopped) {
                 return;
               }
               const workspaceDir = options.workspaceFanout
-                ? path.join(root, `workspace-${index + 1}`)
+                ? path.join(fixtureRoot, `workspace-${index + 1}`)
                 : undefined;
               if (workspaceDir) {
                 mkdirSync(workspaceDir, { recursive: true });
@@ -1994,6 +2166,7 @@ async function runGatewaySample(options: {
         );
       }
       const sessionSeedDurationMs = performance.now() - sessionSeedStartedAt;
+      partialRun.sessionSeedDurationMs = sessionSeedDurationMs;
       const browserTargets: BrowserSessionTarget[] = [];
       const browserHistoryMessages = options.browserHistoryMessages;
       if (options.browserSessionClicks > 0) {
@@ -2036,6 +2209,15 @@ async function runGatewaySample(options: {
       }
       // Normal inventory maintenance can archive older fixture sessions while seeding.
       // Active turns and observers use the newest sessions; history still spans the inventory.
+      if (browserProbe && browserInventory) {
+        partialRun.browser = {
+          newPageReadyMs: browserProbe.newPageReadyMs,
+          initialSessionReadyMs: browserProbe.initialSessionReadyMs,
+          historyMessagesPerTarget: browserHistoryMessages,
+          inventory: browserInventory,
+          clicks: [],
+        };
+      }
       const turnSessionKeys = sessionKeys.slice(-options.concurrency);
       const turnAgentIds = sessionAgents.slice(-options.concurrency);
       const agentCoverage: BenchmarkRun["agentCoverage"] =
@@ -2048,6 +2230,7 @@ async function runGatewaySample(options: {
             }
           : undefined;
       if (agentCoverage) {
+        partialRun.agentCoverage = agentCoverage;
         for (const agentId of agentIds) {
           // Require published runtime facts before measuring the configured roster.
           const models = await rpc<ModelsListResult>("models.list", {
@@ -2064,7 +2247,7 @@ async function runGatewaySample(options: {
             throw new Error(`Configured benchmark model is not published for ${agentId}`);
           }
           const storePath = path.join(
-            root,
+            fixtureRoot,
             "state",
             "agents",
             agentId,
@@ -2116,9 +2299,10 @@ async function runGatewaySample(options: {
         }
       }
       const messageSubscriptions: TimedProbe[] = [];
+      partialRun.messageSubscriptions = messageSubscriptions;
       for (let index = 0; index < options.subscribers; index += 1) {
         const subscriber = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
-        auxiliaryClients.push(subscriber);
+        ownClient(subscriber);
         if (options.visibleObserver) {
           await subscriber.request("sessions.observer.visibility", { visible: true });
         }
@@ -2127,20 +2311,21 @@ async function runGatewaySample(options: {
           "sessions.messages.subscribe",
           { key: turnSessionKeys[index % turnSessionKeys.length] },
           runStartedAt,
+          options.activitySummaryDiagnostics,
         );
         messageSubscriptions.push(subscription);
         if (!subscription.ok) {
           throw new Error(`session message subscription failed: ${subscription.error}`);
         }
       }
-      const historyClients = await Promise.all(
+      const historyClients = await concurrently(
         Array.from({ length: options.historyClients }, async () => {
           const historyClient = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
-          auxiliaryClients.push(historyClient);
+          ownClient(historyClient);
           return historyClient;
         }),
       );
-      const sessionUpdateClients = await Promise.all(
+      const sessionUpdateClients = await concurrently(
         Array.from(
           { length: options.sessionUpdates > 0 ? options.sessionUpdateClients : 0 },
           async () => {
@@ -2150,7 +2335,7 @@ async function runGatewaySample(options: {
               protocolVersion,
               false,
             );
-            auxiliaryClients.push(updateClient);
+            ownClient(updateClient);
             return updateClient;
           },
         ),
@@ -2160,7 +2345,7 @@ async function runGatewaySample(options: {
           ? await connectGateway(port, setupDeadlineAt, protocolVersion, false)
           : undefined;
       if (subscriptionProbeClient) {
-        auxiliaryClients.push(subscriptionProbeClient);
+        ownClient(subscriptionProbeClient);
       }
       if (!live) {
         mockCheckpoints.push(await readMockRequests(mockPort, setupDeadlineAt));
@@ -2169,13 +2354,15 @@ async function runGatewaySample(options: {
       if (!live) {
         agentWarmup.beforeOrdinal = readProviderRequestLog(requestLogPath).length;
       }
+      activityDiagnostics?.setPhase("warmup");
       const agentWarmupStartedAt = performance.now();
+      agentWarmupStarted = true;
       if (options.agentWarmupTurns > 0) {
         const warmupDeadlineAt = performance.now() + options.timeoutMs;
         preparedDeadlineAt = warmupDeadlineAt;
         client.setDeadlineAt(warmupDeadlineAt);
         try {
-          await Promise.all(
+          await concurrently(
             turnSessionKeys.map((sessionKey, index) =>
               runSessionTurns(rpc, index, warmupDeadlineAt, {
                 sessionKey,
@@ -2183,6 +2370,7 @@ async function runGatewaySample(options: {
                 toolEvents: options.toolEvents,
                 turnsPerSession: options.agentWarmupTurns,
                 accounting: agentWarmup,
+                stopped: () => probesStopped,
                 evidence: turnEvidence,
               }),
             ),
@@ -2196,6 +2384,7 @@ async function runGatewaySample(options: {
       }
       // Warm turns exercise this Gateway's runtime; they do not prove background queues drained.
       const memoryBefore = await readGatewayMemory(rpc, runStartedAt);
+      partialRun.memory.before = memoryBefore;
       if (!live) {
         mockCheckpoints.push(await readMockRequests(mockPort, preparedDeadlineAt));
       }
@@ -2210,26 +2399,36 @@ async function runGatewaySample(options: {
         });
       }
       const setupDurationMs = performance.now() - setupStartedAt;
+      partialRun.setupDurationMs = setupDurationMs;
       // Large session fixtures are setup, not benchmarked load. Every measured
       // run therefore gets its complete timeout after all clients are ready.
+      activityDiagnostics?.setPhase("load");
       const loadDeadlineAt = performance.now() + options.timeoutMs;
       client.setDeadlineAt(loadDeadlineAt);
       for (const auxiliaryClient of auxiliaryClients) {
         auxiliaryClient.setDeadlineAt(loadDeadlineAt);
       }
       const controlPlane: BenchmarkRun["controlPlane"] = [];
+      partialRun.controlPlane = controlPlane;
       const controlUi: ControlUiProbe[] = [];
+      partialRun.controlUi = controlUi;
       const history: BenchmarkRun["history"] = [];
+      partialRun.history = history;
       const messageSubscriptionsDuringLoad: TimedProbe[] = [];
+      partialRun.messageSubscriptionsDuringLoad = messageSubscriptionsDuringLoad;
       const readyz: ReadyProbe[] = [];
+      partialRun.readyz = readyz;
       const sessionsList: TimedProbe[] = [];
+      partialRun.sessionsList = sessionsList;
       const sessionUpdates: TimedProbe[] = [];
+      partialRun.sessionUpdates = sessionUpdates;
       let peakRssMb = memoryBefore.rssMb;
+      partialRun.memory.peakRssMb = peakRssMb;
       let lastRssSampleAt = performance.now();
       let turnsDone = false;
       let updatesDone = options.sessionUpdates === 0;
       let browserDone = !browserProbe;
-      const workloadDone = () => turnsDone && updatesDone && browserDone;
+      const workloadDone = () => probesStopped || (turnsDone && updatesDone && browserDone);
       let startedTurnCount = 0;
       let resolveAllTurnsStarted!: () => void;
       const allTurnsStarted = new Promise<void>((resolve) => {
@@ -2255,13 +2454,19 @@ async function runGatewaySample(options: {
               },
             }
           : undefined;
+      partialRun.processPlacement = processPlacement;
       const cpuBefore = await readGatewayCpuUsage(gateway);
       const turnsStartedAt = performance.now();
       // Keep the live artifact intact: buffered setup writes can arrive after this boundary.
       // Inclusive millisecond timestamps conservatively include events on the boundary.
       const timelineFrom = Date.now();
       const loadStartMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
-      const turns = Promise.all(
+      timelineWindow = { from: timelineFrom, through: timelineFrom };
+      partialRun.loadWindow = {
+        startMonotonicMicros: loadStartMonotonicMicros,
+        endMonotonicMicros: null,
+      };
+      const turns = concurrently(
         turnSessionKeys.map((sessionKey, index) =>
           runSessionTurns(rpc, index, loadDeadlineAt, {
             onStarted: () => {
@@ -2275,6 +2480,7 @@ async function runGatewaySample(options: {
             turnsPerSession: options.turnsPerSession,
             evidence: turnEvidence,
             accounting: turnAccounting,
+            stopped: () => probesStopped,
             live,
           }),
         ),
@@ -2290,18 +2496,23 @@ async function runGatewaySample(options: {
           return { error: null, latencyMs: performance.now() - startedAt, ok: true };
         } catch (error) {
           return {
-            error: describeProbeError(error),
+            error: describeProbeError(error, options.activitySummaryDiagnostics),
             latencyMs: performance.now() - startedAt,
             ok: false,
           };
         }
       });
+      pendingWork.push(
+        freshConnection.then((value) => {
+          partialRun.freshConnection = value;
+        }),
+      );
       const browserClicks = allTurnsStarted.then(async (): Promise<BrowserSessionClick[]> => {
         try {
           if (!browserProbe) {
             return [];
           }
-          const clicks: BrowserSessionClick[] = [];
+          const clicks: BrowserSessionClick[] = partialRun.browser?.clicks ?? [];
           const targets = [...browserTargets.slice(1), browserTargets.at(-2)!];
           for (const [index, target] of targets.entries()) {
             clicks.push(
@@ -2318,6 +2529,7 @@ async function runGatewaySample(options: {
           browserDone = true;
         }
       });
+      pendingWork.push(browserClicks);
       const sampler = runProbeRounds({
         rounds: options.probeRounds,
         deadlineAt: loadDeadlineAt,
@@ -2334,6 +2546,7 @@ async function runGatewaySample(options: {
               port,
               rpc,
               runStartedAt,
+              activitySummaryDiagnostics: activityDiagnostics,
             }),
             subscriptionProbeClient && subscriptionKey
               ? timeRpcProbe(
@@ -2341,12 +2554,22 @@ async function runGatewaySample(options: {
                   "sessions.messages.subscribe",
                   { key: subscriptionKey },
                   runStartedAt,
+                  options.activitySummaryDiagnostics,
                 )
               : Promise.resolve(undefined),
             options.controlPlane
               ? Promise.all(
                   ["tasks.list", "cron.list", "cron.status"].map(async (method) =>
-                    Object.assign(await timeRpcProbe(rpc, method, {}, runStartedAt), { method }),
+                    Object.assign(
+                      await timeRpcProbe(
+                        rpc,
+                        method,
+                        {},
+                        runStartedAt,
+                        options.activitySummaryDiagnostics,
+                      ),
+                      { method },
+                    ),
                   ),
                 )
               : Promise.resolve([]),
@@ -2367,11 +2590,12 @@ async function runGatewaySample(options: {
             // Linux reads procfs without spawning a process. Non-Linux hosts use
             // the shared ps fallback at most once per second to bound perturbation.
             peakRssMb = Math.max(peakRssMb, readGatewayProcessRssMb(gateway?.pid) ?? 0);
+            partialRun.memory.peakRssMb = peakRssMb;
             lastRssSampleAt = performance.now();
           }
         },
       });
-      probeJobs.push(sampler);
+      pendingWork.push(sampler);
       const historyLoad = Promise.all(
         historyClients.map((historyClient, clientIndex) => {
           let offset = clientIndex * options.historyBurst;
@@ -2392,6 +2616,7 @@ async function runGatewaySample(options: {
                     "chat.history",
                     { sessionKey },
                     runStartedAt,
+                    options.activitySummaryDiagnostics,
                   );
                   return agentCoverage
                     ? probe.then((sample) => ({ ...sample, sessionKey }))
@@ -2402,16 +2627,16 @@ async function runGatewaySample(options: {
               offset += options.historyBurst;
             },
           });
-          probeJobs.push(job);
+          pendingWork.push(job);
           return job;
         }),
       );
       let nextUpdateIndex = 0;
-      const sessionUpdateLoad = Promise.all(
+      const sessionUpdateLoad = concurrently(
         sessionUpdateClients.map(async (updateClient) => {
           for (;;) {
             const index = nextUpdateIndex++;
-            if (index >= options.sessionUpdates) {
+            if (index >= options.sessionUpdates || probesStopped) {
               return;
             }
             const sessionKey = sessionKeys[index % sessionKeys.length];
@@ -2420,6 +2645,7 @@ async function runGatewaySample(options: {
               "sessions.patch",
               { key: sessionKey, label: `Benchmark update ${index + 1}` },
               runStartedAt,
+              options.activitySummaryDiagnostics,
             );
             sessionUpdates.push(update);
             if (!update.ok) {
@@ -2438,14 +2664,23 @@ async function runGatewaySample(options: {
         historyLoad,
         sessionUpdateLoad,
       ]);
+      partialRun.turnCount = sessionTurnCounts.reduce((sum, count) => sum + count, 0);
       const cpuAfter = await readGatewayCpuUsage(gateway);
+      partialRun.cpuUsage = measureGatewayCpuUsage(cpuBefore, cpuAfter);
       const loadEndMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
+      partialRun.loadWindow = {
+        startMonotonicMicros: loadStartMonotonicMicros,
+        endMonotonicMicros: loadEndMonotonicMicros,
+      };
       const turnsDurationMs = performance.now() - turnsStartedAt;
+      partialRun.turnsDurationMs = turnsDurationMs;
       if (!live) {
         providerAfterLoad = readProviderRequestLog(requestLogPath).length;
       }
       const memoryAfter = await readGatewayMemory(rpc, runStartedAt);
+      partialRun.memory.after = memoryAfter;
       timelineWindow = { from: timelineFrom, through: Date.now() };
+      timelineWindowComplete = true;
       let loadCpuProfile: BenchmarkRun["loadCpuProfile"];
       if (loadCpuProfilePath) {
         await controlGatewayProfile(gateway, "cpu", "stop", loadCpuProfilePath);
@@ -2455,6 +2690,7 @@ async function runGatewaySample(options: {
           workersManifestPath: `${loadCpuProfilePath}.workers.json`,
         };
       }
+      partialRun.loadCpuProfile = loadCpuProfile;
       let heapProfile: BenchmarkRun["heapProfile"];
       if (heapProfilePath) {
         await controlGatewayProfile(gateway, "heap", "stop", heapProfilePath);
@@ -2464,12 +2700,14 @@ async function runGatewaySample(options: {
           workersManifestPath: `${heapProfilePath}.workers.json`,
         };
       }
+      partialRun.heapProfile = heapProfile;
       await live?.captureHistories(rpc);
       if (options.historyClients > 0 && !history.some((sample) => sample.ok)) {
         const failure = history[0]?.error ?? "no requests completed before turns finished";
         throw new Error(`all configured chat.history load probes failed: ${failure}`);
       }
       peakRssMb = Math.max(peakRssMb, memoryAfter.rssMb);
+      partialRun.memory.peakRssMb = peakRssMb;
       if (!live) {
         mockCheckpoints.push(await readMockRequests(mockPort, loadDeadlineAt));
       }
@@ -2535,146 +2773,205 @@ async function runGatewaySample(options: {
             `provider requests at failure: ${JSON.stringify(summarizeProviderRequests(requests, providerBeforeLoad ?? requests.length, providerAfterLoad ?? requests.length, agentWarmup))}`,
           );
         } catch (accountingError) {
-          console.error(`provider request accounting failed: ${String(accountingError)}`);
+          console.error(
+            activityDiagnostics
+              ? "provider request accounting failed; diagnostic error details omitted"
+              : `provider request accounting failed: ${String(accountingError)}`,
+          );
         }
       }
-      throw new Error(detail, { cause: error });
+      errors.push({ phase: "workload", error: detail });
+      if (timelineWindow && !timelineWindowComplete) {
+        timelineWindow.through = Date.now();
+      }
+      if (partialRun.loadWindow?.endMonotonicMicros === null) {
+        partialRun.loadWindow.endMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
+      }
     } finally {
+      activityDiagnostics?.setPhase("shutdown");
       probesStopped = true;
-      try {
-        await browserProbe?.close();
-      } finally {
-        for (const auxiliaryClient of auxiliaryClients) {
-          auxiliaryClient.close();
-        }
-        try {
-          if (gateway) {
-            if (options.cpuProfDir && gateway.exitCode === null && gateway.signalCode === null) {
-              // V8 flushes the main-isolate CPU profile on its normal interrupt path.
-              const profileFlushed = new Promise<void>((resolve) => {
-                gateway!.once("exit", () => {
-                  resolve();
-                });
-              });
-              gateway.kill("SIGINT");
-              await Promise.race([profileFlushed, delay(2_000)]);
-            }
-            gatewayExit = await stopChild(gateway);
-          }
-          // A fatal turn may end Promise.all before fixed probe rounds settle.
-          // Join their closed-client failures before removing the fixture state.
-          await Promise.allSettled(probeJobs);
-        } finally {
-          // Gateway shutdown drains admitted event dispatches before closing sockets.
-          // Keep this client alive through that drain so delayed tool evidence survives.
-          client?.close();
-        }
+      await captureFailure("cleanup", () => browserProbe?.close());
+      for (const auxiliaryClient of auxiliaryClients) {
+        await captureFailure("cleanup", () => auxiliaryClient.close());
       }
+      await captureFailure("cleanup", async () => {
+        if (
+          gateway &&
+          options.cpuProfDir &&
+          gateway.exitCode === null &&
+          gateway.signalCode === null
+        ) {
+          // V8 flushes the main-isolate CPU profile on its normal interrupt path.
+          const profileFlushed = new Promise<void>((resolve) => {
+            gateway!.once("exit", () => resolve());
+          });
+          gateway.kill("SIGINT");
+          await Promise.race([profileFlushed, delay(2_000)]);
+        }
+      });
+      await captureFailure("cleanup", async () => {
+        if (gateway) {
+          gatewayExit = await stopChild(gateway);
+        }
+      });
+      // Keep the event client through Gateway drain, then join every acquired task.
+      await captureFailure("cleanup", () => client?.close());
+      await Promise.allSettled(pendingWork);
     }
     // close() initiates a handshake; retain late event evidence until it settles.
-    await client?.waitClosed();
-    if (!live) {
-      mockCheckpoints.push(await readMockRequests(mockPort, performance.now() + HTTP_TIMEOUT_MS));
+    await captureFailure("cleanup", () => client?.waitClosed());
+    if (!live && mockProvider) {
+      await captureFailure("diagnostics", async () => {
+        mockCheckpoints.push(await readMockRequests(mockPort, performance.now() + HTTP_TIMEOUT_MS));
+      });
     }
-    if (options.diagnosticsTimeline) {
-      if (!gatewayExit || gatewayExit.exitCode !== 0 || gatewayExit.signal !== null) {
-        throw new Error(
-          formatRunFailure(
-            new Error(
-              `Gateway did not exit cleanly; diagnostics timeline may be incomplete: ${JSON.stringify({ helper: gatewayExit, child: readGatewayProcess() })}`,
+    await captureFailure("diagnostics", async () => {
+      if (options.diagnosticsTimeline && gateway) {
+        if (!gatewayExit || gatewayExit.exitCode !== 0 || gatewayExit.signal !== null) {
+          throw new Error(
+            formatRunFailure(
+              new Error(
+                `Gateway did not exit cleanly; diagnostics timeline may be incomplete: ${JSON.stringify({ helper: gatewayExit, child: readGatewayProcess?.() })}`,
+              ),
+              gatewayOutput,
+              mockOutput,
             ),
-            gatewayOutput,
-            mockOutput,
-          ),
+          );
+        }
+        if (gatewayOutput.readOutput().includes("[diagnostics] failed to write timeline event")) {
+          throw new Error("Gateway reported a diagnostics timeline write failure");
+        }
+        const scans = summarizePluginMetadataScans(
+          readDiagnosticsTimelineSpans(timelinePath, timelineWindow),
         );
+        if (timelineWindow) {
+          partialRun.pluginMetadataScans = scans;
+        }
+        if (result) {
+          result.pluginMetadataScans = scans;
+        }
       }
-      if (gatewayOutput.readOutput().includes("[diagnostics] failed to write timeline event")) {
-        throw new Error("Gateway reported a diagnostics timeline write failure");
+      if (!result) {
+        return;
       }
-      result.pluginMetadataScans = summarizePluginMetadataScans(
-        readDiagnosticsTimelineSpans(timelinePath, timelineWindow),
-      );
-    }
-    if (!live && (providerBeforeLoad === undefined || providerAfterLoad === undefined)) {
-      throw new Error("Missing provider request load snapshots");
-    }
-    if (
-      live &&
-      (!gateway ||
-        gatewayExit?.exitCode !== 0 ||
-        gatewayExit.signal !== null ||
-        inspectManagedProcessGroup(gateway, { errorPolicy: "indeterminate" }) !== "dead")
-    ) {
-      throw new Error("Live Gateway did not stop cleanly before transcript verification");
-    }
-    return {
-      ...result,
-      ...(live
-        ? { liveProof: live.finish(root) }
-        : {
-            providerRequests: summarizeProviderRequests(
-              readProviderRequestLog(requestLogPath),
-              providerBeforeLoad!,
-              providerAfterLoad!,
-              agentWarmup,
-            ),
-            mockRequests: summarizeMockRequests(mockCheckpoints),
-          }),
-      turnEvidence: turnEvidence.finish(),
-      agentWarmup: {
-        ...(live ? { durationMs: 0, launched: 0, terminalOk: 0, verified: 0 } : agentWarmup),
-        turnEvidence: turnEvidence.finish("warmup"),
-      },
-      gatewayProcess: readGatewayProcess(),
-      ...(gatewayExit ? { gatewayExit } : {}),
-    };
-  } catch (error) {
-    if (live && options.output) {
-      try {
-        mkdirSync(path.dirname(options.output), { recursive: true });
-        writeFileSync(
-          `${options.output}.failure.json`,
-          redactLiveBenchmarkText(
-            JSON.stringify(
-              {
-                mode: "live-openai-agent",
-                status: "failed",
-                liveProof: live.snapshot(),
-                turnAccounting,
-                gatewayExit,
-                gatewayProcess: readGatewayProcess(),
-                error: error instanceof Error ? error.message : String(error),
-              },
-              null,
-              2,
-            ),
-          ) + "\n",
-          { mode: 0o600 },
-        );
-      } catch {
-        console.error("Live benchmark failure evidence could not be written");
+      if (!live && (providerBeforeLoad === undefined || providerAfterLoad === undefined)) {
+        throw new Error("Missing provider request load snapshots");
       }
-    }
-    throw error;
-  } finally {
-    try {
-      if (mockProvider) {
-        await stopChild(mockProvider);
-      }
-    } finally {
       if (
         live &&
-        gateway &&
-        inspectManagedProcessGroup(gateway, { errorPolicy: "indeterminate" }) !== "dead"
+        (!gateway ||
+          gatewayExit?.exitCode !== 0 ||
+          gatewayExit.signal !== null ||
+          inspectManagedProcessGroup(gateway, { errorPolicy: "indeterminate" }) !== "dead")
       ) {
-        // Successful runs already prove group exit before transcript verification.
-        // Preserve the original failure when teardown could not settle the group.
-        console.error("Live Gateway group unsettled; isolated fixture retained");
-      } else {
-        rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
+        throw new Error("Live Gateway did not stop cleanly before transcript verification");
       }
+      completedRun = {
+        ...result,
+        ...(live
+          ? { liveProof: live.finish(fixtureRoot) }
+          : {
+              providerRequests: summarizeProviderRequests(
+                readProviderRequestLog(requestLogPath),
+                providerBeforeLoad!,
+                providerAfterLoad!,
+                agentWarmup,
+              ),
+              mockRequests: summarizeMockRequests(mockCheckpoints),
+            }),
+        turnEvidence: turnEvidence.finish(),
+        agentWarmup: {
+          ...(live ? { durationMs: 0, launched: 0, terminalOk: 0, verified: 0 } : agentWarmup),
+          turnEvidence: turnEvidence.finish("warmup"),
+        },
+        gatewayProcess: readGatewayProcess?.(),
+        ...(activityDiagnostics
+          ? { activitySummaryDiagnostics: activityDiagnostics.finish() }
+          : {}),
+        ...(gatewayExit ? { gatewayExit } : {}),
+      };
+      Object.assign(partialRun, completedRun);
+    });
+  } catch (error) {
+    recordFailure("workload", error);
+  } finally {
+    await captureFailure("cleanup", async () => {
+      if (mockProvider) {
+        mockProviderExit = await stopChild(mockProvider);
+      }
+    });
+    await captureFailure("cleanup", () => {
+      if (
+        spawnedChildren.some(
+          (child) => inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }) !== "dead",
+        )
+      ) {
+        // Bounded stop receipts do not prove that every owned process exited.
+        throw new Error("Benchmark child group unsettled; isolated fixture retained");
+      } else if (root) {
+        rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
+        cleanup.rootRemoved = true;
+      }
+    });
+  }
+  if (completedRun && errors.length === 0) {
+    return { status: "success", run: completedRun };
+  }
+  partialRun.durationMs = performance.now() - runStartedAt;
+  partialRun.turnAccounting = turnAccounting;
+  if (live) {
+    partialRun.liveProof = live.snapshot();
+  }
+  partialRun.gatewayProcess = readGatewayProcess?.();
+  if (gatewayExit) {
+    partialRun.gatewayExit = gatewayExit;
+  }
+  if (agentWarmupStarted) {
+    partialRun.agentWarmup = completedRun?.agentWarmup ?? { ...agentWarmup, turnEvidence: null };
+  }
+  if (activityDiagnostics) {
+    partialRun.activitySummaryDiagnostics =
+      completedRun?.activitySummaryDiagnostics ?? activityDiagnostics.finish();
+  }
+  if ((live || activityDiagnostics) && options.output) {
+    try {
+      mkdirSync(path.dirname(options.output), { recursive: true });
+      writeFileSync(
+        `${options.output}.failure.json`,
+        redactLiveBenchmarkText(
+          JSON.stringify(
+            {
+              mode: live ? "live-openai-agent" : "mock-activity-summary-diagnostics",
+              status: "failed",
+              ...(live ? { liveProof: live.snapshot() } : {}),
+              ...(activityDiagnostics
+                ? { activitySummaryDiagnostics: partialRun.activitySummaryDiagnostics }
+                : {}),
+              turnAccounting,
+              gatewayExit,
+              gatewayProcess: readGatewayProcess?.(),
+              error: activityDiagnostics
+                ? "Benchmark did not complete"
+                : (errors[0]?.error ?? "Benchmark did not complete"),
+            },
+            null,
+            2,
+          ),
+        ) + "\n",
+        { mode: 0o600 },
+      );
+    } catch {
+      console.error("Benchmark failure evidence could not be written");
     }
   }
+  return {
+    status: "failure",
+    errors,
+    partialRun,
+    cleanup,
+    mockProviderExit,
+    mockProviderProcess: readMockProviderProcess?.(),
+  };
 }
 
 function liveRunPassed(run: BenchmarkRun, options: CliOptions): boolean {
@@ -2934,28 +3231,46 @@ async function runBenchmarkSamples(params: {
   onProgress?: (message: string) => void;
   options: CliOptions;
   runSample?: typeof runGatewaySample;
-}): Promise<BenchmarkRun[]> {
+}): Promise<{
+  runs: BenchmarkRun[];
+  warmupRuns: BenchmarkRun[];
+  failedAttempt?: FailedBenchmarkAttempt;
+}> {
   const now = params.now ?? performance.now.bind(performance);
   const runSample = params.runSample ?? runGatewaySample;
   const runs: BenchmarkRun[] = [];
+  const warmupRuns: BenchmarkRun[] = [];
   const total = params.options.runs + params.options.warmup;
   for (let index = 0; index < total; index += 1) {
     // Each sample gets the same budget so earlier runs cannot shrink later agent waits.
     // runGatewaySample extends this deadline by its probe warmup before load starts.
     const deadlineAt = now() + params.options.timeoutMs;
-    const run = await runSample({ ...params.options, deadlineAt });
+    const attempt = await runSample({ ...params.options, deadlineAt });
+    if (attempt.status === "failure") {
+      return {
+        runs,
+        warmupRuns,
+        failedAttempt: {
+          ...attempt,
+          phase: index < params.options.warmup ? "warmup" : "measured",
+          index: index < params.options.warmup ? index + 1 : index - params.options.warmup + 1,
+        },
+      };
+    }
+    const run = attempt.run;
     if (index >= params.options.warmup) {
       runs.push(run);
       params.onProgress?.(
         `[bench-gateway-concurrency] run ${runs.length}/${params.options.runs}: turns=${run.turnCount} samples=${run.readyz.length} duration=${run.durationMs.toFixed(1)}ms`,
       );
     } else {
+      warmupRuns.push(run);
       params.onProgress?.(
         `[bench-gateway-concurrency] warmup ${index + 1}/${params.options.warmup}: duration=${run.durationMs.toFixed(1)}ms`,
       );
     }
   }
-  return runs;
+  return { runs, warmupRuns };
 }
 
 async function main(): Promise<void> {
@@ -2965,7 +3280,10 @@ async function main(): Promise<void> {
     return;
   }
   const options = parseOptions(argv);
-  const runs = await runBenchmarkSamples({ onProgress: console.error, options });
+  const { runs, warmupRuns, failedAttempt } = await runBenchmarkSamples({
+    onProgress: console.error,
+    options,
+  });
   const payload = {
     agentCount: options.agentCount,
     browserHistoryMessages: options.browserHistoryMessages,
@@ -2976,11 +3294,19 @@ async function main(): Promise<void> {
     historyMessages: options.historyMessages,
     historyMessageChars: options.historyMessageChars,
     diagnosticsTimeline: options.diagnosticsTimeline,
-    entry: options.entry,
+    entry:
+      failedAttempt && options.activitySummaryDiagnostics
+        ? "[omitted in activity-summary diagnostics mode]"
+        : options.entry,
     generatedAt: new Date().toISOString(),
     historyBurst: options.historyBurst,
     historyClients: options.historyClients,
-    mode: options.provider === "openai" ? "live-openai-agent" : "mock-streaming-agent",
+    mode:
+      options.provider === "openai"
+        ? "live-openai-agent"
+        : options.activitySummaryDiagnostics
+          ? "mock-activity-summary-diagnostics"
+          : "mock-streaming-agent",
     provider: options.provider,
     pluginCount: options.pluginCount,
     probeWorkload: {
@@ -2993,6 +3319,8 @@ async function main(): Promise<void> {
       peakRssSampling: "sampler-rounds-and-final-memory",
     },
     runs,
+    warmupRuns,
+    ...(failedAttempt ? { failedAttempt } : {}),
     sessionCount: Math.max(options.sessionCount, options.concurrency),
     sessionUpdateClients: options.sessionUpdates > 0 ? options.sessionUpdateClients : 0,
     sessionUpdates: options.sessionUpdates,
@@ -3019,6 +3347,11 @@ async function main(): Promise<void> {
   if (options.json || !options.output) {
     console.log(redactLiveBenchmarkText(JSON.stringify(payload, null, 2)));
   }
+  if (failedAttempt) {
+    throw new Error(
+      `Benchmark ${failedAttempt.phase} attempt ${failedAttempt.index} failed: ${failedAttempt.errors.map((failure) => `${failure.phase}: ${failure.error}`).join("\n")}`,
+    );
+  }
   if (options.provider === "openai" && runs.some((run) => !liveRunPassed(run, options))) {
     throw new Error("Live benchmark functional verification failed; inspect the retained result");
   }
@@ -3032,6 +3365,8 @@ export const testing = {
   parseMockRequests,
   summarizeMockRequests,
   createTurnEvidence,
+  captureChildOutput,
+  buildConfig,
   formatProbeFailure,
   formatRunFailure,
   requestHttp,
@@ -3054,11 +3389,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     .catch((error: unknown) => {
       console.error(
         redactLiveBenchmarkText(
-          error instanceof CliArgumentError
-            ? error.message
-            : error instanceof Error
-              ? (error.stack ?? error.message)
-              : String(error),
+          hasFlag(process.argv.slice(2), "--activity-summary-diagnostics")
+            ? "Activity-summary diagnostic benchmark failed; inspect retained observations"
+            : error instanceof CliArgumentError
+              ? error.message
+              : error instanceof Error
+                ? (error.stack ?? error.message)
+                : String(error),
         ),
       );
       process.exitCode = 1;

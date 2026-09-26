@@ -10,15 +10,9 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
 import { readCodexMcpToolConnectorId, readCodexMcpToolUiVisibility } from "./mcp-tool-metadata.js";
+import type { ToolCallResult } from "./protocol-mcp.js";
 import type { CodexMcpServerStatus, CodexThreadItem, JsonObject, JsonValue } from "./protocol.js";
 import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
-
-type NativeMcpCallToolResult = {
-  content: JsonValue[];
-  structuredContent?: JsonValue;
-  isError?: boolean;
-  _meta?: JsonValue;
-};
 
 const CODEX_APPS_MCP_SERVER = "codex_apps";
 
@@ -34,7 +28,7 @@ function readMcpAppConnectorId(item: CodexThreadItem): string | undefined {
   return normalizeOptionalString(asOptionalRecord(item.appContext)?.connectorId);
 }
 
-function readMcpToolResult(item: CodexThreadItem): NativeMcpCallToolResult | undefined {
+function readMcpToolResult(item: CodexThreadItem): ToolCallResult | undefined {
   const result = asOptionalRecord(item.result);
   if (!result || !Array.isArray(result.content)) {
     return undefined;

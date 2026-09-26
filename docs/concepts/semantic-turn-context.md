@@ -18,6 +18,7 @@ It is off by default. To enable shadow observation:
 {
   agents: {
     defaults: {
+      experimental: { decisionAssistance: true },
       decisionModel: "typesafe/jev-1.13.0",
       turnContextCuration: {
         mode: "shadow",
@@ -62,3 +63,5 @@ always propagate.
 `timeoutMs` is a cooperative provider deadline, not a hard wall-clock bound.
 Cancellation waits for started provider work to physically settle; a provider
 that ignores abort can delay the opted-in turn beyond this deadline.
+
+Automatic observation requires explicit Decision assistance consent in Labs and an effective decision model for the owning agent, in addition to shadow mode. Absent consent, no model, or an empty per-agent override preserves the original path. Published opt-out discards an in-flight observation; the explicit `decision_evaluate` tool is unaffected.

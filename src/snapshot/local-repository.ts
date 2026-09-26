@@ -3,7 +3,11 @@ import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import {
+  assertDirectoryIdentitySync as assertExactDirectoryIdentitySync,
+  sameFileIdentity,
+} from "@openclaw/fs-safe/advanced";
+import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import {
   ensureDurableDirectory,
   getPublishFileExclusiveFailureDetails,
@@ -16,10 +20,6 @@ import {
   type DurableDirectoryReceipt,
   type PinnedDirectory,
 } from "../infra/directory-durability.js";
-import {
-  assertDirectoryIdentitySync as assertExactDirectoryIdentitySync,
-  sameFileIdentity,
-} from "../infra/fs-safe-advanced.js";
 import {
   canonicalPathFromExistingAncestor,
   ensureAbsoluteDirectory,

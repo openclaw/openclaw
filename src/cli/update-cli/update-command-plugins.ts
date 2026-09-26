@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 // Plugin synchronization and convergence after the core update.
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -77,17 +78,11 @@ function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): s
 }
 
 function collectPluginChannelFallbackMessages(outcomes: readonly PluginUpdateOutcome[]): string[] {
-  const seen = new Set<string>();
-  const messages: string[] = [];
-  for (const outcome of outcomes) {
-    const message = outcome.channelFallback?.message;
-    if (!message || seen.has(message)) {
-      continue;
-    }
-    seen.add(message);
-    messages.push(message);
-  }
-  return messages;
+  return uniqueStrings(
+    outcomes.flatMap(({ channelFallback }) =>
+      channelFallback?.message ? [channelFallback.message] : [],
+    ),
+  );
 }
 
 function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
@@ -136,14 +131,17 @@ async function updatePluginsAfterCoreUpdateWithLease(
   const runtime = params.runtime ?? defaultRuntime;
   const requirements = { ...params.pluginRequirements };
   if (!params.configSnapshot.valid) {
-    const invalid = buildInvalidConfigPostCoreUpdateResult();
+    const invalid = buildInvalidConfigPostCoreUpdateResult(params.configSnapshot);
     if (!params.json) {
       runtime.log(theme.error(invalid.message));
       for (const line of invalid.guidance) {
         runtime.log(theme.muted(`  ${line}`));
       }
     }
-    return { ...invalid.result, assessment: { kind: "core-critical", reason: "invalid-config" } };
+    return {
+      ...invalid.result,
+      assessment: { kind: "core-critical", reason: invalid.result.reason },
+    };
   }
 
   const referenceSource = prepareDoctorConfigReferenceSource(params.configSnapshot);
@@ -356,9 +354,7 @@ async function updatePluginsAfterCoreUpdateWithLease(
         : [],
     ),
   ];
-  for (const warning of [...convergenceWarnings, ...(convergence.notices ?? [])]) {
-    warnings.push(warning);
-  }
+  warnings.push(...convergenceWarnings, ...(convergence.notices ?? []));
   for (const outcome of convergenceOutcomes) {
     pluginUpdateOutcomes.push(outcome);
     if (outcome.status === "error" || isActionableSkippedPostUpdateOutcome(outcome)) {

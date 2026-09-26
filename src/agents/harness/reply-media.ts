@@ -34,6 +34,7 @@ export function bindHarnessReplyMedia(params: {
   });
   const attemptSignal = attempt.abortSignal;
   return async (request) => {
+    const assertSourceCurrent = request.assertCurrent;
     const signal = AbortSignal.any([
       params.signal,
       ...(attemptSignal ? [attemptSignal] : []),
@@ -41,6 +42,7 @@ export function bindHarnessReplyMedia(params: {
     ]);
     const assertCurrent = () => {
       assertActive();
+      assertSourceCurrent?.();
       signal.throwIfAborted();
     };
     assertCurrent();

@@ -71,18 +71,14 @@ vi.mock("./runtime.js", () => ({
 
 let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
 let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
-let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+let resolveFeishuCardTemplate: typeof import("./native-card.js").resolveFeishuCardTemplate;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 let sendStructuredCardFeishu: typeof import("./send.js").sendStructuredCardFeishu;
 
 beforeAll(async () => {
-  ({
-    editMessageFeishu,
-    getMessageFeishu,
-    resolveFeishuCardTemplate,
-    sendMessageFeishu,
-    sendStructuredCardFeishu,
-  } = await import("./send.js"));
+  ({ resolveFeishuCardTemplate } = await import("./native-card.js"));
+  ({ editMessageFeishu, getMessageFeishu, sendMessageFeishu, sendStructuredCardFeishu } =
+    await import("./send.js"));
 });
 
 afterAll(() => {

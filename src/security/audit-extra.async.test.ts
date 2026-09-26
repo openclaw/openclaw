@@ -5,11 +5,11 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import * as skillScanner from "../skills/security/scanner.js";
+import { collectStateDeepFilesystemFindings } from "./audit-extra.async.js";
 import {
   collectInstalledSkillsCodeSafetyFindings,
   collectPluginsCodeSafetyFindings,
-  collectStateDeepFilesystemFindings,
-} from "./audit-extra.async.js";
+} from "./audit.deep.runtime.js";
 
 vi.mock("../skills/loading/workspace-skill-loader.js", () => {
   const loadWorkspaceSkills = (workspaceDir: string) => {
@@ -188,6 +188,36 @@ description: test skill
         path.join(workspaceB, "skills", "evil-skill"),
       ]),
     );
+  });
+
+  it("reports incomplete plugin and skill scans without alleging unsafe code", async () => {
+    vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockResolvedValue({
+      scannedFiles: 1,
+      critical: 0,
+      warn: 0,
+      info: 0,
+      truncated: true,
+      findings: [],
+    });
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: sharedCodeSafetyWorkspaceDir } },
+    };
+    const [plugins, skills] = await Promise.all([
+      collectPluginsCodeSafetyFindings({ stateDir: sharedCodeSafetyStateDir }),
+      collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir: sharedCodeSafetyStateDir }),
+    ]);
+    for (const [kind, findings] of [
+      ["plugins", plugins],
+      ["skills", skills],
+    ] as const) {
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          checkId: `${kind}.code_safety.scan_truncated`,
+          severity: "warn",
+        }),
+      );
+      expect(findings.some((finding) => finding.checkId === `${kind}.code_safety`)).toBe(false);
+    }
   });
 
   it("scans SKILL.md text for dangerous skill instructions", async () => {

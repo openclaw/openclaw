@@ -89,24 +89,14 @@ export async function runQaSuiteScenarioSteps(
       });
     } catch (error) {
       const details = formatQaErrorMessage(error);
-      if (error instanceof QaSuiteScenarioSkipError) {
-        stepResults.push({ name: step.name, status: "skip", details });
-        return {
-          name,
-          status: "skip",
-          steps: stepResults,
-          details,
-          ...(timing ? { timing } : {}),
-          ...(rttMeasurement ? { rttMeasurement } : {}),
-        };
-      }
-      if (process.env.OPENCLAW_QA_DEBUG === "1") {
+      const status = error instanceof QaSuiteScenarioSkipError ? "skip" : "fail";
+      if (status === "fail" && process.env.OPENCLAW_QA_DEBUG === "1") {
         console.error(`[qa-suite] fail scenario="${name}" step="${step.name}" details=${details}`);
       }
-      stepResults.push({ name: step.name, status: "fail", details });
+      stepResults.push({ name: step.name, status, details });
       return {
         name,
-        status: "fail",
+        status,
         steps: stepResults,
         details,
         ...(timing ? { timing } : {}),
@@ -272,11 +262,20 @@ function createQaSuiteScenarioFlowApi(
   return { api, cleanupApi: { ...api, webOpenPage: createWebPageOpener() } };
 }
 
-function createQaScenarioDeadline(timeoutMs?: number) {
+function createQaScenarioDeadline(timeoutMs?: number, whenUnhealthy?: Promise<Error>) {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadlineTimeoutMs = resolveQaGatewayTimeoutWithGraceMs(timeoutMs);
   let deadline: Promise<never> | undefined;
+  let disposed = false;
+  const transportFailure = whenUnhealthy?.then((error) => {
+    if (!disposed) {
+      controller.abort(error);
+    }
+    throw error;
+  });
+  // Transport loss may precede the first step; run() still observes the rejection.
+  void transportFailure?.catch(() => {});
   return {
     signal: controller.signal,
     run: async <T>(operation: () => Promise<T>) => {
@@ -294,9 +293,14 @@ function createQaScenarioDeadline(timeoutMs?: number) {
       }
       // In-flight calls abort cooperatively. The flow runner fences later actions and
       // preserves DSL finally cleanup; the suite owner then tears down runtime resources.
-      return deadline ? await Promise.race([operation(), deadline]) : await operation();
+      const pending = operation();
+      const bounded = deadline ? Promise.race([pending, deadline]) : pending;
+      return transportFailure ? await Promise.race([bounded, transportFailure]) : await bounded;
     },
-    dispose: () => clearTimeout(timer),
+    dispose: () => {
+      disposed = true;
+      clearTimeout(timer);
+    },
   };
 }
 
@@ -328,11 +332,12 @@ function createQaSuiteScenarioStepRunner(
                 const fallbackTimeoutMs = deps.liveTurnTimeoutMs(env, 60_000);
                 const preparationDeadline = createQaScenarioDeadline(
                   Math.max(execution.timeoutMs ?? 0, fallbackTimeoutMs),
+                  env.transport.whenUnhealthy,
                 );
                 try {
                   const prepared = await preparationDeadline.run(() =>
                     prepareFlow({
-                      signal: preparationDeadline.signal,
+                      signal: AbortSignal.any([preparationDeadline.signal, deadline.signal]),
                       config: execution.config ?? {},
                       gateway: env.gateway,
                       outputDir: env.outputDir,
@@ -372,7 +377,10 @@ export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowAp
     throw new Error(`scenario missing flow: ${params.scenario.id}`);
   }
   const vars: Record<string, unknown> = {};
-  const deadline = createQaScenarioDeadline(params.scenario.execution.timeoutMs);
+  const deadline = createQaScenarioDeadline(
+    params.scenario.execution.timeoutMs,
+    params.env.transport.whenUnhealthy,
+  );
   try {
     const { api, cleanupApi } = createQaSuiteScenarioFlowApi({
       ...params,

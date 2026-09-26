@@ -10,7 +10,6 @@ import {
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_CHUNKING_VERSION,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
-  type MemorySessionSyncTarget,
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -27,6 +26,7 @@ import {
   type ManagerIndexFixture,
 } from "./manager-index.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 import { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -1569,12 +1569,12 @@ describe("memory index", () => {
       manager.takeReindexRetryStateForMaintenance();
       const recoveryState = manager as unknown as {
         syncing: Promise<void> | null;
-        queuedSessions: Map<string, unknown>;
+        sessionSyncQueue: MemoryTargetedSessionSyncQueue;
         sessionsDirtyFiles: Set<string>;
         sessionsFullRetryDirty: boolean;
       };
       expect(recoveryState.syncing).toBeNull();
-      expect(recoveryState.queuedSessions.size).toBe(1);
+      expect(recoveryState.sessionSyncQueue.sessions.size).toBe(1);
       expect(recoveryState.sessionsDirtyFiles.size).toBe(0);
       expect(recoveryState.sessionsFullRetryDirty).toBe(false);
 
@@ -1598,7 +1598,7 @@ describe("memory index", () => {
 
       expect(ftsMatchCount(markers.retained)).toBeGreaterThan(0);
       expect(ftsMatchCount(markers.trigger)).toBeGreaterThan(0);
-      expect(recoveryState.queuedSessions.size).toBe(0);
+      expect(recoveryState.sessionSyncQueue.sessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
     } finally {
       db.close();
@@ -1631,9 +1631,8 @@ describe("memory index", () => {
       rejectQueuedSync = reject;
     });
     const owner = manager as unknown as {
+      sessionSyncQueue: MemoryTargetedSessionSyncQueue;
       syncing: Promise<void> | null;
-      queuedSessions: Map<string, MemorySessionSyncTarget>;
-      queuedSessionSync: Promise<void> | null;
       runSync: (params?: MemorySyncParams) => Promise<void>;
     };
     const originalRunSync = owner.runSync.bind(owner);
@@ -1688,7 +1687,7 @@ describe("memory index", () => {
       await vi.waitFor(() => {
         expect(runSyncSpy).toHaveBeenCalledTimes(3);
         expect(owner.syncing).not.toBeNull();
-        expect(owner.queuedSessionSync).not.toBeNull();
+        expect(owner.sessionSyncQueue.pending).not.toBeNull();
       });
       const rejectingQueuedSync = owner.syncing;
       if (!rejectingQueuedSync) {
@@ -1706,8 +1705,8 @@ describe("memory index", () => {
       void rejectingQueuedSync.catch(() => {
         transitionState = {
           syncingNull: owner.syncing === null,
-          queueOwnerLive: owner.queuedSessionSync !== null,
-          queuedTargets: owner.queuedSessions.size,
+          queueOwnerLive: owner.sessionSyncQueue.pending !== null,
+          queuedTargets: owner.sessionSyncQueue.sessions.size,
         };
         const transitionCall = manager.sync({
           reason: "test-live-rejection-transition",
@@ -1742,7 +1741,7 @@ describe("memory index", () => {
         queueOwnerLive: true,
         queuedTargets: 0,
       });
-      expect(Array.from(owner.queuedSessions.values())).toEqual([
+      expect(Array.from(owner.sessionSyncQueue.sessions.values())).toEqual([
         {
           agentId: "main",
           sessionId: "transition",
@@ -1785,7 +1784,7 @@ describe("memory index", () => {
       } finally {
         observer.close();
       }
-      expect(owner.queuedSessions.size).toBe(0);
+      expect(owner.sessionSyncQueue.sessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
       expect(transitionProgress).not.toHaveBeenCalled();
     } finally {
@@ -1809,18 +1808,16 @@ describe("memory index", () => {
       resolveFullSync = resolve;
     });
     const owner = manager as unknown as {
+      sessionSyncQueue: MemoryTargetedSessionSyncQueue;
       closing: boolean;
       closed: boolean;
-      queuedSessions: Map<string, MemorySessionSyncTarget>;
-      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
-      queuedForce: boolean;
       syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
       runSync: (params?: MemorySyncParams) => Promise<void>;
     };
     const syncAdmitted = vi.spyOn(owner, "syncAdmitted");
     const runSyncSpy = vi.spyOn(owner, "runSync").mockReturnValueOnce(fullSyncGate);
     const progress = vi.fn();
-    owner.queuedSessions.set("retained", {
+    owner.sessionSyncQueue.sessions.set("retained", {
       agentId: "main",
       sessionId: "retained-close",
       sessionKey: "agent:main:retained-close",
@@ -1856,9 +1853,9 @@ describe("memory index", () => {
       expect(runSyncSpy).toHaveBeenCalledTimes(1);
       expect(syncAdmitted).toHaveBeenCalledTimes(2);
       expect(owner.closed).toBe(true);
-      expect(owner.queuedSessions.size).toBe(0);
-      expect(owner.queuedProgressCallbacks.size).toBe(0);
-      expect(owner.queuedForce).toBe(false);
+      expect(owner.sessionSyncQueue.sessions.size).toBe(0);
+      expect(owner.sessionSyncQueue.progressCallbacks.size).toBe(0);
+      expect(owner.sessionSyncQueue.force).toBe(false);
       expect(progress).not.toHaveBeenCalled();
     } finally {
       resolveFullSync?.();
@@ -1881,12 +1878,8 @@ describe("memory index", () => {
       resolveActiveSync = resolve;
     });
     const owner = manager as unknown as {
+      sessionSyncQueue: MemoryTargetedSessionSyncQueue;
       closed: boolean;
-      queuedArchiveFiles: Set<string>;
-      queuedSessions: Map<string, MemorySessionSyncTarget>;
-      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
-      queuedForce: boolean;
-      queuedSessionSync: Promise<void> | null;
       runSync: (params?: MemorySyncParams) => Promise<void>;
     };
     const runSyncSpy = vi
@@ -1926,27 +1919,27 @@ describe("memory index", () => {
       await queuedRejection;
 
       expect(runSyncSpy).toHaveBeenCalledTimes(2);
-      expect(owner.queuedArchiveFiles).toEqual(
+      expect(owner.sessionSyncQueue.archiveFiles).toEqual(
         new Set(["/tmp/retained-close-after-failure.jsonl"]),
       );
-      expect(Array.from(owner.queuedSessions.values())).toEqual([
+      expect(Array.from(owner.sessionSyncQueue.sessions.values())).toEqual([
         {
           agentId: "main",
           sessionId: "retained-close-after-failure",
           sessionKey: "agent:main:retained-close-after-failure",
         },
       ]);
-      expect(owner.queuedForce).toBe(true);
-      expect(owner.queuedProgressCallbacks.size).toBe(0);
-      expect(owner.queuedSessionSync).toBeNull();
+      expect(owner.sessionSyncQueue.force).toBe(true);
+      expect(owner.sessionSyncQueue.progressCallbacks.size).toBe(0);
+      expect(owner.sessionSyncQueue.pending).toBeNull();
 
       await manager.close?.();
 
       expect(owner.closed).toBe(true);
-      expect(owner.queuedArchiveFiles.size).toBe(0);
-      expect(owner.queuedSessions.size).toBe(0);
-      expect(owner.queuedProgressCallbacks.size).toBe(0);
-      expect(owner.queuedForce).toBe(false);
+      expect(owner.sessionSyncQueue.archiveFiles.size).toBe(0);
+      expect(owner.sessionSyncQueue.sessions.size).toBe(0);
+      expect(owner.sessionSyncQueue.progressCallbacks.size).toBe(0);
+      expect(owner.sessionSyncQueue.force).toBe(false);
     } finally {
       resolveActiveSync?.();
       await manager.close?.();
@@ -2300,16 +2293,15 @@ describe("memory index", () => {
     }
   });
 
-  it("drops the shipped legacy vector table and schedules a full reindex", async () => {
-    const cfg = createCfg({ vectorEnabled: true });
-    const manager = await getPersistentManager(cfg);
+  it("prepares the native vector connection after child retrieval and retires the legacy table", async () => {
+    const manager = await getPersistentManager(createCfg({ vectorEnabled: true }));
+    await manager.sync({ reason: "test", force: true });
+    await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
+    expect(manager.status().vector?.storeAvailable).toBe(true);
     const db = Reflect.get(manager, "db") as DatabaseSync;
     db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
 
-    const available = await manager.probeVectorStoreAvailability?.();
-    if (!available) {
-      return;
-    }
+    await expect(manager.probeVectorStoreAvailability?.()).resolves.toBe(true);
 
     expect(
       db

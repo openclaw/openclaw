@@ -2,44 +2,23 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  asDateTimestampMs,
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { DEFAULT_MAX_ARCHIVE_BYTES_ZIP } from "../../infra/archive.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createAsyncLock } from "../../infra/json-files.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
-import { withTempWorkspace } from "../../infra/private-temp-workspace.js";
+import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { validateRequestedSkillSlug } from "./install-paths.js";
 import { SkillUploadRequestError } from "./upload-store-error.js";
 import {
-  deleteOwnedSkillUpload,
-  deleteSkillUploadState,
-  hasLiveSkillUploadInstallLease,
-  openSkillUploadDatabase,
-  requireUploadMetadata,
-  assertNotExpired,
-  renewSkillUploadInstallLease,
   resolveSkillUploadDatabaseOptions,
-  selectSkillUploadMetadata,
-  SKILL_UPLOAD_LEASE_SCOPE,
-  type SkillUploadDatabase,
   type SkillUploadMetadataRow,
 } from "./upload-store.sqlite.js";
+import type { SkillUploadWorkerOperations } from "./upload-store.worker.js";
+type SkillUploadScope = Pick<SqliteWorkerStore<SkillUploadWorkerOperations>, "execute">;
 
 /** Time window in which uploaded skill archive chunks may be committed. */
 const SKILL_UPLOAD_TTL_MS = 60 * 60 * 1000;
@@ -47,7 +26,6 @@ const SKILL_UPLOAD_INSTALL_LEASE_MS = 15 * 60 * 1000;
 const SKILL_UPLOAD_INSTALL_HEARTBEAT_MS = 30 * 1000;
 const MAX_SKILL_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
 const MAX_SKILL_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_SKILL_UPLOAD_CHUNK_BYTES / 3) * 4;
-const MAX_ACTIVE_SKILL_UPLOADS = 32;
 const SKILL_UPLOAD_IDEMPOTENCY_KEY_MAX_LENGTH = 2048;
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
@@ -211,61 +189,18 @@ function decodeBase64Chunk(dataBase64: string): Buffer {
   return decoded;
 }
 
-function matchesBegin(
-  row: SkillUploadMetadataRow,
-  params: {
-    kind: "skill-archive";
-    slug: string;
-    force: boolean;
-    sizeBytes: number;
-    sha256?: string;
-  },
-): boolean {
-  return (
-    row.kind === params.kind &&
-    row.slug === params.slug &&
-    row.force === (params.force ? 1 : 0) &&
-    row.size_bytes === params.sizeBytes &&
-    (row.sha256 ?? undefined) === params.sha256
-  );
-}
-
-async function cleanupExpiredUploads(params: {
-  options: OpenClawStateDatabaseOptions;
-  nowMs: number;
-  lockRoot: string;
-  excludeUploadId?: string;
-}): Promise<void> {
-  const validNow = asDateTimestampMs(params.nowMs);
-  if (validNow === undefined) {
-    return;
-  }
-  const { database, kysely } = openSkillUploadDatabase(params.options);
-  const expired = executeSqliteQuerySync(
-    database.db,
-    kysely.selectFrom("skill_uploads").select("upload_id").where("expires_at", "<=", validNow),
-  ).rows;
-  for (const row of expired) {
-    if (row.upload_id === params.excludeUploadId) {
+async function cleanupExpiredUploads(
+  scope: SkillUploadScope,
+  lockRoot: string,
+  excludeUploadId?: string,
+): Promise<void> {
+  const expired = await scope.execute({ type: "skillUploads.expired", input: undefined });
+  for (const uploadId of expired) {
+    if (uploadId === excludeUploadId) {
       continue;
     }
-    await withLock(`${params.lockRoot}:upload:${row.upload_id}`, async () => {
-      runOpenClawStateWriteTransaction(({ db }) => {
-        const transactionDb = getNodeSqliteKysely<SkillUploadDatabase>(db);
-        if (hasLiveSkillUploadInstallLease(db, transactionDb, row.upload_id, validNow)) {
-          return;
-        }
-        const current = executeSqliteQueryTakeFirstSync(
-          db,
-          transactionDb
-            .selectFrom("skill_uploads")
-            .select("expires_at")
-            .where("upload_id", "=", row.upload_id),
-        );
-        if (current && current.expires_at <= validNow) {
-          deleteSkillUploadState(db, transactionDb, row.upload_id);
-        }
-      }, params.options);
+    await withLock(`${lockRoot}:upload:${uploadId}`, async () => {
+      await scope.execute({ type: "skillUploads.deleteExpired", input: { uploadId } });
     });
   }
 }
@@ -303,93 +238,38 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
     SKILL_UPLOAD_INSTALL_HEARTBEAT_MS,
   );
 
-  function lockRoot(): string {
-    return openOpenClawStateDatabase(stateOptions).path;
-  }
-
   return {
     async begin(params: BeginParams) {
-      const root = lockRoot();
+      const request = { ...params };
+      const context = captureOpenClawStateWorkerContext(stateOptions);
+      const root = context.admission.databasePath;
       return await withLock(`${root}:begin`, async () => {
-        await cleanupExpiredUploads({ options: stateOptions, nowMs: Date.now(), lockRoot: root });
-        if (params.kind !== "skill-archive") {
-          throw new SkillUploadRequestError("unsupported upload kind");
-        }
-        const slug = validateUploadSlug(params.slug);
-        const sizeBytes = validateSizeBytes(params.sizeBytes);
-        const sha256 = normalizeSkillUploadSha256(params.sha256);
-        const force = params.force === true;
-        const idempotencyKey = validateIdempotencyKey(params.idempotencyKey);
-        const keyHash = idempotencyKey ? sha256Hex(idempotencyKey) : undefined;
-        // Expiry begins after cleanup waits, not before a possibly long in-flight install.
-        const createdAt = Date.now();
-        const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: createdAt });
-        if (expiresAt === undefined) {
-          throw new SkillUploadRequestError("invalid upload expiry");
-        }
-
-        return runOpenClawStateWriteTransaction(({ db }) => {
-          const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
-          if (keyHash) {
-            const existing = executeSqliteQueryTakeFirstSync(
-              db,
-              selectSkillUploadMetadata(kysely).where("idempotency_key_hash", "=", keyHash),
-            );
-            if (existing) {
-              if (!matchesBegin(existing, { kind: params.kind, slug, force, sizeBytes, sha256 })) {
-                throw new SkillUploadRequestError(
-                  "idempotencyKey conflicts with a different upload",
-                );
-              }
-              if (isFutureDateTimestampMs(existing.expires_at, { nowMs: createdAt })) {
-                return {
-                  uploadId: existing.upload_id,
-                  receivedBytes: existing.received_bytes,
-                  expiresAt: existing.expires_at,
-                };
-              }
-              if (hasLiveSkillUploadInstallLease(db, kysely, existing.upload_id, createdAt)) {
-                throw new SkillUploadRequestError("upload is already being installed");
-              }
-              deleteSkillUploadState(db, kysely, existing.upload_id);
-            }
+        const { runOpenClawStateWorkerOperation } =
+          await import("../../state/openclaw-state-worker-store.js");
+        return runOpenClawStateWorkerOperation(context, async (scope) => {
+          await cleanupExpiredUploads(scope, root);
+          if (request.kind !== "skill-archive") {
+            throw new SkillUploadRequestError("unsupported upload kind");
           }
-
-          const atCapacity = executeSqliteQueryTakeFirstSync(
-            db,
-            kysely
-              .selectFrom("skill_uploads")
-              .select((eb) => eb.val(1).as("present"))
-              .where("expires_at", ">", createdAt)
-              .offset(MAX_ACTIVE_SKILL_UPLOADS - 1)
-              .limit(1),
-          );
-          if (atCapacity) {
-            throw new SkillUploadRequestError("too many active skill uploads");
-          }
-
-          const uploadId = randomUUID();
-          executeSqliteQuerySync(
-            db,
-            kysely.insertInto("skill_uploads").values({
-              upload_id: uploadId,
-              kind: params.kind,
+          const slug = validateUploadSlug(request.slug);
+          const sizeBytes = validateSizeBytes(request.sizeBytes);
+          const sha256 = normalizeSkillUploadSha256(request.sha256);
+          const force = request.force === true;
+          const idempotencyKey = validateIdempotencyKey(request.idempotencyKey);
+          const keyHash = idempotencyKey ? sha256Hex(idempotencyKey) : undefined;
+          return scope.execute({
+            type: "skillUploads.begin",
+            input: {
+              kind: request.kind,
               slug,
-              force: force ? 1 : 0,
-              size_bytes: sizeBytes,
-              sha256: sha256 ?? null,
-              actual_sha256: null,
-              received_bytes: 0,
-              archive_blob: Buffer.alloc(0),
-              created_at: createdAt,
-              expires_at: expiresAt,
-              committed: 0,
-              committed_at: null,
-              idempotency_key_hash: keyHash ?? null,
-            }),
-          );
-          return { uploadId, receivedBytes: 0, expiresAt };
-        }, stateOptions);
+              sizeBytes,
+              sha256,
+              force,
+              keyHash,
+              ttlMs,
+            },
+          });
+        });
       });
     },
 
@@ -397,62 +277,18 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
       const uploadId = validateUploadId(params.uploadId);
       const offset = validateOffset(params.offset);
       const decoded = decodeBase64Chunk(params.dataBase64);
-      const root = lockRoot();
-      await cleanupExpiredUploads({
-        options: stateOptions,
-        nowMs: Date.now(),
-        lockRoot: root,
-        excludeUploadId: uploadId,
-      });
-      return await withLock(`${root}:upload:${uploadId}`, async () => {
-        const currentTime = Date.now();
-        assertNotExpired(requireUploadMetadata(uploadId, stateOptions), currentTime, stateOptions);
-        return runOpenClawStateWriteTransaction(({ db }) => {
-          const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
-          const row = executeSqliteQueryTakeFirstSync(
-            db,
-            selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
-          );
-          if (!row) {
-            throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
-          }
-          const validNow = asDateTimestampMs(currentTime);
-          if (
-            validNow === undefined ||
-            !isFutureDateTimestampMs(row.expires_at, { nowMs: validNow })
-          ) {
-            throw new SkillUploadRequestError("upload has expired");
-          }
-          if (row.committed === 1) {
-            throw new SkillUploadRequestError("upload is already committed");
-          }
-          if (offset !== row.received_bytes) {
-            throw new SkillUploadRequestError(
-              `upload offset mismatch: expected ${row.received_bytes}, got ${offset}`,
-            );
-          }
-          const nextSize = row.received_bytes + decoded.length;
-          if (nextSize > row.size_bytes) {
-            throw new SkillUploadRequestError("upload chunk exceeds declared size");
-          }
-          executeSqliteQuerySync(
-            db,
-            kysely.insertInto("skill_upload_chunks").values({
-              upload_id: uploadId,
-              byte_offset: offset,
-              size_bytes: decoded.length,
-              chunk_blob: decoded,
-            }),
-          );
-          executeSqliteQuerySync(
-            db,
-            kysely
-              .updateTable("skill_uploads")
-              .set({ received_bytes: nextSize })
-              .where("upload_id", "=", uploadId),
-          );
-          return { uploadId, receivedBytes: nextSize, expiresAt: row.expires_at };
-        }, stateOptions);
+      const context = captureOpenClawStateWorkerContext(stateOptions);
+      const root = context.admission.databasePath;
+      const { runOpenClawStateWorkerOperation } =
+        await import("../../state/openclaw-state-worker-store.js");
+      return runOpenClawStateWorkerOperation(context, async (scope) => {
+        await cleanupExpiredUploads(scope, root, uploadId);
+        return withLock(`${root}:upload:${uploadId}`, () =>
+          scope.execute({
+            type: "skillUploads.chunk",
+            input: { uploadId, offset, decoded },
+          }),
+        );
       });
     },
 
@@ -475,122 +311,90 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
       action: (record: SkillUploadRecord, controls: { remove: () => Promise<void> }) => Promise<T>,
     ): Promise<T> {
       const uploadId = validateUploadId(uploadIdRaw);
-      const root = lockRoot();
-      return await withLock(`${root}:upload:${uploadId}`, async () => {
-        const leaseOwner = randomUUID();
-        const currentTime = Date.now();
-        assertNotExpired(requireUploadMetadata(uploadId, stateOptions), currentTime, stateOptions);
-        const row = runOpenClawStateWriteTransaction(({ db }) => {
-          const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
-          const current = executeSqliteQueryTakeFirstSync(
-            db,
-            kysely.selectFrom("skill_uploads").selectAll().where("upload_id", "=", uploadId),
-          );
-          if (!current) {
-            throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
-          }
-          const validNow = asDateTimestampMs(currentTime);
-          if (
-            validNow === undefined ||
-            !isFutureDateTimestampMs(current.expires_at, { nowMs: validNow })
-          ) {
-            throw new SkillUploadRequestError("upload has expired");
-          }
-          if (current.committed !== 1) {
-            throw new SkillUploadRequestError("upload is not committed");
-          }
-          if (!current.actual_sha256) {
-            throw new SkillUploadRequestError("committed upload is missing sha256");
-          }
-          if (current.archive_blob.byteLength !== current.size_bytes) {
-            throw new SkillUploadRequestError("uploaded archive is missing or incomplete");
-          }
-          executeSqliteQuerySync(
-            db,
-            kysely
-              .deleteFrom("state_leases")
-              .where("scope", "=", SKILL_UPLOAD_LEASE_SCOPE)
-              .where("lease_key", "=", uploadId)
-              .where("expires_at", "<=", currentTime),
-          );
-          const claimed = executeSqliteQuerySync(
-            db,
-            kysely
-              .insertInto("state_leases")
-              .values({
-                scope: SKILL_UPLOAD_LEASE_SCOPE,
-                lease_key: uploadId,
-                owner: leaseOwner,
-                expires_at: currentTime + installLeaseMs,
-                heartbeat_at: currentTime,
-                payload_json: null,
-                created_at: currentTime,
-                updated_at: currentTime,
-              })
-              .onConflict((conflict) => conflict.doNothing()),
-          );
-          if (claimed.numAffectedRows !== 1n) {
-            throw new SkillUploadRequestError("upload is already being installed");
-          }
-          return current;
-        }, stateOptions);
-
-        // The callback can cross process-local lock lifetimes. Keep the SQLite owner lease
-        // alive until it settles so another Gateway cannot sweep or reinstall this upload.
-        const heartbeat = setInterval(() => {
-          const heartbeatAt = Date.now();
-          try {
-            renewSkillUploadInstallLease({
-              uploadId,
-              owner: leaseOwner,
-              heartbeatAt,
-              expiresAt: heartbeatAt + installLeaseMs,
-              options: stateOptions,
+      const context = captureOpenClawStateWorkerContext(stateOptions);
+      return withLock(`${context.admission.databasePath}:upload:${uploadId}`, async () => {
+        const { runOpenClawStateWorkerOperation } =
+          await import("../../state/openclaw-state-worker-store.js");
+        const { withSkillUploadInstallOwner } = await import("./upload-store-install-owner.js");
+        const owner = randomUUID();
+        return withSkillUploadInstallOwner(context, { uploadId, owner }, (claimStarted) =>
+          runOpenClawStateWorkerOperation(context, async (scope) => {
+            claimStarted();
+            const row = await scope.execute({
+              type: "skillUploads.claim",
+              input: {
+                uploadId,
+                leaseOwner: owner,
+                installLeaseMs,
+              },
             });
-          } catch {
-            // A transient busy/error keeps the existing generous lease; the next tick retries.
-          }
-        }, installLeaseHeartbeatMs);
-        heartbeat.unref();
-
-        try {
-          return await withTempWorkspace(
-            {
-              rootDir: tempRootDir ?? resolvePreferredOpenClawTmpDir(),
-              prefix: "openclaw-skill-upload-",
-            },
-            async (tmp) => {
-              const archivePath = path.join(tmp.dir, "archive.zip");
-              // SQLite returned a private byte snapshot that remains stable across this await.
-              await fs.writeFile(archivePath, row.archive_blob, { mode: 0o600 });
-              return await action(toSkillUploadRecord(row, archivePath), {
-                remove: async () => {
-                  // Only the callback that still owns the install lease may consume the upload.
-                  // A stalled callback must not erase a successor Gateway's replacement lease.
-                  if (
-                    deleteOwnedSkillUpload(uploadId, leaseOwner, Date.now(), stateOptions) ===
-                    "not-owner"
-                  ) {
-                    throw new SkillUploadRequestError("upload install lease is no longer active");
-                  }
+            context.admission.assertCurrent();
+            let renewal: Promise<void> | undefined;
+            let renewalPaused = 0;
+            let installing = true;
+            const heartbeat = setInterval(() => {
+              if (!installing || renewalPaused || renewal) {
+                return;
+              }
+              renewal = scope
+                .execute({
+                  type: "skillUploads.renew",
+                  input: {
+                    uploadId,
+                    owner,
+                    installLeaseMs,
+                  },
+                })
+                .then(
+                  () => undefined,
+                  () => undefined,
+                )
+                .finally(() => {
+                  renewal = undefined;
+                });
+            }, installLeaseHeartbeatMs);
+            heartbeat.unref();
+            try {
+              return await withTempWorkspace(
+                {
+                  rootDir: tempRootDir ?? resolvePreferredOpenClawTmpDir(),
+                  prefix: "openclaw-skill-upload-",
                 },
-              });
-            },
-          );
-        } finally {
-          clearInterval(heartbeat);
-          runOpenClawStateWriteTransaction(({ db }) => {
-            const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
-            executeSqliteQuerySync(
-              db,
-              kysely
-                .deleteFrom("state_leases")
-                .where("scope", "=", SKILL_UPLOAD_LEASE_SCOPE)
-                .where("lease_key", "=", uploadId)
-                .where("owner", "=", leaseOwner),
-            );
-          }, stateOptions);
-        }
+                async (tmp) => {
+                  const archivePath = path.join(tmp.dir, "archive.zip");
+                  await fs.writeFile(archivePath, row.archive_blob, { mode: 0o600 });
+                  context.admission.assertCurrent();
+                  return action(toSkillUploadRecord(row, archivePath), {
+                    remove: async () => {
+                      renewalPaused += 1;
+                      try {
+                        await renewal;
+                        const result = await scope.execute({
+                          type: "skillUploads.consume",
+                          input: {
+                            uploadId,
+                            owner,
+                          },
+                        });
+                        if (result === "not-owner") {
+                          throw new SkillUploadRequestError(
+                            "upload install lease is no longer active",
+                          );
+                        }
+                      } finally {
+                        renewalPaused -= 1;
+                      }
+                    },
+                  });
+                },
+              );
+            } finally {
+              installing = false;
+              clearInterval(heartbeat);
+              await renewal;
+            }
+          }),
+        );
       });
     },
   };

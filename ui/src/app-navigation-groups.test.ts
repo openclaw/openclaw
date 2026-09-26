@@ -17,6 +17,7 @@ import type { NativeDeviceSettingsCapability } from "./app/native-device-setting
 import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
+import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
@@ -36,18 +37,7 @@ describe("sidebar entries", () => {
       openSystemSettings: () => undefined,
       openPanel: () => undefined,
       checkForUpdates: () => undefined,
-      chromeExtensionStatus: async () => ({
-        nativeHostRegistered: false,
-        installRequested: false,
-        installedProfiles: 0,
-        discoveredProfiles: 0,
-      }),
-      installChromeExtension: async () => ({
-        nativeHostRegistered: false,
-        installRequested: false,
-        installedProfiles: 0,
-        discoveredProfiles: 0,
-      }),
+      setupChromeExtension: async (action) => createChromeExtensionSetupResult({ action }),
       refresh: () => undefined,
       dispose: () => undefined,
     };
@@ -300,6 +290,7 @@ describe("sidebar entries", () => {
       normalizeSidebarEntries([
         "route:usage",
         "session:agent:main:test",
+        "route:cron",
         "route:tasks",
         "route:usage",
         "route:worktrees",
@@ -307,7 +298,7 @@ describe("sidebar entries", () => {
         "usage",
         7,
       ]),
-    ).toEqual(["route:usage", "session:agent:main:test", "route:tasks"]);
+    ).toEqual(["route:usage", "session:agent:main:test", "route:cron"]);
     expect(normalizeSidebarEntries([])).toEqual([]);
   });
 
@@ -323,10 +314,10 @@ describe("sidebar entries", () => {
   });
 
   it("puts every hidden nav route into the More section", () => {
-    const entries = ["route:tasks", "session:agent:main:test", "route:usage"] as const;
+    const entries = ["route:cron", "session:agent:main:test", "route:usage"] as const;
     const more = sidebarMoreRoutes(entries);
-    expect(more).not.toContain("tasks");
+    expect(more).not.toContain("cron");
     expect(more).not.toContain("usage");
-    expect(new Set(["tasks", "usage", ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
+    expect(new Set(["cron", "usage", ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
   });
 });

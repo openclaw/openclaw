@@ -13,8 +13,10 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import {
+  createUpdateRun,
   getUpdateRun,
   listUpdateRuns,
+  recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
@@ -80,6 +82,7 @@ import { updateExecutorNativeEntrypoints } from "./update-command-executor-nativ
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import {
   registerLeaseServiceRestorationTests,
+  registerLegacyResumeWarningTests,
   seedInterruptedPostCoreRun,
 } from "./update-command-lease-service.test-support.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
@@ -686,52 +689,15 @@ describe("update orchestration lifecycle ownership", () => {
     },
   );
 
-  it.each([false, true])(
-    "legacy resume settles Doctor and retains its warnings before its result (changed=%s)",
-    async (changed) => {
-      const secondDoctorWarning = "Plugin fixture: second Doctor repair deferred.";
-      await writeScenario("resume");
-      await fs.rm(state.path("handoff.json"));
-      const resultPath = state.path("legacy-result.json");
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
-      mocks.plugins.mockImplementationOnce(async () => {
-        expect(await events()).toEqual(["post-attempt", "post-acquired"]);
-        expect(await fs.stat(resultPath).catch(() => null)).toBeNull();
-        if (changed) {
-          await state.writeJson("scenario.json", {
-            lane: "resume",
-            doctorWarnings: [secondDoctorWarning],
-          } satisfies LeaseScenario);
-        }
-        return { ...pluginResult, changed };
-      });
-
-      await invoke("resume");
-
-      expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
-        status: changed ? "warning" : "ok",
-        changed,
-        ...(changed
-          ? {
-              warnings: [
-                expect.objectContaining({
-                  reason: "doctor-advisory",
-                  message: secondDoctorWarning,
-                }),
-              ],
-            }
-          : {}),
-      });
-      expect(await events()).toEqual([
-        "post-attempt",
-        "post-acquired",
-        ...(changed ? ["post-attempt", "post-acquired"] : []),
-        "validate",
-        "readiness",
-      ]);
-      expectDoctorDiagnostics();
-    },
-  );
+  registerLegacyResumeWarningTests({
+    context: () => ({ state, entrypoint }),
+    writeScenario: (scenario) => writeScenario("resume", scenario),
+    invoke: () => invoke("resume"),
+    plugins: mocks.plugins,
+    pluginResult,
+    events,
+    expectDoctorDiagnostics,
+  });
 
   it.each(
     (["resume", "candidate-runtime"] as const).flatMap((lane) =>
@@ -896,26 +862,44 @@ describe("update orchestration lifecycle ownership", () => {
       return { ...pluginResult, changed: false };
     });
 
-    await expect(invoke("repair", [recovery.runId])).rejects.toThrow("An update resumed");
+    await expect(invoke("repair", [recovery.runId])).rejects.toThrow(
+      "did not assume the update resumed",
+    );
 
     expect(getUpdateRun(recovery.runId)).toMatchObject({ status: "running", reason: null });
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("resume reports a plugin exception after releasing its lease", async () => {
-    await writeScenario("resume");
-    const resultPath = state.path("failed-post-core.json");
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
-    mocks.plugins.mockRejectedValueOnce(new Error("plugin fixture failure"));
-    await expect(invoke("resume")).rejects.toThrow("plugin fixture failure");
-    const result = JSON.parse(await fs.readFile(resultPath, "utf8"));
-    expect(result).toMatchObject({
-      status: "failed",
-      error: expect.stringContaining("plugin fixture failure"),
-    });
-    expect(result.error).not.toContain(state.root);
-    const probe = await runExec(process.execPath, [entrypoint, "probe"], { timeoutMs: 15_000 });
-    expect(probe.stdout).toBe("acquired");
+  it("repair reports unverified recorded ownership for a captured old-host run", async () => {
+    const driver = { host: "renamed-host.example", pid: 424_242, startIdentity: "1" };
+    const created = createUpdateRun({ trigger: "cli", origin: { driver } });
+    const recovery = recordUpdateRunPhase(created.runId, "verifying");
+    await writeScenario("repair", { pluginUpdate: { ...pluginResult, changed: false } });
+
+    const error = await invoke("repair", [recovery.runId]).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = String(error);
+    expect(message).toContain(`Update ${recovery.runId} remains recorded as running (verifying);`);
+    expect(message).toContain("driver PID 424242 on renamed-host.example, liveness: not observed");
+    expect(message).toContain(
+      "Repair could not verify that the recorded update work stopped; it did not assume the update resumed.",
+    );
+    expect(message).toContain(
+      'Check each named host or supervisor: this host cannot safely determine liveness when a driver is shown as "not observed".',
+    );
+    expect(message).toContain(
+      "If a driver is active, wait for it or stop it through its owning host or supervisor.",
+    );
+    expect(message).toContain(
+      "If this is the same machine after a rename, restore its recorded hostname before retrying `openclaw update repair`; otherwise contact support.",
+    );
+    expect(message).not.toContain("An update resumed");
+    expect(getUpdateRun(recovery.runId)).toMatchObject({ status: "running", phase: "verifying" });
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
   it("continues restart handling with a warning after a final Doctor execution failure", async () => {

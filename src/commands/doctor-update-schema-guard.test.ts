@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import * as backupCreate from "../infra/backup-create.js";
 import * as packageRoot from "../infra/openclaw-root.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -184,6 +184,7 @@ it("retains a verified canonical backup before permitting the normal schema migr
     const logs = runtime();
     const create = vi.spyOn(backupCreate, "createBackupArchive");
     const verify = vi.spyOn(backupVerify, "verifyBackupArchive");
+    const onVerifiedBackup = vi.fn();
     const authority = { runId: f.runId, assertCurrent: vi.fn() };
     const maintenance = await beginDoctorMaintenance({
       root: null,
@@ -198,9 +199,19 @@ it("retains a verified canonical backup before permitting the normal schema migr
           schemas: f.schemas,
           runtime: logs,
           postCoreSchemaRepair: authority,
+          onVerifiedBackup,
         });
         expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
         expect(verify).toHaveBeenCalledTimes(1);
+        const identity = fs.statSync(f.pathname);
+        expect(onVerifiedBackup).toHaveBeenCalledExactlyOnceWith([
+          expect.objectContaining({
+            role: "agent",
+            agentId: "main",
+            dev: identity.dev,
+            ino: identity.ino,
+          }),
+        ]);
         await withAgentDatabaseMaintenanceLease({ env: state.env }, (lease) =>
           migrateOpenClawAgentDatabaseForMaintenance(
             { agentId: "main", pathname: f.pathname },
@@ -253,6 +264,7 @@ it.each([
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = await legacyAgentFixture(true);
     let active = true;
+    const onVerifiedBackup = vi.fn();
     const canceled = new AbortController();
     const assertCurrent = () => {
       canceled.signal.throwIfAborted();
@@ -288,6 +300,7 @@ it.each([
           guardUpdateDoctorSchemaUpgrade({
             schemas: f.schemas,
             postCoreSchemaRepair: { runId: f.runId, assertCurrent },
+            onVerifiedBackup,
           }),
         ),
       ).rejects.toThrow(
@@ -303,6 +316,7 @@ it.each([
       await maintenance?.release();
     }
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
+    expect(onVerifiedBackup).not.toHaveBeenCalled();
   });
 });
 

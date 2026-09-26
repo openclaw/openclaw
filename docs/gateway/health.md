@@ -88,6 +88,17 @@ A broken Telegram or other channel account can also make `/readyz` return `503` 
 
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
 
+### Shared-state integrity failure
+
+A terminal shared-state admission failure immediately makes `/ready` and `/readyz`
+return `503`, including failures discovered by a SQLite worker after startup.
+Detailed responses include `failing: ["state-database"]` and `stateDatabase.reason`
+with the recorded refusal. This bypasses cached channel health;
+probes read the admission owner's recorded result without querying SQLite.
+
+`/healthz` still reports HTTP liveness. Supervisors that need to detect a Gateway
+that is running but cannot admit work must monitor `/readyz`.
+
 ### Plugin replacement recovery
 
 During plugin replacement or recovery, `/readyz` returns `503`. Detailed responses

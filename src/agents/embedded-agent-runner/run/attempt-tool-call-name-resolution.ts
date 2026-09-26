@@ -5,11 +5,8 @@ import { normalizeToolPolicyName } from "../../tool-policy.js";
 
 function resolveCaseInsensitiveAllowedToolName(
   rawName: string,
-  allowedToolNames?: Set<string>,
+  allowedToolNames: Set<string>,
 ): string | null {
-  if (!allowedToolNames || allowedToolNames.size === 0) {
-    return null;
-  }
   const folded = normalizeLowercaseStringOrEmpty(rawName);
   let caseInsensitiveMatch: string | null = null;
   for (const name of allowedToolNames) {
@@ -26,11 +23,8 @@ function resolveCaseInsensitiveAllowedToolName(
 
 function resolveExactAllowedToolName(
   rawName: string,
-  allowedToolNames?: Set<string>,
+  allowedToolNames: Set<string>,
 ): string | null {
-  if (!allowedToolNames || allowedToolNames.size === 0) {
-    return null;
-  }
   if (allowedToolNames.has(rawName)) {
     return rawName;
   }
@@ -50,15 +44,12 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
     return [];
   }
 
-  const candidates: string[] = [];
-  const seen = new Set<string>();
+  const candidates = new Set<string>();
   const addCandidate = (value: string) => {
     const candidate = value.trim();
-    if (!candidate || seen.has(candidate)) {
-      return;
+    if (candidate) {
+      candidates.add(candidate);
     }
-    seen.add(candidate);
-    candidates.push(candidate);
   };
 
   addCandidate(trimmed);
@@ -94,17 +85,13 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
     }
   }
 
-  return candidates;
+  return [...candidates];
 }
 
 function resolveStructuredAllowedToolName(
   rawName: string,
-  allowedToolNames?: Set<string>,
+  allowedToolNames: Set<string>,
 ): string | null {
-  if (!allowedToolNames || allowedToolNames.size === 0) {
-    return null;
-  }
-
   const candidateNames = buildStructuredToolNameCandidates(rawName);
   for (const candidate of candidateNames) {
     if (allowedToolNames.has(candidate)) {

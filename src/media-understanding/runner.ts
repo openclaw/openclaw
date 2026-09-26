@@ -77,6 +77,7 @@ export {
   normalizeMediaAttachments,
   resolveMediaAttachmentLocalRoots,
 } from "./runner.attachments.js";
+export { buildMediaUnderstandingRegistry as buildProviderRegistry } from "./provider-registry.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ModelCatalogApi = typeof import("../agents/model-catalog.js") &
@@ -147,33 +148,11 @@ function resolveConfiguredKeyProviderOrder(params: {
   return uniqueStrings([...supportedProviders, ...params.fallbackProviders]);
 }
 
-function resolveConfiguredImageModelId(params: {
-  cfg: OpenClawConfig;
-  providerId: string;
-}): string | undefined {
-  if (isMinimaxVlmProvider(params.providerId)) {
-    return undefined;
-  }
-  const configured = resolveConfiguredImageModel(params);
-  const id = configured?.id?.trim();
-  return id || undefined;
-}
-
 function resolveConfiguredImageModel(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): { id?: string; input?: string[] } | undefined {
-  const providerCfg = findNormalizedProviderValue(
-    params.cfg.models?.providers,
-    params.providerId,
-  ) as
-    | {
-        models?: Array<{
-          id?: string;
-          input?: string[];
-        }>;
-      }
-    | undefined;
+  const providerCfg = findNormalizedProviderValue(params.cfg.models?.providers, params.providerId);
   return providerCfg?.models?.find((entry) => {
     const id = entry?.id?.trim();
     return Boolean(id) && entry?.input?.includes("image");
@@ -258,7 +237,7 @@ async function resolveAutoImageModelId(params: {
   if (isMinimaxVlmProvider(params.providerId)) {
     return "MiniMax-VL-01";
   }
-  const configuredModel = resolveConfiguredImageModelId(params);
+  const configuredModel = resolveConfiguredImageModel(params)?.id?.trim();
   if (configuredModel) {
     return configuredModel;
   }
@@ -292,13 +271,6 @@ async function resolveAutoImageModelId(params: {
     catalog,
     modelSupportsVision,
   });
-}
-
-export function buildProviderRegistry(
-  overrides?: Record<string, MediaUnderstandingProvider>,
-  cfg?: OpenClawConfig,
-): ProviderRegistry {
-  return buildMediaUnderstandingRegistry(overrides, cfg);
 }
 
 async function resolveKeyEntry(params: {
@@ -450,7 +422,7 @@ async function activeModelSupportsNativeVision(params: {
 }
 
 async function* resolveAutoAudioEntries(
-  params: Parameters<typeof resolveAutoEntries>[0],
+  params: Parameters<typeof resolveAutoEntries>[0] & { providerRegistry: ProviderRegistry },
 ): AsyncGenerator<ResolvedMediaModelEntry> {
   const activeProvider = normalizeMediaExecutionProviderId(
     params.activeModel?.provider?.trim() ?? "",
@@ -481,26 +453,28 @@ async function resolveAutoEntries(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  providerRegistry: ProviderRegistry;
+  providerRegistry?: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
   nativeVisionActive: boolean;
   config?: MediaUnderstandingConfig;
 }): Promise<ResolvedMediaModelEntry[]> {
   if (params.capability === "image" && !params.nativeVisionActive) {
-    const imageModelEntries = resolveImageModelFromAgentDefaults({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
+    const imageModelEntries = resolveImageModelFromAgentDefaults(params);
     if (imageModelEntries.length > 0) {
       return imageModelEntries.map((entry) => ({ entry }));
     }
   }
-  const activeEntry = await resolveActiveModelEntry(params);
+  const prepared = {
+    ...params,
+    providerRegistry:
+      params.providerRegistry ?? buildMediaUnderstandingRegistry(undefined, params.cfg),
+  };
+  const activeEntry = await resolveActiveModelEntry(prepared);
   if (activeEntry) {
     return [{ entry: activeEntry }];
   }
-  const keys = await resolveKeyEntry(params);
+  const keys = await resolveKeyEntry(prepared);
   if (keys) {
     return [{ entry: keys }];
   }
@@ -514,10 +488,8 @@ export async function resolveAutoImageModel(params: {
   workspaceDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
-  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const entries = await resolveAutoEntries({
     ...params,
-    providerRegistry,
     capability: "image",
     nativeVisionActive: false,
   });

@@ -11,7 +11,9 @@ import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlit
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import {
+  createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
@@ -67,8 +69,10 @@ describe("Codex initialization through the registered session deletion owner", (
         const runtime = createPluginRuntimeMock({
           agent,
           state: {
+            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
+              createPluginStateKeyedStore<T>("codex", { ...options, env: state.env }),
             openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-              createPluginStateSyncKeyedStore<T>("codex", options),
+              createPluginStateSyncKeyedStore<T>("codex", { ...options, env: state.env }),
           },
         });
         const fixture = await createCodexSessionInitializationFixtureForTest({
@@ -76,7 +80,7 @@ describe("Codex initialization through the registered session deletion owner", (
           workspaceDir: state.workspaceDir,
         });
         const { params, sourceThread, forkedThread, native, bindingStore, harness } = fixture;
-        const sourceBinding = await bindingStore.read(fixture.sourceIdentity);
+        const sourceBinding = bindingStore.read(fixture.sourceIdentity);
         const sourceEntry = loadSessionEntry(params.source);
         let expectedSourceEntry = sourceEntry;
         const replaceSource = () => {
@@ -233,7 +237,7 @@ describe("Codex initialization through the registered session deletion owner", (
               threadId: forkedThread.id,
               patch: { model: "successor-model" },
             });
-            successorBinding = await bindingStore.read(identity);
+            successorBinding = bindingStore.read(identity);
           }
           if (failure === "successor link") {
             expect(
@@ -295,7 +299,7 @@ describe("Codex initialization through the registered session deletion owner", (
           sessionId: expectDefined(childSessionId, "created child identity"),
         };
         const child = loadSessionEntry(identity);
-        const binding = await bindingStore.read(identity);
+        const binding = bindingStore.read(identity);
         const link = readSessionUpstreamLink(params.targetKey, "main");
         if (failure === "lost response" || failure === "readiness publication") {
           expect(child?.initializationPending).toBeUndefined();
@@ -304,25 +308,8 @@ describe("Codex initialization through the registered session deletion owner", (
           expect(link?.threadId).toBe(forkedThread.id);
           expect(native.archiveThread).not.toHaveBeenCalled();
           expect(deletion).not.toHaveBeenCalled();
-        } else if (failure.startsWith("source successor during link")) {
-          if (failure.endsWith("write")) {
-            expect(child?.initializationPending).toBe(true);
-          } else {
-            expect(child).toBeUndefined();
-          }
-          expect(binding).toBeUndefined();
-          expect(link?.threadId).toBe(failure.endsWith("cleanup") ? forkedThread.id : undefined);
-          expect(native.archiveThread).not.toHaveBeenCalled();
-          expect(result).toMatchObject({
-            message: expect.stringContaining("guarded rollback did not complete"),
-          });
         } else if (
-          [
-            "successor binding",
-            "rollback commit",
-            "source successor",
-            "registry rotation",
-          ].includes(failure)
+          ["successor binding", "rollback commit", "registry rotation"].includes(failure)
         ) {
           expect(child?.initializationPending).toBe(true);
           expect(binding).toEqual(
@@ -380,9 +367,9 @@ describe("Codex initialization through the registered session deletion owner", (
             ),
           ).rejects.toThrow("owned by supervision");
           expect(loadSessionEntry(identity)).toEqual(child);
-          expect(await bindingStore.read(identity)).toEqual(binding);
+          expect(bindingStore.read(identity)).toEqual(binding);
         }
-        expect(await bindingStore.read(fixture.sourceIdentity)).toEqual(sourceBinding);
+        expect(bindingStore.read(fixture.sourceIdentity)).toEqual(sourceBinding);
         expect(loadSessionEntry(params.source)).toEqual(expectedSourceEntry);
         expect(await loadTranscriptEvents(params.source)).toEqual(sourceHistory);
         expect(native.archiveThread.mock.calls).not.toEqual(

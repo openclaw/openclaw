@@ -152,20 +152,11 @@ function execApprovalAgentFromParts(
   sourceAgentId: string,
   value: Record<string, unknown>,
 ): NormalizedExecApprovalAgent {
-  const allowlistEntries = execApprovalAllowlistEntries(value.allowlist).map(
-    (entry): NormalizedExecApprovalAllowlistEntry => ({
-      index: entry.index,
-      pattern: entry.pattern,
-      argPattern: entry.argPattern,
-      entrySource: entry.entrySource,
-      sourceAgentId,
-    }),
-  );
   return {
     agentId,
     sourceAgentId,
     value,
-    allowlistEntries,
+    allowlistEntries: withExecApprovalAllowlistSource(value.allowlist, sourceAgentId),
   };
 }
 
@@ -180,25 +171,7 @@ function mergeLegacyExecApprovalAgent(
     ask: current.ask ?? legacy.ask,
     askFallback: current.askFallback ?? legacy.askFallback,
     autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
-    allowlist: mergedExecApprovalAllowlist(current.allowlist, legacy.allowlist),
   };
-}
-
-function mergedExecApprovalAllowlist(
-  current: unknown,
-  legacy: unknown,
-): readonly unknown[] | undefined {
-  const entries = mergedExecApprovalAllowlistEntries(current, legacy).map((entry) => {
-    const allowlistEntry: Record<string, unknown> = { pattern: entry.pattern };
-    if (entry.argPattern !== undefined) {
-      allowlistEntry.argPattern = entry.argPattern;
-    }
-    if (entry.entrySource !== undefined) {
-      allowlistEntry.source = entry.entrySource;
-    }
-    return allowlistEntry;
-  });
-  return entries.length === 0 ? undefined : entries;
 }
 
 function mergedExecApprovalAllowlistEntries(

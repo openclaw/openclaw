@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
@@ -6,19 +5,14 @@ import { upsertSubagentRunRowInDatabase } from "../agents/subagents/registry/sub
 import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { createStateSchemaMigrationStep } from "../infra/state-migrations.state-schema.js";
-import {
-  migrateLegacyTaskStateSidecars,
-  resolveLegacyTaskRunsSidecarPath,
-} from "../infra/state-migrations.storage.js";
 import { readTaskRecord } from "../tasks/task-registry.store.kernel.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
   type OpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 function seedTask(db: DatabaseSync, taskId: string, runId: string, childSessionKey: string) {
   db.prepare(`INSERT INTO task_runs (
@@ -74,7 +68,7 @@ it.each([false, true])(
       const pathname = database.path;
       closeOpenClawStateDatabaseForTest();
 
-      expect(repairOpenClawStateDatabaseSchemaIfNeeded({ env: state.env }).warnings).toEqual([]);
+      expect((await prepareOpenClawStateDatabaseSchema({ env: state.env })).warnings).toEqual([]);
       const unchanged = new DatabaseSync(pathname);
       expect(snapshot(unchanged)).toEqual(before);
       unchanged.close();
@@ -210,40 +204,6 @@ it.each([false, true])(
         });
       } finally {
         closeOpenClawStateDatabaseForTest();
-      }
-    });
-  },
-);
-
-it.each([false, true])(
-  "normalizes legacy sidecar imports atomically (conflict=%s)",
-  async (conflict) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      fs.mkdirSync(state.statePath("tasks"), { recursive: true });
-      const sourcePath = resolveLegacyTaskRunsSidecarPath(state.stateDir);
-      const legacy = new DatabaseSync(sourcePath);
-      legacy.exec(OPENCLAW_STATE_SCHEMA_SQL);
-      seedTask(legacy, "task-one", " run-one ", " agent:main:subagent:one ");
-      seedTask(legacy, "task-two", conflict ? "run-one" : " run-one ", " agent:main:subagent:one ");
-      legacy.close();
-      const result = await migrateLegacyTaskStateSidecars({ stateDir: state.stateDir });
-      const database = openOpenClawStateDatabase({ env: state.env });
-      if (conflict) {
-        expect(result.warnings).toEqual([expect.stringContaining("task run identifier")]);
-        expect(snapshot(database.db).tasks).toEqual([]);
-        expect(fs.existsSync(sourcePath)).toBe(true);
-      } else {
-        expect(result.warnings).toEqual([]);
-        expect(readTaskRecord(database.db, "task-one")).toMatchObject({
-          runId: "run-one",
-          childSessionKey: "agent:main:subagent:one",
-        });
-        const before = snapshot(database.db);
-        fs.copyFileSync(`${sourcePath}.migrated`, sourcePath);
-        expect(
-          (await migrateLegacyTaskStateSidecars({ stateDir: state.stateDir })).warnings,
-        ).toEqual([]);
-        expect(snapshot(database.db)).toEqual(before);
       }
     });
   },

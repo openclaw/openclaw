@@ -6,6 +6,27 @@ import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce
 import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
+export const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
+  "thread/started",
+  "thread/closed",
+  "thread/status/changed",
+  "turn/started",
+  "turn/completed",
+  "item/agentMessage/delta",
+  "item/reasoning/summaryTextDelta",
+  "item/started",
+  "item/completed",
+  // App-server exposes no typed terminal subagent result. Keep this one raw
+  // boundary until its protocol provides the child's terminal status and text.
+  "rawResponseItem/completed",
+]);
+export const RECOVERY_REVISION_NOTIFICATION_METHODS = new Set([
+  "thread/started",
+  "thread/status/changed",
+  "turn/started",
+  "turn/completed",
+]);
+
 const CODEX_SUBAGENT_NOTIFICATION_START = "<subagent_notification>";
 const CODEX_SUBAGENT_NOTIFICATION_END = "</subagent_notification>";
 

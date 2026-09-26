@@ -21,3 +21,7 @@ export function getCommandArgsWithRootOptions(
   argv: readonly string[],
   options: Omit<CommandPositionalsParseOptions, "maxPositionals">,
 ): string[] | null;
+export function getCommandOptionsWithRootOptions(
+  argv: readonly string[],
+  options: Omit<CommandPositionalsParseOptions, "maxPositionals">,
+): { rootOptions: string[]; commandOptions: string[] } | null;

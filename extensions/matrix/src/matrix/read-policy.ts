@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { CoreConfig } from "../types.js";
 import { resolveMatrixBaseConfig } from "./account-config.js";
-import { resolveMatrixAccount } from "./accounts.js";
+import { resolveDefaultMatrixAccountId, resolveMatrixAccountConfig } from "./accounts.js";
 import { withResolvedActionClient } from "./actions/client.js";
 import type { MatrixActionClientOpts } from "./actions/types.js";
 import {
@@ -77,7 +77,7 @@ type MatrixRoomClassification =
   | { kind: "unknown" };
 
 function resolveMatrixReadRoomPolicy(params: {
-  account: ReturnType<typeof resolveMatrixAccount>;
+  account: { accountId: string; config: ReturnType<typeof resolveMatrixAccountConfig> };
   baseConfig: ReturnType<typeof resolveMatrixBaseConfig>;
   roomId: string;
   aliases: string[];
@@ -154,7 +154,13 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
 }): Promise<T> {
   const assertCurrent = captureChannelReadAuthority();
   assertCurrent?.();
-  const account = resolveMatrixAccount({ cfg: params.cfg, accountId: params.accountId });
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
+  );
+  const account = {
+    accountId,
+    config: resolveMatrixAccountConfig({ cfg: params.cfg, accountId }),
+  };
   const baseConfig = resolveMatrixBaseConfig(params.cfg);
   const preliminaryRoomId = normalizeMatrixResolvableTarget(params.roomId);
   const preliminaryPolicy = resolveMatrixReadRoomPolicy({

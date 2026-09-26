@@ -56,11 +56,6 @@ class HostedCatalogSnapshotWriteError extends Error {
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-function normalizeHostedCatalogHeader(value: string | null): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  return normalized || undefined;
-}
-
 function sha256Hex(value: string): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
@@ -376,18 +371,7 @@ async function snapshotOrBundledFallbackResult(params: {
     try {
       const snapshot = await params.snapshotStore.read(params.url);
       if (snapshot) {
-        return await loadHostedCatalogSnapshotResult({
-          snapshot,
-          error: params.error,
-          expectedSha256: params.expectedSha256,
-          ifNoneMatch: params.ifNoneMatch,
-          ifModifiedSince: params.ifModifiedSince,
-          catalogConfig: params.catalogConfig,
-          requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
-          expectedFeedId: params.expectedFeedId,
-          verification: params.verification,
-          now: params.now,
-        });
+        return await loadHostedCatalogSnapshotResult({ ...params, snapshot });
       }
     } catch (snapshotErr) {
       if (params.verification?.mode === "signed") {
@@ -444,12 +428,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   stateDatabasePath?: string;
   now?: () => Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
-  let source: {
-    url: URL;
-    hostnameAllowlist: string[];
-    expectedFeedId?: string;
-    verification?: OfficialExternalPluginCatalogFeedVerification;
-  };
+  let source: ReturnType<typeof resolveHostedCatalogFeedSource>;
   try {
     source = resolveHostedCatalogFeedSource({
       feedUrl: params?.feedUrl,
@@ -501,9 +480,28 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   if (signedOperation) {
     headers.set("accept", DSSE_ENVELOPE_MEDIA_TYPE);
   }
+  const loadFallback = (
+    error: unknown,
+    metadata?: HostedOfficialExternalPluginCatalogLoadResult["metadata"],
+    now = currentTime(),
+  ) =>
+    snapshotOrBundledFallbackResult({
+      error,
+      snapshotStore,
+      url: url.href,
+      metadata,
+      expectedSha256,
+      ifNoneMatch,
+      ifModifiedSince,
+      catalogConfig: params?.catalogConfig,
+      requireManifestInstallSourceRef,
+      expectedFeedId: source.expectedFeedId,
+      verification: source.verification,
+      now,
+    });
   const metadataBase = (response: Response) => {
-    const etag = normalizeHostedCatalogHeader(response.headers.get("etag"));
-    const lastModified = normalizeHostedCatalogHeader(response.headers.get("last-modified"));
+    const etag = normalizeOptionalString(response.headers.get("etag"));
+    const lastModified = normalizeOptionalString(response.headers.get("last-modified"));
     return {
       url: url.href,
       status: response.status,
@@ -528,56 +526,18 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     response = guarded.response;
     release = guarded.release;
     const base = metadataBase(response);
-    if (response.status === 304) {
-      return await snapshotOrBundledFallbackResult({
-        error: "hosted catalog feed returned HTTP 304",
-        snapshotStore,
-        url: url.href,
-        metadata: base,
-        expectedSha256,
-        ifNoneMatch,
-        ifModifiedSince,
-        catalogConfig: params?.catalogConfig,
-        requireManifestInstallSourceRef,
-        expectedFeedId: source.expectedFeedId,
-        verification: source.verification,
-        now: currentTime(),
-      });
-    }
-    if (!response.ok) {
-      return await snapshotOrBundledFallbackResult({
-        error: `hosted catalog feed returned HTTP ${response.status}`,
-        snapshotStore,
-        url: url.href,
-        metadata: base,
-        expectedSha256,
-        ifNoneMatch,
-        ifModifiedSince,
-        catalogConfig: params?.catalogConfig,
-        requireManifestInstallSourceRef,
-        expectedFeedId: source.expectedFeedId,
-        verification: source.verification,
-        now: currentTime(),
-      });
+    if (response.status === 304 || !response.ok) {
+      return await loadFallback(`hosted catalog feed returned HTTP ${response.status}`, base);
     }
     if (
       signedOperation &&
       response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !==
         DSSE_ENVELOPE_MEDIA_TYPE
     ) {
-      return await snapshotOrBundledFallbackResult({
-        error: `signed hosted catalog feed must use ${DSSE_ENVELOPE_MEDIA_TYPE}`,
-        snapshotStore,
-        url: url.href,
-        metadata: base,
-        expectedSha256,
-        ifNoneMatch,
-        catalogConfig: params?.catalogConfig,
-        requireManifestInstallSourceRef,
-        expectedFeedId: source.expectedFeedId,
-        verification: source.verification,
-        now: currentTime(),
-      });
+      return await loadFallback(
+        `signed hosted catalog feed must use ${DSSE_ENVELOPE_MEDIA_TYPE}`,
+        base,
+      );
     }
     const body = await readHostedCatalogResponseText({
       response,
@@ -588,20 +548,10 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     const checksum = sha256Hex(body);
     const metadata = { ...base, checksum };
     if (expectedSha256 && expectedSha256 !== checksum) {
-      return await snapshotOrBundledFallbackResult({
-        error: `hosted catalog feed checksum mismatch: expected ${expectedSha256}`,
-        snapshotStore,
-        url: url.href,
+      return await loadFallback(
+        `hosted catalog feed checksum mismatch: expected ${expectedSha256}`,
         metadata,
-        expectedSha256,
-        ifNoneMatch,
-        ifModifiedSince,
-        catalogConfig: params?.catalogConfig,
-        requireManifestInstallSourceRef,
-        expectedFeedId: source.expectedFeedId,
-        verification: source.verification,
-        now: currentTime(),
-      });
+      );
     }
     const now = currentTime();
     const verifiedAt = now.toISOString();
@@ -611,22 +561,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       verification: source.verification,
       verifiedAt,
       now,
-    }).catch(async (err: unknown) => {
-      return await snapshotOrBundledFallbackResult({
-        error: err,
-        snapshotStore,
-        url: url.href,
-        metadata,
-        expectedSha256,
-        ifNoneMatch,
-        ifModifiedSince,
-        catalogConfig: params?.catalogConfig,
-        requireManifestInstallSourceRef,
-        expectedFeedId: source.expectedFeedId,
-        verification: source.verification,
-        now,
-      });
-    });
+    }).catch((err: unknown) => loadFallback(err, metadata, now));
     if ("source" in parsed) {
       return parsed;
     }
@@ -709,19 +644,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if (err instanceof HostedCatalogSnapshotWriteError) {
       throw err.originalError;
     }
-    return await snapshotOrBundledFallbackResult({
-      error: err,
-      snapshotStore,
-      url: url.href,
-      expectedSha256,
-      ifNoneMatch,
-      ifModifiedSince,
-      catalogConfig: params?.catalogConfig,
-      requireManifestInstallSourceRef,
-      expectedFeedId: source.expectedFeedId,
-      verification: source.verification,
-      now: currentTime(),
-    });
+    return await loadFallback(err);
   } finally {
     await cancelUnreadResponseBody(response);
     await release?.().catch(() => undefined);

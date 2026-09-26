@@ -277,6 +277,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           skipPluginValidation: true,
           observe: false,
         }),
+        configReadFailure: undefined,
         legacyConfigPlan: undefined,
         storedChannel: null,
       });

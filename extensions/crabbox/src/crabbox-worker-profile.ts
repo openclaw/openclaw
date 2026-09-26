@@ -8,8 +8,6 @@ import {
 import { normalizeOptionalString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
-export { nonEmptyString };
-
 const PROFILE_KEYS = new Set([
   "binary",
   "class",

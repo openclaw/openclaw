@@ -50,6 +50,7 @@ export async function evaluateCompactionShadowCuration(params: {
   snapshot: CompactionSemanticSnapshot;
   signal: AbortSignal;
   timeoutMs?: number;
+  isEligible?: () => boolean;
 }): Promise<CompactionShadowCurationResult> {
   const eligible = params.snapshot.segments.filter((segment) => !segment.protected);
   if (eligible.length === 0) {
@@ -99,6 +100,7 @@ export async function evaluateCompactionShadowCuration(params: {
       agentId: params.agentId,
       timeoutMs: clampTimeoutMs(params.timeoutMs),
       signal: params.signal,
+      isEligible: params.isEligible,
     },
   );
 
@@ -161,6 +163,7 @@ export async function evaluateCompactionFidelity(params: {
   candidateSummary: string;
   signal: AbortSignal;
   timeoutMs?: number;
+  isEligible?: () => boolean;
 }): Promise<CompactionFidelityResult> {
   const candidateFingerprint = fingerprint(params.candidateSummary);
   if (params.snapshot.obligations.length === 0) {
@@ -211,6 +214,7 @@ export async function evaluateCompactionFidelity(params: {
       agentId: params.agentId,
       timeoutMs: clampTimeoutMs(params.timeoutMs),
       signal: params.signal,
+      isEligible: params.isEligible,
     },
   );
   if (outcome.status !== "ok") {

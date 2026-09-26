@@ -23,6 +23,7 @@ afterEach(async () => {
 export const sentinelState: {
   capturedPayload?: RestartSentinelPayload;
   restartSentinelWriteError: Error | null;
+  onSentinelWrite?: () => void;
 } = { restartSentinelWriteError: null };
 export const resolveUpdateInstallSurfaceMock =
   vi.fn<
@@ -279,6 +280,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
         throw sentinelState.restartSentinelWriteError;
       }
       sentinelState.capturedPayload = payload;
+      sentinelState.onSentinelWrite?.();
     },
   };
 });
@@ -318,6 +320,11 @@ vi.mock("../../infra/update-install-status.js", () => ({
 }));
 
 vi.mock("../../infra/update-startup.js", () => ({
+  getUpdateEffectiveChannel: async () => "stable",
+}));
+
+vi.mock("../../infra/update-status-schedule.js", () => ({
+  getGatewayUpdateSchedule: () => getUpdateScheduleMock(),
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
@@ -398,6 +405,7 @@ beforeEach(() => {
   resolveGatewayLifecycleNoticeRouteMock.mockClear();
   sentinelState.capturedPayload = undefined;
   sentinelState.restartSentinelWriteError = null;
+  sentinelState.onSentinelWrite = undefined;
   isRestartEnabledMock.mockReset();
   isRestartEnabledMock.mockReturnValue(true);
   readPackageVersionMock.mockClear();

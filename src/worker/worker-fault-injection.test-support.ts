@@ -13,7 +13,6 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerInferenceTerminalOutcome } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import {
   resolveSessionTranscriptRuntimeTarget,
@@ -48,6 +47,7 @@ import {
   seedFaultAttachedEnvironment,
   WorkerFaultPlacementLifecycle,
 } from "./worker-fault-placement-lifecycle.test-support.js";
+import { bindWorkerFixtureTurnSource } from "./worker-fault-session-target.test-support.js";
 import * as workerRpc from "./worker-rpc-clients.js";
 
 export const SESSION_ID = "fault-session";
@@ -188,6 +188,10 @@ export class ComposedGatewayHarness {
   private placementGateValue: WorkerSessionPlacementGate | undefined;
   private useReplacementExecutor = false;
   private unsubscribeLive: (() => void) | undefined;
+  private readonly turnSources = new Map<
+    string,
+    Awaited<ReturnType<typeof bindWorkerFixtureTurnSource>>
+  >();
 
   static async create(root: string): Promise<ComposedGatewayHarness> {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -223,7 +227,8 @@ export class ComposedGatewayHarness {
     readonly database: stateDb.OpenClawStateDatabase,
     readonly store: envStore.WorkerEnvironmentStore,
   ) {
-    this.socketPath = path.join(root, "gateway.sock");
+    // Leave room for Vitest temp nesting within Darwin's Unix socket pathname limit.
+    this.socketPath = path.join(root, "s");
     this.cfg = {
       agents: { list: [{ id: "main", default: true }] },
       session: {
@@ -237,7 +242,7 @@ export class ComposedGatewayHarness {
     this.placementStore = placements.createWorkerSessionPlacementStore({
       database: this.database,
     });
-    this.liveEventsValue = this.createLiveEvents(true);
+    this.liveEventsValue = liveEvents.createWorkerLiveEventReceiver();
     this.placementLifecycle = new WorkerFaultPlacementLifecycle({
       agentId: "main",
       bundleHash: BUNDLE_HASH,
@@ -292,6 +297,12 @@ export class ComposedGatewayHarness {
 
   settleRun(runId: string): void {
     this.placementLifecycle.settleRun(runId);
+    for (const [claimId, source] of this.turnSources) {
+      if (source.operationalRunInstance.runId === runId) {
+        source.dispose();
+        this.turnSources.delete(claimId);
+      }
+    }
   }
 
   async createDescriptor(params: WorkerClientOptions = {}): Promise<WorkerLaunchDescriptor> {
@@ -301,6 +312,11 @@ export class ComposedGatewayHarness {
     const claim = await this.placementLifecycle.prepareRun(runId, credential);
     if (claim.owner.ownerEpoch !== epoch) {
       throw new Error("fault descriptor epoch does not match its exact placement claim");
+    }
+    let source = this.turnSources.get(claim.claimId);
+    if (!source) {
+      source = await bindWorkerFixtureTurnSource(this.placementStore, claim, this.sessionTarget);
+      this.turnSources.set(claim.claimId, source);
     }
     return {
       version: 4,
@@ -316,7 +332,7 @@ export class ComposedGatewayHarness {
       assignment: {
         agentId: "worker-agent",
         runId,
-        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        operationalRunInstance: source.operationalRunInstance,
         agentRuntimeIdentityToken: "test-agent-runtime-token",
         turnId: "fault-turn",
         prompt: "fault injection",
@@ -367,7 +383,7 @@ export class ComposedGatewayHarness {
     this.chat.state.clear();
     this.abandonedServices.push(this.serviceValue);
     this.liveEventsValue.clear();
-    this.liveEventsValue = this.createLiveEvents(false);
+    this.liveEventsValue = liveEvents.createWorkerLiveEventReceiver();
     this.placementGateValue = createWorkerSessionPlacementGate(this.placementStore, {
       rejectExistingWorkerClaims: true,
     });
@@ -418,16 +434,7 @@ export class ComposedGatewayHarness {
         },
       },
     });
-    this.liveEventsValue.clearEnvironment(ENVIRONMENT_ID);
-    if (
-      !this.liveEventsValue.bindSession({
-        environmentId: ENVIRONMENT_ID,
-        runEpoch: next.ownerEpoch,
-        sessionId: SESSION_ID,
-      })
-    ) {
-      throw new Error("replacement live-event binding failed");
-    }
+    this.liveEventsValue.clearEnvironment(ENVIRONMENT_ID, staleClaim.owner.ownerEpoch);
     await this.placementLifecycle.prepareRun(runId, credential);
     return next.ownerEpoch;
   }
@@ -467,6 +474,10 @@ export class ComposedGatewayHarness {
       await service.stop();
     }
     this.liveEventsValue.clear();
+    for (const source of this.turnSources.values()) {
+      source.dispose();
+    }
+    this.turnSources.clear();
     this.unsubscribeLive?.();
     this.unsubscribeLive = undefined;
     this.chat.dispose();
@@ -483,26 +494,6 @@ export class ComposedGatewayHarness {
       rootPath: this.root,
     });
     await fs.rm(this.root, { recursive: true, force: true });
-  }
-
-  private createLiveEvents(corroborateOwner: boolean): liveEvents.WorkerLiveEventReceiver {
-    const binding = {
-      environmentId: ENVIRONMENT_ID,
-      runEpoch: this.epoch,
-      sessionId: SESSION_ID,
-    };
-    const receiver = liveEvents.createWorkerLiveEventReceiver({
-      getConfig: () => this.cfg,
-      startupBindings: corroborateOwner ? [binding] : [],
-      startupOwners: corroborateOwner
-        ? new Map([[ENVIRONMENT_ID, this.epoch]])
-        : new Map<string, number>(),
-    });
-    receiver.start();
-    if (!corroborateOwner && !receiver.bindSession(binding)) {
-      throw new Error("live-event restart binding failed");
-    }
-    return receiver;
   }
 
   private createService(): workerEnv.WorkerEnvironmentService {
@@ -570,7 +561,7 @@ export class ComposedGatewayHarness {
       },
       liveEvents: this.liveEventsValue,
       executeInference,
-      inferenceStore: createWorkerInferenceStore({ database: this.database }),
+      inferenceStore: createWorkerInferenceStore({ path: this.database.path }),
       ...(this.placementGateValue ? { placementStore: this.placementGateValue } : {}),
     });
   }

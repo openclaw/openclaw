@@ -1,15 +1,23 @@
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { captureTaskMutationContext } from "./task-executor-mutation-effects.async.js";
 import type { TaskMutationContext } from "./task-executor.types.js";
+import {
+  prepareTaskFlowRegistryRead,
+  type TaskFlowRegistryRead,
+} from "./task-flow-runtime-internal.js";
 import type { TaskInitialWorkerCommand } from "./task-initial-worker.types.js";
-import { captureTaskNotificationTarget } from "./task-notification.operation.js";
+import {
+  captureTaskNotificationTarget,
+  type TaskNotificationDeliveryOutcome,
+} from "./task-notification.operation.js";
+import { prepareTaskRegistryRead, prepareTaskRegistryReadOwner } from "./task-registry-read.js";
 import { cloneTaskRecord } from "./task-registry-records.js";
-import { assertTaskRegistryOwnerCurrent } from "./task-registry-state.js";
 import type { TaskRegistryStore } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 type NotificationMutation = Extract<
   TaskInitialWorkerCommand,
-  { type: "tasks.acknowledgeStateChange" }
+  { type: "tasks.acknowledgeStateChange" | "tasks.updateNotificationDelivery" }
 >;
 const pendingNotificationMutations = new WeakMap<
   TaskRegistryStore,
@@ -44,7 +52,7 @@ export function captureTaskNotificationMutationOwner(assertDeliveryCurrent: () =
     }
     const owned = pending;
     const databases = byDatabase;
-    // Register custody before native preparation releases; start storage on the next microtask.
+    // Register custody before preparation yields; start storage on the next microtask.
     const operation = Promise.resolve().then(async () => {
       assertCurrent();
       const { settleTaskRecordTransitionAsync } =
@@ -62,18 +70,54 @@ export function captureTaskNotificationMutationOwner(assertDeliveryCurrent: () =
     return settlement;
   };
   return {
-    async prepare<T>(consume: () => T): Promise<T> {
+    async prepare<T>(
+      consume: (flows: TaskFlowRegistryRead, readSubagentRun?: () => SubagentRunRecord | null) => T,
+      subagentChildSessionKey?: string,
+    ): Promise<T> {
       assertCurrent();
       for (;;) {
         const pending = pendingFor(mutation);
         if (pending?.size) {
-          // Native preparation cannot hold the coordinator while a notification needs host admission.
+          // Notification writes retain the captured store until their publication settles.
           await Promise.allSettled(pending);
           assertCurrent();
           continue;
         }
-        assertTaskRegistryOwnerCurrent(mutation.context, mutation.store);
-        return consume();
+        const owner = await prepareTaskRegistryReadOwner(mutation.context, mutation.store);
+        assertCurrent();
+        const read = await prepareTaskRegistryRead(owner);
+        assertCurrent();
+        const flows = await prepareTaskFlowRegistryRead(mutation.context);
+        assertCurrent();
+        if (!read || !flows) {
+          // Concurrent publication can invalidate the readers' bounded snapshot attempts.
+          continue;
+        }
+        const consumeCurrent = (readSubagentRun?: () => SubagentRunRecord | null) => {
+          assertCurrent();
+          if (pendingFor(mutation)?.size) {
+            return undefined;
+          }
+          read.assertCurrent();
+          flows.assertCurrent();
+          return { value: consume(flows, readSubagentRun) };
+        };
+        let prepared: { value: T } | undefined;
+        if (subagentChildSessionKey) {
+          const { withPreparedLatestSubagentRunByChildSessionKey } =
+            await import("../agents/subagents/registry/subagent-registry-read.js");
+          assertCurrent();
+          prepared = await withPreparedLatestSubagentRunByChildSessionKey(
+            subagentChildSessionKey,
+            mutation.context,
+            consumeCurrent,
+          );
+        } else {
+          prepared = consumeCurrent();
+        }
+        if (prepared) {
+          return prepared.value;
+        }
       }
     },
     bindStateChange: (task: TaskRecord, eventAt: number) => {
@@ -90,6 +134,15 @@ export function captureTaskNotificationMutationOwner(assertDeliveryCurrent: () =
         return acknowledgement;
       };
     },
+    updateDelivery: (task: TaskRecord, outcome: TaskNotificationDeliveryOutcome) =>
+      startMutation({
+        type: "tasks.updateNotificationDelivery",
+        input: {
+          taskId: task.taskId,
+          expectedTask: captureTaskNotificationTarget(task),
+          ...outcome,
+        },
+      }),
   };
 }
 

@@ -5,6 +5,7 @@ import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
+import { isConfigValidationFailedError } from "../config/io.write-errors.js";
 import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
@@ -22,6 +23,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { ExitError, writeRuntimeJson } from "../runtime.js";
 import { toDotPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import { formatCliCommand } from "./command-format.js";
 import {
   formatPluginInstallConfigSetError,
   type ConfigMutationOptions,
@@ -624,6 +626,14 @@ export function handleConfigMutationError(params: {
     params.runtime.error(danger(message));
     exitCliAfterOutput(params.runtime, 1);
   }
-  params.runtime.error(danger(message));
+  if (isConfigValidationFailedError(params.err)) {
+    params.runtime.error("Config change declined. No settings were saved.");
+    params.runtime.error(message);
+    params.runtime.error(
+      `Correct the setting above and retry. Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values.`,
+    );
+  } else {
+    params.runtime.error(danger(message));
+  }
   exitCliAfterOutput(params.runtime, 1);
 }

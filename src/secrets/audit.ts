@@ -15,9 +15,9 @@ import {
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
-import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { JsonFileReadError, readJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { findEnvPlaintextFindings } from "./audit-env.js";
@@ -29,6 +29,7 @@ import type { PlaintextAssignment } from "./audit-store.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { listAuthProfileStoreTargets, type AuthProfileStoreTarget } from "./auth-store-paths.js";
 import { createSecretsConfigIO } from "./config-io.js";
+import { classifyConfigSecretTarget } from "./config-secret-target.js";
 import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
 import { isLikelySensitiveModelProviderHeaderName } from "./model-provider-header-policy.js";
 import { secretRefKey } from "./ref-contract.js";
@@ -39,16 +40,9 @@ import {
   resolveSecretRefValues,
   type SecretRefResolveCache,
 } from "./resolve.js";
-import {
-  hasConfiguredPlaintextSecretValue,
-  isExpectedResolvedSecretValue,
-} from "./secret-value.js";
+import { isExpectedResolvedSecretValue } from "./secret-value.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
-import {
-  listAgentModelsJsonPaths,
-  listSecretsDotEnvPaths,
-  readJsonObjectIfExists,
-} from "./storage-scan.js";
+import { listAgentModelsJsonPaths, listSecretsDotEnvPaths } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
 /** Stable finding codes emitted by `openclaw secrets audit`. */
@@ -105,18 +99,13 @@ type RefAssignment = {
   provider?: string;
 };
 
-type ProviderAuthState = {
-  hasUsableStaticOrOAuth: boolean;
-  modes: Set<"api_key" | "token" | "oauth">;
-};
-
 type SecretDefaults = { env?: string; file?: string; exec?: string };
 
 type AuditCollector = {
   findings: SecretsAuditFinding[];
   refAssignments: RefAssignment[];
   configProviderRefPaths: Map<string, string[]>;
-  authProviderState: Map<string, ProviderAuthState>;
+  authProviderModes: Map<string, Set<"api_key" | "token" | "oauth">>;
   configPlaintextAssignments: PlaintextAssignment[];
   filesScanned: Set<string>;
 };
@@ -147,16 +136,12 @@ function trackAuthProviderState(
   mode: "api_key" | "token" | "oauth",
 ): void {
   const key = normalizeProviderId(provider);
-  const existing = collector.authProviderState.get(key);
+  const existing = collector.authProviderModes.get(key);
   if (existing) {
-    existing.hasUsableStaticOrOAuth = true;
-    existing.modes.add(mode);
+    existing.add(mode);
     return;
   }
-  collector.authProviderState.set(key, {
-    hasUsableStaticOrOAuth: true,
-    modes: new Set([mode]),
-  });
+  collector.authProviderModes.set(key, new Set([mode]));
 }
 
 function collectConfigSecrets(params: {
@@ -165,30 +150,9 @@ function collectConfigSecrets(params: {
   collector: AuditCollector;
   env: NodeJS.ProcessEnv;
 }): void {
-  const defaults = params.config.secrets?.defaults;
   for (const target of discoverConfigSecretTargets(params.config, { env: params.env })) {
-    if (!target.entry.includeInAudit) {
-      continue;
-    }
-    const inlineRef = resolveConfigSecretRef({
-      config: params.config,
-      path: target.path,
-      value: target.value,
-      defaults,
-      includeResolved: true,
-    });
-    const ref = coerceSecretRef(target.refValue, defaults) ?? inlineRef;
-    const hasPlaintext =
-      inlineRef === null &&
-      hasConfiguredPlaintextSecretValue(target.value, target.entry.expectedResolvedValue);
-    const isNonSecretHeader =
-      target.entry.id === "models.providers.*.headers.*" &&
-      !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "");
-    const isModelMarker =
-      target.entry.id === "models.providers.*.apiKey" &&
-      typeof target.value === "string" &&
-      isNonSecretApiKeyMarker(target.value);
-    if (hasPlaintext && !isNonSecretHeader && !isModelMarker && typeof target.value === "string") {
+    const { ref, plaintext } = classifyConfigSecretTarget(params.config, target);
+    if (plaintext && typeof target.value === "string") {
       params.collector.configPlaintextAssignments.push({
         file: params.configPath,
         path: target.path,
@@ -208,7 +172,7 @@ function collectConfigSecrets(params: {
       }
       continue;
     }
-    if (isNonSecretHeader || isModelMarker || !hasPlaintext) {
+    if (!plaintext) {
       continue;
     }
     addFinding(params.collector, {
@@ -296,26 +260,32 @@ function collectModelsJsonSecrets(params: {
   modelsJsonPath: string;
   collector: AuditCollector;
 }): void {
-  if (!fs.existsSync(params.modelsJsonPath)) {
-    return;
-  }
-  params.collector.filesScanned.add(params.modelsJsonPath);
-  const parsedResult = readJsonObjectIfExists(params.modelsJsonPath, {
-    requireRegularFile: true,
-    maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
-  });
-  if (parsedResult.error) {
+  let parsed: unknown;
+  try {
+    parsed = readJsonSync(params.modelsJsonPath, { maxBytes: MAX_AUDIT_MODELS_JSON_BYTES });
+  } catch (error) {
+    if (
+      error instanceof JsonFileReadError &&
+      error.reason === "read" &&
+      hasErrnoCode(error.cause, "ENOENT")
+    ) {
+      return;
+    }
+    params.collector.filesScanned.add(params.modelsJsonPath);
+    // JSON parser causes can quote credential bytes from models.json.
+    const detail =
+      error instanceof JsonFileReadError && error.reason === "parse" ? error.message : error;
     addFinding(params.collector, {
       code: "REF_UNRESOLVED",
       severity: "error",
       file: params.modelsJsonPath,
       jsonPath: "<root>",
-      message: `Invalid JSON in models.json: ${parsedResult.error}`,
+      message: `Invalid JSON in models.json: ${formatErrorMessage(detail)}`,
     });
     return;
   }
-  const parsed = parsedResult.value;
-  if (!parsed || !isRecord(parsed.providers)) {
+  params.collector.filesScanned.add(params.modelsJsonPath);
+  if (!isRecord(parsed) || !isRecord(parsed.providers)) {
     return;
   }
   for (const [providerId, providerValue] of Object.entries(parsed.providers)) {
@@ -533,47 +503,31 @@ async function collectUnresolvedRefFindings(params: {
       continue;
     }
     const resolveErr = errorsByRefKey.get(key);
+    let code: SecretsAuditCode = "REF_UNRESOLVED";
+    let detail: string;
     if (resolveErr) {
-      addFinding(params.collector, {
-        code:
-          isSecretResolutionError(resolveErr) && resolveErr.code === "SECRET_REF_REDACTED_VALUE"
-            ? "PLACEHOLDER_VALUE"
-            : "REF_UNRESOLVED",
-        severity: "error",
-        file: assignment.file,
-        jsonPath: assignment.path,
-        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (${formatErrorMessage(resolveErr)}).`,
-        provider: assignment.provider,
-      });
+      if (isSecretResolutionError(resolveErr) && resolveErr.code === "SECRET_REF_REDACTED_VALUE") {
+        code = "PLACEHOLDER_VALUE";
+      }
+      detail = formatErrorMessage(resolveErr);
+    } else if (!resolvedByRefKey.has(key)) {
+      detail = "resolved value is missing";
+    } else if (!isExpectedResolvedSecretValue(resolvedByRefKey.get(key), assignment.expected)) {
+      detail =
+        assignment.expected === "string"
+          ? "resolved value is not a non-empty string"
+          : "resolved value is not a string/object";
+    } else {
       continue;
     }
-
-    if (!resolvedByRefKey.has(key)) {
-      addFinding(params.collector, {
-        code: "REF_UNRESOLVED",
-        severity: "error",
-        file: assignment.file,
-        jsonPath: assignment.path,
-        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (resolved value is missing).`,
-        provider: assignment.provider,
-      });
-      continue;
-    }
-
-    const resolved = resolvedByRefKey.get(key);
-    if (!isExpectedResolvedSecretValue(resolved, assignment.expected)) {
-      addFinding(params.collector, {
-        code: "REF_UNRESOLVED",
-        severity: "error",
-        file: assignment.file,
-        jsonPath: assignment.path,
-        message:
-          assignment.expected === "string"
-            ? `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (resolved value is not a non-empty string).`
-            : `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (resolved value is not a string/object).`,
-        provider: assignment.provider,
-      });
-    }
+    addFinding(params.collector, {
+      code,
+      severity: "error",
+      file: assignment.file,
+      jsonPath: assignment.path,
+      message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (${detail}).`,
+      provider: assignment.provider,
+    });
   }
   return {
     refsChecked,
@@ -583,11 +537,11 @@ async function collectUnresolvedRefFindings(params: {
 
 function collectShadowingFindings(collector: AuditCollector): void {
   for (const [provider, paths] of collector.configProviderRefPaths.entries()) {
-    const authState = collector.authProviderState.get(provider);
-    if (!authState?.hasUsableStaticOrOAuth) {
+    const modes = collector.authProviderModes.get(provider);
+    if (!modes) {
       continue;
     }
-    const modeText = [...authState.modes].join("/");
+    const modeText = [...modes].join("/");
     for (const configPath of paths) {
       addFinding(collector, {
         code: "REF_SHADOWED",
@@ -629,7 +583,7 @@ export async function runSecretsAudit(
     findings: [],
     refAssignments: [],
     configProviderRefPaths: new Map(),
-    authProviderState: new Map(),
+    authProviderModes: new Map(),
     configPlaintextAssignments: [],
     filesScanned: new Set([configPath]),
   };

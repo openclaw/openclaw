@@ -256,7 +256,6 @@ export function validatePreparedConfigWithPlugins(
 
   let mutatedConfig = config;
   let channelsCloned = false;
-  let pluginsCloned = false;
   let pluginEntriesCloned = false;
   let installedPluginRecordIds = opts.installedPluginRecordIds
     ? new Set([...opts.installedPluginRecordIds].map(normalizePluginId))
@@ -280,16 +279,10 @@ export function validatePreparedConfigWithPlugins(
 
   const hasStalePluginEvidenceForUnknownChannel = (channelId: string): boolean => {
     const normalizedChannelId = normalizePluginId(channelId);
-    if (!normalizedChannelId || ensureKnownIds().has(normalizedChannelId)) {
-      return false;
-    }
-    const pluginConfig = config.plugins;
-    const matches = (pluginId: string) => normalizePluginId(pluginId) === normalizedChannelId;
     return (
-      (Array.isArray(pluginConfig?.allow) && pluginConfig.allow.some(matches)) ||
-      (isRecord(pluginConfig?.entries) && Object.keys(pluginConfig.entries).some(matches)) ||
-      (isRecord(pluginConfig?.installs) && Object.keys(pluginConfig.installs).some(matches)) ||
-      ensureInstalledPluginRecordIds().has(normalizedChannelId)
+      Boolean(normalizedChannelId) &&
+      !ensureKnownIds().has(normalizedChannelId) &&
+      hasPluginEvidence(channelId)
     );
   };
 
@@ -316,9 +309,7 @@ export function validatePreparedConfigWithPlugins(
     ].toSorted((left, right) => left.localeCompare(right));
   };
 
-  const hasPluginEvidenceForWebSearchProvider = (
-    ...pluginOrProviderIds: readonly string[]
-  ): boolean => {
+  const hasPluginEvidence = (...pluginOrProviderIds: readonly string[]): boolean => {
     const candidateIds = new Set(
       pluginOrProviderIds.map(normalizePluginId).filter((id) => id.length > 0),
     );
@@ -364,7 +355,7 @@ export function validatePreparedConfigWithPlugins(
         message: `web_search provider is not available: ${trimmed} (install or enable plugin "${installCatalogEntry.pluginId}", then run openclaw doctor --fix)`,
         allowedValues: collectKnownWebSearchProviderIds(),
       };
-      if (hasPluginEvidenceForWebSearchProvider(trimmed, installCatalogEntry.pluginId)) {
+      if (hasPluginEvidence(trimmed, installCatalogEntry.pluginId)) {
         warnings.push({
           ...issue,
           message: `web_search provider is not available: ${trimmed} (configured plugin "${installCatalogEntry.pluginId}" is unavailable; Gateway will ignore this optional provider until the plugin is installed/enabled or openclaw doctor --fix repairs the config)`,
@@ -387,7 +378,7 @@ export function validatePreparedConfigWithPlugins(
     const hasStaleEvidence = Boolean(
       normalizedProviderId &&
       !ensureKnownIds().has(normalizedProviderId) &&
-      hasPluginEvidenceForWebSearchProvider(trimmed),
+      hasPluginEvidence(trimmed),
     );
     if (hasStaleEvidence) {
       warnings.push({
@@ -456,14 +447,13 @@ export function validatePreparedConfigWithPlugins(
   };
 
   const replacePluginEntryConfig = (pluginId: string, nextValue: Record<string, unknown>): void => {
-    if (!pluginsCloned) {
-      mutatedConfig = { ...mutatedConfig, plugins: { ...mutatedConfig.plugins } };
-      pluginsCloned = true;
-    }
     if (!pluginEntriesCloned) {
-      mutatedConfig.plugins = {
-        ...mutatedConfig.plugins,
-        entries: { ...mutatedConfig.plugins?.entries },
+      mutatedConfig = {
+        ...mutatedConfig,
+        plugins: {
+          ...mutatedConfig.plugins,
+          entries: { ...mutatedConfig.plugins?.entries },
+        },
       };
       pluginEntriesCloned = true;
     }

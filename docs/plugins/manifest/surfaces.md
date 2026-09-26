@@ -370,6 +370,54 @@ plugin can recreate.
 
 OpenClaw includes these servers only while the owning plugin is enabled. Relative `command`, `args`, `cwd`, and `workingDirectory` paths resolve from the plugin root. User configuration remains authoritative: `mcp.servers.<name>` can replace a plugin default or set `enabled: false` to omit it. MCP App rendering and server-tool calls still require the normal MCP Apps setting and effective tool policy; declaring a server does not bypass either boundary.
 
+## UI capabilities
+
+Declare `uiCapabilities` in `openclaw.plugin.json` to describe what the plugin adds
+to the OpenClaw interface. The plugin detail page shows these kinds in its
+**Capabilities** section before installation and while the plugin is disabled or
+enabled. Display reads static manifest or catalog metadata without executing
+plugin code.
+
+```json
+{
+  "uiCapabilities": ["page", "navigation", "accessory", "widget"]
+}
+```
+
+| Value         | Contribution                                         |
+| ------------- | ---------------------------------------------------- |
+| `page`        | A dedicated plugin page.                             |
+| `navigation`  | A navigation entry that opens a plugin page.         |
+| `panel`       | A panel within an existing view.                     |
+| `action`      | A user-facing action in an existing view.            |
+| `accessory`   | A small addition such as a session-header accessory. |
+| `widget`      | A dashboard widget.                                  |
+| `replacement` | A replacement for a supported host UI surface.       |
+| `link-reader` | A reader or preview for supported links.             |
+
+The field is optional. Omission means unspecified; `[]` explicitly declares no
+UI contributions. OpenClaw ignores an invalid declaration (unknown values or a
+non-array value) and reports a plugin warning; the plugin still loads. Older
+OpenClaw versions ignored this field, so malformed display metadata does not
+break existing installs after an update. Duplicates are removed, and values use
+the order above. Declare kinds only,
+not instance counts or live availability. Conditional registrations may be absent
+in a particular session without invalidating the declaration.
+
+This field is independent of `controlUi.entry`: a plugin using a host-rendered
+link reader can declare `link-reader` without shipping browser JavaScript.
+It does not activate a plugin, grant permissions, or prove that a capability is
+currently configured or healthy. Browser registration and known backend UI
+registrations emit a diagnostic when an observed kind is missing from an
+explicit declaration; omission skips that comparison. These diagnostics do not
+block activation.
+
+For a catalog listing, publish the same metadata with the selected plugin
+version. If the catalog omits it, OpenClaw leaves the UI contribution kinds
+unspecified rather than loading the plugin to infer them. For native browser
+modules, explicit UI reload reads the updated declaration and creates a new
+revision even when browser code is unchanged.
+
 ## controlUi reference
 
 `controlUi` declares a trusted native browser entry and optional stylesheets for

@@ -6,6 +6,7 @@ import {
   listAgentEntriesWithSource,
   listAgentIds,
   resolveAgentWorkspaceDir,
+  resolveConfiguredAgentId,
   resolveAmbientOwnerAgentId,
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
@@ -32,7 +33,10 @@ import {
 } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import { createModelPolicyRefValidator } from "./model-policy-ref.js";
+import {
+  createModelPolicyRefValidator,
+  parseOperatorModelPolicyWildcardRef,
+} from "./model-policy-ref.js";
 import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { collectRawBundledChannelConfigIssues } from "./validation-channel-rules.js";
@@ -178,16 +182,7 @@ function validateIdentityAvatar(
     if (!avatar || isAvatarDataUrl(avatar) || isAvatarHttpUrl(avatar)) {
       continue;
     }
-    if (avatar.startsWith("~")) {
-      issues.push(
-        createIdentityAvatarIssue(
-          source,
-          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-        ),
-      );
-      continue;
-    }
-    if (hasAvatarUriScheme(avatar) && !isWindowsAbsolutePath(avatar)) {
+    if (avatar.startsWith("~") || (hasAvatarUriScheme(avatar) && !isWindowsAbsolutePath(avatar))) {
       issues.push(
         createIdentityAvatarIssue(
           source,
@@ -257,20 +252,24 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     refs: readonly string[] | undefined,
     configPath: string,
     agentModels?: typeof defaultModels,
+    allowModelPrefix = false,
   ) => {
     if (!refs?.length) {
       return;
     }
     const isValidRef = createModelPolicyRefValidator(defaultModels, agentModels);
     for (const [index, raw] of refs.entries()) {
-      if (isValidRef(raw)) {
+      if (isValidRef(raw) || (allowModelPrefix && parseOperatorModelPolicyWildcardRef(raw))) {
         continue;
       }
       issues.push({
         path: `${configPath}.${index}`,
         message:
           `invalid model policy ref: ${sanitizeForLog(JSON.stringify(raw))}. ` +
-          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*" or "provider/namespace/*".',
+          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*" or "provider/namespace/*".' +
+          (allowModelPrefix
+            ? ' Role policies also accept a model-name prefix such as "provider/family-*".'
+            : ""),
       });
     }
   };
@@ -280,6 +279,29 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     const pathPrefix =
       source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
     validateRefs(agent.modelPolicy?.allow, `${pathPrefix}.modelPolicy.allow`, agent.models);
+  }
+  for (const [role, definition] of Object.entries(config.gateway?.roles?.definitions ?? {})) {
+    const policy = definition.modelPolicy;
+    if (!policy) {
+      continue;
+    }
+    const pathPrefix = `gateway.roles.definitions.${role}.modelPolicy`;
+    let sourceAgent: string;
+    try {
+      sourceAgent = resolveConfiguredAgentId(
+        config,
+        resolveAmbientOwnerAgentId(config, policy.sourceAgent),
+      );
+    } catch {
+      issues.push({
+        path: `${pathPrefix}.sourceAgent`,
+        message: "Choose a configured source agent for this role's model policy.",
+      });
+      continue;
+    }
+    const models = listAgentEntries(config).find((agent) => agent.id === sourceAgent)?.models;
+    validateRefs(policy.allow, `${pathPrefix}.allow`, models, true);
+    validateRefs(policy.deny, `${pathPrefix}.deny`, models, true);
   }
   return issues;
 }

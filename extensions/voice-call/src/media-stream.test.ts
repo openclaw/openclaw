@@ -297,7 +297,7 @@ describe("MediaStreamHandler security hardening", () => {
 
     const result = handler.sendAudio("MZ-backpressure", Buffer.alloc(160, 0xff));
 
-    expect(result.sent).toBe(false);
+    expect(result).toBe(false);
     expect(ws["send"]).not.toHaveBeenCalled();
     expect(ws["close"]).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
@@ -341,7 +341,7 @@ describe("MediaStreamHandler security hardening", () => {
     const result = handler.sendMark("MZ-overflow", "mark-1");
 
     expect(ws["send"]).toHaveBeenCalledTimes(1);
-    expect(result.sent).toBe(false);
+    expect(result).toBe(false);
     expect(ws["close"]).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
 

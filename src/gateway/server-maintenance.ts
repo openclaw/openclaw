@@ -270,6 +270,18 @@ export function startGatewayMaintenanceTimers(params: {
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
   let mediaCleanupStopped = false;
+  const createMediaCleanupLoader = (label: string, run: () => Promise<unknown>) => {
+    const loader = createLazyPromiseLoader(async () => {
+      try {
+        await run();
+      } catch (error) {
+        params.logHealth.error(`${label} failed: ${formatError(error)}`);
+      } finally {
+        loader.clear();
+      }
+    });
+    return loader;
+  };
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ??
     (async () => {
@@ -281,15 +293,10 @@ export function startGatewayMaintenanceTimers(params: {
       }
     });
   let deliveryQueueMediaGcStartedAtMs = 0;
-  const deliveryQueueMediaGcLoader = createLazyPromiseLoader(async () => {
-    try {
-      await runDeliveryQueueMediaGc();
-    } catch (error) {
-      params.logHealth.error(`delivery queue maintenance failed: ${formatError(error)}`);
-    } finally {
-      deliveryQueueMediaGcLoader.clear();
-    }
-  });
+  const deliveryQueueMediaGcLoader = createMediaCleanupLoader(
+    "delivery queue maintenance",
+    runDeliveryQueueMediaGc,
+  );
   let deliveryQueueMediaGcStartPromise: Promise<void> | undefined;
   const performDeliveryQueueMediaGc = () => {
     if (mediaCleanupStopped) {
@@ -494,15 +501,10 @@ export function startGatewayMaintenanceTimers(params: {
     sweepStaleRunContexts();
   }, 60_000);
 
-  const playbackTranscodeCacheCleanupLoader = createLazyPromiseLoader(async () => {
-    try {
-      await prunePlaybackTranscodeCache();
-    } catch (err) {
-      params.logHealth.error(`playback transcode cache cleanup failed: ${formatError(err)}`);
-    } finally {
-      playbackTranscodeCacheCleanupLoader.clear();
-    }
-  });
+  const playbackTranscodeCacheCleanupLoader = createMediaCleanupLoader(
+    "playback transcode cache cleanup",
+    prunePlaybackTranscodeCache,
+  );
   const runManagedOutgoingMediaGc =
     params.runManagedOutgoingMediaGc ??
     (async () => {
@@ -519,15 +521,10 @@ export function startGatewayMaintenanceTimers(params: {
         },
       });
     });
-  const managedOutgoingCleanupLoader = createLazyPromiseLoader(async () => {
-    try {
-      await runManagedOutgoingMediaGc();
-    } catch (err) {
-      params.logHealth.error(`managed outgoing media cleanup failed: ${formatError(err)}`);
-    } finally {
-      managedOutgoingCleanupLoader.clear();
-    }
-  });
+  const managedOutgoingCleanupLoader = createMediaCleanupLoader(
+    "managed outgoing media cleanup",
+    runManagedOutgoingMediaGc,
+  );
 
   let mediaCleanupInFlight: Promise<void> | null = null;
   const runMediaCleanup = () => {

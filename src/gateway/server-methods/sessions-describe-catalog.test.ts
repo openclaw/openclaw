@@ -105,7 +105,11 @@ describe("sessions.describe catalog projection", () => {
 
         expect(response?.[0]).toBe(true);
         expect(response?.[1]).toMatchObject({
-          session: { agentId, thinkingLevels: levels, thinkingDefault: defaultLevel },
+          session: {
+            agentId,
+            thinkingLevels: [...levels, { id: "ultra", label: "ultra" }],
+            thinkingDefault: defaultLevel,
+          },
         });
       });
     },

@@ -106,12 +106,13 @@ export function splitPreservedRecentTurns(params: {
     (index) => params.messages[index]?.role === "user",
   );
   const boundaryStartIndex = userIndexes.at(-preserveTurns);
+  const preserveFromIndex = boundaryStartIndex ?? userIndexes[0];
   const preservedIndexSet = new Set(
-    boundaryStartIndex === undefined
-      ? userIndexes
-      : conversationIndexes.filter((index) => index >= boundaryStartIndex),
+    preserveFromIndex === undefined
+      ? []
+      : conversationIndexes.filter((index) => index >= preserveFromIndex),
   );
-  if (boundaryStartIndex === undefined) {
+  if (userIndexes.length === 0) {
     for (const index of conversationIndexes.toReversed()) {
       preservedIndexSet.add(index);
       if (preservedIndexSet.size >= preserveTurns * 2) {

@@ -35,6 +35,7 @@ export function normalizeSessionTokenCount(value: number | undefined): number | 
 
 /** Applies run result metadata and usage to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
+  agentId: string;
   cfg: OpenClawConfig;
   agentDir: string;
   sessionId: string;
@@ -214,6 +215,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
   await patchSessionEntryCore(
     {
+      agentId: params.agentId,
       storePath,
       sessionKey,
     },
@@ -222,9 +224,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         (!context.existingEntry && hadPreExistingEntry) ||
         (!preserveUserFacingRunState &&
           context.existingEntry &&
-          (context.existingEntry.sessionId !== expectedSession.sessionId ||
-            context.existingEntry.lifecycleRevision !== expectedSession.lifecycleRevision ||
-            context.existingEntry.activeWriterRunId !== expectedSession.activeWriterRunId))
+          !isSameSessionLifecycleOwner(context.existingEntry, expectedSession))
       ) {
         // Successor acceptance owns identity changes. Finalizers may update only
         // their exact still-current row and cannot recreate a deleted owner.
@@ -253,6 +253,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
 }
 
 type CliSessionForkStoreParams = {
+  agentId: string;
   provider: string;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
@@ -263,7 +264,7 @@ type CliSessionForkStoreParams = {
 
 function isSameSessionLifecycleOwner(
   current: InternalSessionEntry,
-  expected: InternalSessionEntry,
+  expected: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">,
 ): boolean {
   return (
     current.sessionId === expected.sessionId &&
@@ -283,7 +284,7 @@ async function patchCliSessionForkBinding(
   }
   let committed: SessionEntry | undefined;
   await patchSessionEntryCore(
-    { storePath, sessionKey },
+    { agentId: params.agentId, storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
       // A binding id can survive session rollover. Fork authority belongs to the exact lifecycle.
@@ -353,6 +354,7 @@ export async function persistCliSessionForkSuccessorInStore(
 
 /** Records CLI compaction metadata on the persisted session entry. */
 export async function recordCliCompactionInStore(params: {
+  agentId: string;
   compactionKind: NonNullable<EmbeddedAgentCompactResult["compactionKind"]>;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
@@ -391,16 +393,12 @@ export async function recordCliCompactionInStore(params: {
   let committedEntry: SessionEntry | undefined;
   await patchSessionEntryCore(
     {
+      agentId: params.agentId,
       storePath,
       sessionKey,
     },
     (currentEntry, context) => {
-      if (
-        !context.existingEntry ||
-        currentEntry.sessionId !== expectedSession.sessionId ||
-        currentEntry.lifecycleRevision !== expectedSession.lifecycleRevision ||
-        currentEntry.activeWriterRunId !== expectedSession.activeWriterRunId
-      ) {
+      if (!context.existingEntry || !isSameSessionLifecycleOwner(currentEntry, expectedSession)) {
         return null;
       }
       return {

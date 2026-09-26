@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type {
   ProjectedLifecycleMutation,
   SessionEntryRemovalPlan,
@@ -10,13 +11,31 @@ import type { SessionEntry } from "./types.js";
 
 type SessionIdentityDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
 
-function toSessionIdentityTarget(entry: SessionEntry | undefined, sessionKeys: readonly string[]) {
+function toSessionIdentityTarget(
+  entry: Pick<SessionEntry, "sessionId"> | undefined,
+  sessionKeys: readonly string[],
+) {
   const sessionId = normalizeOptionalString(entry?.sessionId);
   return { ...(sessionId ? { sessionId } : {}), sessionKeys };
 }
 
+export function publishCommittedSessionEntryRemoval(
+  agentId: string,
+  databaseIdentity: string | symbol,
+  sessionId: string | undefined,
+  sessionKeys: readonly string[],
+): void {
+  emitSessionIdentityMutation({
+    agentId,
+    databaseIdentity,
+    kind: "delete",
+    previous: { ...(sessionId ? { sessionId } : {}), sessionKeys },
+  });
+}
+
 export function prepareCommittedSessionEntryRemovals(
   agentId: string,
+  databaseIdentity: string | symbol,
   removals: readonly SessionEntryRemovalPlan[],
 ): () => void {
   const previousByKey = new Map<string, ReturnType<typeof toSessionIdentityTarget>>();
@@ -30,15 +49,21 @@ export function prepareCommittedSessionEntryRemovals(
   }
   return () => {
     for (const previous of previousByKey.values()) {
-      emitSessionIdentityMutation({ agentId, kind: "delete", previous });
+      publishCommittedSessionEntryRemoval(
+        agentId,
+        databaseIdentity,
+        previous.sessionId,
+        previous.sessionKeys,
+      );
     }
   };
 }
 
 export function publishCommittedSessionIdentity(
   agentId: string,
-  previous: ReadonlyMap<string, SessionEntry>,
-  current: ReadonlyMap<string, SessionEntry>,
+  databaseIdentity: string | symbol,
+  previous: ReadonlyMap<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>,
+  current: ReadonlyMap<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>,
 ): void {
   const currentKeysBySessionId = new Map<string, string[]>();
   for (const [sessionKey, entry] of current) {
@@ -77,6 +102,7 @@ export function publishCommittedSessionIdentity(
     if (currentEntry) {
       emitSessionIdentityMutation({
         agentId,
+        databaseIdentity,
         kind: "move",
         previous: toSessionIdentityTarget(currentEntry, previousKeys),
         current: toSessionIdentityTarget(currentEntry, [currentKey]),
@@ -89,16 +115,29 @@ export function publishCommittedSessionIdentity(
     const previousTarget = toSessionIdentityTarget(previousEntry, [sessionKey]);
     if (currentEntry) {
       const currentTarget = toSessionIdentityTarget(currentEntry, [sessionKey]);
-      if (previousTarget.sessionId !== currentTarget.sessionId) {
+      // Same-ID resets replace lifecycle ownership while retaining transcript identity.
+      const kind =
+        previousTarget.sessionId !== currentTarget.sessionId
+          ? "replace"
+          : previousEntry.lifecycleRevision !== currentEntry.lifecycleRevision
+            ? "reset"
+            : undefined;
+      if (kind) {
         emitSessionIdentityMutation({
           agentId,
-          kind: "replace",
+          databaseIdentity,
+          kind,
           previous: previousTarget,
           current: currentTarget,
         });
       }
     } else if (!handledPreviousKeys.has(sessionKey)) {
-      emitSessionIdentityMutation({ agentId, kind: "delete", previous: previousTarget });
+      publishCommittedSessionEntryRemoval(
+        agentId,
+        databaseIdentity,
+        previousTarget.sessionId,
+        previousTarget.sessionKeys,
+      );
     }
   }
 
@@ -108,6 +147,7 @@ export function publishCommittedSessionIdentity(
     }
     emitSessionIdentityMutation({
       agentId,
+      databaseIdentity,
       kind: "create",
       previous: { sessionKeys: [] },
       current: toSessionIdentityTarget(currentEntry, [sessionKey]),
@@ -121,7 +161,8 @@ export function prepareSessionIdentityPublication(
   previous: ReadonlyMap<string, SessionEntry>,
   current: ReadonlyMap<string, SessionEntry>,
 ): () => void {
-  const publish = () => publishCommittedSessionIdentity(agentId, previous, current);
+  const { identity } = readOpenClawAgentDatabaseIdentity(database);
+  const publish = () => publishCommittedSessionIdentity(agentId, identity, previous, current);
   // Savepoint success is not COMMIT; identity observers can cancel live work.
   return () => {
     if (!deferSqlitePostCommitPublication(database.db, publish)) {

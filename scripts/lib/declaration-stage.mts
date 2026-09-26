@@ -1,19 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { executeTsdownBuildPlan, type prepareTsdownBuildExecution } from "../tsdown-build.mts";
 import {
   listCacheFiles,
   portableRelativePath,
   publishArtifactFiles,
 } from "./build-artifact-cache.mts";
+import { createNativeTypeScriptParser, type NativeTypeScriptParser } from "./native-typescript.mts";
 import {
   sanitizeBundlerHelperDtsExports,
   sanitizeBundlerHelperDtsExportTree,
 } from "./sanitize-bundler-helper-dts-exports.mts";
 
-function declarationReferences(file: string, contents: string) {
-  const source = ts.createSourceFile(file, contents, ts.ScriptTarget.Latest);
+function declarationReferences(file: string, contents: string, parser: NativeTypeScriptParser) {
+  const source = parser.parseSourceFile(file, contents);
   const modules = source.typeReferenceDirectives.map((reference) => reference.fileName);
   function visit(node: ts.Node) {
     let specifier: ts.Node | undefined;
@@ -29,12 +30,12 @@ function declarationReferences(file: string, contents: string) {
     } else if (ts.isModuleDeclaration(node)) {
       specifier = node.name;
     }
-    if (specifier && ts.isStringLiteralLike(specifier)) {
+    if (specifier && ts.isStringLiteralLikeNode(specifier)) {
       modules.push(specifier.text);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
-  ts.forEachChild(source, visit);
+  source.forEachChild(visit);
   // Parse declarations so comments cannot invent imports, and reference directives
   // and import-equals declarations cannot hide missing staged dependencies.
   return [
@@ -70,6 +71,7 @@ export async function publishStagedDeclarations(
       });
     }
   }
+  using parser = createNativeTypeScriptParser();
   for (const source of sources) {
     const files = listCacheFiles(
       source.output,
@@ -88,7 +90,7 @@ export async function publishStagedDeclarations(
       const raw = fs.readFileSync(file, "utf8");
       // Strip generated bundler helpers before staged bytes become the published
       // declaration identity.
-      const bytes = Buffer.from(sanitizeBundlerHelperDtsExports(raw).sourceText, "utf8");
+      const bytes = Buffer.from(sanitizeBundlerHelperDtsExports(raw, parser).sourceText, "utf8");
       // Shared chunks may be identical across groups. A differing owner must
       // fail before publication; last-writer-wins can corrupt nominal identity.
       if (fs.existsSync(target)) {
@@ -114,7 +116,7 @@ export async function publishStagedDeclarations(
     }
     const absolute = path.join(staging, file);
     const current = fs.readFileSync(absolute, "utf8");
-    const sanitized = sanitizeBundlerHelperDtsExports(current).sourceText;
+    const sanitized = sanitizeBundlerHelperDtsExports(current, parser).sourceText;
     if (sanitized !== current) {
       fs.writeFileSync(absolute, sanitized);
     }
@@ -131,7 +133,7 @@ export async function publishStagedDeclarations(
   for (const file of files) {
     const targets: string[] = [];
     const contents = fs.readFileSync(path.join(staging, file), "utf8");
-    for (const declaration of declarationReferences(file, contents)) {
+    for (const declaration of declarationReferences(file, contents, parser)) {
       if (path.posix.isAbsolute(declaration) || path.win32.isAbsolute(declaration)) {
         throw new Error(`Incomplete declaration closure: ${file} -> ${declaration}`);
       }

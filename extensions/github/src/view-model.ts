@@ -27,7 +27,7 @@ export function githubChangeMetadata(
 export function githubPreviewView(preview: ControlUiGitHubPreview): ControlUiLinkReaderPreview {
   const badge: ControlUiLinkReaderPreview["badge"] = preview.mergedAt
     ? { label: "Merged", tone: "accent" }
-    : preview.draft
+    : preview.draft && preview.state === "open"
       ? { label: "Draft", tone: "neutral" }
       : preview.state === "open"
         ? { label: "Open", tone: "positive" }
@@ -38,7 +38,10 @@ export function githubPreviewView(preview: ControlUiGitHubPreview): ControlUiLin
     url: githubTargetUrl(preview),
     title: preview.title,
     subtitle: preview.owner + "/" + preview.repo + " #" + preview.number,
-    badge,
+    badge: {
+      ...badge,
+      timestamp: preview.mergedAt ?? (preview.state === "closed" ? preview.closedAt : undefined),
+    },
     author: preview.login,
     authorUrl: "https://github.com/" + encodeURIComponent(preview.login),
     coAuthors: preview.coAuthors?.map(({ login, avatarDataUrl }) => ({

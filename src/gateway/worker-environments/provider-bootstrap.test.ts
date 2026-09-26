@@ -10,6 +10,7 @@ import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
@@ -260,9 +261,9 @@ describe("worker environment service", () => {
       runReclaimBarrier: async ({ begin, reclaim }) =>
         await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
-      reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+      ...createWorkerWorkspaceRecoveryFixture({
+        resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
+      }),
     });
 
     await expect(
@@ -284,12 +285,13 @@ describe("worker environment service", () => {
       entries: { main: { sessionId: persisted.sessionId, updatedAt: support.testState.nowMs } },
       storePath: sessionStorePath,
     });
+    const config = { session: { store: sessionStorePath } };
     const described = await directSessionReq<{ session: GatewaySessionRow | null }>(
       "sessions.describe",
       { key: "main" },
       {
         context: {
-          getRuntimeConfig: () => ({ session: { store: sessionStorePath } }),
+          getRuntimeConfig: () => config,
           workerSessionPlacementService: placements,
         },
       },
@@ -357,7 +359,9 @@ describe("worker environment service", () => {
     const { promise: identityPending, resolve: finishIdentity } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async ({ installation, resolveIdentity, signal }) => {
       signal.addEventListener("abort", () => void events.push("abort"), { once: true });
-      await resolveIdentity(support.SSH_ENDPOINT.keyRef);
+      await resolveIdentity(support.SSH_ENDPOINT.keyRef, {
+        assertCurrent: () => signal.throwIfAborted(),
+      });
       return {
         bundleHash: installation.bundleHash,
         openclawVersion: installation.openclawVersion,
@@ -461,7 +465,8 @@ describe("worker environment service", () => {
   });
 
   it("allows a large bundle bootstrap to outlive the former service deadline", async () => {
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     support.testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
       tarballBytes: 243_000_000,

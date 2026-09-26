@@ -26,6 +26,7 @@ import {
   checkTargetDatabaseSchemasForContexts,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
+  isCandidateAdmissionContextCovered,
 } from "./schema-preflight.js";
 import {
   resolveGitInstallDir,
@@ -128,6 +129,7 @@ export async function preflightUpdateCommandSchemas(params: {
   packageAlreadyCurrent?: boolean;
   managedServiceNodeRunner?: string;
   expectedForeground?: true;
+  candidateAdmissionChecks?: readonly string[];
   opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
   refuseUpdate: RefuseUpdate;
 }): Promise<
@@ -154,6 +156,10 @@ export async function preflightUpdateCommandSchemas(params: {
     refuseUpdate,
   } = params;
   const run = opts.run;
+  const candidateAdmissionChecks =
+    updateInstallKind === "package" && !opts.dryRun
+      ? (params.candidateAdmissionChecks ?? run?.candidateAdmissionChecks)
+      : undefined;
   if (run) {
     recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
   }
@@ -179,6 +185,7 @@ export async function preflightUpdateCommandSchemas(params: {
         managedServiceRootRedirect,
         managedServiceRoot: params.managedServiceRoot,
         legacyConfigPlan: params.legacyConfigPlan,
+        candidateAdmissionChecks,
         expectedForeground:
           params.expectedForeground || run?.completionOwner === "gateway-restart" || undefined,
       });
@@ -208,16 +215,21 @@ export async function preflightUpdateCommandSchemas(params: {
           : { schemaVersions: packageTargetSchemaVersions };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {
         const failure = createUpdatePreflightFailure(
-          "target-git-metadata",
+          "failureCode" in target && target.failureCode
+            ? target.failureCode
+            : "target-git-metadata",
           target.metadataUnreadable,
         );
         throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
           failureFacts: failure.failureFacts,
         });
       }
+      const installedContexts = candidateAdmissionChecks?.includes("database-schema")
+        ? admission.contexts.filter((context) => !isCandidateAdmissionContextCovered(context.env))
+        : admission.contexts;
       packageSchemaPreflight = await checkTargetDatabaseSchemasForContexts(
         target.schemaVersions,
-        admission.contexts,
+        installedContexts,
       );
       if (opts.dryRun && updateInstallKind === "package") {
         const runtime = await resolvePackageRuntimePreflight({

@@ -76,6 +76,14 @@ suite.define(() => {
         });
         const thumbnails = row.locator(".chat-message-image-button");
         await expect.poll(() => thumbnails.count()).toBe(4);
+        await thumbnails.first().focus();
+        for (let index = 1; index < 4; index++) {
+          await page.keyboard.press("Tab");
+          expect(
+            await thumbnails.nth(index).evaluate((element) => element === document.activeElement),
+          ).toBe(true);
+        }
+        await expect.poll(() => thumbnails.locator("img").count()).toBe(4);
         await expect
           .poll(() =>
             thumbnails

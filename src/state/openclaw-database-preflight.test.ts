@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import packageJson from "../../package.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -112,6 +112,7 @@ describe("OpenClaw database schema preflight", () => {
     const agentDir = path.join(root, "external", "agents", "alpha");
     const agentPath = path.join(agentDir, "agent", "openclaw-agent.sqlite");
     const store = path.join(agentDir, "sessions", "sessions.json");
+    openOpenClawStateDatabase({ env });
     openOpenClawAgentDatabase({
       agentId: "beta",
       path: agentPath,
@@ -343,7 +344,7 @@ describe("OpenClaw database schema preflight", () => {
   });
 
   it.each(["default", "configured"])(
-    "checks an unregistered %s store without creating shared state",
+    "holds an unregistered %s store without deletion history or creating shared state",
     async (layout) => {
       const stateDir = tempDirs.make("openclaw-unregistered-readiness-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -368,6 +369,7 @@ describe("OpenClaw database schema preflight", () => {
         operation: "doctor" as const,
         configuredAgentDatabaseTargets:
           layout === "configured" ? [{ agentId: "main", path: agent.path }] : [],
+        onAgentInspection: vi.fn(),
       };
       const before = snapshotSourceFamily(agent.path);
       await expect(assertOpenClawDatabasesReady(options)).resolves.toBeUndefined();
@@ -379,8 +381,44 @@ describe("OpenClaw database schema preflight", () => {
       );
       legacyWriter.close();
       const legacy = snapshotSourceFamily(agent.path);
-      await expect(assertOpenClawDatabasesReady(options)).rejects.toThrow(
-        /Doctor.*database readiness.*schema version 17/s,
+      await expect(assertOpenClawDatabasesReady(options)).resolves.toBeUndefined();
+      expect(options.onAgentInspection).toHaveBeenCalledTimes(2);
+      expect(options.onAgentInspection.mock.calls).toEqual([
+        [{ schemaProcessCount: 0, schemaInspectionCount: 0, schemaSnapshotCount: 0 }],
+        [{ schemaProcessCount: 0, schemaInspectionCount: 0, schemaSnapshotCount: 0 }],
+      ]);
+      const onAgentDatabaseDiscovery = vi.fn();
+      await expect(
+        preflightOpenClawDatabaseSchemas({ ...options, onAgentDatabaseDiscovery }),
+      ).resolves.toEqual({ incompatible: [], indeterminate: [] });
+      expect(onAgentDatabaseDiscovery).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          discovery: expect.objectContaining({
+            targets: [],
+            deletionJournal: {
+              status: "unavailable",
+              cause: "missing",
+              reason: "shared state database missing",
+            },
+            retainedTargets: [],
+            unverifiedTargets: [
+              {
+                agentId: "main",
+                path: agent.path,
+                realPath: fs.realpathSync.native(agent.path),
+                source: layout === "configured" ? "configured" : "disk",
+              },
+            ],
+            registryRemovals: [],
+            failures: [],
+            warnings: [
+              expect.stringContaining(
+                `Held agent main database ${agent.path} (deletion journal unavailable); run openclaw doctor --fix`,
+              ),
+              "Agent deletion journal missing; 1 store held back. Run openclaw doctor --fix to record recovery, then restore or delete each held agent explicitly.",
+            ],
+          }),
+        }),
       );
       expect(snapshotSourceFamily(agent.path)).toEqual(legacy);
       expect(fs.existsSync(statePath)).toBe(false);
@@ -691,6 +729,9 @@ describe("OpenClaw database schema preflight", () => {
     "keeps partial configured-store inventory when one candidate lookup is denied",
     async () => {
       const stateDir = tempDirs.make("openclaw-configured-candidate-lookup-");
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      openOpenClawStateDatabase({ env });
+      closeOpenClawStateDatabaseForTest();
       const visibleDir = tempDirs.make("openclaw-configured-visible-");
       const deniedDir = tempDirs.make("openclaw-configured-denied-");
       const visiblePath = path.join(visibleDir, "newer.sqlite");
@@ -709,7 +750,7 @@ describe("OpenClaw database schema preflight", () => {
       let result: Awaited<ReturnType<typeof preflightOpenClawDatabaseSchemas>>;
       try {
         result = await preflightOpenClawDatabaseSchemas({
-          env: { OPENCLAW_STATE_DIR: stateDir },
+          env,
           supportedVersions: {
             state: OPENCLAW_STATE_SCHEMA_VERSION,
             agent: OPENCLAW_AGENT_SCHEMA_VERSION,

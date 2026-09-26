@@ -66,6 +66,20 @@ describe("vitest scheduling host snapshot", () => {
 describe("local Vitest scheduling", () => {
   it.each([
     [
+      "does not raise a single-core inferred budget under moderate load",
+      { cpuCount: 1, loadAverage1m: 0.75 },
+      {},
+      1,
+      false,
+    ],
+    [
+      "does not raise a four-core inferred budget under moderate load",
+      { cpuCount: 4, totalMemoryBytes: 16 * 1024 ** 3, loadAverage1m: 3 },
+      {},
+      1,
+      false,
+    ],
+    [
       "caps total memory by the process constraint",
       { constrainedMemoryBytes: 16 * 1024 ** 3 },
       {},

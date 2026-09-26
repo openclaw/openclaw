@@ -32,19 +32,15 @@ export function formatAbortReplyText(
     typeof failedSubagents === "number" && failedSubagents > 0
       ? ` Cancellation was incomplete for ${failedSubagents} sub-agent${failedSubagents === 1 ? "" : "s"}. Retry /stop.`
       : "";
-  if (rejectionReason === "finalizing") {
-    const base = "Agent reply is already finalizing and can no longer be aborted.";
-    if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
-      return `${base}${failureSuffix}`;
-    }
-    const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
-    return `${base} Stopped ${stoppedSubagents} ${label}.${failureSuffix}`;
-  }
+  const base =
+    rejectionReason === "finalizing"
+      ? "Agent reply is already finalizing and can no longer be aborted."
+      : "⚙️ Agent was aborted.";
   if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
-    return `⚙️ Agent was aborted.${failureSuffix}`;
+    return `${base}${failureSuffix}`;
   }
   const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
-  return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.${failureSuffix}`;
+  return `${base} Stopped ${stoppedSubagents} ${label}.${failureSuffix}`;
 }
 
 /** Normalize ingress once; current authorization belongs to the loaded operation. */

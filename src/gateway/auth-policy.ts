@@ -1,6 +1,7 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sourceRolePolicies } from "./operator-role-source-policy.js";
 
 const generations = new WeakMap<OpenClawConfig, string>();
 
@@ -11,7 +12,7 @@ export function resolveGatewayAuthPolicyGeneration(config: OpenClawConfig): stri
     const gateway = config.gateway;
     const trustedProxy = gateway?.auth?.trustedProxy;
     generation = stableStringify({
-      roles: gateway?.roles,
+      roles: sourceRolePolicies(gateway?.roles),
       trustedProxies: gateway?.trustedProxies?.toSorted(),
       allowRealIpFallback: gateway?.allowRealIpFallback,
       allowTailscale: gateway?.auth?.allowTailscale,

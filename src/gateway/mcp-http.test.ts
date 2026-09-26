@@ -1,5 +1,8 @@
 // MCP HTTP tests cover gateway-scoped tool listing and invocation over the
 // JSON-RPC surface, including hook filtering and context propagation.
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useMcpCollectorRegistry } from "./mcp-http.collector-registry.test-support.js";
 import { EventEmitter } from "node:events";
 import { request, ServerResponse } from "node:http";
 import { connect } from "node:net";
@@ -170,13 +173,7 @@ vi.mock("./tool-resolution.js", () => ({
     resolveGatewayScopedToolsMock(...args),
 }));
 
-import {
-  addSubagentRunForTests,
-  getSubagentRunByRunId,
-  resetSubagentRegistryForTests,
-  testing as registryTesting,
-} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { consumeSwarmStructuredOutput } from "../agents/tools/structured-output-tool.js";
+import { getSubagentRunByRunId } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   deactivateMcpLoopbackClientGrantCapture,
@@ -778,12 +775,12 @@ describe("MCP terminal process result delivery", () => {
   });
 
   it("keeps the notification when the response connection closes before its bytes finish", async () => {
-    vi.spyOn(ServerResponse.prototype, "end").mockImplementationOnce(
-      function (this: ServerResponse) {
-        this.destroy();
-        return this;
-      },
-    );
+    vi.spyOn(ServerResponse.prototype, "end").mockImplementationOnce(function (
+      this: ServerResponse,
+    ) {
+      this.destroy();
+      return this;
+    });
     const { runtime } = await startLoopbackServerForTest();
     await expect(sendMainSessionToolCall({ token: runtime.ownerToken })).rejects.toThrow();
     expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
@@ -4094,27 +4091,19 @@ describe("collector result tool across the loopback MCP boundary", () => {
     additionalProperties: false,
   };
 
+  useMcpCollectorRegistry({
+    runId: collectorRunId,
+    childSessionKey: collectorSessionKey,
+    outputSchema: collectorSchema,
+  });
+
   beforeEach(async () => {
-    resetSubagentRegistryForTests({ persist: false });
-    registryTesting.setDepsForTest({ persistSubagentRunsToDiskOrThrow: vi.fn() });
-    addSubagentRunForTests({
-      runId: collectorRunId,
-      childSessionKey: collectorSessionKey,
-      collect: true,
-      outputSchema: collectorSchema,
-    });
     const { resolveGatewayScopedTools: resolveActual } =
       await vi.importActual<typeof import("./tool-resolution.js")>("./tool-resolution.js");
     resolveGatewayScopedToolsMock.mockImplementation(
       (...args) =>
         resolveActual(...(args as Parameters<typeof resolveActual>)) as MockGatewayScopedTools,
     );
-  });
-
-  afterEach(() => {
-    consumeSwarmStructuredOutput(collectorRunId);
-    resetSubagentRegistryForTests({ persist: false });
-    registryTesting.setDepsForTest();
   });
 
   async function mintCollectorGrant(runtimeOwnerToken: string) {

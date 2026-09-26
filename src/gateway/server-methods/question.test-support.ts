@@ -9,13 +9,13 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
 import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createQuestionHandlers } from "./question.js";
 import { createSecretStoreWriteService } from "./secrets.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestOptions, RespondFn } from "./types.js";
 
 export let manager: QuestionManager;
 export let requesterAuthority: AgentRunDelegatedAuthority;
@@ -53,8 +53,8 @@ export function installQuestionTestHooks() {
         },
       },
     } as GatewayClient;
-    unregisterAuthorityClosed = registerAgentRunDelegatedAuthorityClosedHandler(() =>
-      manager.cancelClosedAuthorities(),
+    unregisterAuthorityClosed = registerAgentRunDelegatedAuthorityClosedHandler((authority) =>
+      manager.cancelClosedAuthorities(authority.operationalRunInstance),
     );
     broadcast = vi.fn<GatewayBroadcastFn>();
     reloadSecrets = vi.fn<SecretStoreReload>().mockResolvedValue({ warningCount: 0 });
@@ -62,11 +62,12 @@ export function installQuestionTestHooks() {
     handlers = createQuestionHandlers(manager, storeWriteService);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     releaseAgentRunDelegatedAuthority(requesterAuthority);
     unregisterAuthorityClosed();
     clearAgentRunContext(requestParams.runId);
     manager.close();
+    await manager.drain();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -75,22 +76,34 @@ export function installQuestionTestHooks() {
 export async function callQuestionRpc(
   method: string,
   params: Record<string, unknown>,
-  options?: { client?: GatewayClient; cfg?: OpenClawConfig },
+  options?: { client?: GatewayClient; cfg?: OpenClawConfig; registered?: true } & Pick<
+    GatewayRequestOptions,
+    "hasCurrentClientAuthority"
+  >,
 ) {
   const calls: Parameters<RespondFn>[] = [];
   const respond: RespondFn = (...args) => calls.push(args);
-  await handlers[method]?.({
-    req: { type: "req", id: "request-1", method, params },
+  const cfg = options?.cfg ?? {};
+  const request = {
+    req: { type: "req" as const, id: "request-1", method, params },
     params,
     respond,
     client: options?.client ?? null,
+    hasCurrentClientAuthority: options?.hasCurrentClientAuthority,
     isWebchatConnect: () => false,
     context: createDirectChatContext({
       broadcast,
+      questionManager: manager,
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-      getRuntimeConfig: () => options?.cfg ?? {},
+      getRuntimeConfig: () => cfg,
     }),
-  });
+  };
+  if (options?.registered) {
+    const { handleGatewayRequest } = await import("../server-methods.js");
+    await handleGatewayRequest({ ...request, extraHandlers: handlers });
+  } else {
+    await handlers[method]?.(request);
+  }
   const response = calls[0];
   if (!response) {
     throw new Error(`expected ${method} response`);

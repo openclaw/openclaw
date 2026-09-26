@@ -101,7 +101,7 @@ describe("Anthropic cache checkpoint transport parity", () => {
           expect.arrayContaining([
             {
               type: "text",
-              text: "x-anthropic-billing-header: cc_version=2.1.278; cc_entrypoint=sdk-cli;",
+              text: "x-anthropic-billing-header: cc_version=2.1.280; cc_entrypoint=sdk-cli;",
             },
             {
               type: "text",

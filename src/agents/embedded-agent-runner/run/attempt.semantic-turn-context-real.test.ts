@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { installDecisionFixture } from "../../agent-hooks/compaction-safeguard-semantic.test-support.js";
@@ -101,6 +102,56 @@ describe("admitted embedded turn-context shadow eligibility", () => {
         ...expectedMessages,
         { role: "assistant", content: "done", timestamp: 6 },
       ]);
+    },
+  );
+
+  it.each(["mode off", "policy changed"] as const)(
+    "revokes shadow observation when %s during assembly",
+    async (change) => {
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            experimental: { decisionAssistance: true },
+            decisionModel: "semantic-fixture/default-v1",
+            turnContextCuration: { mode: "shadow", minEstimatedTokens: 1, recentMessages: 2 },
+          },
+        },
+      };
+      const { requests } = installDecisionFixture("preserved", undefined, config);
+      const source = sourceMessages();
+      const original = structuredClone(source);
+      let modelMessages: AgentMessage[] | undefined;
+      await createContextEngineAttemptRunner({
+        contextEngine: {
+          assemble: async () => {
+            setRuntimeConfigSnapshot({
+              ...config,
+              agents: {
+                ...config.agents,
+                defaults: {
+                  ...config.agents?.defaults,
+                  turnContextCuration:
+                    change === "mode off"
+                      ? { ...config.agents?.defaults?.turnContextCuration, mode: "off" }
+                      : { ...config.agents?.defaults?.turnContextCuration, recentMessages: 3 },
+                },
+              },
+            });
+            return { messages: source, estimatedTokens: 300 };
+          },
+          info: { id: "custom-engine", name: "Custom fixture", version: "1.0.0" },
+        },
+        sessionKey: `agent:main:turn-context-shadow-revoked-${change}`,
+        tempPaths,
+        sessionMessages: source,
+        attemptOverrides: { config },
+        sessionPrompt: async (session) => {
+          modelMessages = structuredClone(session.messages as AgentMessage[]);
+        },
+      });
+      expect(requests).toHaveLength(0);
+      expect(modelMessages).toEqual(original);
+      expect(source).toEqual(original);
     },
   );
 });

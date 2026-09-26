@@ -9,11 +9,11 @@ import {
   clearOpenClawDatabaseQuarantine,
   markOpenClawAgentIntegrityClean,
   readOpenClawAgentIntegrityVerification,
-  readOpenClawDatabaseQuarantine,
   recordOpenClawAgentIntegrityVerification,
   recordOpenClawDatabaseQuarantine,
-  resolveQuarantineStorePath,
 } from "./openclaw-quarantine-store.js";
+import { readPersistedQuarantineRow } from "./openclaw-quarantine-store.test-support.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -125,7 +125,7 @@ it.each(["record", "clear"] as const)(
     const quarantine = { env: fixture.env, path: fixture.pathname, kind: "agent" as const };
     expect(recordOpenClawDatabaseQuarantine({ ...quarantine, reason: "original" })).toBe(true);
     fixture.record();
-    const before = readOpenClawDatabaseQuarantine(fixture.pathname, { env: fixture.env });
+    const before = readPersistedQuarantineRow(fixture.pathname, { env: fixture.env });
     const receipt = readOpenClawAgentIntegrityVerification(fixture.pathname, fixture.env);
     failReceiptWrite(fixture.storePath, "DELETE", "rollback");
 
@@ -135,7 +135,7 @@ it.each(["record", "clear"] as const)(
         : clearOpenClawDatabaseQuarantine(fixture.pathname, { env: fixture.env });
 
     expect(result).toBe(false);
-    expect(readOpenClawDatabaseQuarantine(fixture.pathname, { env: fixture.env })).toEqual(before);
+    expect(readPersistedQuarantineRow(fixture.pathname, { env: fixture.env })).toEqual(before);
     expect(readOpenClawAgentIntegrityVerification(fixture.pathname, fixture.env)).toEqual(receipt);
   },
 );

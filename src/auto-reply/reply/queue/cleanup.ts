@@ -7,7 +7,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import { removeQueuedItemsByRef } from "../../../utils/queue-helpers.js";
 import { clearFollowupDrainCallback } from "./drain.js";
 import { completeFollowupRunLifecycle } from "./lifecycle.js";
-import { clearFollowupQueue, FOLLOWUP_QUEUES } from "./state.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES, followupQueueSources } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import type { FollowupRun } from "./types.js";
 
@@ -40,13 +40,7 @@ export function prepareSessionFollowupCleanup(params: {
       !queue.activeSummarySources.has(source);
     // Admission can retarget the next claim before run.sessionId is refreshed.
     // Neither identity may transfer this Stop to another incarnation.
-    const sources = [
-      ...new Set([
-        ...queue.items,
-        ...queue.summarySources,
-        ...queue.summaryElisions.flatMap((entry) => entry.sources),
-      ]),
-    ]
+    const sources = [...new Set(followupQueueSources(queue))]
       .filter(
         (source) =>
           isPending(source) &&

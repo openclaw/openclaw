@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withSessionMetadataPublication,
@@ -49,6 +50,7 @@ import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
@@ -295,12 +297,7 @@ async function createAgentSessionImpl(
     const current = sessionManager.getSessionTarget();
     if (
       sessionManager.getSessionId() !== initialSessionId ||
-      (initialTarget
-        ? !current ||
-          (["agentId", "sessionId", "sessionKey", "storePath"] as const).some(
-            (key) => current[key] !== initialTarget[key],
-          )
-        : current !== undefined)
+      !sameSessionTranscriptTargetBinding(initialTarget, current)
     ) {
       throw new SessionTranscriptWriterClaimReboundError();
     }
@@ -314,7 +311,8 @@ async function createAgentSessionImpl(
   }
 
   // Check if session has existing data to restore
-  const existingSession = sessionManager.buildSessionContext();
+  const existingSession = await sessionManager[sessionManagerReadInitialContext]();
+  assertInitialSessionCurrent();
   const hasExistingSession = existingSession.messages.length > 0;
   const hasThinkingEntry = sessionManager
     .getBranch()
@@ -549,16 +547,17 @@ async function createAgentSessionImpl(
     appendInitialMetadata({ type: "thinking_level_change", thinkingLevel }, () =>
       sessionManager.appendThinkingLevelChange(thinkingLevel),
     );
-  const initializeMetadata = () =>
-    withSessionManagerWrite(sessionManager, async () => {
+  const initializeMetadata = () => {
+    // Prepared history needs no write permit when its initial metadata already exists.
+    // Otherwise restoration waits behind unrelated writes, including reclamation.
+    if (hasExistingSession && hasThinkingEntry) {
+      return Promise.resolve();
+    }
+    return withSessionManagerWrite(sessionManager, async () => {
       assertInitialSessionCurrent();
-      // Restore messages if session has existing data.
       if (hasExistingSession) {
-        if (!hasThinkingEntry) {
-          await appendInitialThinking();
-          assertInitialSessionCurrent();
-        }
-        agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
+        await appendInitialThinking();
+        assertInitialSessionCurrent();
       } else {
         // Persist initial settings before exposing the new session to callers.
         if (model) {
@@ -571,6 +570,7 @@ async function createAgentSessionImpl(
         await appendInitialThinking();
       }
     });
+  };
   try {
     await (initialTarget
       ? withSessionTranscriptWriteAssertion(
@@ -581,6 +581,9 @@ async function createAgentSessionImpl(
       : initializeMetadata());
     // Cleanup can yield after the last append, before this factory exposes its session.
     assertInitialSessionCurrent();
+    if (hasExistingSession) {
+      agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
+    }
   } catch (cause) {
     if (cause instanceof SessionMetadataCommittedError || !metadataCommit) {
       throw cause;

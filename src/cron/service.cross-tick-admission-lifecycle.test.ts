@@ -12,9 +12,11 @@ import {
   beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { captureTaskDeliveryWork } from "../tasks/task-registry-delivery.test-support.js";
 import { start, stop } from "./service/ops-lifecycle.js";
 import { run } from "./service/ops-run.js";
 import { onTimer } from "./service/timer.test-support.js";
@@ -80,6 +82,7 @@ describe("cron service cross-tick admission lifecycle", () => {
   });
 
   it("gives a waiter-delayed partial-batch wake an independent Gateway root", async () => {
+    using deliveries = captureTaskDeliveryWork();
     const store = fixtures.makeStorePath();
     const t0 = Date.parse("2026-02-06T10:09:00.000Z");
     const scheduledA = createDueIsolatedJob({
@@ -178,19 +181,25 @@ describe("cron service cross-tick admission lifecycle", () => {
       releaseScheduledB.resolve({ status: "ok", summary: "scheduled b" });
       await Promise.all([directAStarted.promise, directBStarted.promise]);
       await timerRun;
+      await deliveries.settle();
 
       expect(state.runAdmission.capacityListener).toBeTypeOf("function");
-      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      expect(
+        getActiveGatewayRootWorkCount(),
+        `Active Gateway roots: ${JSON.stringify(getActiveGatewayRootWorkHolders())}`,
+      ).toBe(2);
 
       releaseDirectA.resolve({ status: "ok", summary: "direct a" });
       // The capacity wake still observes active receipts before admitting pending work.
       await pendingStarted.promise;
       expect(pendingStartCount).toBe(1);
       await directRunA;
+      await deliveries.settle();
       expect(getActiveGatewayRootWorkCount()).toBe(2);
 
       releaseDirectB.resolve({ status: "ok", summary: "direct b" });
       await directRunB;
+      await deliveries.settle();
       expect(getActiveGatewayRootWorkCount()).toBe(1);
 
       releasePending.resolve({ status: "ok", summary: "pending" });
@@ -207,7 +216,11 @@ describe("cron service cross-tick admission lifecycle", () => {
         directRunA ?? Promise.resolve(),
         directRunB ?? Promise.resolve(),
       ]);
-      stop(state);
+      try {
+        await deliveries.settle();
+      } finally {
+        stop(state);
+      }
     }
   });
 

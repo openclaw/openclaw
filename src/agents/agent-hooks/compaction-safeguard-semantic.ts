@@ -236,10 +236,11 @@ function buildSegments(params: {
     }
 
     const rendered = members.map(renderMessage);
-    const text = rendered
+    const combinedText = rendered
       .map((item) => item.text)
       .filter(Boolean)
       .join("\n");
+    const text = combinedText.slice(0, MAX_SEGMENT_TEXT_CHARS);
     const protectionReasons = new Set<CompactionSemanticProtectionReason>();
     if (members.some((message) => message.role === "user")) {
       protectionReasons.add("user-authored");
@@ -256,7 +257,7 @@ function buildSegments(params: {
     if (rendered.some((item) => item.unsupported)) {
       protectionReasons.add("unsupported-content");
     }
-    if (rendered.some((item) => item.truncated)) {
+    if (combinedText.length > MAX_SEGMENT_TEXT_CHARS || rendered.some((item) => item.truncated)) {
       protectionReasons.add("oversized-segment");
     }
     if (params.identifiers.some((identifier) => identifier && text.includes(identifier))) {

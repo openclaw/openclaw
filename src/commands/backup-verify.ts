@@ -4,7 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import * as tar from "tar";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import {
   recordArchiveSymbolicLink,
   type BackupSymbolicLink,
@@ -29,6 +29,7 @@ import {
   isRootBackupManifestEntry,
   parseBackupManifest,
   verifyBackupManifestEntries,
+  verifyBackupSqliteCoverage,
 } from "./backup-verify-manifest.js";
 
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
@@ -48,6 +49,7 @@ type BackupVerifyResult = {
   assetCount: number;
   entryCount: number;
   symlinkCount: number;
+  sqliteInventoryVerified: boolean;
   externalSymbolicLinks?: BackupSymbolicLink[];
 };
 
@@ -139,6 +141,9 @@ function formatResult(result: BackupVerifyResult): string {
     `Assets verified: ${result.assetCount}`,
     `Archive entries scanned: ${result.entryCount}`,
     `Symbolic links checked: ${result.symlinkCount}`,
+    result.sqliteInventoryVerified
+      ? "Canonical SQLite inventory verified."
+      : "Canonical SQLite completeness unknown: this legacy archive has no database inventory.",
   ].join("\n");
 }
 
@@ -641,22 +646,7 @@ async function verifyResolvedBackupArchive(
     throw new Error("Backup manifest external symbolic links do not match archive entries.");
   }
   const verifiedSnapshots = await verifySqliteSnapshots({ archivePath, entries, manifest });
-  for (const required of requiredSnapshots) {
-    const expectedPath = buildBackupArchivePath(manifest.archiveRoot, required.sourcePath);
-    if (
-      !verifiedSnapshots.some(
-        (verified) =>
-          verified.archivePath === expectedPath &&
-          verified.role === required.role &&
-          (required.role === "global" ||
-            (verified.role === "agent" && verified.agentId === required.agentId)),
-      )
-    ) {
-      throw new Error(
-        `Backup lacks verified canonical SQLite coverage for ${required.sourcePath}.`,
-      );
-    }
-  }
+  verifyBackupSqliteCoverage(manifest, requiredSnapshots, verifiedSnapshots);
 
   const result: BackupVerifyResult = {
     ok: true,
@@ -667,6 +657,7 @@ async function verifyResolvedBackupArchive(
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
     symlinkCount: symbolicLinks.length,
+    sqliteInventoryVerified: manifest.sqliteSnapshots !== undefined,
     ...(externalSymbolicLinks.length ? { externalSymbolicLinks } : {}),
   };
 

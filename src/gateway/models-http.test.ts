@@ -128,10 +128,15 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     }
   });
 
-  it("rejects operator scopes that lack read access", async () => {
-    const res = await getModels("/v1/models", { "x-openclaw-scopes": "operator.approvals" });
-    await expectMissingReadScope(res);
-  });
+  it.each(["operator.approvals", "operator.sessions.read", "operator.sessions.write"])(
+    "rejects %s for the global agent target inventory",
+    async (scope) => {
+      for (const pathname of ["/v1/models", "/v1/models/openclaw"]) {
+        const res = await getModels(pathname, { "x-openclaw-scopes": scope });
+        await expectMissingReadScope(res);
+      }
+    },
+  );
 
   it("rejects requests with no declared operator scopes", async () => {
     const res = await getModels("/v1/models", { "x-openclaw-scopes": "" });

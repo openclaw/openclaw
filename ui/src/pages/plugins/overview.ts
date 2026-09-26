@@ -1,4 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
+import {
+  PLUGIN_UI_CAPABILITIES,
+  type PluginUiCapability,
+} from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs } from "../../lib/format.ts";
@@ -182,6 +186,48 @@ export function renderPluginCapabilitySection(
         </section>`
       : nothing
   }`;
+}
+
+// Runtime plumbing is intentionally absent: the overview describes user capabilities.
+const overviewContractFamilies = [
+  "speechProviders",
+  "realtimeTranscriptionProviders",
+  "realtimeVoiceProviders",
+  "mediaUnderstandingProviders",
+  "imageGenerationProviders",
+  "videoGenerationProviders",
+  "musicGenerationProviders",
+  "embeddingProviders",
+  "webSearchProviders",
+  "webFetchProviders",
+  "webContentExtractors",
+  "documentExtractors",
+  "transcriptSourceProviders",
+  "migrationProviders",
+] as const;
+
+export function renderPluginDeclaredCapabilities(
+  contracts: Readonly<Record<string, readonly string[]>> | undefined,
+  uiCapabilities?: readonly PluginUiCapability[],
+): TemplateResult {
+  return renderPluginCapabilitySection(
+    t("pluginsPage.detailCapabilities"),
+    [
+      ...overviewContractFamilies
+        .filter((family) => contracts?.[family]?.length)
+        .map((family) => ({
+          name: t(`pluginsPage.capabilityFamilies.${family}.name`),
+          description: t(`pluginsPage.capabilityFamilies.${family}.description`),
+        })),
+      ...PLUGIN_UI_CAPABILITIES.filter((capability) => uiCapabilities?.includes(capability)).map(
+        (capability) => ({
+          name: t(`pluginsPage.uiCapabilities.${capability}.name`),
+          description: t(`pluginsPage.uiCapabilities.${capability}.description`),
+        }),
+      ),
+    ],
+    icons.layers,
+  );
 }
 
 export function renderPluginAskAction(onAsk?: () => void, primary = true) {

@@ -1,5 +1,10 @@
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
+export function readFiniteSqliteNumber(value: unknown): number | undefined {
+  const number = typeof value === "bigint" ? Number(value) : value;
+  return typeof number === "number" && Number.isFinite(number) ? number : undefined;
+}
+
 export function coerceRequiredSqliteNumber(value: number | bigint): number {
   return typeof value === "bigint" ? Number(value) : value;
 }

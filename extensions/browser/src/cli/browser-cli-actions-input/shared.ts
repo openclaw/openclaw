@@ -2,7 +2,7 @@
  * Shared helpers for Browser CLI action subcommands.
  */
 import fs from "node:fs/promises";
-import type { Command } from "commander";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { asRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserActRequestTimeoutMs } from "../../browser/act-policy.js";
@@ -14,29 +14,12 @@ import {
   printBrowserJsonResult,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
-import { danger, defaultRuntime } from "../core-api.js";
-
-type BrowserActionContext = {
-  parent: BrowserParentOpts;
-  profile: string | undefined;
-};
 
 type BrowserActionResult = Awaited<ReturnType<typeof browserAct>>;
-
-/** Resolves inherited Browser action context from a commander command. */
-export function resolveBrowserActionContext(
-  cmd: Command,
-  parentOpts: (cmd: Command) => BrowserParentOpts,
-): BrowserActionContext {
-  const parent = parentOpts(cmd);
-  const profile = parent?.browserProfile;
-  return { parent, profile };
-}
 
 /** Execute and present an action, preserving recorded interruptions and child failures. */
 export async function runBrowserAction(params: {
   parent: BrowserParentOpts;
-  profile?: string;
   body: BrowserActRequest;
   successMessage?: string | ((result: BrowserActionResult) => string);
 }): Promise<void> {
@@ -45,7 +28,7 @@ export async function runBrowserAction(params: {
     {
       method: "POST",
       path: "/act",
-      query: params.profile ? { profile: params.profile } : undefined,
+      query: params.parent.browserProfile ? { profile: params.parent.browserProfile } : undefined,
       body: params.body,
     },
     { timeoutMs: resolveBrowserActRequestTimeoutMs(params.body) },

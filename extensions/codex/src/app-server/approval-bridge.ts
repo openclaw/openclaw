@@ -938,53 +938,24 @@ function describePermissionProfile(permissions: JsonObject, label: string): stri
   if (isJsonObject(permissions.network)) {
     const summaries = [
       summarizeNetworkEnabledPermission(permissions.network, risks),
-      summarizePermissionRecord(permissions.network, risks, [
-        {
-          key: "allowHosts",
-          label: "allowHosts",
-          sanitize: sanitizePermissionHostValue,
-          risksFor: permissionHostRisks,
-        },
-      ]),
+      summarizePermissionArray(permissions.network.allowHosts, "allowHosts", risks, {
+        sanitize: sanitizePermissionHostValue,
+        risksFor: permissionHostRisks,
+      }),
     ].filter((summary): summary is string => Boolean(summary));
     networkSummary = summaries.length > 0 ? summaries.join("; ") : undefined;
   }
   let fileSystemSummary: string | undefined;
-  if (isJsonObject(permissions.fileSystem)) {
+  const fileSystem = permissions.fileSystem;
+  if (isJsonObject(fileSystem)) {
     const summaries = [
-      summarizePermissionRecord(permissions.fileSystem, risks, [
-        {
-          key: "read",
-          label: "read",
+      ...["read", "write", "roots", "readPaths", "writePaths"].map((key) =>
+        summarizePermissionArray(fileSystem[key], key, risks, {
           sanitize: sanitizePermissionPathValue,
           risksFor: permissionPathRisks,
-        },
-        {
-          key: "write",
-          label: "write",
-          sanitize: sanitizePermissionPathValue,
-          risksFor: permissionPathRisks,
-        },
-        {
-          key: "roots",
-          label: "roots",
-          sanitize: sanitizePermissionPathValue,
-          risksFor: permissionPathRisks,
-        },
-        {
-          key: "readPaths",
-          label: "readPaths",
-          sanitize: sanitizePermissionPathValue,
-          risksFor: permissionPathRisks,
-        },
-        {
-          key: "writePaths",
-          label: "writePaths",
-          sanitize: sanitizePermissionPathValue,
-          risksFor: permissionPathRisks,
-        },
-      ]),
-      summarizeFileSystemEntries(permissions.fileSystem, risks),
+        }),
+      ),
+      summarizeFileSystemEntries(fileSystem, risks),
     ].filter((summary): summary is string => Boolean(summary));
     fileSystemSummary = summaries.length > 0 ? summaries.join("; ") : undefined;
   }
@@ -999,13 +970,6 @@ function describePermissionProfile(permissions: JsonObject, label: string): stri
   }
   return lines;
 }
-
-type PermissionArrayDescriptor = {
-  key: string;
-  label: string;
-  sanitize: (value: string) => string;
-  risksFor: (value: string) => readonly string[];
-};
 
 function summarizeNetworkEnabledPermission(
   permission: JsonObject,
@@ -1056,43 +1020,34 @@ function summarizeFileSystemEntries(
   return `entries: ${samples.join(", ")}${remainderSuffix}`;
 }
 
-function summarizePermissionRecord(
-  permission: JsonObject,
-  risks: Set<string>,
-  descriptors: readonly PermissionArrayDescriptor[],
-): string | undefined {
-  return (
-    descriptors
-      .map((descriptor) => summarizePermissionArray(permission, descriptor, risks))
-      .filter(Boolean)
-      .join("; ") || undefined
-  );
-}
-
 function summarizePermissionArray(
-  record: JsonObject,
-  descriptor: PermissionArrayDescriptor,
+  input: JsonValue | undefined,
+  label: string,
   risks: Set<string>,
+  format: {
+    sanitize: (value: string) => string;
+    risksFor: (value: string) => readonly string[];
+  },
 ): string | undefined {
-  const values = normalizeTrimmedStringList(record[descriptor.key]);
+  const values = normalizeTrimmedStringList(input);
   if (values.length === 0) {
     return undefined;
   }
   for (const value of values) {
-    for (const risk of descriptor.risksFor(value)) {
+    for (const risk of format.risksFor(value)) {
       risks.add(risk);
     }
   }
   const sampleValues = values
     .slice(0, PERMISSION_SAMPLE_LIMIT)
-    .map(descriptor.sanitize)
+    .map(format.sanitize)
     .filter(Boolean);
   if (sampleValues.length === 0) {
-    return `${descriptor.label}: ${values.length}`;
+    return `${label}: ${values.length}`;
   }
   const remaining = values.length - sampleValues.length;
   const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `${descriptor.label}: ${sampleValues.join(", ")}${remainderSuffix}`;
+  return `${label}: ${sampleValues.join(", ")}${remainderSuffix}`;
 }
 
 function summarizeStringArray(

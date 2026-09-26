@@ -170,6 +170,49 @@ registeredElementSuite.define(() => {
           await page.evaluate((key) => sessionStorage.getItem(key), renderCountKey),
         ).toBeNull();
 
+        const drag = await page.evaluate(() => {
+          const fallback = document.getElementById("openclaw-mount-fallback")!;
+          const press = (target: Element, button = 0, handled = false) => {
+            const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button });
+            if (handled) {
+              event.preventDefault();
+            }
+            target.dispatchEvent(event);
+            return event.defaultPrevented;
+          };
+          const withoutBridge = press(fallback);
+          const messages: unknown[] = [];
+          Object.defineProperty(window, "webkit", {
+            configurable: true,
+            value: {
+              messageHandlers: {
+                openclawWindowDrag: { postMessage: (message: unknown) => messages.push(message) },
+              },
+            },
+          });
+          try {
+            const background = press(fallback);
+            const panel = [
+              ".mount-fallback__panel",
+              ".mount-fallback__panel h1",
+              "#openclaw-mount-retry",
+              "#openclaw-mount-wait",
+            ].map((selector) => press(fallback.querySelector(selector)!));
+            const secondary = press(fallback, 2);
+            press(fallback, 0, true);
+            return { withoutBridge, background, panel, secondary, messages };
+          } finally {
+            Reflect.deleteProperty(window, "webkit");
+          }
+        });
+        expect(drag).toEqual({
+          withoutBridge: false,
+          background: true,
+          panel: [false, false, false, false],
+          secondary: false,
+          messages: [{ type: "window-drag" }],
+        });
+
         syntheticModuleRenders = true;
         await Promise.all([
           page.waitForNavigation({ waitUntil: "domcontentloaded" }),

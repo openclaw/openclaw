@@ -86,6 +86,8 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
         session: TSession,
         options?: { finalize?: boolean },
       ): Promise<MeetingTranscriptSnapshot | undefined>;
+      /** Observe every provider revision before the durable transcript cursor deduplicates lines. */
+      onSnapshot?(session: TSession, snapshot: MeetingTranscriptSnapshot): void;
       onLines?(session: TSession, lines: MeetingTranscriptLine[]): Promise<void>;
     },
   ) {}
@@ -206,6 +208,7 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
       throw error;
     }
     if (snapshot) {
+      this.options.onSnapshot?.(session, snapshot);
       if (this.options.isTranscribeSession(session)) {
         this.#merge(session.id, snapshot);
       }

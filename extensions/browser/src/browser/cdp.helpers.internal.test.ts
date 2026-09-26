@@ -1,10 +1,10 @@
 // Browser tests cover cdp.helpers.internal plugin behavior.
 import http, { createServer } from "node:http";
 import type { Socket } from "node:net";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { toErrorObject } from "../infra/errors.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const sleepWithAbortMock = vi.hoisted(() =>
@@ -40,7 +40,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
 }));
 
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import {
   assertCdpEndpointAllowed,
   fetchCdpChecked,

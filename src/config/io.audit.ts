@@ -1,6 +1,8 @@
 // Audits config paths and values for diagnostics and safety checks.
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { redactSecrets } from "../logging/redact.js";
@@ -440,20 +442,6 @@ export type ConfigAuditScrubResult = {
   aborted: boolean;
 };
 
-type ConfigAuditScrubFs = {
-  promises: {
-    readFile(path: string, encoding: "utf-8"): Promise<string>;
-    stat(path: string): Promise<{ size: number }>;
-    writeFile(
-      path: string,
-      data: string,
-      options?: { encoding?: BufferEncoding; mode?: number },
-    ): Promise<unknown>;
-    rename(oldPath: string, newPath: string): Promise<unknown>;
-    unlink(path: string): Promise<unknown>;
-  };
-};
-
 // Rewrites every record in `config-audit.jsonl` through `redactConfigAuditArgv`
 // so that historical argv/execArgv values written before the forward redactor
 // shipped are masked the same way new entries are. Idempotent — re-applying the
@@ -463,11 +451,8 @@ type ConfigAuditScrubFs = {
 // Malformed lines (parse failures, non-object payloads) are preserved verbatim
 // and counted as `skipped` so the function never destroys forensic content it
 // cannot understand.
-// Atomic write: produces a sibling `*.scrub.tmp` file at mode `0o600`, then
-// renames it over the audit log. The temp file is unlinked on any error path
-// so a partial scrub never leaves plaintext at rest.
+// Stages redacted bytes at mode 0o600 before replacing the audit log.
 export async function scrubConfigAuditLog(params: {
-  fs: ConfigAuditScrubFs;
   env: NodeJS.ProcessEnv;
   homedir: () => string;
   dryRun?: boolean;
@@ -475,7 +460,7 @@ export async function scrubConfigAuditLog(params: {
   const auditPath = resolveLegacyConfigAuditLogPath(params.env, params.homedir);
   let raw: string;
   try {
-    raw = await params.fs.promises.readFile(auditPath, "utf-8");
+    raw = await fs.readFile(auditPath, "utf-8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
       return { scanned: 0, rewritten: 0, skipped: 0, aborted: false };
@@ -546,54 +531,30 @@ export async function scrubConfigAuditLog(params: {
     return { scanned, rewritten, skipped, aborted: false };
   }
 
-  // Concurrent-append guard: re-stat just before the rename. If the file
-  // grew while the scrub was transforming records in memory, an
-  // appendConfigAuditRecord caller wrote a new entry that the rename would
-  // overwrite. Abort instead of silently dropping the new record. The
-  // caller (doctor --fix) surfaces a retry hint to the operator.
-  let preRenameSize: number;
+  const appended = new Error("Config audit log changed before scrub publication");
   try {
-    preRenameSize = (await params.fs.promises.stat(auditPath)).size;
-  } catch {
-    return { scanned, rewritten, skipped, aborted: true };
-  }
-  if (preRenameSize !== originalByteLength) {
-    return { scanned, rewritten, skipped, aborted: true };
-  }
-
-  const tmpPath = `${auditPath}.scrub.tmp`;
-  try {
-    await params.fs.promises.writeFile(tmpPath, outLines.join("\n"), {
-      encoding: "utf-8",
-      mode: 0o600,
+    const directory = await fs.realpath(path.dirname(auditPath));
+    await replaceFileAtomic({
+      filePath: path.join(directory, path.basename(auditPath)),
+      content: outLines.join("\n"),
+      mode: 0o600 & ~process.umask(),
+      dirMode: (await fs.stat(directory)).mode & 0o7777,
+      beforeRename: async ({ filePath }) => {
+        // Replacing a log must not discard entries appended after the read.
+        const size = await fs.stat(filePath).then(
+          (stat) => stat.size,
+          () => undefined,
+        );
+        if (size !== originalByteLength) {
+          throw appended;
+        }
+      },
     });
-    let finalPreRenameSize: number;
-    try {
-      finalPreRenameSize = (await params.fs.promises.stat(auditPath)).size;
-    } catch {
-      try {
-        await params.fs.promises.unlink(tmpPath);
-      } catch {
-        // best-effort cleanup; the stat failure is handled as a safe abort
-      }
+  } catch (error) {
+    if (error === appended) {
       return { scanned, rewritten, skipped, aborted: true };
     }
-    if (finalPreRenameSize !== originalByteLength) {
-      try {
-        await params.fs.promises.unlink(tmpPath);
-      } catch {
-        // best-effort cleanup; the append detection is the actionable state
-      }
-      return { scanned, rewritten, skipped, aborted: true };
-    }
-    await params.fs.promises.rename(tmpPath, auditPath);
-  } catch (err) {
-    try {
-      await params.fs.promises.unlink(tmpPath);
-    } catch {
-      // best-effort cleanup; the rename failure is the actionable error
-    }
-    throw err;
+    throw error;
   }
 
   return { scanned, rewritten, skipped, aborted: false };

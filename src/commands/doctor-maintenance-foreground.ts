@@ -20,7 +20,12 @@ import { isDoctorUpdateRepairMode, resolveDoctorRepairMode } from "./doctor-repa
 export async function acquireDoctorGatewayMaintenanceCoordinator(
   databasePath: string,
   env: NodeJS.ProcessEnv,
-  params: { options: DoctorOptions; runtime: RuntimeEnv; assertCurrent?: () => void },
+  params: {
+    options: DoctorOptions;
+    runtime: RuntimeEnv;
+    assertCurrent?: () => void;
+    deadlineMs?: number;
+  },
 ) {
   const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options));
   let foreground: ReturnType<typeof readGatewayOwnerLease>;
@@ -81,11 +86,13 @@ export async function acquireDoctorGatewayMaintenanceCoordinator(
     },
     // Installation replacement is an unsupervised restart: detection, drain,
     // then server close and process exit each retain their owner's allowance.
-    deadlineMs:
+    deadlineMs: Math.min(
+      params.deadlineMs ?? Infinity,
       performance.now() +
-      TICK_INTERVAL_MS +
-      resolveGatewayRestartDeferralTimeoutMs() +
-      GATEWAY_SERVICE_STOP_TIMEOUT_MS,
+        TICK_INTERVAL_MS +
+        resolveGatewayRestartDeferralTimeoutMs() +
+        GATEWAY_SERVICE_STOP_TIMEOUT_MS,
+    ),
     pollIntervalMs: 100,
     maxPollIntervalMs: 1_000,
     sleep: (ms) =>

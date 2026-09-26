@@ -123,12 +123,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       throwIfDispatchOperationAborted();
       // Durable reasoning is a channel-owned lane; generic channels keep the
       // historical suppression unless they explicitly opt in.
-      if (reply.isReasoning === true && !state.reasoningPayloadsEnabled) {
-        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
-        await heartbeatReply?.settle?.("cancelled");
-        continue;
-      }
-      if (reply.isCommentary === true && !state.commentaryPayloadsEnabled) {
+      if (
+        (reply.isReasoning === true && !state.reasoningPayloadsEnabled) ||
+        (reply.isCommentary === true && !state.commentaryPayloadsEnabled)
+      ) {
         await suppressPendingFinalDelivery(reply, pendingFinalOptions);
         await heartbeatReply?.settle?.("cancelled");
         continue;

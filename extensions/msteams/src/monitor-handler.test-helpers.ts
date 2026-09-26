@@ -4,11 +4,13 @@ import {
   type runPreparedInboundReply,
   type PreparedInboundReply,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  createTestInboundDebounceFlush,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import type { MSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
@@ -185,6 +187,7 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         resolveStorePath,
       },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: buildChannelInboundEventContext,
         run: run as unknown as PluginRuntime["channel"]["inbound"]["run"],
       },
@@ -192,31 +195,16 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
   } as unknown as PluginRuntime);
 }
 
-export function createActivityHandler(
-  run = vi.fn(async () => undefined),
-): MSTeamsActivityHandler & {
-  run: NonNullable<MSTeamsActivityHandler["run"]>;
-} {
-  const handler: MSTeamsActivityHandler & {
-    run: NonNullable<MSTeamsActivityHandler["run"]>;
-  } = {
-    onMessage: () => handler,
-    onMembersAdded: () => handler,
-    onReactionsAdded: () => handler,
-    onReactionsRemoved: () => handler,
-    run,
-  };
-  return handler;
-}
-
 export function createMSTeamsMessageHandlerDeps(params?: {
   cfg?: OpenClawConfig;
   runtime?: RuntimeEnv;
 }): MSTeamsMessageHandlerDeps {
   const app = {
-    tokenManager: {
-      getBotToken: async () => ({ toString: () => "bot-token" }),
-      getGraphToken: async () => ({ toString: () => "graph-token" }),
+    tokenProvider: {
+      getAppToken: async (scope: string) => ({
+        toString: () =>
+          scope === "https://graph.microsoft.com/.default" ? "graph-token" : "bot-token",
+      }),
     },
     api: {},
     graph: {},

@@ -66,13 +66,15 @@ function projectSchemaTier(params: {
   let items = schema.items;
   if (schema.items) {
     hasSchemaChildren = true;
-    const sourceItems = [schema.items];
-    const projectedItems = sourceItems
-      .map((item) => projectSchemaTier({ schema: item, path: [...path, "*"], advanced, hints }))
-      .filter((projection) => projection.schema !== null);
-    items = projectedItems[0]?.schema ?? undefined;
-    for (const projection of projectedItems) {
-      for (const leaf of projection.leaves) {
+    const projected = projectSchemaTier({
+      schema: schema.items,
+      path: [...path, "*"],
+      advanced,
+      hints,
+    });
+    items = projected.schema ?? undefined;
+    if (projected.schema) {
+      for (const leaf of projected.leaves) {
         leaves.add(leaf);
       }
     }

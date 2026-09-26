@@ -1,7 +1,6 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Command risk detection follows nested carriers, shell wrappers, and inline
 // interpreter eval paths used by approval policy and command explanations.
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
   COMMAND_CARRIER_EXECUTABLES,
@@ -13,7 +12,11 @@ import {
 import { unwrapKnownDispatchWrapperInvocation } from "../dispatch-wrapper-resolution.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
-import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "../shell-inline-command.js";
+import {
+  isDirectShellPositionalCarrierCommand,
+  POSIX_INLINE_COMMAND_FLAGS,
+  resolveInlineCommandMatch,
+} from "../shell-inline-command.js";
 import {
   extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
@@ -78,16 +81,6 @@ export function buildCommandPayloadArgvCandidates(
   ]);
 }
 
-/** Builds candidate command payload strings from nested carriers and shell wrappers. */
-export function buildCommandPayloadCandidates(
-  argv: string[],
-  seenArgv = new Set<string>(),
-): string[] {
-  return uniqueStrings(
-    buildCommandPayloadArgvCandidates(argv, seenArgv).map((candidate) => candidate.join(" ")),
-  );
-}
-
 function stripLeadingEnvAssignments(argv: string[]): string[] {
   let index = 0;
   while (index < argv.length && isEnvAssignmentToken(argv[index] ?? "")) {
@@ -138,19 +131,7 @@ function normalizeShellPositionalToken(
 
 function resolveShellPositionalCarrierPlan(command: string): ShellPositionalCarrierPlan | null {
   const trimmed = command.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-
-  const shellWhitespace = String.raw`[^\S\r\n]+`;
-  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
-  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
-  if (
-    !new RegExp(
-      `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
-      "u",
-    ).test(trimmed)
-  ) {
+  if (!isDirectShellPositionalCarrierCommand(trimmed)) {
     return null;
   }
 

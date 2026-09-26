@@ -4,9 +4,11 @@ import path from "node:path";
 import { tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
 import { openLocalFileSafely, type OpenResult } from "./fs-safe.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { classifyPartialCloneGitFailure } from "./update-runner-git-target.js";
-import type { RunStepOptions, UpdateStepResult } from "./update-runner-types.js";
+import type { RunStepOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const LARGE_CANDIDATE_PACK_WARNING_BYTES = 256 * 1024 * 1024;
 
@@ -77,12 +79,7 @@ export async function prepareGitCandidateTransfer(params: {
     });
     // A process may exit zero after handling the output-limit termination signal.
     // Its captured object list is still incomplete and must never be admitted.
-    return result.exitCode === 0 &&
-      !result.killed &&
-      !result.signal &&
-      (!result.termination || result.termination === "exit")
-      ? stdout.trim()
-      : undefined;
+    return !isFailedUpdateStep(result) && !result.signal ? stdout.trim() : undefined;
   };
   const upstreamSha = upstreamRef
     ? await runGit("git-pin-update-upstream", ["rev-parse", upstreamRef])
@@ -270,7 +267,7 @@ export async function prepareGitCandidateTransfer(params: {
         runCommand: (argv, options) =>
           target.runCommand(argv, { ...options, stdinFileDescriptor: pack.handle.fd }),
       });
-      if (imported.exitCode !== 0) {
+      if (isFailedUpdateStep(imported)) {
         return false;
       }
       if (!upstreamRef || !upstreamSha) {
@@ -281,7 +278,7 @@ export async function prepareGitCandidateTransfer(params: {
         name: "git-import-admitted-upstream",
         argv: ["git", "-C", target.cwd, "update-ref", upstreamRef, upstreamSha],
       });
-      return tracked.exitCode === 0;
+      return !isFailedUpdateStep(tracked);
     },
     async cleanup(target: RunStepOptions): Promise<void> {
       try {

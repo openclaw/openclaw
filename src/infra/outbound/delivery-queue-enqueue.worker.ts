@@ -15,17 +15,21 @@ import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
   OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-  OUTBOUND_DELIVERY_QUEUE_NAME,
+  OUTBOUND_EXECUTABLE_QUEUE_NAMES,
+  outboundDeliveryQueueName,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
 } from "./delivery-queue-namespaces.js";
+import type { QueuedDelivery } from "./delivery-queue-types.js";
 
 export function executeDeliveryQueueEnqueue(
   input: DeliveryQueueWorkerOperations["deliveryQueue.enqueue"]["input"],
   writeOptions: { database: OpenClawStateDatabase; env: NodeJS.ProcessEnv },
 ): DeliveryQueueWorkerOperations["deliveryQueue.enqueue"]["output"] {
   // SAFETY: Only the host enqueue owner supplies this canonical, typed queue-entry JSON.
-  const entry = JSON.parse(input.entryJson) as DeliveryQueueEntryState;
+  const entry = JSON.parse(input.entryJson) as QueuedDelivery;
+  const queueName = outboundDeliveryQueueName(entry);
   const conflictQueueNames = [
+    ...OUTBOUND_EXECUTABLE_QUEUE_NAMES.filter((name) => name !== queueName),
     OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
     OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
     LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -49,16 +53,13 @@ export function executeDeliveryQueueEnqueue(
         });
         // Random inserts need the same rollback evidence as staged enqueues.
         if (input.kind === "random" && !input.mediaStageId) {
-          upsertDeliveryQueueEntryInDatabase(
-            { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, entry },
-            database,
-          );
+          upsertDeliveryQueueEntryInDatabase({ queueName, entry }, database);
           return "created";
         }
         if (input.kind === "prepared") {
           return movePendingDeliveryQueueEntryNamespaceInDatabase(database, {
             sourceQueueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-            destinationQueueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+            destinationQueueName: queueName,
             conflictQueueNames,
             // SAFETY: The host serializes its typed preparation snapshot before yielding.
             expectedSourceEntry: JSON.parse(input.preparationJson) as DeliveryQueueEntryState,
@@ -72,7 +73,7 @@ export function executeDeliveryQueueEnqueue(
           });
         }
         const params = {
-          queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+          queueName,
           conflictQueueNames:
             input.kind === "stable"
               ? [...conflictQueueNames, OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME]

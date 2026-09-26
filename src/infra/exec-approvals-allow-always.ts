@@ -1,6 +1,9 @@
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 // Owns durable approval matching and allow-always persistence.
-import { canonicalizeExecApprovalPolicyRules } from "./exec-approval-policy-snapshot.js";
+import {
+  buildExecApprovalPolicyRuleKey,
+  canonicalizeExecApprovalPolicyRules,
+} from "./exec-approval-policy-snapshot.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
@@ -118,13 +121,6 @@ export function buildAllowlistEntryMatchKey(
   entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern">,
 ): string {
   return JSON.stringify([entry.pattern, entry.argPattern ?? null]);
-}
-
-function buildExecApprovalPolicyRuleKey(
-  entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern" | "source">,
-): string {
-  // A JSON tuple preserves exact regex bytes without delimiter collisions.
-  return JSON.stringify([entry.pattern, entry.argPattern ?? null, entry.source ?? null]);
 }
 
 function buildAllowAlwaysUpgradeRuleKey(
@@ -298,19 +294,7 @@ export function resolveAllowAlwaysPatternCoverage(params: {
   const byKey = new Map<string, ReturnType<typeof resolveAllowAlwaysPatternEntries>[number]>();
   let representedSegmentCount = 0;
   for (const segment of params.segments) {
-    if (isShellWrapperInvocation(segment.argv)) {
-      const segmentPatterns = resolveAllowAlwaysPatternEntries({
-        segments: [segment],
-        cwd: params.cwd,
-        env: params.env,
-        platform: params.platform,
-        strictInlineEval: params.strictInlineEval,
-      });
-      for (const pattern of segmentPatterns) {
-        byKey.set(`${pattern.pattern}\x00${pattern.argPattern ?? ""}`, pattern);
-      }
-      continue;
-    }
+    const shellWrapper = isShellWrapperInvocation(segment.argv);
     const segmentPatterns = resolveAllowAlwaysPatternEntries({
       segments: [segment],
       cwd: params.cwd,
@@ -321,7 +305,9 @@ export function resolveAllowAlwaysPatternCoverage(params: {
     if (segmentPatterns.length === 0) {
       continue;
     }
-    representedSegmentCount += 1;
+    if (!shellWrapper) {
+      representedSegmentCount += 1;
+    }
     for (const pattern of segmentPatterns) {
       byKey.set(`${pattern.pattern}\x00${pattern.argPattern ?? ""}`, pattern);
     }

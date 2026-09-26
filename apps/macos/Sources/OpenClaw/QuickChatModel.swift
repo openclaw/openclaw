@@ -197,9 +197,25 @@ final class QuickChatModel {
     private(set) var currentSessionThinkingLevel: String?
     private(set) var thinkingOptions: [OpenClawChatThinkingLevelOption] = []
     private(set) var speed = OpenClawChatFastModeProfile.resolve(session: nil, model: nil)
-    private(set) var selectedModelSelectionID: String?
+    private var requestedModelSelectionID: String?
+
+    private(set) var selectedModelSelectionID: String? {
+        get {
+            guard !self.modelCatalogInvalidated else { return nil }
+            guard self.modelSelectionPolicy?.restricted == true,
+                  let selectionID = self.requestedModelSelectionID else { return self.requestedModelSelectionID }
+            if selectionID == OpenClawChatViewModel.defaultModelSelectionID {
+                return self.canSelectDefaultModel ? selectionID : nil
+            }
+            return self.modelChoices.contains(where: { $0.selectionID == selectionID }) ? selectionID : nil
+        }
+        set { self.requestedModelSelectionID = newValue }
+    }
+
     private(set) var selectedThinkingLevel: String?
     private(set) var modelDefaultProvider: String?
+    private(set) var modelSelectionPolicy: OpenClawChatModelSelectionPolicy?
+    private(set) var modelCatalogInvalidated = false
     private(set) var isLoadingModelControls = false
     private(set) var isUpdatingModel = false
     private(set) var modelControlStatusMessage: String?
@@ -298,7 +314,8 @@ final class QuickChatModel {
                 target: target,
                 models: modelCatalog.choices,
                 sessions: sessions,
-                agents: agents)
+                agents: agents,
+                modelSelectionPolicy: modelCatalog.modelSelectionPolicy)
             snapshot.catalogMessage = modelCatalog.message
             snapshot.catalogRefreshFailed = modelCatalog.refreshFailed
             return snapshot
@@ -850,6 +867,7 @@ final class QuickChatModel {
         let previousTarget = self.routingTarget
         self.setRoutingTarget(target)
         if previousTarget != target {
+            self.invalidateModelChoices()
             // Explicit overrides survive target changes, but the target's underlying
             // session state must be read again before the compact control claims a value.
             self.currentSessionModelSelectionID = nil
@@ -1029,7 +1047,7 @@ extension QuickChatModel {
     func selectModel(_ selectionID: String) {
         guard self.canUseModelControls, !self.isUpdatingModel, let target = self.routingTarget else { return }
         let normalized = selectionID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized == OpenClawChatViewModel.defaultModelSelectionID ||
+        guard (normalized == OpenClawChatViewModel.defaultModelSelectionID && self.canSelectDefaultModel) ||
             self.modelChoices.contains(where: {
                 $0.selectionID == normalized && $0.manualSelectionAllowed != false && $0.available != false
             })
@@ -1098,8 +1116,14 @@ extension QuickChatModel {
             defaultProvider: self.modelDefaultProvider)
     }
 
+    var canSelectDefaultModel: Bool {
+        !self.modelCatalogInvalidated &&
+            (self.modelSelectionPolicy?.restricted != true || self.modelSelectionPolicy?.defaultModel != nil)
+    }
+
     var displayedModelSelectionID: String? {
-        self.selectedModelSelectionID ?? self.currentSessionModelSelectionID
+        guard !self.modelCatalogInvalidated else { return nil }
+        return self.selectedModelSelectionID ?? self.currentSessionModelSelectionID
     }
 
     var displayedThinkingLevel: String? {
@@ -1137,13 +1161,22 @@ extension QuickChatModel {
         switch push {
         case let .event(event):
             guard event.event == "config.changed" || event.event == "chat.metadata.changed" else { return }
+            if case .modelSelectionChanged = OpenClawChatGatewayPayloadCodec.event(from: event) {
+                self.invalidateModelChoices()
+            }
         case .snapshot, .seqGap:
-            break
+            self.invalidateModelChoices()
         }
         await self.awaitControlPatchSettlement(for: target)
         guard !Task.isCancelled, delivery.isCurrent,
               self.isCurrentPresentation(presentationID), self.routingTarget == target else { return }
         self.refreshModelControls(for: target)
+    }
+
+    private func invalidateModelChoices() {
+        self.cancelModelControlRefresh()
+        self.modelCatalogInvalidated = true
+        self.modelChoices = []
     }
 
     private func refreshModelControls(for target: QuickChatRoutingTarget, afterSettingsChange: Bool = false) {
@@ -1165,6 +1198,8 @@ extension QuickChatModel {
                 guard !Task.isCancelled, self.modelControlsRequestID == requestID,
                       self.routingTarget == target else { return }
                 self.modelChoices = snapshot.models
+                self.modelSelectionPolicy = snapshot.modelSelectionPolicy
+                if self.modelCatalogInvalidated { self.modelCatalogInvalidated = false }
                 self.currentSessionModelSelectionID = snapshot.currentModelSelectionID
                 self.currentSessionThinkingLevel = snapshot.currentThinkingLevel
                 self.thinkingOptions = snapshot.thinkingOptions

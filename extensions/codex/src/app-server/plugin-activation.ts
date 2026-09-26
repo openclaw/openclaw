@@ -175,16 +175,7 @@ export async function ensureCodexPluginActivation(
   const refreshDiagnostics: CodexPluginActivationDiagnostic[] = [];
   let refreshFailed = false;
   try {
-    const refreshResult = await refreshCodexPluginRuntimeState({
-      request: params.request,
-      appCache: params.appCache,
-      appCacheKey: params.appCacheKey,
-      appInventoryCacheKey: params.appInventoryCacheKey,
-      configCwd: params.configCwd,
-      metadataCache: params.metadataCache,
-      deferAppInventoryRefresh: params.deferAppInventoryRefresh,
-      targetAppIds: params.targetAppIds,
-    });
+    const refreshResult = await refreshCodexPluginRuntimeState(params);
     refreshDiagnostics.push(...refreshResult.diagnostics);
   } catch (error) {
     refreshFailed = true;
@@ -313,13 +304,12 @@ function activationFailure(
   identity: ResolvedCodexPluginPolicy,
   reason: CodexPluginActivationReason,
   diagnostic: CodexPluginActivationDiagnostic,
-  extraDiagnostics: CodexPluginActivationDiagnostic[] = [],
 ): CodexPluginActivationResult {
   return {
     identity,
     ok: false,
     reason,
     installAttempted: false,
-    diagnostics: [diagnostic, ...extraDiagnostics],
+    diagnostics: [diagnostic],
   };
 }

@@ -1,4 +1,11 @@
 /** Recursive spawn authority must survive the real Gateway and agent-command admission path. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  cleanupPreparedModelRuntimeHarness,
+  getPreparedModelRuntimeMocks,
+  resetPreparedModelRuntimeHarness,
+} from "../../prepared-model-runtime.test-harness.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +20,7 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
-import type { CallGatewayOptions } from "../../../gateway/call.js";
+import { callGateway } from "../../../gateway/call.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
@@ -22,11 +29,13 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
 import { withTimeout } from "../../../infra/fs-safe.js";
+import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
 import { findTaskByRunId } from "../../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
+import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -38,23 +47,16 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
-import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "../../prepared-model-runtime.test-harness.js";
 import { ModelRegistry } from "../../sessions/model-registry.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import { callInProcessGatewayTool } from "../../tools/in-process-gateway.js";
+import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
-import {
-  resetSubagentRegistryForTests,
-  testing as registryTesting,
-} from "../registry/subagent-registry.test-helpers.js";
+import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import {
   activateSwarmRun,
   closeSwarmScheduler,
@@ -73,6 +75,10 @@ import {
   createSpawnOperatorSource,
 } from "./subagent-spawn.production-boundary.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
+
+vi.mock("../announce/subagent-announce.js", { spy: true });
+vi.mock("../../../gateway/call.js", { spy: true });
+vi.mock("../registry/subagent-registry-state.js", { spy: true });
 
 const runEmbeddedAgent = vi.hoisted(() =>
   vi.fn<typeof import("../../embedded-agent.js").runEmbeddedAgent>(),
@@ -168,16 +174,18 @@ beforeEach(async () => {
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
-  registryTesting.setDepsForTest({
-    loadAgentRuntimePluginRegistryHandle: () => undefined,
-    runSubagentAnnounceFlow: async () => "delivered",
-    callGateway: async <T>(request: CallGatewayOptions): Promise<T> => {
+  preparedRuntime.loadAgentRuntimePluginRegistryHandle.mockImplementation(
+    () => getActivePluginRegistry() ?? createTestRegistry([]),
+  );
+  vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("delivered");
+  vi.mocked(callGateway).mockImplementation(
+    async <T>(request: Parameters<typeof callGateway>[0]) => {
       if (request.method !== "agent.wait") {
         throw new Error(`Unexpected registry RPC ${request.method}`);
       }
       return { status: "pending" } as T;
     },
-  });
+  );
 });
 
 afterEach(async ({ task }) => {
@@ -185,7 +193,8 @@ afterEach(async ({ task }) => {
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
-  registryTesting.setDepsForTest();
+  vi.mocked(runSubagentAnnounceFlow).mockReset();
+  vi.mocked(callGateway).mockReset();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
@@ -209,7 +218,7 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
     { refreshPreparedModelRuntimeSnapshots },
   ] = await Promise.all([
     import("../../../gateway/agent-runtime-execution-lineage.js"),
-    import("../../../gateway/agent-runtime-identity-token.js"),
+    import("../../../gateway/agent-runtime-approval-authority.js"),
     import("../../../gateway/server-instance-runtime.js"),
     import("../../../gateway/server-methods.js"),
     import("../../prepared-model-runtime.js"),
@@ -235,6 +244,7 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
   });
   context.createAgentTurnFacade = runtime.createAgentTurnFacade;
   context.recoveryRuntime = runtime.recovery;
+  vi.spyOn(runtime.recovery, "waitForAgent").mockResolvedValue({ status: "pending" });
   context.getGatewayMethodRegistry = () => methodRegistry;
   return { context, runtime, identities, readAgentRuntimeExecutionLineage };
 }
@@ -790,7 +800,7 @@ describe("recursive spawn production boundary", () => {
       storePath: bound.storePath,
       sessionKey: childSessionKey,
     });
-    const worker = target.startsWith("worker-") ? createBoundWorker(bound) : undefined;
+    const worker = target.startsWith("worker-") ? await createBoundWorker(bound) : undefined;
     let replacementClaim: ReturnType<NonNullable<typeof worker>["store"]["claimTurn"]> | undefined;
     const results: boolean[] = [];
     const errors: unknown[] = [];

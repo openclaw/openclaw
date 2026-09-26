@@ -39,6 +39,10 @@ retire_prep_evidence() {
     .local/prepare-push-result.env \
     .local/prepare-sync-result.env \
     .local/prep.md \
+    .local/correction-review.json \
+    .local/correction-review.md \
+    .local/correction-incoming-review.json \
+    .local/correction-incoming-review.md \
     .local/gates-*.log; do
     if [ ! -e "$artifact" ] && [ ! -L "$artifact" ]; then
       continue
@@ -59,6 +63,10 @@ retire_prep_evidence() {
   rm -f \
     .local/gates.env \
     .local/prep.env \
+    .local/correction-review.json \
+    .local/correction-review.md \
+    .local/correction-incoming-review.json \
+    .local/correction-incoming-review.md \
     .local/prepare-push-result.env \
     .local/prepare-sync-result.env || return 1
   printf '%s\n' "- Prior preparation evidence retained at $archive." >> .local/prep.md || return 1
@@ -172,11 +180,18 @@ verify_prep_branch_matches_prepared_head() {
 }
 
 prepare_init() {
-  local pr="$1"
-  local observation="${2:-}"
+  local pr="$1" observation="${2:-}" review_mode="${3:-ready}"
+  local incoming_json_oid=""
   # Validate the exact reviewed head before taking the lock past its reversible phase.
-  review_validate_artifacts "$pr" true || return 1
-  require_ready_review_recommendation || return 1
+  case "$review_mode" in
+    ready) review_validate_artifacts "$pr" true || return 1 ;;
+    correction)
+      review_validate_artifacts "$pr" correction || return 1
+      require_correction_review_recommendation || return 1
+      incoming_json_oid=$(pr_git hash-object --no-filters .local/review.json) || return 1
+      ;;
+    *) echo "Unknown preparation review mode: $review_mode" >&2; return 1 ;;
+  esac
   mark_pr_operation_side_effects_started
   enter_worktree "$pr" false || return 1
 
@@ -239,6 +254,8 @@ prepare_init() {
     PR_HEAD "$reviewed_head" \
     PR_HEAD_SHA_BEFORE "$reviewed_head_sha" \
     PREP_BRANCH "pr-$pr-prep" \
+    PREP_REVIEW_MODE "$review_mode" \
+    PREP_INCOMING_JSON_OID "$incoming_json_oid" \
     PR_AUTHOR_ACCESS_AT_PREP "$author_access_at_prep" \
     PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/prep-context.env
@@ -260,6 +277,16 @@ EOF_PREP
   echo "worktree=$PWD"
   echo "branch=$(pr_git branch --show-current)"
   echo "wrote=.local/prep-context.env .local/prep.md"
+}
+
+prepare_correction_review_init() {
+  local pr="$1"
+  enter_worktree "$pr" false || return 1
+  mark_pr_operation_side_effects_started
+  checkout_prep_branch "$pr" || return 1
+  run_prepared_correction_review "$pr" init || return 1
+  echo "Complete independent review of this exact correction in .local/correction-review.json (the validated summary is rendered from JSON)."
+  echo "The incoming review is unchanged; gates and publication require the corrected-candidate READY review."
 }
 
 prepare_validate_commit() {
@@ -290,6 +317,47 @@ prepare_validate_commit() {
   echo "prep commit subject validated: $subject"
 }
 
+read_prep_publication_result() {
+  local file="$1" line key value seen=" " count=0 valid=true
+  if [ ! -f "$file" ] || [ -L "$file" ]; then
+    echo "Invalid publication receipt $file: expected a regular file." >&2
+    return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      PUSH_PREP_HEAD_SHA|PUSH_LOCAL_PREP_HEAD_SHA|PUSHED_FROM_SHA|PR_HEAD_SHA_AFTER_PUSH)
+        [[ "$value" =~ ^[0-9a-f]{40}$ ]] || { valid=false; break; } ;;
+      PUSH_REPLACED_HOSTED_ANCESTRY)
+        [ "$value" = true ] || [ "$value" = false ] || { valid=false; break; } ;;
+      *) valid=false; break ;;
+    esac
+    case "$seen" in *" $key "*) valid=false; break ;; esac
+    printf -v "$key" '%s' "$value"
+    seen="$seen$key "
+    count=$((count + 1))
+  done < "$file"
+  if [ "$valid" != true ] || [ "$count" -ne 5 ] ||
+    [ "$PUSH_PREP_HEAD_SHA" != "$PR_HEAD_SHA_AFTER_PUSH" ]; then
+    echo "Invalid publication receipt $file: expected the complete native result." >&2
+    return 1
+  fi
+}
+
+verify_prep_publication_order() {
+  local previous_head="$1" previous_local="$2" next_head="$3" next_local="$4"
+  [ -n "$previous_head" ] && [ "$previous_head" != "$next_head" ] || return 0
+  if { pr_git merge-base --is-ancestor "$previous_head" "$next_head" &&
+      pr_git merge-base --is-ancestor "$previous_head" "$next_local"; } ||
+    { pr_git merge-base --is-ancestor "$next_head" "$previous_head" &&
+      pr_git merge-base --is-ancestor "$next_head" "$previous_local"; }; then
+    return 0
+  fi
+  echo "Conflicting publication receipts; retain them and inspect the hosted ancestry." >&2
+  return 1
+}
+
 resolve_prep_publication_target() {
   local pr="$1" local_head="$2"
   local source_head="${PR_HEAD_SHA_BEFORE:-}" head_ref="${PR_HEAD:-}"
@@ -299,40 +367,80 @@ resolve_prep_publication_target() {
   fi
   PREP_PUBLICATION_LEASE_SHA="$source_head"
   PREP_PUBLICATION_HEAD_SHA="$local_head"
-  if [ ! -e .local/prep.env ]; then
-    return 0
-  fi
-
   # A previous publication can advance authority only for this PR, branch,
   # and prepared source. Do not let sourced receipt fields replace context.
   local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE=""
   local PREP_HEAD_SHA="" LOCAL_PREP_HEAD_SHA=""
-  # shellcheck disable=SC1091
-  source .local/prep.env || return 1
-  if [ "$PR_NUMBER" != "$pr" ] || [ "$PR_HEAD" != "$head_ref" ] ||
-    ! [[ "$PR_HEAD_SHA_BEFORE" =~ ^[0-9a-f]{40}$ ]] ||
-    ! [[ "$PREP_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
-    ! [[ "$LOCAL_PREP_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
-    ! pr_git merge-base --is-ancestor "$source_head" "$PR_HEAD_SHA_BEFORE" ||
-    ! pr_git merge-base --is-ancestor "$PR_HEAD_SHA_BEFORE" "$PREP_HEAD_SHA" ||
-    ! pr_git merge-base --is-ancestor "$source_head" "$LOCAL_PREP_HEAD_SHA" ||
-    [ "$(pr_git rev-parse "$LOCAL_PREP_HEAD_SHA^{tree}")" != "$(pr_git rev-parse "$PREP_HEAD_SHA^{tree}")" ]; then
-    echo "Publication receipt does not match this preparation. Retain artifacts and re-run review-init and prepare-init." >&2
-    return 1
+  if [ -e .local/prep.env ] || [ -L .local/prep.env ]; then
+    [ -f .local/prep.env ] && [ ! -L .local/prep.env ] || return 1
+    # shellcheck disable=SC1091
+    source .local/prep.env || return 1
+    if [ "$PR_NUMBER" != "$pr" ] || [ "$PR_HEAD" != "$head_ref" ] ||
+      ! [[ "$PR_HEAD_SHA_BEFORE" =~ ^[0-9a-f]{40}$ ]] ||
+      ! [[ "$PREP_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+      ! [[ "$LOCAL_PREP_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+      ! pr_git merge-base --is-ancestor "$source_head" "$PR_HEAD_SHA_BEFORE" ||
+      ! pr_git merge-base --is-ancestor "$PR_HEAD_SHA_BEFORE" "$PREP_HEAD_SHA" ||
+      ! pr_git merge-base --is-ancestor "$source_head" "$LOCAL_PREP_HEAD_SHA" ||
+      [ "$(pr_git rev-parse "$LOCAL_PREP_HEAD_SHA^{tree}")" != "$(pr_git rev-parse "$PREP_HEAD_SHA^{tree}")" ]; then
+      echo "Publication receipt does not match this preparation. Retain artifacts and re-run review-init and prepare-init." >&2
+      return 1
+    fi
   fi
-  PREP_PUBLICATION_LEASE_SHA="$PREP_HEAD_SHA"
-  if [ "$local_head" = "$LOCAL_PREP_HEAD_SHA" ]; then
+  local completed_head="$PREP_HEAD_SHA" completed_local="$LOCAL_PREP_HEAD_SHA"
+  local selected_head="$PREP_HEAD_SHA" selected_local="$LOCAL_PREP_HEAD_SHA"
+  local previous_result_head="" previous_result_local=""
+  local result PUSH_PREP_HEAD_SHA="" PUSH_LOCAL_PREP_HEAD_SHA="" PUSHED_FROM_SHA=""
+  local PUSH_REPLACED_HOSTED_ANCESTRY="" PR_HEAD_SHA_AFTER_PUSH=""
+  for result in .local/prepare-push-result.env .local/prepare-sync-result.env; do
+    [ -e "$result" ] || [ -L "$result" ] || continue
+    read_prep_publication_result "$result" || return 1
+    if ! pr_git merge-base --is-ancestor "$source_head" "$PUSHED_FROM_SHA" ||
+      ! pr_git merge-base --is-ancestor "$PUSHED_FROM_SHA" "$PUSH_PREP_HEAD_SHA" ||
+      ! pr_git merge-base --is-ancestor "$source_head" "$PUSH_LOCAL_PREP_HEAD_SHA" ||
+      [ "$PUSH_REPLACED_HOSTED_ANCESTRY" != false ] ||
+      [ "$(pr_git rev-parse "$PUSH_LOCAL_PREP_HEAD_SHA^{tree}")" != "$(pr_git rev-parse "$PUSH_PREP_HEAD_SHA^{tree}")" ]; then
+      echo "Publication receipt $result does not match this preparation." >&2
+      return 1
+    fi
+    # A completed merge can contain conflicting older receipts. Validate every
+    # recorded pair before selecting; equal GraphQL aliases need no self-ancestry.
+    verify_prep_publication_order "$completed_head" "$completed_local" "$PUSH_PREP_HEAD_SHA" "$PUSH_LOCAL_PREP_HEAD_SHA" || return 1
+    verify_prep_publication_order "$previous_result_head" "$previous_result_local" "$PUSH_PREP_HEAD_SHA" "$PUSH_LOCAL_PREP_HEAD_SHA" || return 1
+    previous_result_head="$PUSH_PREP_HEAD_SHA"
+    previous_result_local="$PUSH_LOCAL_PREP_HEAD_SHA"
+    if [ -z "$selected_head" ] ||
+      { [ "$selected_head" != "$PUSH_PREP_HEAD_SHA" ] &&
+        pr_git merge-base --is-ancestor "$selected_head" "$PUSH_PREP_HEAD_SHA"; }; then
+      selected_head="$PUSH_PREP_HEAD_SHA"
+      selected_local="$PUSH_LOCAL_PREP_HEAD_SHA"
+    elif [ "$selected_head" = "$PUSH_PREP_HEAD_SHA" ] &&
+      [ "$selected_head" != "$completed_head" ] && [ "$local_head" = "$PUSH_LOCAL_PREP_HEAD_SHA" ]; then
+      selected_local="$PUSH_LOCAL_PREP_HEAD_SHA"
+    fi
+  done
+  [ -n "$selected_head" ] || return 0
+  PREP_PUBLICATION_LEASE_SHA="$selected_head"
+  if [ "$local_head" = "$selected_local" ]; then
     # GraphQL can return a different verified OID for this exact local commit.
     # Only that recorded pair permits a no-op; new fixups must extend the OID.
-    PREP_PUBLICATION_HEAD_SHA="$PREP_HEAD_SHA"
+    PREP_PUBLICATION_HEAD_SHA="$selected_head"
   else
-    verify_prep_head_extends_hosted_head "$PREP_HEAD_SHA" || return 1
+    verify_prep_head_extends_hosted_head "$selected_head" "$local_head" || return 1
   fi
+}
+
+verify_correction_publication_authority() {
+  [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ] || return 0
+  require_correction_publication_gates "$PREP_PUBLICATION_PR" "$(pr_git rev-parse HEAD)" \
+    "$PREP_PUBLICATION_ALLOW_PENDING" || return 1
+  verify_correction_review_snapshot "$PREP_PUBLICATION_PR" "$PREP_PUBLICATION_REVIEW_SNAPSHOT"
 }
 
 prepare_push() {
   local pr="$1"
   local observation="${2:-}"
+  local PREP_PUBLICATION_REVIEW_SNAPSHOT="" PREP_PUBLICATION_PR="$pr" PREP_PUBLICATION_ALLOW_PENDING=true
   PR_MAIN_SHA=""
   enter_worktree "$pr" false || return 1
 
@@ -371,6 +479,9 @@ prepare_push() {
     return 1
   fi
 
+  require_prepared_review "$pr" || return 1
+  PREP_PUBLICATION_REVIEW_SNAPSHOT=$(correction_review_snapshot "$pr") || return 1
+  verify_correction_publication_authority || return 1
   push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" "$push_result_env" "$observation" || return $?
   # shellcheck disable=SC1090
   source "$push_result_env"
@@ -385,7 +496,7 @@ prepare_push() {
   local pr_head_sha_after="$PR_HEAD_SHA_AFTER_PUSH"
 
   if [ "${GATES_MODE:-}" = "remote_crabbox_aws_pending" ]; then
-    finalize_remote_crabbox_aws_gate "$pr" "$prep_head_sha"
+    finalize_remote_crabbox_aws_gate "$pr" "$prep_head_sha" || return 1
     # shellcheck disable=SC1091
     source .local/gates.env
   elif [ "${GATES_MODE:-}" = github_pending ]; then
@@ -447,6 +558,7 @@ EOF_PREP
 
 prepare_sync_head() {
   local pr="$1"
+  local PREP_PUBLICATION_REVIEW_SNAPSHOT="" PREP_PUBLICATION_PR="$pr" PREP_PUBLICATION_ALLOW_PENDING=false
   enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
@@ -471,6 +583,9 @@ prepare_sync_head() {
   prep_head_sha="$PREP_PUBLICATION_HEAD_SHA"
   local push_result_env=".local/prepare-sync-result.env"
 
+  require_prepared_review "$pr" || return 1
+  PREP_PUBLICATION_REVIEW_SNAPSHOT=$(correction_review_snapshot "$pr") || return 1
+  verify_correction_publication_authority || return 1
   push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" "$push_result_env" || return $?
   # shellcheck disable=SC1090
   source "$push_result_env"

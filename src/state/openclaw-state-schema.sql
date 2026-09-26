@@ -2075,6 +2075,7 @@ CREATE TABLE IF NOT EXISTS github_repository_publication_requests (
   request_digest TEXT NOT NULL,
   session_id TEXT NOT NULL,
   session_lifecycle_revision TEXT,
+  requester_authority_json TEXT,
   session_key TEXT NOT NULL,
   agent_id TEXT NOT NULL,
   workspace_id TEXT NOT NULL,
@@ -2513,6 +2514,7 @@ CREATE TABLE IF NOT EXISTS github_publication_session_lifecycles (
   publication_kind TEXT NOT NULL CHECK (publication_kind IN ('shared', 'personal')),
   request_id TEXT NOT NULL,
   lifecycle_revision TEXT,
+  requester_authority_json TEXT,
   PRIMARY KEY (publication_kind, request_id)
 ) STRICT;
 
@@ -2687,6 +2689,21 @@ CREATE TABLE IF NOT EXISTS claw_mcp_server_refs (
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, name)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS user_profile_identities (
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  canonical_login TEXT,
+  created_at INTEGER NOT NULL,
+  authorization_id TEXT,
+  authorization_basis_json TEXT,
+  PRIMARY KEY (provider, subject)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_user_profile_identities_profile_id
+  ON user_profile_identities(profile_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profile_identities_authorization
+  ON user_profile_identities(authorization_id);
 
 CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   realpath TEXT NOT NULL PRIMARY KEY,

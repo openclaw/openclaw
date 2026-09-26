@@ -2,6 +2,10 @@ import { loadSessionEntryReadOnly } from "../../../config/sessions/session-acces
 import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
+import {
+  assertOperatorModelAllowed,
+  readRunOperatorAuthority,
+} from "../../admitted-run-context.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import {
@@ -15,6 +19,7 @@ import { readSessionRuntimeOwnership } from "../../harness/session-runtime-owner
 import { assertPluginHarnessConversationToolPolicySupport } from "../../harness/support.js";
 import type { AgentHarness } from "../../harness/types.js";
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
+import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
 import { assertPreparedModelRuntimeInputCurrent } from "../../prepared-model-runtime.errors.js";
@@ -33,7 +38,7 @@ import {
 export type PreparedNativeSessionRuntime = {
   harness: AgentHarness;
   assertCurrent: () => Promise<void>;
-} & ({ auth: "native" } | { auth: "host"; modelRef: ModelRef });
+} & ({ auth: "native"; modelRef?: ModelRef } | { auth: "host"; modelRef: ModelRef });
 
 function prepareNativeSessionRuntime(
   runParams: RunEmbeddedAgentInternalParams,
@@ -78,19 +83,28 @@ function prepareNativeSessionRuntime(
       "The pinned runtime's native session ownership is unavailable. Reattach the original native session instead of starting a replacement model run.",
     );
   }
+  const operatorAuthority = readRunOperatorAuthority(runParams);
+  assertOperatorModelAllowed(operatorAuthority, ownership.modelRef);
   if (ownership.auth === "host" && !ownership.modelRef) {
     throw new AgentHarnessPreflightError(
       "The native session's model and provider are unavailable for host authentication. Reattach the original native session before retrying.",
     );
   }
+  let currentOwnership = ownership;
   return {
     harness,
     ...(ownership.auth === "host"
       ? { auth: "host", modelRef: ownership.modelRef! }
-      : { auth: "native" }),
+      : {
+          auth: "native",
+          get modelRef() {
+            return currentOwnership.modelRef;
+          },
+        }),
     // Compare host-prepared auth against its exact tuple; native auth may follow its owner's model.
     assertCurrent: async () => {
       const current = resolveOwnership();
+      assertOperatorModelAllowed(operatorAuthority, current?.modelRef);
       if (
         current?.model !== ownership.model ||
         current.auth !== ownership.auth ||
@@ -102,6 +116,7 @@ function prepareNativeSessionRuntime(
           "Native model ownership changed before agent harness dispatch. Reattach the original native session before retrying.",
         );
       }
+      currentOwnership = current;
     },
   };
 }
@@ -121,6 +136,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }) {
   const runParams = params.runParams;
+  const operatorAuthority = readRunOperatorAuthority(runParams);
   const hookSelection = await resolveHookModelSelection({
     prompt: runParams.prompt,
     attachments: buildBeforeModelResolveAttachments(runParams.images),
@@ -161,6 +177,20 @@ export async function resolveEmbeddedRunModelSetup(params: {
   if (nativeSessionRuntime?.auth === "host") {
     provider = nativeSessionRuntime.modelRef.provider;
     modelId = nativeSessionRuntime.modelRef.model;
+  }
+  if (operatorAuthority?.modelPolicy && !nativeSessionRuntime) {
+    const selected = resolveModelCandidateChain({
+      cfg: runParams.config,
+      agentId: runParams.agentId,
+      provider,
+      model: modelId,
+      requestedRouteResolution: modelSelectionChangedByHook
+        ? "raw"
+        : runParams.requestedRouteResolution,
+      fallbacksOverride: [],
+      manifestPlugins: params.preparedModelRuntime?.metadataSnapshot,
+    })[0];
+    assertOperatorModelAllowed(operatorAuthority, selected);
   }
   const requestedModelId = modelId;
   if (nativeSessionRuntime?.auth === "native" && requestStreamTransportOverrides) {
@@ -299,6 +329,9 @@ export async function resolveEmbeddedRunModelSetup(params: {
     });
   }
   const { model, authStorage, modelRegistry } = modelResolution;
+  if (!nativeSessionRuntime) {
+    assertOperatorModelAllowed(operatorAuthority, { provider, model: modelId });
+  }
 
   return {
     provider,

@@ -15,6 +15,7 @@ import {
   formatCrabboxGateCheckSummary,
   validateForwardAncestry,
 } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
+import { buildCrabboxGateTransport } from "../../scripts/pr-lib/crabbox-gate-transport.mts";
 
 const repository = "openclaw/openclaw";
 const workflowSha = "a".repeat(40);
@@ -22,9 +23,8 @@ const baseSha = "c".repeat(40);
 const headSha = "b".repeat(40);
 const mainSha = "d".repeat(40);
 const laterMainSha = "e".repeat(40);
-const bootstrapSha256 = createHash("sha256")
-  .update(readFileSync("scripts/crabbox-untrusted-bootstrap.sh"))
-  .digest("hex");
+const bootstrap = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
+const bootstrapSha256 = createHash("sha256").update(bootstrap).digest("hex");
 const runId = "run_abc123";
 const leaseId = "cbx_def456";
 const serviceOwner = "unknown";
@@ -99,15 +99,16 @@ function context() {
   };
 }
 
-function command() {
-  return [
-    "--script",
-    "scripts/crabbox-untrusted-bootstrap.sh",
+function transport() {
+  return buildCrabboxGateTransport({
+    bootstrap,
+    command: buildCrabboxGateCommand(gatePlan(), bootstrapSha256),
     headSha,
-    "/bin/bash",
-    "-lc",
-    buildCrabboxGateCommand(gatePlan(), bootstrapSha256),
-  ];
+  });
+}
+
+function command() {
+  return ["--script-stdin", ...transport().args];
 }
 
 function retainedLog() {
@@ -152,7 +153,7 @@ function brokerEvents(overrides: Record<number, Record<string, unknown>> = {}) {
     { type: "run.started" },
     { leaseID: leaseId, provider: "aws", target: "linux", type: "lease.created" },
     {
-      message: `.crabbox/scripts/${bootstrapSha256.slice(0, 12)}-crabbox-untrusted-bootstrap.sh`,
+      message: transport().uploadPath,
       type: "script.uploaded",
     },
     { type: "command.started" },
@@ -217,13 +218,16 @@ function crabboxRunner() {
       args,
       env: childEnv,
       stream,
+      input,
     }: {
       args: string[];
       env: NodeJS.ProcessEnv;
       stream?: boolean;
+      input?: string;
     }) => {
       if (args[0] === "config") {
         expect(stream).toBeUndefined();
+        expect(input).toBeUndefined();
         return {
           exitCode: 0,
           stderr: "",
@@ -234,6 +238,8 @@ function crabboxRunner() {
         };
       }
       expect(stream).toBe(true);
+      expect(input).toBe(transport().input);
+      expect(args.slice(-4)).toEqual(transport().args);
       expect(args).toEqual(
         expect.arrayContaining([
           "--provider",
@@ -248,8 +254,7 @@ function crabboxRunner() {
           "240m",
           "--stop-after",
           "always",
-          "--script",
-          "scripts/crabbox-untrusted-bootstrap.sh",
+          "--script-stdin",
           headSha,
         ]),
       );
@@ -304,7 +309,7 @@ describe("Crabbox gate request and broker proof", () => {
   it("accepts matching opaque owner, including unknown", () => {
     expect(() =>
       validateBrokerProof({
-        bootstrapSha256,
+        bootstrap,
         context: context(),
         events: brokerEvents(),
         log: retainedLog(),
@@ -321,7 +326,7 @@ describe("Crabbox gate request and broker proof", () => {
   ])("%s proof freshness", (_label, now, rejected) => {
     const verify = () =>
       validateBrokerProof({
-        bootstrapSha256,
+        bootstrap,
         context: context(),
         events: brokerEvents(),
         log: retainedLog(),
@@ -359,6 +364,19 @@ describe("Crabbox gate request and broker proof", () => {
     ["provider", { provider: "blacksmith-testbox" }, brokerEvents(), retainedLog()],
     ["truncation", { logTruncated: true }, brokerEvents(), retainedLog()],
     ["command", { command: ["pnpm", "test"] }, brokerEvents(), retainedLog()],
+    ...["head", "bootstrap digest", "command digest", "launcher digest"].map(
+      (label, index) =>
+        [
+          label,
+          {
+            command: command().map((arg, position) =>
+              position === index + 1 ? "f".repeat(arg.length) : arg,
+            ),
+          },
+          brokerEvents(),
+          retainedLog(),
+        ] as const,
+    ),
     [
       "bootstrap",
       {},
@@ -372,10 +390,10 @@ describe("Crabbox gate request and broker proof", () => {
       retainedLog(),
     ],
     ["marker", {}, brokerEvents(), retainedLog().replace("test:ok", "missing")],
-  ])("rejects mismatched %s", (_label, runOverrides, events, log) => {
+  ] as const)("rejects mismatched %s", (_label, runOverrides, events, log) => {
     expect(() =>
       validateBrokerProof({
-        bootstrapSha256,
+        bootstrap,
         context: context(),
         events,
         log,
@@ -389,7 +407,7 @@ describe("Crabbox gate request and broker proof", () => {
   it("accepts empty retained logs when command and events are complete", () => {
     expect(() =>
       validateBrokerProof({
-        bootstrapSha256,
+        bootstrap,
         context: context(),
         events: brokerEvents(),
         log: "",
@@ -398,6 +416,20 @@ describe("Crabbox gate request and broker proof", () => {
         run: brokerRun(),
       }),
     ).not.toThrow();
+  });
+
+  it("recomputes the transport from the complete plan, even without retained logs", () => {
+    expect(() =>
+      validateBrokerProof({
+        bootstrap,
+        context: { ...context(), plan: { ...gatePlan(), targets: [] } },
+        events: brokerEvents(),
+        log: "",
+        now: Date.parse("2026-08-28T02:00:00Z"),
+        principal: servicePrincipal(),
+        run: brokerRun(),
+      }),
+    ).toThrow(/canonical exact-head gate/u);
   });
 });
 

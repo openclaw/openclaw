@@ -1,6 +1,7 @@
 import {
   readSkillProposalRevisionChangedError,
   type SkillsProposalApplyResult,
+  type SkillsProposalEvaluateResult,
   type SkillsProposalRecordResult,
 } from "@openclaw/gateway-protocol";
 import type { SkillWorkshopRevisionAdmissionOutcome } from "../../app/skill-workshop-revision-admissions.ts";
@@ -13,11 +14,7 @@ import type {
   SkillWorkshopProposal,
   SkillWorkshopProposalDecision,
 } from "../../lib/skill-workshop/index.ts";
-import {
-  proposalFromActionRecord,
-  proposalFromEvaluation,
-  type SkillProposalEvaluateResult,
-} from "./proposal-records.ts";
+import { proposalFromActionRecord, proposalFromEvaluation } from "./proposal-records.ts";
 import {
   invalidateSkillWorkshopReads,
   loadedSkillWorkshopAgentParams,
@@ -244,7 +241,7 @@ export async function runSkillWorkshopEvaluation(
     if (!current || current.status !== "pending" || !current.revisionHash) {
       throw new Error(t("skillWorkshop.evaluation.errors.revisionHashUnavailable"));
     }
-    const result = await client.request<SkillProposalEvaluateResult>("skills.proposals.evaluate", {
+    const result = await client.request<SkillsProposalEvaluateResult>("skills.proposals.evaluate", {
       agentId: requestAgentId,
       proposalId,
       expectedRevisionHash: current.revisionHash,

@@ -28,7 +28,7 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 const boundary = vi.hoisted(
   (): {
     afterReply?: (reply: unknown) => Promise<void>;
-    afterRotate?: () => Promise<void>;
+    afterCleanup?: () => Promise<void>;
     failRetirement: boolean;
   } => ({ failRetirement: false }),
 );
@@ -36,35 +36,49 @@ vi.mock("../infra/worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-task-pool.js")>();
   return {
     ...actual,
-    WorkerTaskPool: class<Input, Output> extends actual.WorkerTaskPool<Input, Output> {
-      constructor(options: WorkerTaskPoolOptions<Output>) {
-        // Exercise real queue admission without retaining hundreds of megabytes.
-        super({ ...options, maxPendingBytes: 256 * 1024 });
-      }
-      override run(...args: Parameters<WorkerTaskPool<Input, Output>["run"]>) {
-        const result = super.run(...args);
-        const observe = boundary.afterReply;
-        return observe
-          ? result.then(async (reply) => {
-              await observe(reply);
-              return reply;
-            })
-          : result;
-      }
-      override async rotate(...args: Parameters<WorkerTaskPool<Input, Output>["rotate"]>) {
-        if (boundary.failRetirement) {
-          throw new Error("synthetic retirement failure");
-        }
-        await super.rotate(...args);
-        await boundary.afterRotate?.();
-      }
+    createOwnedWorkerTaskPool: <Input, Output>(options: WorkerTaskPoolOptions<Output>) => {
+      // Exercise real queue admission without retaining hundreds of megabytes.
+      const pool = actual.createOwnedWorkerTaskPool<Input, Output>({
+        ...options,
+        maxPendingBytes: 256 * 1024,
+      });
+      let observedRead = false;
+      return {
+        ...pool,
+        run(...args: Parameters<WorkerTaskPool<Input, Output>["run"]>) {
+          observedRead = true;
+          const result = pool.run(...args);
+          const observe = boundary.afterReply;
+          return observe
+            ? result.then(async (reply) => {
+                await observe(reply);
+                return reply;
+              })
+            : result;
+        },
+        async rotate() {
+          if (observedRead && boundary.failRetirement) {
+            throw new Error("synthetic retirement failure");
+          }
+          await pool.rotate();
+          if (observedRead) {
+            await boundary.afterCleanup?.();
+          }
+        },
+        async closeResources(...args: Parameters<typeof pool.closeResources>) {
+          await pool.closeResources(...args);
+          if (observedRead) {
+            await boundary.afterCleanup?.();
+          }
+        },
+      };
     },
   };
 });
 
 afterEach(() => {
   boundary.afterReply = undefined;
-  boundary.afterRotate = undefined;
+  boundary.afterCleanup = undefined;
   boundary.failRetirement = false;
   vi.restoreAllMocks();
 });
@@ -92,6 +106,7 @@ function pauseRegistry() {
     .mockImplementationOnce((...args) => {
       const prepared = prepare(...args);
       return {
+        assertCurrent: prepared.assertCurrent,
         read: async () => {
           entered.resolve();
           await resume.promise;
@@ -332,7 +347,7 @@ it.each(["evidence", "settlement"] as const)(
           }
         }
       };
-      boundary.afterRotate = async () => {
+      boundary.afterCleanup = async () => {
         if (phase === "settlement" && evidenceRead) {
           await write();
         }
@@ -345,7 +360,7 @@ it.each(["evidence", "settlement"] as const)(
         expect(wrote).toBe(true);
       } finally {
         boundary.afterReply = undefined;
-        boundary.afterRotate = undefined;
+        boundary.afterCleanup = undefined;
       }
       expect(await (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject)).toBe(
         "current",
@@ -405,14 +420,14 @@ it.each(["path", "root"] as const)(
   },
 );
 
-it("rejects discovery revoked during final reader retirement", async () => {
+it("rejects discovery revoked during final reader cleanup", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const subject = placement();
     replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
     let revoke: Promise<void> | undefined;
-    boundary.afterRotate = async () => {
-      boundary.afterRotate = undefined;
-      // Close joins the same in-flight retirement; do not wait for ourselves here.
+    boundary.afterCleanup = async () => {
+      boundary.afterCleanup = undefined;
+      // Close joins native cleanup; do not wait for ourselves here.
       revoke = drainAgentDatabaseResources({ agentId: "main" }, async () => {});
     };
     try {
@@ -422,7 +437,7 @@ it("rejects discovery revoked during final reader retirement", async () => {
       expect(revoke).toBeDefined();
       await revoke;
     } finally {
-      boundary.afterRotate = undefined;
+      boundary.afterCleanup = undefined;
       await revoke;
     }
   });

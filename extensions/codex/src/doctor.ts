@@ -1,6 +1,7 @@
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveEffectiveAgentRuntime } from "openclaw/plugin-sdk/command-auth-native";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
@@ -55,10 +56,6 @@ function managedCodexFinding(params: {
     ...(params.requirement ? { requirement: params.requirement } : {}),
     ...(params.fixHint ? { fixHint: params.fixHint } : {}),
   };
-}
-
-function readErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function parseCodexVersion(output: string): string | undefined {
@@ -163,7 +160,7 @@ function createCodexManagedAppServerHealthCheck(params: {
         } catch (error) {
           return [
             managedCodexFinding({
-              message: `Managed Codex app-server could not be resolved: ${readErrorMessage(error)}`,
+              message: `Managed Codex app-server could not be resolved: ${coerceErrorMessage(error)}`,
               path: params.pluginRoot,
               requirement: `an executable Codex ${CODEX_APP_SERVER_VERSION} managed artifact`,
               fixHint:
@@ -207,7 +204,7 @@ function createCodexManagedAppServerHealthCheck(params: {
           managedCodexFinding({
             message:
               spawnFailure?.message ??
-              `Managed Codex app-server version check failed: ${readErrorMessage(error)}`,
+              `Managed Codex app-server version check failed: ${coerceErrorMessage(error)}`,
             severity:
               spawnFailure && resolved.managedCommandOrder === "package-only"
                 ? "warning"

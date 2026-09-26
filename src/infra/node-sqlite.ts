@@ -7,6 +7,7 @@ import { formatErrorMessage } from "./errors.js";
 import { compareValidSemver } from "./semver.js";
 import { registerSqliteReaderConnection } from "./sqlite-reader-lifecycle.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
+import { trackSqliteSchema } from "./sqlite-schema-facts.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
@@ -148,6 +149,7 @@ export function openNodeSqliteDatabase(
     options === undefined
       ? new sqlite.DatabaseSync(resolvedLocation)
       : new sqlite.DatabaseSync(resolvedLocation, options);
+  trackSqliteSchema(database, sqlite);
   registerSqliteReaderConnection(database);
   return database;
 }

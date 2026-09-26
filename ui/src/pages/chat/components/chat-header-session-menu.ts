@@ -121,14 +121,6 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     },
   );
 
-  private actionDisabled(kind: HeaderMenuActionKind, extra = false): boolean {
-    return extra || Boolean(this.actionDisabledReasons[kind]);
-  }
-
-  private actionTitle(kind: HeaderMenuActionKind): string | typeof nothing {
-    return this.actionDisabledReasons[kind] ?? nothing;
-  }
-
   private readonly handleSelect = (event: MenuSelectEvent) => {
     const value = event.detail.item.value;
     if (!value) {
@@ -201,7 +193,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       event.preventDefault();
       return;
     }
-    if (value === "continue-in-terminal" && !this.actionDisabled(value)) {
+    if (value === "continue-in-terminal" && !this.actionDisabledReasons[value]) {
       event.currentTarget.open = false;
       this.onAction({ kind: value });
     }
@@ -418,8 +410,8 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       slot=${inline ? nothing : "submenu"}
       class="session-menu__item"
       value="continue-in-terminal"
-      ?disabled=${this.actionDisabled("continue-in-terminal")}
-      title=${this.actionTitle("continue-in-terminal")}
+      ?disabled=${Boolean(this.actionDisabledReasons["continue-in-terminal"])}
+      title=${this.actionDisabledReasons["continue-in-terminal"] ?? nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.terminal}</span>
       <span class="session-menu__text">${t("chat.sessionHeader.continueInTerminal.action")}</span>

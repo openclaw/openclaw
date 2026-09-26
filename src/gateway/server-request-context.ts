@@ -48,6 +48,8 @@ type GatewayRequestContextRuntime = Pick<
   | "questionManager"
   | "forwardPluginApprovalRequest"
   | "forwardExecApprovalRequest"
+  | "forwardSystemAgentApprovalRequest"
+  | "forwardSystemAgentApprovalResolved"
   | "execApprovalIosPushDelivery"
   | "approvalWebPushDelivery"
   | "pluginApprovalIosPushDelivery"
@@ -107,6 +109,7 @@ type GatewayRequestContextRuntime = Pick<
   > & {
     sessionObserver: NonNullable<GatewayRequestContext["sessionObserver"]>;
     sessionActivitySummaries?: GatewayRequestContext["sessionActivitySummaries"];
+    channelAdmissionAudit?: GatewayRequestContext["channelAdmissionAudit"];
     sessionCompanion: NonNullable<GatewayRequestContext["sessionCompanion"]>;
     isConnectionActive: NonNullable<GatewayRequestContext["isConnectionActive"]>;
     clients: GatewayClientRegistry;
@@ -272,6 +275,7 @@ export function createGatewayRequestContext(
     sessionCompanion: runtime.sessionCompanion,
     sessionObserver,
     sessionActivitySummaries,
+    channelAdmissionAudit: runtime.channelAdmissionAudit,
     mentionInbox: runtime.mentionInbox,
     applyPluginLifecycleChange: runtime.kernel.applyPluginLifecycleChange,
     getMcpAppSandboxPort: runtime.transportBridge.getMcpAppSandboxPort,
@@ -289,6 +293,8 @@ export function createGatewayRequestContext(
       : undefined,
     forwardPluginApprovalRequest: runtime.forwardPluginApprovalRequest,
     forwardExecApprovalRequest: runtime.forwardExecApprovalRequest,
+    forwardSystemAgentApprovalRequest: runtime.forwardSystemAgentApprovalRequest,
+    forwardSystemAgentApprovalResolved: runtime.forwardSystemAgentApprovalResolved,
     execApprovalIosPushDelivery: runtime.execApprovalIosPushDelivery,
     approvalWebPushDelivery: runtime.approvalWebPushDelivery,
     pluginApprovalIosPushDelivery: runtime.pluginApprovalIosPushDelivery,

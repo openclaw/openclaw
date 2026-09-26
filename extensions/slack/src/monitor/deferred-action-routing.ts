@@ -1,4 +1,3 @@
-// Slack plugin module owns workspace-qualified routing for deferred actions.
 import type { SlackTargetKind } from "../target-parsing.js";
 import type { SlackEventScope } from "./event-scope.js";
 

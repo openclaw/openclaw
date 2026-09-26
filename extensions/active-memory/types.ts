@@ -144,18 +144,12 @@ type ResolvedActiveRecallPluginConfig = {
   agents: string[];
   model?: string;
   modelFallback?: string;
-  allowedChatTypes: Array<"direct" | "group" | "channel" | "explicit">;
+  allowedChatTypes: ActiveMemoryChatType[];
   allowedChatIds: string[];
   deniedChatIds: string[];
   thinking: ActiveMemoryThinkingLevel;
   fastMode?: ActiveMemoryFastMode;
-  promptStyle:
-    | "balanced"
-    | "strict"
-    | "contextual"
-    | "recall-heavy"
-    | "precision-heavy"
-    | "preference-only";
+  promptStyle: ActiveMemoryPromptStyle;
   toolsAllow: string[];
   promptOverride?: string;
   promptAppend?: string;
@@ -199,26 +193,24 @@ type ActiveMemorySearchDebug = {
   error?: string;
 };
 
-type ActiveRecallResult =
+type ActiveRecallResult = {
+  elapsedMs: number;
+  searchDebug?: ActiveMemorySearchDebug;
+} & (
   | {
       status: "empty" | "failed" | "no_relevant_memory" | "timeout" | "unavailable";
-      elapsedMs: number;
       summary: string | null;
-      searchDebug?: ActiveMemorySearchDebug;
     }
   | {
       status: "timeout_partial";
-      elapsedMs: number;
       summary: string;
-      searchDebug?: ActiveMemorySearchDebug;
     }
   | {
       status: "ok";
-      elapsedMs: number;
       rawReply: string;
       summary: string;
-      searchDebug?: ActiveMemorySearchDebug;
-    };
+    }
+);
 
 type ActiveMemoryPartialTimeoutData = Partial<RecallSubagentResult> & {
   cleanupFailed?: boolean;

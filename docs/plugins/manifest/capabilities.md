@@ -82,6 +82,8 @@ Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list 
 | `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
 | `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
 
+Document extractors may return optional completeness metadata with their text and images. `pages.processed` is a bounded list of 1-based pages actually processed; `pages.total` is the document page count; `pages.selection` distinguishes automatic limits from an explicit request; and `pages.truncated`, `textTruncated`, and `imagesTruncated` report known omissions. `maxPages` is a count cap; automatic page choice remains extractor-owned, while `pageNumbers` restricts an explicit selection. Omit `metadata` when the extractor cannot establish these facts; do not infer completeness downstream.
+
 `contracts.embeddedExtensionFactories` is retained for bundled Codex app-server-only extension factories. Bundled tool-result transforms should declare `contracts.agentToolResultMiddleware` and register with `api.registerAgentToolResultMiddleware(...)` instead. Installed plugins may use the same middleware seam only when explicitly enabled and only for runtimes they declare in `contracts.agentToolResultMiddleware`.
 
 Installed plugins that need the host-trusted pre-tool policy tier must declare each registered local id in `contracts.trustedToolPolicies` and be explicitly enabled. Bundled plugins keep the existing trusted-policy path, but installed plugins with undeclared policy ids are rejected before registration. Policy ids are scoped to the registering plugin, so two plugins may both declare and register `workflow-budget`; a single plugin may not register the same local id twice.
@@ -110,13 +112,55 @@ loading the provider runtime or resolving credentials.
 ```json
 {
   "contracts": { "decisionProviders": ["example-decisions"] },
-  "decisionModels": [{ "provider": "example-decisions", "id": "fast", "name": "Fast decisions" }]
+  "decisionModels": [
+    {
+      "provider": "example-decisions",
+      "id": "fast",
+      "name": "Fast decisions",
+      "capabilities": {
+        "questionTypes": ["boolean", "choice", "score"],
+        "maxQuestions": 32,
+        "maxChoiceAlternatives": 64,
+        "maxScoreLevels": 16,
+        "maxInputTokens": 8192,
+        "inputTokenScope": "encoded-question",
+        "requiresBooleanCriteria": true,
+        "confidence": "provider-specific"
+      }
+    }
+  ]
 }
 ```
 
 Each entry requires a provider ID, model ID, and display name. The selector uses
 `example-decisions/fast`. Disabled plugins are excluded from the decision picker;
 saved unavailable selections remain visible for the operator to repair.
+
+`capabilities` is optional static metadata. It describes provider support for
+discovery and guidance; it does not prove that credentials or the runtime are
+ready, and its limits do not raise OpenClaw's host admission bounds.
+
+| Field                     | Required | Accepted value                                                             | Omission semantics                                                                                        |
+| ------------------------- | -------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `questionTypes`           | Yes      | Non-empty array containing up to three of `boolean`, `choice`, and `score` | The entire `capabilities` object is omitted when this field is absent or invalid; duplicates are removed. |
+| `maxQuestions`            | No       | Positive safe integer                                                      | No provider-specific question limit is advertised.                                                        |
+| `maxChoiceAlternatives`   | No       | Positive safe integer                                                      | No provider-specific Choice-alternative limit is advertised.                                              |
+| `maxScoreLevels`          | No       | Positive safe integer                                                      | No provider-specific Score-level limit is advertised.                                                     |
+| `maxInputTokens`          | No       | Positive safe integer                                                      | No provider-specific input-token limit is advertised.                                                     |
+| `inputTokenScope`         | No       | `encoded-question` or `state-plus-each-criterion`                          | The provider does not declare how `maxInputTokens` is accounted.                                          |
+| `requiresBooleanCriteria` | No       | Boolean                                                                    | No extra Boolean-criteria requirement is advertised.                                                      |
+| `confidence`              | No       | `provider-specific` or `none`                                              | No confidence-result semantic is advertised.                                                              |
+
+`encoded-question` means the provider counts its encoded request, including
+provider-added rubric overhead. `state-plus-each-criterion` means the shared
+state is counted with each criterion evaluation. `provider-specific` confidence
+is a provider metric, not a calibrated probability that an answer is correct;
+`none` declares that the provider does not return confidence.
+
+Malformed optional fields and unknown fields are ignored individually. A
+malformed `questionTypes` value removes the whole capability descriptor but does
+not remove the model entry. Duplicate `provider/id` entries keep the first valid
+model descriptor.
 
 ## Tool metadata reference
 

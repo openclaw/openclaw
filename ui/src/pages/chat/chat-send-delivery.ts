@@ -23,11 +23,11 @@ import {
   type QueuedChatSendResult,
   type QueuedChatStorageMode,
 } from "./chat-outbox-drain.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   admitQueuedMessageForSession,
   excludeComposerAttachments,
   readQueuedMessageById,
-  removeQueuedMessageWithoutReleasing,
 } from "./chat-queue.ts";
 import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import { cancelChatDelivery, restoreRejectedChatDelivery } from "./chat-send-composer.ts";
@@ -62,9 +62,9 @@ import {
 } from "./chat-send-timing.ts";
 import {
   captureChatNativeRuntimeRecovery,
-  getPendingChatPickerPatch,
   refreshChatSessionListForTarget,
 } from "./chat-session.ts";
+import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
@@ -280,7 +280,7 @@ async function sendPreparedChatMessage(
   const message = prepared.intent ? prepared.text : submitted.text;
   const attachments = (queued.attachmentPayload ? queued.attachments : prepared.attachments) ?? [];
   if (!message && attachments.length === 0) {
-    removeQueuedMessageWithoutReleasing(host, id);
+    chatOutboxOwner(host).remove(host, id);
     return "sent";
   }
   const sessionKey = prepared.sessionKey ?? host.sessionKey;
@@ -412,16 +412,18 @@ async function sendPreparedChatMessage(
           { type: "sendFailed", runId },
           { scope: projectionScope },
         );
+        const ownsLocalRun = host.chatRunId === ack.runId;
         reconcileChatRunLifecycle(host, {
           outcome: "interrupted",
           sessionStatus: ack.status === "error" ? "failed" : "killed",
           runId: ack.runId,
           sessionKey,
-          clearLocalRun: true,
-          clearChatStream: true,
-          clearToolStream: true,
+          clearIndicators: ownsLocalRun,
+          clearLocalRun: ownsLocalRun,
+          clearChatStream: ownsLocalRun,
+          clearToolStream: ownsLocalRun,
           publishRunStatus: false,
-          armLocalTerminalReconcile: ack.runId === runId,
+          armLocalTerminalReconcile: (!host.chatRunId || ownsLocalRun) && ack.runId === runId,
         });
       }
       surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {
@@ -439,7 +441,7 @@ async function sendPreparedChatMessage(
       (ack.status === "ok" && !requiresChatInputConsumption(prepared));
     let retirementFailed = false;
     if (retireOnAck) {
-      removeQueuedMessageWithoutReleasing(host, id);
+      chatOutboxOwner(host).remove(host, id);
       retirementFailed = storageMode === "durable" && readQueuedMessageById(host, id) !== null;
     }
     if (isVisible()) {
@@ -666,6 +668,7 @@ export async function deliverChatQueueItem(
     if (options.restoreDraft && options.previousDraft?.trim()) {
       host.chatMessage = options.previousDraft;
       host.chatMentions = options.previousMentions ?? [];
+      host.chatReplyTarget = options.previousReplyTarget ?? null;
     }
     if (options.restoreAttachments && options.previousAttachments?.length) {
       host.chatAttachments = options.previousAttachments;
@@ -698,18 +701,15 @@ export const chatOutboxDrainDependencies: ChatOutboxDrainDependencies = {
       undefined,
       reconnectSafeQueuedSendState(host),
     );
-    const item = pending?.item;
-    if (item) {
-      publishPendingSendMessage(host, item);
-    }
-    if (!pending || !admitQueuedMessageForSession(host, pending.admission, pending.item)) {
+    const item = pending ? publishPendingSendMessage(host, pending.item) : undefined;
+    if (!pending || !item || !admitQueuedMessageForSession(host, pending.admission, item)) {
       if (item) {
         cancelChatDelivery(host, item, { previousDraft: options.previousDraft });
       }
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       return;
     }
-    await deliverChatQueueItem(host, pending.item, {
+    await deliverChatQueueItem(host, item, {
       previousDraft: options.previousDraft,
       restoreDraft: options.restoreDraft,
       routingSessionKey: host.sessionKey,

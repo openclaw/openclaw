@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -9,8 +9,13 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setImmediate"] });
+});
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  vi.useRealTimers();
 });
 
 describe("shared state runtime schema fence", () => {
@@ -31,6 +36,8 @@ describe("shared state runtime schema fence", () => {
     } finally {
       external.close();
     }
+
+    vi.runOnlyPendingTimers();
 
     let failure: unknown;
     try {
@@ -61,6 +68,8 @@ describe("shared state runtime schema fence", () => {
     } finally {
       external.close();
     }
+
+    vi.runOnlyPendingTimers();
 
     expect(openOpenClawStateDatabase(options)).toBe(initial);
     expect(initial.db.isOpen).toBe(true);

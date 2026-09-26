@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { appendJsonlOcPath, setJsonlOcPath } from "../../jsonl/edit.js";
 import { emitJsonl } from "../../jsonl/emit.js";
 import { parseJsonl } from "../../jsonl/parse.js";
+import { resolveJsonlOcPath } from "../../jsonl/resolve.js";
 import { parseOcPath } from "../../oc-path.js";
 
 describe("setJsonlOcPath — value replacement", () => {
@@ -47,6 +48,21 @@ describe("setJsonlOcPath — value replacement", () => {
     }
   });
 
+  it("reads and edits $first after blank and malformed lines", () => {
+    const { ast } = parseJsonl('\nbroken\n{"event":"start"}\n{"event":"end"}\n');
+    const path = parseOcPath("oc://session-events/$first/event");
+    expect(resolveJsonlOcPath(ast, path)).toMatchObject({
+      kind: "object-entry",
+      line: 3,
+      node: { value: { kind: "string", value: "start" } },
+    });
+    const r = setJsonlOcPath(ast, path, { kind: "string", value: "replaced" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(emitJsonl(r.ast)).toBe('\nbroken\n{"event":"replaced"}\n{"event":"end"}');
+    }
+  });
+
   it("reports unresolved for unknown line addresses", () => {
     const { ast } = parseJsonl(log);
     const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/L99/x"), {
@@ -56,9 +72,17 @@ describe("setJsonlOcPath — value replacement", () => {
     expect(r).toEqual({ ok: false, reason: "unresolved" });
   });
 
-  it("reports not-a-value-line when targeting a blank line", () => {
-    const { ast } = parseJsonl('{"a":1}\n\n{"b":2}\n');
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/L2"), {
+  it.each([
+    { kind: "blank", raw: "" },
+    { kind: "malformed", raw: "broken" },
+  ])("reports not-a-value-line when targeting a $kind line", ({ kind, raw }) => {
+    const { ast } = parseJsonl(`{"a":1}\n${raw}\n{"b":2}\n`);
+    const path = parseOcPath("oc://session-events/L2");
+    expect(resolveJsonlOcPath(ast, path)).toMatchObject({
+      kind: "line",
+      node: { kind, line: 2, raw },
+    });
+    const r = setJsonlOcPath(ast, path, {
       kind: "number",
       value: 1,
     });

@@ -14,7 +14,7 @@
  *   local CLI sessions are never locked out. Failed auth still incurs a
  *   bounded, escalating delay.
  * - The module is side-effect-free: callers create an instance via
- *   {@link createAuthRateLimiter} and pass it where needed.
+ *   {@link createGatewayAuthRateLimiter} and pass it where needed.
  */
 
 import {
@@ -180,7 +180,7 @@ function resolveAuthRateLimitPolicy(config?: GatewayAuthRateLimitConfig) {
   };
 }
 
-export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter & {
+export function createGatewayAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter & {
   updateConfig: (config?: GatewayAuthRateLimitConfig) => void;
 } {
   let policy = resolveAuthRateLimitPolicy(config);

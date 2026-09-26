@@ -66,6 +66,7 @@ function createCodexTestRuntime(
     ...(current ? { config: { current } } : {}),
     state: {
       openSyncKeyedStore: () => stateStore,
+      openKeyedStore: () => stateStore,
     },
   } as never;
 }
@@ -820,33 +821,33 @@ describe("codex plugin", () => {
       sessionId: "session-1",
       sessionKey: "agent:worker:session-1",
     });
-    const setBinding = () =>
-      bindingStore.mutate(identity, {
+    const setBinding = (target = identity) =>
+      bindingStore.mutate(target, {
         kind: "set",
         binding: { threadId: "thread-1", cwd: "/repo" },
       });
 
-    for (const reason of ["shutdown", "restart", "compaction", "unknown"] as const) {
-      await setBinding();
+    for (const reason of ["shutdown", "restart", "compaction", "deleted", "unknown"] as const) {
+      await expect(setBinding()).resolves.toBe(true);
       await sessionEnd(
         { sessionId: "session-1", sessionKey: "agent:worker:session-1", reason },
         { agentId: "worker", sessionId: "session-1" },
       );
       expect(bindingStore.read(identity)).toMatchObject({ threadId: "thread-1" });
     }
-    for (const reason of ["new", "reset", "idle", "daily", "deleted"] as const) {
-      await setBinding();
-      await sessionEnd(
-        { sessionId: "session-1", sessionKey: "agent:worker:session-1", reason },
-        { agentId: "worker", sessionId: "session-1" },
-      );
-      expect(bindingStore.read(identity)).toBeUndefined();
+    for (const reason of ["new", "reset", "idle", "daily"] as const) {
+      const sessionId = `session-${reason}`;
+      const sessionKey = `agent:worker:${sessionId}`;
+      const retiredIdentity = sessionBindingIdentity({ agentId: "worker", sessionId, sessionKey });
+      await expect(setBinding(retiredIdentity)).resolves.toBe(true);
+      expect(bindingStore.read(retiredIdentity)).toMatchObject({ threadId: "thread-1" });
+      await sessionEnd({ sessionId, sessionKey, reason }, { agentId: "worker", sessionId });
+      expect(bindingStore.read(retiredIdentity)).toBeUndefined();
     }
 
     // Cross-key handoff (e.g. dashboard "New Chat"/fork): the parent's still-live
     // binding must survive because the successor lives under a different key and
-    // owns its own Codex thread. Use a fresh parent key (session-1 above is now
-    // permanently retired). See #106778.
+    // owns its own Codex thread. See #106778.
     const parent = sessionBindingIdentity({
       agentId: "worker",
       sessionId: "parent-1",

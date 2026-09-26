@@ -3,8 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { expect, vi } from "vitest";
+import { afterAll, beforeAll, expect, vi } from "vitest";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
@@ -12,6 +13,8 @@ import { isProcessAlive, waitForDead, waitForFixtureFile } from "../helpers/proc
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import { createPreparedVitestCliFixture } from "./run-vitest-bounded-fixture.test-support.js";
 import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
@@ -21,6 +24,30 @@ import {
 
 const it = createWorkerArtifactTest();
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const wrapperEntries = ["run-vitest.mts", "test-projects-serial.mts", "ci-run-node-test-shard.mts"];
+const preparedCli = createPreparedVitestCliFixture(repoRoot, wrapperEntries, {
+  preserveSourceModuleExports: true,
+});
+let preparedModules: Array<readonly [URL, URL]>;
+beforeAll(async () => {
+  await preparedCli.prepare();
+  preparedModules = collectRuntimeImportClosure(
+    repoRoot,
+    wrapperEntries.map((entry) => `scripts/${entry}`),
+    { includeDynamicImports: true },
+  )
+    .filter((source) => /\.[cm]?ts$/u.test(source))
+    .map(
+      (source) =>
+        [
+          pathToFileURL(path.join(repoRoot, source)),
+          pathToFileURL(path.join(preparedCli.root, source.replace(/\.[cm]?ts$/u, ".js"))),
+        ] as const,
+    )
+    .filter(([, prepared]) => fs.existsSync(prepared));
+});
+afterAll(() => preparedCli.cleanup());
+
 type OwnerReceipt = { owner: number; borrower: number; generation: string };
 
 const shutdownCases = [
@@ -243,7 +270,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
       const command = workerArtifacts.fixtureLifetime.track(
         runNodeScript(
           args,
-          {
+          preparedScriptWrapperEnv(preparedModules, {
             PATH: process.env.PATH,
             HOME: root,
             USERPROFILE: root,
@@ -273,7 +300,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
               : {}),
             // runNodeScript owns every wrapper route, so its fixture preload is always a Node import.
             ...fixturePreloadEnv(preload, "node"),
-          },
+          }),
           20_000,
           {
             cwd: repoRoot,

@@ -397,6 +397,25 @@ export class CodexAssistantProjection {
       this.supersedeVisibleAnswerCandidate();
       return;
     }
+    // Codex 0.154.0 can stream under an output-item ID that differs from the
+    // completed item's ID. Only completion receipts own successful history;
+    // retaining the preview would concatenate it with the completed answer.
+    // Remove text before checkpoint close too, so queued commentary readers
+    // cannot persist an orphan preview. Failed turns retain their partial work;
+    // unphased replacement snapshots retain their existing replacement authority.
+    for (const itemId of this.assistantItemOrder) {
+      if (
+        !this.completedAssistantItemIds.has(itemId) &&
+        !this.isAsyncAssistantItem(itemId) &&
+        (this.isFinalAnswerAssistantItem(itemId) || this.isCommentaryAssistantItem(itemId))
+      ) {
+        if (itemId === this.visibleAnswerCandidateItemId) {
+          // Activity needs the preview text to publish its superseded transition.
+          this.supersedeVisibleAnswerCandidate();
+        }
+        this.assistantTextByItem.delete(itemId);
+      }
+    }
     const turnItems = turn.items ?? [];
     const authoritativeIndex = turnItems.findLastIndex((item) => {
       if (

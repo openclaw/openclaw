@@ -1,6 +1,10 @@
 import { CodexCatalogField, type CodexCatalogStatus } from "./session-catalog-index-field.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
-import { getCodexCatalogSource, type CodexCatalogSource } from "./session-catalog-source.js";
+import {
+  getCodexCatalogSource,
+  hasLiveCodexCatalogSource,
+  type CodexCatalogSource,
+} from "./session-catalog-source.js";
 
 type SourcedStatus = { status: CodexCatalogStatus; sources: Set<CodexCatalogSource> };
 const MAX_STATUS_SOURCE_WITNESSES = 64;
@@ -40,14 +44,7 @@ export class CodexCatalogStatusIndex {
 
   get(threadId: string): CodexCatalogStatus | undefined {
     const current = this.values.get(threadId);
-    if (current) {
-      for (const source of current.sources) {
-        if (!source.closed) {
-          return current.status;
-        }
-      }
-    }
-    return undefined;
+    return current && hasLiveCodexCatalogSource(current.sources) ? current.status : undefined;
   }
 
   delete(threadId: string): void {
@@ -61,12 +58,7 @@ export class CodexCatalogStatusIndex {
     }
     this.values.deleteWhere((entry) => {
       entry.sources.delete(source);
-      for (const witness of entry.sources) {
-        if (!witness.closed) {
-          return false;
-        }
-      }
-      return true;
+      return !hasLiveCodexCatalogSource(entry.sources);
     });
   }
 

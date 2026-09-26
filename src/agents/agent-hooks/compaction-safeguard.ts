@@ -79,6 +79,7 @@ import {
 } from "./compaction-safeguard-quality.js";
 import {
   getCompactionSafeguardRuntime,
+  getCurrentCompactionSemanticMode,
   setCompactionSafeguardCancellation,
 } from "./compaction-safeguard-runtime.js";
 import {
@@ -278,23 +279,6 @@ type ToolFailure = {
   meta?: string;
 };
 
-type ModelRegistryWithRequestAuthLookup = {
-  getApiKeyAndHeaders?: (
-    model: NonNullable<ExtensionContext["model"]>,
-  ) => Promise<ResolvedRequestAuth>;
-};
-
-type ResolvedRequestAuth =
-  | {
-      ok: true;
-      apiKey?: string;
-      headers?: Record<string, string>;
-    }
-  | {
-      ok: false;
-      error: string;
-    };
-
 /**
  * Resolve model credentials. Returns auth details on success or a cancel reason on failure.
  * Extracted to keep the main handler readable when model/auth is conditional.
@@ -305,9 +289,9 @@ async function resolveModelAuth(
 ): Promise<
   { ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; reason: string }
 > {
-  let requestAuth: ResolvedRequestAuth;
+  let requestAuth: Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
   try {
-    const modelRegistry = ctx.modelRegistry as ModelRegistryWithRequestAuthLookup;
+    const modelRegistry = ctx.modelRegistry;
     if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
       throw new Error("model registry auth lookup unavailable");
     }
@@ -724,7 +708,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       latestUnresolvedUserRequest ?? undefined,
     );
 
-    const semanticMode = runtime?.semanticCurationMode ?? "off";
+    const semanticMode = getCurrentCompactionSemanticMode(ctx.sessionManager);
     const semanticTimeoutMs = runtime?.semanticCurationTimeoutMs;
     const semanticAgentId = ctx.sessionManager.getSessionTarget()?.agentId ?? runtime?.agentId;
     const semanticSignal = signal ?? new AbortController().signal;
@@ -753,7 +737,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           })()
         : undefined;
     const observeSemanticSummary = async (summary: string) => {
-      if (!semanticSnapshot) {
+      if (!semanticSnapshot || getCurrentCompactionSemanticMode(ctx.sessionManager) !== "shadow") {
         return;
       }
       try {
@@ -764,6 +748,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             snapshot: semanticSnapshot,
             signal: semanticSignal,
             timeoutMs: semanticTimeoutMs,
+            isEligible: () => getCurrentCompactionSemanticMode(ctx.sessionManager) === "shadow",
           }),
           evaluateCompactionFidelity({
             runtime: { evaluate: evaluateDecision },
@@ -772,6 +757,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             candidateSummary: summary,
             signal: semanticSignal,
             timeoutMs: semanticTimeoutMs,
+            isEligible: () => getCurrentCompactionSemanticMode(ctx.sessionManager) === "shadow",
           }),
         ]);
         semanticSignal.throwIfAborted();
@@ -783,8 +769,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
         const shadow = shadowResult.value;
         const fidelity = fidelityResult.value;
-        const currentSemanticMode =
-          getCompactionSafeguardRuntime(ctx.sessionManager)?.semanticCurationMode ?? "off";
+        const currentSemanticMode = getCurrentCompactionSemanticMode(ctx.sessionManager);
         if (
           currentSemanticMode !== "shadow" ||
           fingerprintCompactionMessages(semanticSourceMessages) !==

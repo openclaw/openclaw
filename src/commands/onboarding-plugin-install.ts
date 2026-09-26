@@ -6,7 +6,6 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
@@ -428,20 +427,8 @@ async function promptInstallChoice(params: {
     });
   }
 
-  if (params.autoConfirmSingleSource) {
-    const realSources: InstallChoice[] = [];
-    if (safeClawHubSpec) {
-      realSources.push("clawhub");
-    }
-    if (safeNpmSpec) {
-      realSources.push("npm");
-    }
-    if (params.localPath) {
-      realSources.push("local");
-    }
-    if (realSources.length === 1) {
-      return expectDefined(realSources[0], "real sources entry at 0");
-    }
+  if (params.autoConfirmSingleSource && options.length === 1) {
+    return options[0]!.value;
   }
 
   options.push({ value: "skip", label: t("common.skipForNow") });
@@ -481,22 +468,6 @@ function formatDurationLabel(timeoutMs: number): string {
   }
   const seconds = Math.round(timeoutMs / 1000);
   return t(seconds === 1 ? "common.second" : "common.seconds", { count: seconds });
-}
-
-function formatPluginInstallProgress(label: string): string {
-  return t("wizard.plugins.installingPlugin", { plugin: label });
-}
-
-function formatPluginInstalled(label: string): string {
-  return t("wizard.plugins.installedPlugin", { plugin: label });
-}
-
-function formatPluginInstallFailed(label: string): string {
-  return t("wizard.plugins.installFailedShort", { plugin: label });
-}
-
-function formatPluginInstallTimedOut(label: string): string {
-  return t("wizard.plugins.installTimedOutShort", { plugin: label });
 }
 
 function formatPluginInstallTimedOutNote(spec: string): string {
@@ -740,7 +711,9 @@ async function runOnboardingPluginInstallWithProgress(params: {
     beforePersistentEffect: params.beforePersistentEffect,
   });
   const safeLabel = sanitizeTerminalText(params.entry.label);
-  const progress = params.prompter.progress(formatPluginInstallProgress(safeLabel));
+  const progress = params.prompter.progress(
+    t("wizard.plugins.installingPlugin", { plugin: safeLabel }),
+  );
   progress.update(t("wizard.plugins.preparingInstall"));
   const updateProgress = (message: string) => {
     const sanitized = sanitizeTerminalText(message).trim();
@@ -765,15 +738,20 @@ async function runOnboardingPluginInstallWithProgress(params: {
       ),
     );
     progress.stop(
-      result.ok ? formatPluginInstalled(safeLabel) : formatPluginInstallFailed(safeLabel),
+      t(result.ok ? "wizard.plugins.installedPlugin" : "wizard.plugins.installFailedShort", {
+        plugin: safeLabel,
+      }),
     );
     consent.rethrowCallbackError();
     return { status: "completed", result, capabilityConsent };
   } catch (error) {
     progress.stop(
-      isTimeoutError(error)
-        ? formatPluginInstallTimedOut(safeLabel)
-        : formatPluginInstallFailed(safeLabel),
+      t(
+        isTimeoutError(error)
+          ? "wizard.plugins.installTimedOutShort"
+          : "wizard.plugins.installFailedShort",
+        { plugin: safeLabel },
+      ),
     );
     consent.rethrowCallbackError();
     if (isTimeoutError(error)) {
@@ -974,7 +952,9 @@ async function installPluginFromClawHubSpecWithProgress(params: {
     beforePersistentEffect: params.beforePersistentEffect,
   });
   const safeLabel = sanitizeTerminalText(params.entry.label);
-  const progress = params.prompter.progress(formatPluginInstallProgress(safeLabel));
+  const progress = params.prompter.progress(
+    t("wizard.plugins.installingPlugin", { plugin: safeLabel }),
+  );
   progress.update(t("wizard.plugins.preparingInstall"));
   const updateProgress = (message: string) => {
     const sanitized = sanitizeTerminalText(message).trim();
@@ -1020,15 +1000,15 @@ async function installPluginFromClawHubSpecWithProgress(params: {
       progress.stop("Review ClawHub warning");
       renderTrustWarning(failureWarning);
     }
-    if (result.ok) {
-      progress.stop(formatPluginInstalled(safeLabel));
-    } else {
-      progress.stop(formatPluginInstallFailed(safeLabel));
-    }
+    progress.stop(
+      t(result.ok ? "wizard.plugins.installedPlugin" : "wizard.plugins.installFailedShort", {
+        plugin: safeLabel,
+      }),
+    );
     consent.rethrowCallbackError();
     return { result, capabilityConsent };
   } catch (error) {
-    progress.stop(formatPluginInstallFailed(safeLabel));
+    progress.stop(t("wizard.plugins.installFailedShort", { plugin: safeLabel }));
     consent.rethrowCallbackError();
     // The separate ClawHub risk prompt also owns wizard navigation.
     if (error instanceof WizardCancelledError || error instanceof WizardNavigationError) {

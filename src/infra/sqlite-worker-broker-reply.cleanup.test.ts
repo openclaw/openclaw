@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -106,9 +107,7 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = []) {
 }
 
 function aggregate(value: unknown): AggregateError {
-  if (!(value instanceof AggregateError)) {
-    throw new Error("Expected the retained cleanup aggregate");
-  }
+  assert(value instanceof AggregateError, "Expected the retained cleanup aggregate");
   return value;
 }
 

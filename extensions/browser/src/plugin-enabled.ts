@@ -1,9 +1,12 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+} from "openclaw/plugin-sdk/plugin-config-runtime";
 /**
  * Browser plugin enablement resolver for bundled-plugin defaults.
  */
 import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
-import type { OpenClawConfig } from "./sdk-config.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./sdk-config.js";
 
 /** Retains the policy owner's refusal reason alongside browser enablement. */
 export function resolveBrowserPluginEnableState(cfg: OpenClawConfig) {

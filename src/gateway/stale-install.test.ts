@@ -3,6 +3,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
 const fixture = vi.hoisted(() => ({ root: "", buildId: "build-before" as string | null }));
@@ -27,6 +31,7 @@ async function writeIdentity(version: string, buildId: string): Promise<void> {
 }
 
 beforeEach(async () => {
+  resetGatewayWorkAdmission();
   fixture.root = directories.make("openclaw-replaced-install-");
   fixture.buildId = "build-before";
   await fs.mkdir(path.join(fixture.root, "dist"));
@@ -37,6 +42,7 @@ beforeEach(async () => {
 afterEach(() => {
   dispose?.();
   dispose = undefined;
+  resetGatewayWorkAdmission();
   vi.restoreAllMocks();
 });
 
@@ -139,6 +145,138 @@ describe("running installation replacement", () => {
     await copiedModule.checkGatewayInstallationReplacement();
     expect(handoff).toHaveBeenCalledOnce();
     expect(copiedModule.getGatewayInstallationReplacement()?.onDisk?.buildId).toBe("build-after");
+  });
+
+  it.each(["preparing", "draining", "prepared"] as const)(
+    "leaves installation handoff with the suspension owner while %s",
+    async (phase) => {
+      const { registerGatewayRunInstallationReplacement } =
+        await import("../cli/gateway-cli/run-loop-request.js");
+      const restart = vi.fn();
+      dispose = registerGatewayRunInstallationReplacement({
+        waitForUpdates: () => undefined,
+        accept: restart,
+        logger: { warn: vi.fn(), error: vi.fn() },
+        supervised: true,
+      });
+      const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
+      expect(suspension).not.toBeNull();
+      if (phase === "draining") {
+        expect(suspension?.drain()).toBe(true);
+      } else if (phase === "prepared") {
+        expect(suspension?.commit()).toBe(true);
+      }
+      await writeIdentity("2026.9.5", "build-after");
+      await owner.checkGatewayInstallationReplacement();
+      expect(restart).not.toHaveBeenCalled();
+      expect(owner.getGatewayInstallationReplacement()).toBeUndefined();
+      expect(phase === "preparing" ? suspension?.rollback() : suspension?.release()).toBe(true);
+      await owner.checkGatewayInstallationReplacement();
+      expect(restart).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["resume", "retire"] as const)(
+    "rechecks suspension after the update helper settles (%s)",
+    async (outcome) => {
+      const { registerGatewayRunInstallationReplacement } =
+        await import("../cli/gateway-cli/run-loop-request.js");
+      const helper = createDeferredCore();
+      const accepted = createDeferredCore();
+      const restart = vi.fn(() => accepted.resolve());
+      dispose = registerGatewayRunInstallationReplacement({
+        waitForUpdates: vi.fn().mockReturnValueOnce(helper.promise),
+        accept: restart,
+        logger: { warn: vi.fn(), error: vi.fn() },
+        supervised: true,
+      });
+      await writeIdentity("2026.9.5", "build-after");
+      await owner.checkGatewayInstallationReplacement();
+      const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
+      expect(suspension?.drain()).toBe(true);
+      helper.resolve();
+      await helper.promise;
+      expect(restart).not.toHaveBeenCalled();
+      if (outcome === "retire") {
+        dispose();
+        dispose = undefined;
+      }
+      expect(suspension?.release()).toBe(true);
+      await owner.checkGatewayInstallationReplacement();
+      if (outcome === "resume") {
+        await accepted.promise;
+        expect(restart).toHaveBeenCalledOnce();
+      } else {
+        expect(restart).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("rechecks a latched replacement after a suspended helper rollback", async () => {
+    const { registerGatewayRunInstallationReplacement } =
+      await import("../cli/gateway-cli/run-loop-request.js");
+    const helper = createDeferredCore();
+    const restart = vi.fn();
+    dispose = registerGatewayRunInstallationReplacement({
+      waitForUpdates: vi.fn().mockReturnValueOnce(helper.promise),
+      accept: restart,
+      logger: { warn: vi.fn(), error: vi.fn() },
+      supervised: true,
+    });
+    await writeIdentity("2026.9.5", "build-after");
+    await owner.checkGatewayInstallationReplacement();
+    const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
+    expect(suspension?.drain()).toBe(true);
+    await writeIdentity("2026.9.4", "build-before");
+    helper.resolve();
+    await helper.promise;
+    expect(suspension?.release()).toBe(true);
+    await owner.checkGatewayInstallationReplacement();
+    expect(restart).not.toHaveBeenCalled();
+    expect(owner.getGatewayInstallationReplacement()).toBeUndefined();
+  });
+
+  it("discards an installation read across suspension and rollback before it settles", async () => {
+    const json = await import("../infra/json-files.js");
+    const pending = createDeferredCore<unknown>();
+    vi.spyOn(json, "tryReadJson").mockImplementationOnce(() => pending.promise);
+    const restart = vi.fn();
+    dispose = owner.registerGatewayInstallationReplacementHandler(restart);
+    const checking = owner.checkGatewayInstallationReplacement();
+    try {
+      const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
+      expect(suspension?.drain()).toBe(true);
+      await writeIdentity("2026.9.4", "build-before");
+      expect(suspension?.release()).toBe(true);
+      pending.resolve({ version: "2026.9.5", buildId: "build-after" });
+      await checking;
+      expect(restart).not.toHaveBeenCalled();
+      expect(owner.getGatewayInstallationReplacement()).toBeUndefined();
+      await owner.checkGatewayInstallationReplacement();
+      expect(restart).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve(undefined);
+      await checking;
+    }
+  });
+
+  it("reports missing runtime chunks without taking over a held suspension", () => {
+    const restart = vi.fn();
+    dispose = owner.registerGatewayInstallationReplacementHandler(restart);
+    const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
+    expect(suspension?.drain()).toBe(true);
+    const missing = Object.assign(new Error("runtime chunk unavailable"), {
+      code: "ENOENT",
+      path: path.join(fixture.root, "dist", "runtime.js"),
+    });
+    expect(owner.classifyGatewayStaleInstall(missing)?.error.details).toMatchObject({
+      code: "STALE_INSTALL",
+    });
+    expect(restart).not.toHaveBeenCalled();
+    expect(owner.getGatewayInstallationReplacement()).toBeUndefined();
+    expect(suspension?.release()).toBe(true);
+    expect(owner.classifyGatewayStaleInstall(missing)).not.toBeNull();
+    expect(restart).toHaveBeenCalledOnce();
   });
 
   it("coalesces disk reads and rejects an observation after its lifecycle registration retires", async () => {

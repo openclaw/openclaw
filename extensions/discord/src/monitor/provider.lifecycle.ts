@@ -411,7 +411,7 @@ export async function runDiscordGatewayLifecycle(params: {
   isDisallowedIntentsError: (err: unknown) => boolean;
   voiceManager: DiscordVoiceManager | null;
   voiceManagerRef: { current: DiscordVoiceManager | null };
-  threadBindings: { stop: () => void };
+  threadBindings: { stop: () => void | Promise<void> };
   gatewaySupervisor: DiscordGatewaySupervisor;
   statusSink?: DiscordMonitorStatusSink;
 }) {
@@ -552,25 +552,28 @@ export async function runDiscordGatewayLifecycle(params: {
       throw err;
     }
   } finally {
-    lifecycleStopping = true;
-    params.gatewaySupervisor.detachLifecycle();
-    unregisterGateway(params.accountId);
-    stopGatewayLogging();
-    statusObserver.dispose();
-    gatewayEmitter?.removeListener("debug", statusObserver.onGatewayDebug);
-    gatewayEmitter?.removeListener(
-      DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
-      onGatewayTransportActivity,
-    );
-    if (params.voiceManager) {
-      await params.voiceManager.destroy();
-      setDiscordTranscriptsVoiceManager({
-        accountId: params.accountId,
-        manager: null,
-        expectedManager: params.voiceManager,
-      });
-      params.voiceManagerRef.current = null;
+    try {
+      lifecycleStopping = true;
+      params.gatewaySupervisor.detachLifecycle();
+      unregisterGateway(params.accountId);
+      stopGatewayLogging();
+      statusObserver.dispose();
+      gatewayEmitter?.removeListener("debug", statusObserver.onGatewayDebug);
+      gatewayEmitter?.removeListener(
+        DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
+        onGatewayTransportActivity,
+      );
+      if (params.voiceManager) {
+        await params.voiceManager.destroy();
+        setDiscordTranscriptsVoiceManager({
+          accountId: params.accountId,
+          manager: null,
+          expectedManager: params.voiceManager,
+        });
+        params.voiceManagerRef.current = null;
+      }
+    } finally {
+      await params.threadBindings.stop();
     }
-    params.threadBindings.stop();
   }
 }

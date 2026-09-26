@@ -1,7 +1,11 @@
 import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import { sessionsList } from "./session-ownership-fixtures.test-support.ts";
@@ -447,6 +451,7 @@ suite.define(() => {
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: { "sessions.list": result },
     });
+    await currentPage.clock.install();
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     const row = currentPage.locator('[data-session-key="agent:main:ada"]');
     await expectBrowser(row).toBeVisible();
@@ -454,9 +459,21 @@ suite.define(() => {
     await captureSessionOwnerProof(suite, currentPage, "one-human-with-agents.png");
     await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(0);
 
+    await pauseVirtualClock(currentPage);
+    const rosterMatch = { includeGlobal: true };
+    const initialRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
     await gateway.setMethodResponse("sessions.list", sessionsList(["profile-ada", "profile-bob"]));
     await gateway.emitGatewayEvent("sessions.changed", {});
+    await currentPage.clock.runFor(4_999);
+    expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(initialRequests);
+    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(0);
+    // Cross the event window and deliver the nested mock response timer.
+    await currentPage.clock.runFor(2);
     await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(1);
+    expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(
+      initialRequests + 1,
+    );
+    await currentPage.clock.resume();
     await captureSessionOwnerProof(suite, currentPage, "multiple-humans.png");
   });
 
@@ -1009,6 +1026,6 @@ suite.define(() => {
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
     const menu = await openNewSessionPlusMenu(currentPage);
-    expect(await menu.getByRole("menuitem", { name: "Draft" }).count()).toBe(0);
+    expect(await menu.getByRole("menuitemcheckbox", { name: "Draft" }).count()).toBe(0);
   });
 });

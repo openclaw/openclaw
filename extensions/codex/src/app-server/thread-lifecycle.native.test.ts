@@ -2,16 +2,13 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { isJsonObject } from "./protocol.js";
-import {
-  createCodexAppServerBindingStore,
-  sessionBindingIdentity,
-  type StoredCodexAppServerBinding,
-} from "./session-binding.js";
+import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import { startOrResumeThread } from "./thread-lifecycle.js";
 import {
@@ -29,7 +26,12 @@ describe("native Codex cold thread recovery", () => {
     "replaces a deleted ordinary binding and completes its next turn",
     { timeout: 75_000 },
     async (context) => {
-      const tempDirs = useAutoCleanupTempDirTracker(context.onTestFinished);
+      const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+        context.onTestFinished(async () => {
+          await closeOpenClawStateDatabaseAsync();
+          cleanup();
+        }),
+      );
       const root = await fs.realpath(tempDirs.make("codex-missing-thread-"));
       const native = await createCodexNativeTestState(root);
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
@@ -148,9 +150,10 @@ describe("native Codex cold thread recovery", () => {
         agentDir,
         modelId: "gpt-5.6-luna",
       };
-      const store = createPluginStateSyncKeyedStore<StoredCodexAppServerBinding>("codex", {
+      const store = createCodexSqliteTestBindingStateStore({
         namespace: "native-recovery-test",
         maxEntries: 32,
+        env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
       });
       const bindingStore = createCodexAppServerBindingStore(store);
       const common = {

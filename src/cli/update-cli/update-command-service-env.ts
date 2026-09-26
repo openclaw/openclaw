@@ -132,32 +132,42 @@ export async function withOwnedManagedUpdateEnv<T>(
   }
 }
 
-export async function withUpdateInProgressEnv<T>(
-  invocationCwd: string | undefined,
+/** Restore only this phase's overrides; other environment writes remain with their owners. */
+export async function withUpdateEnv<T>(
+  overrides: NodeJS.ProcessEnv,
   run: () => Promise<T>,
 ): Promise<T> {
-  const env = resolveServiceRefreshEnv(process.env, invocationCwd);
-  env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  const scopedKeys = Object.keys(env).filter(
-    (key) => key === "OPENCLAW_UPDATE_IN_PROGRESS" || env[key] !== process.env[key],
-  );
-  const previousValues = scopedKeys.map((key) => [key, process.env[key]] as const);
-  // Package replacement can remove cwd. All phase owners must share the
-  // invocation's resolved selectors until cleanup finishes.
-  for (const key of scopedKeys) {
-    process.env[key] = env[key];
-  }
-  try {
-    return await run();
-  } finally {
-    for (const [key, value] of previousValues) {
+  const previous = Object.keys(overrides).map((key) => [key, process.env[key]] as const);
+  const apply = (entries: Iterable<readonly [string, string | undefined]>) => {
+    for (const [key, value] of entries) {
       if (value === undefined) {
         delete process.env[key];
       } else {
         process.env[key] = value;
       }
     }
+  };
+  apply(Object.entries(overrides));
+  try {
+    return await run();
+  } finally {
+    apply(previous);
   }
+}
+
+export async function withUpdateInProgressEnv<T>(
+  invocationCwd: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const env = resolveServiceRefreshEnv(process.env, invocationCwd);
+  env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  // Package replacement can remove cwd. Retain resolved selectors through cleanup.
+  const overrides = Object.fromEntries(
+    Object.entries(env).filter(
+      ([key, value]) => key === "OPENCLAW_UPDATE_IN_PROGRESS" || value !== process.env[key],
+    ),
+  );
+  return await withUpdateEnv(overrides, run);
 }
 
 export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

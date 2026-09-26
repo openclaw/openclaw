@@ -1,4 +1,5 @@
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -40,7 +41,11 @@ export function prepareProjectedSessionPresentation(
   now = Date.now(),
   projectRun?: ReturnType<typeof createVisibleActiveSessionRunProjector>,
 ) {
-  const { cfg, rowContext } = projection.state;
+  const { cfg, policyConfig, rowContext } = projection.state;
+  const models =
+    client === undefined
+      ? undefined
+      : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
     projectRun?.({
@@ -55,16 +60,16 @@ export function prepareProjectedSessionPresentation(
     return record ? toProjectedSessionSharingTarget(record) : null;
   };
   const sharing = prepareProjectedSessionSharing({
-    cfg,
+    cfg: policyConfig,
     client: client ?? null,
     isMember: (value, identityId) =>
       projection
-        .describe({
+        .readMembership({
           agentId: value.agentId,
           key: value.storeKey,
           storePath: value.storePath,
         })
-        ?.membership.has(identityId) ?? false,
+        ?.has(identityId) ?? false,
   });
   const profile = gatewayClientSessionCreator(client ?? null);
   const profiles = rowContext.userProfileIdentityById;
@@ -86,7 +91,7 @@ export function prepareProjectedSessionPresentation(
     options: PresentationOptions = {},
   ): GatewaySessionRow | null => {
     const record = projection.describe(
-      { ...captured, storePath: captured.storeTarget.storePath },
+      { agentId: captured.agentId, key: captured.key, storePath: captured.storeTarget.storePath },
       captured,
     );
     if (!record) {
@@ -148,7 +153,7 @@ export function prepareProjectedSessionPresentation(
         };
       }
     }
-    return row;
+    return models?.session(row) ?? row;
   };
   return {
     rowContext: { ...rowContext, subagentRuns },

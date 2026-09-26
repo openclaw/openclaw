@@ -43,8 +43,14 @@ import type {
 
 type LoadGitHubPreview = typeof gitHubPublicApi.loadControlUiGitHubPreview;
 
+class GitHubReadRequestInactiveError extends Error {
+  constructor() {
+    super("GitHub request is no longer active. Try again.");
+  }
+}
+
 async function prepareControlUiGitHubIdentity(
-  { context, client, signal }: GatewayRequestHandlerOptions,
+  { context, client, signal, hasCurrentClientAuthority }: GatewayRequestHandlerOptions,
   agentId: string,
 ): Promise<{
   identity: ControlUiGitHubPreviewIdentity | undefined;
@@ -58,15 +64,19 @@ async function prepareControlUiGitHubIdentity(
       resolveConfiguredGitHubToolIdentity({ config: current, agentId, scope: "system" })
     );
   };
+  // Nested plugin requests may decorate the client; transport authority retains its owner.
   const assertActive = () => {
     if (
       signal?.aborted ||
-      (client?.connId &&
-        !context.getClientConnIds?.((current) => current === client).has(client.connId))
+      (hasCurrentClientAuthority
+        ? !hasCurrentClientAuthority()
+        : client?.connId &&
+          !context.getClientConnIds?.((current) => current === client).has(client.connId))
     ) {
-      throw new GitHubIdentityError("changed");
+      throw new GitHubReadRequestInactiveError();
     }
   };
+  assertActive();
   // Without a managed selection, retain service/env/anonymous access without
   // probing native gh. Both paths must still own the selection at delivery.
   const identity = configuredIdentity()
@@ -123,6 +133,7 @@ function createGitHubReadHandler<T>(
         options,
         resolved.agentId,
       );
+      assertSelected();
       const result =
         params.refresh === true
           ? await load(target, identity, undefined, true)
@@ -131,9 +142,11 @@ function createGitHubReadHandler<T>(
       respond(true, result, undefined);
     } catch (error) {
       const { message, ...details } =
-        error instanceof GitHubIdentityError
-          ? { message: error.message, retryable: error.reason !== "unavailable" }
-          : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
+        error instanceof GitHubReadRequestInactiveError
+          ? { message: error.message, retryable: true }
+          : error instanceof GitHubIdentityError
+            ? { message: error.message, retryable: error.reason !== "unavailable" }
+            : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
     }
   };
@@ -410,7 +423,7 @@ export function createControlUiHandlers(
       }
       try {
         const reader = client
-          ? prepareControlUiSessionPrRead({
+          ? await prepareControlUiSessionPrRead({
               client,
               sessionKey: parsed.sessionKey,
               getRuntimeConfig: context.getRuntimeConfig,
@@ -422,19 +435,28 @@ export function createControlUiHandlers(
                   .has(client.connId) === true,
             })
           : undefined;
-        const currentBinding = () => {
+        const currentBinding = async () => {
           if (!client) {
             return resolveCheckDetailsSession(parsed.sessionKey, context, client);
           }
-          return reader?.() ?? null;
+          return (await reader?.()) ?? null;
         };
-        const binding = currentBinding();
+        const binding = await currentBinding();
         if (!binding) {
           throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
         }
         const assertCurrent = () => {
-          const current = currentBinding();
-          if (signal?.aborted || current?.identity !== binding.identity) {
+          let identityCurrent = false;
+          try {
+            binding.assertCurrent?.();
+            identityCurrent = client
+              ? true
+              : resolveCheckDetailsSession(parsed.sessionKey, context, client)?.identity ===
+                binding.identity;
+          } catch {
+            // The read owner reports retired selections and grants as assertion failures.
+          }
+          if (signal?.aborted || !identityCurrent) {
             throw new gitHubPublicApi.ControlUiGitHubError(
               409,
               "Session changed; reopen CI details",
@@ -469,7 +491,7 @@ export function createControlUiHandlers(
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
       }
     },
-    "controlUi.sessionPullRequests.subscribe": ({ params, client, context, respond }) => {
+    "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
       const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
       if (!parsed) {
         respond(
@@ -492,11 +514,16 @@ export function createControlUiHandlers(
         );
         return;
       }
-      if (parsed.refreshSessionKeys.length > 0) {
-        void subscriptions.replace(connId, parsed.sessionKeys, new Set(parsed.refreshSessionKeys));
-      } else {
-        void subscriptions.replace(connId, parsed.sessionKeys);
-      }
+      const admitted = new Promise<void>((resolve) => {
+        const replacement = subscriptions.replace(
+          connId,
+          parsed.sessionKeys,
+          parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
+          resolve,
+        );
+        void replacement.catch(() => {});
+      });
+      await admitted;
       respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
     },
   };

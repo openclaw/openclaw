@@ -245,6 +245,28 @@ describe("sendMessageDiscord", () => {
     expect(requestBody(postMock)).toEqual({ name: "thread" });
   });
 
+  it("keeps original create authority after awaited channel metadata", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    let ownerCurrent = true;
+    const options = {
+      ...discordClientOpts(rest),
+      assertCreateAllowed: () => {
+        if (!ownerCurrent) {
+          throw new Error("Command owner was revoked");
+        }
+      },
+    };
+    getMock.mockImplementationOnce(async () => {
+      ownerCurrent = false;
+      options.assertCreateAllowed = () => {};
+      return { type: ChannelType.GuildText };
+    });
+    await expect(createThreadDiscord("chan1", { name: "thread" }, options)).rejects.toThrow(
+      "Command owner was revoked",
+    );
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
   it("creates forum threads with an initial message", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     getMock.mockResolvedValue({ type: ChannelType.GuildForum });

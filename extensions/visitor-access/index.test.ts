@@ -40,6 +40,7 @@ const gatewayConfig: OpenClawConfig = {
           agents: ["main"],
           scopes: ["operator.sessions.write"],
           sandbox: "required",
+          modelPolicy: {},
         },
         staff: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
       },

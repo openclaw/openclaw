@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveRememberAcrossConversations } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   normalizePluginsConfig,
   resolvePluginConfigObject,
@@ -125,10 +124,6 @@ function isActiveMemoryPluginEnabled(cfg: OpenClawConfig): boolean {
     return false;
   }
   return plugins.entries["active-memory"]?.enabled !== false;
-}
-
-function shouldRememberAcrossConversations(cfg: OpenClawConfig, agentId: string): boolean {
-  return resolveRememberAcrossConversations(cfg, agentId);
 }
 
 function updateActiveMemoryGlobalEnabledInConfig(
@@ -442,6 +437,5 @@ export {
   resolveCommandSessionKey,
   setSessionActiveMemoryDisabled,
   shouldSkipActiveMemoryForHarnessSession,
-  shouldRememberAcrossConversations,
   updateActiveMemoryGlobalEnabledInConfig,
 };

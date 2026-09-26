@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   declareAgentWorkspaceAccess,
@@ -252,11 +254,15 @@ describe("host-owned workspace access", () => {
       canonicalPath: "/remote/MEMORY.md",
     }));
     host.bridge.readDirectory = vi.fn(async () => [{ name: "MEMORY.md", isDirectory: false }]);
+    host.bridge.createFileExclusive = vi.fn(async () => "created" as const);
     const release = registerAgentWorkspaceAccess(root, host);
     const retained = getAgentWorkspaceAccess(root)!;
     await expect(
       retained.bridge.readFileWithSource!({ filePath: "alias/MEMORY.md", maxBytes: 6 }),
     ).resolves.toEqual({ data: Buffer.from("remote"), canonicalPath: "/remote/MEMORY.md" });
+    await expect(
+      retained.bridge.createFileExclusive!({ filePath: "MEMORY.md", data: "new memory" }),
+    ).resolves.toBe("created");
     release();
     await expect(
       retained.bridge.readFileWithSource!({ filePath: "alias/MEMORY.md" }),
@@ -264,8 +270,29 @@ describe("host-owned workspace access", () => {
     await expect(retained.bridge.readDirectory!({ filePath: "." })).rejects.toThrow(
       "stopped or not ready",
     );
+    await expect(
+      retained.bridge.createFileExclusive!({ filePath: "MEMORY.md", data: "late memory" }),
+    ).rejects.toThrow("stopped or not ready");
     expect(host.bridge.readFileWithSource).toHaveBeenCalledTimes(1);
     expect(host.bridge.readDirectory).not.toHaveBeenCalled();
+    expect(host.bridge.createFileExclusive).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report exclusive creation success after its host is revoked", async () => {
+    const root = workspace();
+    const host = provider();
+    host.bridge.createFileExclusive = vi.fn(async () => {
+      release();
+      return "created" as const;
+    });
+    const release = registerAgentWorkspaceAccess(root, host);
+    await expect(
+      getAgentWorkspaceAccess(root)!.bridge.createFileExclusive!({
+        filePath: "MEMORY.md",
+        data: "new memory",
+      }),
+    ).rejects.toThrow(WorkspaceAccessUnavailableError);
+    expect(host.bridge.createFileExclusive).toHaveBeenCalledTimes(1);
   });
 
   it("does not return source metadata after access is revoked during a read", async () => {
@@ -286,6 +313,142 @@ describe("host-owned workspace access", () => {
 
 describe("workspace attachment preparation", () => {
   const turn = { timeoutMs: 1_000, media: [{ path: "media://inbound/report.pdf" }] };
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([false, true])(
+    "finishes short attachment reads before publishing paths (close failure: %s)",
+    async (closeFailure) => {
+      const stateDir = tempDirs.make("openclaw-attachment-prefix-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const mediaDir = path.join(stateDir, "media");
+      await fs.mkdir(mediaDir);
+      const filePath = path.join(mediaDir, "attachment");
+      await fs.writeFile(filePath, "%PDF-1.7\nsynthetic attachment\n%%EOF\n");
+      const handles: FileHandle[] = [];
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]) === filePath) {
+          handles.push(handle);
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementationOnce(async (...readArgs) => {
+            const result = await read(...readArgs);
+            return { ...result, bytesRead: Math.min(1, result.bytesRead) };
+          });
+          if (closeFailure) {
+            const close = handle.close.bind(handle);
+            vi.spyOn(handle, "close").mockImplementation(async () => {
+              await close();
+              throw new Error("attachment close failed");
+            });
+          }
+        }
+        return handle;
+      });
+      const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
+
+      const note = await prepareLocalWorkspaceAttachments({
+        media: [{ path: filePath }],
+        execution: {
+          readAllowed: true,
+          maxChars: 10_000,
+          config: {
+            gateway: {
+              http: { endpoints: { responses: { files: { allowedMimes: ["application/pdf"] } } } },
+            },
+          },
+        },
+        assertCurrent() {},
+      });
+
+      if (closeFailure) {
+        expect(note).toBeUndefined();
+      } else {
+        expect(note).toContain(JSON.stringify(filePath));
+      }
+      expect(handles).toHaveLength(1);
+      expect(handles[0]!.fd).toBe(-1);
+    },
+  );
+
+  it.each(["binding", "replacement", "caller", "abort"])(
+    "fences local attachment preparation when %s changes during an awaited step",
+    async (change) => {
+      const root = workspace();
+      const controller = new AbortController();
+      let active = true;
+      let release: (() => void) | undefined;
+      const pending = prepareAgentWorkspaceAttachments({
+        workspaceDir: root,
+        localExecution: { readAllowed: true, maxChars: 60_000 },
+        turn: { ...turn, abortSignal: controller.signal },
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("caller closed");
+          }
+        },
+      });
+      if (change === "binding" || change === "replacement") {
+        release = registerAgentWorkspaceAccess(root, provider());
+        if (change === "replacement") {
+          release();
+          release = registerAgentWorkspaceAccess(root, provider());
+        }
+      } else if (change === "caller") {
+        active = false;
+      } else {
+        controller.abort(new Error("attachment cancelled"));
+      }
+      try {
+        await expect(pending).rejects.toThrow(
+          change === "caller"
+            ? "caller closed"
+            : change === "abort"
+              ? "attachment cancelled"
+              : "Workspace access changed",
+        );
+      } finally {
+        release?.();
+      }
+    },
+  );
+
+  it.each(["bridge", "ready", "stopped", "declared"])(
+    "never uses local attachment preparation for a %s remote binding",
+    async (state) => {
+      const root = workspace();
+      const prepare = vi.fn(async () => "remote note");
+      const release =
+        state === "declared"
+          ? undefined
+          : registerAgentWorkspaceAccess(root, {
+              ...provider(),
+              ...(state === "bridge" ? {} : { prepareTurnAttachments: prepare }),
+            });
+      if (state === "declared") {
+        declareAgentWorkspaceAccess(root);
+      } else if (state === "stopped") {
+        release?.();
+      }
+      try {
+        await expect(
+          prepareAgentWorkspaceAttachments({
+            workspaceDir: root,
+            localExecution: { readAllowed: true, maxChars: 60_000 },
+            turn,
+            assertCurrent: () => {},
+          }),
+        ).resolves.toBeUndefined();
+        expect(prepare).not.toHaveBeenCalled();
+      } finally {
+        release?.();
+      }
+    },
+  );
 
   it.each([false, true])("preserves bridge-only input handling after stop: %s", async (stopped) => {
     const root = workspace();

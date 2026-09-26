@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
@@ -58,7 +57,6 @@ type DiscordEventQueueOptions = NonNullable<ConstructorParameters<typeof Client>
 
 function registerLatePlugin(client: Client, plugin: Plugin) {
   void plugin.registerClient?.(client);
-  void plugin.registerRoutes?.(client);
   if (!client.plugins.some((entry) => entry.id === plugin.id)) {
     client.plugins.push({ id: plugin.id, plugin });
   }
@@ -81,12 +79,7 @@ function createDiscordStatusReadyListener(params: {
         return;
       }
 
-      const presence = resolveDiscordPresenceUpdate(params.discordConfig);
-      if (!presence) {
-        return;
-      }
-
-      gateway.updatePresence(presence);
+      gateway.updatePresence(resolveDiscordPresenceUpdate(params.discordConfig));
     }
   })();
 }
@@ -134,16 +127,11 @@ export async function createDiscordMonitorClient(params: {
   });
   const client = params.createClient(
     {
-      baseUrl: "http://localhost",
-      deploySecret: "a",
       clientId: params.applicationId,
-      publicKey: "a",
       token: params.token,
-      autoDeploy: false,
       commandDeployHashStore: params.commandDeployHashStore,
       requestOptions: {
         timeout: DISCORD_REST_TIMEOUT_MS,
-        runtimeProfile: "persistent",
         maxQueueSize: 1000,
         ...(params.restFetch ? { fetch: params.restFetch } : {}),
       },

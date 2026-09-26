@@ -14,21 +14,9 @@ export async function sanitizeNodeInvokeParamsForForwarding(opts: {
   rawParams: unknown;
   client: GatewayClient | null;
   execApprovalManager?: ExecApprovalManager;
-}): Promise<
-  | {
-      ok: true;
-      params: unknown;
-      approvalAuthority?: { recordId: string; decision: "allow-once" | "allow-always" };
-    }
-  | { ok: false; message: string; details?: Record<string, unknown> }
-> {
+}): ReturnType<typeof sanitizeSystemRunParamsForForwarding> {
   if (opts.command === "system.run") {
-    return sanitizeSystemRunParamsForForwarding({
-      nodeId: opts.nodeId,
-      rawParams: opts.rawParams,
-      client: opts.client,
-      execApprovalManager: opts.execApprovalManager,
-    });
+    return sanitizeSystemRunParamsForForwarding(opts);
   }
   return { ok: true, params: opts.rawParams };
 }

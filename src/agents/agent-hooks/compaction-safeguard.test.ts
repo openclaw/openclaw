@@ -1323,10 +1323,21 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(section).not.toContain("[non-text content]");
   });
 
-  it("caps preserved tail when user turns are below preserve target", () => {
+  it("preserves the whole user turn when turns are below the preserve target", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "single user prompt", timestamp: 1 },
-      castAgentMessage(timestampedTextAssistant("assistant-1", 2)),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "first_call", name: "read", arguments: {} }],
+        timestamp: 2,
+      }),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "first_call",
+        toolName: "read",
+        content: [{ type: "text", text: "first tool result" }],
+        timestamp: 2,
+      }),
       castAgentMessage(timestampedTextAssistant("assistant-2", 3)),
       castAgentMessage(timestampedTextAssistant("assistant-3", 4)),
       castAgentMessage(timestampedTextAssistant("assistant-4", 5)),
@@ -1341,8 +1352,8 @@ describe("compaction-safeguard recent-turn preservation", () => {
       recentTurnsPreserve: 3,
     });
 
-    // preserve target is 3 turns -> fallback should cap at 6 role messages
-    expect(split.preservedMessages).toHaveLength(6);
+    expect(split.preservedMessages).toHaveLength(messages.length);
+    expect(split.summarizableMessages).toHaveLength(0);
     expect(
       split.preservedMessages.some(
         (msg: AgentMessage) =>
@@ -1350,7 +1361,8 @@ describe("compaction-safeguard recent-turn preservation", () => {
       ),
     ).toBe(true);
     expect(preservedTurnsText(split.preservedMessages)).toContain("assistant-8");
-    expect(preservedTurnsText(split.preservedMessages)).not.toContain("assistant-2");
+    expect(preservedTurnsText(split.preservedMessages)).toContain("assistant-2");
+    expect(preservedTurnsText(split.preservedMessages)).toContain("first tool result");
   });
 
   it("trim-starts preserved section when history summary is empty", () => {

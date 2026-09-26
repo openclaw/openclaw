@@ -136,6 +136,13 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
     const blob = await blobs.lookup("artifact-1");
     ```
 
+    For command-owned writes, `store.register(key, value, { assertCurrent })`
+    and `store.delete(key, { assertCurrent })` carry the captured owner assertion
+    through worker preparation and admission. The assertion remains in the host;
+    it is never serialized into stored data. Revocation prevents a pending write
+    from being admitted, while a write already accepted by the worker still
+    settles normally.
+
     Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `observe(...)` with `compareAndApply(...)` when a mutation depends on the current value; the comparison and mutation run in one SQLite worker transaction. Each namespace owns its `maxEntries` retention policy and optional TTL expiry; there is no aggregate row limit across a plugin’s namespaces. JSON values are limited to 1 MiB of UTF-8 encoded JSON. By default, a write over `maxEntries` sheds the oldest live rows only from that namespace. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at the namespace limit, while existing keys remain updateable. Growth in a sibling cache cannot reject or evict those ownership records. Existing databases need no migration or cleanup when upgrading; their stored rows are preserved.
 
     To retain records without count-based eviction, use the async opener with `retention: "retained"` instead of `maxEntries`:
@@ -311,8 +318,14 @@ input validation, and JSON serialization remain on the calling thread.
 Callback-based `update` and `deleteIf` retain the native synchronous transaction;
 do not replace either with a separate lookup and write. Worker errors retain `PluginStateStoreError` codes, operation, and path. Canonical
 state errors use their existing codec; other native causes retain bounded causal
-messages and error codes. Arbitrary custom properties and original stacks do not
-cross the worker boundary.
+messages, error codes, and numeric `errno` values. Structured file logs include
+the process ID, thread ID, and OpenClaw version that constructed the plugin-state
+error in `owner`, plus nested cause details. Failures before command dispatch
+are wrapped on the caller thread. Native cause codes appear as `errorCode` in these
+records; the in-memory error keeps its original `code`. Existing log redaction
+still applies. Arbitrary custom properties and original stacks do not cross the
+worker boundary. `PLUGIN_STATE_OPEN_FAILED` can describe a rejected admission
+before SQLite opens; inspect the cause and owner before diagnosing a file error.
 
 Discord and Slack use scalar conditional deletion when relinquishing a presence
 cooldown. On older hosts without that optional capability, they leave it to expire
@@ -354,17 +367,45 @@ AgentSession and extension `setThinkingLevel` return `Promise<void>`. Await thes
 operations before using the resulting model or thinking state. Other synchronous
 SessionManager operations still need an appropriate caller-owned write boundary.
 
+`SessionManager.appendMessageToTranscript` is a deprecated public SDK compatibility
+method, retained for plugins using the v2026.9.5 contract. It accepts ordinary,
+custom, and Bash execution messages and synchronously returns the persisted
+message ID. It delegates to the canonical append kernel and can perform SQLite
+work on the calling thread. Removal requires a versioned SDK replacement and a
+plugin migration window; the bundled failed-image path does not call it.
+
+Core failed-image settlement uses the internal `appendSessionTranscriptNote`
+operation, which accepts a custom message and returns a promise for its persisted `messageId`, canonical
+`message`, the append owner's `appended` result, and a `currentTail` fact from the same snapshot.
+The tail fact uses the transaction's visible leaf and generation: side metadata does not suppress a retry's publication, while a later visible entry does.
+File-backed notes use the same canonical agent worker and writer queue, reserving their turn
+before asynchronous target preparation. The embedded runner awaits its failed-image note before publishing that stored message in live context or the
+completed result when the owner appended it or confirms it is still the current tail after a lost reply. An idempotent historical result does not reintroduce a note omitted by compaction. Input and target capture precede awaited work; transaction and
+publication checks retain the original writer and session binding. A known
+commit followed by a publication failure retains its message ID and prevents
+model fallback from replaying the append. Incognito notes use the same canonical
+append snapshot under their existing process-held native write owner until its
+actor cutover; this path still performs caller-thread SQLite work. It leaves the
+manager's loaded view unchanged and applies the same fresh-append/current-tail
+publication rules. Detached notes continue through their in-memory manager owner.
+Canonical storage close revokes pending asynchronous notes and joins their target
+preparation, accepted work, and cleanup before releasing the store.
+Failed-image notes use the existing message idempotency key to survive redaction
+and same-run retries. Existing unkeyed notes retain their run-metadata matching.
+
 `SessionManager.open`, `openBounded`, and `setSessionTarget` capture `storePath`
 as an absolute lexical locator before reading the transcript or invoking
 `onTruncated`. Relative locators resolve against the process working directory
 at entry; `getSessionTarget()` returns that captured locator. Later working
-directory changes leave the manager bound to its original store. Existing
-`sessions.json` and custom-store routing and symlink spelling are preserved.
+directory changes leave the manager bound to its original store. The binding also
+captures the resolved state directory and supervisor mode; environment changes
+cannot redirect later writes. Existing `sessions.json` and custom-store routing
+and symlink spelling are preserved.
 
 File-backed model and thinking transcript writes execute through the canonical
 agent database worker. Queued extension actions retain their original runtime
-and session authority through transaction and commit admission. Session opening,
-final model-context validation, and incognito transcript persistence still use
+and session authority through transaction and commit admission. Synchronous session
+opening, final model-context validation, and incognito transcript persistence still use
 their native owners; an asynchronous method does not imply that every storage
 operation in the enclosing session flow runs off-thread.
 
@@ -409,6 +450,13 @@ commit grant orders the commit before later revocation; an earlier refusal rolls
 back. Callers must preserve committed or unknown outcomes and never replay them.
 Private file owners can use `runSqliteWorkerStoreWrite` with their own admission
 and lifetime; it does not supply the shared agent queue or lease.
+
+`runSqliteWorkerStoreOperation(store, operation, undefined, assertCurrent)` retains
+one existing worker actor and checks the supplied authority through broker
+admission. Use it when a private store has prepared a command asynchronously;
+checking only before worker opening leaves pending work authorized by an old
+snapshot. This operation helper preserves accepted native settlement and does
+not add a transaction/commit handshake to backends that do not implement one.
 
 Worker backends can load module prerequisites asynchronously in `prepare(command)`.
 Preparation carries captured state/runtime facts and performs no native work.

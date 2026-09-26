@@ -12,14 +12,23 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   deleteCurrentConversationBindingRecordsBySession,
   inspectCurrentConversationBindingRecordAsync,
+  readCurrentConversationBindingSelectionAsync,
   resolveCurrentConversationBindingRecordAsync,
   touchCurrentConversationBindingRecordAsync,
   listCurrentConversationBindingRecordsBySession,
+  listCurrentConversationBindingRecordsBySessionAsync,
   resolveCurrentConversationBindingRecord,
   inspectCurrentConversationBindingRecord,
   updateCurrentConversationBindingRecord,
 } from "./current-conversation-bindings.js";
 import type { CurrentConversationBindingTouch } from "./current-conversation-bindings.worker-contract.js";
+import { SessionBindingError } from "./session-binding-errors.js";
+import {
+  nativeSessionBindingSelection,
+  nativeSessionBindingListBySession,
+  type NativeSessionBindingListing,
+  type NativeSessionBindingSelection,
+} from "./session-binding-native-selection.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import {
   isSessionBindingAdapterCurrent,
@@ -238,7 +247,11 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       state.managersByAccountId.get(accountId) !== manager ||
       !isSessionBindingAdapterCurrent(sessionBindingAdapter)
     ) {
-      throw new Error("Account conversation binding manager is no longer active");
+      throw new SessionBindingError(
+        "BINDING_ADAPTER_UNAVAILABLE",
+        "Account conversation binding manager is no longer active",
+        { channel: params.channel, accountId },
+      );
     }
   };
   const matchesAccount = (ref: ConversationRef) => {
@@ -314,11 +327,26 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     },
   };
 
-  const sessionBindingAdapter: SessionBindingAdapter = {
+  const sessionBindingAdapter: SessionBindingAdapter &
+    NativeSessionBindingSelection &
+    NativeSessionBindingListing = {
     channel: params.channel,
     accountId,
     capabilities: {
       placements: ["current"],
+    },
+    [nativeSessionBindingSelection]: async (refs) => {
+      const conversations = refs.map((ref) =>
+        matchesAccount(ref) ? conversationRef(ref.conversationId) : null,
+      );
+      assertCurrent();
+      const records = await readCurrentConversationBindingSelectionAsync(
+        conversations.filter((ref) => ref !== null),
+        assertCurrent,
+      );
+      assertCurrent();
+      let index = 0;
+      return conversations.map((ref) => (ref ? (records[index++] ?? null) : null));
     },
     bind: async (input) => {
       if (input.conversation.channel !== params.channel || input.placement === "child") {
@@ -333,6 +361,12 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     },
     listBySession: (targetSessionKey) =>
       listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope),
+    [nativeSessionBindingListBySession]: (targetSessionKey) =>
+      listCurrentConversationBindingRecordsBySessionAsync(
+        targetSessionKey,
+        accountScope,
+        assertCurrent,
+      ),
     resolveByConversation: (ref) => {
       if (ref.channel !== params.channel) {
         return null;

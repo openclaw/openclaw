@@ -24,6 +24,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
+  "inheritedGitContributorProfileIds",
   "profileInvolvement",
   "cliHistoryBoundary",
   "publicShare",

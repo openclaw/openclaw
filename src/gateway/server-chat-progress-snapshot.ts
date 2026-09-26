@@ -60,6 +60,7 @@ export function updateChatRunProgressSnapshot(
   const isStartupStatus =
     event.stream === "run_status" &&
     [
+      "waiting_for_state",
       "preparing_workspace",
       "naming_worktree",
       "creating_worktree",

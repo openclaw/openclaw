@@ -20,6 +20,8 @@ The tool registers only when OpenClaw can resolve a PDF-capable model for the ag
 
 Every fallback candidate is auth-checked before use, so a configured `provider/model` only counts if OpenClaw can authenticate that provider for the agent. If no usable model resolves, the `pdf` tool is not exposed.
 
+PDF analysis uses the selected model's configured provider credentials or connected account. It does not require a separate PDF API key.
+
 ## Input reference
 
 <ParamField path="pdf" type="string">
@@ -53,7 +55,7 @@ Per-PDF size cap in MB. Defaults to `agents.defaults.pdfMaxMb`, or `10` if unset
 Notes:
 
 - `pdf` and `pdfs` are merged and deduplicated before loading; at least one is required.
-- `pages` is parsed as 1-based page numbers, deduped, sorted, and clamped to `agents.defaults.pdfMaxPages` (default `20`). A range that matches no in-bounds pages errors before the model call.
+- `pages` is parsed as 1-based page numbers, deduped, and sorted. `agents.defaults.pdfMaxPages` (default `20`) limits the number of selected pages, not their page numbers; if a larger selection is shortened, both the PDF model and the calling model receive a partial-document notice.
 
 ## Supported PDF references
 
@@ -97,6 +99,7 @@ Details:
 - If the model has no image input and there is no extractable text, the tool errors.
 - If image rendering fails, OpenClaw drops the images and continues with the extracted text.
 - If the target model is text-only and extraction produced images, OpenClaw drops the images and sends text only.
+- If page, text, or image limits make extraction partial, OpenClaw includes a short partial-document notice in the analysis context and tool result.
 
 ## Config
 

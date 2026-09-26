@@ -7,7 +7,6 @@ import {
   resetPluginRuntimeStateForTest,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import type { summarizeInStages } from "../compaction.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
@@ -186,14 +185,20 @@ async function runCompactionScenario(params: {
 
 describe("compaction semantic observer wiring", () => {
   it("joins both Decision requests before propagating caller cancellation", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.useFakeTimers();
     const controller = new AbortController();
     const abortError = new Error("cancel asymmetric semantic observation");
     let started = 0;
-    const bothRequestsStarted = createDeferredCore();
-    const slowRequest = createDeferredCore();
+    const startedBarrier = Promise.withResolvers<void>();
+    let releaseSlowRequest: (() => void) | undefined;
+    const slowRequest = new Promise<void>((resolve) => {
+      releaseSlowRequest = resolve;
+    });
     const { config, builder } = installDecisionFixture("preserved", async (_batch, context) => {
       started += 1;
+      if (started === 2) {
+        startedBarrier.resolve();
+      }
       if (started === 1) {
         await new Promise<never>((_resolve, reject) => {
           context.signal.addEventListener(
@@ -209,8 +214,7 @@ describe("compaction semantic observer wiring", () => {
           );
         });
       }
-      bothRequestsStarted.resolve();
-      await slowRequest.promise;
+      await slowRequest;
     });
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue("The report remains pending.");
@@ -239,18 +243,20 @@ describe("compaction semantic observer wiring", () => {
       (error: unknown) => ({ status: "rejected" as const, error }),
     );
 
-    const completed = vi.fn();
-    void completion.then(completed);
+    let settled = false;
+    void completion.then(() => {
+      settled = true;
+    });
     try {
-      await bothRequestsStarted.promise;
-      expect(started).toBe(2);
+      await startedBarrier.promise;
       controller.abort(abortError);
-      // Drain the abort's promise reactions without waiting on wall-clock scheduling.
+      // Flush all queued promise reactions without racing a wall-clock timer.
       await vi.advanceTimersByTimeAsync(0);
-      expect(completed).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
       expect(builder.registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(1);
     } finally {
-      slowRequest.resolve();
+      // Failed settlement assertions must still let provider disposal finish.
+      releaseSlowRequest?.();
       await completion;
     }
     await expect(completion).resolves.toEqual({ status: "rejected", error: abortError });

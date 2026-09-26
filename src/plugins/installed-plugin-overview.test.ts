@@ -21,13 +21,26 @@ it("reads the full installed README and package presentation without relying on 
   );
   expect(
     withPluginCache(createPluginCache(), () =>
-      readInstalledPluginOverview({ rootDir, origin: "global" }),
+      readInstalledPluginOverview({
+        rootDir,
+        origin: "global",
+        providers: ["local-model"],
+        channels: ["local-channel"],
+        contracts: { speechProviders: ["local-speech"] },
+        uiCapabilities: ["link-reader"],
+      }),
     ),
   ).toEqual({
     readme,
     repositoryUrl: "git+https://github.com/Acme/demo.git",
     documentationUrl: "https://example.org/docs",
     publisherName: "Acme",
+    capabilities: {
+      providers: ["local-model"],
+      channels: ["local-channel"],
+      contracts: { speechProviders: ["local-speech"] },
+      ui: ["link-reader"],
+    },
   });
 });
 
@@ -47,7 +60,7 @@ it.each(["symlink", "hardlink", "oversize"])(
     }
     expect(
       withPluginCache(createPluginCache(), () =>
-        readInstalledPluginOverview({ rootDir, origin: "global" }),
+        readInstalledPluginOverview({ rootDir, origin: "global", providers: [], channels: [] }),
       )?.readme,
     ).toBeUndefined();
   },

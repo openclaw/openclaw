@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import {
+  matchesAgentHarnessTaskAssignment,
+  type AgentHarnessTaskRecord,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   asFiniteNumber,
   normalizeOptionalString,
@@ -24,7 +27,10 @@ import type {
 } from "./native-subagent-monitor-types.js";
 import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
 import {
+  normalizeIdentifier,
   readNativeTaskAssignment,
+  readThreadParentThreadId,
+  readThreadSpawnSource,
   type NativeSubagentAssignment,
 } from "./native-subagent-task-ids.js";
 import type { JsonObject } from "./protocol.js";
@@ -253,10 +259,10 @@ export class CodexNativeSubagentHistoryRecovery {
     if (
       tasks.length !== 1 ||
       !task ||
-      task.taskId !== candidate.taskId ||
+      !matchesAgentHarnessTaskAssignment(task, candidate.expectedTask) ||
       !this.acceptsTask(task, candidate.parentState) ||
       !this.shouldReconcileTask(task, now) ||
-      (child?.completionTaskId && child.completionTaskId !== candidate.taskId)
+      (child?.expectedTask && !matchesAgentHarnessTaskAssignment(task, child.expectedTask))
     ) {
       return undefined;
     }
@@ -287,8 +293,8 @@ export class CodexNativeSubagentHistoryRecovery {
     if (
       currentTasks.length !== 1 ||
       !current ||
-      current.taskId !== candidate.taskId ||
-      task.taskId !== candidate.taskId
+      !matchesAgentHarnessTaskAssignment(current, candidate.expectedTask) ||
+      !matchesAgentHarnessTaskAssignment(task, candidate.expectedTask)
     ) {
       return false;
     }
@@ -712,21 +718,4 @@ export function isNoFinalCompletion(completion: CodexNativeSubagentCompletion): 
     completion.status === "succeeded" &&
     completion.statusLabel === "completed_without_final_message"
   );
-}
-
-export function readThreadParentThreadId(thread: JsonObject | undefined): string | undefined {
-  return (
-    readString(thread, "parentThreadId")?.trim() ??
-    readString(readThreadSpawnSource(thread), "parent_thread_id")?.trim()
-  );
-}
-
-export function readThreadSpawnSource(thread: JsonObject | undefined): JsonObject | undefined {
-  const source = isJsonObject(thread?.source) ? thread.source : undefined;
-  const subAgent = isJsonObject(source?.subAgent) ? source.subAgent : undefined;
-  return isJsonObject(subAgent?.thread_spawn) ? subAgent.thread_spawn : undefined;
-}
-
-export function normalizeIdentifier(value: string | undefined): string | undefined {
-  return value?.replace(/[^a-z0-9]/giu, "").toLowerCase();
 }

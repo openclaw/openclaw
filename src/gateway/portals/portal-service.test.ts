@@ -47,6 +47,70 @@ function reportTargetPortCollision(server: Server, targetPort: number): void {
 }
 
 describe("portal open authority fence", () => {
+  it("disconnects an already-streaming response when its scoped resource owner retires", async () => {
+    await withServer(
+      (_req, res) => {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write("data: live\n\n");
+      },
+      async (targetUrl) => {
+        const { service } = makeService(["127.0.0.1"]);
+        const owner = new AbortController();
+        const portal = await service.open({
+          targetPort: Number(new URL(targetUrl).port),
+          ownerSignal: owner.signal,
+        });
+        const response = await fetch(portal.url);
+        const reader = response.body!.getReader();
+        expect((await reader.read()).done).toBe(false);
+        owner.abort();
+        await expect(reader.read()).rejects.toThrow();
+        expect(service.list()).toEqual([]);
+      },
+    );
+  });
+
+  it("keeps published resources independent of completed requests and retires them with their resource owner", async () => {
+    const { service } = makeService(["127.0.0.1"]);
+    const owner = new AbortController();
+    let requestCurrent = true;
+    const release = vi.fn();
+    const portal = await service.open({
+      targetPort: 3000,
+      ownerSignal: owner.signal,
+      assertCurrent: () => {
+        if (!requestCurrent) {
+          throw new Error("request completed");
+        }
+      },
+      onClose: release,
+    });
+    requestCurrent = false;
+    expect(service.list()).toEqual([portal]);
+    expect(await getStatus("127.0.0.1", portal.listenPort, "/")).toBe(401);
+    owner.abort();
+    expect(service.list()).toEqual([]);
+    await service.closeAll();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("does not publish a listener whose resource owner retires during startup", async () => {
+    const owner = new AbortController();
+    const actualListen = httpListen.listenGatewayHttpServer;
+    vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
+      await actualListen(params);
+      owner.abort(new Error("session reset"));
+    });
+    const { service, httpServers } = makeService(["127.0.0.1"]);
+    const release = vi.fn();
+    await expect(
+      service.open({ targetPort: 3000, ownerSignal: owner.signal, onClose: release }),
+    ).rejects.toThrow("session reset");
+    expect(service.list()).toEqual([]);
+    expect(httpServers).toEqual([]);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("refuses to mutate a reused portal when the caller's authority lapsed", async () => {
     const { service } = makeService(["127.0.0.1"]);
     const first = await service.open({ targetPort: 41234, title: "Live" });

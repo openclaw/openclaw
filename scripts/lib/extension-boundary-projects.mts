@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
 import {
   isTypeScriptPackageEntry,
   listBuiltRuntimeEntryCandidates,
@@ -9,6 +8,7 @@ import { collectFilesSync } from "../check-file-utils.ts";
 import { portableRelativePath } from "./build-artifact-cache.mts";
 import { collectBundledPluginBuildEntries } from "./bundled-plugin-build-entries.mjs";
 import { BOUNDARY_CACHE_ROOT } from "./extension-boundary-inputs.mts";
+import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
 import { isRecord } from "./record-shared.mjs";
 
 function exportTargets(value: unknown): string[] {
@@ -41,19 +41,10 @@ export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: 
       matches.add(source);
       candidates.set(key, matches);
     };
-    const parsed = ts.getParsedCommandLineOfConfigFile(
-      path.join(pluginRoot, "tsconfig.json"),
-      {},
-      {
-        ...ts.sys,
-        onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
-          throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
-        },
-      },
-    );
-    if (!parsed || parsed.errors.length) {
-      throw new Error(`Invalid extension boundary config: ${extensionId}`);
-    }
+    const parsed = readNativeTypeScriptConfig({
+      cwd: rootDir,
+      configFileName: path.join(pluginRoot, "tsconfig.json"),
+    });
     const declarations = parsed.fileNames.filter((source) => /\.d\.[cm]?ts$/u.test(source));
     for (const source of sources) {
       const relative = portableRelativePath(pluginRoot, source);

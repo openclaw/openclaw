@@ -10,7 +10,9 @@ describe("rejectWebSocketUpgrade", () => {
   it.each([
     [401, "Unauthorized"],
     [426, "Upgrade Required"],
+    [502, "Bad Gateway"],
     [503, "Service Unavailable"],
+    [504, "Gateway Timeout"],
   ] as const)("writes exact HTTP %s bytes with and without a body", async (status, reason) => {
     for (const body of [undefined, { contentType: "text/plain; charset=utf-8", text: "é" }]) {
       const chunks: Buffer[] = [];

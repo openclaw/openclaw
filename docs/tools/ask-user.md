@@ -47,6 +47,13 @@ Questions from a standalone [attached MCP client](/cli/attach) do not carry an
 OpenClaw run's creator binding. Answer those using the question controls in the
 Control UI, TUI, or native app, not an ordinary channel message.
 
+Guests with `operator.sessions.write` can answer ordinary questions from their
+own authorized agent run in a session they created. The Control UI restores
+those pending questions after reconnecting. Access to another person's session
+does not expose their questions or make them answerable. Secret, administrative,
+and sessionless questions keep their existing privileged access requirements.
+Answering a question does not grant the agent additional permissions.
+
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
@@ -173,3 +180,9 @@ The model-facing contract tells the agent to:
 
 The agent should not use `ask_user` to ask whether it may proceed or to confirm
 its own plan.
+
+## Related
+
+- [Secrets](/tools/secrets) — the credential-safe path when the answer is a secret
+- [Control UI](/web/control-ui) — where the docked answer panel appears
+- [Tools overview](/tools) — the rest of the built-in tool surface

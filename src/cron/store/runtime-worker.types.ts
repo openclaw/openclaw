@@ -1,4 +1,6 @@
 import type { CronFailureNotificationDelivery } from "../types.js";
+import type { CronJobFamilyIdentity } from "./row-codec.js";
+import type { CronRunReceiptHandle, CronRunReceiptStatus } from "./run-receipt.types.js";
 import type { CronRunRecoveryProposal } from "./run-recovery-read.types.js";
 
 export type CronScheduleMaintenanceOptions = {
@@ -9,7 +11,36 @@ export type CronScheduleMaintenanceOptions = {
   skipScheduleErrorHandling?: boolean;
 };
 
+export type CronReceiptTerminal = {
+  handle: CronRunReceiptHandle;
+  status: Exclude<CronRunReceiptStatus, "running">;
+  finishedAtMs: number;
+  error?: string;
+};
+
 export type CronRuntimeMutationInputs = {
+  "cron.activateRun": {
+    storeKey: string;
+    handle: CronRunReceiptHandle;
+    startedAtMs: number;
+    onExitSchedule?: { kind: "on-exit"; command: string; cwd?: string };
+  };
+  "cron.releaseReservations": {
+    storeKey: string;
+    jobIds: string[];
+    restoreLastError: boolean;
+    recompute: boolean;
+    terminal?: CronReceiptTerminal;
+    requireCurrentReceipt?: boolean;
+  };
+  "cron.finishReceipt": {
+    storeKey: string;
+    terminal: CronReceiptTerminal;
+  };
+  "cron.removeStaleFamily": {
+    storeKey: string;
+    family: CronJobFamilyIdentity;
+  };
   "cron.repairRun": {
     storeKey: string;
     proposal: CronRunRecoveryProposal;

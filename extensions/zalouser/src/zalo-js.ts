@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-// Zalouser plugin module implements zalo js behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   asDateTimestampMs,
@@ -19,18 +18,21 @@ import {
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  ZaloCredentialPersistence,
+  snapshotApiCredentials,
+  type ZaloCredentialPayload,
+} from "./credential-persistence.js";
+import { buildZaloNameIndex } from "./directory-index.js";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import { sendZaloTextWithApi } from "./send-api.js";
 import { withZaloSendContext } from "./send-context.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import {
-  clearStoredZaloCredentials,
+  captureZalouserCredentialsEnv,
   loadStoredZaloCredentials,
-  loadStoredZaloCredentialsAsync,
   normalizeZalouserCredentialProfile as normalizeProfile,
   refreshStoredZaloCredentials,
-  saveStoredZaloCredentials,
-  type StoredZaloCredentials,
 } from "./session-state.js";
 import type {
   ZaloAuthStatus,
@@ -47,7 +49,6 @@ import type {
 } from "./types.js";
 import {
   type API,
-  type Credentials,
   type GroupInfo,
   type LoginQRCallbackEvent,
   type Message,
@@ -71,18 +72,19 @@ const MAX_SAFE_ZALO_TIMESTAMP_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
 
 const apiByProfile = new Map<string, API>();
 const apiInitByProfile = new Map<string, Promise<API>>();
-const credentialSignaturesByProfile = new Map<string, string>();
-const credentialRefreshesByProfile = new Map<string, Promise<void>>();
+const credentials = new ZaloCredentialPersistence(
+  (profile, api) => apiByProfile.get(profile) === api,
+);
 
 type CredentialPersistenceMode = "persist" | "read-only";
 type CredentialPersistenceOptions = { credentialPersistence?: CredentialPersistenceMode };
-type ZaloCredentialPayload = Omit<StoredZaloCredentials, "profile" | "createdAt" | "lastUsedAt">;
 
 type ActiveZaloQrLogin = {
   id: string;
   profile: string;
   startedAt: number;
   beforeCredentialPersistence?: () => Promise<void>;
+  assertCredentialPersistenceCurrent?: () => void;
   qrDataUrl?: string;
   connected: boolean;
   error?: string;
@@ -371,170 +373,17 @@ function mapGroup(groupId: string, group: GroupInfo & Record<string, unknown>): 
   };
 }
 
-function readCredentials(profile: string): StoredZaloCredentials | null {
-  try {
-    const credentials = loadStoredZaloCredentials(profile);
-    if (!credentials) {
-      return null;
-    }
-    credentialSignaturesByProfile.set(profile, credentialSignature(credentials));
-    return credentials;
-  } catch {
-    return null;
-  }
-}
-
-function credentialSignature(credentials: ZaloCredentialPayload): string {
-  return JSON.stringify({
-    imei: credentials.imei,
-    cookie: canonicalCredentialCookie(credentials.cookie),
-    userAgent: credentials.userAgent,
-    language: credentials.language,
-  });
-}
-
-function stableCanonicalValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableCanonicalValue);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, stableCanonicalValue(entry)]),
-  );
-}
-
-function stableSignatureValue(value: unknown): string {
-  return JSON.stringify(stableCanonicalValue(value)) ?? "undefined";
-}
-
-function canonicalCookieArray(value: unknown[]): unknown[] {
-  return value
-    .map(stableCanonicalValue)
-    .toSorted((left, right) =>
-      stableSignatureValue(left).localeCompare(stableSignatureValue(right)),
-    );
-}
-
-function canonicalCredentialCookie(cookie: Credentials["cookie"]): unknown {
-  if (Array.isArray(cookie)) {
-    return canonicalCookieArray(cookie);
-  }
-  if (!cookie || typeof cookie !== "object") {
-    return cookie;
-  }
-  return Object.fromEntries(
-    Object.entries(cookie as Record<string, unknown>)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [
-        key,
-        key === "cookies" && Array.isArray(entry)
-          ? canonicalCookieArray(entry)
-          : stableCanonicalValue(entry),
-      ]),
-  );
-}
-
-function writeCredentials(profile: string, credentials: ZaloCredentialPayload): void {
-  const existing = readCredentials(profile);
-  const now = new Date().toISOString();
-  const next: StoredZaloCredentials = {
-    profile,
-    ...credentials,
-    createdAt: existing?.createdAt ?? now,
-    lastUsedAt: now,
-  };
-  const { profile: _profile, ...stored } = next;
-  saveStoredZaloCredentials(profile, stored);
-  credentialSignaturesByProfile.set(profile, credentialSignature(next));
-}
-
-function snapshotApiCredentials(
-  api: API,
-  fallback?: Partial<ZaloCredentialPayload>,
-): ZaloCredentialPayload {
-  const ctx = api.getContext();
-  const cookieJson = api.getCookie().toJSON();
-  const refreshedCookies =
-    Array.isArray(cookieJson?.cookies) && cookieJson.cookies.length > 0
-      ? cookieJson.cookies
-      : fallback?.cookie;
-  const imei = normalizeOptionalString(ctx.imei) ?? normalizeOptionalString(fallback?.imei);
-  const userAgent =
-    normalizeOptionalString(ctx.userAgent) ?? normalizeOptionalString(fallback?.userAgent);
-  if (!imei || !refreshedCookies || !userAgent) {
-    throw new Error("Zalo API session did not expose refreshed credentials");
-  }
-  const language =
-    normalizeOptionalString(ctx.language) ?? normalizeOptionalString(fallback?.language);
-  return {
-    imei,
-    cookie: refreshedCookies as Credentials["cookie"],
-    userAgent,
-    ...(language ? { language } : {}),
-  };
-}
-
-function writeApiCredentials(
-  profile: string,
-  api: API,
-  fallback?: Partial<ZaloCredentialPayload>,
-): void {
-  writeCredentials(profile, snapshotApiCredentials(api, fallback));
-}
-
-async function persistApiCredentialsIfChanged(profile: string, api: API): Promise<void> {
-  const previous = credentialRefreshesByProfile.get(profile) ?? Promise.resolve();
-  const refresh = previous.then(async () => {
-    try {
-      const isCurrent = () => apiByProfile.get(profile) === api;
-      if (!isCurrent()) {
-        return;
-      }
-      const credentials = snapshotApiCredentials(api);
-      const signature = credentialSignature(credentials);
-      if (credentialSignaturesByProfile.get(profile) === signature) {
-        return;
-      }
-      if ((await refreshStoredZaloCredentials(profile, credentials, isCurrent)) && isCurrent()) {
-        credentialSignaturesByProfile.set(profile, signature);
-      }
-    } catch {
-      // Do not fail an already-successful Zalo operation only because the
-      // best-effort session refresh could not be persisted.
-    }
-  });
-  credentialRefreshesByProfile.set(profile, refresh);
-  try {
-    await refresh;
-  } finally {
-    if (credentialRefreshesByProfile.get(profile) === refresh) {
-      credentialRefreshesByProfile.delete(profile);
-    }
-  }
-}
-
-function clearCredentials(profile: string): boolean {
-  try {
-    if (clearStoredZaloCredentials(profile)) {
-      credentialSignaturesByProfile.delete(profile);
-      return true;
-    }
-  } catch {
-    // ignore
-  }
-  return false;
-}
-
 async function ensureApi(
   profileInput?: string | null,
   timeoutMs = API_LOGIN_TIMEOUT_MS,
   credentialPersistence: CredentialPersistenceMode = "persist",
 ): Promise<API> {
   const profile = normalizeProfile(profileInput);
+  const env = captureZalouserCredentialsEnv();
+  const pendingRevocation = credentials.pendingRevocation(profile);
+  if (pendingRevocation) {
+    await pendingRevocation;
+  }
   const cached = apiByProfile.get(profile);
   if (cached) {
     return cached;
@@ -547,7 +396,7 @@ async function ensureApi(
 
   const initPromise: Promise<API> = (async () => {
     const isCurrent = () => apiInitByProfile.get(profile) === initPromise;
-    const stored = await loadStoredZaloCredentialsAsync(profile).catch(() => null);
+    const stored = await loadStoredZaloCredentials(profile, env).catch(() => null);
     if (!stored || !isCurrent()) {
       throw new Error(`No saved Zalo session for profile "${profile}"`);
     }
@@ -571,12 +420,13 @@ async function ensureApi(
             profile,
             snapshotApiCredentials(api, stored),
             isCurrent,
+            env,
           )
         : stored;
     if (!isCurrent() || !persisted) {
       throw new Error(`Zalo session restore was superseded for profile "${profile}"`);
     }
-    credentialSignaturesByProfile.set(profile, credentialSignature(persisted));
+    credentials.rememberCredentials(profile, persisted);
     apiByProfile.set(profile, api);
     return api;
   })();
@@ -616,7 +466,7 @@ async function withZaloApi<T>(
     ? await withZaloSendContext(options.handoff, () => operation(api))
     : await operation(api);
   if (credentialPersistence === "persist" && (options.shouldPersist?.(result) ?? true)) {
-    await persistApiCredentialsIfChanged(profile, api);
+    await credentials.persistApiCredentialsIfChanged(profile, api);
   }
   return result;
 }
@@ -821,7 +671,7 @@ export async function checkZaloAuthenticated(
   options?: CredentialPersistenceOptions,
 ): Promise<boolean> {
   const profile = normalizeProfile(profileInput);
-  if (!(await loadStoredZaloCredentialsAsync(profile).catch(() => null))) {
+  if (!(await loadStoredZaloCredentials(profile).catch(() => null))) {
     return false;
   }
   try {
@@ -1238,6 +1088,7 @@ export async function startZaloQrLogin(params: {
   force?: boolean;
   timeoutMs?: number;
   beforeCredentialPersistence?: () => Promise<void>;
+  assertCredentialPersistenceCurrent?: () => void;
 }): Promise<{ qrDataUrl?: string; message: string }> {
   const profile = normalizeProfile(params.profile);
 
@@ -1249,15 +1100,18 @@ export async function startZaloQrLogin(params: {
     };
   }
 
+  params.assertCredentialPersistenceCurrent?.();
   if (params.force) {
-    await logoutZaloProfile(profile);
+    await logoutZaloProfile(profile, { assertCurrent: params.assertCredentialPersistenceCurrent });
   }
 
   let existing = activeQrLogins.get(profile);
   if (
     existing &&
-    params.beforeCredentialPersistence &&
-    existing.beforeCredentialPersistence !== params.beforeCredentialPersistence
+    ((params.beforeCredentialPersistence &&
+      existing.beforeCredentialPersistence !== params.beforeCredentialPersistence) ||
+      (params.assertCredentialPersistenceCurrent &&
+        existing.assertCredentialPersistenceCurrent !== params.assertCredentialPersistenceCurrent))
   ) {
     // A QR flow may outlive its setup turn. Never let a new setup owner adopt
     // another owner's pending login and bypass its persistence revalidation.
@@ -1282,6 +1136,9 @@ export async function startZaloQrLogin(params: {
       startedAt: Date.now(),
       ...(params.beforeCredentialPersistence
         ? { beforeCredentialPersistence: params.beforeCredentialPersistence }
+        : {}),
+      ...(params.assertCredentialPersistenceCurrent
+        ? { assertCredentialPersistenceCurrent: params.assertCredentialPersistenceCurrent }
         : {}),
       connected: false,
       waitPromise: Promise.resolve(),
@@ -1357,12 +1214,22 @@ export async function startZaloQrLogin(params: {
           };
         }
 
+        const assertCurrent = () => {
+          login.assertCredentialPersistenceCurrent?.();
+          if (activeQrLogins.get(profile)?.id !== login.id) {
+            throw new Error("Zalo QR login was superseded before credential persistence");
+          }
+        };
+        assertCurrent();
         await login.beforeCredentialPersistence?.();
-        const owned = activeQrLogins.get(profile);
-        if (!owned || owned.id !== login.id) {
-          return;
-        }
-        writeApiCredentials(profile, api, capturedCredentials ?? undefined);
+        assertCurrent();
+        await credentials.writeApiCredentials(
+          profile,
+          api,
+          assertCurrent,
+          capturedCredentials ?? undefined,
+        );
+        assertCurrent();
         invalidateApi(profile);
         apiByProfile.set(profile, api);
         current.connected = true;
@@ -1463,12 +1330,16 @@ export async function waitForZaloQrLogin(params: {
   };
 }
 
-export async function logoutZaloProfile(profileInput?: string | null): Promise<{
+export async function logoutZaloProfile(
+  profileInput?: string | null,
+  options?: { assertCurrent?: () => void },
+): Promise<{
   cleared: boolean;
   loggedOut: boolean;
   message: string;
 }> {
   const profile = normalizeProfile(profileInput);
+  options?.assertCurrent?.();
   resetQrLogin(profile);
   clearCachedGroupContext(profile);
 
@@ -1483,7 +1354,7 @@ export async function logoutZaloProfile(profileInput?: string | null): Promise<{
   }
 
   invalidateApi(profile);
-  const cleared = clearCredentials(profile);
+  const cleared = await credentials.clearCredentials(profile, options?.assertCurrent);
 
   return {
     cleared,
@@ -1597,16 +1468,7 @@ export async function resolveZaloGroupsByEntries(params: {
   const groups = await listZaloGroups(params.profile, {
     credentialPersistence: params.credentialPersistence ?? "persist",
   });
-  const byName = new Map<string, ZaloGroup[]>();
-  for (const group of groups) {
-    const key = normalizeOptionalLowercaseString(group.name);
-    if (!key) {
-      continue;
-    }
-    const list = byName.get(key) ?? [];
-    list.push(group);
-    byName.set(key, list);
-  }
+  const byName = buildZaloNameIndex(groups, (group) => group.name);
 
   return params.entries.map((input) => {
     const trimmed = input.trim();
@@ -1630,16 +1492,7 @@ export async function resolveZaloAllowFromEntries(params: {
   const friends = await listZaloFriends(params.profile, {
     credentialPersistence: params.credentialPersistence ?? "persist",
   });
-  const byName = new Map<string, ZcaFriend[]>();
-  for (const friend of friends) {
-    const key = normalizeOptionalLowercaseString(friend.displayName);
-    if (!key) {
-      continue;
-    }
-    const list = byName.get(key) ?? [];
-    list.push(friend);
-    byName.set(key, list);
-  }
+  const byName = buildZaloNameIndex(friends, (friend) => friend.displayName);
 
   return params.entries.map((input) => {
     const trimmed = input.trim();

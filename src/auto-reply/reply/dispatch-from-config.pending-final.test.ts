@@ -208,6 +208,7 @@ describe("pending final delivery restart proof", () => {
 
     await expect(
       retireTerminalRestartRecoverySourceClaim({
+        agentId: "main",
         sessionId: "session",
         sessionKey,
         sourceTurnId: "source-1",

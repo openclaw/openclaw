@@ -1,7 +1,6 @@
 // Discord tests cover client plugin behavior.
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
 import { Command, type CommandOptions, type DiscordCommand } from "./commands.js";
@@ -89,57 +88,6 @@ describe("ComponentRegistry", () => {
     expect(registry.resolve("encoded:payload=two", { componentType: ComponentType.Button })).toBe(
       button,
     );
-  });
-
-  it("preserves each message owner when replacing a one-off component wait", async () => {
-    const registry = new ComponentRegistry<Button>();
-    const firstMessage = {
-      id: "message-1",
-      channelId: "channel-1",
-      owner: "first",
-    } as never;
-    const secondMessage = {
-      id: "message-1",
-      channelId: "channel-1",
-      owner: "second",
-    } as never;
-
-    const first = registry.waitForMessageComponent(firstMessage, 5_000);
-    const second = registry.waitForMessageComponent(secondMessage, 5_000);
-    const firstResult = await first;
-    const resolved = registry.resolveOneOffComponent({
-      channelId: "channel-1",
-      customId: "choice:one",
-      messageId: "message-1",
-      values: ["one"],
-    });
-    const secondResult = await second;
-
-    expect(firstResult).toMatchObject({
-      success: false,
-      reason: "timed out",
-    });
-    expect(firstResult.message).toBe(firstMessage);
-    expect(resolved).toBe(true);
-    expect(secondResult).toMatchObject({
-      success: true,
-      customId: "choice:one",
-      values: ["one"],
-    });
-    expect(secondResult.message).toBe(secondMessage);
-  });
-
-  it("caps oversized one-off component wait timers", () => {
-    vi.useFakeTimers();
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const registry = new ComponentRegistry<Button>();
-
-    void registry.waitForMessageComponent(
-      { id: "message-1", channelId: "channel-1" } as never,
-      Number.MAX_SAFE_INTEGER,
-    );
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 });
 
@@ -506,9 +454,7 @@ describe("Client gateway event queue", () => {
   }): Client {
     return new Client(
       {
-        baseUrl: "http://localhost",
         clientId: "app1",
-        publicKey: "public",
         token: "token",
         eventQueue: params.eventQueue,
       },

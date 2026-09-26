@@ -37,8 +37,20 @@ export function createSessionRowProjectionCatalog(params: {
   let modelCatalog = params.modelCatalog;
   let catalogDirty = params.getModelCatalog ? Symbol("catalog") : undefined;
   let pending: Promise<void> | undefined;
+  let replacement: Promise<void> | undefined;
   let disposed = false;
   const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
+    if (event.phase === "invalidated" && event.replacement) {
+      const replacing = (replacement = event.replacement);
+      const settled = () => {
+        if (!disposed && replacement === replacing) {
+          replacement = undefined;
+          params.onInvalidated();
+        }
+      };
+      // Scoped auth invalidations need not publish globally; only the owner gate can pause reads.
+      void replacing.then(settled, settled).catch(() => {});
+    }
     // An incomplete catalog read still needs the next publication to recover its rows.
     if (
       event.phase !== "failed" &&
@@ -66,7 +78,7 @@ export function createSessionRowProjectionCatalog(params: {
       }
     },
     refresh() {
-      if (disposed || !catalogDirty) {
+      if (disposed || !catalogDirty || (replacement && modelCatalog !== undefined)) {
         return Promise.resolve();
       }
       if (pending) {

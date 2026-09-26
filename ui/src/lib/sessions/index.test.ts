@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 // @vitest-environment node
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -31,6 +31,8 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
     },
   };
 }
+
+afterEach(() => vi.useRealTimers());
 
 describe("createSessionCapability", () => {
   it("shares confirmed archive visibility after Gateway events", async () => {
@@ -901,6 +903,7 @@ describe("createSessionCapability", () => {
   });
 
   it("refreshes instead of inserting hidden sessions after configured-only lists", async () => {
+    vi.useFakeTimers();
     const visibleKey = "agent:main:main";
     const hiddenKey = "agent:local:hidden";
     const refreshed = createDeferred<SessionsListResult>();
@@ -939,15 +942,18 @@ describe("createSessionCapability", () => {
 
     emitEvent(sessionChangedEvent(hiddenKey));
 
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
     expect(publishedKeys.some((keys) => keys.includes(hiddenKey))).toBe(false);
     refreshed.resolve(sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 2));
-    await waitForFast(() => expect(sessions.state.loading).toBe(false));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sessions.state.loading).toBe(false);
     sessions.dispose();
   });
 
   it("publishes remote deletion before refreshing the canonical list", async () => {
+    vi.useFakeTimers();
     const visibleKey = "agent:main:main";
     const refreshed = createDeferred<SessionsListResult>();
     let listCalls = 0;
@@ -978,14 +984,17 @@ describe("createSessionCapability", () => {
       payload: { sessionKey: visibleKey, sessionId: "deleted-generation", reason: "delete" },
     });
 
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(deletedSnapshots.some((keys) => keys.includes(visibleKey))).toBe(true);
     refreshed.resolve(sessionsResult([], 2));
-    await waitForFast(() => expect(sessions.state.loading).toBe(false));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sessions.state.loading).toBe(false);
     sessions.dispose();
   });
 
   it("refreshes broad lists when the client omits the server-side window limit", async () => {
+    vi.useFakeTimers();
     const visibleKey = "agent:main:main";
     const hiddenKey = "agent:local:hidden";
     const request = vi.fn(async (method: string, _params?: unknown) => {
@@ -1011,12 +1020,14 @@ describe("createSessionCapability", () => {
 
     emitEvent(sessionChangedEvent(hiddenKey));
 
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(sessions.state.result?.sessions.map((row) => row.key)).not.toContain(hiddenKey);
     sessions.dispose();
   });
 
   it("refreshes stale active rows after a terminal session message", async () => {
+    vi.useFakeTimers();
     const key = "agent:main:main";
     const request = vi
       .fn()
@@ -1057,13 +1068,12 @@ describe("createSessionCapability", () => {
       payload: { sessionKey: key, updatedAt: 1, status: "done" },
     });
 
-    await waitForFast(() =>
-      expect(sessions.state.result?.sessions[0]).toMatchObject({
-        key,
-        hasActiveRun: false,
-        status: "done",
-      }),
-    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      key,
+      hasActiveRun: false,
+      status: "done",
+    });
     expect(request).toHaveBeenCalledTimes(2);
     sessions.dispose();
   });

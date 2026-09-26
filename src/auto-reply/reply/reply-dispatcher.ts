@@ -46,6 +46,7 @@ import {
   shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
+import { invokeReplyDispatcherObserver } from "./reply-dispatcher-observers.js";
 import {
   mapReplyDispatchCounts,
   type ReplyDispatchBeforeDeliver,
@@ -281,9 +282,7 @@ export function createReplyDispatcher(
       return;
     }
     idleNotified = true;
-    try {
-      void Promise.resolve(options.onIdle?.()).catch(ignoreResult);
-    } catch {}
+    invokeReplyDispatcherObserver(() => options.onIdle?.());
   };
   const scheduleDelivery = <T>(run: () => Promise<T>): Promise<T> => {
     idleNotified = false;
@@ -293,8 +292,6 @@ export function createReplyDispatcher(
     void drained.then(() => drained === sendChain && pendingFinalizations > 0 && notifyIdle());
     return delivery;
   };
-  const enqueueSettlement = (settle: () => Promise<void>) =>
-    (settlementChain = settlementChain.then(settle));
   const waitForIdle = async () => {
     let sent: Promise<void>;
     let settled: Promise<void>;
@@ -320,7 +317,7 @@ export function createReplyDispatcher(
   const unregister = registerDispatcher(() => pending);
 
   const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
-    void Promise.resolve(options.onError?.(err, info)).catch(() => undefined);
+    invokeReplyDispatcherObserver(() => options.onError?.(err, info));
   };
 
   const normalizeForDispatch = (
@@ -578,7 +575,7 @@ export function createReplyDispatcher(
       kind,
     );
     const delivery = startSerializedDelivery(normalizedInput, dispatchInfo, shouldDelay);
-    void enqueueSettlement(async () => {
+    settlementChain = settlementChain.then(async () => {
       let attempt: Awaited<typeof delivery> | undefined;
       try {
         attempt = await delivery;
@@ -607,7 +604,11 @@ export function createReplyDispatcher(
           deliveryOutcomeTracker.resolve(deliveryOutcome);
         }
         try {
-          options.onDeliverySettled?.(dispatchInfo);
+          if (options.onDeliverySettled) {
+            void Promise.resolve(options.onDeliverySettled(dispatchInfo)).catch((err: unknown) => {
+              reportObserverError(err, dispatchInfo);
+            });
+          }
         } catch (err: unknown) {
           reportObserverError(err, dispatchInfo);
         }

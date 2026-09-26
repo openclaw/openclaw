@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { planMacNodeWorkerClosure } from "../../scripts/prune-mac-node-worker.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -26,6 +27,7 @@ function fixture(): string {
         "@openclaw/ai": "1.0.0",
         alpha: "1.0.0",
         "partial-json": "1.0.0",
+        undici: "1.0.0",
       },
       optionalDependencies: { "sqlite-vec": "1.0.0" },
     }),
@@ -33,7 +35,7 @@ function fixture(): string {
   write(
     root,
     "dist/mac-node-worker.js",
-    'import "./worker-shared.mjs"; import "@openclaw/ai"; import "alpha/subpath";',
+    'import "./worker-shared.mjs"; import "@openclaw/ai"; import "alpha/subpath"; import "path";',
   );
   write(
     root,
@@ -62,7 +64,11 @@ function fixture(): string {
   write(root, "dist/infra/git-operation.worker.js", 'import "./git-worker-shared.mjs";');
   write(root, "dist/infra/git-worker-shared.mjs", "export const gitWorker = true;");
   write(root, "node_modules/@openclaw/ai/package.json", '{"name":"@openclaw/ai"}');
-  write(root, "node_modules/@openclaw/ai/dist/runtime.js", 'import "partial-json";');
+  write(
+    root,
+    "node_modules/@openclaw/ai/dist/runtime.js",
+    'import "partial-json"; import "undici"; import "fs";',
+  );
   for (const [id, registration] of [
     ["browser", "export default { nodeHostCommands: [] };"],
     ["file-transfer", "api.registerNodeHostCommand({});"],
@@ -81,6 +87,8 @@ function fixture(): string {
   }
   write(root, "dist/extensions/unrelated/package.json", '{"name":"unrelated"}');
   write(root, "dist/extensions/unrelated/index.js", "export default {};");
+  write(root, "dist/extensions/browser/setup-entry.js", 'import "./setup-runtime.js";');
+  write(root, "dist/extensions/browser/setup-runtime.js", "export const setup = true;");
   write(root, "skills/system/SKILL.md", "# System");
   write(root, "dist/entry.js", "throw new Error('complete CLI');");
   write(root, "dist/control-ui/index.html", "unused");
@@ -90,12 +98,13 @@ function fixture(): string {
 
 describe("Mac node worker closure", () => {
   it("retains worker, plugin SDK, bundled node plugins, and skills only", () => {
-    const plan = planMacNodeWorkerClosure(fixture());
+    const plan = planMacNodeWorkerClosure(fixture(), resolveTestNodeExecPath());
     expect(plan.dependencies).toEqual([
       "@openclaw/ai",
       "alpha",
       "partial-json",
       "sqlite-vec",
+      "undici",
       "ws",
     ]);
     expect(plan.files).toContain("dist/mac-node-worker.js");
@@ -103,6 +112,8 @@ describe("Mac node worker closure", () => {
     expect(plan.files).toContain("dist/plugin-sdk/demo.js");
     expect(plan.files).toContain("dist/sdk-shared.mjs");
     expect(plan.files).toContain("dist/extensions/browser/index.js");
+    expect(plan.files).toContain("dist/extensions/browser/setup-entry.js");
+    expect(plan.files).toContain("dist/extensions/browser/setup-runtime.js");
     expect(plan.files).toContain("dist/extensions/file-transfer/index.js");
     expect(plan.files).toContain("dist/extensions/cua-computer/index.js");
     expect(plan.files).toContain("dist/media/image-processor.worker.js");
@@ -125,6 +136,8 @@ describe("Mac node worker closure", () => {
   it("rejects a missing relative runtime edge", () => {
     const root = fixture();
     fs.writeFileSync(path.join(root, "dist/mac-node-worker.js"), 'import "./missing.mjs";');
-    expect(() => planMacNodeWorkerClosure(root)).toThrow("Mac worker closure seed is missing");
+    expect(() => planMacNodeWorkerClosure(root, resolveTestNodeExecPath())).toThrow(
+      "Mac worker closure seed is missing",
+    );
   });
 });

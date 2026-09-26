@@ -1,18 +1,23 @@
 // Exercises the automatic sender with real task/session stores and recording transport.
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { captureCommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
+import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { SessionWorkStartChangedError } from "../../config/sessions/lifecycle.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import * as transcriptReads from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
-import { drainMatrixReconnect } from "../../infra/outbound/deliver.queue-integration.test-support.js";
-import { loadPendingDeliveries } from "../../infra/outbound/delivery-queue.test-helpers.js";
+import { drainPendingDeliveriesCore } from "../../infra/outbound/delivery-queue-recovery.js";
+import { loadUnfinishedDeliveries as loadPendingDeliveries } from "../../infra/outbound/delivery-queue-storage.js";
+import { createRecoveryLog } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { createAgentHarnessTaskRuntime } from "../../plugin-sdk/agent-harness-task-runtime.js";
 import {
   initializeGlobalHookRunner,
@@ -20,19 +25,17 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  captureHarnessCompletionRecovery,
-  createHarnessCompletionSourceAssertion,
-} from "../../tasks/agent-harness-completion-recovery.js";
+import { captureHarnessCompletionRecovery } from "../../tasks/agent-harness-completion-recovery.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { getTaskById, markTaskTerminalById } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { bindCommandHarnessCompletionAssertion } from "../agent-command-restart-recovery.js";
 import { reconcileHarnessCompletionDelivery } from "../agent-harness-completion-delivery.js";
 import { resolveSourceReplyDelivery } from "../embedded-agent-runner/delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
+import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
 
 afterEach(() => {
@@ -47,12 +50,40 @@ describe("native completion final-send custody", () => {
     "adapter preparation",
     "queued retry",
     "queued after cleanup",
+    "restart onPlatformSendDispatch",
+    "restart assertDirectAdapterHandoff",
+    "source read onPlatformSendDispatch",
+    "source read assertDirectAdapterHandoff",
   ] as const) {
-    it.each(["unchanged", "cancelled", "failed"] as const)(
+    const restart = boundary.startsWith("restart");
+    const readFailure = boundary.startsWith("source read");
+    const handoff = restart || readFailure;
+    const authorizationOutcomes = readFailure
+      ? (["source-interleaved", "owner-bound-source-interleaved"] as const)
+      : restart
+        ? ([
+            "unchanged",
+            "source-interleaved",
+            "owner-bound-unchanged",
+            "owner-bound-source-interleaved",
+          ] as const)
+        : (["unchanged", "cancelled", "failed"] as const);
+    it.each(authorizationOutcomes)(
       `enforces %s task authorization across ${boundary}`,
       async (outcome) => {
         const queued = boundary.startsWith("queued");
-        await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const unchanged = outcome.endsWith("unchanged");
+        await withAdminIngress(async ({ state, cfg, admins, context }) => {
+          const recover = () =>
+            drainPendingDeliveriesCore({
+              drainKey: "matrix:completion-custody",
+              logLabel: "Completion custody",
+              cfg,
+              log: createRecoveryLog(),
+              stateDir: state.stateDir,
+              deliver: deliverOutboundPayloads,
+              selectEntry: () => ({ match: true, bypassBackoff: true }),
+            });
           resetTaskRegistryForTests();
           const key = "agent:main:matrix:direct:owner";
           const child = "codex-thread:final-send-child";
@@ -122,8 +153,25 @@ describe("native completion final-send custody", () => {
           );
           const admittedEntry = { ...entry, restartRecoveryHarnessCompletion: claim };
           await replaceSessionEntry(target, admittedEntry);
+          const opts = bindCommandHarnessCompletionAssertion({
+            claim,
+            persisted: admittedEntry,
+            sessionKey: key,
+            storePath: target.storePath,
+            opts: {
+              message: "Continue admitted completion",
+              assertSourceCurrent: outcome.startsWith("owner-bound")
+                ? captureCommandOwnerAssertion(await context(admins[0]!.identity.senderId))
+                : undefined,
+            },
+          });
+          const assertCurrent = opts.assertSourceCurrent!;
+          if (outcome.startsWith("owner-bound")) {
+            expect(assertCurrent.recoveryReference).toBeTruthy();
+          }
           const payloads = [{ text: "The completed child result" }];
           const marker = await persistPendingFinalDeliveryMarker({
+            agentId: target.agentId,
             deliver: true,
             sessionStore: { [key]: admittedEntry },
             sessionKey: key,
@@ -134,16 +182,15 @@ describe("native completion final-send custody", () => {
             payloads,
             deliveryContext: { channel: "matrix", to: "!owner:example", accountId: "default" },
             runOwnedSessionId: entry.sessionId,
+            commandOwnerReference: assertCurrent.recoveryReference,
           });
           expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(true);
-          const assertCurrent = createHarnessCompletionSourceAssertion({
-            claim,
-            storePath: target.storePath,
-          });
           assertCurrent();
           const entered = createDeferred();
           const release = createDeferred();
           const writes: string[] = [];
+          const controller = new AbortController();
+          let recoveryStarted = false;
           const hold = async () => {
             entered.resolve();
             await release.promise;
@@ -175,7 +222,17 @@ describe("native completion final-send custody", () => {
                   },
                 },
                 text: async ({ text, onPlatformSendDispatch, assertDirectAdapterHandoff }) => {
+                  if (handoff && !recoveryStarted && boundary.endsWith("onPlatformSendDispatch")) {
+                    await hold();
+                  }
                   await onPlatformSendDispatch?.();
+                  if (
+                    handoff &&
+                    !recoveryStarted &&
+                    boundary.endsWith("assertDirectAdapterHandoff")
+                  ) {
+                    await hold();
+                  }
                   assertDirectAdapterHandoff?.();
                   writes.push(text);
                   return {
@@ -201,11 +258,12 @@ describe("native completion final-send custody", () => {
           setActivePluginRegistry(registry);
           initializeGlobalHookRunner(registry);
           const delivery = deliverAgentCommandResult({
-            cfg: {},
+            cfg,
             deps: {},
             runtime: { log: () => {}, error: () => {}, exit: () => {} },
             opts: {
-              message: "Continue admitted completion",
+              ...opts,
+              abortSignal: controller.signal,
               deliver: true,
               replyChannel: "matrix",
               replyTo: "!owner:example",
@@ -217,7 +275,10 @@ describe("native completion final-send custody", () => {
             sessionEntry: marker.sessionEntry,
             result: { meta: { durationMs: 1 } },
             payloads,
-            assertDeliveryCurrent: assertCurrent,
+            assertDeliveryCurrent: () => {
+              assertCurrent();
+              controller.signal.throwIfAborted();
+            },
           }).then(
             (value) => ({ ok: true as const, value }),
             (error: unknown) => ({ ok: false as const, error }),
@@ -234,7 +295,27 @@ describe("native completion final-send custody", () => {
             await entered.promise;
           }
           expect(writes).toEqual([]);
-          if (outcome !== "unchanged") {
+          if (readFailure) {
+            expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(1);
+            const sourceRead = vi
+              .spyOn(transcriptReads, "everySessionTranscriptUserInputFrom")
+              .mockImplementationOnce(() => {
+                throw new Error("Source transcript read unavailable");
+              });
+            release.resolve();
+            try {
+              expect((await delivery).ok).toBe(false);
+            } finally {
+              sourceRead.mockRestore();
+            }
+          }
+          if (outcome.endsWith("source-interleaved")) {
+            await appendTranscriptMessage(
+              { ...target, sessionId: entry.sessionId },
+              { message: { role: "user", content: "A new request", timestamp: Date.now() } },
+            );
+            expect(assertCurrent).toThrow(SessionWorkStartChangedError);
+          } else if (outcome === "cancelled" || outcome === "failed") {
             markTaskTerminalById({ taskId: task.taskId, status: outcome, endedAt: Date.now() + 1 });
             expect(getTaskById(task.taskId)?.status).toBe(outcome);
             expect(assertCurrent).toThrow();
@@ -271,16 +352,21 @@ describe("native completion final-send custody", () => {
               }),
             });
           }
-          if (queued) {
+          if (handoff) {
+            if (restart) {
+              controller.abort(createAgentRunRestartAbortError());
+              release.resolve();
+              expect((await delivery).ok).toBe(false);
+            }
+            recoveryStarted = true;
+            await recover();
+          } else if (queued) {
             // The drain reconstructs callbacks from SQLite, not the old sender closure.
-            await drainMatrixReconnect({
-              stateDir: state.stateDir,
-              deliver: deliverOutboundPayloads,
-            });
+            await recover();
           } else {
             release.resolve();
             const settled = await delivery;
-            if (boundary === "reply hook" && outcome !== "unchanged") {
+            if (boundary === "reply hook" && !unchanged) {
               // Revocation before queue admission retires the unsent intent.
               expect(settled.ok).toBe(true);
               if (!settled.ok) {
@@ -292,16 +378,20 @@ describe("native completion final-send custody", () => {
                 resultCount: 0,
               });
             } else {
-              expect(settled.ok).toBe(outcome === "unchanged");
+              expect(settled.ok).toBe(unchanged);
             }
           }
-          expect(writes).toEqual(outcome === "unchanged" ? ["The completed child result"] : []);
+          expect(writes).toEqual(unchanged ? ["The completed child result"] : []);
           // Revocation must not leave a queued stale reply for a later drain.
           expect(await loadPendingDeliveries(state.stateDir)).toEqual([]);
+          if (handoff) {
+            await recover();
+            expect(writes).toEqual(unchanged ? ["The completed child result"] : []);
+          }
           expect(getTaskById(task.taskId)?.deliveryStatus).toBe(
-            outcome === "unchanged" ? "delivered" : "pending",
+            unchanged ? "delivered" : "pending",
           );
-          if (outcome === "unchanged") {
+          if (unchanged) {
             // Reopen task state as startup would: queue acknowledgment must not
             // be the only copy of the exact harness completion receipt.
             resetTaskRegistryForTests({ persist: false });

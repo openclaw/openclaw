@@ -8,6 +8,15 @@ import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { analyzeConfigSchema } from "./config-form.ts";
 
 describe("config form composition integrity", () => {
+  it("preserves forbidden properties in composed schemas", () => {
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      allOf: [{ type: "object", properties: { blocked: false } }],
+    });
+
+    expect(analysis.schema?.allOf?.[0]?.properties).toEqual({ blocked: false });
+  });
+
   it("renders object fields guarded by a required-property exclusion", () => {
     const analysis = analyzeConfigSchema({
       type: "object",

@@ -13,10 +13,6 @@ private struct NodeInvokeRequestPayload: Codable {
     var sessionKey: String?
 }
 
-private struct NodeInvokeCancelPayload: Codable {
-    var invokeId: String
-}
-
 /// Binds suspended work to one installed gateway channel generation.
 /// Callers use this lease so an actor hop cannot retarget a payload to a replacement gateway.
 public struct GatewayNodeSessionRoute: Sendable, Equatable {
@@ -140,6 +136,7 @@ public actor GatewayNodeSession {
     private var computerInvokeReceiptOrder: [ComputerInvokeReceiptKey] = []
     #if DEBUG
     private var computerInvokeReceiptJoinCounts: [UUID: Int] = [:]
+    var testBeforeChannelShutdown: (@Sendable () async -> Void)?
     #endif
 
     private struct ServerEventSubscriber {
@@ -219,7 +216,7 @@ public actor GatewayNodeSession {
         credentials: GatewayNodeSessionCredentials,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
-        extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
@@ -244,6 +241,7 @@ public actor GatewayNodeSession {
 
         let channelGeneration: UInt64
         if shouldReconnect {
+            self.channel?.retireSocketAdmission()
             let invalidatedAdmissionGeneration = self.admissionGeneration
             self.channelGeneration &+= 1
             self.admissionGeneration &+= 1
@@ -350,7 +348,7 @@ public actor GatewayNodeSession {
         password: String? = nil,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
-        extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
@@ -376,6 +374,7 @@ public actor GatewayNodeSession {
     }
 
     public func disconnect() async {
+        self.channel?.retireSocketAdmission()
         let invalidatedAdmissionGeneration = self.admissionGeneration
         self.channelGeneration &+= 1
         self.admissionGeneration &+= 1
@@ -428,7 +427,15 @@ public actor GatewayNodeSession {
         // Stop the detached transport concurrently with owner cleanup. Input release
         // must not wait on socket cancellation, but the old endpoint must not retain
         // automatic reconnect ownership while lifecycle callbacks are suspended.
-        let channelShutdown = Task { await channel.shutdown() }
+        #if DEBUG
+        let beforeChannelShutdown = self.testBeforeChannelShutdown
+        #endif
+        let channelShutdown = Task {
+            #if DEBUG
+            await beforeChannelShutdown?()
+            #endif
+            await channel.shutdown()
+        }
         let immediateTeardown = Task {
             await Self.$executingLifecycleCallbackID.withValue(invalidationCallbackID) {
                 await onRouteInvalidated?()
@@ -1149,11 +1156,11 @@ extension GatewayNodeSession {
         if evt.event == "node.invoke.cancel" {
             guard let payload = evt.payload else { return }
             do {
-                let cancel: NodeInvokeCancelPayload = try self.decodeEventPayload(from: payload)
+                let cancel: NodeInvokeCancelEvent = try self.decodeEventPayload(from: payload)
                 self.activeInvokes.cancel(
-                    requestID: cancel.invokeId,
+                    requestID: cancel.invokeid,
                     admissionGeneration: admissionGeneration)
-                await self.onInvokeCancel?(cancel.invokeId)
+                await self.onInvokeCancel?(cancel.invokeid)
             } catch {
                 self.logger.error("node invoke cancel decode failed: \(error.localizedDescription, privacy: .public)")
             }

@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/routing";
 import type { OpenClawPluginApi } from "./api.js";
 import type { MemoryConfig } from "./config.js";
 import {
@@ -26,6 +27,7 @@ type AutoRecallToolAuthority = {
 
 type AutoRecallHookContext = {
   agentId?: string;
+  sessionKey?: string;
   toolAuthority?: AutoRecallToolAuthority;
 };
 
@@ -44,6 +46,9 @@ export function createAutoRecallHook(params: {
   recordCooldown: (agentId: string, error: string) => void;
 }) {
   return async (event: AutoRecallHookEvent, ctx: AutoRecallHookContext) => {
+    if (isIncognitoSessionKey(ctx.sessionKey)) {
+      return undefined;
+    }
     const currentCfg = params.resolveCurrentConfig();
     const recallMaxChars = currentCfg.recallMaxChars;
     if (!currentCfg.autoRecall) {

@@ -204,7 +204,11 @@ export async function assembleHarnessContextEngine(
         ),
   );
   const assembled = ensureAssembleResultShape(result, contextEngine.info.id);
-  if (!params.semanticCuration || params.semanticCuration.config?.mode !== "shadow") {
+  if (
+    !params.semanticCuration ||
+    params.semanticCuration.config?.mode !== "shadow" ||
+    !params.semanticCuration.isEligible()
+  ) {
     return assembled;
   }
   const { observeSemanticTurnContext } = await import("./semantic-turn-context.js");

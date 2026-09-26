@@ -1,9 +1,12 @@
 import { WebClient } from "@slack/web-api";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveSlackThreadHistory } from "./thread.js";
-import { logVerbose } from "./thread.runtime.js";
 
-vi.mock("./thread.runtime.js", () => ({ logVerbose: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  logVerbose: vi.fn(),
+}));
 
 function expectVerboseLogContains(expected: string): void {
   expect(vi.mocked(logVerbose).mock.calls.flat().join("\n")).toContain(expected);

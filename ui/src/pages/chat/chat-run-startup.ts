@@ -42,6 +42,7 @@ export function reconcileChatRunStartup(
 }
 
 const STARTUP_LABEL_KEYS = {
+  waiting_for_state: "chat.startupStatus.waitingForState",
   preparing_workspace: "chat.startupStatus.preparingWorkspace",
   naming_worktree: "chat.startupStatus.namingWorktree",
   creating_worktree: "chat.startupStatus.creatingWorktree",

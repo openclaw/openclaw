@@ -25,7 +25,7 @@ import {
   resolveAnthropicCacheOptions,
   applyAnthropicContextManagementToRequest,
   isDirectAnthropicModel,
-  resolveAnthropicContextManagementBetaHeader,
+  resolveAnthropicRequestBetaHeader,
 } from "../transports/anthropic-payload-policy.js";
 import { consumeAnthropicStream } from "../transports/anthropic-stream-reducer.js";
 // Anthropic provider adapts Anthropic streams and tool calls for the runtime.
@@ -65,10 +65,7 @@ import {
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
 } from "./anthropic-model-contract.js";
-import {
-  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  ANTHROPIC_SERVER_SIDE_FALLBACKS,
-} from "./anthropic-server-fallback.js";
+import { ANTHROPIC_SERVER_SIDE_FALLBACKS } from "./anthropic-server-fallback.js";
 import { applyAnthropicThinkingBindingControls } from "./anthropic-thinking-replay.js";
 import {
   normalizeAnthropicToolCallId,
@@ -246,10 +243,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         params = nextParams as MessageCreateParamsStreaming;
       }
       applyClaudeRequestContract(params, model);
-      const betaHeader = resolveAnthropicContextManagementBetaHeader(
-        params,
-        directApiKeyBetaHeader,
-      );
+      const betaHeader = resolveAnthropicRequestBetaHeader(params, directApiKeyBetaHeader);
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
@@ -321,6 +315,7 @@ type AnthropicSimpleStreamOptions = SimpleStreamOptions &
   AnthropicContextManagementOptions & {
     authProfileId?: string;
     toolChoice?: AnthropicCompactionOptions["toolChoice"];
+    thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
   };
 
 export const streamSimpleAnthropic: StreamFunction<
@@ -344,6 +339,7 @@ export const streamSimpleAnthropic: StreamFunction<
     authProfileId: options?.authProfileId,
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,
+    thinkingDisplay: options?.thinkingDisplay,
   };
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   if (options?.reasoning === "off" && !mandatoryAdaptiveThinking) {
@@ -362,7 +358,7 @@ export const streamSimpleAnthropic: StreamFunction<
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
-      effort: resolveAnthropicThinkingEffort(model, reasoning ?? "high"),
+      effort: resolveAnthropicThinkingEffort(model, reasoning),
     } satisfies AnthropicCompactionOptions);
   }
   if (!reasoning) {
@@ -558,9 +554,6 @@ function createClient(
 
   // API key auth
   const serverSideFallback = supportsAnthropicServerSideFallback(model);
-  if (serverSideFallback) {
-    betaFeatures.push(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
-  }
   const sessionAffinityHeaders: Record<string, string | null> =
     sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
       ? { "x-session-affinity": sessionId }

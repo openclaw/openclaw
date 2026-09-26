@@ -57,29 +57,30 @@ export function createPreparedWorkerCompiler() {
         fixtures,
         "preload.mjs",
         `import fs from 'node:fs';
-import {registerHooks} from 'node:module';
+import {fixtureSourceFileFilter,registerFixtureSourceTransform} from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const compiler = ${JSON.stringify(pathToFileURL(compiler).href)};
 const buildEntries = ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/vitest-worker-build-entries.mts")).href)};
-registerHooks({load(url,context,nextLoad) {
+registerFixtureSourceTransform({
+  name:'prepared-worker-compiler',
+  filter:fixtureSourceFileFilter([compiler,buildEntries,${JSON.stringify(tsdown)}]),
+  transform(url,readSource) {
   const narrow = globalThis[Symbol.for('openclaw.fixture.realCompiler')];
   // These tests inspect only the declaration in the unbundled legacy graph.
   // The CLI finalizer fixture owns the unbundled updater execution proof.
   if(url===buildEntries && process.argv[1]===${JSON.stringify(compiler)} && process.argv[2]===${JSON.stringify(template)}) {
     const original=JSON.stringify(buildEntries+'?fixture-original');
-    return {format:'module',shortCircuit:true,source:
-      'export * from '+original+';import * as original from '+original+';'+
-      'export const legacyFinalizerBuildSources=original.legacyFinalizerBuildSources.filter(source=>source==="src/infra/runtime-process-entrypoints.ts");'};
+    return 'export * from '+original+';import * as original from '+original+';'+
+      'export const preservedModuleBuildSources=original.preservedModuleBuildSources.filter(source=>source==="src/infra/runtime-process-entrypoints.ts"||source==="scripts/run-with-env.mts");';
   }
   if(url===${JSON.stringify(tsdown)} && process.argv[1]===${JSON.stringify(compiler)} && !narrow) {
     fs.appendFileSync(${JSON.stringify(receipt)},JSON.stringify({kind:'full',directory:process.argv[2]})+'\\n');
   }
-  if(url!==compiler) return nextLoad(url,context);
+  if(url!==compiler) return readSource();
   const full = process.argv[2] === ${JSON.stringify(template)};
-  if(full || narrow) return nextLoad(url,context);
+  if(full || narrow) return readSource();
   fs.appendFileSync(${JSON.stringify(receipt)},JSON.stringify({kind:'copy',directory:process.argv[2]})+'\\n');
-  return {format:'module',shortCircuit:true,source:
-    'import {copyPreparedWorkerArtifacts} from '+JSON.stringify(${JSON.stringify(pathToFileURL(clone).href)})+';'+
-    'await copyPreparedWorkerArtifacts('+JSON.stringify(${JSON.stringify(template)})+',process.argv[2]);'};
+  return 'import {copyPreparedWorkerArtifacts} from '+JSON.stringify(${JSON.stringify(pathToFileURL(clone).href)})+';'+
+    'await copyPreparedWorkerArtifacts('+JSON.stringify(${JSON.stringify(template)})+',process.argv[2]);';
 }});`,
       );
       const result = await lifetime.track(
@@ -126,7 +127,7 @@ export function interceptCompilerBuild(directory: string, source: string): strin
 export const vitestWorkerBuildEntries = {
   "infra/sqlite-readonly-location.worker": original.vitestWorkerBuildEntries["infra/sqlite-readonly-location.worker"],
 };
-export const legacyFinalizerBuildSources = original.legacyFinalizerBuildSources.filter(
+export const preservedModuleBuildSources = original.preservedModuleBuildSources.filter(
   source => source === "src/infra/runtime-process-entrypoints.ts",
 );
 `,

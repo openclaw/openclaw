@@ -19,9 +19,7 @@ import {
 } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
-  readPersistedAuthProfileStoreRaw,
   readPersistedSharedAuthProfileStoreRaw,
-  writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import {
@@ -478,81 +476,20 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expectMigratedArchive(authPath);
   });
 
-  it("imports shared oauth.json into shared-main only and records its archive", async () => {
+  it("preserves pre-June oauth.json and directs its upgrade through 2026.9.5", async () => {
     const state = await makeTestState();
     const oauthPath = await state.writeJson("credentials/oauth.json", {
       openai: {
         access: "fake-access-token",
         refresh: "fake-refresh-token",
         expires: 1_900_000_000_000,
-        accountId: "fake-account",
-        subscriptionType: "fake-subscription",
       },
     });
     const sourceBytes = fs.readFileSync(oauthPath);
-    const secondaryAgentDir = state.agentDir("secondary");
-
-    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: {
-        agents: { list: [{ id: "secondary", agentDir: secondaryAgentDir }] },
-      },
-      prompter: makePrompter(true),
-      env: state.env,
-      now: () => Date.parse("2026-07-25T12:00:00.000Z"),
-    });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(
-      loadPersistedAuthProfileStore(state.agentDir())?.profiles["openai:default"],
-    ).toMatchObject({
-      type: "oauth",
-      provider: "openai",
-      access: "fake-access-token",
-      refresh: "fake-refresh-token",
-      accountId: "fake-account",
-      subscriptionType: "fake-subscription",
-    });
-    expect(loadPersistedAuthProfileStore(secondaryAgentDir)).toBeNull();
-    expect(fs.existsSync(oauthPath)).toBe(false);
-    const archives = listMigratedArchives(oauthPath);
-    expect(archives).toHaveLength(1);
-    expect(fs.readFileSync(archives[0]!)).toEqual(sourceBytes);
-
-    const receipt = openOpenClawStateDatabase({ env: state.env })
-      .db.prepare(
-        "SELECT status, removed_source, target_table FROM migration_sources WHERE migration_kind = ?",
-      )
-      .get("auth-profile-json-to-sqlite-v2") as
-      | { status: string; removed_source: number; target_table: string }
-      | undefined;
-    expect(receipt).toEqual({
-      status: "completed",
-      removed_source: 1,
-      target_table: "auth_profile_store",
-    });
-  });
-
-  it("defers shared OAuth while a higher-priority main credential remains pending", async () => {
-    const state = await makeTestState();
     const authPath = await writeLegacyAuthProfilesJson(state, {
       version: 1,
       profiles: {
-        "openai:default": {
-          type: "oauth",
-          provider: "openai",
-          oauthRef: {
-            source: "openclaw-credentials",
-            id: "0123456789abcdef0123456789abcdef",
-            provider: "openai-codex",
-          },
-        },
-      },
-    });
-    const oauthPath = await state.writeJson("credentials/oauth.json", {
-      openai: {
-        access: "fake-lower-priority-access",
-        refresh: "fake-lower-priority-refresh",
-        expires: 1_900_000_000_000,
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "not-a-real" },
       },
     });
 
@@ -562,57 +499,16 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       env: state.env,
     });
 
-    expect(result.warnings).toEqual([expect.stringContaining("legacy OAuth sidecar profile")]);
-    expect(
-      loadPersistedAuthProfileStore(state.agentDir())?.profiles["openai:default"],
-    ).toMatchObject({
-      type: "oauth",
-      provider: "openai",
-      oauthRef: {
-        source: "openclaw-credentials",
-        provider: "openai-codex",
-      },
+    expect(result.warnings).toEqual([
+      expect.stringMatching(/OAuth credentials.*2026\.9\.5.*doctor --fix/),
+    ]);
+    expect(fs.readFileSync(oauthPath)).toEqual(sourceBytes);
+    expectNoMigratedArchive(oauthPath);
+    expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles).toEqual({
+      "anthropic:default": { type: "api_key", provider: "anthropic", key: "not-a-real" },
     });
     expect(fs.existsSync(authPath)).toBe(false);
-    expect(fs.existsSync(oauthPath)).toBe(false);
     expectMigratedArchive(authPath);
-    expectMigratedArchive(oauthPath);
-  });
-
-  it("preserves state-only profile IDs while migrating shared OAuth", async () => {
-    const state = await makeTestState();
-    writePersistedAuthProfileStateRaw(
-      {
-        version: 1,
-        order: { openai: ["openai:external"] },
-        lastGood: { openai: "openai:external" },
-        usageStats: { "openai:external": { cooldownUntil: 1_900_000_000_000 } },
-      },
-      state.agentDir(),
-    );
-    await state.writeJson("credentials/oauth.json", {
-      anthropic: {
-        access: "not-a-real",
-        refresh: "not-a-real",
-        expires: 1_900_000_000_000,
-      },
-    });
-
-    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: {},
-      prompter: makePrompter(true),
-      env: state.env,
-    });
-
-    expect(result.warnings).toEqual([]);
-    expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
-      profiles: {
-        "anthropic:default": { type: "oauth", provider: "anthropic" },
-      },
-      order: { openai: ["openai:external"] },
-      lastGood: { openai: "openai:external" },
-      usageStats: { "openai:external": { cooldownUntil: 1_900_000_000_000 } },
-    });
   });
 
   it("retries when an absent legacy sibling appears during migration", async () => {
@@ -658,98 +554,6 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expectNoMigratedArchive(authPath);
     expectNoMigratedArchive(legacyPath);
     expect(loadPersistedAuthProfileStore(state.agentDir())).toBeNull();
-  });
-
-  it("archives restored OAuth bytes without replaying a terminal receipt", async () => {
-    const state = await makeTestState();
-    const oauthPath = await state.writeJson("credentials/oauth.json", {
-      openai: {
-        access: "fake-stale-access",
-        refresh: "fake-stale-refresh",
-        expires: 1_900_000_000_000,
-      },
-    });
-    const sourceBytes = fs.readFileSync(oauthPath);
-
-    await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: {},
-      prompter: makePrompter(true),
-      env: state.env,
-    });
-    saveAuthProfileStore({ version: 1, profiles: {} }, state.agentDir(), {
-      syncExternalCli: false,
-    });
-    fs.writeFileSync(oauthPath, sourceBytes);
-
-    const replay = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: {},
-      prompter: makePrompter(true),
-      env: state.env,
-    });
-
-    expect(replay.changes).toEqual([expect.stringContaining("without replaying credentials")]);
-    expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles).toEqual({});
-    expect(fs.existsSync(oauthPath)).toBe(false);
-    expect(listMigratedArchives(oauthPath)).toHaveLength(2);
-  });
-
-  it("marks a partially parsed shared OAuth source for manual recovery", async () => {
-    const state = await makeTestState();
-    const oauthPath = await state.writeJson("credentials/oauth.json", {
-      anthropic: {
-        access: "fake-access-token",
-        refresh: "fake-refresh-token",
-        expires: 1_900_000_000_000,
-      },
-      malformed: 42,
-    });
-
-    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: {},
-      prompter: makePrompter(true),
-      env: state.env,
-    });
-
-    expect(result.warnings).toContain(
-      "Imported valid shared OAuth entries and archived 1 rejected entry for manual recovery.",
-    );
-    expect(
-      loadPersistedAuthProfileStore(state.agentDir())?.profiles["anthropic:default"],
-    ).toBeDefined();
-    expect(fs.existsSync(oauthPath)).toBe(false);
-    const receipt = openOpenClawStateDatabase({ env: state.env })
-      .db.prepare("SELECT status FROM migration_sources WHERE migration_kind = ?")
-      .get("auth-profile-json-to-sqlite-v2") as { status?: string } | undefined;
-    expect(receipt?.status).toBe("archived-unparsed");
-  });
-
-  it("leaves shared OAuth in place when the canonical SQLite store is unreadable", async () => {
-    const state = await makeTestState();
-    const oauthPath = await state.writeJson("credentials/oauth.json", {
-      openai: {
-        access: "fake-access-token",
-        refresh: "fake-refresh-token",
-        expires: 1_900_000_000_000,
-      },
-    });
-    const unreadableStore = { version: 1, profiles: "invalid-profile-map" };
-    writePersistedAuthProfileStoreRaw(unreadableStore, state.agentDir());
-
-    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: {},
-      prompter: makePrompter(true),
-      env: state.env,
-    });
-
-    // The warning must carry the underlying cause so the user can act on it.
-    expect(result.warnings).toEqual([
-      expect.stringMatching(
-        /^Failed to migrate shared legacy OAuth credentials; the source was left in place: .+/,
-      ),
-    ]);
-    expect(fs.existsSync(oauthPath)).toBe(true);
-    expectNoMigratedArchive(oauthPath);
-    expect(readPersistedAuthProfileStoreRaw(state.agentDir())).toEqual(unreadableStore);
   });
 
   it("surfaces the resume failure cause instead of a generic warning", async () => {

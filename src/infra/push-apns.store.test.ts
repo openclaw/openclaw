@@ -347,14 +347,14 @@ describe("push APNs registration store", () => {
       let reachedStage = false;
       const admission = vi
         .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit) =>
+        .mockImplementation((admit, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === stage) {
               reachedStage = true;
               connectionCurrent = false;
             }
             admit(request, grant);
-          }),
+          }, attachment),
         );
       try {
         await expect(

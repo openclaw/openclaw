@@ -30,6 +30,7 @@ import {
   prepareChannelParticipantObservation,
 } from "../../sessions/session-participant-input.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
@@ -188,6 +189,10 @@ describe("prepareChatSendUserTurn", () => {
         await new Promise<void>((resolve) => {
           queueMicrotask(resolve);
         });
+        await runOpenClawAgentWriteAdmission(
+          { agentId: target.agentId, path: target.storePath, env: state.env },
+          () => undefined,
+        );
         expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toEqual(
           kind === "profile"
             ? [
@@ -325,9 +330,9 @@ describe("prepareChatSendUserTurn", () => {
         },
         attachments: createAttachments({
           parsedMessage,
-          mediaPathOffloadPaths: ["/workspace/voice.mp3"],
-          mediaPathOffloadTypes: ["audio/mpeg"],
-          mediaPathOffloadWorkspaceDir: "/workspace",
+          mediaPathOffloads: [
+            { path: "/workspace/voice.mp3", contentType: "audio/mpeg", workspaceDir: "/workspace" },
+          ],
         }),
         client: null,
         logGateway: { warn: vi.fn() } as never,
@@ -429,9 +434,13 @@ describe("prepareChatSendUserTurn", () => {
         },
       },
       attachments: createAttachments({
-        mediaPathOffloadPaths: ["uploads/report.pdf"],
-        mediaPathOffloadTypes: ["application/pdf"],
-        mediaPathOffloadWorkspaceDir: "/workspace",
+        mediaPathOffloads: [
+          {
+            path: "uploads/report.pdf",
+            contentType: "application/pdf",
+            workspaceDir: "/workspace",
+          },
+        ],
       }),
       client: {
         connId: "conn-1",
@@ -673,6 +682,7 @@ describe("prepareChatSendUserTurn", () => {
             fact: {
               url: "media://inbound/photo.png",
               contentType: "image/png",
+              fileName: "photo café 雪 🦞.png",
               kind: "image",
               sizeBytes: 10,
             },
@@ -717,6 +727,7 @@ describe("prepareChatSendUserTurn", () => {
         {
           path: persistedPath,
           contentType: "image/png",
+          fileName: "photo café 雪 🦞.png",
           hydrationSuppressed: true,
         },
       ]);
@@ -730,6 +741,7 @@ describe("prepareChatSendUserTurn", () => {
         {
           path: persistedPath,
           contentType: "image/png",
+          fileName: "photo café 雪 🦞.png",
           hydrationSuppressed: true,
         },
       ]);

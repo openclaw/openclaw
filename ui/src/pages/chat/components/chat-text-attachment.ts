@@ -7,6 +7,7 @@ import { icons } from "../../../components/icons.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -22,6 +23,8 @@ import {
   LazyCustomElementRequestController,
   renderHtmlPreview,
 } from "./chat-html-preview.ts";
+
+registerFilePreviewEnglish();
 
 export function isTextAttachment(rawMimeType: string, filename: string): boolean {
   const mimeType = rawMimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";

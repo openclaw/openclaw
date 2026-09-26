@@ -175,6 +175,16 @@ has been saved. If registration fails, the send returns an error and the child
 does not start. A requested state watch is installed only after successful
 admission.
 
+For core task-receipt-backed native-child followups with in-process one-way result delivery, yielding to
+accepted children keeps the same logical result obligation. Its exact admitted continuation returns
+one final result; an empty yielded predecessor is not a completed `no_reply`.
+A positive wait can transfer to asynchronous delivery without a second consumer.
+This custody is process-local: it does not restore caller authority after a
+Gateway restart, and it closes when that authority or either conversation changes.
+The original paused child task remains separate from an explicit followup.
+Registered detached task runtimes keep their existing run-scoped reply behavior;
+they are not silently converted into core task receipts.
+
 A retry cannot restart a follow-up whose task record is already terminal.
 Completed input receipts are reconciled before rejecting the retry.
 
@@ -215,6 +225,23 @@ Replies come from the completed run's terminal result. When a same-session
 target has already delivered its final reply to the source conversation through
 `message`, OpenClaw skips the duplicate channel announcement. Progress messages
 and replies stored only in the internal UI do not count as external delivery.
+When a same-session follow-up still has an announcement target, its reply preserves
+the requesting turn's channel, account, recipient, and thread when available.
+Later messages can update the session's stored route without redirecting the
+accepted reply, including when an identity link hides the address from the session key.
+
+Each completed same-session reply is queued separately for that original session
+generation. Later ordinary turns and other completed replies do not cancel it.
+Resetting, deleting, or replacing the original session stops replies that have not
+started sending; a send already handed to the channel keeps its normal outcome.
+The queue can recover a completed reply after restart. This does not make an
+unfinished model run or its in-memory reply observer restartable.
+
+Older versions that do not recognize these queue entries leave them and their
+attachments pending while continuing ordinary work. Return to a supporting
+version to resume delivery. Full state backups include queued attachments;
+database-only backups do not. Backup restoration intentionally omits pending
+delivery records and does not resume these replies.
 
 A waited send that finishes without visible assistant text returns `status: "no_reply"`; no announcement remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
 
@@ -247,6 +274,8 @@ Pass `watch: true` to also register the sender as a state-change watcher of the 
 
 `session_status` is the lightweight `/status`-equivalent tool for the current or another visible session. It reports usage, time, model/runtime state, and linked background-task context when present. Like `/status`, it can backfill sparse token/cache counters from the latest transcript usage entry, and `model=default` clears a per-session override. Use `sessionKey="current"` for the caller's current session; visible client labels such as `openclaw-tui` are not session keys.
 
+Model changes stay scoped to the selected session and do not update the agent's or global default. Gateway-managed sessions apply the same model, runtime, and execution-environment checks as other session model selections. Repeating an unchanged choice does not update session activity or emit model-change notifications.
+
 When route metadata is available, `session_status` also includes a visible `Route context` JSON block and matching structured `details` fields. These fields disambiguate the session key from the route that is currently handling the live run:
 
 - `origin` is where the session was created, or the provider inferred from a deliverable session-key prefix when older state lacks stored origin metadata.
@@ -277,7 +306,7 @@ Key options:
 - `thread: true` to bind the spawn to a chat thread (Discord, Slack, etc.).
 - `sandbox: "require"` to enforce sandboxing on the child.
 - `context: "fork"` when the child needs the current requester transcript; this requires `runtime: "subagent"` and the same agent as the requester, whether the child is hidden or visible. Use `context: "isolated"` explicitly for a clean child. Omission means isolated context for non-thread spawns; thread-bound native sub-agents follow `threadBindings.defaultSpawnContext`, which defaults to `fork`.
-- `visible: true` to create a persistent dashboard session instead of a hidden sub-agent session. Visible spawns support an explicit sidebar `group`, model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits. The accepted result is a receipt: it includes the child session key, run id, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record naming the requesting agent. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second. The spawned session is attributed to the requesting agent in the sidebar; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
+- `visible: true` to create a persistent dashboard session instead of a hidden sub-agent session. Visible spawns support an explicit sidebar `group`, model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits. The accepted result is a receipt: it includes the child session key, run id, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record naming the stored owner. When the active human requester matches the requesting session's verified human owner, a new visible child inherits that person as owner. Otherwise, the owner falls back to the requesting agent. The requesting agent is normally the immutable creator; a required sandbox instead preserves the parent's creator provenance as an isolation policy. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second. Ownership controls responsibility and display, not creator-based access; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 
 Sub-agents below the default depth limit of `5` receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their own children. Set a lower `maxSpawnDepth` to turn sessions at that depth into leaves sooner.
 

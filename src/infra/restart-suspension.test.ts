@@ -102,7 +102,7 @@ describe("scheduled restart during gateway suspension", () => {
     expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(1);
   });
 
-  it("lets delivered targeted restart drain supersede prepared suspension", async () => {
+  it("lets delivered targeted restart drain retain prepared suspension ownership", async () => {
     const restartHandler = () => markGatewayRestartDraining();
     const resumeScheduling = vi.fn();
     process.on("SIGUSR2", restartHandler);
@@ -124,8 +124,10 @@ describe("scheduled restart during gateway suspension", () => {
       admission?.release();
 
       expect(result).toEqual({ status: "emitted" });
-      expect(getGatewaySuspendStatus("suspension-targeted-restart")).toEqual({
-        status: "running",
+      expect(getGatewaySuspendStatus("suspension-targeted-restart", true)).toMatchObject({
+        status: "draining",
+        ownerId: "request-targeted-restart",
+        phase: "interrupting",
       });
       expect(resumeScheduling).not.toHaveBeenCalled();
       expect(isGatewayWorkAdmissionClosed()).toBe(true);

@@ -49,6 +49,7 @@ const continuationSchema = z.strictObject({
       channel: z.string().max(4096).optional(),
       accountId: z.string().max(4096).optional(),
       senderId: z.string().max(4096).optional(),
+      authorizationSource: z.string().max(4096).optional(),
     })
     .optional(),
 });
@@ -512,11 +513,7 @@ export async function acceptTriageContinuation(): Promise<
     armShutdown();
     try {
       if (lease) {
-        if (cleanup === "closed") {
-          store.settle(lease, "closed");
-        } else {
-          store.settle(lease, "uncertain");
-        }
+        store.settle(lease, cleanup);
       }
     } finally {
       disposed = true;

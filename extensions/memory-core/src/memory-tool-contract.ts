@@ -1,5 +1,7 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
+  asToolParamsRecord,
+  type AnyAgentTool,
   resolveMemorySearchIndexConfig,
   type MemoryPromptSectionBuilder,
   type OpenClawConfig,
@@ -89,6 +91,26 @@ export const MEMORY_SEARCH_TOOL_CONTRACT = {
   label: "Memory Search",
   name: "memory_search",
   parameters: MemorySearchSchema,
+  prepareArguments: (args: unknown) => {
+    const params = asToolParamsRecord(args);
+    if (!Object.hasOwn(params, "min_score") && !Object.hasOwn(params, "max_results")) {
+      return args;
+    }
+    const normalized = { ...params };
+    // Explicit camelCase values win, including invalid values that validation must reject.
+    for (const [alias, key] of [
+      ["min_score", "minScore"],
+      ["max_results", "maxResults"],
+    ] as const) {
+      if (Object.hasOwn(normalized, alias)) {
+        if (!Object.hasOwn(normalized, key)) {
+          normalized[key] = normalized[alias];
+        }
+        delete normalized[alias];
+      }
+    }
+    return normalized;
+  },
   describe: ({ search }: MemorySourceContract) =>
     `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Session results are transcript search references, not readable memory-file paths. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` searches indexed session transcripts under the same visibility rules as session history tools and returns unavailable when semantic session indexing is disabled. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
 } as const;
@@ -101,9 +123,10 @@ export const MEMORY_GET_TOOL_CONTRACT = {
     `Safe exact excerpt read from ${files}. Session transcript paths are unsupported; use the available session-history workflow for session hits. Defaults to a bounded excerpt when lines are omitted and includes truncation/continuation info when more content exists. \`corpus=wiki\` reads registered compiled-wiki supplements. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE}`,
 } as const;
 
-export type MemoryToolContract =
+export type MemoryToolContract = (
   | typeof MEMORY_SEARCH_TOOL_CONTRACT
-  | typeof MEMORY_GET_TOOL_CONTRACT;
+  | typeof MEMORY_GET_TOOL_CONTRACT
+) & { prepareArguments?: AnyAgentTool["prepareArguments"] };
 
 export function buildMemoryPromptSection({
   availableTools,

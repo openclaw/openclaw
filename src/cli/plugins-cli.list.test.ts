@@ -842,7 +842,7 @@ describe("plugins cli list", () => {
       ],
       diagnostics: [
         {
-          level: "warn",
+          level: "info",
           pluginId: "discord",
           source: "/tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
           message:
@@ -875,7 +875,7 @@ describe("plugins cli list", () => {
       ],
       diagnostics: [
         {
-          level: "warn",
+          level: "info",
           pluginId: "discord",
           source: "/tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
           message:

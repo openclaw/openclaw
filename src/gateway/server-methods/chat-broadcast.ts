@@ -97,7 +97,12 @@ type ChatBroadcastParams = {
 
 type ChatTerminal =
   | { state: "final" | "aborted"; message?: Record<string, unknown>; stopReason?: string }
-  | { state: "error"; errorMessage?: string; stopReason?: string; errorKind?: "timeout" };
+  | {
+      state: "error";
+      errorMessage?: string;
+      stopReason?: string;
+      errorKind?: "timeout" | "state_contention";
+    };
 
 type ChatFrame = ChatTerminal | { state: "delta"; text: string };
 

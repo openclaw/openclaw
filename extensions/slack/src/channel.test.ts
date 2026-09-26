@@ -43,7 +43,7 @@ vi.mock("./action-runtime.js", async () => {
   };
 });
 
-vi.mock("./send.runtime.js", () => ({
+vi.mock("./send.js", () => ({
   resolveSlackDmChannelId: resolveSlackDmChannelIdMock,
   sendMessageSlack: sendMessageSlackMock,
 }));

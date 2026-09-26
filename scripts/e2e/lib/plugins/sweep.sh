@@ -129,9 +129,6 @@ fi
 trap cleanup_openclaw_plugins_sweep EXIT
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
-PACKAGE_VERSION="$(node -p 'require("./package.json").version')"
-OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(node scripts/e2e/lib/package-compat.mjs "$PACKAGE_VERSION")"
-export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 BUNDLED_PLUGIN_ROOT_DIR="extensions"
 OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 

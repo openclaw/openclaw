@@ -158,9 +158,11 @@ suite.define(() => {
             message: nextRequest,
           });
           await expectBrowser(
-            page.getByText(recovery ? "System · restart recovery" : nextRequest.content, {
-              exact: true,
-            }),
+            page
+              .locator(".chat-thread-inner")
+              .getByText(recovery ? "System · restart recovery" : nextRequest.content, {
+                exact: true,
+              }),
           ).toBeVisible();
           await expectBrowser(dock).toBeVisible();
           await gateway.setHistoryMessages(finalHistory);
@@ -191,7 +193,9 @@ suite.define(() => {
         const dock = page.locator(".agent-chat__question-dock");
         const summary = page.locator(".chat-question-summary").filter({ hasText: title });
         await expectBrowser(
-          page.getByText("The summary is finalized and the task is complete.", { exact: true }),
+          page
+            .locator(".chat-thread-inner")
+            .getByText("The summary is finalized and the task is complete.", { exact: true }),
         ).toBeVisible();
         await expectBrowser(dock).toHaveCount(0);
         await expectBrowser(summary).toContainText("No longer pending");
@@ -799,7 +803,9 @@ suite.define(() => {
               message,
             });
           }
-          await expectBrowser(page.getByText(laterFinal.content, { exact: true })).toBeVisible();
+          await expectBrowser(
+            page.locator(".chat-thread-inner").getByText(laterFinal.content, { exact: true }),
+          ).toBeVisible();
           await expectBrowser(summary).toContainText("Answer not sent");
           await failedSend.getByRole("button", { name: "Discard", exact: true }).click();
           await page.screenshot({

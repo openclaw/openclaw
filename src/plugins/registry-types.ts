@@ -113,7 +113,7 @@ export type PluginToolRegistration = PluginRegistrationOwner & {
   /** Explicitly registered required-authority context, never inferred from plugin identity. */
   contextVersion?: 2;
   names: string[];
-  declaredNames?: string[];
+  declaredNames?: ReadonlySet<string>;
   optional: boolean;
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */
   origin?: PluginOrigin;
@@ -391,6 +391,7 @@ export type PluginRecord = {
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  uiCapabilities?: PluginManifestRecord["uiCapabilities"];
   mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;
   dependencyStatus?: PluginDependencyStatus;

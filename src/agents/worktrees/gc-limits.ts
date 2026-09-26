@@ -1,6 +1,6 @@
 import { directorySizeBytes } from "./capacity.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
-import { listRegistryWorktrees } from "./registry.js";
+import { readLiveRegistryWorktreeIds, readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 type EnforceWorktreeCleanupLimitsParams = {
@@ -9,6 +9,7 @@ type EnforceWorktreeCleanupLimitsParams = {
   progress: WorktreeGcProgress;
   protect: (record: ManagedWorktreeRecord) => Promise<string | undefined>;
   remove: (record: ManagedWorktreeRecord) => Promise<void>;
+  onError: (record: ManagedWorktreeRecord, error: unknown) => Promise<void>;
 };
 
 /** Enforces retention caps without retrying a record already handled by idle cleanup. */
@@ -20,7 +21,9 @@ export async function enforceWorktreeCleanupLimits(
     progress.recordLimitState(true);
     return [];
   }
-  const live = listRegistryWorktrees(params.env).filter((record) => record.removedAt === undefined);
+  const live = (await readRegistryWorktrees(params.env)).filter(
+    (record) => record.removedAt === undefined,
+  );
   const sizes = new Map<string, number>();
   let totalBytes = 0;
   let inventoryComplete = true;
@@ -42,12 +45,8 @@ export async function enforceWorktreeCleanupLimits(
     (limits.maxTotalSizeBytes !== undefined && totalBytes > limits.maxTotalSizeBytes);
   // Concurrent changes must affect every destructive decision and the final
   // result. New records stay unmeasured rather than receiving a false size.
-  const refreshTotals = () => {
-    const liveIds = new Set(
-      listRegistryWorktrees(params.env)
-        .filter((record) => record.removedAt === undefined)
-        .map((record) => record.id),
-    );
+  const refreshTotals = async () => {
+    const liveIds = new Set(await readLiveRegistryWorktreeIds(params.env));
     liveCount = liveIds.size;
     if (limits.maxTotalSizeBytes !== undefined) {
       totalBytes = 0;
@@ -71,7 +70,11 @@ export async function enforceWorktreeCleanupLimits(
       }
     }
   };
-  const initialRefresh = refreshTotals();
+  // Count-only inventory has not yielded since its registry read.
+  const initialRefresh =
+    limits.maxTotalSizeBytes === undefined
+      ? { liveIds: inventoriedIds, inventoryComplete }
+      : await refreshTotals();
   if (!overLimit()) {
     progress.recordLimitState(true, inventoryComplete);
     if (progress.result.limitsSatisfied !== true) {
@@ -84,7 +87,7 @@ export async function enforceWorktreeCleanupLimits(
     .filter((record) => record.ownerKind === "workboard" || record.ownerKind === "session")
     .toSorted((a, b) => a.lastActiveAt - b.lastActiveAt);
   for (const record of candidates) {
-    const { liveIds } = refreshTotals();
+    const { liveIds } = await refreshTotals();
     if (!overLimit()) {
       break;
     }
@@ -99,12 +102,13 @@ export async function enforceWorktreeCleanupLimits(
       }
       await params.remove(record);
     } catch (error) {
-      progress.error("limits", error, record.id);
+      await params.onError(record, error);
       continue;
     }
     removed.push(record.id);
   }
-  const { liveIds: remainingIds, inventoryComplete: finalInventoryComplete } = refreshTotals();
+  const { liveIds: remainingIds, inventoryComplete: finalInventoryComplete } =
+    await refreshTotals();
   progress.recordLimitState(!overLimit(), finalInventoryComplete);
   if (progress.result.limitsSatisfied !== true) {
     for (const record of live) {

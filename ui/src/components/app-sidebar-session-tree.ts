@@ -75,6 +75,7 @@ export function projectSessionTree(params: {
   mainSessionKeys?: ReadonlySet<string>;
   rowsByKey: ReadonlyMap<string, GatewaySessionRow>;
   loadingChildKeys: ReadonlySet<string>;
+  isChildSessionVisible?: (parentKey: string, childKey: string, row?: GatewaySessionRow) => boolean;
   resolveAttention: (row: Pick<GatewaySessionRow, "key" | "agentId">) => SidebarSessionAttention;
   toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession;
 }): SidebarRecentSession[] {
@@ -102,7 +103,9 @@ export function projectSessionTree(params: {
       row.archived === true
         ? []
         : (childKeysByParent.get(normalizeDefaultMainSessionAliasForUi(row.key)) ?? []).filter(
-            (key) => !hasRootCategory(rowsByKey.get(key)),
+            (key) =>
+              !hasRootCategory(rowsByKey.get(key)) &&
+              (params.isChildSessionVisible?.(row.key, key, rowsByKey.get(key)) ?? true),
           );
     const ownsAncestor = !ancestors.has(row.key);
     ancestors.add(row.key);

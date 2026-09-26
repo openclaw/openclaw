@@ -29,9 +29,10 @@ import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
 import type { SkillProposalRecord } from "../skills/workshop/types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
@@ -53,6 +54,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetLegacyWorkspaceStateCheckForTest();
   await state.cleanup();
@@ -229,7 +231,7 @@ describe("Workshop relocation and workspace survival", () => {
 
   it("captures a new attestation only for remaining filesystem moves", async () => {
     const fixture = await createLegacyWorkspace();
-    repairOpenClawStateDatabaseSchemaIfNeeded({ env: state.env });
+    await prepareOpenClawStateDatabaseSchema({ env: state.env });
     await deleteWorkspaceState(prepareWorkspaceStateDeletion(fixture.workspaceDir));
     const before = await readWorkspaceStateSnapshot(fixture.workspaceDir);
     expect(before.attestation).toBeUndefined();
@@ -256,7 +258,7 @@ describe("Workshop relocation and workspace survival", () => {
       path.join("skill-workshop", "proposals", remaining.id, "PROPOSAL.md"),
       draft,
     );
-    importLegacySkillProposal({
+    await importLegacySkillProposal({
       record: remaining,
       ownerAgentId: "main",
       store: { env: state.env },
@@ -327,6 +329,7 @@ describe("Workshop relocation and workspace survival", () => {
   it("resumes saved workspace cleanup after a pending proposal write interrupts relocation", async () => {
     const fixture = await createLegacyWorkspace();
     await interruptPendingWrite(fixture);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     await migrateLegacySkillWorkshopProposals({ config: fixture.config, env: state.env });
@@ -358,6 +361,7 @@ describe("Workshop relocation and workspace survival", () => {
     const refreshed = (await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation;
     expect(refreshed).toBeDefined();
     await fs.rm(projectFile);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     await migrateLegacySkillWorkshopProposals({ config: fixture.config, env: state.env });
@@ -381,6 +385,7 @@ describe("Workshop relocation and workspace survival", () => {
       if (condition === "recreated") {
         await fs.rename(replacement, fixture.workspaceDir);
       }
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
 
       await migrateLegacySkillWorkshopProposals({ config: fixture.config, env: state.env });
@@ -424,6 +429,7 @@ describe("Workshop relocation and workspace survival", () => {
         generatedHashes: new Map(),
         nowMs: refreshedAtMs,
       });
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
 
       await migrateLegacySkillWorkshopProposals({ config: fixture.config, env: state.env });

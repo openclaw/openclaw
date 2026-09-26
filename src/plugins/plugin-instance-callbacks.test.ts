@@ -9,46 +9,75 @@ import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-s
 import { createPluginRecord } from "./status.test-helpers.js";
 
 describe("plugin value invocation ownership", () => {
-  it("keeps Promise inspection and assimilation in the admitted owner", async () => {
-    const registry = createEmptyPluginRegistry();
-    const record = createPluginRecord({ id: "promise-export" });
-    registry.plugins.push(record);
-    const instance = new PluginInstance(record.id, { record, registry });
-    const store = createPluginRuntimeStore<string>("unset fixture runtime");
-    instance.run(() => store.setRuntime("owned runtime"));
-    const pending = createDeferredCore();
-    const observed: Array<{ phase: string; registry: unknown; runtime: unknown }> = [];
-    const observe = (phase: string) =>
-      observed.push({
-        phase,
-        registry: getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
-        runtime: store.tryGetRuntime(),
+  it.each(["function", "iterator"] as const)(
+    "keeps Promise inspection and assimilation in %s admission",
+    async (surface) => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "promise-export" });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
+      const store = createPluginRuntimeStore<string>("unset fixture runtime");
+      instance.run(() => store.setRuntime("owned runtime"));
+      const pending = createDeferredCore();
+      const value = surface === "iterator" ? new Date(0) : pending.promise;
+      const observed: Array<{ phase: string; registry: unknown; runtime: unknown }> = [];
+      const observe = (phase: string) =>
+        observed.push({
+          phase,
+          registry: getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
+          runtime: store.tryGetRuntime(),
+        });
+      // oxlint-disable-next-line unicorn/no-thenable -- Plugin-defined Promise inspection must retain its admitted scope.
+      void Object.defineProperty(value, "then", {
+        get() {
+          observe("getter");
+          return (...args: Parameters<Promise<void>["then"]>) => {
+            observe("method");
+            return Promise.prototype.then.apply(pending.promise, args);
+          };
+        },
       });
-    // oxlint-disable-next-line unicorn/no-thenable -- Plugin-defined Promise inspection must retain its admitted scope.
-    void Object.defineProperty(pending.promise, "then", {
-      get() {
-        observe("getter");
-        return (...args: Parameters<Promise<void>["then"]>) => {
-          observe("method");
-          return Promise.prototype.then.apply(pending.promise, args);
-        };
-      },
-    });
-    let result: Promise<void> | undefined;
-    try {
-      result = instance.wrap(() => pending.promise)();
-      expect(observed.map((item) => item.phase)).toContain("getter");
-      expect(observed.map((item) => item.phase)).toContain("method");
-      for (const item of observed) {
-        expect.soft(item.registry, item.phase).toBe(registry);
-        expect.soft(item.runtime, item.phase).toBe("owned runtime");
+      let result: Promise<unknown> | undefined;
+      let closeIterator: (() => Promise<void>) | undefined;
+      try {
+        if (surface === "iterator") {
+          const stream = instance.wrap({
+            [Symbol.asyncIterator]() {
+              return {
+                async next() {
+                  return { done: false, value };
+                },
+                async return() {
+                  return { done: true, value: undefined };
+                },
+              };
+            },
+          });
+          const iterator = stream[Symbol.asyncIterator]();
+          closeIterator = async () => {
+            await iterator.return();
+          };
+          const next = await iterator.next();
+          result = Promise.resolve(next.value);
+        } else {
+          result = Promise.resolve(instance.wrap(() => value)());
+        }
+        pending.resolve();
+        await result;
+        expect(observed.map((item) => item.phase)).toContain("getter");
+        expect(observed.map((item) => item.phase)).toContain("method");
+        for (const item of observed) {
+          expect.soft(item.registry, item.phase).toBe(registry);
+          expect.soft(item.runtime, item.phase).toBe("owned runtime");
+        }
+      } finally {
+        pending.resolve();
+        await result;
+        await closeIterator?.();
+        await instance.dispose();
       }
-    } finally {
-      pending.resolve();
-      await result;
-      await instance.dispose();
-    }
-  });
+    },
+  );
 });
 
 describe("plugin values delivered through caller callbacks", () => {

@@ -210,6 +210,7 @@ describe("createChatRunState", () => {
   );
 
   it.each([
+    "waiting_for_state",
     "naming_worktree",
     "creating_worktree",
     "running_setup",

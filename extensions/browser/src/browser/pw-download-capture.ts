@@ -1,10 +1,10 @@
 /** Shared Playwright download capture and output handling. */
 import crypto from "node:crypto";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
-import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 type BrowserDownloadCaptureState = {
   downloadWaiterDepth: number;

@@ -10,10 +10,7 @@ import {
   type WhatsAppBaileysGroupMetadataCache,
   type WhatsAppBaileysMessageCache,
 } from "./baileys-cache.js";
-import {
-  createWhatsAppDurableInboundQueue,
-  type WhatsAppDurableInboundQueue,
-} from "./durable-receive.js";
+import type { WhatsAppDurableInboundQueue } from "./durable-receive.js";
 import {
   createWhatsAppGroupMetadataCacheOwner,
   type WhatsAppGroupMetadataCache,
@@ -74,13 +71,8 @@ type MonitorWebInboxOptions = {
   durableInboundQueue?: WhatsAppDurableInboundQueue;
 };
 
-type AttachWebInboxToSocketOptions = Omit<
-  MonitorWebInboxOptions,
-  "onMessage" | "shouldDebounce" | "socketTiming"
-> & {
+type AttachWebInboxToSocketOptions = MonitorWebInboxOptions & {
   socketTiming: Required<WhatsAppSocketTimingOptions>;
-  onMessage: (msg: AdmittedWebInboundCallbackMessage) => Promise<void>;
-  shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
 };
 
 export async function attachWebInboxToSocket(
@@ -134,8 +126,7 @@ export async function attachWebInboxToSocket(
     appendReplyWindow: options.appendReplyWindow,
     shouldDebounce: options.shouldDebounce,
     onPendingWorkChanged: options.onPendingWorkChanged,
-    durableInboundQueue:
-      options.durableInboundQueue ?? createWhatsAppDurableInboundQueue(options.accountId),
+    durableInboundQueue: options.durableInboundQueue,
   });
   const sendApi = createWebSendApi({
     sock: socketSession.socketOperations,

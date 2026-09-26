@@ -133,35 +133,48 @@ suite.define(() => {
     expect(tabsBox.x).toBeGreaterThan(toolbar.x + toolbar.width);
   });
 
-  it("keeps stacked hub tabs and title below the collapsed Mac controls", async () => {
-    const page = await openPage("plugins", installNativeWebChrome, ".plugins-hub-header", {
-      methodResponses: {
-        "plugins.catalog.browse": discoveryResult,
-        "plugins.catalog.categories": discoveryCategories,
-      },
-    });
-    const toolbar = await collapseNative(page);
-    const header = page.locator(".plugins-hub-header");
-    const tabs = header.locator(".hub-page-header__tabs");
-    await expect
-      .poll(async () => (await tabs.boundingBox())?.y ?? -1)
-      .toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
-    // Both elements move together while the sidebar collapses; separate browser
-    // reads can compare different animation frames and report false misalignment.
-    const { titleBox, tabsBox } = await header.evaluate((element) => ({
-      titleBox: element.querySelector(".page-title")!.getBoundingClientRect().toJSON(),
-      tabsBox: element.querySelector(".hub-page-header__tabs")!.getBoundingClientRect().toJSON(),
-    }));
-    expect(titleBox.height).toBeGreaterThan(1);
-    expect(titleBox.y).toBeGreaterThanOrEqual(tabsBox.y + tabsBox.height);
-    expect(Math.abs(titleBox.x - tabsBox.x)).toBeLessThanOrEqual(1);
-    if (proofDir) {
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(proofDir, "native-web-collapsed-stacked-header.png"),
+  it.each(["ltr", "rtl"] as const)(
+    "keeps the stacked hub title and tabs below collapsed Mac controls (%s)",
+    async (direction) => {
+      const page = await openPage("plugins", installNativeWebChrome, ".plugins-hub-header", {
+        methodResponses: {
+          "plugins.catalog.browse": discoveryResult,
+          "plugins.catalog.categories": discoveryCategories,
+        },
       });
-    }
-  });
+      await page.evaluate((dir) => {
+        document.documentElement.dir = dir;
+      }, direction);
+      const toolbar = await collapseNative(page);
+      const header = page.locator(".plugins-hub-header");
+      const title = header.locator(".page-title");
+      await expect
+        .poll(async () => (await title.boundingBox())?.y ?? -1)
+        .toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      // Both elements move together while the sidebar collapses; separate browser
+      // reads can compare different animation frames and report false misalignment.
+      const { titleBox, introBox, tabsBox } = await header.evaluate((element) => ({
+        titleBox: element.querySelector(".page-title")!.getBoundingClientRect().toJSON(),
+        introBox: element
+          .querySelector(".hub-page-header__title")!
+          .getBoundingClientRect()
+          .toJSON(),
+        tabsBox: element.querySelector(".hub-page-header__tabs")!.getBoundingClientRect().toJSON(),
+      }));
+      expect(titleBox.height).toBeGreaterThan(1);
+      expect(titleBox.width).toBeGreaterThan(1);
+      expect(tabsBox.y).toBeGreaterThanOrEqual(introBox.bottom);
+      const titleStart = direction === "rtl" ? titleBox.right : titleBox.left;
+      const tabsStart = direction === "rtl" ? tabsBox.right : tabsBox.left;
+      expect(Math.abs(titleStart - tabsStart)).toBeLessThanOrEqual(1);
+      if (proofDir) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, `native-web-collapsed-stacked-header-${direction}.png`),
+        });
+      }
+    },
+  );
 
   it("keeps RTL page actions clear of the fixed left controls", async () => {
     // Arabic and Persian set the document direction (i18n/lib/translate.ts);

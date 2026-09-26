@@ -17,7 +17,7 @@ describe("meeting browser act lock", () => {
     const entered = createDeferred();
     const run = async (name: string, gate?: Promise<void>) =>
       await runMeetingBrowserAct({
-        deadline: Date.now() + 10_000,
+        deadline: performance.now() + 10_000,
         targetId: "target-1",
         operation: async () => {
           active += 1;
@@ -47,7 +47,7 @@ describe("meeting browser act lock", () => {
   it("releases the target after a failed evaluation", async () => {
     await expect(
       runMeetingBrowserAct({
-        deadline: Date.now() + 10_000,
+        deadline: performance.now() + 10_000,
         targetId: "target-failure",
         operation: async () => {
           throw new Error("evaluation failed");
@@ -57,7 +57,7 @@ describe("meeting browser act lock", () => {
 
     await expect(
       runMeetingBrowserAct({
-        deadline: Date.now() + 10_000,
+        deadline: performance.now() + 10_000,
         targetId: "target-failure",
         operation: async () => "recovered",
       }),
@@ -70,13 +70,13 @@ describe("meeting browser act lock", () => {
       releaseFirst = resolve;
     });
     const first = runMeetingBrowserAct({
-      deadline: Date.now() + 10_000,
+      deadline: performance.now() + 10_000,
       targetId: "target-deadline",
       operation: async () => await firstGate,
     });
     let expiredStarted = false;
     const expired = runMeetingBrowserAct({
-      deadline: Date.now() + 1_000,
+      deadline: performance.now() + 1_000,
       targetId: "target-deadline",
       operation: async () => {
         expiredStarted = true;
@@ -91,7 +91,7 @@ describe("meeting browser act lock", () => {
     expect(expiredStarted).toBe(false);
 
     const third = runMeetingBrowserAct({
-      deadline: Date.now() + 10_000,
+      deadline: performance.now() + 10_000,
       targetId: "target-deadline",
       operation: async () => "recovered",
     });
@@ -108,7 +108,7 @@ describe("meeting browser act lock", () => {
     });
     let settled = false;
     const running = runMeetingBrowserAct({
-      deadline: Date.now() + 1_000,
+      deadline: performance.now() + 1_000,
       targetId: "target-running",
       operation: async () => await gate,
     }).finally(() => {

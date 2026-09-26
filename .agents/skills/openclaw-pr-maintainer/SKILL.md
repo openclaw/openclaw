@@ -113,3 +113,16 @@ Verify the final merge/closure state and source rather than trusting a local
 summary. Report the problem, owner-level change, important proof and limitations,
 credit, and linked final state in concise prose. Record worthwhile follow-ups;
 do not manufacture another task after a bounded request is complete.
+
+## Finalize and clean up
+
+Once the requested outcome and required verification are complete, remove the
+task's disposable proof and scratch. This includes test logs, receipts, local
+proof archives, and `.crabbox` outputs. Do not retain, archive, export, or hand off
+these files merely to remove the completed task's worktree. Follow
+[native closeout](references/landing.md#recovery-and-closeout).
+
+Required pre-merge proof stays mandatory. Preserve requested deliverables,
+explicit retention requests, unfinished source, recovery state needed by unfinished
+operations, active owners, credentials, agent state, and shared dependencies.
+Optional follow-ups do not keep a completed task open.

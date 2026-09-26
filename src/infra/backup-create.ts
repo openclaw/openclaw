@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   sealBackupResourceInventory,
@@ -22,7 +23,6 @@ import {
   backupManifestSizeError,
   type BackupManifest,
 } from "../commands/backup-verify-manifest.js";
-import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
@@ -129,7 +129,7 @@ async function resolveOutputPath(params: {
     const cwd = path.resolve(process.cwd());
     const canonicalCwd = await fs.realpath(cwd).catch(() => cwd);
     const cwdInsideSource = params.includedAssets.some((asset) =>
-      isPathWithin(canonicalCwd, asset.sourcePath),
+      isPathInside(asset.sourcePath, canonicalCwd),
     );
     const defaultDir = cwdInsideSource ? (resolveHomeDir() ?? path.dirname(params.stateDir)) : cwd;
     return path.resolve(defaultDir, basename);
@@ -167,7 +167,7 @@ function formatBackupOutputFailure(
   }
   if (ownedRoot) {
     const failedPath = filesystemError.path;
-    if (typeof failedPath !== "string" || !isPathWithin(path.resolve(failedPath), ownedRoot)) {
+    if (typeof failedPath !== "string" || !isPathInside(ownedRoot, path.resolve(failedPath))) {
       return error;
     }
   }
@@ -232,7 +232,7 @@ async function chooseBackupTempRoot(params: {
   const systemTmp = os.tmpdir();
   const canonicalSystemTmp = await canonicalizePathForContainment(systemTmp);
   const systemTmpInsideAsset = params.assets.some((asset) =>
-    isPathWithin(canonicalSystemTmp, asset.sourcePath),
+    isPathInside(asset.sourcePath, canonicalSystemTmp),
   );
   if (!systemTmpInsideAsset) {
     return systemTmp;
@@ -245,7 +245,7 @@ async function chooseBackupTempRoot(params: {
   const fallback = path.dirname(params.outputPath);
   const canonicalFallback = await canonicalizePathForContainment(fallback);
   const fallbackInsideAsset = params.assets.find((asset) =>
-    isPathWithin(canonicalFallback, asset.sourcePath),
+    isPathInside(asset.sourcePath, canonicalFallback),
   );
   if (fallbackInsideAsset) {
     throw new Error(
@@ -402,7 +402,7 @@ export async function createBackupArchive(
 
   const canonicalOutputPath = await canonicalizePathForContainment(outputPath);
   const overlappingAsset = plan.included.find((asset) =>
-    isPathWithin(canonicalOutputPath, asset.sourcePath),
+    isPathInside(asset.sourcePath, canonicalOutputPath),
   );
   if (overlappingAsset) {
     throw new Error(
@@ -487,13 +487,7 @@ export async function createBackupArchive(
       skippedStateSourcePaths.add(path.resolve(plan.configPath));
       skippedStateSourcePaths.add(await canonicalizePathForContainment(plan.configPath));
     }
-    for (const snapshot of stateSqliteBackup.snapshots) {
-      sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
-      for (const skippedSourcePath of snapshot.skippedSourcePaths) {
-        skippedStateSourcePaths.add(skippedSourcePath);
-      }
-    }
-    for (const snapshot of legacyAuditSnapshots) {
+    for (const snapshot of [...stateSqliteBackup.snapshots, ...legacyAuditSnapshots]) {
       sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
       for (const skippedSourcePath of snapshot.skippedSourcePaths) {
         skippedStateSourcePaths.add(skippedSourcePath);
@@ -528,7 +522,7 @@ export async function createBackupArchive(
       ) {
         return false;
       }
-      if (isPathWithin(resolvedEntryPath, gatewayLockDir)) {
+      if (isPathInside(gatewayLockDir, resolvedEntryPath)) {
         return false;
       }
       if (
@@ -640,6 +634,11 @@ export async function createBackupArchive(
                 // Per-entry reports must not overflow the bounded restore manifest.
                 const manifest = buildManifest({ ...result, skipped: plan.skipped }, plan);
                 manifest.externalSymbolicLinks = externalSymbolicLinks;
+                manifest.sqliteSnapshots = snapshotFacts.map((snapshot) =>
+                  snapshot.role === "agent"
+                    ? { sourcePath: snapshot.sourcePath, role: "agent", agentId: snapshot.agentId }
+                    : { sourcePath: snapshot.sourcePath, role: "global" },
+                );
                 const contents = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
                 const sizeError = backupManifestSizeError(contents.length);
                 if (sizeError) {

@@ -129,14 +129,7 @@ export async function runCliFallbackCandidate(
   // from the shared agent-event handler; without it a failed CLI command renders
   // exactly like one that succeeded.
   const deliverCliCommandOutcome = async (
-    payload: {
-      name: string | undefined;
-      phase: "start" | "update" | "result";
-      args: Record<string, unknown> | undefined;
-      toolCallId?: string;
-      isError?: boolean;
-      result?: unknown;
-    },
+    payload: Parameters<typeof cliToolSummaryTracker.noteToolEvent>[0],
     commandBearing: boolean,
   ) => {
     const onCommandOutput = turn.opts?.onCommandOutput;
@@ -221,6 +214,7 @@ export async function runCliFallbackCandidate(
                     return;
                   }
                   await clearCliSessionInStore({
+                    agentId: turn.followupRun.run.agentId,
                     provider: params.cliExecutionProvider,
                     expectedCliSessionId: cliSessionBinding.sessionId,
                     expectedSessionId: sessionEntry?.sessionId,
@@ -263,45 +257,32 @@ export async function runCliFallbackCandidate(
           onCompactionStart: turn.opts?.onCompactionStart,
           onCompactionEnd: turn.opts?.onCompactionEnd,
           onToolEvent: async (payload) => {
-            if (!params.preserveProgressCallbackStartOrder) {
-              const commandBearing = await cliToolSummaryTracker.noteToolEvent(payload);
-              if (payload.phase === "result") {
-                await deliverCliCommandOutcome(payload, commandBearing);
-                return;
-              }
-              const { name, phase, args, toolCallId } = payload;
-              await Promise.all([
-                turn.typingSignals.signalToolStart(),
-                turn.opts?.onToolStart?.({
-                  ...(toolCallId ? { toolCallId } : {}),
-                  name,
-                  phase,
-                  args,
-                  detailMode: turn.toolProgressDetail,
-                }),
-              ]);
-              return;
-            }
             const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
             if (payload.phase === "result") {
-              const commandBearing = await summaryPromise;
-              await deliverCliCommandOutcome(payload, commandBearing);
+              await deliverCliCommandOutcome(payload, await summaryPromise);
               return;
             }
             const { name, phase, args, toolCallId } = payload;
+            const deliverToolStart = () =>
+              turn.opts?.onToolStart?.({
+                ...(toolCallId ? { toolCallId } : {}),
+                name,
+                phase,
+                args,
+                detailMode: turn.toolProgressDetail,
+              });
+            if (!params.preserveProgressCallbackStartOrder) {
+              await summaryPromise;
+              await Promise.all([turn.typingSignals.signalToolStart(), deliverToolStart()]);
+              return;
+            }
             // Tool and assistant bridges drain independently. Preserve source order.
             await Promise.all([
               summaryPromise,
               params.presentation.presentWithTyping(
                 turn.typingSignals.signalToolStart(),
                 async () => {
-                  await turn.opts?.onToolStart?.({
-                    ...(toolCallId ? { toolCallId } : {}),
-                    name,
-                    phase,
-                    args,
-                    detailMode: turn.toolProgressDetail,
-                  });
+                  await deliverToolStart();
                 },
               ),
             ]);
@@ -484,6 +465,7 @@ export async function runCliFallbackCandidate(
           // invalidation remains, and failure must retain the returned turn.
           return await settleCliSessionResult(candidateResult, async () => {
             await clearCliSessionInStore({
+              agentId: turn.followupRun.run.agentId,
               provider: params.cliExecutionProvider,
               expectedCliSessionId: cliSessionBinding?.sessionId,
               expectedSessionId: sessionEntry?.sessionId,
@@ -504,6 +486,7 @@ export async function runCliFallbackCandidate(
           )
         ) {
           return await persistCliSessionBindingResult({
+            agentId: turn.followupRun.run.agentId,
             provider: params.cliExecutionProvider,
             result: candidateResult,
             sessionKey,

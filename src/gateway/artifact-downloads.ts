@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
@@ -58,12 +59,7 @@ export function createArtifactDownload(params: {
       grants.delete(ticket);
     }
   }
-  while (grants.size >= MAX_DOWNLOADS_PER_CONNECTION) {
-    const oldest = grants.keys().next().value;
-    if (oldest !== undefined) {
-      grants.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(grants, MAX_DOWNLOADS_PER_CONNECTION - 1);
   const ticket = randomBytes(32).toString("base64url");
   const expiresAt = now + DOWNLOAD_TTL_MS;
   grants.set(ticket, {

@@ -266,8 +266,8 @@ describe("sessions.list catalog scoping", () => {
         expect(result.sessions[0]?.thinkingOptions).toContain(level);
         expect(result.defaults.thinkingOptions).toContain(level);
         if (level === "max") {
-          expect(result.sessions[0]?.thinkingOptions).not.toContain("ultra");
-          expect(result.defaults.thinkingOptions).not.toContain("ultra");
+          expect(result.sessions[0]?.thinkingOptions).toContain("ultra");
+          expect(result.defaults.thinkingOptions).toContain("ultra");
         }
         expect(owner.loadFullModelCatalog).not.toHaveBeenCalled();
         expect(JSON.stringify(result)).not.toContain('"metadataSnapshot":');
@@ -332,6 +332,7 @@ describe("sessions.list catalog scoping", () => {
       expect(first.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual([
         "off",
         "low",
+        "ultra",
       ]);
       const catalogs = vi.spyOn(context, "readPreparedGatewayModelCatalogBatch");
       expect((await listSessions(request)).sessions).toEqual(first.sessions);
@@ -352,18 +353,26 @@ describe("sessions.list catalog scoping", () => {
       expect(roster.agents.find((row) => row.id === "work")?.thinkingOptions).toEqual([
         "off",
         "low",
+        "ultra",
       ]);
 
-      // An empty replacement is authoritative even while the global registry still offers Ultra.
+      // An empty replacement restores the generic native ladder without disabling harness Ultra.
       owners.set("main", { ...mainOwner, pluginRegistry: createEmptyPluginRegistry() });
       notifyPreparedModelRuntimePublication({ phase: "published" });
       const replaced = await listSessions(request);
-      expect(
-        replaced.sessions.find((row) => row.agentId === "main")?.thinkingOptions,
-      ).not.toContain("ultra");
+      expect(replaced.sessions.find((row) => row.agentId === "main")?.thinkingOptions).toEqual([
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "max",
+        "ultra",
+      ]);
       expect(replaced.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual([
         "off",
         "low",
+        "ultra",
       ]);
 
       failMainCatalogRead = true;
@@ -375,6 +384,7 @@ describe("sessions.list catalog scoping", () => {
       expect(partial.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual([
         "off",
         "low",
+        "ultra",
       ]);
       failMainCatalogRead = false;
 
@@ -424,7 +434,7 @@ describe("sessions.list catalog scoping", () => {
       setRuntimeConfigSnapshot(nextConfig);
       const changedConfig = await listSessions(request);
       expect(changedConfig.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual(
-        ["off", "low"],
+        ["off", "low", "ultra"],
       );
     });
   });

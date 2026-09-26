@@ -1,6 +1,7 @@
 // Backup planning helpers for archive naming, payload paths, and deduplicated asset selection.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import {
   createConfigIO,
@@ -9,6 +10,7 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeWindowsNamespaceAlias } from "../infra/backup-archive-path-policy.js";
 import {
   resolveBackupConfigCapture,
   type BackupConfigCapture,
@@ -38,8 +40,8 @@ import {
   type BackupRegenerableKind,
   type BackupResourcePlan,
 } from "./backup-resource-inventory.js";
-import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
-import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
+import { buildCleanupPlan } from "./cleanup-utils.js";
+import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
 
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
@@ -159,7 +161,7 @@ export function buildBackupArchiveBasename(nowMs = Date.now()): string {
 
 /** Encode an absolute or relative source path into a traversal-safe archive payload path. */
 function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
-  const normalized = sourcePath.replaceAll("\\", "/");
+  const normalized = normalizeWindowsNamespaceAlias(sourcePath).replaceAll("\\", "/");
   const windowsMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
   if (windowsMatch) {
     const drive = windowsMatch[1]?.toUpperCase() ?? "UNKNOWN";
@@ -230,7 +232,7 @@ async function resolveBackupPlanFromPaths(params: {
       await Promise.all(
         excludedWorkspaceDirs.map(async (workspaceDir) =>
           [path.resolve(workspaceDir), await canonicalizePathForContainment(workspaceDir)].filter(
-            (dir) => dir !== canonicalStateDir && !isPathWithin(canonicalStateDir, dir),
+            (dir) => dir !== canonicalStateDir && !isPathInside(dir, canonicalStateDir),
           ),
         ),
       )
@@ -283,7 +285,7 @@ async function resolveBackupPlanFromPaths(params: {
 
   const isOwnedPathCoveredBy = (sourcePath: string, sourceRoot: string): boolean => {
     let ancestor = sourcePath;
-    while (isPathWithin(ancestor, sourceRoot)) {
+    while (isPathInside(sourceRoot, ancestor)) {
       if (resources.isVolatile(ancestor)) {
         return false;
       }
@@ -402,7 +404,7 @@ async function resolveBackupPlanFromPaths(params: {
     const coveredBy = included.find((asset) =>
       candidate.kind === "config" || candidate.kind === "credentials"
         ? isOwnedPathCoveredBy(candidate.canonicalPath, asset.sourcePath)
-        : isPathWithin(candidate.canonicalPath, asset.sourcePath),
+        : isPathInside(asset.sourcePath, candidate.canonicalPath),
     );
     if (coveredBy) {
       skipped.push({
@@ -426,7 +428,7 @@ async function resolveBackupPlanFromPaths(params: {
   const regenerableRoots = resources.regenerableRoots.filter(
     (resource) =>
       !resources.isIncluded(resource.sourcePath) &&
-      included.some((asset) => isPathWithin(resource.sourcePath, asset.sourcePath)),
+      included.some((asset) => isPathInside(asset.sourcePath, resource.sourcePath)),
   );
   const regenerableResourceExists = await Promise.all(
     regenerableRoots.map((resource) => pathExists(resource.sourcePath)),
@@ -522,7 +524,7 @@ function resolveManagedSkillSymlinkTargetCandidates(params: {
       if (
         !targetPath ||
         params.ownerRoots.some(
-          (ownerRoot) => isPathWithin(targetPath, ownerRoot) || isPathWithin(ownerRoot, targetPath),
+          (ownerRoot) => isPathInside(ownerRoot, targetPath) || isPathInside(targetPath, ownerRoot),
         )
       ) {
         continue;
@@ -624,7 +626,7 @@ async function resolveBackupPlanFromState(params: {
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
   const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
   const configSnapshot = configRead.snapshot;
-  const discoverySnapshot = resolveStartupConfigSnapshot(configSnapshot) ?? configSnapshot;
+  const discoverySnapshot = resolveLegacyConfigSnapshotForBackup(configSnapshot) ?? configSnapshot;
   const configCapture = await resolveBackupConfigCapture(configRead);
   if (discoverySnapshot.exists && !discoverySnapshot.valid) {
     throw new Error(

@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqliteQueries from "../infra/kysely-sync.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "./openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -13,11 +16,13 @@ import { onUserProfilesChanged } from "./user-profile-events.js";
 import {
   getUserProfileDisplay,
   getUserProfileDisplays,
+  prepareUserProfileIdentity,
   readUserProfileAliases,
   readUserProfileIdentity,
   resolveUserProfileReference,
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
+import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
   ensureProfileForEmail,
   linkEmail,
@@ -48,6 +53,106 @@ function fixture() {
 }
 
 describe("resident profile display and reference catalog", () => {
+  it.each(["email", "github", "delete"] as const)(
+    "keeps prepared binding checks current through %s changes without host SQL",
+    async (producer) => {
+      const options = fixture();
+      const email = producer === "delete" ? "source@github" : "source@example.test";
+      const first = ensureProfileForEmail(email, options);
+      linkEmail("retained@example.test", first.id, options);
+      const target = ensureProfileForEmail("target@example.test", options);
+      if (producer === "github") {
+        syncGitHubIdentity(
+          {
+            identity: { accountId: 40, login: "first-account" },
+            authenticationAlias: { kind: "email", email },
+          },
+          options,
+        );
+      }
+      const prepared = await prepareUserProfileIdentity(first.id, options);
+      releases.push(prepared.release);
+      const bindings = prepared.emailBindingIds;
+      const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+      const current = prepared.readCurrentFacts(bindings);
+      expect(current.profile).toEqual({
+        profileId: first.id,
+        emails: [email, "retained@example.test"].toSorted(),
+        assignedRole: null,
+      });
+      expect(current.aliases).toEqual(new Set([first.id]));
+      expect(prepared.readCurrentProfile()).toEqual({ profileId: first.id, assignedRole: null });
+      expect(native).not.toHaveBeenCalled();
+      native.mockRestore();
+      setDisplayName(first.id, "Cosmetic update", options);
+      linkEmail("later@example.test", first.id, options);
+      expect(prepared.readCurrentFacts().profile.emails).toEqual(
+        [email, "retained@example.test", "later@example.test"].toSorted(),
+      );
+      linkEmail("later@example.test", target.id, options);
+      setUserProfileRole(first.id, "reader", options);
+      expect(prepared.readCurrentProfile()).toEqual({
+        profileId: first.id,
+        assignedRole: "reader",
+      });
+      prepared.readCurrentFacts(bindings);
+      if (producer === "email") {
+        linkEmail(email, target.id, options);
+        linkEmail(email, first.id, options);
+      } else if (producer === "github") {
+        syncGitHubIdentity(
+          {
+            identity: { accountId: 41, login: "second-account" },
+            authenticationAlias: { kind: "email", email },
+          },
+          options,
+        );
+      } else {
+        migrateLegacyTailscaleProfileIdentities(options);
+        linkEmail(email, first.id, options);
+      }
+      const after = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+      expect(prepared.readCurrentFacts().profile).toEqual({
+        profileId: first.id,
+        emails: (producer === "github"
+          ? ["retained@example.test"]
+          : [email, "retained@example.test"]
+        ).toSorted(),
+        assignedRole: "reader",
+      });
+      expect(() => prepared.readCurrentFacts(bindings)).toThrow("user profile not found");
+      expect(after).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses an old prepared identity after physical replacement and prepares the new store off-thread", async () => {
+    const options = fixture();
+    const prior = ensureProfileForEmail("prior@example.test", options);
+    const prepared = await prepareUserProfileIdentity(prior.id, options);
+    releases.push(prepared.release);
+    await closeOpenClawStateDatabaseByPathAsync(options.path);
+    fs.renameSync(options.path, `${options.path}.old`);
+    const replacement = fixture();
+    const current = ensureProfileForEmail("current@example.test", replacement);
+    await closeOpenClawStateDatabaseByPathAsync(replacement.path);
+    fs.renameSync(replacement.path, options.path);
+    expect(() => prepared.readCurrentFacts()).toThrow();
+    expect(() => prepared.readCurrentProfile()).toThrow();
+    const next = await prepareUserProfileIdentity(current.id, options);
+    releases.push(next.release);
+    expect(next.emailBindingIds).toEqual([expect.any(String)]);
+    expect(next.readCurrentFacts().profile).toEqual({
+      profileId: current.id,
+      emails: ["current@example.test"],
+      assignedRole: null,
+    });
+    expect(() => next.readCurrentFacts(next.emailBindingIds)).not.toThrow();
+    const missing = await prepareUserProfileIdentity(prior.id, options);
+    releases.push(missing.release);
+    expect(() => missing.readCurrentFacts()).toThrow("user profile not found");
+    expect(() => missing.readCurrentProfile()).toThrow("user profile not found");
+  });
+
   it.each(["email", "github"])(
     "publishes committed %s merge chains and cosmetics before session observers without clean SQL",
     (producer) => {

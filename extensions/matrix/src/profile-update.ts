@@ -1,6 +1,7 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import { updateMatrixAccountConfig, resolveMatrixConfigPath } from "./matrix/config-update.js";
+import type { MatrixProfileSyncResult } from "./matrix/profile.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -8,13 +9,7 @@ export type MatrixProfileUpdateResult = {
   accountId: string;
   displayName: string | null;
   avatarUrl: string | null;
-  profile: {
-    displayNameUpdated: boolean;
-    avatarUpdated: boolean;
-    resolvedAvatarUrl: string | null;
-    uploadedAvatarSource: "http" | "path" | null;
-    convertedAvatarFromHttp: boolean;
-  };
+  profile: Omit<MatrixProfileSyncResult, "skipped">;
   configPath: string;
 };
 
@@ -54,18 +49,13 @@ export async function applyMatrixProfileUpdate(params: {
     nextConfig: updated as never,
     afterWrite: { mode: "auto" },
   });
+  const { skipped: _skipped, ...profile } = synced;
 
   return {
     accountId,
     displayName,
     avatarUrl: persistedAvatarUrl ?? null,
-    profile: {
-      displayNameUpdated: synced.displayNameUpdated,
-      avatarUpdated: synced.avatarUpdated,
-      resolvedAvatarUrl: synced.resolvedAvatarUrl,
-      uploadedAvatarSource: synced.uploadedAvatarSource,
-      convertedAvatarFromHttp: synced.convertedAvatarFromHttp,
-    },
+    profile,
     configPath: resolveMatrixConfigPath(updated, accountId),
   };
 }

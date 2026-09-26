@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import type { observeSemanticTurnContext } from "../../harness/semantic-turn-context.js";
 import {
@@ -39,7 +40,11 @@ describe("admitted embedded turn-context observation", () => {
           ...(kind === "legacy" ? { contextEngine: undefined } : {}),
           config: {
             agents: {
-              defaults: { turnContextCuration: { mode: "shadow", minEstimatedTokens: 1 } },
+              defaults: {
+                experimental: { decisionAssistance: true },
+                decisionModel: "fixture/default",
+                turnContextCuration: { mode: "shadow", minEstimatedTokens: 1 },
+              },
             },
           },
         },
@@ -55,16 +60,30 @@ describe("admitted embedded turn-context observation", () => {
     },
   );
 
-  it("keeps off-mode legacy execution on the original path", async () => {
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey: "agent:main:context-off",
-      tempPaths,
-      attemptOverrides: {
-        contextEngine: undefined,
-        config: { agents: { defaults: { turnContextCuration: { mode: "off" } } } },
-      },
-    });
-    expect(observe).not.toHaveBeenCalled();
-  });
+  it.each(["off", undefined] as const)(
+    "keeps mode=%s legacy execution on the original path",
+    async (mode) => {
+      const assemble = vi.spyOn(LegacyContextEngine.prototype, "assemble");
+      await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:context-off",
+        tempPaths,
+        attemptOverrides: {
+          contextEngine: undefined,
+          config: {
+            agents: {
+              defaults: {
+                experimental: { decisionAssistance: true },
+                decisionModel: "fixture/default",
+                turnContextCuration: { mode },
+              },
+            },
+          },
+        },
+      });
+      expect(observe).not.toHaveBeenCalled();
+      expect(assemble).not.toHaveBeenCalled();
+      assemble.mockRestore();
+    },
+  );
 });

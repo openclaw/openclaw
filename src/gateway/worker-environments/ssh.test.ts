@@ -28,6 +28,65 @@ function prepareTestWorkerSsh() {
 }
 
 describe("worker SSH preparation", () => {
+  it("discards a late identity before writing it and closes the retained preparation guard", async () => {
+    const controller = new AbortController();
+    const closed = new Error("SSH preparation stopped");
+    let retained: (() => void) | undefined;
+    const writeFile = vi.spyOn(fs, "writeFile");
+    let prepared: Awaited<ReturnType<typeof prepareWorkerSsh>> | undefined;
+    const request = {
+      ssh: SSH,
+      pinnedHostKey: SSH.hostKey,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+      resolveIdentity: async (
+        _keyRef: WorkerSshEndpoint["keyRef"],
+        context?: { assertCurrent: () => void },
+      ) => {
+        retained = context?.assertCurrent;
+        context?.assertCurrent();
+        controller.abort(closed);
+        return { kind: "material" as const, contents: "synthetic-worker-key" };
+      },
+    };
+    try {
+      await expect(
+        prepareWorkerSsh(request).then((value) => {
+          prepared = value;
+          return value;
+        }),
+      ).rejects.toBe(closed);
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(retained).toBeTypeOf("function");
+      expect(() => retained?.()).toThrow("preparation invocation is closed");
+    } finally {
+      await prepared?.dispose();
+      writeFile.mockRestore();
+    }
+  });
+
+  it("closes the preparation guard after success without disposing the prepared identity", async () => {
+    let retained: (() => void) | undefined;
+    const prepared = await prepareWorkerSsh({
+      ssh: SSH,
+      pinnedHostKey: SSH.hostKey,
+      resolveIdentity: async (
+        _keyRef: WorkerSshEndpoint["keyRef"],
+        context?: { assertCurrent: () => void },
+      ) => {
+        retained = context?.assertCurrent;
+        context?.assertCurrent();
+        return { kind: "path", path: "/keys/worker" };
+      },
+    });
+    try {
+      expect(retained).toBeTypeOf("function");
+      expect(() => retained?.()).toThrow("preparation invocation is closed");
+      await fs.access(prepared.knownHostsPath);
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
   it("retries disposal after a filesystem cleanup failure", async () => {
     const prepared = await prepareTestWorkerSsh();
     const directory = path.dirname(prepared.knownHostsPath);

@@ -43,8 +43,11 @@ import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
-import { formatForLog } from "../ws-log.js";
-import { setAbortedAgentDedupeEntries, setGatewayDedupeEntries } from "./agent-dedupe.js";
+import {
+  buildAbortedAgentPayload,
+  setAbortedAgentDedupeEntries,
+  setGatewayDedupeEntries,
+} from "./agent-dedupe.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
 import {
   yieldAfterAgentAcceptedAck,
@@ -56,6 +59,7 @@ import {
   resolveAgentRestartRecoveryExecutionIdentityAdmission,
 } from "./agent-restart-recovery-context.js";
 import type { PreparedAgentRunDispatch } from "./agent-run-admission-types.js";
+import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import {
   resolveAbortedAgentStopReason,
@@ -80,7 +84,6 @@ export async function startAgentRunExecution(params: {
   resolvedSessionKey?: string;
   requestedSessionKey?: string;
   resolvedSessionId?: string;
-  storePath?: string;
   agentId?: string;
   activeSessionAgentId: string;
   delivery: AgentDeliveryPhaseResult;
@@ -116,6 +119,11 @@ export async function startAgentRunExecution(params: {
   ) => Promise<boolean>;
 }): Promise<void> {
   const { prepared } = params;
+  const diagnostics = createAgentRunDiagnostics(
+    params.resolvedSessionKey,
+    params.sessionEntry?.incognito,
+    params.context.logGateway,
+  );
   const jobSessionBinding = prepared.activeRunAbort.entry ?? {
     sessionKey: params.resolvedSessionKey,
     sessionId: params.resolvedSessionId,
@@ -176,20 +184,22 @@ export async function startAgentRunExecution(params: {
           (!prepared.userTurn.privateCompletion || outcome.reason === "cancelled");
         releasePreparedAgentRunUserTurn(prepared.userTurn, cancelled ? "cancelled" : "interrupted");
       } catch (error) {
-        params.context.logGateway.warn(
-          `failed to settle pending agent input: ${formatForLog(error)}`,
-        );
+        diagnostics.warning("failed to settle pending agent input")(error);
       }
       prepared.activeRunAbort.cleanup();
       prepared.activeGatewayWorkAdmission.release();
       leaseActive = false;
       mediaCleanup ??= discardPreparedInboundMedia(refsToDiscard, params.context.logGateway);
       if (prepared.userTurn.recorder && params.resolvedSessionKey) {
-        emitSessionsChanged(params.context, {
-          sessionKey: params.resolvedSessionKey,
-          agentId: params.activeSessionAgentId,
-          reason: "agent.input.settled",
-        });
+        emitSessionsChanged(
+          params.context,
+          {
+            sessionKey: params.resolvedSessionKey,
+            agentId: params.activeSessionAgentId,
+            reason: "agent.input.settled",
+          },
+          { accessChanged: false },
+        );
       }
     };
     const dispatchAdmittedAgentRun = (
@@ -226,9 +236,7 @@ export async function startAgentRunExecution(params: {
           try {
             prepared.userTurn.recorder?.completeProcessing?.(outcome);
           } catch (completionError) {
-            params.context.logGateway.warn(
-              `input completion persistence failed: ${formatForLog(completionError)}`,
-            );
+            diagnostics.warning("input completion persistence failed")(completionError);
           }
         }
         await settleUnstartedTask(outcome);
@@ -237,9 +245,12 @@ export async function startAgentRunExecution(params: {
           dedupe: params.context.dedupe,
           keys: params.agentDedupeKeys,
           session: captureAgentJobSession(jobSessionBinding),
-          entry: { ts: Date.now(), ok: false, payload, error },
+          entry: diagnostics.forReplay({ ts: Date.now(), ok: false, payload, error }),
         });
-        params.io.emitFinal([false, payload, error], { runId: params.runId, error: renderedErr });
+        params.io.emitFinal([false, payload, error], {
+          runId: params.runId,
+          ...diagnostics.errorMeta(renderedErr),
+        });
       };
       const finishUndispatchedAbort = async () => {
         const stopReason = resolveAbortedAgentStopReason(prepared.activeRunAbort.entry);
@@ -267,21 +278,9 @@ export async function startAgentRunExecution(params: {
           runId: params.runId,
           stopReason,
         });
-        params.io.emitFinal(
-          [
-            true,
-            {
-              runId: params.runId,
-              status: "timeout" as const,
-              summary: "aborted",
-              stopReason,
-              timeoutPhase: "queue" as const,
-              providerStarted: false,
-            },
-            undefined,
-          ],
-          { runId: params.runId },
-        );
+        params.io.emitFinal([true, buildAbortedAgentPayload(params.runId, stopReason), undefined], {
+          runId: params.runId,
+        });
       };
       try {
         if (prepared.activeRunAbort.controller.signal.aborted) {
@@ -318,11 +317,15 @@ export async function startAgentRunExecution(params: {
           });
         }
         if (!params.suppressVisibleSessionEffects && params.resolvedSessionKey) {
-          emitSessionsChanged(params.context, {
-            sessionKey: params.resolvedSessionKey,
-            agentId: params.activeSessionAgentId,
-            reason: "send",
-          });
+          emitSessionsChanged(
+            params.context,
+            {
+              sessionKey: params.resolvedSessionKey,
+              agentId: params.activeSessionAgentId,
+              reason: "send",
+            },
+            { accessChanged: false },
+          );
         }
 
         if (!params.isRawModelRun) {
@@ -555,11 +558,15 @@ export async function startAgentRunExecution(params: {
                   }
                   params.io.emitExecutionStarted?.();
                   if (params.resolvedSessionKey) {
-                    emitSessionsChanged(params.context, {
-                      sessionKey: params.resolvedSessionKey,
-                      agentId: params.agentId,
-                      reason: "agent.run.started",
-                    });
+                    emitSessionsChanged(
+                      params.context,
+                      {
+                        sessionKey: params.resolvedSessionKey,
+                        agentId: params.agentId,
+                        reason: "agent.run.started",
+                      },
+                      { accessChanged: false },
+                    );
                   }
                 },
                 onActiveModelSelected: createAgentRunModelSelectionHandler({
@@ -610,6 +617,7 @@ export async function startAgentRunExecution(params: {
                 : undefined,
               io: params.io,
               context: params.context,
+              isIncognito: diagnostics.incognito,
               taskTrackingMode: prepared.dispatchTaskTrackingMode,
               restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
               canonicalSkillWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir,
@@ -634,10 +642,7 @@ export async function startAgentRunExecution(params: {
                 pendingRecovery ??= await repairMainSessionRecoveryMutation({
                   mutation: restoreAdmittedRecovery,
                   onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
-                  onError: (err) =>
-                    params.context.logGateway.warn(
-                      `failed to restore undispatched restart recovery: ${formatForLog(err)}`,
-                    ),
+                  onError: diagnostics.warning("failed to restore undispatched restart recovery"),
                 });
               }
             } finally {
@@ -649,8 +654,8 @@ export async function startAgentRunExecution(params: {
                     params.mainRestartRecoveryOwnerLease,
                   );
                 } catch (err) {
-                  params.context.logGateway.warn(
-                    `failed to release undispatched main restart recovery owner: ${formatForLog(err)}`,
+                  diagnostics.warning("failed to release undispatched main restart recovery owner")(
+                    err,
                   );
                 } finally {
                   try {

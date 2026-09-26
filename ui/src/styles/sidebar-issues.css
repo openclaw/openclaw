@@ -606,28 +606,11 @@ footer.sidebar-issues-panel__mentions-note {
   color: var(--accent-foreground);
 }
 
-.sidebar-mention-row__summary {
-  align-items: flex-start;
+.sidebar-issues-panel__notification-meta .sidebar-issues-panel__state {
+  flex: 0 1 auto;
 }
 
-.sidebar-mention-row__avatar {
-  flex: none;
-  margin-block-start: 2px;
-}
-
-.sidebar-mention-row__header {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.sidebar-mention-row__header .sidebar-issues-panel__entity {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.sidebar-mention-row__age {
+.sidebar-issues-panel__age {
   flex: none;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);

@@ -1,16 +1,25 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
-const { census, directory, read, definitelyDead, container, darwinCommand } = vi.hoisted(() => ({
-  census: vi.fn(),
-  directory: vi.fn(),
-  read: vi.fn(),
-  definitelyDead: vi.fn(),
-  container: vi.fn(),
-  darwinCommand: vi.fn(),
-}));
+const { census, directory, read, readlink, realpath, definitelyDead, container, darwinCommand } =
+  vi.hoisted(() => ({
+    census: vi.fn(),
+    directory: vi.fn(),
+    read: vi.fn(),
+    readlink: vi.fn(),
+    realpath: vi.fn(),
+    definitelyDead: vi.fn(),
+    container: vi.fn(),
+    darwinCommand: vi.fn(),
+  }));
 vi.mock("node:child_process", () => ({ spawnSync: census }));
-vi.mock("node:fs", () => ({ readdirSync: directory, readFileSync: read }));
+vi.mock("node:fs", () => ({
+  readdirSync: directory,
+  readFileSync: read,
+  readlinkSync: readlink,
+  realpathSync: realpath,
+  default: { readFileSync: read, realpathSync: realpath, readlinkSync: readlink },
+}));
 vi.mock("../shared/pid-alive.js", () => ({ isPidDefinitelyDead: definitelyDead }));
 vi.mock("./container-environment.js", () => ({ isContainerEnvironment: container }));
 vi.mock("../process/supervisor/darwin-process-command.js", () => ({
@@ -21,7 +30,14 @@ import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
 const self = process.pid;
 const launcher = self + 1;
 const peer = self + 2;
-type Process = { ppid: number; argv: string[]; state?: string; flags?: number };
+type Process = {
+  ppid: number;
+  argv: string[];
+  state?: string;
+  flags?: number;
+  cwd?: string;
+  environment?: string;
+};
 let rows: Map<number, Process>;
 
 beforeEach(() => {
@@ -35,18 +51,73 @@ beforeEach(() => {
   container.mockReset().mockReturnValue(false);
   census.mockReset();
   darwinCommand.mockReset();
+  realpath.mockReset().mockImplementation((file: string) => file);
+  readlink.mockReset().mockImplementation((file: string) => {
+    const pid = Number(/^\/proc\/(\d+)\/cwd$/.exec(file)?.[1]);
+    return rows.get(pid)?.cwd ?? "/app";
+  });
   directory.mockReset().mockImplementation(() => Array.from(rows.keys(), String));
   read.mockReset().mockImplementation((file: string) => {
-    const match = /^\/proc\/(\d+)\/(stat|cmdline)$/.exec(file);
+    if (file.endsWith("/package.json")) {
+      return JSON.stringify({
+        name: file === "/app/package.json" ? "openclaw" : "unrelated-service",
+      });
+    }
+    const match = /^\/proc\/(\d+)\/(stat|cmdline|environ)$/.exec(file);
     const pid = Number(match?.[1]);
     const row = rows.get(pid);
     if (!row) {
       throw Object.assign(new Error("Process disappeared"), { code: "ENOENT" });
     }
+    if (match?.[2] === "environ") {
+      return row.environment ?? "";
+    }
     return match?.[2] === "cmdline"
       ? row.argv.join("\0")
       : `${pid} (name ) (with\nparentheses) ${row.state ?? "S"} ${row.ppid} ${self} 0 0 0 ${row.flags ?? 0}`;
   });
+});
+
+it("does not classify an unrelated relative dist/index.js service as OpenClaw", () => {
+  rows.set(peer, { ppid: 1, argv: ["node", "dist/index.js"], cwd: "/unrelated-app" });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+});
+
+it("resolves a relative script against the observed OpenClaw installation", () => {
+  rows.set(peer, { ppid: 1, argv: ["node", "dist/index.js"], cwd: "/app" });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
+});
+
+it("preserves a retained runtime used by an orphaned eval worker", () => {
+  rows.set(peer, {
+    ppid: 1,
+    argv: [
+      "node",
+      "--eval",
+      "import(process.argv[1])",
+      "/tmp/openclaw-update-runtime-Ab1234/tree/2f/app/dist/terminal.js",
+    ],
+  });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
+});
+
+it("reports an unclassified PID instead of claiming it is OpenClaw", () => {
+  rows.set(peer, { ppid: 1, argv: ["node", "dist/index.js"] });
+  readlink.mockImplementation(() => {
+    throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+  });
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    error: expect.stringContaining(`Could not classify PID ${peer}:`),
+  });
+});
+
+it("recognizes an owned service marker without guessing from its script name", () => {
+  rows.set(peer, {
+    ppid: 1,
+    argv: ["node", "/vendor/renamed.js"],
+    environment: "OPENCLAW_SERVICE_MARKER=openclaw\0",
+  });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -159,6 +230,10 @@ it("uses native Darwin arguments and explicit foreign system-service facts", () 
       ? { argvUnavailable: true, executable: "/sbin/launchd", uid: 0 }
       : { argv: rows.get(pid)!.argv },
   );
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
+  rows.set(peer, { ppid: 1, argv: ["node", "/unrelated-app/dist/index.js"] });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+  rows.set(peer, { ppid: 1, argv: ["node", "/app/dist/index.js"] });
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
   rows.delete(peer);
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });

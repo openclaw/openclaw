@@ -8,19 +8,11 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { recordBackupOutcomeBestEffort } from "./backup-shared.js";
 import { formatBackupCreateSummary } from "./backup-summary.js";
 
-type BackupVerifyRuntime = typeof import("./backup-verify.js");
-
-const backupVerifyRuntimeLoader = createLazyImportLoader<BackupVerifyRuntime>(
-  () => import("./backup-verify.js"),
-);
-
-function loadBackupVerifyRuntime(): Promise<BackupVerifyRuntime> {
-  return backupVerifyRuntimeLoader.load();
-}
+const loadBackupVerifyRuntime = createLazyPromise(() => import("./backup-verify.js"));
 
 /** Create a backup archive, optionally verify it, and emit text or JSON output. */
 export async function backupCreateCommand(

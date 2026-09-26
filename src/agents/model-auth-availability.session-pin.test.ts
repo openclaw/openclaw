@@ -180,6 +180,116 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
 });
 
 describe("session account pin admission", () => {
+  it.each(["automatic", "ordered", "pinned", "required", "configured"] as const)(
+    "reports an authoritative route rejection for %s OAuth on a Platform-only model",
+    (selection) => {
+      const pin = "openai:chatgpt";
+      const cfg: OpenClawConfig =
+        selection === "ordered"
+          ? { auth: { order: { openai: [pin] } } }
+          : selection === "configured"
+            ? { models: { providers: { openai: { auth: "oauth", baseUrl: "", models: [] } } } }
+            : {};
+      const store = authStore({
+        [pin]: {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+          expires: Date.now() + 600_000,
+        },
+        ...(selection === "required"
+          ? { "openai:shared": { type: "api_key", provider: "openai", key: "synthetic-key" } }
+          : {}),
+      });
+      const result = createModelAuthAvailabilityResolver({
+        cfg,
+        authStore: store,
+        env: {},
+        allowPreparedRuntimeAuth: false,
+      }).evaluateModelAuth("openai", {
+        modelId: "CHAT-LATEST",
+        ...(selection === "pinned" ? { pinnedProfileId: pin } : {}),
+        ...(selection === "required" ? { requiredProfileId: pin } : {}),
+      });
+
+      expect(result).toMatchObject({
+        availability: false,
+        availabilityAuthoritative: true,
+        unavailableReason: "auth-failed",
+        routeResolution: { kind: "routes" },
+      });
+    },
+  );
+
+  it.each([
+    { state: "missing", availability: false },
+    { state: "required-missing", availability: false },
+    { state: "unread", availability: undefined },
+    { state: "cooldown", availability: false },
+    { state: "shared-fallback", availability: true },
+    { state: "direct-fallback", availability: true },
+  ] as const)(
+    "keeps $state authentication distinct from route incompatibility",
+    ({ state, availability }) => {
+      const hasProfiles = state !== "missing" && state !== "required-missing";
+      const store = authStore(
+        hasProfiles
+          ? {
+              "openai:chatgpt": {
+                type: "oauth",
+                provider: "openai",
+                access: "synthetic-access",
+                refresh: "synthetic-refresh",
+                expires: Date.now() + 600_000,
+              },
+              ...(state !== "direct-fallback"
+                ? {
+                    "openai:platform": {
+                      type: "api_key",
+                      provider: "openai",
+                      ...(state === "unread"
+                        ? { keyRef: { source: "env", provider: "default", id: "UNREAD_KEY" } }
+                        : { key: "synthetic-key" }),
+                    },
+                  }
+                : {}),
+            }
+          : {},
+      );
+      if (state === "cooldown") {
+        store.usageStats = { "openai:platform": { cooldownUntil: Date.now() + 600_000 } };
+      }
+      const cfg: OpenClawConfig =
+        state === "direct-fallback"
+          ? {
+              models: {
+                providers: { openai: { apiKey: "synthetic-direct", baseUrl: "", models: [] } },
+              },
+            }
+          : {};
+      const result = createModelAuthAvailabilityResolver({
+        cfg,
+        authStore: store,
+        env: {},
+        allowPreparedRuntimeAuth: false,
+      }).evaluateModelAuth("openai", {
+        modelId: "chat-latest",
+        ...(state === "shared-fallback" ? { pinnedProfileId: "openai:chatgpt" } : {}),
+        ...(state === "required-missing" ? { requiredProfileId: "openai:missing" } : {}),
+      });
+
+      expect(result.availability).toBe(availability);
+      expect(result.availabilityAuthoritative).toBeUndefined();
+      if (state === "cooldown") {
+        expect(result.unavailableReason).toBe("cooldown");
+      }
+      if (state === "shared-fallback") {
+        expect(result.selectedProfileId).toBe("openai:platform");
+      }
+    },
+  );
+
   it.each([
     { pinnedProfile: "openai:platform", primaryProfile: undefined, requirement: "api-key" },
     {

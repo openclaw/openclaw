@@ -82,6 +82,65 @@ afterEach(() => {
 });
 
 describe("broadcast serialization failures", () => {
+  it.each(["operator.sessions.read", "operator.sessions.write"])(
+    "requires current session authorization for content delivered with %s",
+    (scope) => {
+      const scoped = makeClient("scoped");
+      scoped.client.connect.scopes = [scope];
+      const staff = makeClient("staff");
+      const clients = new GatewayClientRegistry([scoped.client, staff.client]);
+      const { broadcast } = createGatewayBroadcaster({
+        clients,
+        canReceiveSessionEvent: (client, keys) =>
+          client === staff.client || keys.every((key) => key === "agent:main:visible"),
+      });
+      for (const event of ["agent", "chat", "session.message", "session.tool"]) {
+        broadcast(event, { text: "Unscoped content" });
+        broadcast(event, { sessionKey: "agent:main:hidden", text: "Hidden content" });
+      }
+      expect(scoped.socket.send).not.toHaveBeenCalled();
+      expect(staff.socket.send).toHaveBeenCalledTimes(8);
+      broadcast("chat", { sessionKey: "agent:main:visible", text: "Visible content" });
+      expect(scoped.socket.frames).toEqual([{ event: "chat", seq: 1 }]);
+
+      const unbound = createGatewayBroadcaster({ clients });
+      unbound.broadcast("chat", { sessionKey: "agent:main:visible", text: "No read owner" });
+      expect(scoped.socket.send).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("limits keyless session delivery to redacted and targeted personal invalidations", () => {
+    const scoped = makeClient("scoped");
+    scoped.client.connect.scopes = ["operator.sessions.read"];
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([scoped.client]),
+    });
+    const recipients = new Set([scoped.client.connId]);
+    const getter = vi.fn(() => "Hidden content");
+    const dynamic = Object.defineProperty({ reason: "delete" }, "content", {
+      enumerable: true,
+      get: getter,
+    });
+    broadcast("sessions.changed", { reason: "delete" });
+    broadcast("users.prefs.changed", { profileId: "other", keys: ["ui.theme"] });
+    broadcast("chat.metadata.changed", { content: "Hidden content" });
+    broadcastToConnIds("sessions.changed", dynamic, recipients);
+    expect(scoped.socket.send).not.toHaveBeenCalled();
+    expect(getter).not.toHaveBeenCalled();
+    broadcast("chat.metadata.changed", {});
+    broadcastToConnIds("sessions.changed", { reason: "delete", ts: 1 }, recipients);
+    broadcastToConnIds(
+      "users.prefs.changed",
+      { profileId: "owner", keys: ["ui.theme"] },
+      recipients,
+    );
+    expect(scoped.socket.frames).toEqual([
+      { event: "chat.metadata.changed", seq: 1 },
+      { event: "sessions.changed", seq: 2 },
+      { event: "users.prefs.changed", seq: 3 },
+    ]);
+  });
+
   it("keeps recipient session permissions separate at the same sequence and profile", () => {
     const first = makeClient("first");
     const second = makeClient("second");
@@ -166,7 +225,15 @@ describe("broadcast serialization failures", () => {
   });
 
   it.each([
-    ["first", { message: { text: '"🦞"\n\\\ud800', items: [undefined, Symbol("omitted")] } }],
+    [
+      "first",
+      {
+        message: {
+          text: '"🦞"\n\\\ud800'.repeat(256),
+          items: [undefined, Symbol("omitted")],
+        },
+      },
+    ],
     ["middle", { sessionKey: "agent:main:chat", message: null, omitted: undefined }],
     ["last", { sessionKey: "agent:main:chat", omitted: undefined, message: undefined }],
     ["native property key", { message: { toJSON: (key: string) => ({ key }) } }],
@@ -201,6 +268,73 @@ describe("broadcast serialization failures", () => {
       );
     }
   });
+
+  it.each(["getter", "toJSON", "proxy"])(
+    "observes %s message mutations between recipients when long strings repeat",
+    (publisher) => {
+      const peers = [makeClient("first"), makeClient("second"), makeClient("third")];
+      const initial = '"🦞"\n\\\ud800'.repeat(256);
+      let current = initial;
+      const reads: string[] = [];
+      const read = () => {
+        reads.push(current);
+        return current;
+      };
+      const message =
+        publisher === "getter"
+          ? {
+              get text() {
+                return read();
+              },
+            }
+          : publisher === "toJSON"
+            ? {
+                toJSON(key: string) {
+                  expect(key).toBe("message");
+                  return { text: read() };
+                },
+              }
+            : new Proxy(
+                { text: initial },
+                {
+                  get(target, key, receiver) {
+                    return key === "text" ? read() : Reflect.get(target, key, receiver);
+                  },
+                },
+              );
+      const source = { message };
+      const { broadcast } = createGatewayBroadcaster({
+        clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+        prepareSessionEventProjection: () => (client) => ({
+          ...source,
+          session: { sharingRole: client.connId },
+        }),
+      });
+      peers[0]!.socket.send.mockImplementationOnce(() => {
+        current = initial + " changed";
+      });
+      peers[1]!.socket.send.mockImplementationOnce(() => {
+        current = initial;
+      });
+
+      broadcast("session.message", source);
+
+      expect(reads).toEqual([initial, initial + " changed", initial]);
+      for (const [index, peer] of peers.entries()) {
+        expect(peer.socket.send.mock.calls[0]?.[0]).toBe(
+          JSON.stringify({
+            type: "event",
+            event: "session.message",
+            payload: {
+              message: { text: reads[index] },
+              session: { sharingRole: peer.client.connId },
+            },
+            seq: 1,
+          }),
+        );
+      }
+    },
+  );
 
   it.each(["message", "first recipient", "second recipient", "source toJSON"])(
     "consumes only delivered sequences when %s cannot serialize",

@@ -1,8 +1,10 @@
 // Subagent spawn workspace tests cover same-agent inheritance, cross-agent
 // workspace selection, sandboxed cwd rejection, and cleanup deletion calls.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import {
   createSubagentSpawnTestConfig,
+  installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
 } from "./subagent-spawn.test-helpers.js";
@@ -36,6 +38,8 @@ type TestBindingRequest = {
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
+  loadSessionStoreMock: vi.fn(),
+  updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   resolveSandboxRuntimeStatusMock: vi.fn<
     (params: { sessionKey?: string }) => { sandboxed: boolean }
@@ -138,6 +142,8 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       getRuntimeConfig: () => hoisted.configOverride,
+      loadSessionStoreMock: hoisted.loadSessionStoreMock,
+      updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       hookRunner: hoisted.hookRunner,
       resolveAgentConfig: resolveTestAgentConfig,
@@ -151,6 +157,9 @@ describe("spawnSubagentDirect workspace inheritance", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockClear();
+    hoisted.loadSessionStoreMock.mockReset().mockReturnValue({});
+    hoisted.updateSessionStoreMock.mockReset();
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
     hoisted.registerSubagentRunMock.mockClear();
     hoisted.resolveSandboxRuntimeStatusMock.mockReset();
     hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(() => ({ sandboxed: false }));
@@ -161,6 +170,46 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     hoisted.bindingService.listBySession.mockClear();
     hoisted.configOverride = createConfigOverride();
     setupAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
+  });
+
+  it("inherits incognito storage ownership for direct children", async () => {
+    const requesterSessionKey = "agent:main:dashboard:incognito-parent";
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      [requesterSessionKey]: {
+        sessionId: "incognito-parent-session",
+        inheritedGitContributorProfileIds: ["inherited-human"],
+        participants: [{ identity: { type: "profile", id: "direct-human" } }],
+      },
+    });
+    const sessionPatches: Record<string, unknown>[] = [];
+    const sessionStorePaths: string[] = [];
+    hoisted.updateSessionStoreMock.mockImplementation(
+      async (
+        storePath: string,
+        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
+      ) => {
+        sessionStorePaths.push(storePath);
+        const store: Record<string, Record<string, unknown>> = {};
+        await mutator(store);
+        sessionPatches.push(...Object.values(store));
+        return store;
+      },
+    );
+
+    const result = await spawnSubagentDirect(
+      { task: "keep this child in memory" },
+      { agentSessionKey: requesterSessionKey },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.childSessionKey).toMatch(/^agent:main:subagent:incognito-/u);
+    expect(sessionPatches).toContainEqual(expect.objectContaining({ incognito: true }));
+    for (const patch of sessionPatches) {
+      expect(patch).not.toHaveProperty("inheritedGitContributorProfileIds");
+    }
+    expect(sessionStorePaths).toContain(
+      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    );
   });
 
   it("uses the target agent workspace for cross-agent spawns", async () => {

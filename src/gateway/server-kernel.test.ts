@@ -304,6 +304,11 @@ describe("createGatewayKernel", () => {
         const startMaintenance = vi.fn(() => {});
         maintenanceTimer = setTimeout(startMaintenance, 0);
         kernel.postReadyState.maintenanceTimer = maintenanceTimer;
+        kernel.scheduler.schedule({
+          id: "test:post-ready-maintenance",
+          delayMs: 0,
+          run: startMaintenance,
+        });
         closing = server
           ? server.close({ reason: "close ordering test" })
           : kernel.prepareClose({ reason: "close ordering test" }).then((close) => close());

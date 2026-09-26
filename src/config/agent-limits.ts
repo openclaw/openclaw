@@ -20,7 +20,7 @@ function resolveDefaultAgentMaxConcurrent(): number {
   return defaultAgentMaxConcurrent;
 }
 
-/** Default maximum concurrent child-agent runs across subagent execution. */
+/** Default maximum concurrent child-agent runs per immediate spawning/controller session. */
 export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
 /** Default maximum direct children a single agent run may spawn. */
 export const DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT = 5;
@@ -44,7 +44,7 @@ export function resolveAgentMaxConcurrent(cfg?: OpenClawConfig): number {
   return resolveDefaultAgentMaxConcurrent();
 }
 
-/** Resolves subagent concurrency, flooring finite values and clamping to at least one. */
+/** Resolves per-session subagent concurrency, flooring finite values and clamping to at least one. */
 export function resolveSubagentMaxConcurrent(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.subagents?.maxConcurrent;
   if (typeof raw === "number" && Number.isFinite(raw)) {

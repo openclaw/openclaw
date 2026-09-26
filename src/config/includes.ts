@@ -158,6 +158,11 @@ export class ConfigIncludeError extends Error {
   }
 }
 
+/** File access failed; the included configuration has not been validated. */
+export class ConfigIncludeReadError extends ConfigIncludeError {
+  override name = "ConfigIncludeReadError";
+}
+
 export class CircularIncludeError extends ConfigIncludeError {
   constructor(public readonly chain: string[]) {
     super(
@@ -388,7 +393,7 @@ class IncludeProcessor {
         // File doesn't exist yet - lexical containment check above is sufficient.
         return { resolvedPath: normalized, root: lexicalMatch };
       }
-      throw new ConfigIncludeError(
+      throw new ConfigIncludeReadError(
         `Failed to resolve include file realpath: ${includePath} (resolved: ${normalized})`,
         includePath,
         err instanceof Error ? err : undefined,
@@ -442,7 +447,7 @@ class IncludeProcessor {
       if (err instanceof ConfigIncludeError) {
         throw err;
       }
-      throw new ConfigIncludeError(
+      throw new ConfigIncludeReadError(
         `Failed to read include file: ${includePath} (resolved: ${resolvedPath})`,
         includePath,
         err instanceof Error ? err : undefined,
@@ -541,7 +546,7 @@ export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): 
         params.includePath,
       );
     }
-    throw new ConfigIncludeError(
+    throw new ConfigIncludeReadError(
       `Failed to read include file: ${params.includePath} (resolved: ${params.resolvedPath})`,
       params.includePath,
       opened.error instanceof Error ? opened.error : undefined,

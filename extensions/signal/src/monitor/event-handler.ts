@@ -10,7 +10,6 @@ import {
   resolveAckReaction,
   shouldAckReaction,
   type StatusReactionController,
-  type StatusReactionEmojis,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildMentionRegexes,
@@ -162,20 +161,6 @@ function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult)
   return Object.values(result.settledReceipt?.counts ?? {}).some(
     (counts) => counts.failedBeforeSend > 0 || counts.failedAfterSend > 0,
   );
-}
-
-function resolveSignalStatusReactionEmojis(
-  emojis: StatusReactionEmojis | undefined,
-): StatusReactionEmojis | undefined {
-  if (emojis?.stallHard !== undefined) {
-    return emojis;
-  }
-  return {
-    ...emojis,
-    // Signal exposes one reaction slot on the source message. A warning emoji
-    // reads as terminal failure even when the turn is merely long-running.
-    stallHard: DEFAULT_EMOJIS.stallSoft,
-  };
 }
 
 async function finalizeSignalStatusReaction(params: {
@@ -405,7 +390,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               },
             },
             initialEmoji: ackReaction,
-            emojis: resolveSignalStatusReactionEmojis(undefined),
+            // Signal has one reaction slot. A stall warning otherwise reads as terminal failure.
+            emojis: { stallHard: DEFAULT_EMOJIS.stallSoft },
             timing: statusReactionTiming,
             onError: (err) => {
               logAckFailure({

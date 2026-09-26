@@ -17,11 +17,9 @@ const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
 type EnsureConfigReadyOptions = {
   allowInvalid?: boolean;
-  beforeStateMigrations?: () => Promise<boolean>;
+  beforeStatePreparation?: () => Promise<boolean>;
   commandPath?: string[];
   requireConfig?: boolean;
-  skipPristineCoreStateMigrations?: boolean;
-  skipPristineStartupStateMigrations?: boolean;
 };
 const ensureConfigReadyMock = vi.fn<(_opts: EnsureConfigReadyOptions) => Promise<void>>(
   async () => {},
@@ -31,8 +29,6 @@ const routeLogsToStderrMock = vi.fn();
 const prepareGatewayRunBootstrapMock = vi.fn(async () => true);
 const recheckGatewayRunBootstrapMock = vi.fn(async () => true);
 const reloadTrustedGatewayRunEnvironmentMock = vi.fn(async () => true);
-const wasPreparedGatewayRunCoreStatePristineMock = vi.fn(() => true);
-const wasPreparedGatewayRunStatePristineMock = vi.fn(() => true);
 
 const runtimeMock = {
   log: vi.fn(),
@@ -74,8 +70,6 @@ vi.mock("../gateway-cli/pre-bootstrap.js", () => ({
   prepareGatewayRunBootstrap: prepareGatewayRunBootstrapMock,
   recheckGatewayRunBootstrap: recheckGatewayRunBootstrapMock,
   reloadTrustedGatewayRunEnvironment: reloadTrustedGatewayRunEnvironmentMock,
-  wasPreparedGatewayRunCoreStatePristine: wasPreparedGatewayRunCoreStatePristineMock,
-  wasPreparedGatewayRunStatePristine: wasPreparedGatewayRunStatePristineMock,
 }));
 
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
@@ -208,6 +202,8 @@ describe("registerPreActionHooks", () => {
   });
 
   it("applies shared skip policy to routed reads on the Commander path", async () => {
+    // A reused worker may already have the CLI title, which needs no setter call.
+    observedProcessTitle = "node";
     const processTitleSetSpy = vi.spyOn(process, "title", "set");
     await runPreAction({
       parseArgv: ["status"],
@@ -218,7 +214,8 @@ describe("registerPreActionHooks", () => {
     expect(setVerboseMock).toHaveBeenCalledWith(true);
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw-status");
+    expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw");
+    expect(processTitleSetSpy).not.toHaveBeenCalledWith("openclaw-status");
 
     vi.clearAllMocks();
     await runPreAction({
@@ -290,15 +287,13 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        beforeStateMigrations: expect.any(Function),
+        beforeStatePreparation: expect.any(Function),
         commandPath: ["gateway", "run"],
         measure: expect.any(Function),
-        skipPristineCoreStateMigrations: true,
-        skipPristineStartupStateMigrations: true,
       }),
     );
-    const beforeStateMigrations = ensureConfigReadyMock.mock.calls[0]?.[0]?.beforeStateMigrations;
-    await beforeStateMigrations?.();
+    const beforeStatePreparation = ensureConfigReadyMock.mock.calls[0]?.[0]?.beforeStatePreparation;
+    await beforeStatePreparation?.();
     expect(recheckGatewayRunBootstrapMock).toHaveBeenCalledWith({
       opts: expect.objectContaining({ force: false, reset: false }),
       runtime: runtimeMock,
@@ -881,6 +876,16 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("defers message config preparation until the action selects local or Gateway execution", async () => {
+    const parseProgram = buildProgram();
+    process.argv = ["node", "openclaw", "message", "send", "--json"];
+
+    await parseProgram.parseAsync(process.argv);
+
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });

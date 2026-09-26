@@ -6,7 +6,7 @@ import OpenClawKit
 final class MacControlLiveOwner: MacControlOwner {
     func status() async throws -> MacControlStatus {
         let primary = try await self.primaryStatus()
-        let gateways = try await self.gateways()
+        let gateways = try await self.gateways(retryKeychainAccess: false)
         let state = AppStateStore.shared
         let running = switch GatewayProcessManager.shared.status {
         case .running, .attachedExisting: true
@@ -96,8 +96,8 @@ final class MacControlLiveOwner: MacControlOwner {
         }
     }
 
-    func gateways() async throws -> [MacControlGatewayStatus] {
-        let profiles = try await MacGatewayProfileStore.shared.catalogProfiles()
+    func gateways(retryKeychainAccess: Bool) async throws -> [MacControlGatewayStatus] {
+        let profiles = try await MacGatewayProfileStore.shared.catalogProfiles(retryKeychainAccess: retryKeychainAccess)
         var result: [MacControlGatewayStatus] = []
         let state = AppStateStore.shared
         if state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary {
@@ -205,7 +205,7 @@ final class MacControlLiveOwner: MacControlOwner {
     }
 
     private func gateway(id: String) async throws -> MacControlGatewayStatus {
-        guard let profile = try await self.gateways().first(where: { $0.id == id }) else {
+        guard let profile = try await self.gateways(retryKeychainAccess: false).first(where: { $0.id == id }) else {
             throw MacGatewayProfileError.profileNotFound
         }
         return profile

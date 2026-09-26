@@ -76,7 +76,10 @@ vi.mock("../plugins/plugin-registry.js", () => ({ resolvePluginContributionOwner
 vi.mock("./configure.channels.js", () => ({ removeChannelConfigWizard: vi.fn() }));
 vi.mock("./configure.daemon.js", () => ({ maybeInstallDaemon: mocks.maybeInstallDaemon }));
 vi.mock("./configure.gateway-auth.js", () => ({ promptAuthConfig: vi.fn() }));
-vi.mock("./configure.gateway.js", () => ({ promptGatewayConfig: vi.fn() }));
+vi.mock("./configure.gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./configure.gateway.js")>()),
+  promptGatewayConfig: vi.fn(),
+}));
 vi.mock("./health.js", () => ({ healthCommandNonExiting: mocks.healthCommand }));
 vi.mock("./onboard-channels.js", () => ({ setupChannels: vi.fn() }));
 vi.mock("./onboard-remote.js", () => ({ promptRemoteGatewayConfig: vi.fn() }));

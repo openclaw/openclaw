@@ -1,11 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   deleteSessionEntryLifecycle,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
@@ -13,6 +17,7 @@ import type { GatewayClient } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import * as projectionRecords from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
@@ -239,18 +244,23 @@ test.for(
         });
       }
       const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
+      const previewPublished = createDeferred();
+      const publishTranscriptFields = projectionRecords.publishTranscriptFields;
+      using publication = vi
+        .spyOn(projectionRecords, "publishTranscriptFields")
+        .mockImplementation((...args) => {
+          const published = publishTranscriptFields(...args);
+          const [row] = args;
+          if (
+            row.key === key &&
+            row.entry.sessionId === entry.sessionId &&
+            row.lastMessagePreview === "Physical database preview"
+          ) {
+            previewPublished.resolve();
+          }
+          return published;
+        });
       const projection = await createSessionRowProjection({ cfg });
-      await vi.waitFor(() =>
-        expect(
-          projection.snapshot(
-            { key, agentId: "ops" },
-            { includeDerivedTitles: true, includeLastMessage: true },
-          ).row,
-        ).toMatchObject({
-          derivedTitle: "Physical database title",
-          lastMessagePreview: "Physical database preview",
-        }),
-      );
       const ensure = projection.ensureMaterialized;
       const spy = vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
         await ensure();
@@ -287,6 +297,17 @@ test.for(
         await ensure();
       });
       try {
+        await previewPublished.promise;
+        publication.mockRestore();
+        expect(
+          projection.snapshot(
+            { key, agentId: "ops" },
+            { includeDerivedTitles: true, includeLastMessage: true },
+          ).row,
+        ).toMatchObject({
+          derivedTitle: "Physical database title",
+          lastMessagePreview: "Physical database preview",
+        });
         const result = await directSessionReq<SessionsListResult>(
           "sessions.list",
           { configuredAgentsOnly: true, includeDerivedTitles: true, includeLastMessage: true },
@@ -314,6 +335,7 @@ test.for(
       } finally {
         spy.mockRestore();
         projection.dispose();
+        await projection.ensureMaterialized();
       }
     });
   },

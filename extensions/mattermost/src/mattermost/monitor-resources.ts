@@ -22,11 +22,10 @@ import {
   buildMattermostApiUrl,
   fetchMattermostChannel,
   fetchMattermostUser,
+  MattermostPostSchema,
   sendMattermostTyping,
   updateMattermostPost,
-  type MattermostChannel,
   type MattermostClient,
-  type MattermostUser,
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
 
@@ -85,6 +84,8 @@ export function formatMattermostInboundMediaText(params: {
 
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
+// Reaction side paths read a post's thread root; posts are immutable except for edits.
+const POST_CACHE_TTL_MS = 5 * 60_000;
 const MONITOR_RESOURCE_CACHE_MAX_ENTRIES = 1000;
 // Match Telegram/Tlon inbound media: header wait is independent of body idle.
 const MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
@@ -118,43 +119,40 @@ export function createMattermostMonitorResources(params: {
     saveRemoteMedia,
     mediaKindFromMime,
   } = params;
-  // Only resolved resources are cached: a cached failure would hide the channel or sender
-  // for a whole TTL and silently drop reactions, button clicks, and username-allowlisted senders.
-  const channelCache = new Map<string, { value: MattermostChannel; expiresAt: number }>();
-  const userCache = new Map<string, { value: MattermostUser; expiresAt: number }>();
-
-  const getCachedValue = <T>(
-    cache: Map<string, { value: T; expiresAt: number }>,
-    key: string,
-    nowMs: number | undefined,
-  ): T | undefined => {
-    const cached = cache.get(key);
-    if (!cached) {
-      return undefined;
-    }
-    if (nowMs !== undefined && cached.expiresAt > nowMs) {
-      return cached.value;
-    }
-    cache.delete(key);
-    return undefined;
-  };
-
-  const setCachedValue = <T>(
-    cache: Map<string, { value: T; expiresAt: number }>,
-    key: string,
-    value: T,
+  function createCachedLookup<T>(
+    label: string,
     ttlMs: number,
-    rawNowMs: number,
-  ): void => {
-    const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNowMs });
-    if (expiresAt !== undefined) {
-      // Concurrent misses can resolve the same key out of order. Reinsert on
-      // writes so the cap keeps the most recently resolved resources.
-      cache.delete(key);
-      cache.set(key, { value, expiresAt });
-      pruneMapToMaxSize(cache, MONITOR_RESOURCE_CACHE_MAX_ENTRIES);
-    }
-  };
+    fetchValue: (id: string) => Promise<T>,
+  ): (id: string) => Promise<T | null> {
+    // Cache only resolved resources: failures must not hide a channel or sender for a TTL.
+    const cache = new Map<string, { value: T; expiresAt: number }>();
+    return async (id) => {
+      const rawNow = Date.now();
+      const now = asDateTimestampMs(rawNow);
+      const cached = cache.get(id);
+      if (cached && now !== undefined && cached.expiresAt > now) {
+        if (cached.value !== undefined) {
+          return cached.value;
+        }
+      } else {
+        cache.delete(id);
+      }
+      try {
+        const value = await fetchValue(id);
+        const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+        if (expiresAt !== undefined) {
+          // Concurrent misses can resolve out of order; retain the most recently resolved values.
+          cache.delete(id);
+          cache.set(id, { value, expiresAt });
+          pruneMapToMaxSize(cache, MONITOR_RESOURCE_CACHE_MAX_ENTRIES);
+        }
+        return value;
+      } catch (err) {
+        logger.debug?.(`mattermost: ${label} lookup failed: ${String(err)}`);
+        return null;
+      }
+    };
+  }
 
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
@@ -224,37 +222,22 @@ export function createMattermostMonitorResources(params: {
     await sendMattermostTyping(client, { channelId, parentId });
   };
 
-  const resolveChannelInfo = async (channelId: string): Promise<MattermostChannel | null> => {
-    const rawNow = Date.now();
-    const cached = getCachedValue(channelCache, channelId, asDateTimestampMs(rawNow));
-    if (cached !== undefined) {
-      return cached;
+  const resolveChannelInfo = createCachedLookup("channel", CHANNEL_CACHE_TTL_MS, (channelId) =>
+    fetchMattermostChannel(client, channelId),
+  );
+  const resolveUserInfo = createCachedLookup("user", USER_CACHE_TTL_MS, (userId) =>
+    fetchMattermostUser(client, userId),
+  );
+  const resolvePostInfo = createCachedLookup("post", POST_CACHE_TTL_MS, async (postId) => {
+    // A different id cannot be trusted for thread placement.
+    const info = MattermostPostSchema.parse(
+      await client.request<unknown>(`/posts/${encodeURIComponent(postId)}`),
+    );
+    if (info.id !== postId) {
+      throw new Error("Mattermost post lookup returned a different post id");
     }
-    try {
-      const info = await fetchMattermostChannel(client, channelId);
-      setCachedValue(channelCache, channelId, info, CHANNEL_CACHE_TTL_MS, rawNow);
-      return info;
-    } catch (err) {
-      logger.debug?.(`mattermost: channel lookup failed: ${String(err)}`);
-      return null;
-    }
-  };
-
-  const resolveUserInfo = async (userId: string): Promise<MattermostUser | null> => {
-    const rawNow = Date.now();
-    const cached = getCachedValue(userCache, userId, asDateTimestampMs(rawNow));
-    if (cached !== undefined) {
-      return cached;
-    }
-    try {
-      const info = await fetchMattermostUser(client, userId);
-      setCachedValue(userCache, userId, info, USER_CACHE_TTL_MS, rawNow);
-      return info;
-    } catch (err) {
-      logger.debug?.(`mattermost: user lookup failed: ${String(err)}`);
-      return null;
-    }
-  };
+    return info;
+  });
 
   const buildModelPickerProps = (
     channelId: string,
@@ -288,6 +271,7 @@ export function createMattermostMonitorResources(params: {
     sendTypingIndicator,
     resolveChannelInfo,
     resolveUserInfo,
+    resolvePostInfo,
     updateModelPickerPost,
   };
 }

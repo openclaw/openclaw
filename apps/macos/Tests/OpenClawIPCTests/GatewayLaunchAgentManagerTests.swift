@@ -224,6 +224,44 @@ struct GatewayLaunchAgentManagerTests {
         }
     }
 
+    @Test func `intercepted requests reserve responses before completion hooks`() async {
+        await TestIsolation.withIsolatedState {
+            let firstStarted = AsyncTestGate()
+            let finishFirst = AsyncTestGate()
+            defer {
+                finishFirst.open()
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayloads([
+                #"{"ok":false,"error":"first response"}"#,
+                #"{"ok":false,"error":"second response"}"#,
+            ])
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { arguments in
+                if arguments.last == "first" {
+                    firstStarted.open()
+                    await finishFirst.wait()
+                }
+            }
+            let first = Task {
+                await GatewayLaunchAgentManager.runDaemonCommand(["status", "first"])
+            }
+            await firstStarted.wait()
+            let admitted = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            let second = await GatewayLaunchAgentManager.runDaemonCommand(["status", "second"])
+            finishFirst.open()
+
+            #expect(await first.value == "first response")
+            #expect(second == "second response")
+            #expect(admitted == [["status", "first"]])
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "first"], ["status", "second"],
+            ])
+        }
+    }
+
     @Test(arguments: ["failure-with-hints", "failure-hints-only", "failure-without-hints", "success"])
     func `gateway daemon failures preserve actionable recovery hints`(_ scenario: String) async {
         await TestIsolation.withIsolatedState {

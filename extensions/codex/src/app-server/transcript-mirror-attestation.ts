@@ -53,10 +53,7 @@ export function attachCodexMirrorAttestation(
   sourceFingerprint?: string,
 ): AgentMessage {
   const existing = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  const baseMeta =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? (existing as Record<string, unknown>)
-      : {};
+  const baseMeta = asOptionalRecord(existing) ?? {};
   const attested: AgentMessage & { [CODEX_META_KEY]: Record<string, unknown> } = {
     ...message,
     [CODEX_META_KEY]: {
@@ -95,10 +92,7 @@ export function hasCodexMirrorOrigin(message: AgentMessage): boolean {
 
 export function readCodexMirrorSourceFingerprint(message: AgentMessage): string | undefined {
   const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const value = (meta as Record<string, unknown>)[MIRROR_SOURCE_FINGERPRINT_META_KEY];
+  const value = asOptionalRecord(meta)?.[MIRROR_SOURCE_FINGERPRINT_META_KEY];
   return typeof value === "string" && value ? value : undefined;
 }
 

@@ -10,13 +10,13 @@ import {
   insertRepositoryGitHubPublication,
   readRepositoryGitHubPublication,
   repositoryGitHubPublicationDigest,
-  type RepositoryGitHubPublicationRow,
 } from "../../gateway/github-repository-publication-store.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
 } from "../../sessions/session-lifecycle-events.js";
+import type { RepositoryGitHubPublicationRow } from "../../state/github-publication-read.types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -38,10 +38,8 @@ import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  appendTranscriptEventsInTransaction,
-  ensureTranscriptHeader,
-} from "./session-accessor.sqlite-transcript-store.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -102,6 +100,7 @@ function seedReceipt(agentId: string, sessionKey: string, sessionId: string): st
     request_digest: "",
     session_id: sessionId,
     session_lifecycle_revision: null,
+    requester_authority_json: null,
     session_key: sessionKey,
     agent_id: agentId,
     workspace_id: `workspace-${requestId}`,
@@ -387,6 +386,7 @@ describe("budget cap-entry logical ownership", () => {
     "deletes the matching receipt for $name in a shared physical main store",
     async (scenario) => {
       const f = await fixture("shared", scenario.bare);
+      const file = fs.statSync(f.databasePath, { bigint: true });
       const facts = observeVictim(f);
       await expect(enforce(f, scenario.explicit ? "secondary" : undefined)).resolves.toMatchObject({
         removedEntries: 1,
@@ -414,6 +414,7 @@ describe("budget cap-entry logical ownership", () => {
         {
           mutation: {
             agentId: scenario.expectedAgent,
+            databaseIdentity: `${file.dev}:${file.ino}`,
             kind: "delete",
             previous: { sessionId: f.victimId, sessionKeys: [f.victimKey] },
           },

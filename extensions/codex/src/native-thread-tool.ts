@@ -110,39 +110,27 @@ function readThreadId(params: Record<string, unknown>): string {
   return readStringParam(params, "thread_id", { required: true, label: "thread_id" });
 }
 
-function readThreadStatusType(value: unknown): string | undefined {
-  if (!isJsonObject(value) || !isJsonObject(value.thread) || !isJsonObject(value.thread.status)) {
-    return undefined;
-  }
-  return typeof value.thread.status.type === "string" ? value.thread.status.type : undefined;
-}
-
-function assertThreadMayBeArchived(value: unknown, expectedThreadId: string): void {
+function assertThreadIdle(
+  value: unknown,
+  expectedThreadId: string,
+  action: "archive" | "fork",
+): void {
   if (!isJsonObject(value) || !isJsonObject(value.thread)) {
     throw new Error("Codex app-server returned an invalid thread/read response");
   }
   if (value.thread.id !== expectedThreadId) {
     throw new Error("Codex app-server returned a different thread than requested");
   }
-  const status = readThreadStatusType(value);
-  if (status === "active") {
+  const status = isJsonObject(value.thread.status) ? value.thread.status.type : undefined;
+  if (action === "archive" && status === "active") {
     throw new Error("cannot archive an active Codex thread; wait for its turn to finish");
   }
   if (status !== "idle" && status !== "notLoaded") {
-    throw new Error("cannot verify that the Codex thread is idle; refusing to archive");
-  }
-}
-
-function assertThreadMayBeForked(value: unknown, expectedThreadId: string): void {
-  if (!isJsonObject(value) || !isJsonObject(value.thread)) {
-    throw new Error("Codex app-server returned an invalid thread/read response");
-  }
-  if (value.thread.id !== expectedThreadId) {
-    throw new Error("Codex app-server returned a different thread than requested");
-  }
-  const status = readThreadStatusType(value);
-  if (status !== "idle" && status !== "notLoaded") {
-    throw new Error("cannot fork a Codex thread unless it is idle or not loaded");
+    throw new Error(
+      action === "archive"
+        ? "cannot verify that the Codex thread is idle; refusing to archive"
+        : "cannot fork a Codex thread unless it is idle or not loaded",
+    );
   }
 }
 
@@ -398,7 +386,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             { threadId, includeTurns: false },
             await requestOptions(admissionConfig),
           );
-          assertThreadMayBeArchived(current, threadId);
+          assertThreadIdle(current, threadId, "archive");
           if (await options.bindingStore.hasOtherThreadOwner(threadId, identity)) {
             throw new Error(
               "cannot archive a native Codex thread owned by another OpenClaw session",
@@ -421,7 +409,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 { threadId: descendantThreadId, includeTurns: false },
                 await requestOptions(admissionConfig),
               );
-              assertThreadMayBeArchived(descendant, descendantThreadId);
+              assertThreadIdle(descendant, descendantThreadId, "archive");
             },
           });
           await request(
@@ -476,7 +464,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             { threadId, includeTurns: false },
             forkOptions,
           );
-          assertThreadMayBeForked(current, threadId);
+          assertThreadIdle(current, threadId, "fork");
         }
         const response = await request(
           admissionConfig,

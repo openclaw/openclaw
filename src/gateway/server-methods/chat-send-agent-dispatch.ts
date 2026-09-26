@@ -14,6 +14,7 @@ import { isInternalSourceReplyChannel } from "../../auto-reply/reply/source-repl
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
@@ -121,6 +122,15 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   const { chatSendAckedAtMs, chatSendTiming } = timing;
 
   const jobSessionBinding = admission.sessionBinding;
+  const requestDeadline =
+    performance.now() +
+    Math.max(0, (activeRunAbort.entry?.expiresAtMs ?? Number.POSITIVE_INFINITY) - Date.now());
+  let acquisitionDeadline: number | undefined;
+  const stateAcquisitionDeadline = () =>
+    (acquisitionDeadline ??= Math.min(
+      requestDeadline,
+      performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    ));
   let agentRunStarted = false;
   let replyDispatchRun: ReplyDispatchRun | undefined;
   const isRunCurrent = () =>
@@ -318,6 +328,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   ? { admittedSessionSettings: admission.admittedSessionSettings }
                   : {}),
                 runId: clientRunId,
+                stateAcquisitionDeadline,
                 operatorAuthority: admission.operatorAuthority,
                 providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                 dashboardReadAdmission,
@@ -382,11 +393,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   replyDispatchRun = options;
                   if (activeRunAbort.markExecutionStarted()) {
                     admission.armOperatorRunCancellation();
-                    emitSessionsChanged(context, {
-                      sessionKey,
-                      agentId,
-                      reason: "agent.run.started",
-                    });
+                    emitSessionsChanged(
+                      context,
+                      { sessionKey, agentId, reason: "agent.run.started" },
+                      { accessChanged: false },
+                    );
                   }
                   agentRunStarted = replyDispatch.captureAgentTranscriptStart(runId);
                   emitServerTiming(
@@ -668,7 +679,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     } finally {
       await dispatchErrorLifecycle.finalize();
       // Terminal lifecycle can precede owner release; publish exact liveness after cleanup.
-      emitSessionsChanged(context, { sessionKey, agentId, reason: "agent.input.settled" });
+      emitSessionsChanged(
+        context,
+        { sessionKey, agentId, reason: "agent.input.settled" },
+        { accessChanged: false },
+      );
       if (userTurnRecorder.isBlocked() && attachments.offloadedRefs.length > 0) {
         // A blocked turn persists only the redacted block reason — no media
         // markers — so the prepared inbound media stays unreferenced forever

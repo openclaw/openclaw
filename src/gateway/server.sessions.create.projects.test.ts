@@ -33,6 +33,7 @@ import {
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   controlUiClient,
   initializeRepository,
@@ -958,6 +959,7 @@ test("sessions.create with an empty message preserves its owned checkout above t
       await settleWorkspaceRuns(context, storePath, key, true);
     }
   } finally {
+    await disposeSessionReadContexts();
     if (sessionStoreDir) {
       await closeOpenClawAgentDatabasesAsync(sessionStoreDir);
     }

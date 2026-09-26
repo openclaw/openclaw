@@ -159,11 +159,16 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         sessionId: ChatPageHost["currentSessionId"];
         agentId: string | undefined;
         card: ProgressCard;
+        lifetime: object | undefined;
         identity: string;
       }
     | undefined;
 
-  protected get progressCardPresentation(): { card: ProgressCard; identity: string } | null {
+  protected get progressCardPresentation(): {
+    card: ProgressCard;
+    lifetime: object | undefined;
+    identity: string;
+  } | null {
     const state = this.state;
     if (
       !state ||
@@ -199,6 +204,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         sessionId: state.currentSessionId,
         agentId,
         card,
+        lifetime: this.progressCard.lifetime,
         // Global and ordinary sessions can share the progress-card wire key.
         identity: JSON.stringify([target.agentId ?? null, target.sessionKey]),
       };
@@ -471,6 +477,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           message: state.chatMessage,
           mentions: state.chatMentions,
           goalMode: state.chatGoalDraftMode,
+          replyTarget: state.chatReplyTarget,
           attachments: state.chatAttachments,
           draftRetry: persistResult,
         });
@@ -504,6 +511,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     state.chatAttachments = [...handoff.attachments];
     state.chatGoalDraftMode = handoff.goalMode ?? null;
+    state.chatReplyTarget = handoff.replyTarget ?? null;
     state.handleChatDraftChange(handoff.draft, handoff.mentions ?? []);
     state.requestUpdate?.();
     if (handoff.send) {
@@ -520,6 +528,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         const attachments = state.chatAttachments;
         const mentions = state.chatMentions;
         const goalMode = state.chatGoalDraftMode;
+        const replyTarget = state.chatReplyTarget;
         const presentationOwner = this.headerOutcomeOwner;
         const isCurrent = () =>
           this.state === state &&
@@ -536,7 +545,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           state.chatMessage === handoff.draft &&
           state.chatAttachments === attachments &&
           state.chatMentions === mentions &&
-          state.chatGoalDraftMode === goalMode;
+          state.chatGoalDraftMode === goalMode &&
+          state.chatReplyTarget === replyTarget;
         if (!isCurrent()) {
           return;
         }

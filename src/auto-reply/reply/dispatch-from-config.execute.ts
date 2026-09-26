@@ -26,7 +26,6 @@ import {
   prepareReplyPayloadForSideEffects as preparePayload,
   requiresDurableToolResultDelivery,
 } from "./dispatch-from-config.payloads.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
@@ -527,7 +526,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     if (acpTailResult) {
       return acpTailResult;
     }
-    const nextState = extendPreparedDispatchState(state, {
+    const nextState = Object.assign(state, {
       pendingContinuation,
       pendingContinuationSettlement,
       replyResult,

@@ -28,10 +28,12 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { createConfigValidationFailure } from "./update-cli-config.test-support.js";
+import {
+  createChangedPostCoreUpdateOptions,
+  createConfigValidationFailure,
+} from "./update-cli-config.test-support.js";
 import { registerFreshDoctorDiagnosticTests } from "./update-command-fresh-doctor-diagnostics.test-support.js";
 import { registerFreshDoctorOutcomeTests } from "./update-command-fresh-doctor-outcomes.test-support.js";
-import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
@@ -79,29 +81,12 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
 
-const pluginUpdate: PostCorePluginUpdateResult = {
-  status: "ok",
-  changed: true,
-  sync: {
-    changed: false,
-    switchedToBundled: [],
-    switchedToNpm: [],
-    warnings: [],
-    errors: [],
-  },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
-  warnings: [],
-};
-
-const updateOptions = {
+const updateOptions = createChangedPostCoreUpdateOptions({
   root: "/opt/openclaw",
-  pluginUpdate,
-  freshDoctorRequired: true,
-  yes: true,
-  json: true,
   timeoutMs: 5_000,
-};
+});
+const pluginUpdate = updateOptions.pluginUpdate;
+pluginUpdate.npm = { changed: false, outcomes: [] };
 
 const validConfigSnapshot = {
   exists: true,
@@ -140,6 +125,62 @@ describe("post-plugin update readiness", () => {
       stdout: JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }),
     });
   });
+
+  it.each(["pre-plugin", "post-plugin"] as const)(
+    "preserves a settled %s maintenance deferral without running convergence checks",
+    async (phase) => {
+      const refusal = { kind: "deferred", reason: "coordinator-contention" };
+      const warning =
+        "Doctor maintenance is deferred; stop other OpenClaw processes and run openclaw doctor --fix.";
+      const onWarnings = vi.fn();
+      mocks.runExec.mockImplementationOnce(async (_command, _args, options) => {
+        await fs.writeFile(
+          options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+          JSON.stringify({ status: "ok", warnings: [warning], maintenanceRefusal: refusal }),
+        );
+        return { stdout: "", stderr: "" };
+      });
+      const run =
+        phase === "pre-plugin"
+          ? runUpdateFinalizationDoctorInFreshProcess({ ...updateOptions, phase, onWarnings })
+          : completePostCorePluginUpdate({ ...updateOptions, onWarnings });
+      await expect(run).rejects.toMatchObject({ refusal, message: warning });
+      expect(onWarnings).toHaveBeenCalledExactlyOnceWith([warning]);
+      expect(mocks.runExec).toHaveBeenCalledOnce();
+      expect(mocks.runUtf8).not.toHaveBeenCalled();
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "active-mutation",
+    "unreadable-state",
+    "incomplete-migration",
+    "gateway-state-unverified",
+  ] as const)(
+    "preserves serialized unsafe maintenance refusal %s without diagnostic facts",
+    async (reason) => {
+      const refusal = { kind: "data-at-risk" as const, reason };
+      const childFailure = Object.assign(new Error("Doctor exited with unsafe maintenance."), {
+        exitCode: 1,
+      });
+      mocks.runExec.mockImplementationOnce(async (_command, _args, options) => {
+        await writeUpdatePostInstallDoctorResult({
+          resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+          result: { status: "error", failureFacts: [], maintenanceRefusal: refusal },
+        });
+        throw childFailure;
+      });
+      await expect(completePostCorePluginUpdate(updateOptions)).rejects.toMatchObject({
+        name: "DoctorMaintenanceRefusalError",
+        refusal,
+        cause: childFailure,
+      });
+      expect(mocks.runExec).toHaveBeenCalledOnce();
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+      expect(mocks.runUtf8).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps a fresh Doctor requester refusal terminal when later checks would pass", async () => {
     const isCurrent = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
@@ -772,9 +813,7 @@ describe("post-plugin update readiness", () => {
       })}\n`,
     });
 
-    const result = await completePostCorePluginUpdate({
-      ...updateOptions,
-    });
+    const result = await completePostCorePluginUpdate(updateOptions);
 
     expect(result.pluginUpdate).toMatchObject({
       status: "error",
@@ -849,9 +888,7 @@ describe("post-plugin update readiness", () => {
   ])("fails closed on $label from the updated readiness child", async ({ stdout }) => {
     mocks.runUtf8.mockResolvedValue({ ...readinessExit, stdout });
 
-    const result = await completePostCorePluginUpdate({
-      ...updateOptions,
-    });
+    const result = await completePostCorePluginUpdate(updateOptions);
 
     expect(result.pluginUpdate).toMatchObject({
       status: "error",
@@ -934,6 +971,37 @@ describe("post-plugin update readiness", () => {
       warnings: [expect.objectContaining({ reason: "Error: Readiness executable unavailable" })],
     });
   });
+
+  it.each(["", "{unfinished"])(
+    "preserves a failed readiness child's diagnostic when stdout is %j",
+    async (stdout) => {
+      mocks.runUtf8.mockResolvedValue({
+        ...readinessExit,
+        code: 2,
+        stdout,
+        stderr:
+          "Earlier diagnostic line\n".repeat(100) +
+          "Could not load readiness plugin https://example.test/diagnostic?token=fixture-secret",
+      });
+
+      const result = await completePostCorePluginUpdate(updateOptions);
+
+      expect(result.pluginUpdate).toMatchObject({
+        status: "error",
+        reason: "post-plugin-update-readiness-execution-failed",
+      });
+      const reason = result.pluginUpdate.warnings?.[0]?.reason;
+      expect(reason).toContain("code=2");
+      expect(reason).toContain("stderr:");
+      expect(reason).toContain("Could not load readiness plugin");
+      expect(reason).toContain("token=<redacted>");
+      expect(reason).not.toContain("fixture-secret");
+      expect(reason).not.toContain("/opt/openclaw/dist/index.js");
+      expect(reason?.length).toBeLessThan(600);
+      expect(result.pluginUpdate.doctorLint?.stderrTail).toContain("token=<redacted>");
+      expect(result.pluginUpdate.doctorLint?.stderrTail).not.toContain("fixture-secret");
+    },
+  );
 
   it("returns readiness facts without publishing update history, output, or reports", async () => {
     await withTempHome(async (home) => {

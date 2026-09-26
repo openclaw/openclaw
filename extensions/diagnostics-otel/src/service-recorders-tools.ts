@@ -3,8 +3,11 @@ import {
   isInternalDiagnosticEventMetadata,
   normalizeDiagnosticValue,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { redactSensitiveText } from "../api.js";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { positiveFiniteNumber } from "./service-genai-attributes.js";
 import {
   assignOtelToolContentAttributes,
@@ -34,6 +37,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     telemetryExporterCounter,
     spanWithDuration,
     activeTrustedParentContext,
+    internalOrTrustedExplicitParentContext,
     exportedInternalOrTrustedContext,
     trackTrustedSpan,
     getTrackedInternalOrTrustedSpan,
@@ -342,6 +346,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
 
   const recordDiagnosticPhaseCompleted = (
     evt: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>,
+    metadata: DiagnosticEventMetadata,
   ) => {
     if (!tracesEnabled) {
       return;
@@ -361,6 +366,9 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     }
     const span = spanWithDuration("openclaw.diagnostic.phase", spanAttrs, evt.durationMs, {
       endTimeMs: evt.ts,
+      ...(metadata.trusted
+        ? { parentContext: internalOrTrustedExplicitParentContext(evt, metadata) ?? ROOT_CONTEXT }
+        : {}),
     });
     span.end(evt.ts);
   };

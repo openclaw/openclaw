@@ -15,12 +15,9 @@ import {
   parseBrowserSessionTabRecord,
   sameBrowserSessionTabRecord,
   updateBrowserSessionTab,
+  withoutBrowserSessionTabCleanup,
 } from "./session-tab-store.js";
-
-type DurableTab = BrowserSessionTabRecord & {
-  kind: "durable";
-  storageKey: string;
-};
+import type { DurableTab } from "./session-tab-tracking.js";
 
 export type CleanupKind = "lifecycle" | "sweep";
 
@@ -110,13 +107,10 @@ function deleteClaimedTab(tab: DurableTab, onWarn?: (message: string) => void): 
         if (!matchesCleanupAttempt(record, tab) || !record.dashboard) {
           return undefined;
         }
-        const {
-          cleanupRequestedAt: _requested,
-          cleanupAttemptToken: _token,
-          cleanupKind: _kind,
-          ...settled
-        } = record;
-        return { ...settled, dashboard: { ...record.dashboard, state: "stopped" } };
+        return {
+          ...withoutBrowserSessionTabCleanup(record),
+          dashboard: { ...record.dashboard, state: "stopped" },
+        };
       });
       return;
     }
@@ -137,7 +131,7 @@ async function closeCurrentDurableTab(
   // Empty session cleanup must not initialize Browser control or its CDP graph.
   const [{ getRuntimeConfig }, { resolveCdpControlPolicy }, { closeTrackedCdpTarget }, config] =
     await Promise.all([
-      import("../config/config.js"),
+      import("openclaw/plugin-sdk/runtime-config-snapshot"),
       import("./cdp-reachability-policy.js"),
       import("./cdp.helpers.js"),
       import("./config.js"),

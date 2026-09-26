@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  configureChannelAdmissionEvidenceCollection,
+  createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
 import {
@@ -28,6 +28,7 @@ import {
   createQueueTestRun as createRun,
   createQueueSettings,
   createDrainRecorder,
+  drainRecordedQueue,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { resolveFollowupDeliveryContextKey } from "./queue/delivery-context.js";
@@ -95,15 +96,6 @@ function enqueueRoutedRuns(
   for (const prompt of prompts) {
     enqueueTestRun(key, { prompt, ...route }, settings);
   }
-}
-
-async function drainRecordedQueue(
-  key: string,
-  runFollowup: ReturnType<typeof createDrainRecorder>["runFollowup"],
-  done: ReturnType<typeof createDrainRecorder>["done"],
-) {
-  scheduleFollowupDrain(key, runFollowup);
-  await done.promise;
 }
 
 describe("followup queue collect routing", () => {
@@ -2155,7 +2147,7 @@ describe("followup queue collect routing", () => {
   });
 
   it("preserves sender-scoped batching while identity collection is disabled", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(false);
+    const audit = createChannelAdmissionAudit({ enabled: false });
     try {
       const { key, calls, done, runFollowup, settings } = createQueueCase(
         `test-collect-identity-disabled-${Date.now()}`,
@@ -2172,6 +2164,11 @@ describe("followup queue collect routing", () => {
           key,
           {
             ...item,
+            channelAdmissionEvidence: createChannelParticipantAdmissionEvidence({
+              audit,
+              channelId: "slack",
+              participantId: senderId,
+            }),
             run: { ...item.run, senderId, senderIsOwner: false },
           },
           settings,
@@ -2183,12 +2180,12 @@ describe("followup queue collect routing", () => {
 
       expect(calls.map((call) => call.run.senderId)).toEqual(["user-1", "user-2"]);
     } finally {
-      cleanup();
+      audit.close();
     }
   });
 
   it("keeps same-participant evidence for a collected batch", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({ enabled: true });
     try {
       const sameCase = createQueueCase(`test-collect-identity-same-${Date.now()}`);
       for (const prompt of ["same one", "same two"]) {
@@ -2202,6 +2199,7 @@ describe("followup queue collect routing", () => {
           {
             ...item,
             channelAdmissionEvidence: createChannelParticipantAdmissionEvidence({
+              audit,
               channelId: "slack",
               accountId: "default",
               participantId: "user-1",
@@ -2222,7 +2220,7 @@ describe("followup queue collect routing", () => {
         invoker: { state: "present", kind: "person" },
       });
     } finally {
-      cleanup();
+      audit.close();
     }
   });
 
@@ -3200,87 +3198,6 @@ describe("followup queue collect routing", () => {
       "model:second",
     ]);
     expect(second.turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(2);
-  });
-
-  it("collects transcript-owned turns under one aggregate recorder", async () => {
-    const key = `test-collect-transcript-owner-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const firstComplete = vi.fn();
-    const secondComplete = vi.fn();
-    const firstCorrelation = { begin: vi.fn() };
-    const secondCorrelation = { begin: vi.fn() };
-    const createRecorder = (text: string, mediaPath: string) =>
-      createUserTurnTranscriptRecorder({
-        input: {
-          text,
-          media: [{ path: mediaPath, contentType: "image/png" }],
-          mentions: [
-            { profileId: "ada", start: text.indexOf("@Ada"), end: text.indexOf("@Ada") + 4 },
-          ],
-        },
-        target: createTestUserTurnTranscriptTarget(),
-        updateMode: "none",
-      });
-    const firstRecorder = createRecorder("first transcript @Ada", "/tmp/first.png");
-    const secondRecorder = createRecorder("second transcript 🦞 @Ada", "/tmp/second.png");
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-
-    for (const [prompt, recorder, onComplete, deliveryCorrelation] of [
-      ["first", firstRecorder, firstComplete, firstCorrelation],
-      ["second", secondRecorder, secondComplete, secondCorrelation],
-    ] as const) {
-      enqueueFollowupRun(
-        key,
-        {
-          ...createRun({ prompt }),
-          transcriptPrompt: `${prompt} transcript`,
-          userTurnTranscriptRecorder: recorder,
-          currentInboundContext: { text: "shared gateway context", promptJoiner: " " },
-          deliveryCorrelations: [deliveryCorrelation],
-          abortSignal: new AbortController().signal,
-          turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
-        },
-        settings,
-      );
-    }
-
-    await drainRecordedQueue(key, runFollowup, done);
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt).toContain("first");
-    expect(calls[0]?.prompt).toContain("second");
-    expect(calls[0]?.transcriptPrompt).toContain("first transcript");
-    expect(calls[0]?.transcriptPrompt).toContain("second transcript");
-    expect(calls[0]?.currentInboundContext?.text).toContain(
-      "Queued #1 context:\nshared gateway context",
-    );
-    expect(calls[0]?.currentInboundContext?.text).toContain(
-      "Queued #2 context:\nshared gateway context",
-    );
-    expect(calls[0]?.currentInboundContext?.promptJoiner).toBe("\n\n");
-    expect(calls[0]?.deliveryCorrelations).toEqual([firstCorrelation, secondCorrelation]);
-    expect(calls[0]?.userTurnTranscriptRecorder).not.toBe(firstRecorder);
-    expect(calls[0]?.userTurnTranscriptRecorder).not.toBe(secondRecorder);
-    const message = await calls[0]?.userTurnTranscriptRecorder?.resolveMessage();
-    expect(message?.content).toContain("first transcript");
-    expect(message?.content).toContain("second transcript");
-    const mentions = message?.["__openclaw"]?.humanMentions;
-    expect(mentions).toHaveLength(2);
-    expect(
-      mentions?.map((mention) =>
-        typeof message?.content === "string"
-          ? message.content.slice(mention.start, mention.end)
-          : undefined,
-      ),
-    ).toEqual(["@Ada", "@Ada"]);
-    expect(mentions?.[1]?.start).toBeGreaterThan(mentions?.[0]?.end ?? 0);
-    expect(
-      (message as unknown as { __openclaw?: { media?: Array<{ path?: string }> } } | undefined)?.[
-        "__openclaw"
-      ]?.media?.map((fact) => fact.path),
-    ).toEqual(["/tmp/first.png", "/tmp/second.png"]);
-    await vi.waitFor(() => expect(firstComplete).toHaveBeenCalledTimes(1));
-    expect(secondComplete).toHaveBeenCalledTimes(1);
   });
 
   it("pairs differing inbound runtime contexts inside one collected turn", async () => {

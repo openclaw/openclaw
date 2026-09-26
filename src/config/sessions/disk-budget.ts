@@ -1,7 +1,7 @@
 // Session disk-budget enforcement prunes orphaned artifacts before deleting store entries.
 import fs from "node:fs";
 import path from "node:path";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { err } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -24,6 +24,9 @@ import {
   isSessionPromptBlobTempArtifactName,
   readSessionPromptBlobFiles,
   readSessionsDirFiles,
+  removeFileForBudget,
+  removeFileIfExists,
+  type FileRemovalResult,
   type SessionPhysicalDiskUsage,
   type SessionsDirFileStat,
 } from "./disk-budget-files.js";
@@ -36,6 +39,7 @@ import { readLegacyCompactionSnapshotPaths } from "./legacy-compaction-history.j
 import { resolveSessionArtifactDirectory, resolveSessionFilePathCore } from "./paths.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { timeArchivePruningAsync } from "./session-history-archive-pruning-diagnostics.js";
+import type { SessionLegacyArchiveRemovalResult } from "./session-history-archive-pruning.types.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { isSessionEntryDiskBudgetEvictable } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -202,9 +206,9 @@ export async function hasRetainedSessionTranscriptArchives(storePath: string): P
 /** Removes oldest retained archives and legacy compact backups, remeasuring after each file. */
 export async function pruneSessionTranscriptArchivesToHighWater(params: {
   diagnostics?: SqliteSessionArchivePruningDiagnostics;
-  excludeNames?: ReadonlySet<string>;
   highWaterBytes: number;
   storePath: string;
+  removeFile?: (file: SessionsDirFileStat) => Promise<SessionLegacyArchiveRemovalResult>;
 }): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
   // Oldest-first is the hard-cap sacrifice order: under extreme pressure this
   // may prune an archive the current pass just extracted, which is preferred
@@ -212,10 +216,7 @@ export async function pruneSessionTranscriptArchivesToHighWater(params: {
   const { diagnostics } = params;
   const files = await timeArchivePruningAsync(diagnostics, "legacyInventoryMs", async () =>
     (await readSessionsDirFiles(resolveSessionArtifactDirectory(params.storePath)))
-      .filter(
-        (file) =>
-          isRetainedSessionTranscriptArchiveName(file.name) && !params.excludeNames?.has(file.name),
-      )
+      .filter((file) => isRetainedSessionTranscriptArchiveName(file.name))
       .toSorted((left, right) => left.mtimeMs - right.mtimeMs),
   );
   let usage = await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
@@ -226,21 +227,26 @@ export async function pruneSessionTranscriptArchivesToHighWater(params: {
     if (usage.totalBytes <= params.highWaterBytes) {
       break;
     }
-    if (
-      !(
-        await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
-          removeFileIfExists(file.path),
-        )
-      ).ok
-    ) {
+    const removal = params.removeFile
+      ? await params.removeFile(file)
+      : (
+            await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
+              removeFileIfExists(file.path),
+            )
+          ).ok
+        ? "removed"
+        : "failed";
+    if (removal === "failed") {
       if (diagnostics) {
         diagnostics.failedRemovals = (diagnostics.failedRemovals ?? 0) + 1;
       }
       continue;
     }
-    removedFiles += 1;
-    if (diagnostics) {
-      diagnostics.removedFiles = (diagnostics.removedFiles ?? 0) + 1;
+    if (removal === "removed") {
+      removedFiles += 1;
+      if (diagnostics) {
+        diagnostics.removedFiles = (diagnostics.removedFiles ?? 0) + 1;
+      }
     }
     usage = await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
       measureSessionPhysicalDiskUsage(params.storePath),
@@ -316,52 +322,6 @@ function isDiskBudgetRemovableSessionFile(
     isSessionArchiveArtifactName(file.name) ||
     isUnreferencedSessionArtifactFile(file, referencedPaths)
   );
-}
-
-// A removed empty file is success; bytes alone cannot signal removal.
-type FileRemovalResult = Result<number, "not-removed">;
-
-async function removeFileIfExists(filePath: string): Promise<FileRemovalResult> {
-  const stat = await fs.promises.stat(filePath).catch(() => null);
-  if (!stat?.isFile()) {
-    return err("not-removed");
-  }
-  // Forced removal would count paths another cleanup already removed after stat.
-  return fs.promises.rm(filePath).then(
-    () => ok(stat.size),
-    () => err("not-removed"),
-  );
-}
-
-async function removeFileForBudget(params: {
-  filePath: string;
-  canonicalPath?: string;
-  dryRun: boolean;
-  fileSizesByPath: Map<string, number>;
-  simulatedRemovedPaths: Set<string>;
-  onRemovedPath?: (canonicalPath: string) => void;
-}): Promise<FileRemovalResult> {
-  const resolvedPath = path.resolve(params.filePath);
-  const canonicalPath = params.canonicalPath ?? canonicalizePathForComparison(resolvedPath);
-  if (params.dryRun) {
-    // Dry-run deletion is path-deduped so a transcript and pointer alias cannot count the same
-    // artifact twice against the simulated budget.
-    if (params.simulatedRemovedPaths.has(canonicalPath)) {
-      return err("not-removed");
-    }
-    const size = params.fileSizesByPath.get(canonicalPath);
-    if (size === undefined) {
-      return err("not-removed");
-    }
-    params.simulatedRemovedPaths.add(canonicalPath);
-    params.onRemovedPath?.(canonicalPath);
-    return ok(size);
-  }
-  const removal = await removeFileIfExists(resolvedPath);
-  if (removal.ok) {
-    params.onRemovedPath?.(canonicalPath);
-  }
-  return removal;
 }
 
 async function removePromptBlobFileForBudget(params: {

@@ -53,6 +53,42 @@ function expectSafeguardRuntime(
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
+  it.each([true, false])(
+    "uses persisted owner eligibility instead of prepared agent (enabled=%s)",
+    (ownerEnabled) => {
+      const sessionManager = {
+        getSessionTarget: () => ({
+          agentId: "owner",
+          sessionId: "id",
+          sessionKey: "agent:owner:id",
+          storePath: "/synthetic",
+        }),
+      } as SessionManager;
+      buildEmbeddedExtensionFactories({
+        cfg: {
+          agents: {
+            defaults: {
+              experimental: { decisionAssistance: true },
+              compaction: { mode: "safeguard", semanticCuration: { mode: "shadow" } },
+            },
+            entries: {
+              owner: { decisionModel: ownerEnabled ? "fixture/owner" : "" },
+              prepared: { decisionModel: ownerEnabled ? "" : "fixture/prepared" },
+            },
+          },
+        },
+        sessionManager,
+        agentId: "prepared",
+        provider: "fixture",
+        modelId: "summary",
+        model: undefined,
+      });
+      expect(getCompactionSafeguardRuntime(sessionManager)?.semanticCurationMode).toBe(
+        ownerEnabled ? "shadow" : "off",
+      );
+    },
+  );
+
   it("uses the prepared context budget for safeguard sizing", () => {
     const sessionManager = {} as SessionManager;
     const factories = buildEmbeddedExtensionFactories({
@@ -133,6 +169,8 @@ describe("buildEmbeddedExtensionFactories", () => {
     const { sessionManager } = buildSafeguardFactories({
       agents: {
         defaults: {
+          experimental: { decisionAssistance: true },
+          decisionModel: "fixture/default",
           compaction: {
             mode: "safeguard",
             semanticCuration: {

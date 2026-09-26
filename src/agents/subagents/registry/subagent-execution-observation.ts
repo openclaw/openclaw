@@ -1,3 +1,4 @@
+import { isAgentRunWaitingForCapacity } from "../../../infra/agent-run-capacity-wait.js";
 import {
   getSubagentRunsForChildSession,
   getSubagentRunsForRequesterSession,
@@ -94,7 +95,12 @@ export function observeSubagentExecution(
     return { state: "unknown" };
   }
   if (isSubagentRunLive(current)) {
-    return { state: current.execution.status === "queued" ? "queued" : "running" };
+    return {
+      state:
+        current.execution.status === "queued" || isAgentRunWaitingForCapacity(current.runId)
+          ? "queued"
+          : "running",
+    };
   }
   if (isSubagentRunQueued(current)) {
     return { state: "queued" };

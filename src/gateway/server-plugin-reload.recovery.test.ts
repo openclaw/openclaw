@@ -71,7 +71,7 @@ import {
   verifyCandidateResourceCleanup,
   verifyFailedRecoveryCleanup,
   verifyFreshRegistrationRecovery,
-  verifySelfConsumerReload,
+  registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
 } from "./server-plugin-reload.resources.test-support.js";
 import { registerPluginServiceRecoveryTests } from "./server-plugin-reload.service-recovery.test-support.js";
@@ -163,16 +163,7 @@ it("flushes failed candidate services before closing their shared resources", ()
 it("closes resources opened by a recovery that fails before publication", () =>
   verifyFailedRecoveryCleanup(createRecoveryFixture));
 
-it.each([
-  "own invocation",
-  "between invocations",
-  "pending cleanup",
-  "final checkpoint",
-  "later replacement target",
-] as const)(
-  "rejects reload with a retained consumer during %s before invalidating or stopping runtime",
-  (caller) => verifySelfConsumerReload(createRecoveryFixture, caller),
-);
+registerPluginRetainedWorkReloadTests(createRecoveryFixture);
 
 it.each(["commit", "rollback"] as const)(
   "keeps service and lifecycle Cron getters current after %s",
@@ -405,7 +396,7 @@ it.each([false, true])(
   (withChannels) => verifyGatewayCleanupRefusal(createRecoveryFixture, withChannels),
 );
 
-it("refuses replacement during service startup and keeps retired dispatch fenced across retry", () =>
+it("bounds the wait for service startup and keeps retired dispatch fenced across retry", () =>
   verifyPendingServiceCleanupRetry(createRecoveryFixture));
 
 it("retains unrelated discovery after the selected service refuses cleanup", async () => {

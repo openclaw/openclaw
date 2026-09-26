@@ -38,6 +38,14 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 import { CronCliError, type CronCliJobMatch } from "./cron-cli-error.js";
 
+export function parseCronStringOption(value: unknown, flag: string): string | undefined {
+  const parsed = normalizeOptionalString(value);
+  if (typeof value === "string" && !parsed) {
+    throw new CronCliError(`${flag} must not be blank`);
+  }
+  return parsed;
+}
+
 export function parseCronIntegerOption(
   value: unknown,
   flag: string,

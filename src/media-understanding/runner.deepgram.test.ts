@@ -99,6 +99,7 @@ describe("runCapability deepgram provider options", () => {
                 },
                 providerOptions: {
                   deepgram: {
+                    ["__proto__"]: "ignored",
                     detectLanguage: false,
                     punctuate: false,
                     smart_format: true,

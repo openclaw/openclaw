@@ -104,8 +104,6 @@ export function visitBrowserProxyFilePaths(
   }
 }
 
-type BrowserProxyErrorBody = BrowserErrorPayload;
-
 export type BrowserProxySuccess = {
   result: unknown;
   files?: BrowserProxyFile[];
@@ -115,23 +113,12 @@ export type BrowserProxySuccess = {
 type BrowserProxyFailure = {
   error: {
     status: number;
-    body: BrowserProxyErrorBody;
+    body: BrowserErrorPayload;
   };
   route?: BrowserProxyRoute;
 };
 
 export type BrowserProxyEnvelope = BrowserProxySuccess | BrowserProxyFailure;
-
-function normalizeBrowserProxyErrorBody(
-  value: unknown,
-  fallback?: string,
-): BrowserProxyErrorBody | null {
-  const parsed = parseBrowserErrorPayload(value);
-  if (parsed) {
-    return parsed;
-  }
-  return fallback ? { error: fallback } : null;
-}
 
 /** Build a route-failure envelope while allowing only closed Browser metadata. */
 export function createBrowserProxyFailure(
@@ -142,7 +129,7 @@ export function createBrowserProxyFailure(
   return {
     error: {
       status,
-      body: normalizeBrowserProxyErrorBody(body, `HTTP ${status}`) ?? { error: `HTTP ${status}` },
+      body: parseBrowserErrorPayload(body) ?? { error: `HTTP ${status}` },
     },
     ...(route ? { route } : {}),
   };
@@ -192,7 +179,7 @@ export function parseBrowserProxyFailure(value: unknown): BrowserProxyFailure | 
   ) {
     return null;
   }
-  const body = normalizeBrowserProxyErrorBody(candidate.body);
+  const body = parseBrowserErrorPayload(candidate.body);
   if (!body) {
     return null;
   }

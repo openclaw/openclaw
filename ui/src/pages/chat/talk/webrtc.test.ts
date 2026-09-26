@@ -3,65 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./shared.ts";
+import { FakePeerConnection, requirePeer } from "./webrtc.test-support.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./webrtc.ts";
 
 let getUserMedia: ReturnType<typeof vi.fn>;
 let stopInputTrack: ReturnType<typeof vi.fn>;
-
-class FakeDataChannel extends EventTarget {
-  readyState: RTCDataChannelState = "open";
-  send = vi.fn();
-  close = vi.fn(() => {
-    this.readyState = "closed";
-  });
-}
-
-class FakePeerConnection extends EventTarget {
-  static instances: FakePeerConnection[] = [];
-
-  connectionState: RTCPeerConnectionState = "new";
-  readonly channel = new FakeDataChannel();
-  readonly addTrack = vi.fn(() => {
-    if (this.connectionState === "closed") {
-      throw new DOMException("Cannot add a track to a closed peer", "InvalidStateError");
-    }
-  });
-  localDescription: RTCSessionDescriptionInit | null = null;
-  remoteDescription: RTCSessionDescriptionInit | null = null;
-
-  constructor() {
-    super();
-    FakePeerConnection.instances.push(this);
-  }
-
-  createDataChannel(): RTCDataChannel {
-    return this.channel as unknown as RTCDataChannel;
-  }
-
-  async createOffer(): Promise<RTCSessionDescriptionInit> {
-    return { type: "offer", sdp: "offer-sdp" };
-  }
-
-  async setLocalDescription(description: RTCSessionDescriptionInit): Promise<void> {
-    this.localDescription = description;
-  }
-
-  async setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
-    this.remoteDescription = description;
-  }
-
-  close(): void {
-    this.connectionState = "closed";
-  }
-}
-
-function requirePeer(): FakePeerConnection {
-  const peer = FakePeerConnection.instances[0];
-  if (!peer) {
-    throw new Error("expected WebRTC peer");
-  }
-  return peer;
-}
 
 function requireTalkEvent(
   onTalkEvent: ReturnType<typeof vi.fn>,
@@ -446,14 +392,29 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     const onStatus = vi.fn();
     const transport = await createOpenAiTransport({}, { onStatus });
     await expect(transport.start()).resolves.toBe("ready");
+    const consumerError = new Error("consumer failed");
     onStatus.mockImplementation(() => {
-      throw new Error("consumer failed");
+      throw consumerError;
     });
     const peer = requirePeer();
+    const reportedErrors: unknown[] = [];
+    const onWindowError = (event: ErrorEvent) => {
+      reportedErrors.push(event.error);
+      if (event.error === consumerError) {
+        event.preventDefault();
+      }
+    };
 
     peer.connectionState = "failed";
-    peer.dispatchEvent(new Event("connectionstatechange"));
+    window.addEventListener("error", onWindowError);
+    try {
+      peer.dispatchEvent(new Event("connectionstatechange"));
+    } finally {
+      window.removeEventListener("error", onWindowError);
+    }
 
+    expect(reportedErrors).toHaveLength(1);
+    expect(reportedErrors[0]).toBe(consumerError);
     expect(onStatus).toHaveBeenCalledWith("error", "Realtime connection closed");
     expect(stopInputTrack).toHaveBeenCalledOnce();
     expect(peer.channel.close).toHaveBeenCalledOnce();

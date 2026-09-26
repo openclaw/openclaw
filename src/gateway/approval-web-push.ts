@@ -113,6 +113,42 @@ function approvalWebPushTopic(approvalId: string): string {
     .slice(0, 32);
 }
 
+type ApprovalNotificationGroup = {
+  copy: ReturnType<typeof approvalNotificationCopy>;
+  subscriptions: BoundWebPushSubscription[];
+};
+
+function sendApprovalNotificationGroups(params: {
+  sender: PreparedWebPushNotificationSender;
+  cfg: OpenClawConfig;
+  approvalId: string;
+  ttlSeconds: number;
+  groups: Iterable<ApprovalNotificationGroup>;
+}) {
+  return Promise.all(
+    [...params.groups].map(({ copy, subscriptions }) =>
+      params.sender({
+        subscriptions,
+        payload: {
+          ...copy,
+          renotify: false,
+          tag: approvalWebPushTag(params.approvalId),
+          url: resolveControlUiWebPushUrl(
+            params.cfg,
+            `approve/${encodeURIComponent(params.approvalId)}`,
+          ),
+        },
+        deliveryOptions: {
+          TTL: params.ttlSeconds,
+          urgency: "high",
+          timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
+          topic: approvalWebPushTopic(params.approvalId),
+        },
+      }),
+    ),
+  );
+}
+
 async function deliverBoundApprovalWebPush<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   getRuntimeConfig: () => OpenClawConfig;
@@ -220,13 +256,7 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
       const source = isRecord(params.record.request) ? params.record.request : undefined;
       const agentId = normalizeOptionalString(source?.agentId);
       const agentLabel = normalizeWebPushDisplayLabel(agentId);
-      const requestGroups = new Map<
-        string,
-        {
-          copy: ReturnType<typeof approvalNotificationCopy>;
-          subscriptions: BoundWebPushSubscription[];
-        }
-      >();
+      const requestGroups = new Map<string, ApprovalNotificationGroup>();
       for (const subscription of currentEligibleSubscriptions) {
         const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
         const copy = approvalNotificationCopy({ terminal: false, preferences, agentLabel });
@@ -237,28 +267,13 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
       }
       return {
         start: () =>
-          Promise.all(
-            [...requestGroups.values()].map(({ copy, subscriptions: groupedSubscriptions }) =>
-              sendWebPushNotifications({
-                subscriptions: groupedSubscriptions,
-                payload: {
-                  ...copy,
-                  renotify: false,
-                  tag: approvalWebPushTag(params.record.id),
-                  url: resolveControlUiWebPushUrl(
-                    cfg,
-                    `approve/${encodeURIComponent(params.record.id)}`,
-                  ),
-                },
-                deliveryOptions: {
-                  TTL: ttlSeconds,
-                  urgency: "high",
-                  timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
-                  topic: approvalWebPushTopic(params.record.id),
-                },
-              }),
-            ),
-          ),
+          sendApprovalNotificationGroups({
+            sender: sendWebPushNotifications,
+            cfg,
+            approvalId: params.record.id,
+            ttlSeconds,
+            groups: requestGroups.values(),
+          }),
       };
     },
   );
@@ -335,13 +350,7 @@ export function createApprovalWebPushDelivery(params: {
           const currentTargetsBySubscriptionId = new Map(
             currentTargets.map((target) => [target.subscription.subscriptionId, target]),
           );
-          const terminalGroups = new Map<
-            string,
-            {
-              copy: ReturnType<typeof approvalNotificationCopy>;
-              subscriptions: BoundWebPushSubscription[];
-            }
-          >();
+          const terminalGroups = new Map<string, ApprovalNotificationGroup>();
           for (const subscription of subscriptions) {
             const current = currentTargetsBySubscriptionId.get(subscription.subscriptionId);
             const target =
@@ -389,28 +398,13 @@ export function createApprovalWebPushDelivery(params: {
           }
           return {
             start: () =>
-              Promise.all(
-                [...terminalGroups.values()].map(({ copy, subscriptions: groupedSubscriptions }) =>
-                  sender({
-                    subscriptions: groupedSubscriptions,
-                    payload: {
-                      ...copy,
-                      renotify: false,
-                      tag: approvalWebPushTag(approval.id),
-                      url: resolveControlUiWebPushUrl(
-                        cfg,
-                        `approve/${encodeURIComponent(approval.id)}`,
-                      ),
-                    },
-                    deliveryOptions: {
-                      TTL: WEB_PUSH_TERMINAL_TTL_SECONDS,
-                      urgency: "high",
-                      timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
-                      topic: approvalWebPushTopic(approval.id),
-                    },
-                  }),
-                ),
-              ),
+              sendApprovalNotificationGroups({
+                sender,
+                cfg,
+                approvalId: approval.id,
+                ttlSeconds: WEB_PUSH_TERMINAL_TTL_SECONDS,
+                groups: terminalGroups.values(),
+              }),
           };
         },
       );

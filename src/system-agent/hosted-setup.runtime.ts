@@ -92,6 +92,7 @@ export async function runHostedChannelSetup(
   prompter: WizardPrompter,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
+  assertPersistentEffectCurrent?: () => void,
 ): Promise<HostedSetupCompletion> {
   const { createChannelSetupHooks, setupChannels } =
     await import("../commands/onboard-channels.js");
@@ -116,6 +117,7 @@ export async function runHostedChannelSetup(
           skipDmPolicyPrompt: true,
           skipConfirm: true,
           beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
+          ...(assertPersistentEffectCurrent ? { assertPersistentEffectCurrent } : {}),
           onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
         }),
         afterWrite: async (configPath) => {

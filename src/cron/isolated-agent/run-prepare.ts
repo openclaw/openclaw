@@ -118,6 +118,8 @@ export type PreparedCronRunContext = {
   deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
+  /** Trusted delivery-channel formatting metadata; absent without a resolved chat delivery. */
+  deliverySystemPrompt?: string;
   sourceDelivery: SourceDeliveryPlan;
   suppressExecNotifyOnExit: boolean;
   skillsSnapshot: SkillSnapshot;
@@ -510,12 +512,17 @@ export async function prepareCronRunContext(params: {
       agentRuntime: effectiveAgentRuntime,
       toolsAllowProvenance: input.job.toolsAllowProvenance,
     });
-    const { deliveryPlan, deliveryRequested, resolvedDelivery, sourceDelivery } =
-      await resolveCronDeliveryContext({
-        cfg: cfgWithAgentDefaults,
-        job: input.job,
-        agentId,
-      });
+    const {
+      deliveryPlan,
+      deliveryRequested,
+      resolvedDelivery,
+      sourceDelivery,
+      deliverySystemPrompt,
+    } = await resolveCronDeliveryContext({
+      cfg: cfgWithAgentDefaults,
+      job: input.job,
+      agentId,
+    });
 
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
@@ -603,6 +610,7 @@ export async function prepareCronRunContext(params: {
       cronSession,
     });
     const authSelection = await resolveCronAuthSelection({
+      agentId,
       cfg: cfgWithAgentDefaults,
       provider,
       modelId: model,
@@ -645,6 +653,7 @@ export async function prepareCronRunContext(params: {
           toolsAllowExecTarget: input.job.toolsAllowExecTarget,
           toolsAllowExecTargetRequirement: input.job.toolsAllowExecTargetRequirement,
           cliSessionBindingFacts: {
+            extraSystemPromptStatic: deliverySystemPrompt,
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
           },
@@ -691,6 +700,7 @@ export async function prepareCronRunContext(params: {
         deliveryPlan,
         resolvedDelivery,
         deliveryRequested,
+        deliverySystemPrompt,
         sourceDelivery,
         suppressExecNotifyOnExit: deliveryPlan.mode === "none",
         skillsSnapshot,

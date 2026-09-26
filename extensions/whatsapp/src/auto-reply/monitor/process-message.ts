@@ -84,6 +84,22 @@ const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
   timeoutMs: 2_000,
 };
 
+function mapWhatsAppIngressToTurnAdmission(
+  ingress: ReturnType<typeof requireWhatsAppInboundAdmission>["ingress"],
+) {
+  const reason = ingress.reasonCode;
+  if (ingress.admission === "dispatch") {
+    return { kind: "dispatch" as const, reason };
+  }
+  if (ingress.admission === "observe") {
+    return { kind: "observeOnly" as const, reason };
+  }
+  if (ingress.admission === "skip") {
+    return { kind: "handled" as const, reason };
+  }
+  return { kind: "drop" as const, reason, recordHistory: false };
+}
+
 type WhatsAppMessageReceivedHookConfig = {
   pluginHooks?: {
     messageReceived?: boolean;
@@ -318,7 +334,6 @@ export async function processMessage(params: {
     envelope: envelopeOptions,
     visibleReplyTo,
   });
-  let shouldClearGroupHistory = false;
   const visibleGroupHistory =
     conversationKind === "group"
       ? resolveVisibleWhatsAppGroupHistory({
@@ -358,7 +373,6 @@ export async function processMessage(params: {
         },
       });
     }
-    shouldClearGroupHistory = !(params.suppressGroupHistoryClear ?? false);
   }
 
   // When statusReactions.enabled, a StatusReactionController takes over lifecycle
@@ -500,6 +514,11 @@ export async function processMessage(params: {
     suppressMessageReceivedHooks: true,
   });
   const { inbound, turnInput, ctxPayload } = prepared;
+  const turnAdmission = mapWhatsAppIngressToTurnAdmission(
+    inbound.channelIngress?.ingress ?? admission.ingress,
+  );
+  const shouldClearGroupHistory =
+    conversationKind === "group" && params.suppressGroupHistoryClear !== true;
   const transport = buildWhatsAppInboundTransportContext(params.msg);
   const ingressLifecycle = resolveWhatsAppIngressLifecycle(params.msg);
   const turnAdoptionLifecycle = ingressLifecycle
@@ -535,24 +554,13 @@ export async function processMessage(params: {
     ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
     adapter: {
       ingest: () => turnInput,
-      preflight: () => {
-        const reason = admission.ingress.reasonCode;
-        if (admission.ingress.admission === "dispatch") {
-          return { admission: { kind: "dispatch", reason } };
+      preflight: () => ({ admission: turnAdmission }),
+      onFinalize: (result) => {
+        // The shared history option also clears during failure cleanup. WhatsApp keeps pending
+        // context when dispatch fails so a later message can retry it.
+        if (result.dispatched && turnAdmission.kind === "dispatch" && shouldClearGroupHistory) {
+          params.groupHistories.set(params.groupHistoryKey, []);
         }
-        if (admission.ingress.admission === "observe") {
-          return { admission: { kind: "observeOnly", reason } };
-        }
-        if (admission.ingress.admission === "skip") {
-          return { admission: { kind: "handled", reason } };
-        }
-        return {
-          admission: {
-            kind: "drop",
-            reason,
-            recordHistory: false,
-          },
-        };
       },
       resolveTurn: () => {
         const { finalize, ...replyPlan } = createWhatsAppReplyPlan({
@@ -560,8 +568,6 @@ export async function processMessage(params: {
           connectionId: params.connectionId,
           context: ctxPayload,
           deliverReply: deliverWebReply,
-          groupHistories: params.groupHistories,
-          groupHistoryKey: params.groupHistoryKey,
           maxMediaBytes: params.maxMediaBytes,
           maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
           inbound,
@@ -573,7 +579,6 @@ export async function processMessage(params: {
           },
           replyResolver: params.replyResolver,
           route: params.route,
-          shouldClearGroupHistory,
           statusReactionController,
           transport,
           turnAdoptionLifecycle,

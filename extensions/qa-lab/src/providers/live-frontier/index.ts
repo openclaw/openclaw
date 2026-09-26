@@ -16,10 +16,6 @@ function isAnthropicFamilyModel(modelRef: string) {
   return isAnthropicModel(modelRef) || modelRef.startsWith("claude-cli/");
 }
 
-function isQaFastModeModelRef(modelRef: string) {
-  return isOpenAiModel(modelRef);
-}
-
 function isGptFiveModel(modelRef: string) {
   return isOpenAiModel(modelRef) && modelRef.slice("openai/".length).startsWith("gpt-5");
 }
@@ -35,11 +31,11 @@ export const liveFrontierProviderDefinition: QaProviderDefinition = {
   defaultImageGenerationProviderIds: ["openai"],
   defaultImageGenerationModel: ({ modelProviderIds }) =>
     modelProviderIds.includes("openai") ? "openai/gpt-image-1" : null,
-  usesFastModeByDefault: isQaFastModeModelRef,
+  usesFastModeByDefault: isOpenAiModel,
   resolveModelParams: ({ modelRef, fastMode, thinkingDefault }) => ({
     transport: "sse",
     openaiWsWarmup: false,
-    ...((fastMode ?? isQaFastModeModelRef(modelRef)) ? { fastMode: true } : {}),
+    ...((fastMode ?? isOpenAiModel(modelRef)) ? { fastMode: true } : {}),
     ...(thinkingDefault ? { thinking: thinkingDefault } : {}),
   }),
   resolveTurnTimeoutMs: ({ fallbackMs, modelRef }) => {

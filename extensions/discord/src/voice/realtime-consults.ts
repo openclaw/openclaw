@@ -240,10 +240,18 @@ export class DiscordRealtimeConsults {
     if (!context) {
       context = this.params.turns.consumePendingSpeakerContext();
       if (context) {
-        recent = this.rememberRecentAgentProxyConsultContext(consultMessage, context, {
+        recent = this.params.harness.forcedConsults.prepare(consultMessage, {
+          context: {
+            speaker: context,
+            providerEpoch: this.params.providerEpoch(),
+            delivery: "provider",
+          },
           ...(callId === "unknown" ? {} : { id: `native-consult:${callId}` }),
-          started: true,
         });
+        if (!recent) {
+          throw new Error("Discord realtime consult context requires a non-empty question");
+        }
+        this.params.harness.forcedConsults.markStarted(recent);
       }
     }
     const state = recent?.context;
@@ -337,7 +345,11 @@ export class DiscordRealtimeConsults {
     }
     if (usesRealtimeAgentHandoff) {
       if (pendingForcedConsult) {
-        this.schedulePreparedForcedAgentProxyConsult(pendingForcedConsult);
+        this.params.harness.forcedConsults.schedule(
+          pendingForcedConsult,
+          DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS,
+          (handle) => void this.runForcedAgentProxyConsult(handle),
+        );
       }
       return;
     }
@@ -452,14 +464,6 @@ export class DiscordRealtimeConsults {
     });
   }
 
-  private schedulePreparedForcedAgentProxyConsult(pending: AgentProxyConsultHandle): void {
-    this.params.harness.forcedConsults.schedule(
-      pending,
-      DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS,
-      (handle) => void this.runForcedAgentProxyConsult(handle),
-    );
-  }
-
   private async runForcedAgentProxyConsult(pending: AgentProxyConsultHandle): Promise<void> {
     this.params.harness.forcedConsults.markStarted(pending);
     const state = pending.context;
@@ -509,28 +513,6 @@ export class DiscordRealtimeConsults {
       state.delivery = "playback";
       this.params.playback.enqueueExactSpeechMessage(text);
     }
-  }
-
-  private rememberRecentAgentProxyConsultContext(
-    question: string,
-    context: DiscordRealtimeSpeakerContext,
-    options: { id?: string; started?: boolean } = {},
-  ): AgentProxyConsultHandle {
-    const handle = this.params.harness.forcedConsults.prepare(question, {
-      context: {
-        speaker: context,
-        providerEpoch: this.params.providerEpoch(),
-        delivery: "provider",
-      },
-      ...(options.id ? { id: options.id } : {}),
-    });
-    if (!handle) {
-      throw new Error("Discord realtime consult context requires a non-empty question");
-    }
-    if (options.started) {
-      this.params.harness.forcedConsults.markStarted(handle);
-    }
-    return handle;
   }
 
   private trackAgentProxyConsult(

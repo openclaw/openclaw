@@ -283,6 +283,41 @@ describe("preflightCronModelProvider", () => {
     expect(request.auditContext).toBe("cron-model-provider-preflight");
   });
 
+  it.each([false, true])("reprobes after a client timeout (nested: %s)", async (nested) => {
+    const timeout = new DOMException("request timed out", "TimeoutError");
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      nested ? new TypeError("fetch failed", { cause: timeout }) : timeout,
+    );
+    mockReachableResponse();
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            api: "openai-completions" as const,
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    const first = await preflightCronModelProvider({
+      cfg,
+      provider: "vllm",
+      model: "first",
+      nowMs: 1000,
+    });
+    const next = await preflightCronModelProvider({
+      cfg,
+      provider: "vllm",
+      model: "next",
+      nowMs: 2000,
+    });
+
+    expect(first.status).toBe("unavailable");
+    expect(next).toEqual({ status: "available" });
+  });
+
   it("reports a nested guarded-fetch deadline separately from endpoint failures", async () => {
     const timeoutError = new Error("request timed out");
     timeoutError.name = "TimeoutError";

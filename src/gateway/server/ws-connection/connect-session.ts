@@ -36,7 +36,7 @@ import {
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
-import { resolveOperatorRolePolicyForProfile } from "../../operator-role-policy.js";
+import { resolveOperatorRolePolicyForAssignment } from "../../operator-role-policy.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
   indexPluginNodeCapabilitySurfaces,
@@ -45,12 +45,12 @@ import {
   setClientPluginNodeCapability,
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
-import { WEBSOCKET_OPEN_READY_STATE } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import {
   rejectGatewayConnectOrigin,
+  rejectUnavailableProfileConnect,
   resolveEffectiveConnectionScopes,
   resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
@@ -62,7 +62,7 @@ import {
   rejectGatewayConnectOperatorAccess,
 } from "./connect-operator-access.js";
 import {
-  resolveAuthenticatedProfile,
+  createGatewayConnectProfileLifecycle,
   resolveGatewayConnectProfileAdmission,
 } from "./connect-user-profile.js";
 import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
@@ -187,10 +187,12 @@ export async function attachAuthenticatedGatewayConnect(
     ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
     : undefined;
   const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
+  const profileLifecycle = createGatewayConnectProfileLifecycle(context, state);
   const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
     requestHeaders: context.handler.upgradeReq.headers,
+    assertCurrent: profileLifecycle.assertCurrent,
   });
   const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
   const sharedSecretOperatorOwner =
@@ -205,11 +207,13 @@ export async function attachAuthenticatedGatewayConnect(
     ownerProfileExpected,
     authenticatedUserId,
     resolveAuthenticatedGitHubIdentity,
+    assertCurrent: profileLifecycle.assertCurrent,
   });
   if (!profileAdmission.ok) {
     return;
   }
-  const authenticatedUserProfile = profileAdmission.profile;
+  const preparedProfile = profileAdmission.prepared;
+  const authenticatedUserProfile = preparedProfile?.profile;
   // Identity-derived scopes must be capped only after their durable profile is known.
   // Configured roles fail closed if profile storage or provider verification is unavailable.
   const effectiveScopes = resolveEffectiveConnectionScopes({
@@ -221,8 +225,9 @@ export async function attachAuthenticatedGatewayConnect(
   });
   const rolePolicy =
     role === "operator" && !sharedSecretOperatorOwner
-      ? resolveOperatorRolePolicyForProfile(
+      ? resolveOperatorRolePolicyForAssignment(
           authenticatedUserProfile?.profileId,
+          preparedProfile?.authority.role ?? null,
           context.configSnapshot,
         )
       : undefined;
@@ -352,14 +357,14 @@ export async function attachAuthenticatedGatewayConnect(
   }
   // Record the authenticated ingress after device and role scope restrictions.
   // Later turns must not infer management authority from names or session routing.
+  const authenticatedOperator =
+    role === "operator" && authMethod !== undefined && authMethod !== "none";
   const authenticatedControlUi =
-    role === "operator" &&
-    authMethod !== undefined &&
-    authMethod !== "none" &&
-    connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+    authenticatedOperator && connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
   const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
   const internal = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
+    ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
     ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
@@ -413,34 +418,10 @@ export async function attachAuthenticatedGatewayConnect(
       : {}),
   };
   attachGatewayLocalUserIngress(nextClient, localUserIngress);
-  const attachAuthenticatedProfile = (profileId: string, updatedAt: number) => {
-    if (
-      isClosed() ||
-      context.handler.getClient() !== nextClient ||
-      nextClient.invalidated ||
-      socket.readyState !== WEBSOCKET_OPEN_READY_STATE
-    ) {
-      return;
-    }
-    nextClient.preparedRecipientProfileId = undefined;
-    const profile = resolveAuthenticatedProfile(profileId, updatedAt);
-    if (nextClient.authenticatedUserProfile) {
-      Object.assign(nextClient.authenticatedUserProfile, profile);
-    } else {
-      nextClient.authenticatedUserProfile = profile;
-    }
-    prepareGatewayRecipientProfile(nextClient);
-    attachGatewayLocalUserIngress(
-      nextClient,
-      prepareLocalUserIngress(nextClient.authenticatedUserProfile),
-    );
-    const { profileId: id, ...display } = profile;
-    buildRequestContext().refreshConnectedUserProfile?.({ id, ...display });
-  };
   if (resolveAuthenticatedGitHubIdentity) {
     nextClient.authenticatedGitHubIdentitySync = async () => {
       const result = await resolveAuthenticatedGitHubIdentity();
-      attachAuthenticatedProfile(result.profileId, result.updatedAt);
+      await profileLifecycle.attach(result.profileId, result.updatedAt, prepareLocalUserIngress);
       return result;
     };
   }
@@ -528,7 +509,14 @@ export async function attachAuthenticatedGatewayConnect(
     await rejectGatewayConnectOperatorAccess(context);
     return;
   }
-  prepareGatewayRecipientProfile(nextClient);
+  if (!profileLifecycle.isCurrent(preparedProfile)) {
+    await rejectUnavailableProfileConnect(
+      context,
+      new Error("Gateway profile changed before registration"),
+    );
+    return;
+  }
+  prepareGatewayRecipientProfile(nextClient, { identity: preparedProfile?.recipient });
   if (!setClient(nextClient)) {
     await releasePendingNodePairingCleanup();
     setCloseCause("connect-aborted-before-register", {
@@ -537,6 +525,7 @@ export async function attachAuthenticatedGatewayConnect(
     });
     return;
   }
+  profileLifecycle.bind(nextClient);
   if (!bindGatewayConnectOperatorAccess(context, nextClient)) {
     return;
   }
@@ -687,7 +676,7 @@ export async function attachAuthenticatedGatewayConnect(
           try {
             const updated = await adoptTailscaleProfileAvatar(result.profileId, profilePic);
             if (updated.avatarMime) {
-              attachAuthenticatedProfile(updated.id, updated.updatedAt);
+              await profileLifecycle.attach(updated.id, updated.updatedAt, prepareLocalUserIngress);
             }
           } catch (error) {
             logGateway.warn(
@@ -716,7 +705,7 @@ export async function attachAuthenticatedGatewayConnect(
         if (!updated.avatarMime) {
           return;
         }
-        attachAuthenticatedProfile(updated.id, updated.updatedAt);
+        await profileLifecycle.attach(updated.id, updated.updatedAt, prepareLocalUserIngress);
       },
       (error) =>
         logGateway.warn(`Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`),

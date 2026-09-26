@@ -5,8 +5,18 @@ import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-gl
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { createUpdateProgress, type UpdateDisplayProgress } from "./progress.js";
-import type { UpdateCommandOptions } from "./shared.js";
+import { createUpdateProgress } from "./progress.js";
+import {
+  UpdatePreMutationError,
+  usesCandidateUpdateAdmission,
+  type UpdateCommandOptions,
+} from "./shared.js";
+import { withPrivateStagedPackageInstall } from "./update-command-artifact.js";
+import {
+  applyUpdateCandidateAdmission,
+  assertUpdateAdmissionConfigUnchanged,
+  inspectStagedUpdateCandidateAdmission,
+} from "./update-command-candidate-admission.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   acquireLegacyUpdateInitializationFence,
@@ -16,6 +26,7 @@ import {
   type InitializedUpdate,
 } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
+import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import {
   assertUpdatePackageActivationAdmission,
   recordUpdateCommandTarget,
@@ -102,15 +113,19 @@ export async function initializeAndRunUpdate(
             const artifact =
               target.updateInstallKind === "package" &&
               !canResolveRegistryVersionForPackageTarget(target.packageInstallSpec ?? target.tag);
-            const stageParams = (progress: UpdateDisplayProgress) => ({
+            const candidateAdmissionEnabled =
+              usesCandidateUpdateAdmission(opts, prepared.installKind) &&
+              target.updateInstallKind === "package";
+            const stageParams = (presentation: ReturnType<typeof createUpdateProgress>) => ({
               reapplyLocalOverrides: opts.reapplyLocalOverrides,
               root: target.root,
               installKind: prepared.installKind,
               tag: target.tag,
               installSpec: target.packageInstallSpec ?? undefined,
               timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+              workTimeoutMs: prepared.timeoutMs ?? null,
               startedAt: prepared.startedAt,
-              progress,
+              progress: presentation.progress,
               managedServiceEnv: env,
               invocationCwd,
               honorPackageRoot:
@@ -124,6 +139,57 @@ export async function initializeAndRunUpdate(
               }),
               installTarget: target.packageInstallTarget,
               requirePackageReplacement: target.managedServiceRoot !== undefined,
+              ...(candidateAdmissionEnabled
+                ? {
+                    resolveLifecycleNodeRunner: () => target.packageUpdateNodeRunner,
+                    beforeVerifyCandidate: async (candidateRoot: string) => {
+                      const fence = await executor.enter(target.root, {
+                        preflight: true,
+                        serviceRoot: target.managedServiceRoot,
+                      });
+                      const assertCurrent = () => {
+                        fence.assertCurrent();
+                        assertUpdatePackageActivationAdmission(target.root, packageAdmission);
+                      };
+                      try {
+                        initialization.candidateAdmission =
+                          await inspectStagedUpdateCandidateAdmission({
+                            target,
+                            prepared,
+                            opts,
+                            timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                            invocationCwd,
+                            presentation,
+                            candidateRoot,
+                            runId,
+                            env,
+                            assertCurrent,
+                          });
+                        applyUpdateCandidateAdmission({
+                          target,
+                          opts,
+                          result: initialization.candidateAdmission,
+                        });
+                      } catch (error) {
+                        if (!(error instanceof UpdatePreMutationError)) {
+                          throw error;
+                        }
+                        throw new UnreportedUpdateAdmissionOutcome({
+                          root: target.root,
+                          mode: target.mode,
+                          installKind: target.updateInstallKind,
+                          opts,
+                          controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+                          reason: error.reason,
+                          message: error.message,
+                          nextAction: error.nextAction,
+                          failureFacts: error.failureFacts,
+                          recoverySteps: error.recoverySteps,
+                        });
+                      }
+                    },
+                  }
+                : {}),
             });
             const runSelectedTarget = async () => {
               assertUpdatePackageActivationAdmission(target.root, packageAdmission);
@@ -140,11 +206,25 @@ export async function initializeAndRunUpdate(
               }
               const timeoutMs = prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
               const selectedStoredChannel = target.storedChannel;
-              const checkSchemas = async () => {
+              const candidateAdmissionChecks =
+                initialization.candidateAdmission?.verdict?.verdict === "admit"
+                  ? initialization.candidateAdmission.verdict.facts.checks.map(
+                      (check) => check.name,
+                    )
+                  : undefined;
+              const checkSchemas = async (phase?: "before" | "after") => {
                 const { readUpdateChannelConfig } = await import("./update-command-config.js");
                 const config = await withOwnedManagedUpdateEnv(env, () =>
-                  readUpdateChannelConfig(Boolean(opts.channel)),
+                  readUpdateChannelConfig(Boolean(opts.channel), {
+                    tolerateReadFailure: candidateAdmissionChecks?.includes("config"),
+                  }),
                 );
+                if (candidateAdmissionChecks?.includes("config") && phase !== "after") {
+                  assertUpdateAdmissionConfigUnchanged(
+                    target.configSnapshot,
+                    config.configSnapshot,
+                  );
+                }
                 if (!opts.channel && config.storedChannel !== selectedStoredChannel) {
                   await target.refuseUpdate(
                     "update-channel-changed",
@@ -159,6 +239,7 @@ export async function initializeAndRunUpdate(
                   invocationCwd,
                   packageTargetVersion: target.targetVersion ?? undefined,
                   opts,
+                  candidateAdmissionChecks,
                   expectedForeground:
                     prepared.controlPlaneUpdateSentinelMeta?.completionOwner ===
                       "gateway-restart" || undefined,
@@ -209,6 +290,7 @@ export async function initializeAndRunUpdate(
                 targetVersion,
                 targetSchemas: schemas,
               });
+              let initializationStage: InitializedUpdate["stagedPackage"];
               await withUpdateInitializationCleanup(
                 async () => {
                   await withUpdateInitializationCleanup(
@@ -218,20 +300,22 @@ export async function initializeAndRunUpdate(
                         await checkSchemas();
                         assertCurrent();
                         if (!target.packageAlreadyCurrent && !initialization.stagedPackage) {
-                          initialization.stagedPackage = await stagePackageInstallUpdate(
-                            stageParams(presentation.progress),
+                          initializationStage = await stagePackageInstallUpdate(
+                            stageParams(presentation),
                           );
+                          initialization.stagedPackage = initializationStage;
                         }
                         assertCurrent();
                         await initializeUpdateStateFromTarget({
                           root: initialization.stagedPackage?.root ?? target.root,
                           env,
                           timeoutMs,
+                          workTimeoutMs: prepared.timeoutMs ?? null,
                           nodeRunner: target.packageUpdateNodeRunner,
                           invocationCwd,
                           progress: presentation.progress,
                           assertCurrent,
-                          checkSchemas: async () => void (await checkSchemas()),
+                          checkSchemas: async (phase) => void (await checkSchemas(phase)),
                         });
                       } finally {
                         presentation.dispose();
@@ -241,17 +325,42 @@ export async function initializeAndRunUpdate(
                   );
                   await runInitialized(initialization);
                 },
-                () => (artifact ? undefined : initialization.stagedPackage?.close()),
+                () => initializationStage?.close(),
               );
             };
-            if (!artifact) {
+            const runWithSelectedProfile = async () => {
+              if (artifact) {
+                const { runFreshUpdateArtifact } = await import("./update-command-artifact.js");
+                return await runFreshUpdateArtifact(
+                  { initialization, stageParams, json: Boolean(opts.json) },
+                  runSelectedTarget,
+                );
+              }
+              if (
+                candidateAdmissionEnabled &&
+                target.packageTargetSchemaVersions &&
+                target.packageTargetSchemaVersions.state < OPENCLAW_STATE_SCHEMA_VERSION
+              ) {
+                const presentation = createUpdateProgress(!opts.json);
+                try {
+                  return await withPrivateStagedPackageInstall(
+                    stageParams(presentation),
+                    async ({ stage }) => {
+                      initialization.stagedPackage = stage;
+                      return await runSelectedTarget();
+                    },
+                  );
+                } finally {
+                  presentation.dispose();
+                }
+              }
               return await runSelectedTarget();
-            }
-            const { runFreshUpdateArtifact } = await import("./update-command-artifact.js");
-            return await runFreshUpdateArtifact(
-              { initialization, stageParams, json: Boolean(opts.json) },
-              runSelectedTarget,
-            );
+            };
+            return candidateAdmissionEnabled
+              ? await withOwnedManagedUpdateEnv(env, () =>
+                  withUpdateInProgressEnv(invocationCwd, runWithSelectedProfile),
+                )
+              : await runWithSelectedProfile();
           }),
         ),
       opts,

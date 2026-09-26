@@ -195,6 +195,103 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
     });
   });
 
+  it("paints message footer focus outlines past virtual row boundaries", async () => {
+    await withBrowserPage(openBrowserPage(600, 300), async (page) => {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread" style="width: 500px; --accent: rgb(255, 0, 0);">
+            <div class="chat-thread-inner chat-thread-inner--virtual">
+              <div class="chat-virtual-sizer">
+                <div class="chat-virtual-block">
+                  <div class="chat-virtual-row" data-focused-row>
+                    <div class="chat-group assistant chat-group--with-footer">
+                      <div class="chat-group-messages"><div class="chat-bubble">Message</div></div>
+                      <div class="chat-group-footer">
+                        <div class="chat-group-footer__meta">
+                          <button class="msg-meta__summary" type="button">
+                            <span class="chat-group-timestamp" style="width: 18px;">6m ago</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="chat-virtual-row" style="height: 40px;">
+                    <div>The next message begins here.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+      const summary = page.locator(".msg-meta__summary");
+      await summary.focus();
+      await page
+        .locator(".chat-group-footer")
+        .evaluate((node) => node.getAnimations().forEach((animation) => animation.finish()));
+      const bounds = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>("[data-focused-row]")!;
+        const control = document.querySelector<HTMLElement>(".msg-meta__summary")!;
+        // Keep the clipping boundary at the control, independent of turn spacing.
+        // Otherwise extra room below the footer makes the below-row pixel oracle vacuous.
+        row.style.height = `${control.getBoundingClientRect().bottom - row.getBoundingClientRect().top}px`;
+        const rowRect = row.getBoundingClientRect();
+        const controlRect = control.getBoundingClientRect();
+        return {
+          controlBottom: controlRect.bottom,
+          clip: {
+            x: Math.floor(controlRect.left - 8),
+            y: Math.floor(controlRect.top - 8),
+            width: Math.ceil(controlRect.width + 16),
+            height: Math.ceil(controlRect.height + 16),
+          },
+          rowBottom: rowRect.bottom,
+          deviceScaleFactor: window.devicePixelRatio,
+        };
+      });
+      expect(bounds.controlBottom).toBeCloseTo(bounds.rowBottom, 3);
+      const png = await page.screenshot({ clip: bounds.clip });
+      const widestAccentRunBelowRow = await page.evaluate(
+        async ({ pngBase64, clipTop, rowBottom, deviceScaleFactor }) => {
+          const image = new Image();
+          image.src = `data:image/png;base64,${pngBase64}`;
+          await image.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = image.width;
+          canvas.height = image.height;
+          const context = canvas.getContext("2d")!;
+          context.drawImage(image, 0, 0);
+          const pixels = context.getImageData(0, 0, image.width, image.height).data;
+          const firstRowBelow = Math.ceil((rowBottom - clipTop) * deviceScaleFactor);
+          let widestRun = 0;
+          for (let y = firstRowBelow; y < image.height; y += 1) {
+            let currentRun = 0;
+            for (let x = 0; x < image.width; x += 1) {
+              const offset = (y * image.width + x) * 4;
+              if (pixels[offset]! > 240 && pixels[offset + 1]! < 20 && pixels[offset + 2]! < 20) {
+                currentRun += 1;
+                widestRun = Math.max(widestRun, currentRun);
+              } else {
+                currentRun = 0;
+              }
+            }
+          }
+          return widestRun;
+        },
+        {
+          pngBase64: png.toString("base64"),
+          clipTop: bounds.clip.y,
+          rowBottom: bounds.rowBottom,
+          deviceScaleFactor: bounds.deviceScaleFactor,
+        },
+      );
+
+      // A clipped ring leaves only a vertical edge (the outline's device-pixel
+      // width). A wider run proves the rounded bottom edge was painted too.
+      expect(widestAccentRunBelowRow).toBeGreaterThan(bounds.deviceScaleFactor * 2);
+    });
+  });
+
   it.each([
     [1200, 800, "desktop"],
     [390, 844, "mobile"],

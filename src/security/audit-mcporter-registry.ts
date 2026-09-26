@@ -2,7 +2,7 @@
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readFileHandleBounded } from "../infra/fs-safe-advanced.js";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "../infra/fs-safe.js";
 
 const MAX_MCPORTER_REGISTRY_BYTES = 16 * 1024 * 1024;

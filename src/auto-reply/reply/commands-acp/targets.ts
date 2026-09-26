@@ -51,19 +51,21 @@ async function resolveSessionKeyByToken(
   return null;
 }
 
-export function resolveBoundAcpThreadSessionKey(
+export async function resolveBoundAcpThreadSessionKey(
   params: Parameters<typeof resolveAcpCommandBindingContext>[0],
-): string | undefined {
-  const commandTargetSessionKey = normalizeOptionalString(params.ctx.CommandTargetSessionKey) ?? "";
+  commandTargetSessionKey?: string,
+): Promise<string | undefined> {
   const activeSessionKey =
-    commandTargetSessionKey || (normalizeOptionalString(params.sessionKey) ?? "");
+    normalizeOptionalString(params.ctx.CommandTargetSessionKey) ??
+    normalizeOptionalString(params.sessionKey);
   const bindingContext = resolveAcpCommandBindingContext(params);
-  return resolveEffectiveResetTargetSessionKey({
+  return await resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
     conversationId: bindingContext.conversationId,
     parentConversationId: bindingContext.parentConversationId,
+    commandTargetSessionKey,
     activeSessionKey,
     allowNonAcpBindingSessionKey: true,
     skipConfiguredFallbackWhenActiveSessionNonAcp: false,
@@ -90,7 +92,8 @@ export async function resolveAcpTargetSessionKey(params: {
     // reach the correct session via the binding context.
   }
 
-  const threadBound = resolveBoundAcpThreadSessionKey(params.commandParams);
+  const threadBound = await resolveBoundAcpThreadSessionKey(params.commandParams);
+  params.commandParams.opts?.abortSignal?.throwIfAborted();
   if (threadBound) {
     return {
       ok: true,

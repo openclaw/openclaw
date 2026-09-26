@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,11 +7,13 @@ import {
   listVitestRuntimeConsumerFiles,
   resolveVitestCliEntry,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { createPatternFileHelper } from "../helpers/pattern-file.js";
-import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
-import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
+import { createControlledWorkerCompiler } from "./vitest-worker-artifacts.test-support.js";
 
 const commands = vi.hoisted(() => ({ prepare: vi.fn(), prepareE2e: vi.fn(), reader: vi.fn() }));
 vi.mock("../../scripts/lib/managed-child-process.mts", async (importOriginal) => ({
@@ -31,6 +33,10 @@ vi.mock("../../scripts/lib/vitest-shard-timings.mts", async (importOriginal) => 
   readShardTimings: () => new Map(),
   writeShardTimings: () => {},
 }));
+
+const { runManagedCommand: runCliCommand } = await vi.importActual<
+  typeof import("../../scripts/lib/managed-child-process.mts")
+>("../../scripts/lib/managed-child-process.mts");
 
 const modelTarget = "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts";
 const targets = [modelTarget, "extensions/qa-lab/src/suite-process-lifecycle.test.ts"];
@@ -81,7 +87,7 @@ afterEach(() => {
 
 describe("CLI runtime admission", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
-  posixIt.each<[name: string, args: string[]]>([
+  posixIt.for<[name: string, args: string[]]>([
     ["ordinary target", [ordinaryQa]],
     ["ordinary CLI config", ["--config", "test/vitest/vitest.cli.config.ts"]],
     [
@@ -107,6 +113,8 @@ describe("CLI runtime admission", () => {
       [
         "--config",
         "test/vitest/vitest.gateway-server.config.ts",
+        "--exclude",
+        "server.acp-native-model.product.test.ts",
         "--exclude",
         "server-sidecar-retention.test.ts",
         "--exclude",
@@ -138,35 +146,47 @@ describe("CLI runtime admission", () => {
     ["clear cache", ["--clearCache"]],
     ["native invalid scalar", ["--passWithNoTests", "--passWithNoTests"]],
     ["native unknown option", ["--unknownOption"]],
-  ])("leaves direct $0 selection without runtime preparation", async (_name, args) => {
-    const root = tempDirs.make("plugin-build-direct-");
-    const preload = path.join(root, "preload.mjs");
-    fs.writeFileSync(
-      preload,
-      `import cp from 'node:child_process';
+  ])(
+    "leaves direct $0 selection without runtime preparation",
+    async ([_name, args], { signal, onTestFinished }) => {
+      const lifetime = createFixtureLifetime();
+      onTestFinished(() => lifetime.cleanup());
+      await lifetime.run(async () => {
+        const root = lifetime.createTempDir("plugin-build-direct-");
+        const preload = path.join(root, "preload.mjs");
+        fs.writeFileSync(
+          preload,
+          `import cp from 'node:child_process';
 import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => spawn(process.execPath, ['-e',
   args.includes('scripts/run-node.mjs') ? 'process.exit(91)' : ''], options);
 syncFixtureBuiltinExports();\n`,
-    );
-    const configArgs = args.includes("--config")
-      ? []
-      : ["--config", "test/vitest/vitest.extension-qa.config.ts"];
-    const child = spawn(
-      process.execPath,
-      ["--import", preload, "scripts/run-vitest.mts", ...configArgs, ...args],
-      { stdio: "ignore" },
-    );
-    try {
-      await expect(waitForChildClose(child)).resolves.toEqual({ code: 0, signal: null });
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-    }
-  });
-  posixIt.each([
+        );
+        const configArgs = args.includes("--config")
+          ? []
+          : ["--config", "test/vitest/vitest.extension-qa.config.ts"];
+        let child: ChildProcess | undefined;
+        await lifetime.track(
+          runCliCommand({
+            bin: process.execPath,
+            args: ["--import", preload, "scripts/run-vitest.mts", ...configArgs, ...args],
+            stdio: "ignore",
+            signal,
+            requireProcessTreeExit: true,
+            onReady(owned) {
+              child = owned;
+            },
+          }),
+        );
+        expect({ code: child?.exitCode, signal: child?.signalCode }).toEqual({
+          code: 0,
+          signal: null,
+        });
+      });
+    },
+  );
+  posixIt.for([
     ["single", "scripts/test-extension.mts", []],
     ["batch", "scripts/test-extension-batch.mts", ["qa-lab,firecrawl"]],
     [
@@ -301,25 +321,32 @@ syncFixtureBuiltinExports();\n`,
     ],
   ] as const)(
     "blocks %s CLI readers until successful build and preserves SIGTERM",
-    async (_name, script, args, mode: "private-qa" | "runtime" = "private-qa") => {
-      const outcomes = [0, 7, "SIGTERM"] as const;
-      // Rows share hooks and module state; only their independent process trees overlap.
-      const results = await Promise.allSettled(
-        outcomes.map(async (outcome) => {
-          const scenarioDirs = createTempDirTracker();
-          const root = scenarioDirs.make("plugin-build-cli-");
-          try {
+    async ([_name, script, args, mode = "private-qa"], { signal, onTestFinished }) => {
+      const lifetime = createFixtureLifetime();
+      onTestFinished(() => lifetime.cleanup());
+      await lifetime.run(async () => {
+        const outcomes = [0, 7, "SIGTERM"] as const;
+        // Rows share hooks and module state; only their independent process trees overlap.
+        const results = await Promise.allSettled(
+          outcomes.map(async (outcome) => {
+            const root = lifetime.createTempDir("plugin-build-cli-");
             const pidFile = path.join(root, "build.pid");
             const readersFile = path.join(root, "readers");
             const builder = path.join(root, "build.mjs");
             const preload = path.join(root, "preload.mjs");
+            const workerCompiler = createControlledWorkerCompiler(
+              root,
+              { ...process.env, OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+              process.versions.bun ? "bun" : "node",
+            );
             fs.writeFileSync(
               builder,
               `import fs from 'node:fs';
 process.on('SIGTERM', () => process.exit(0));
 process.stdin.once('data', () => process.exit(${typeof outcome === "number" ? outcome : 0}));
 fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-process.stdin.resume();\n`,
+process.stdin.resume();
+process.stdout.write('fixture-build-ready\\n');\n`,
             );
             // Keep the real managed process owner and CLI scheduler. Replace only
             // heavyweight build/test executables at Node's child-process boundary.
@@ -339,37 +366,56 @@ cp.spawn = (bin, args, options) => {
 };
 syncFixtureBuiltinExports();\n`,
             );
-            const child = spawn(
-              process.execPath,
-              ["--import", preload, path.resolve(script), ...args],
-              {
-                cwd: _name === "single" ? path.resolve("extensions/qa-lab") : process.cwd(),
-                env: { ...process.env, OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
-                stdio: ["pipe", "pipe", "pipe"],
-              },
-            );
+            const finished = new AbortController();
+            const ready = createDeferred();
+            let child: ChildProcess | undefined;
             let output = "";
-            child.stdout.on("data", (data) => {
-              output += data;
-            });
-            child.stderr.on("data", (data) => {
-              output += data;
-            });
-            // Observe timeout failures immediately, but retain the actual close event
-            // so failed assertions still join cleanup before this outcome settles.
-            const closed = waitForChildClose(child).catch((error: unknown) => error);
-            const stopped = createDeferred();
-            child.once("close", () => stopped.resolve());
-            let buildPid: number | undefined;
+            let stdout = "";
+            const closed = lifetime.track(
+              runCliCommand({
+                bin: process.execPath,
+                args: ["--import", preload, path.resolve(script), ...args],
+                cwd: _name === "single" ? path.resolve("extensions/qa-lab") : process.cwd(),
+                env: workerCompiler.env,
+                stdio: ["pipe", "pipe", "pipe"],
+                signal: AbortSignal.any([signal, finished.signal]),
+                requireProcessTreeExit: true,
+                onReady(owned) {
+                  child = owned;
+                  owned.stdout!.on("data", (data) => {
+                    output += data;
+                    stdout += data;
+                    if (stdout.includes("fixture-build-ready\n")) {
+                      ready.resolve();
+                    }
+                  });
+                  owned.stderr!.on("data", (data) => {
+                    output += data;
+                  });
+                },
+              }),
+            );
             try {
-              buildPid = await waitForPidFile(pidFile, 5_000);
+              await Promise.race([
+                ready.promise,
+                closed.then((code) => {
+                  throw new Error(`CLI exited before builder readiness (${code}):\n${output}`);
+                }),
+              ]);
+              const buildPid = Number(fs.readFileSync(pidFile, "utf8"));
+              expect(Number.isInteger(buildPid)).toBe(true);
+              expect(buildPid).toBeGreaterThan(0);
               expect(fs.existsSync(readersFile), `outcome=${outcome}`).toBe(false);
               if (outcome === "SIGTERM") {
-                child.kill("SIGTERM");
+                expect(child!.kill("SIGTERM")).toBe(true);
               } else {
-                child.stdin.end("finish\n");
+                child!.stdin!.end("finish\n");
               }
-              expect(await closed, `outcome=${outcome}\n${output}`).toEqual({
+              await closed;
+              expect(
+                { code: child?.exitCode, signal: child?.signalCode },
+                `outcome=${outcome}\n${output}`,
+              ).toEqual({
                 code: outcome === "SIGTERM" ? 143 : outcome,
                 signal: null,
               });
@@ -380,40 +426,28 @@ syncFixtureBuiltinExports();\n`,
                 output.match(new RegExp(`preparing ${mode} runtime`, "gu")),
                 `outcome=${outcome}`,
               ).toHaveLength(1);
-              await waitForDead(buildPid, 5_000);
+              await lifetime.verifyCleanup(async () => {
+                expect(isProcessAlive(buildPid)).toBe(false);
+                if (_name === "root config" && outcome === 0) {
+                  const compilations = workerCompiler.read();
+                  expect(compilations).toHaveLength(1);
+                  expect(isProcessAlive(compilations[0]!.pid)).toBe(false);
+                  expect(fs.existsSync(compilations[0]!.directory)).toBe(false);
+                }
+              });
             } finally {
-              if (child.exitCode === null && child.signalCode === null) {
-                child.kill("SIGKILL");
-              }
-              if (!buildPid && fs.existsSync(pidFile)) {
-                buildPid = await waitForPidFile(pidFile, 5_000);
-              }
-              if (buildPid) {
-                try {
-                  process.kill(buildPid, "SIGKILL");
-                } catch {
-                  /* Already exited. */
-                }
-              }
-              try {
-                await withTestTimeout(stopped.promise, 5_000, `outcome=${outcome}: CLI cleanup`);
-              } finally {
-                if (buildPid) {
-                  await waitForDead(buildPid, 5_000);
-                }
-              }
+              finished.abort();
+              await Promise.allSettled([closed]);
             }
-          } finally {
-            scenarioDirs.cleanup();
-          }
-        }),
-      );
-      for (const [index, result] of results.entries()) {
-        expect.soft(result, `outcome=${outcomes[index]}`).toEqual({
-          status: "fulfilled",
-          value: undefined,
-        });
-      }
+          }),
+        );
+        for (const [index, result] of results.entries()) {
+          expect.soft(result, `outcome=${outcomes[index]}`).toEqual({
+            status: "fulfilled",
+            value: undefined,
+          });
+        }
+      });
     },
   );
 });
@@ -554,36 +588,28 @@ describe("full-suite timing metadata", () => {
 });
 
 describe("cache lease completion", () => {
-  it.each([
-    { platform: "linux", phase: "preflight" },
-    { platform: "linux", phase: "retry" },
-    { platform: "win32", phase: "preflight" },
-    { platform: "win32", phase: "retry" },
-  ] as const)(
-    "preserves $platform policy after an unverified $phase completion",
-    async ({ platform, phase }) => {
+  beforeEach(() => {
+    // The enclosing CI test worker owns its PATH; these fixtures exercise a new scheduler.
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");
+  });
+
+  it.each(["linux", "win32"] as const)(
+    "preserves %s policy after an unverified preflight completion",
+    async (platform) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
-      vi.stubEnv("OPENCLAW_VITEST_NO_OUTPUT_RETRY", "1");
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
       let preflights = 0;
       let attempts = 0;
-      commands.reader.mockImplementation(({ pnpmArgs, onNoOutputTimeout }) => {
-        let groupJoined = platform !== "win32";
-        let timedOut = false;
+      commands.reader.mockImplementation(({ pnpmArgs }) => {
         if (pnpmArgs.includes("scripts/ensure-playwright-chromium.mts")) {
           preflights += 1;
-          groupJoined = platform !== "win32" && phase !== "preflight";
         } else if (pnpmArgs.includes("test/vitest/vitest.ui-e2e.config.ts")) {
           attempts += 1;
-          groupJoined = false;
-          if (attempts === 1) {
-            timedOut = true;
-            onNoOutputTimeout();
-          }
         }
         return {
-          completion: Promise.resolve({ code: timedOut ? 143 : 0, signal: null, groupJoined }),
+          completion: Promise.resolve({ code: 0, signal: null, groupJoined: false }),
           getForwardedSignal: () => undefined,
         };
       });
@@ -593,8 +619,7 @@ describe("cache lease completion", () => {
       ]);
       if (platform === "win32") {
         await expect(running).resolves.toBeUndefined();
-        expect(preflights).toBe(2);
-        expect(attempts).toBe(2);
+        expect(attempts).toBe(1);
       } else {
         await expect(running).rejects.toMatchObject({
           errors: [
@@ -603,9 +628,43 @@ describe("cache lease completion", () => {
             }),
           ],
         });
-        expect(preflights).toBe(1);
-        expect(attempts).toBe(phase === "preflight" ? 0 : 1);
+        expect(attempts).toBe(0);
       }
+      expect(preflights).toBe(1);
+    },
+  );
+
+  it.each([
+    { signal: "SIGTERM", code: 143 },
+    { signal: null, code: 143 },
+    { signal: null, code: 0 },
+  ] as const)(
+    "fails on the first no-output timeout without retrying (signal=$signal, code=$code)",
+    async ({ signal, code }) => {
+      vi.stubEnv("CI", "true");
+      vi.stubEnv("OPENCLAW_VITEST_NO_OUTPUT_RETRY", "1");
+      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+      const exitBySignal = vi.fn(async () => {});
+      commands.reader
+        .mockImplementationOnce(({ onNoOutputTimeout }) => {
+          onNoOutputTimeout();
+          return {
+            completion: Promise.resolve({ code, signal, groupJoined: true }),
+            getForwardedSignal: () => undefined,
+          };
+        })
+        .mockImplementation(() => ({
+          completion: Promise.resolve({ code: 0, signal: null, groupJoined: true }),
+          getForwardedSignal: () => undefined,
+        }));
+
+      await runTestProjects(exitBySignal, ["test/vitest/vitest.cli.config.ts"]);
+
+      expect(process.exitCode).toBe(143);
+      expect(commands.reader).toHaveBeenCalledTimes(1);
+      expect(exitBySignal).not.toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/^\[test\] failed /u));
+      expect(console.error).not.toHaveBeenCalledWith(expect.stringMatching(/^\[test\] passed /u));
     },
   );
 
@@ -615,13 +674,12 @@ describe("cache lease completion", () => {
     { platform: "win32", concurrency: 1 },
     { platform: "win32", concurrency: 2 },
   ] as const)(
-    "preserves $platform cache ownership through preflight and retry (concurrency=$concurrency)",
+    "preserves $platform cache ownership through preflight and execution (concurrency=$concurrency)",
     async ({ platform, concurrency }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       const cacheRoot = tempDirs.make("cache-policy-");
-      vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", cacheRoot);
+      vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", cacheRoot);
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", String(concurrency));
-      vi.stubEnv("OPENCLAW_VITEST_NO_OUTPUT_RETRY", "1");
       const planner = await import("../../scripts/test-projects.test-support.mts");
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
       if (concurrency === 1) {
@@ -639,36 +697,29 @@ describe("cache lease completion", () => {
         );
       }
       const firstPreflight = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
-      const retryPreflight = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
+      const firstExecution = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
       const peer = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
       const started = createDeferred();
-      const retryStarted = createDeferred();
+      const executionStarted = createDeferred();
       const paths: string[] = [];
       const uiPaths: string[] = [];
       let peerPath: string | undefined;
       let preflights = 0;
       let attempts = 0;
       const joined = { code: 0, signal: null, groupJoined: platform !== "win32" };
-      commands.reader.mockImplementation(({ env, pnpmArgs, onNoOutputTimeout }) => {
+      commands.reader.mockImplementation(({ env, pnpmArgs }) => {
         const cache = env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH;
         paths.push(cache);
         let completion;
         if (pnpmArgs.includes("scripts/ensure-playwright-chromium.mts")) {
           uiPaths.push(cache);
           preflights += 1;
-          completion = preflights === 1 ? firstPreflight.promise : retryPreflight.promise;
-          if (preflights === 2) {
-            retryStarted.resolve();
-          }
+          completion = preflights === 1 ? firstPreflight.promise : Promise.resolve(joined);
         } else if (pnpmArgs.includes("test/vitest/vitest.ui-e2e.config.ts")) {
           uiPaths.push(cache);
           attempts += 1;
-          if (attempts === 1) {
-            onNoOutputTimeout();
-          }
-          completion = Promise.resolve(
-            attempts === 1 ? { ...joined, code: 143, signal: "SIGTERM" } : joined,
-          );
+          completion = attempts === 1 ? firstExecution.promise : Promise.resolve(joined);
+          executionStarted.resolve();
         } else {
           peerPath = cache;
           completion = peer.promise;
@@ -687,38 +738,37 @@ describe("cache lease completion", () => {
       try {
         await withTestTimeout(started.promise, 5_000, "preflight and peer admission");
         expect(new Set(paths).size).toBe(concurrency);
-        if (concurrency === 2) {
-          for (const cache of paths) {
-            expect(path.relative(cacheRoot, cache).startsWith(`slots${path.sep}`)).toBe(
-              platform !== "win32",
-            );
-          }
+        for (const cache of paths) {
+          const relative = path.relative(cacheRoot, cache);
+          expect(relative).not.toBe("");
+          expect(path.isAbsolute(relative)).toBe(false);
+          expect(relative.split(path.sep)).not.toContain("..");
         }
         firstPreflight.resolve(joined);
-        await withTestTimeout(retryStarted.promise, 5_000, "retry preflight admission");
-        expect(uiPaths).toHaveLength(3);
+        await withTestTimeout(executionStarted.promise, 5_000, "execution admission");
+        expect(uiPaths).toHaveLength(2);
         expect(new Set(uiPaths).size).toBe(1);
         expect(uiPaths).not.toContain(peerPath);
         expect(attempts).toBe(1);
       } finally {
         firstPreflight.resolve(joined);
-        retryPreflight.resolve(joined);
+        firstExecution.resolve(joined);
         peer.resolve(joined);
         await running;
       }
-      expect(uiPaths).toHaveLength(concurrency === 1 ? 6 : 4);
-      expect(new Set(uiPaths.slice(0, 4)).size).toBe(1);
+      expect(uiPaths).toHaveLength(concurrency === 1 ? 4 : 2);
+      expect(new Set(uiPaths.slice(0, 2)).size).toBe(1);
       if (concurrency === 1) {
-        expect(new Set(uiPaths.slice(4)).size).toBe(1);
+        expect(new Set(uiPaths.slice(2)).size).toBe(1);
         if (platform === "win32") {
-          expect(uiPaths[4]).not.toBe(uiPaths[0]);
+          expect(uiPaths[2]).not.toBe(uiPaths[0]);
         } else {
-          expect(uiPaths[4]).toBe(uiPaths[0]);
+          expect(uiPaths[2]).toBe(uiPaths[0]);
         }
       }
       expect(uiPaths).not.toContain(peerPath);
-      expect(preflights).toBe(concurrency === 1 ? 3 : 2);
-      expect(attempts).toBe(concurrency === 1 ? 3 : 2);
+      expect(preflights).toBe(concurrency === 1 ? 2 : 1);
+      expect(attempts).toBe(concurrency === 1 ? 2 : 1);
       expect(process.exitCode).toBe(0);
     },
   );

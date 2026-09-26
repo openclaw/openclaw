@@ -144,6 +144,30 @@ describe("buildProviderStatusIndex", () => {
     mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([]);
   });
 
+  it("uses prepared accounts when read-only inspection is unavailable", async () => {
+    const plugin = createAccountSelectionFixture();
+    plugin.config.inspectAccount = undefined;
+    plugin.config.listAccountIds = () => ["work"];
+    plugin.config.resolveAccount = () => {
+      throw new Error("legacy account resolution");
+    };
+    plugin.config.resolveAccountAsync = async () => ({
+      accountId: "work",
+      name: "Prepared work account",
+      configured: true,
+      enabled: true,
+    });
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+
+    const statuses = await buildProviderStatusIndex({});
+
+    expect(statuses.get("telegram:work")).toMatchObject({
+      accountId: "work",
+      name: "Prepared work account",
+      state: "configured",
+    });
+  });
+
   it("prefers inspectAccount for read-only status surfaces", async () => {
     const inspectAccount = vi.fn(() => ({ enabled: true, configured: true, name: "Work" }));
     const resolveAccount = vi.fn(() => {

@@ -13,16 +13,24 @@ import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import {
+  getUpdateRunAsync,
   getUpdateRunWithReconciliationAsync,
   getUpdateRunStatusAsync,
   listUpdateRunsAsync,
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
+import { toPublicUpdateRun } from "../../infra/update-run-record.js";
+import { getUpdateEffectiveChannel } from "../../infra/update-startup.js";
 import {
-  getUpdateEffectiveChannel,
+  getGatewayUpdateSchedule,
   refreshGatewayUpdateStatus,
-} from "../../infra/update-startup.js";
+} from "../../infra/update-status-schedule.js";
 import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
+import {
+  getGatewayRestartDrainSignal,
+  getGatewaySuspendAdmissionPhase,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
@@ -57,25 +65,12 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       mark("checkout");
       const config = context?.getRuntimeConfig?.();
-      const configChannel = normalizeUpdateChannel(config?.update?.channel);
       if (params.refreshCheckout === true && config) {
         try {
           await refreshGatewayUpdateStatus(config);
         } catch (err) {
           context?.logGateway?.warn(
             `update.status checkout refresh failed: ${formatErrorMessage(err)}`,
-          );
-        }
-      }
-      mark("identity");
-      const schedule = getUpdateSchedule();
-      let effectiveChannel = configChannel ?? normalizeUpdateChannel(schedule?.channel);
-      if (!effectiveChannel) {
-        try {
-          effectiveChannel = await getUpdateEffectiveChannel();
-        } catch (err) {
-          context?.logGateway?.warn(
-            `update.status install identity failed: ${formatErrorMessage(err)}`,
           );
         }
       }
@@ -89,11 +84,46 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       mark("history");
       const { activeRun, lastRun } = await getUpdateRunStatusAsync();
+      const campaignRunId = gatewayUpdateCampaign.getRunId();
+      const campaignRun =
+        !campaignRunId || lastRun?.runId === campaignRunId
+          ? lastRun
+          : activeRun?.runId === campaignRunId
+            ? activeRun
+            : await getUpdateRunAsync(campaignRunId).catch((error: unknown) => {
+                context?.logGateway?.warn(
+                  `update.status campaign run lookup failed: ${formatErrorMessage(error)}`,
+                );
+                return undefined;
+              });
+      gatewayUpdateCampaign.reconcileRun(campaignRun);
+      mark("identity");
+      let currentConfig = context?.getRuntimeConfig?.() ?? config;
+      let effectiveChannel =
+        normalizeUpdateChannel(currentConfig?.update?.channel) ??
+        (currentConfig ? undefined : normalizeUpdateChannel(getUpdateSchedule()?.channel));
+      if (!effectiveChannel) {
+        try {
+          effectiveChannel = await getUpdateEffectiveChannel();
+        } catch (err) {
+          context?.logGateway?.warn(
+            `update.status install identity failed: ${formatErrorMessage(err)}`,
+          );
+        }
+        currentConfig = context?.getRuntimeConfig?.() ?? currentConfig;
+        effectiveChannel =
+          normalizeUpdateChannel(currentConfig?.update?.channel) ?? effectiveChannel;
+      }
+      const schedule = currentConfig
+        ? effectiveChannel
+          ? getGatewayUpdateSchedule(currentConfig, effectiveChannel)
+          : undefined
+        : getUpdateSchedule();
       mark("response");
       const result = {
         sentinel,
-        ...(activeRun ? { activeRun } : {}),
-        ...(lastRun ? { lastRun } : {}),
+        ...(activeRun ? { activeRun: toPublicUpdateRun(activeRun) } : {}),
+        ...(lastRun ? { lastRun: toPublicUpdateRun(lastRun) } : {}),
         updateAvailable: getUpdateAvailable(),
         ...(effectiveChannel ? { effectiveChannel } : {}),
         ...(schedule ? { schedule } : {}),
@@ -166,16 +196,42 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateRunsGetParams, "update.runs.get", respond)) {
       return;
     }
-    const { run, reconciliationError } = await getUpdateRunWithReconciliationAsync(params.runId);
-    if (reconciliationError) {
-      context?.logGateway?.warn(`update.runs.get reconciliation failed: ${reconciliationError}`);
+    // Lazy handler preparation can outlast an in-process restart. Reacquire
+    // root ownership before reconciliation if the new runtime reopened admission.
+    const admission = tryBeginGatewayRootWorkAdmission("ws:update.runs.get");
+    if (!admission) {
+      if (
+        !getGatewayRestartDrainSignal().aborted ||
+        getGatewaySuspendAdmissionPhase() !== "accepting"
+      ) {
+        respond(false, undefined, {
+          code: "UNAVAILABLE",
+          message: "update.runs.get unavailable during gateway restart or suspension",
+        });
+        return;
+      }
+      // Only committed drain is one-way: a reversible signal could roll back
+      // while this unrooted read awaits the database worker.
+      const run = await getUpdateRunAsync(params.runId);
+      respond(true, { run: run ? toPublicUpdateRun(run) : null });
+      return;
     }
-    respond(true, { run: run ?? null });
+    try {
+      const { run, reconciliationError } = await admission.run(() =>
+        getUpdateRunWithReconciliationAsync(params.runId),
+      );
+      if (reconciliationError) {
+        context?.logGateway?.warn(`update.runs.get reconciliation failed: ${reconciliationError}`);
+      }
+      respond(true, { run: run ? toPublicUpdateRun(run) : null });
+    } finally {
+      admission.release();
+    }
   },
   "update.runs.list": async ({ params, respond }) => {
     if (!assertValidParams(params, validateUpdateRunsListParams, "update.runs.list", respond)) {
       return;
     }
-    respond(true, { runs: await listUpdateRunsAsync(params) });
+    respond(true, { runs: (await listUpdateRunsAsync(params)).map(toPublicUpdateRun) });
   },
 };

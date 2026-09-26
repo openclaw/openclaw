@@ -26,6 +26,7 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
+import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
@@ -56,7 +57,6 @@ import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
   chatSendAckServerTimingAttributes,
   roundedChatSendTimingMs,
-  shouldIncludeChatSendAckServerTiming,
 } from "./chat-server-timing.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
@@ -231,6 +231,7 @@ async function handleChatSendWithOptions(
   try {
     const assertInputAdmissionCurrent = () => {
       admitted.value.assertWorkAdmissionCurrent();
+      admitted.value.assertSessionTargetCurrent();
       sessionMutationCommitGuard?.();
     };
     assertInputAdmissionCurrent();
@@ -243,8 +244,7 @@ async function handleChatSendWithOptions(
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
       mentionInbox: context.mentionInbox,
-      assertOriginalInputCommit:
-        req.expectedProfileId === undefined ? undefined : assertInputAdmissionCurrent,
+      assertOriginalInputCommit: assertInputAdmissionCurrent,
       assertGoalCurrent: () => {
         sessionMutationCommitGuard?.();
         sessionMutationAuthorization?.assertCurrent();
@@ -331,6 +331,7 @@ async function handleChatSendWithOptions(
       pendingStageAttempted = true;
       const assertCustodyCurrent = () => {
         admitted.value.assertWorkAdmissionCurrent();
+        admitted.value.assertSessionTargetCurrent();
         if (sessionMutationAuthorization?.assertAdmittedInputCurrent) {
           sessionMutationAuthorization.assertAdmittedInputCurrent();
         } else {
@@ -553,7 +554,7 @@ async function handleChatSendWithOptions(
         !reconnectResumeRequested &&
         normalizedRequest.value.turnKind === "main",
     );
-    const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
+    const serverTiming = isOperatorUiClient(clientInfo)
       ? {
           receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),
           loadSessionMs: sessionLoadMs,
@@ -600,6 +601,7 @@ async function handleChatSendWithOptions(
     // After the ACK, dispatch owns the turn: its error lifecycle persists the
     // user transcript (which references the media) on every path, so a
     // post-ACK cleanupAdmittedRun must not race that persist with a discard.
+    admitted.value.assertSessionTargetCurrent();
     admitted.value.setDiscardAbandonedPreparedMedia(undefined);
     respond(true, ackPayload, undefined, { runId: clientRunId });
     context.recordClientActivity?.(client);

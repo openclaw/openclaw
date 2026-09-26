@@ -3,7 +3,9 @@
  */
 import type {
   AgentHarnessV2,
+  AgentHarnessCompactParams,
   AgentHarnessNativeCompaction,
+  AgentHarnessNativeCompactionParams,
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -19,6 +21,25 @@ import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-ty
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
 // New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
+
+/** Keep the shipped callback loadable on older hosts without inventing source authority. */
+function requireCodexCompactionCapabilities<T extends AgentHarnessCompactParams>(
+  params: T & Partial<Pick<AgentHarnessCompactParams<2>, "hostCapabilities">>,
+): T & Pick<AgentHarnessCompactParams<2>, "hostCapabilities"> {
+  const capabilities = params.hostCapabilities;
+  if (
+    capabilities?.kind !== "agent-harness-host-capability" ||
+    capabilities.version !== 1 ||
+    typeof capabilities.assertActive !== "function" ||
+    typeof capabilities.retainSourceAuthority !== "function"
+  ) {
+    throw new Error(
+      "This host did not provide compaction source authority. Update OpenClaw before compacting this session.",
+    );
+  }
+  capabilities.assertActive();
+  return { ...params, hostCapabilities: capabilities };
+}
 // Same versioned slot shared-client.ts writes; a bare name would let this harness call
 // another build's disposer after an in-process plugin update.
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = codexBuildSymbol(
@@ -116,6 +137,7 @@ export function createCodexAppServerAgentHarness(
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
+    nativeModelPolicySupport: "exact",
     conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
     conversationToolPolicyNativeTools: CODEX_NATIVE_TOOL_REQUIREMENTS,
     deliveryDefaults: {
@@ -152,7 +174,8 @@ export function createCodexAppServerAgentHarness(
     },
     ...(sessionCatalogControlFactory && sessionRuntime
       ? {
-          sessionFork: {
+          sessionForkV2: {
+            executionEnvironment: "host-only" as const,
             upstreamKinds: ["codex-app-server"] as const,
             fork: async (params) => {
               const { forkCodexUpstreamSession } =
@@ -199,7 +222,19 @@ export function createCodexAppServerAgentHarness(
       validate: async (binding) => {
         const { validateCodexAppServerRuntimeArtifact } =
           await import("./src/app-server/runtime-artifact.js");
-        return validateCodexAppServerRuntimeArtifact(binding);
+        const { isCodexConfiguredConnectionArtifact } =
+          await import("./src/app-server/runtime-artifact-connection.js");
+        if (!isCodexConfiguredConnectionArtifact(binding.id)) {
+          return validateCodexAppServerRuntimeArtifact(binding);
+        }
+        const { resolveCodexAppServerRuntimeOptions } = await import("./src/app-server/config.js");
+        return validateCodexAppServerRuntimeArtifact(
+          binding,
+          undefined,
+          resolveCodexAppServerRuntimeOptions({
+            pluginConfig: resolveAttemptPluginConfig(options.resolveConfig?.()),
+          }).start,
+        );
       },
     },
     fetchUsageSnapshot: async (ctx) => {
@@ -212,10 +247,12 @@ export function createCodexAppServerAgentHarness(
       const { createCodexAppServerModelCatalog } =
         await import("./src/app-server/model-catalog.js");
       if (disposed) {
-        return [];
+        return { entries: [] };
       }
       modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
-      return await modelCatalog.load(params, resolveAttemptPluginConfig(params.config));
+      return {
+        entries: await modelCatalog.load(params, resolveAttemptPluginConfig(params.config)),
+      };
     },
     readModelCatalogReadiness: (params) =>
       modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
@@ -436,8 +473,9 @@ export function createCodexAppServerAgentHarness(
       });
     },
     compact: async (params) => {
+      const admittedParams = requireCodexCompactionCapabilities(params);
       const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
-      return maybeCompactCodexAppServerSession(params, {
+      return maybeCompactCodexAppServerSession(admittedParams, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
@@ -509,12 +547,14 @@ export function createCodexAppServerNativeCompaction(
   >,
 ): AgentHarnessNativeCompaction {
   return async (params) => {
+    const admittedParams: AgentHarnessNativeCompactionParams<2> =
+      requireCodexCompactionCapabilities(params);
     const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
-    return maybeCompactCodexAppServerSession(params, {
+    return maybeCompactCodexAppServerSession(admittedParams, {
       bindingStore: options.bindingStore,
       pluginConfig: options.resolvePluginConfig?.() ?? options.pluginConfig,
       allowNonManualNativeRequest: true,
-      nativeCompactionRequest: params.nativeCompactionRequest,
+      nativeCompactionRequest: admittedParams.nativeCompactionRequest,
     });
   };
 }

@@ -111,36 +111,42 @@ export function resolveAcpAction(tokens: string[]): AcpAction {
   return "help";
 }
 
-function readOptionValue(params: { tokens: string[]; index: number; flag: string }):
+function readOptionValue(params: { tokens: string[]; index: number; flags: readonly string[] }):
   | {
       matched: true;
+      flag: string;
       value?: string;
       nextIndex: number;
       error?: string;
     }
   | { matched: false } {
   const token = normalizeAcpOptionToken(params.tokens[params.index] ?? "");
+  const flag = params.flags.find(
+    (candidate) => token === candidate || token.startsWith(`${candidate}=`),
+  );
+  if (!flag) {
+    return { matched: false };
+  }
   let value: string;
   let nextIndex = params.index + 1;
-  if (token === params.flag) {
+  if (token === flag) {
     const nextValue = normalizeAcpOptionToken(params.tokens[params.index + 1] ?? "");
     value = nextValue.startsWith("--") ? "" : nextValue;
     if (value) {
       nextIndex += 1;
     }
-  } else if (token.startsWith(`${params.flag}=`)) {
-    value = token.slice(`${params.flag}=`.length).trim();
   } else {
-    return { matched: false };
+    value = token.slice(flag.length + 1).trim();
   }
   if (!value) {
     return {
       matched: true,
+      flag,
       nextIndex,
-      error: `${params.flag} requires a value`,
+      error: `${flag} requires a value`,
     };
   }
-  return { matched: true, value, nextIndex };
+  return { matched: true, flag, value, nextIndex };
 }
 
 function normalizeAcpOptionToken(raw: string): string {
@@ -180,79 +186,53 @@ export function parseSpawnInput(
   for (let i = 0; i < normalizedTokens.length;) {
     const token = normalizedTokens[i] ?? "";
 
-    const modeOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--mode" });
-    if (modeOption.matched) {
-      if (modeOption.error) {
-        return { ok: false, error: `${modeOption.error}. ${ACP_SPAWN_USAGE}` };
-      }
-      const raw = normalizeOptionalLowercaseString(modeOption.value);
-      if (raw !== "persistent" && raw !== "oneshot") {
-        return {
-          ok: false,
-          error: `Invalid --mode value "${modeOption.value}". Use persistent or oneshot.`,
-        };
-      }
-      mode = raw;
-      i = modeOption.nextIndex;
-      continue;
-    }
-
-    const bindOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--bind" });
-    if (bindOption.matched) {
-      if (bindOption.error) {
-        return { ok: false, error: `${bindOption.error}. ${ACP_SPAWN_USAGE}` };
-      }
-      const raw = normalizeOptionalLowercaseString(bindOption.value);
-      if (raw !== "here" && raw !== "off") {
-        return {
-          ok: false,
-          error: `Invalid --bind value "${bindOption.value}". Use here or off.`,
-        };
-      }
-      bind = raw;
-      i = bindOption.nextIndex;
-      continue;
-    }
-
-    const threadOption = readOptionValue({
+    const option = readOptionValue({
       tokens: normalizedTokens,
       index: i,
-      flag: "--thread",
+      flags: ["--mode", "--bind", "--thread", "--cwd", "--label"],
     });
-    if (threadOption.matched) {
-      if (threadOption.error) {
-        return { ok: false, error: `${threadOption.error}. ${ACP_SPAWN_USAGE}` };
+    if (option.matched) {
+      if (option.error) {
+        return { ok: false, error: `${option.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = normalizeOptionalLowercaseString(threadOption.value);
-      if (raw !== "auto" && raw !== "here" && raw !== "off") {
-        return {
-          ok: false,
-          error: `Invalid --thread value "${threadOption.value}". Use auto, here, or off.`,
-        };
+      const raw = normalizeOptionalLowercaseString(option.value);
+      switch (option.flag) {
+        case "--mode":
+          if (raw !== "persistent" && raw !== "oneshot") {
+            return {
+              ok: false,
+              error: `Invalid --mode value "${option.value}". Use persistent or oneshot.`,
+            };
+          }
+          mode = raw;
+          break;
+        case "--bind":
+          if (raw !== "here" && raw !== "off") {
+            return {
+              ok: false,
+              error: `Invalid --bind value "${option.value}". Use here or off.`,
+            };
+          }
+          bind = raw;
+          break;
+        case "--thread":
+          if (raw !== "auto" && raw !== "here" && raw !== "off") {
+            return {
+              ok: false,
+              error: `Invalid --thread value "${option.value}". Use auto, here, or off.`,
+            };
+          }
+          thread = raw;
+          sawThreadOption = true;
+          break;
+        case "--cwd":
+          cwd = normalizeOptionalString(option.value);
+          break;
+        case "--label":
+          label = normalizeOptionalString(option.value);
+          break;
       }
-      thread = raw;
-      sawThreadOption = true;
-      i = threadOption.nextIndex;
-      continue;
-    }
-
-    const cwdOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--cwd" });
-    if (cwdOption.matched) {
-      if (cwdOption.error) {
-        return { ok: false, error: `${cwdOption.error}. ${ACP_SPAWN_USAGE}` };
-      }
-      cwd = normalizeOptionalString(cwdOption.value);
-      i = cwdOption.nextIndex;
-      continue;
-    }
-
-    const labelOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--label" });
-    if (labelOption.matched) {
-      if (labelOption.error) {
-        return { ok: false, error: `${labelOption.error}. ${ACP_SPAWN_USAGE}` };
-      }
-      label = normalizeOptionalString(labelOption.value);
-      i = labelOption.nextIndex;
+      i = option.nextIndex;
       continue;
     }
 
@@ -316,7 +296,7 @@ export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, stri
     const sessionOption = readOptionValue({
       tokens: normalizedTokens,
       index: i,
-      flag: "--session",
+      flags: ["--session"],
     });
     if (sessionOption.matched) {
       if (sessionOption.error) {
@@ -487,18 +467,6 @@ export function resolveCommandRequestId(params: HandleCommandsParams): string {
   return randomUUID();
 }
 
-export function collectAcpErrorText(params: {
-  error: unknown;
-  fallbackCode: AcpRuntimeError["code"];
-  fallbackMessage: string;
-}): string {
-  return toAcpRuntimeErrorText({
-    error: params.error,
-    fallbackCode: params.fallbackCode,
-    fallbackMessage: params.fallbackMessage,
-  });
-}
-
 export async function withAcpCommandErrorBoundary<T>(params: {
   run: () => Promise<T>;
   fallbackCode: AcpRuntimeError["code"];
@@ -510,7 +478,7 @@ export async function withAcpCommandErrorBoundary<T>(params: {
     return params.onSuccess(result);
   } catch (error) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error,
         fallbackCode: params.fallbackCode,
         fallbackMessage: params.fallbackMessage,

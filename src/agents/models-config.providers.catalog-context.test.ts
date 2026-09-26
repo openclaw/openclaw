@@ -34,6 +34,78 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
+it.each(["chatgpt-identity", undefined])(
+  "passes refreshed OAuth grant metadata to the catalog (authFlow: %s)",
+  async (authFlow) => {
+    const agentDir = tempDirs.make("catalog-oauth-grant-");
+    const profileId = "openai:sharing";
+    const credential = {
+      ...oauthCred({
+        provider: "openai",
+        access: "expired-sharing-access",
+        refresh: "sharing-refresh",
+        expires: 1,
+      }),
+      authFlow: "chatgpt-token-sharing",
+    };
+    const store = createAuthProfileStoreFixture({ [profileId]: credential });
+    const refreshed = {
+      ...credential,
+      access: "refreshed-access",
+      expires: Date.now() + 600_000,
+      authFlow,
+    };
+    vi.mocked(resolveApiKeyForProfile).mockResolvedValue({
+      apiKey: refreshed.access,
+      provider: credential.provider,
+      profileId,
+      profileType: "oauth",
+      credential: refreshed,
+    });
+    const observedAuth: Array<ReturnType<ProviderAuthResolver>> = [];
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run: async () => ({ profiles: [] }) }],
+      catalog: {
+        run: async (ctx) => {
+          observedAuth.push(ctx.resolveProviderAuth(undefined, { oauthMarker: "oauth-marker" }));
+          return null;
+        },
+      },
+    };
+    const prepared = await prepareProviderCatalogRun({
+      provider,
+      config: {},
+      agentDir,
+      authStore: store,
+      env: {},
+      isActive: () => true,
+      resolveProviderAuth: (_providerId, options) => ({
+        apiKey: options?.oauthMarker,
+        discoveryApiKey: credential.access,
+        authFlow: credential.authFlow,
+        profileId,
+        mode: "oauth",
+        source: "profile",
+      }),
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+    });
+    await runProviderCatalog(prepared);
+
+    expect(observedAuth).toEqual([
+      {
+        apiKey: "oauth-marker",
+        discoveryApiKey: refreshed.access,
+        authFlow,
+        profileId,
+        mode: "oauth",
+        source: "profile",
+      },
+    ]);
+  },
+);
+
 it.each([true, false])(
   "reports failed OAuth preparation with the resulting catalog (API-key fallback: %s)",
   async (withApiKey) => {

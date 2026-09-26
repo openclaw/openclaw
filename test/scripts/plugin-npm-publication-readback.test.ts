@@ -8,8 +8,13 @@ import {
 } from "./plugin-npm-publication-readback.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const fixture = (mode = "direct", fault = "none") =>
-  createNpmPublicationReadbackFixture(tempDirs.make("npm-parent-readback-"), mode, fault);
+const fixture = (mode = "direct", fault = "none", distTagVersion?: string) =>
+  createNpmPublicationReadbackFixture(
+    tempDirs.make("npm-parent-readback-"),
+    mode,
+    fault,
+    distTagVersion,
+  );
 
 describe("parent plugin npm publication readback", () => {
   it("recovers a historical failed publisher only through its successful receipt step and exact bytes", async () => {
@@ -112,6 +117,30 @@ describe("parent plugin npm publication readback", () => {
     await expect(parent.verify(packageName, version, "beta")).resolves.toBeUndefined();
     expect(parent.evidence).toMatchObject([{ packageName, verification: "published-registry" }]);
     expect(value.requests.filter((url) => url.endsWith(".tgz"))).toHaveLength(1);
+  });
+
+  it("passes a skipped version a later release superseded with a note and no tag check", async () => {
+    const value = await fixture("direct", "no-publish", "2026.9.2-beta.2");
+    const parent = await createPluginNpmPublicationReadback(value.options);
+    await expect(parent.verify(packageName, version, "beta")).resolves.toBe(
+      `${packageName}@${version} superseded by 2026.9.2-beta.2; dist-tag beta stays.`,
+    );
+    expect(parent.evidence).toMatchObject([
+      { packageName, verification: "published-registry", supersededBy: "2026.9.2-beta.2" },
+    ]);
+    expect(value.requests.filter((url) => url.endsWith(".tgz"))).toHaveLength(1);
+  });
+
+  it.each([
+    ["lagging selector on a skipped version", "no-publish", "2026.9.1-beta.1"],
+    ["ahead selector on a version this run published", "none", "2026.9.2-beta.2"],
+  ])("still rejects a %s", async (_label, fault, distTagVersion) => {
+    const value = await fixture("direct", fault, distTagVersion);
+    const parent = await createPluginNpmPublicationReadback(value.options);
+    await expect(parent.verify(packageName, version, "beta")).rejects.toThrow(
+      "differs from the prepared version",
+    );
+    expect(parent.evidence).toEqual([]);
   });
 
   it("does not interpret a missing job inventory as no new publication", async () => {

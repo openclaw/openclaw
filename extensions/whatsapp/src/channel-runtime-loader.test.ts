@@ -2,8 +2,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { describe, expect, it, vi } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import {
   loadWhatsAppChannelRuntime,
   readWhatsAppAccountLinkState,
@@ -25,6 +26,8 @@ vi.mock("./channel.runtime.js", () => {
 });
 
 const sourceDir = fileURLToPath(new URL(".", import.meta.url));
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 function listChannelRuntimeImportOwners(): string[] {
   const owners: string[] = [];
@@ -33,12 +36,7 @@ function listChannelRuntimeImportOwners(): string[] {
       continue;
     }
     const filePath = path.join(sourceDir, relativePath);
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      readFileSync(filePath, "utf8"),
-      ts.ScriptTarget.Latest,
-      true,
-    );
+    const sourceFile = parser.parseSourceFile(filePath, readFileSync(filePath, "utf8"));
     const visit = (node: ts.Node) => {
       if (
         ts.isCallExpression(node) &&
@@ -50,7 +48,7 @@ function listChannelRuntimeImportOwners(): string[] {
       ) {
         owners.push(relativePath);
       }
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
     };
     visit(sourceFile);
   }

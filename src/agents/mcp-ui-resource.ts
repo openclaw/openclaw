@@ -4,6 +4,7 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
@@ -72,17 +73,8 @@ export function readMcpAppChannelView(result: unknown): McpAppChannelView | unde
   return { viewId };
 }
 
-type McpAppViewStore = Map<string, McpAppViewLease>;
-
-function getViewStore(): McpAppViewStore {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[MCP_APP_VIEW_STORE_KEY] as McpAppViewStore | undefined;
-  if (existing) {
-    return existing;
-  }
-  const store = new Map<string, McpAppViewLease>();
-  globalStore[MCP_APP_VIEW_STORE_KEY] = store;
-  return store;
+function getViewStore(): Map<string, McpAppViewLease> {
+  return resolveGlobalMap(MCP_APP_VIEW_STORE_KEY);
 }
 
 function deleteView(viewId: string, expected?: McpAppViewLease): void {

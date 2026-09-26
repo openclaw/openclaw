@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { diffGatewayReloadPaths } from "../../gateway/config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -186,7 +186,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
                   agentDir: state.agentDir(),
                   workspaceDir: state.workspaceDir,
                 }),
-              ).resolves.toEqual([]);
+              ).resolves.toEqual({ entries: [] });
             } finally {
               next.close();
             }

@@ -150,6 +150,9 @@ export type SessionModelUsage = {
 };
 
 export type SessionCostSummary = CostUsageTotals & {
+  computedAt?: number;
+  staleSince?: number;
+  refreshing?: boolean;
   sessionId?: string;
   sessionFile?: string;
   firstActivity?: number;

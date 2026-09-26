@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const GATEWAY_HTTP_PROBE_MAX_RESPONSE_CHARS = 1024;
 
-export type GatewayHttpProbeResponse = {
+type GatewayHttpProbeResponse = {
   statusCode: number;
   body: string;
   tlsFingerprint?: string;
@@ -31,11 +31,11 @@ export type ConfiguredGatewayLocalProbe = {
   ): Promise<GatewayLocalProbeTarget | null>;
 };
 
-export function normalizeGatewayHttpProbeHost(host: string): string {
+function normalizeGatewayHttpProbeHost(host: string): string {
   return host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
 }
 
-export async function requestGatewayLocalHttpProbe(params: {
+async function requestGatewayLocalHttpProbe(params: {
   host: string;
   pathname: "/healthz" | "/readyz" | "/startupz";
   port: number;

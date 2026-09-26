@@ -217,13 +217,14 @@ describe("mcp connection resolver helpers", () => {
     const previousExternalRestartPolicy = isGatewayRestartExternallyAllowed();
 
     try {
-      // Keep Gateway refresh scheduling observable without starting provider discovery.
-      const refreshPreparedModelRuntimeSnapshots = vi
-        .spyOn(await import("./prepared-model-runtime.js"), "refreshPreparedModelRuntimeSnapshots")
-        .mockResolvedValue(undefined);
-      const refreshContextWindowCache = vi
-        .spyOn(await import("./context.js"), "refreshContextWindowCache")
-        .mockResolvedValue(undefined);
+      // Keep provider discovery outside the MCP credential-revocation fixture.
+      vi.spyOn(
+        await import("./prepared-model-runtime.js"),
+        "refreshPreparedModelRuntimeSnapshots",
+      ).mockResolvedValue(undefined);
+      vi.spyOn(await import("./context.js"), "refreshContextWindowCache").mockResolvedValue(
+        undefined,
+      );
       const previous = createMcpProofPluginRegistry();
       previous.apiFor("startup-mail").registerMcpServerConnectionResolver({
         serverName: "user-mail",
@@ -373,11 +374,6 @@ describe("mcp connection resolver helpers", () => {
         status: "applied",
         runtime,
       });
-      expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
-        allowGatewaySubagentBinding: true,
-        catalogMode: "static",
-      });
-      expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(isPluginRegistryRetired(previous.registry)).toBe(true);
       expect(

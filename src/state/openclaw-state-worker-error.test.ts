@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
@@ -17,6 +18,11 @@ import { StateDatabaseCoordinatorContentionError } from "../infra/state-database
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
+import { DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME } from "./openclaw-quarantine-error.js";
+import {
+  findOpenClawStateDatabaseFailure,
+  markOpenClawStateDatabaseFailure,
+} from "./openclaw-state-db-failure.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
   OpenClawStateLeaseError,
@@ -33,17 +39,20 @@ import {
   retainOpenClawStateWorkerErrorPayload,
 } from "./openclaw-state-worker-error.js";
 
+function remoteError(payload: unknown): Error {
+  const retained = new Error("remote error");
+  retainOpenClawStateWorkerErrorPayload(retained, payload);
+  return retained;
+}
+
 function roundTrip(error: Error): Error {
   const payload = encodeOpenClawStateWorkerError(error);
-  if (!payload) {
-    throw new Error("expected a canonical shared-state error payload");
-  }
-  const retained = new Error("remote error");
-  retainOpenClawStateWorkerErrorPayload(retained, structuredClone(payload));
+  assert(payload, "expected a canonical shared-state error payload");
+  const retained = remoteError(structuredClone(payload));
   const decoded = hydrateOpenClawStateWorkerError(retained);
-  if (decoded === retained) {
-    throw new Error("expected a decoded shared-state error");
-  }
+  expect(decoded).not.toBe(retained);
+  expect(decoded).toBeInstanceOf(error.constructor);
+  expect(decoded).toMatchObject({ name: error.name, message: error.message });
   return decoded;
 }
 
@@ -58,8 +67,6 @@ describe("shared-state worker error transport", () => {
       },
     );
     const decoded = roundTrip(error);
-    expect(decoded).toBeInstanceOf(McpOAuthStoreCorruptionError);
-    expect(decoded).toMatchObject({ name: error.name, message: error.message });
     expect(decoded.cause).toBeInstanceOf(Error);
     expect(decoded.cause).toMatchObject({ name: "SyntaxError", message: cause.message });
   });
@@ -67,9 +74,7 @@ describe("shared-state worker error transport", () => {
   it("preserves the attachment conflict identity used for credential recovery", () => {
     const original = new WorkerSessionAlreadyAttachedError("session", "environment");
     const decoded = roundTrip(original);
-    expect(decoded).toBeInstanceOf(WorkerSessionAlreadyAttachedError);
     expect(decoded).toMatchObject({
-      message: original.message,
       sessionId: "session",
       environmentId: "environment",
     });
@@ -87,7 +92,6 @@ describe("shared-state worker error transport", () => {
 
       const decoded = roundTrip(original);
       expect(decoded).not.toBe(original);
-      expect(decoded).toMatchObject({ message: original.message });
       expect("code" in decoded ? decoded.code : undefined).toBe(code);
       expect(isSqliteNativeOpenFailure(decoded)).toBe(true);
       expect(hydrateOpenClawStateWorkerError(decoded)).toBe(decoded);
@@ -116,10 +120,7 @@ describe("shared-state worker error transport", () => {
       cause: { message: "Synthetic decoding cause" },
     });
     if (aggregate) {
-      expect(decoded).toBeInstanceOf(AggregateError);
-      if (!(decoded instanceof AggregateError)) {
-        throw new Error("Expected aggregate read failure");
-      }
+      assert(decoded instanceof AggregateError);
       expect(decoded.errors).toHaveLength(2);
       expect(decoded.errors[0]).toBe(restored);
       expect(decoded.errors[1]).toBe(restored);
@@ -145,7 +146,6 @@ describe("shared-state worker error transport", () => {
       }),
     });
     const decoded = roundTrip(error);
-    expect(decoded).toBeInstanceOf(PluginBlobStoreError);
     expect(decoded).toMatchObject({
       code,
       operation,
@@ -166,10 +166,7 @@ describe("shared-state worker error transport", () => {
     });
     combined.errors.push(combined);
     const decoded = roundTrip(combined);
-    expect(decoded).toBeInstanceOf(AggregateError);
-    if (!(decoded instanceof AggregateError)) {
-      throw new Error("Expected aggregate");
-    }
+    assert(decoded instanceof AggregateError);
     expect(decoded.errors[0]).toBeInstanceOf(PluginBlobStoreError);
     expect(decoded.errors[0]).toBe(decoded.errors[2]);
     expect(decoded.cause).toBe(decoded.errors[0]);
@@ -189,8 +186,7 @@ describe("shared-state worker error transport", () => {
       cause: new Error("Synthetic verification cause"),
     });
     const decoded = roundTrip(error);
-    expect(decoded).toBeInstanceOf(OpenClawStateLeaseError);
-    expect(decoded).toMatchObject({ name: error.name, message: error.message, code });
+    expect(decoded).toMatchObject({ code });
     expect(decoded.cause).toBeInstanceOf(Error);
     expect(decoded.cause).toMatchObject({ message: "Synthetic verification cause" });
   });
@@ -201,7 +197,6 @@ describe("shared-state worker error transport", () => {
     expect(wrapped.cause).toBe(cause);
     expect(toOpenClawStateLeaseVerificationError(identity, wrapped)).toBe(wrapped);
     const decoded = roundTrip(wrapped);
-    expect(decoded).toBeInstanceOf(OpenClawStateLeaseError);
     expect(decoded).toMatchObject({
       code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
       message: "failed to verify test lease test/read",
@@ -210,8 +205,7 @@ describe("shared-state worker error transport", () => {
   });
 
   it("uses the validated wire root when retaining an unopened error graph", () => {
-    const retained = new Error("remote aggregate");
-    retainOpenClawStateWorkerErrorPayload(retained, {
+    const retained = remoteError({
       version: 1,
       root: 1,
       nodes: [
@@ -226,9 +220,7 @@ describe("shared-state worker error transport", () => {
 
   it("keeps outcome-unknown explicit instead of hydrating a maintenance payload", () => {
     const payload = encodeOpenClawStateWorkerError(new SqliteSchemaVersionError("newer schema"));
-    if (!payload) {
-      throw new Error("Expected canonical payload");
-    }
+    assert(payload);
     const job: Job = {
       request: {
         type: "execute",
@@ -275,9 +267,7 @@ describe("shared-state worker error transport", () => {
         dispatch() {},
       },
     );
-    if (!(failure instanceof Error)) {
-      throw new Error("Expected the broker to settle the original failure");
-    }
+    assert(failure instanceof Error, "Expected the broker to settle the original failure");
     expect(hydrateOpenClawStateWorkerError(failure)).toBe(failure);
     expect(failure).toMatchObject({ code: "outcome-unknown" });
     expect(findStartupMaintenanceRequiredError(failure)).toBeUndefined();
@@ -285,11 +275,8 @@ describe("shared-state worker error transport", () => {
 
   it("hydrates a cached rejection independently for each caller without rewriting its graph", async () => {
     const payload = encodeOpenClawStateWorkerError(new SqliteSchemaVersionError("newer schema"));
-    if (!payload) {
-      throw new Error("Expected canonical payload");
-    }
-    const remote = new Error("remote failure");
-    retainOpenClawStateWorkerErrorPayload(remote, payload);
+    assert(payload);
+    const remote = remoteError(payload);
     expect(Object.keys(remote)).toEqual([]);
     expect(JSON.stringify(remote)).toBe("{}");
     const untouched = new Error("local cleanup");
@@ -304,9 +291,7 @@ describe("shared-state worker error transport", () => {
       import("../infra/startup-maintenance-required.js"),
     ]);
     const second = codec.hydrateOpenClawStateWorkerError(original);
-    if (!(first instanceof AggregateError) || !(second instanceof AggregateError)) {
-      throw new Error("Expected hydrated aggregate wrappers");
-    }
+    assert(first instanceof AggregateError && second instanceof AggregateError);
     expect(first).not.toBe(second);
     expect(first.errors[0]).not.toBe(second.errors[0]);
     expect(first.errors[0]).toBeInstanceOf(StartupMaintenanceRequiredError);
@@ -326,11 +311,8 @@ describe("shared-state worker error transport", () => {
     const original = new AggregateError([refusal, refusal], "wire graph", { cause: refusal });
     refusal.cause = original;
     const payload = encodeOpenClawStateWorkerError(original);
-    if (!payload) {
-      throw new Error("Expected canonical wire graph");
-    }
-    const retained = new Error("remote error");
-    retainOpenClawStateWorkerErrorPayload(retained, payload);
+    assert(payload);
+    const retained = remoteError(payload);
     const first = hydrateOpenClawStateWorkerError(retained);
     const second = hydrateOpenClawStateWorkerError(retained);
     const combined = new AggregateError([first, second], "separate calls");
@@ -340,21 +322,15 @@ describe("shared-state worker error transport", () => {
       import("../infra/startup-maintenance-required.js"),
     ]);
     const result = codec.hydrateOpenClawStateWorkerError(combined);
-    if (!(result instanceof AggregateError)) {
-      throw new Error("Expected aggregate wrapper");
-    }
+    assert(result instanceof AggregateError);
     expect(result.errors[0]).not.toBe(result.errors[1]);
     for (const graph of result.errors) {
-      if (!(graph instanceof AggregateError)) {
-        throw new Error("Expected materialized wire graph");
-      }
+      assert(graph instanceof AggregateError);
       expect(graph.cause).toBe(graph.errors[0]);
       expect(graph.errors[0]).toBe(graph.errors[1]);
       expect(graph.errors[0]).toBeInstanceOf(errors.StartupMaintenanceRequiredError);
       const cause: unknown = graph.errors[0];
-      if (!(cause instanceof Error)) {
-        throw new Error("Expected hydrated cause");
-      }
+      assert(cause instanceof Error);
       expect(cause.cause).toBe(graph);
     }
     expect(combined.errors).toEqual([first, second]);
@@ -367,15 +343,11 @@ describe("shared-state worker error transport", () => {
     expect(encodeOpenClawStateWorkerError(original)).toBeUndefined();
     const payload = encodeOpenClawStateWorkerError(original, { includeOrdinary: true });
     expect(payload).toBeDefined();
-    const retained = new Error("remote failure");
-    retainOpenClawStateWorkerErrorPayload(retained, structuredClone(payload));
+    const retained = remoteError(structuredClone(payload));
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
     const decoded = hydrateOpenClawStateWorkerError(retained, { includeOrdinary: true });
-    expect(decoded).toBeInstanceOf(AggregateError);
     expect(decoded.cause).toMatchObject({ message: "native failure", code: "SQLITE_BUSY" });
-    if (!(decoded instanceof AggregateError) || !(decoded.cause instanceof Error)) {
-      throw new Error("Expected the constructed aggregate and its cause");
-    }
+    assert(decoded instanceof AggregateError && decoded.cause instanceof Error);
     expect(decoded.errors[0]).toBe(decoded.cause);
     expect(decoded.cause.cause).toBe(decoded);
   });
@@ -394,64 +366,46 @@ describe("shared-state worker error transport", () => {
   it.each([
     {
       error: new OpenClawStateOwnershipError("owner refused"),
-      constructor: OpenClawStateOwnershipError,
       fields: {},
     },
     {
       error: new OpenClawStateOwnershipMetadataError("/fixture/state.sqlite", "invalid metadata"),
-      constructor: OpenClawStateOwnershipMetadataError,
       fields: { databasePath: "/fixture/state.sqlite" },
     },
     {
       error: new OpenClawStateExternalOwnershipError("/fixture/state.sqlite", "fixture-manager"),
-      constructor: OpenClawStateExternalOwnershipError,
       fields: { databasePath: "/fixture/state.sqlite", managerId: "fixture-manager" },
     },
-  ])("preserves ownership classification for $error.name", ({ error, constructor, fields }) => {
+  ])("preserves ownership classification for $error.name", ({ error, fields }) => {
     const decoded = roundTrip(error);
-    expect(decoded).toBeInstanceOf(constructor);
     expect(decoded).toBeInstanceOf(OpenClawStateOwnershipError);
-    expect(decoded).toMatchObject({ ...fields, name: error.name, message: error.message });
+    expect(decoded).toMatchObject(fields);
   });
 
   it.each([
     {
+      error: new StartupMaintenanceRequiredError("state-migrations", "state migration"),
+      fields: { kind: "state-migrations", reason: "state migration" },
+    },
+    {
       error: new StartupMaintenanceRequiredError("legacy-session-store", "session migration"),
-      constructor: StartupMaintenanceRequiredError,
       fields: { kind: "legacy-session-store", reason: "session store migration" },
     },
     {
       error: new SqliteSchemaVersionError("newer schema"),
-      constructor: SqliteSchemaVersionError,
       fields: { kind: "newer-schema", reason: "a newer OpenClaw build" },
     },
-    {
-      error: new OpenClawStateDatabaseSchemaMigrationRequiredError(
-        "audit-events-v2",
-        "/fixture/state.sqlite",
-      ),
-      constructor: OpenClawStateDatabaseSchemaMigrationRequiredError,
-      fields: {
-        kind: "audit-events-v2",
-        pathname: "/fixture/state.sqlite",
-        reason: "state database schema migration",
-      },
-    },
-    {
-      error: new OpenClawStateDatabaseSchemaMigrationRequiredError(
-        "legacy-cron-run-logs",
-        "/fixture/state.sqlite",
-      ),
-      constructor: OpenClawStateDatabaseSchemaMigrationRequiredError,
-      fields: {
-        kind: "legacy-cron-run-logs",
-        pathname: "/fixture/state.sqlite",
-        reason: "cron run history migration",
-      },
-    },
+    ...(
+      [
+        ["audit-events-v2", "state database schema migration"],
+        ["legacy-cron-run-logs", "cron run history migration"],
+      ] as const
+    ).map(([kind, reason]) => ({
+      error: new OpenClawStateDatabaseSchemaMigrationRequiredError(kind, "/fixture/state.sqlite"),
+      fields: { kind, pathname: "/fixture/state.sqlite", reason },
+    })),
     {
       error: new OpenClawAgentDatabaseMediaMigrationRequiredError("/fixture/agent.sqlite", 11),
-      constructor: OpenClawAgentDatabaseMediaMigrationRequiredError,
       fields: {
         kind: "agent-media",
         pathname: "/fixture/agent.sqlite",
@@ -459,15 +413,12 @@ describe("shared-state worker error transport", () => {
         reason: "offline media migration",
       },
     },
-  ])("preserves maintenance classification for $error.name", ({ error, constructor, fields }) => {
+  ])("preserves maintenance classification for $error.name", ({ error, fields }) => {
     const decoded = roundTrip(error);
-    expect(decoded).toBeInstanceOf(constructor);
     expect(findStartupMaintenanceRequiredError(decoded)).toBe(decoded);
     expect(decoded).toMatchObject({
       ...fields,
       code: "gateway.maintenance_required",
-      name: error.name,
-      message: error.message,
     });
   });
 
@@ -486,16 +437,11 @@ describe("shared-state worker error transport", () => {
     repair.cause = root;
 
     const decoded = roundTrip(root);
-    expect(decoded).toBeInstanceOf(AggregateError);
-    if (!(decoded instanceof AggregateError)) {
-      throw new Error("expected aggregate wrapper");
-    }
+    assert(decoded instanceof AggregateError);
     expect(decoded.cause).toBe(decoded.errors[0]);
     const restoredWrapper: unknown = decoded.errors[0];
     const restoredRepair: unknown = decoded.errors[1];
-    if (!(restoredWrapper instanceof Error) || !(restoredRepair instanceof Error)) {
-      throw new Error("expected restored error causes");
-    }
+    assert(restoredWrapper instanceof Error && restoredRepair instanceof Error);
     expect(restoredWrapper).toMatchObject({ code: "EWRAPPED" });
     expect(restoredWrapper.cause).toBe(restoredRepair);
     expect(restoredRepair.cause).toBe(decoded);
@@ -527,9 +473,7 @@ describe("shared-state worker error transport", () => {
     expect(JSON.stringify(payload)).not.toContain("fixture-not-for-transport");
     expect(payload?.nodes.every((node) => !("stack" in node))).toBe(true);
     const decoded = roundTrip(original);
-    if (!(decoded instanceof AggregateError)) {
-      throw new Error("expected aggregate wrapper");
-    }
+    assert(decoded instanceof AggregateError);
     expect(decoded.errors[1]).toBeInstanceOf(Error);
     expect(decoded.errors[1]).not.toBeInstanceOf(CustomError);
     expect(decoded.errors[1]).toMatchObject({ name: "CustomError", code: 17, cause: "detail" });
@@ -545,12 +489,40 @@ describe("shared-state worker error transport", () => {
       Object.assign(new Error("type imitation"), { name: "TypeError" }),
       Object.assign(new Error("upload imitation"), { name: "SkillUploadRequestError" }),
       Object.assign(new Error("native open imitation"), { nativeOpen: true, code: "SQLITE_IOERR" }),
+      Object.assign(new Error("terminal admission imitation"), {
+        name: "SqliteIntegrityError",
+        stateDatabasePath: "/isolated/state.sqlite",
+      }),
       imitation,
       new AggregateError([imitation], "ordinary aggregate"),
+      Object.assign(new Error("cleanup imitation"), {
+        name: DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME,
+      }),
+      Object.assign(new AggregateError([], "cleanup aggregate imitation"), {
+        name: DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME,
+      }),
       { cause: new OpenClawStateOwnershipError("nested object") },
     ]) {
       expect(encodeOpenClawStateWorkerError(error)).toBeUndefined();
     }
+  });
+
+  it("preserves the canonical state refusal path and native cause through cleanup aggregates", () => {
+    const native = Object.assign(new Error("database corruption"), { errcode: 11 });
+    const failure = Object.assign(new Error("integrity admission refused", { cause: native }), {
+      name: "SqliteIntegrityError",
+    });
+    markOpenClawStateDatabaseFailure(failure, "/isolated/state.sqlite");
+    const original = new AggregateError([failure, new Error("cleanup failed")], "open failed", {
+      cause: failure,
+    });
+    const decoded = roundTrip(original);
+    expect(findOpenClawStateDatabaseFailure(decoded, "/isolated/other.sqlite")).toBeUndefined();
+    expect(findOpenClawStateDatabaseFailure(decoded, "/isolated/state.sqlite")).toMatchObject({
+      name: "SqliteIntegrityError",
+      cause: { errcode: 11 },
+    });
+    expect(findOpenClawStateDatabaseFailure(decoded, "/isolated/state.sqlite")).toBe(decoded.cause);
   });
 
   it("opts into complete ordinary graphs without promoting name-only classifications", () => {
@@ -571,14 +543,11 @@ describe("shared-state worker error transport", () => {
     const payload = encodeOpenClawStateWorkerError(original, options);
     expect(payload).toBeDefined();
     expect(JSON.stringify(payload)).not.toContain("fixture-not-for-transport");
-    const retained = new Error("remote error");
-    retainOpenClawStateWorkerErrorPayload(retained, structuredClone(payload));
+    const retained = remoteError(structuredClone(payload));
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
 
     const decoded = hydrateOpenClawStateWorkerError(retained, options);
-    if (!(decoded instanceof AggregateError)) {
-      throw new Error("expected ordinary aggregate graph");
-    }
+    assert(decoded instanceof AggregateError);
     expect(decoded.cause).toBe(decoded.errors[0]);
     expect(decoded.errors[0]).toMatchObject({ name: "SqliteIntegrityError" });
     expect(decoded.errors[0].cause).toBe(decoded.errors[1]);
@@ -589,6 +558,17 @@ describe("shared-state worker error transport", () => {
     expect(hydrateOpenClawStateWorkerError(retained, options)).not.toBe(decoded);
   });
 
+  it("does not admit a cleanup name on a non-aggregate wire node", () => {
+    const retained = remoteError({
+      version: 1,
+      root: 0,
+      nodes: [
+        { type: "error", name: DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME, message: "imitation" },
+      ],
+    });
+    expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
+  });
+
   it.each([
     new SqliteCoordinatorError("admission refused", new Error("native cause")),
     ...(["gateway-lifecycle", "state-lifecycle", "state-handles"] as const).map(
@@ -597,9 +577,7 @@ describe("shared-state worker error transport", () => {
   ])("preserves coordinator classification for %s", (original) => {
     const decoded = roundTrip(original);
     expect(decoded).toBeInstanceOf(SqliteCoordinatorError);
-    expect(decoded).toMatchObject({ name: original.name, message: original.message });
     if (original instanceof StateDatabaseCoordinatorContentionError) {
-      expect(decoded).toBeInstanceOf(StateDatabaseCoordinatorContentionError);
       expect(decoded).toMatchObject({ family: original.family });
     } else {
       expect(decoded.cause).toBeInstanceOf(Error);
@@ -618,62 +596,41 @@ describe("shared-state worker error transport", () => {
     { version: 2, root: 0, nodes: [validNode] },
     { version: 1, root: 1, nodes: [validNode] },
     { version: 1, root: 0, nodes: [] },
-    { version: 1, root: 0, nodes: [{ ...validNode, type: "CustomError" }] },
-    { version: 1, root: 0, nodes: [{ ...validNode, kind: "unknown-migration" }] },
-    { version: 1, root: 0, nodes: [{ ...validNode, cause: { ref: 1 } }] },
-    { version: 1, root: 0, nodes: [{ ...validNode, cause: { value: {} } }] },
-    { version: 1, root: 0, nodes: [{ ...validNode, code: {} }] },
-    { version: 1, root: 0, nodes: [{ ...validNode, nativeOpen: false }] },
-    { version: 1, root: 0, nodes: [{ ...validNode, errcode: -1 }] },
-    { version: 1, root: 0, nodes: [{ ...validNode, errcode: 0.5 }] },
-    { version: 1, root: 0, nodes: [{ ...validNode, errcode: 2 ** 31 }] },
-    {
-      version: 1,
-      root: 0,
-      nodes: [
-        { type: "coordinator-contention", name: "Error", message: "invalid", family: "other" },
-      ],
-    },
-    {
-      version: 1,
-      root: 0,
-      nodes: [
-        {
-          type: "state-lease",
-          leaseCode: "OPENCLAW_STATE_LEASE_LOST",
-          code: "OPENCLAW_STATE_LEASE_HELD",
-          name: "OpenClawStateLeaseError",
-          message: "mismatched lease classification",
-        },
-      ],
-    },
-    { version: 1, root: 0, nodes: [{ ...validNode, stack: "not transported" }] },
-    {
-      version: 1,
-      root: 0,
-      nodes: [{ type: "aggregate", name: "AggregateError", message: "missing edges" }],
-    },
+    ...[
+      { ...validNode, type: "CustomError" },
+      { ...validNode, kind: "unknown-migration" },
+      { ...validNode, cause: { ref: 1 } },
+      { ...validNode, cause: { value: {} } },
+      { ...validNode, code: {} },
+      { ...validNode, nativeOpen: false },
+      { ...validNode, errcode: -1 },
+      { ...validNode, errcode: 0.5 },
+      { ...validNode, errcode: 2 ** 31 },
+      { type: "coordinator-contention", name: "Error", message: "invalid", family: "other" },
+      {
+        type: "state-lease",
+        leaseCode: "OPENCLAW_STATE_LEASE_LOST",
+        code: "OPENCLAW_STATE_LEASE_HELD",
+        name: "OpenClawStateLeaseError",
+        message: "mismatched lease classification",
+      },
+      { ...validNode, stack: "not transported" },
+      { type: "aggregate", name: "AggregateError", message: "missing edges" },
+      {
+        type: "agent-media-migration",
+        name: "Error",
+        message: "invalid version",
+        pathname: "/fixture/agent.sqlite",
+        schemaVersion: -1,
+      },
+    ].map((node) => ({ version: 1, root: 0, nodes: [node] })),
     {
       version: 1,
       root: 0,
       nodes: [{ type: "error", name: "Error", message: "unrelated" }, validNode],
     },
-    {
-      version: 1,
-      root: 0,
-      nodes: [
-        {
-          type: "agent-media-migration",
-          name: "Error",
-          message: "invalid version",
-          pathname: "/fixture/agent.sqlite",
-          schemaVersion: -1,
-        },
-      ],
-    },
   ])("rejects malformed or noncanonical payload %#", (payload) => {
-    const retained = new Error("ordinary transport failure");
-    retainOpenClawStateWorkerErrorPayload(retained, payload);
+    const retained = remoteError(payload);
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
     expect(hydrateOpenClawStateWorkerError(retained, { includeOrdinary: true })).toBe(retained);
   });

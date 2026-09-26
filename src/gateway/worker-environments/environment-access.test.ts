@@ -9,6 +9,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as observeBridge from "../desktop/observe-bridge.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
+import { createWorkerInferenceStore } from "./inference-store.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import { createWorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import * as support from "./service.test-support.js";
@@ -78,6 +79,80 @@ describe("worker environment service", () => {
       nodeShutdown.resolve();
       portalShutdown.resolve();
       await stopping.catch(() => undefined);
+    }
+  });
+
+  it("drains tunnels and artifacts while retaining inference and artifact shutdown failures", async () => {
+    const inferenceFailure = new Error("inference recovery write failed");
+    const artifactFailure = new Error("bootstrap artifact cleanup failed");
+    const inferenceStore = createWorkerInferenceStore({ path: support.testState.stateDb.path });
+    vi.spyOn(inferenceStore, "recoverPending").mockRejectedValue(inferenceFailure);
+    const tunnelEntered = createDeferred();
+    const tunnelClosed = createDeferred();
+    const artifactEntered = createDeferred();
+    const artifactClosed = createDeferred();
+    const tunnelManager = createWorkerTunnelManager();
+    vi.spyOn(tunnelManager, "stopAll").mockImplementation(async () => {
+      tunnelEntered.resolve();
+      await tunnelClosed.promise;
+    });
+    const workerService = support.createService(support.createProvider(), {
+      inferenceStore,
+      tunnelManager,
+      closeNodeBootstrapArtifacts: async () => {
+        artifactEntered.resolve();
+        await artifactClosed.promise;
+        throw artifactFailure;
+      },
+    });
+    await expect(workerService.ready()).rejects.toBe(inferenceFailure);
+    const stopping = workerService.stop();
+    const settled = vi.fn();
+    void stopping.then(settled, settled);
+    const rejected = expect(stopping).rejects.toMatchObject({
+      errors: [inferenceFailure, artifactFailure],
+    });
+    try {
+      await Promise.race([tunnelEntered.promise, stopping]);
+      expect(settled).not.toHaveBeenCalled();
+      tunnelClosed.resolve();
+      await Promise.race([artifactEntered.promise, stopping]);
+      expect(settled).not.toHaveBeenCalled();
+      artifactClosed.resolve();
+      await rejected;
+    } finally {
+      tunnelClosed.resolve();
+      artifactClosed.resolve();
+      await stopping.catch(() => undefined);
+      support.testState.service = undefined;
+    }
+  });
+
+  it("joins both readiness owners before reporting their original failures", async () => {
+    const storeFailure = new Error("environment inventory readiness failed");
+    const inferenceFailure = new Error("inference recovery failed");
+    const storeReady = createDeferred();
+    const inferenceReady = createDeferred();
+    vi.spyOn(support.testState.store, "ready").mockReturnValueOnce(storeReady.promise);
+    const inferenceStore = createWorkerInferenceStore({ path: support.testState.stateDb.path });
+    vi.spyOn(inferenceStore, "recoverPending").mockReturnValueOnce(inferenceReady.promise);
+    const workerService = support.createService(support.createProvider(), { inferenceStore });
+    const ready = workerService.ready();
+    const settled = vi.fn();
+    void ready.then(settled, settled);
+    try {
+      inferenceReady.reject(inferenceFailure);
+      await Promise.allSettled([inferenceReady.promise]);
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      storeReady.reject(storeFailure);
+      await expect(ready).rejects.toMatchObject({ errors: [storeFailure, inferenceFailure] });
+    } finally {
+      inferenceReady.reject(inferenceFailure);
+      storeReady.reject(storeFailure);
+      await ready.catch(() => undefined);
+      await workerService.stop().catch(() => undefined);
+      support.testState.service = undefined;
     }
   });
 
@@ -406,7 +481,8 @@ describe("worker environment service", () => {
       sessionId: "session-device",
     });
     const sshStopCallsBeforeStart = sshStop.mock.calls.length;
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
     const starting = workerService.startTunnel({
       environmentId: environment.environmentId,
@@ -947,7 +1023,8 @@ describe("worker environment service", () => {
 
   it("stops a poisoned tunnel start and returns a typed deadline error", async () => {
     await support.seedReady("worker-tunnel-timeout");
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { promise: started, resolve: signalStarted } = createDeferred();
     const { promise: pendingStart, reject: rejectStart } = createDeferred<never>();
     const tunnelManager = {

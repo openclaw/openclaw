@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssembleResult, ContextEngine } from "../../context-engine/types.js";
 import type { DecisionRuntimeV1 } from "../../decisions/types.js";
 import { installDecisionFixture } from "../agent-hooks/compaction-safeguard-semantic.test-support.js";
+import { isDecisionAssistanceEligible } from "../decision-assistance.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { assembleHarnessContextEngine } from "./context-engine-lifecycle.js";
@@ -41,6 +45,7 @@ function options() {
     config: { mode: "shadow" as const, minEstimatedTokens: 1, recentMessages: 2 },
     signal: new AbortController().signal,
     assertActive: vi.fn(),
+    isEligible: () => true,
   };
 }
 const unavailable: DecisionRuntimeV1 = {
@@ -194,5 +199,86 @@ describe("semantic turn context", () => {
         throw error;
       });
     await expect(observeSemanticTurnContext(fixture(), opts)).rejects.toBe(error);
+  });
+});
+
+describe("turn context published Labs eligibility", () => {
+  it.each([
+    { name: "absent Labs", labs: undefined, model: "semantic-fixture/default-v1", enabled: false },
+    { name: "Labs off", labs: false, model: "semantic-fixture/default-v1", enabled: false },
+    { name: "options only", labs: undefined, model: undefined, enabled: false },
+    { name: "Labs on without model", labs: true, model: undefined, enabled: false },
+    {
+      name: "empty agent override",
+      labs: true,
+      model: "semantic-fixture/default-v1",
+      override: "",
+      enabled: false,
+    },
+    { name: "Labs on with model", labs: true, model: "semantic-fixture/default-v1", enabled: true },
+  ])("$name preserves context", async ({ labs, model, override, enabled }) => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { experimental: { decisionAssistance: labs }, decisionModel: model },
+        entries: { main: { ...(override !== undefined ? { decisionModel: override } : {}) } },
+      },
+    };
+    const { requests } = installDecisionFixture("preserved", undefined, config);
+    const readConfig = createRuntimeConfigReader(config);
+    const source = fixture();
+    const original = JSON.stringify(source);
+    const engine: ContextEngine = {
+      info: { id: "legacy", name: "fixture" },
+      ingest: async () => ({ ingested: false }),
+      assemble: async () => source,
+      compact: async () => ({ ok: true, compacted: false }),
+    };
+    const result = await assembleHarnessContextEngine({
+      contextEngine: engine,
+      messages: source.messages,
+      sessionId: "synthetic",
+      modelId: "synthetic-model",
+      agentId: "main",
+      semanticCuration: {
+        ...options(),
+        isEligible: () => isDecisionAssistanceEligible(readConfig(), "main"),
+      },
+    });
+    expect(requests.length > 0).toBe(enabled);
+    expect(result?.messages).toBe(source.messages);
+    expect(JSON.stringify(source)).toBe(original);
+    if (!enabled) expect(result?.semanticCurationObservation).toBeUndefined();
+  });
+
+  it("discards an awaited observation after Labs opt-out", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: { decisionAssistance: true },
+          decisionModel: "semantic-fixture/default-v1",
+        },
+      },
+    };
+    const { requests } = installDecisionFixture(
+      "preserved",
+      () => {
+        setRuntimeConfigSnapshot({
+          agents: {
+            defaults: { ...config.agents?.defaults, experimental: { decisionAssistance: false } },
+          },
+        });
+      },
+      config,
+    );
+    const readConfig = createRuntimeConfigReader(config);
+    const source = fixture();
+    const result = await observeSemanticTurnContext(source, {
+      ...options(),
+      agentId: "main",
+      isEligible: () => isDecisionAssistanceEligible(readConfig(), "main"),
+    });
+    expect(requests).toHaveLength(1);
+    expect(result).toBe(source);
+    expect(result.semanticCurationObservation).toBeUndefined();
   });
 });

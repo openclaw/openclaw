@@ -196,7 +196,7 @@ async function migrateProposal(params: {
   if (rollback === null) {
     return false;
   }
-  importLegacySkillProposal({
+  await importLegacySkillProposal({
     record,
     rollback,
     ownerAgentId,

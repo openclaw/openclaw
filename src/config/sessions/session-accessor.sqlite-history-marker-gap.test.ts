@@ -3,10 +3,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendTranscriptMessage, replaceTranscriptEvents } from "./session-accessor.js";
-import {
-  readSessionTranscriptHistoryEventCount,
-  readSessionTranscriptHistoryEventPage,
-} from "./session-accessor.sqlite-history-events.js";
+import { readSessionTranscriptHistoryEventPage } from "./session-accessor.sqlite-history-events.js";
+import { readSessionTranscriptHistoryEventCount } from "./session-accessor.sqlite-history.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {

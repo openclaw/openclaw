@@ -74,6 +74,7 @@ export async function runOutboundDelivery(
   return await runOutboundDeliveryInternal({
     ...params,
     conversationDeliveryTarget: undefined,
+    sessionGeneration: undefined,
     deliveryQueueStateContext: undefined,
   });
 }

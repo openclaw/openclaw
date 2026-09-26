@@ -2,6 +2,8 @@ import type { FileLockOptions } from "openclaw/plugin-sdk/file-lock";
 
 export const MATRIX_IDB_PERSIST_INTERVAL_MS = 60_000;
 
+// Restores and large snapshots can outlive the generic stale window. Reclaiming
+// their live lock would allow concurrent crypto-state writers.
 const IDB_SNAPSHOT_LOCK_STALE_MS = 5 * 60_000;
 const IDB_SNAPSHOT_LOCK_RETRY_BASE = {
   factor: 2,
@@ -9,22 +11,6 @@ const IDB_SNAPSHOT_LOCK_RETRY_BASE = {
   maxTimeout: 5_000,
   randomize: true,
 } satisfies Omit<FileLockOptions["retries"], "retries">;
-
-function computeRetryDelayMs(retries: FileLockOptions["retries"], attempt: number): number {
-  return Math.min(
-    retries.maxTimeout,
-    Math.max(retries.minTimeout, retries.minTimeout * retries.factor ** attempt),
-  );
-}
-
-function computeMinimumRetryWindowMs(retries: FileLockOptions["retries"]): number {
-  let total = 0;
-  const attempts = Math.max(1, retries.retries + 1);
-  for (let attempt = 0; attempt < attempts - 1; attempt += 1) {
-    total += computeRetryDelayMs(retries, attempt);
-  }
-  return total;
-}
 
 function resolveRetriesForMinimumWindowMs(
   retries: Omit<FileLockOptions["retries"], "retries">,
@@ -34,7 +20,12 @@ function resolveRetriesForMinimumWindowMs(
     ...retries,
     retries: 0,
   };
-  while (computeMinimumRetryWindowMs(resolved) < minimumWindowMs) {
+  let total = 0;
+  while (total < minimumWindowMs) {
+    total += Math.min(
+      retries.maxTimeout,
+      Math.max(retries.minTimeout, retries.minTimeout * retries.factor ** resolved.retries),
+    );
     resolved.retries += 1;
   }
   return resolved;

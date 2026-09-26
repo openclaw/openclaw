@@ -14,10 +14,7 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
-import {
-  createSidebarCatalogMenuController,
-  type SidebarCatalogMenuController,
-} from "./app-sidebar-catalog-menu.ts";
+import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
 import type {
   SidebarRecentSession,
@@ -103,7 +100,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   constructor(readonly host: SidebarMenusControllerHost) {
     host.addController(this);
     this.agentMenuAvatars = new IdentityAvatarController(host);
-    this.catalogMenu = createSidebarCatalogMenuController(host, () => {
+    this.catalogMenu = new SidebarCatalogMenuController(host, () => {
       this.dismissTransientMenus();
     });
   }

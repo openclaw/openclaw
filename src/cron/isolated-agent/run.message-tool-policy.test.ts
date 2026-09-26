@@ -1000,22 +1000,21 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
   it("keeps automatic exec completion notifications when webhook delivery is active", async () => {
     mockRunCronFallbackPassthrough();
-    resolveCronDeliveryPlanMock.mockReturnValue({
-      requested: false,
-      mode: "webhook",
-      to: "https://example.invalid/cron",
-    });
+    const delivery = { mode: "webhook", to: "https://example.invalid/cron" };
+    resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, ...delivery });
+    const job = makeMessageToolPolicyJob(delivery);
+    const result = await runCronIsolatedAgentTurn({ ...makeParams(), job });
 
-    await runCronIsolatedAgentTurn({
-      ...makeParams(),
-      job: makeMessageToolPolicyJob({
-        mode: "webhook",
-        to: "https://example.invalid/cron",
-      }),
-    });
-
+    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    expect(expectEmbeddedRunFields({}).execOverrides).toBeUndefined();
+    const run = expectEmbeddedRunFields({ disableMessageTool: true, forceMessageTool: false });
+    expect(run.execOverrides).toBeUndefined();
+    expect(result.delivery?.resolved).toEqual({
+      ok: false,
+      to: null,
+      source: "last",
+      error: "webhook delivery has no chat target",
+    });
   });
 
   it("disables the message tool when webhook delivery is active", async () => {

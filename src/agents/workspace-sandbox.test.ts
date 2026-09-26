@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { resolveAttemptWorkspaceSandbox, resolveHarnessWorkspace } from "./workspace-sandbox.js";
 
@@ -95,6 +96,54 @@ it.each(["ro", "rw"] as const)(
         });
       }
       await expect(fs.stat(remoteWorkspace)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  },
+);
+
+it.each(["realpath", "mkdir"] as const)(
+  "rejects workspace preparation revoked during final %s",
+  async (boundary) => {
+    await withOpenClawTestState({ label: "workspace-preparation-authority" }, async (state) => {
+      const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+      const admission = prepareSystemAgentRunAdmission(
+        config,
+        `workspace-preparation-${boundary}`,
+        "main",
+        "workspace-preparation-test",
+      );
+      const admittedRunContext = await admission.admit("embedded");
+      const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+      const realpath = vi.spyOn(fs, "realpath");
+      if (boundary === "realpath") {
+        realpath.mockImplementationOnce(async () => {
+          admission.close();
+          return state.workspaceDir;
+        });
+      } else {
+        mkdir.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
+          admission.close();
+          return undefined;
+        });
+      }
+      try {
+        await expect(
+          resolveAttemptWorkspaceSandbox({
+            config,
+            agentId: "main",
+            sessionId: "workspace-preparation",
+            sessionKey: "agent:main:workspace-preparation",
+            workspaceDir: state.workspaceDir,
+            placementSandbox: createSandboxTestContext(),
+            admittedRunContext,
+          }),
+        ).rejects.toThrow("admitted run authority is no longer active");
+        // A revoked path lookup must not admit the following directory mutation.
+        expect(mkdir).toHaveBeenCalledTimes(boundary === "realpath" ? 1 : 2);
+      } finally {
+        mkdir.mockRestore();
+        realpath.mockRestore();
+        admission.close();
+      }
     });
   },
 );

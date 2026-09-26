@@ -683,7 +683,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   findSidebarHovercardRowByKey(sessionKey: string) {
-    return findSidebarHovercardRow(this, sessionKey);
+    return findSidebarHovercardRow(
+      this,
+      sessionKey,
+      this.selectedAgentSessionRows(this.getSessionNavigationState()),
+    );
   }
 
   /** The list follows the chip-selected agent without flashing stale rows mid-switch. */

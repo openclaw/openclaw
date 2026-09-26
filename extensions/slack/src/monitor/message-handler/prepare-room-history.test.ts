@@ -250,9 +250,10 @@ describe("Slack platform-authoritative automatic room history", () => {
     { mode: "allowlist_quote", allowed: false },
     { mode: "all", allowed: false },
   ] as const)(
-    "gates initial bot thread text and media ($mode, allowed: $allowed)",
+    "keeps bot thread context independent of allowBots false ($mode, allowed: $allowed)",
     async ({ mode, allowed }) => {
       const f = fixture(5, mode);
+      f.account.config.allowBots = false;
       const root = {
         ts: "10.000",
         user: allowed ? "U1" : "UDENIED",

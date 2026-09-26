@@ -118,7 +118,9 @@ it.each([
     container,
   );
 
-  const save = container.querySelector<HTMLButtonElement>(".agent-identity-editor__actions button");
+  const save = container.querySelector<HTMLButtonElement>(
+    ".agent-identity-editor__actions button.primary",
+  );
   expect(save?.textContent?.trim()).toBe(text);
   expect(save?.disabled).toBe(true);
 });
@@ -159,7 +161,7 @@ describe("fallback field", () => {
     { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
     { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
     { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google" },
-  ] satisfies ReturnType<typeof createProps>["modelCatalog"];
+  ] satisfies ReturnType<typeof createProps>["modelCatalog"]["models"];
 
   function renderFallbacks(overrides: Partial<ReturnType<typeof createProps>> = {}) {
     const container = document.createElement("div");
@@ -180,7 +182,7 @@ describe("fallback field", () => {
             configFormDirty: false,
             lastError: null,
           },
-          modelCatalog: catalog,
+          modelCatalog: { models: catalog, hasSnapshot: true, retired: false },
           onModelFallbacksChange,
           ...overrides,
         }),
@@ -245,10 +247,14 @@ describe("fallback field", () => {
           configFormDirty: false,
           lastError: null,
         },
-        modelCatalog: [
-          { provider: "custom", id: "model-a", name: "Lowercase model" },
-          { provider: "custom", id: "Model-A", name: "Uppercase model" },
-        ],
+        modelCatalog: {
+          hasSnapshot: true,
+          retired: false,
+          models: [
+            { provider: "custom", id: "model-a", name: "Lowercase model" },
+            { provider: "custom", id: "Model-A", name: "Uppercase model" },
+          ],
+        },
       });
 
       expect(field.isExcluded("FAST")).toBe(true);

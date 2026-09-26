@@ -25,4 +25,12 @@ describe("resolveTelegramQaRunOptions", () => {
       "supports only --credential-source convex",
     );
   });
+
+  it("preserves the private production credential descriptor", () => {
+    expect(
+      resolveTelegramQaRunOptions({
+        credentialFile: "/private/telegram-production.json",
+      }),
+    ).toMatchObject({ credentialFile: "/private/telegram-production.json" });
+  });
 });

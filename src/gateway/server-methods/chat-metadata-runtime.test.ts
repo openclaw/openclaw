@@ -84,6 +84,27 @@ describe("gateway chat metadata runtime", () => {
     harness.runtime.fail(new Error("replacement failed"));
     await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow("replacement failed");
     expect(onChanged).toHaveBeenCalledTimes(3);
+    expect(onChanged.mock.calls).toEqual(
+      Array.from({ length: 3 }, () => [{ modelCatalogChanged: true, authChanged: true }]),
+    );
+  });
+
+  test("invalidates models after same-snapshot owner replacement", async () => {
+    const onChanged = vi.fn();
+    const harness = createChatMetadataHarness(undefined, { onChanged });
+    try {
+      await harness.runtime.refresh();
+      onChanged.mockClear();
+      // Materialization publications can retain both the runtime and catalog objects.
+      harness.runtime.invalidate();
+      await harness.runtime.refresh();
+      expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+        modelCatalogChanged: true,
+        authChanged: true,
+      });
+    } finally {
+      await harness.runtime.stop();
+    }
   });
 
   test.each(["resolve", "reject"] as const)(

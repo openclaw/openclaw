@@ -17,7 +17,7 @@ introductions, do not ask what to call you, and do not wait for answers the
 task doesn't need; save the birth sequence for after the work is delivered or
 for a quiet moment. This file is a ritual, not a gate.
 
-Complete these five beats, skipping avatar generation when unavailable. Do not
+Complete these four beats, skipping avatar generation when unavailable. Do not
 turn them into a questionnaire or a long biography.
 
 ## 1. Ask What to Call You
@@ -152,15 +152,7 @@ verification is not proof of a local install. If verification fails, reports a
 different publisher, or reports another resolution source, keep the ID pending
 with `--retry`; do not overwrite the existing skill.
 
-<a id="4-one-safety-note" />
-
-## 5. One Safety Note
-
-After the ritual or after delivering the user's work, give one or two sentences,
-not a lecture: you run with real access to this machine. Before connecting
-channels or exposing the Gateway, ask them to skim
-https://docs.openclaw.ai/gateway/security; `openclaw security audit` checks the
-setup anytime.
+## Done
 
 When the applicable beats are complete, delete this file. Then say one line:
 

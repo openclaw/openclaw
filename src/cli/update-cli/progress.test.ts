@@ -96,6 +96,38 @@ describe("update progress", () => {
     expect(lines.join("\n")).toContain("Build type error");
   });
 
+  it("reports elapsed time for quiet redirected steps and stops after completion", () => {
+    vi.useFakeTimers();
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    presentation = createUpdateProgress(true);
+    presentation.progress.onStepStart?.(step);
+    vi.advanceTimersByTime(29_999);
+    expect(log.mock.calls.flat()).toEqual(["build..."]);
+    vi.advanceTimersByTime(1);
+    expect(log).toHaveBeenLastCalledWith("build — still running (30s)");
+    vi.advanceTimersByTime(30_000);
+    expect(log).toHaveBeenLastCalledWith("build — still running (60s)");
+    presentation.progress.onStepComplete?.({ ...step, durationMs: 60_000, exitCode: 0 });
+    const count = log.mock.calls.length;
+    vi.advanceTimersByTime(60_000);
+    expect(log).toHaveBeenCalledTimes(count);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["stop", "suspend", "dispose"] as const)(
+    "clears redirected elapsed notices on %s",
+    (operation) => {
+      vi.useFakeTimers();
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      presentation = createUpdateProgress(true);
+      presentation.progress.onStepStart?.(step);
+      presentation[operation]();
+      vi.advanceTimersByTime(60_000);
+      expect(log.mock.calls.flat()).toEqual(["build..."]);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it("keeps the report available when initial history observation fails", async () => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
@@ -400,6 +432,25 @@ describe("update progress", () => {
     expect(lines.filter((line) => line === "Phase: verifying")).toHaveLength(1);
     expect(lines.filter((line) => line === "Phase: finished")).toHaveLength(1);
     expect(lines.join("\n")).toContain("service running; version verified");
+  });
+
+  it("omits private capture receipts from final JSON without mutating retained history", async () => {
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    run.origin.updateRecoveryCapture = {
+      manifestSha256: "a".repeat(64),
+      status: "pending",
+      error: "private recovery detail",
+      configWrites: [],
+    };
+    const retained = structuredClone(run);
+    await printResult(result, { json: true, run: context });
+    expect(writeJson).toHaveBeenCalledExactlyOnceWith({
+      ...result,
+      run: { ...run, origin: {} },
+      reportPath,
+    });
+    expect(JSON.stringify(writeJson.mock.calls)).not.toContain("private recovery detail");
+    expect(run).toEqual(retained);
   });
 
   it("keeps JSON stdout silent until one result containing the durable row", async () => {

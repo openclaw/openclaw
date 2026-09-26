@@ -1,0 +1,53 @@
+name: Full Release Child Evidence
+
+on:
+  workflow_call:
+    inputs:
+      role:
+        required: true
+        type: string
+      target_sha:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  seal:
+    name: Seal child receipt
+    continue-on-error: true
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted child evidence tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
+      - name: Seal exact child attempt evidence
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FRV_CHILD_ROLE: ${{ inputs.role }}
+          FRV_CHILD_TARGET_SHA: ${{ inputs.target_sha }}
+          FRV_CHILD_EVIDENCE_PATH: ${{ runner.temp }}/full-release-child-evidence.json
+        run: node scripts/full-release-child-evidence.mjs
+
+      - name: Upload sealed child evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.evidence.outputs.artifact_name }}
+          path: ${{ runner.temp }}/full-release-child-evidence.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14

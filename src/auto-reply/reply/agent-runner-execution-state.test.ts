@@ -129,7 +129,7 @@ describe("executeAgentTurn: session state", () => {
     expect(followupRun.run.provider).toBe("openai");
     expect(followupRun.run.model).toBe("gpt-5.6-luna");
     expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({ agentHarnessRuntimeOverride: "codex", thinkLevel: "max" }),
+      expect.objectContaining({ agentHarnessRuntimeOverride: "codex", thinkLevel: "ultra" }),
     );
   });
 
@@ -295,7 +295,6 @@ describe("executeAgentTurn: session state", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
       getActiveSessionEntry: () => sessionEntry,
@@ -355,7 +354,6 @@ describe("executeAgentTurn: session state", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
       getActiveSessionEntry: () => sessionEntry,
@@ -429,7 +427,6 @@ describe("executeAgentTurn: session state", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
       getActiveSessionEntry: () => sessionEntry,
@@ -490,7 +487,6 @@ describe("executeAgentTurn: session state", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
       getActiveSessionEntry: () => sessionEntry,
@@ -554,7 +550,6 @@ describe("executeAgentTurn: session state", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
       getActiveSessionEntry: () => sessionEntry,

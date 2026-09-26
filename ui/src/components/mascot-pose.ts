@@ -83,32 +83,42 @@ export function createMascotPose(): MascotPose {
   };
 }
 
-function clamp(value: number, min: number, max: number): number {
+export function clampMascotValue(value: number, min = 0, max = 1): number {
   return Math.min(Math.max(value, min), max);
+}
+
+export function mascotEaseInOut(value: number): number {
+  const t = clampMascotValue(value);
+  return t * t * (3 - 2 * t);
+}
+
+export function mascotBell(value: number): number {
+  const t = clampMascotValue(value);
+  return mascotEaseInOut(t < 0.5 ? t * 2 : (1 - t) * 2);
 }
 
 /** Keep every channel inside the drawable 120x120 art-space bounds. */
 export function clampMascotPose(pose: MascotPose): MascotPose {
-  pose.floatOffset = clamp(pose.floatOffset, -12, 2);
-  pose.antennaDegrees = clamp(pose.antennaDegrees, -14, 14);
-  pose.antennaDroop = clamp(pose.antennaDroop, 0, 1);
-  pose.leftClawDegrees = clamp(pose.leftClawDegrees, -45, 45);
-  pose.rightClawDegrees = clamp(pose.rightClawDegrees, -45, 45);
-  pose.eyeGlowOpacity = clamp(pose.eyeGlowOpacity, 0, 1);
-  pose.glowScale = clamp(pose.glowScale, 0.5, 1.6);
-  pose.leftEyeOpenness = clamp(pose.leftEyeOpenness, 0, 1);
-  pose.rightEyeOpenness = clamp(pose.rightEyeOpenness, 0, 1);
-  pose.happyEyes = clamp(pose.happyEyes, 0, 1);
-  pose.gaze.x = clamp(pose.gaze.x, -1.2, 1.2);
-  pose.gaze.y = clamp(pose.gaze.y, -1.2, 1.2);
-  pose.mouthCurve = clamp(pose.mouthCurve, -1, 1);
-  pose.mouthOpen = clamp(pose.mouthOpen, 0, 1);
-  pose.mouthRound = clamp(pose.mouthRound, 0, 1);
-  pose.blush = clamp(pose.blush, 0, 1);
-  pose.hardHat = clamp(pose.hardHat, 0, 1);
-  pose.bodyTilt = clamp(pose.bodyTilt, -8, 8);
-  pose.bodyStretch = clamp(pose.bodyStretch, 0.86, 1.05);
-  pose.dizzy = clamp(pose.dizzy, 0, 1);
+  pose.floatOffset = clampMascotValue(pose.floatOffset, -12, 2);
+  pose.antennaDegrees = clampMascotValue(pose.antennaDegrees, -14, 14);
+  pose.antennaDroop = clampMascotValue(pose.antennaDroop, 0, 1);
+  pose.leftClawDegrees = clampMascotValue(pose.leftClawDegrees, -45, 45);
+  pose.rightClawDegrees = clampMascotValue(pose.rightClawDegrees, -45, 45);
+  pose.eyeGlowOpacity = clampMascotValue(pose.eyeGlowOpacity, 0, 1);
+  pose.glowScale = clampMascotValue(pose.glowScale, 0.5, 1.6);
+  pose.leftEyeOpenness = clampMascotValue(pose.leftEyeOpenness, 0, 1);
+  pose.rightEyeOpenness = clampMascotValue(pose.rightEyeOpenness, 0, 1);
+  pose.happyEyes = clampMascotValue(pose.happyEyes, 0, 1);
+  pose.gaze.x = clampMascotValue(pose.gaze.x, -1.2, 1.2);
+  pose.gaze.y = clampMascotValue(pose.gaze.y, -1.2, 1.2);
+  pose.mouthCurve = clampMascotValue(pose.mouthCurve, -1, 1);
+  pose.mouthOpen = clampMascotValue(pose.mouthOpen, 0, 1);
+  pose.mouthRound = clampMascotValue(pose.mouthRound, 0, 1);
+  pose.blush = clampMascotValue(pose.blush, 0, 1);
+  pose.hardHat = clampMascotValue(pose.hardHat, 0, 1);
+  pose.bodyTilt = clampMascotValue(pose.bodyTilt, -8, 8);
+  pose.bodyStretch = clampMascotValue(pose.bodyStretch, 0.86, 1.05);
+  pose.dizzy = clampMascotValue(pose.dizzy, 0, 1);
   return pose;
 }
 

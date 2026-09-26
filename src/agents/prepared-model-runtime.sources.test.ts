@@ -200,10 +200,11 @@ describe("prepared catalog source composition", () => {
         generation,
         catalogFacts,
         {
+          initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
           isCurrent: () => true,
           withRefreshStatus: (catalog) => catalog,
           readFullModelCatalog: () => undefined,
-          readPublishedModelCatalog: () => undefined,
+          refreshExpiredModelCatalog: () => {},
           readPublishedModels: () => undefined,
           loadFullModelCatalog: async () => catalogFacts.modelCatalog,
           loadNativeModelCatalog: async () => catalogFacts.modelCatalog,

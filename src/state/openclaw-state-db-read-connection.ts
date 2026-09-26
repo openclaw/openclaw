@@ -8,6 +8,7 @@ import {
 } from "../infra/sqlite-coordinator.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
@@ -221,7 +222,10 @@ export function readOpenClawStateReadOnlyLocation<T>(
     // Scope and path policy are authority, not ordinary schema SQL failure.
     const existingSchema = isExistingOpenClawStateSchema(pathname, opened.database.db);
     try {
-      assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
+      runSqliteReadOperationSync(opened.database.db, () => {
+        assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
+        admitSqliteSchema(opened.database.db);
+      });
       result = { status: "available", value: operation(opened.database) };
     } catch (error) {
       result = { status: "unavailable", error };
@@ -293,7 +297,10 @@ export function openOpenClawStateReadOnlyLocation(
 ) {
   const connection = openOpenClawStateReadConnection(pathname, source);
   try {
-    assertStateReadSchema(connection.database.db, pathname);
+    runSqliteReadOperationSync(connection.database.db, () => {
+      assertStateReadSchema(connection.database.db, pathname);
+      admitSqliteSchema(connection.database.db);
+    });
   } catch (error) {
     try {
       connection.close();

@@ -1,10 +1,11 @@
 {
   "scenarios": [
     "base",
-    "msteams-polls",
     "abandoned-update",
     "legacy-operator-state",
     "workshop-doctor-recovery",
+    "update-report-recovery",
+    "dreaming-cron-doctor",
     "mobile-pairing-reconnect",
     "acpx-openclaw-tools-bridge",
     "feishu-channel",
@@ -16,6 +17,7 @@
     "missing-load-path",
     "custom-plugin-siblings",
     "projects-doctor",
+    "channel-owner-policy",
     "projects-startup-migration",
     "taskflow-restoration",
     "stale-source-plugin-shadow",

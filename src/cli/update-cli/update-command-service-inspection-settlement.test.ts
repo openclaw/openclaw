@@ -36,7 +36,8 @@ vi.mock("./update-command-service.js", () => ({
 vi.mock("./schema-preflight.js", () => ({
   captureTargetDatabaseSchemaContext: boundary.callerContext,
 }));
-vi.mock("./update-command-managed-context.js", () => ({
+vi.mock("./update-command-managed-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-managed-context.js")>()),
   captureOwnedManagedUpdatePreflightContext: boundary.managedContext,
 }));
 

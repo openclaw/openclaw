@@ -5,9 +5,12 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { nativeProcessTestEntrypoints } from "./native-process-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const ownerUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.updateCandidateIo);
 
 it.skipIf(process.platform === "win32").each(["deadline", "cancellation", "completion"])(
   "releases native progress IO and exits naturally after %s",
@@ -57,7 +60,7 @@ fs.statSync = function(file, ...args) {
     await fs.writeFile(
       helper,
       `import fs from "node:fs";
-import { withUpdateCandidateIoBudget } from ${JSON.stringify(new URL("./update-candidate-io.ts", import.meta.url).href)};
+import { withUpdateCandidateIoBudget } from ${JSON.stringify(ownerUrl.href)};
 const outcome = ${JSON.stringify(outcome)};
 const budgetMs = 340000;
 const realNow = Date.now.bind(Date);
@@ -123,12 +126,7 @@ process.stdout.write(JSON.stringify(evidence) + "\\n");
 `,
     );
     const result = await runCommandBuffered(
-      [
-        process.execPath,
-        "--import",
-        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
-        helper,
-      ],
+      [process.execPath, ...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1), helper],
       {
         cwd: fileURLToPath(new URL("../../", import.meta.url)),
         baseEnv: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },

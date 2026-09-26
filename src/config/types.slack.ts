@@ -41,7 +41,7 @@ export type SlackChannelConfig = {
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
-  /** Allow bot-authored messages to trigger replies (default: false). Set to "mentions" to only allow bot messages that @mention this bot. */
+  /** Allow bot-authored messages to trigger replies (default: true). Set to "mentions" to only allow bot messages that @mention this bot. */
   allowBots?: boolean | "mentions";
   /** Sliding-window bot-pair loop guard for accepted bot-authored Slack messages. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;

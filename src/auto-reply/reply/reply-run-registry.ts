@@ -1,6 +1,5 @@
 export {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   ReplyRunAlreadyActiveError,
   ReplyRunFollowupAdmissionBlockedError,
   ReplyRunSuccessorAdmissionBlockedError,
@@ -43,12 +42,10 @@ export {
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.registry.js";
 export {
-  expireStaleReplyOperation,
   forceClearReplyOperation,
   hasCommittedReplyOperationOutcome,
   hasReplyOperationExecutionStarted,
   isReplyRunAbortableForSignal,
-  isReplyRunEvidenceStale,
   isReplyRunSuccessorAdmissionBlocked,
   markReplyOperationExecutionStarted,
   registerReplyOperationSuccessorBarrier,

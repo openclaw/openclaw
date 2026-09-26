@@ -14,7 +14,10 @@ import {
   readSessionEntryCount,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-store.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import {
+  projectSessionEntryLifecycleMutation,
+  readReferencedSessionIds,
+} from "./session-accessor.sqlite-lifecycle-state.js";
 import { readSessionMaintenanceCapCandidates } from "./session-accessor.sqlite-maintenance-candidates.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -330,6 +333,76 @@ describe("SQLite exclusion survivor semantics", () => {
 });
 
 describe("SQLite candidate reference reads", () => {
+  it("bounds reference rows when planning removal among 5,000 unrelated entries", async () => {
+    const database = openDatabase();
+    const removedKey = "agent:main:removed";
+    const entry = { sessionId: "removed", updatedAt: 1, previousSessionId: "shared" };
+    database.db.exec("BEGIN");
+    try {
+      for (let index = 0; index < 5_000; index += 1) {
+        insertEntry(database, `agent:main:unrelated-${index}`, `unrelated-${index}`);
+      }
+      insertEntry(database, removedKey, entry.sessionId, JSON.stringify(entry));
+      insertEntry(database, "agent:main:survivor", "shared");
+      database.db.exec("UPDATE session_nodes SET entry_valid = 1");
+      database.db.exec("COMMIT");
+    } catch (error) {
+      database.db.exec("ROLLBACK");
+      throw error;
+    }
+    // Admit the fixture before measuring the hot lifecycle planning path.
+    readSessionEntryStore(database);
+    const fullReferences = readReferencedSessionIds(database, new Set([removedKey]));
+    const keys = trackMaterializedKeys(database);
+    const startedAt = performance.now();
+    const result = await projectSessionEntryLifecycleMutation(
+      { agentId: database.agentId, path: database.path },
+      {
+        archiveDirectory: path.dirname(database.path),
+        removals: [{ sessionKey: removedKey, expectedEntry: entry }],
+        upserts: [],
+      },
+    );
+    console.log({ lifecycleReferenceRows: keys.length, planningMs: performance.now() - startedAt });
+    expect(result.removals).toHaveLength(1);
+    expect(result.deletePlans.map((plan) => plan.sessionId)).toEqual(
+      [entry.sessionId, entry.previousSessionId].filter((id) => !fullReferences.has(id)),
+    );
+    expect(result.deletePlans.map((plan) => plan.sessionId)).toEqual(["removed"]);
+    expect(keys.length).toBeLessThan(50);
+  });
+
+  it("preserves surviving and same-call references to generations absent from the removed entry", async () => {
+    const database = openDatabase();
+    const removedKey = "agent:main:removed";
+    insertEntry(database, removedKey, "removed");
+    insertEntry(database, "agent:main:survivor", "retained-history");
+    database.db.exec("UPDATE session_nodes SET entry_valid = 1");
+    const insertWindow = database.db.prepare(
+      "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
+    );
+    for (const id of ["retained-history", "upsert-history", "unreferenced-history"]) {
+      insertWindow.run(id, removedKey);
+    }
+    const result = await projectSessionEntryLifecycleMutation(
+      { agentId: database.agentId, path: database.path },
+      {
+        archiveDirectory: path.dirname(database.path),
+        removals: [{ sessionKey: removedKey, archiveRemovedTranscript: true }],
+        upserts: [
+          {
+            sessionKey: "agent:main:new-owner",
+            entry: { sessionId: "upsert-history", updatedAt: 2 },
+          },
+        ],
+      },
+    );
+    expect(result.deletePlans.map((plan) => plan.sessionId).toSorted()).toEqual([
+      "removed",
+      "unreferenced-history",
+    ]);
+  });
+
   it.each(["current ", "current\0 ", "\u00a0current\ufeff"])(
     "retains normalized current IDs for %j",
     (current) => {
@@ -380,6 +453,9 @@ describe("SQLite candidate reference reads", () => {
     }
     const parse = vi.spyOn(JSON, "parse");
     expect(readReferencedSessionIds(database)).toEqual(expected);
+    expect(readReferencedSessionIds(database, undefined, [...expected, "missing"])).toEqual(
+      expected,
+    );
     expect(readReferencedSessionIds(database, undefined, ["pre-0", "post-31", "missing"])).toEqual(
       new Set(["pre-0", "post-31"]),
     );

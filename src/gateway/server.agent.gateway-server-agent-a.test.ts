@@ -23,14 +23,19 @@ import { redactSensitiveText } from "../logging/redact.js";
 import * as mediaStore from "../media/store.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   isGatewaySubordinateWorkAdmissionClosed,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
-import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
+import {
+  observeGatewayRunExecution,
+  waitForAgentCommandCall,
+} from "./agent-command.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
@@ -317,21 +322,40 @@ describe("gateway server agent", () => {
         suspension?.rollback();
       }
     });
-
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "prove detached root transfer",
-      sessionKey: "main",
-      idempotencyKey: "idem-agent-detached-root",
+    const execution = await observeGatewayRunExecution({
+      method: "agent",
+      runId: "idem-agent-detached-root",
     });
+    let participantRecorded = false;
+    const unsubscribeParticipant = onSessionLifecycleEvent((event) => {
+      if (
+        event.reason === "participants" &&
+        event.agentId === "main" &&
+        event.sessionKey === "agent:main:main"
+      ) {
+        participantRecorded = true;
+      }
+    });
+    try {
+      const res = await rpcReq(gatewaySuite.ws, "agent", {
+        message: "prove detached root transfer",
+        sessionKey: "main",
+        idempotencyKey: "idem-agent-detached-root",
+      });
 
-    expect(res.ok).toBe(true);
-    expect(res.payload?.status).toBe("accepted");
-    await vi.waitFor(() => {
+      expect(res.ok).toBe(true);
+      expect(res.payload?.status).toBe("accepted");
+      await execution.waitForCompletion();
+      expect(participantRecorded).toBe(true);
       expect(subordinateAdmissionClosed).toBe(false);
-    });
-    await vi.waitFor(() => {
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    });
+      expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
+    } finally {
+      try {
+        await execution.restore();
+      } finally {
+        unsubscribeParticipant();
+      }
+    }
   });
 
   test("agent marks implicit delivery when lastTo is stale", async () => {

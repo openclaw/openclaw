@@ -9,7 +9,6 @@ import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
-  boundInFlightRunSnapshotForChatHistory,
   isChatStopCommandText,
   registerChatAbortController,
   resolveAgentRunExpiresAtMs,
@@ -21,6 +20,7 @@ import {
 } from "./chat-abort.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import { createChatRunState, type ChatRunPlanSnapshot } from "./server-chat-state.js";
+import { boundInFlightRunSnapshotForChatHistory } from "./server-methods/chat-history-budget.js";
 
 type CreatedChatAbortOps = ChatAbortOps & {
   broadcast: ReturnType<typeof vi.fn>;

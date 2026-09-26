@@ -10,8 +10,8 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
-import { subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import {
@@ -97,8 +97,8 @@ it("publishes a real recovery-owner change to subscribed panes during a foreign 
   const peerPaint = vi.fn();
   host.requestUpdate = paint;
   peer.requestUpdate = peerPaint;
-  const stopHost = subscribeChatOutboxProjection(host);
-  const stopPeer = subscribeChatOutboxProjection(peer);
+  const stopHost = chatOutboxOwner(host).subscribe(host);
+  const stopPeer = chatOutboxOwner(peer).subscribe(peer);
   onTestFinished(() => {
     stopPeer();
     stopHost();

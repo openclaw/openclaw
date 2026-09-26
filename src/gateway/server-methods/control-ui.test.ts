@@ -17,7 +17,7 @@ import { gitHubPublicApi } from "../github-public-api.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
 import { createControlUiHandlers } from "./control-ui.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
-import type { RespondFn } from "./types.js";
+import type { GatewayClient, RespondFn } from "./types.js";
 
 const requestOptions = createControlUiRequestOptions(() => ({
   agents: { entries: { main: {} } },
@@ -32,6 +32,45 @@ describe("controlUi.githubPreview", () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
+
+  it.each(["revoked", "copied", "aborted", "aborted-after-preparation"] as const)(
+    "rejects %s requests before reading GitHub",
+    async (state) => {
+      const client = { ...identifiedClient("preview-reader"), connId: "preview-connection" };
+      const controller = new AbortController();
+      if (state === "aborted") {
+        controller.abort();
+      }
+      const loadPreview = vi.fn();
+      const respond = vi.fn<RespondFn>();
+      const handler = expectDefined(
+        createControlUiHandlers(loadPreview)["controlUi.githubPreview"],
+        "preview handler",
+      );
+      const pending = handler({
+        ...requestOptions({ kind: "issue", number: 1, owner: "octocat", repo: "repo" }, respond, {
+          client: state === "copied" ? { ...client } : client,
+          context: {
+            getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
+            getClientConnIds: (filter: (current: GatewayClient) => boolean) =>
+              new Set(filter(client) ? [client.connId] : []),
+          },
+        }),
+        signal: controller.signal,
+        ...(state === "revoked" ? { hasCurrentClientAuthority: () => false } : {}),
+      });
+      if (state === "aborted-after-preparation") {
+        controller.abort();
+      }
+      await pending;
+      expect(loadPreview).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "UNAVAILABLE",
+        message: "GitHub request is no longer active. Try again.",
+        retryable: true,
+      });
+    },
+  );
 
   it.each(["controlUi.githubPreview", "controlUi.githubDetail"])(
     "uses the selected agent's Settings identity for %s",
@@ -480,7 +519,17 @@ describe("controlUi.githubPreview", () => {
 
 describe("controlUi.sessionPullRequests.subscribe", () => {
   it("replaces the connection watch set", async () => {
-    const replace = vi.fn().mockResolvedValue(undefined);
+    const replace = vi.fn(
+      (
+        _connId: string,
+        _sessionKeys: readonly string[],
+        _refreshSessionKeys: ReadonlySet<string> | undefined,
+        onAdmitted: (() => void) | undefined,
+      ) => {
+        onAdmitted?.();
+        return Promise.resolve();
+      },
+    );
     const handlers = createControlUiHandlers(vi.fn());
     const respond = vi.fn<RespondFn>();
 
@@ -498,13 +547,28 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       ),
     );
 
-    expect(replace).toHaveBeenCalledWith("conn-control-ui", ["agent:main:main", "agent:work:main"]);
+    expect(replace).toHaveBeenCalledWith(
+      "conn-control-ui",
+      ["agent:main:main", "agent:work:main"],
+      undefined,
+      expect.any(Function),
+    );
     expect(respond).toHaveBeenCalledWith(true, { subscribed: true }, undefined);
   });
 
   it("acknowledges a subscription before its cold snapshots finish loading", async () => {
     const { promise: hydration, resolve: finishHydration } = createDeferred();
-    const replace = vi.fn(() => hydration);
+    const replace = vi.fn(
+      (
+        _connId: string,
+        _sessionKeys: readonly string[],
+        _refreshSessionKeys: ReadonlySet<string> | undefined,
+        onAdmitted: (() => void) | undefined,
+      ) => {
+        onAdmitted?.();
+        return hydration;
+      },
+    );
     const handlers = createControlUiHandlers(vi.fn());
     const respond = vi.fn<RespondFn>();
 
@@ -517,15 +581,31 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
         context: { controlUiSessionPullRequests: { replace } },
       }),
     );
+    await Promise.resolve();
 
-    expect(replace).toHaveBeenCalledWith("conn-control-ui", ["agent:main:cold"]);
+    expect(replace).toHaveBeenCalledWith(
+      "conn-control-ui",
+      ["agent:main:cold"],
+      undefined,
+      expect.any(Function),
+    );
     expect(respond).toHaveBeenCalledWith(true, { subscribed: true }, undefined);
     finishHydration();
     await request;
   });
 
   it("accepts an empty replace-set as unsubscribe", async () => {
-    const replace = vi.fn().mockResolvedValue(undefined);
+    const replace = vi.fn(
+      (
+        _connId: string,
+        _sessionKeys: readonly string[],
+        _refreshSessionKeys: ReadonlySet<string> | undefined,
+        onAdmitted: (() => void) | undefined,
+      ) => {
+        onAdmitted?.();
+        return Promise.resolve();
+      },
+    );
     const handlers = createControlUiHandlers(vi.fn());
     const respond = vi.fn<RespondFn>();
 
@@ -539,7 +619,7 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       }),
     );
 
-    expect(replace).toHaveBeenCalledWith("conn-control-ui", []);
+    expect(replace).toHaveBeenCalledWith("conn-control-ui", [], undefined, expect.any(Function));
     expect(respond).toHaveBeenCalledWith(true, { subscribed: false }, undefined);
   });
 

@@ -5,6 +5,7 @@ import {
   requestHeartbeat,
   setHeartbeatWakeHandler,
 } from "../../infra/heartbeat-wake.js";
+import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
@@ -23,7 +24,7 @@ const runtimeTaskMocks = vi.hoisted(() => ({
 
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => ({
   sendMessage: runtimeTaskMocks.sendMessageMock,
-  resolveTaskControlUiSessionUrl: () => undefined,
+  prepareTaskControlUiSessionUrl: async () => () => undefined,
 }));
 
 vi.mock("../../tasks/task-registry-control.runtime.js", () => ({
@@ -35,12 +36,14 @@ vi.mock("../../tasks/task-registry-control.runtime.js", () => ({
 
 const HEARTBEAT_FLUSH_REASON = "runtime-task-test-flush";
 let disposeHeartbeatWakeHandler: (() => void) | undefined;
+let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
 
 export function getRuntimeTaskMocks() {
   return runtimeTaskMocks;
 }
 
 export function installRuntimeTaskDeliveryMock(): void {
+  deliveries = captureTaskDeliveryWork();
   // Terminal task delivery requests heartbeat wakes. Consume them here: a wake left
   // pending with no handler is delivered to the next handler any later test file in
   // the shared worker installs, and that file then observes a foreign wake.
@@ -53,13 +56,19 @@ export function installRuntimeTaskDeliveryMock(): void {
 // ensureTaskRegistryReady() restores them into the process registry as active
 // restart blockers for every later test file in the same worker.
 export async function resetRuntimeTaskTestState(): Promise<void> {
-  await flushHeartbeatWakeRequests();
-  disposeHeartbeatWakeHandler?.();
-  disposeHeartbeatWakeHandler = undefined;
-  resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryForTests();
-  resetTaskFlowRegistryForTests();
-  vi.clearAllMocks();
+  try {
+    await deliveries?.settle();
+  } finally {
+    deliveries?.[Symbol.dispose]();
+    deliveries = undefined;
+    await flushHeartbeatWakeRequests();
+    disposeHeartbeatWakeHandler?.();
+    disposeHeartbeatWakeHandler = undefined;
+    resetDetachedTaskLifecycleRuntimeForTests();
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
+    vi.clearAllMocks();
+  }
 }
 
 // A sentinel wake proves every earlier pending wake was delivered to this file's handler.

@@ -1,4 +1,4 @@
-// Control UI tests cover the working claw's optical alignment.
+// Control UI tests cover the working claw's alignment and fixed size.
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
@@ -33,6 +33,7 @@ describeBrowser("working claw browser layout", () => {
       const css = [
         "ui/src/styles/base.css",
         "ui/src/styles/components.css",
+        "ui/src/styles/chat/startup-layout.css",
         "ui/src/styles/chat/working-indicator.css",
         // Production code splitting can attach grouped chat CSS after the
         // indicator chunk. The centering invariant must not depend on order.
@@ -63,6 +64,8 @@ describeBrowser("working claw browser layout", () => {
           paintedCenter: center(".chat-reading-indicator svg"),
           statusCenter: center(".chat-working-indicator__status"),
           translate: getComputedStyle(svg).translate,
+          width: getComputedStyle(svg).width,
+          height: getComputedStyle(svg).height,
         };
       });
 
@@ -71,6 +74,8 @@ describeBrowser("working claw browser layout", () => {
       expect(geometry.layoutCenter).toBeCloseTo(geometry.statusCenter, 3);
       expect(geometry.paintedCenter).toBeCloseTo(geometry.statusCenter, 3);
       expect(geometry.translate).toBe("none");
+      expect(geometry.width).toBe("18px");
+      expect(geometry.height).toBe("18px");
     } finally {
       await page.close();
     }

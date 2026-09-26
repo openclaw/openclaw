@@ -4,6 +4,8 @@ import {
   type ExecAsk,
   type ExecSecurity,
   type ExecTarget,
+  normalizeExecAsk,
+  normalizeExecSecurity,
   normalizeExecTarget,
 } from "../../../infra/exec-approvals-core.js";
 import {
@@ -30,22 +32,6 @@ type ExecDirectiveParse = {
   invalidAsk: boolean;
   invalidNode: boolean;
 };
-
-function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeExecAsk(value?: string): ExecAsk | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
-    return normalized as ExecAsk;
-  }
-  return undefined;
-}
 
 function parseExecDirectiveArgs(raw: string): Omit<
   ExecDirectiveParse,
@@ -116,7 +102,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
     }
     if (key === "security") {
       rawExecSecurity = value;
-      execSecurity = normalizeExecSecurity(value);
+      execSecurity = normalizeExecSecurity(value) ?? undefined;
       if (!execSecurity) {
         invalidSecurity = true;
       }
@@ -126,7 +112,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
     }
     if (key === "ask") {
       rawExecAsk = value;
-      execAsk = normalizeExecAsk(value);
+      execAsk = normalizeExecAsk(value) ?? undefined;
       if (!execAsk) {
         invalidAsk = true;
       }

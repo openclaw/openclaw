@@ -1,15 +1,19 @@
-// Diagnostic stability helpers compare diagnostic outputs across runs.
-import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import {
+  DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY,
+  normalizeDiagnosticStabilityQuery,
+} from "./diagnostic-stability-query.js";
+
+export {
+  MAX_DIAGNOSTIC_STABILITY_LIMIT,
+  normalizeDiagnosticStabilityQuery,
+} from "./diagnostic-stability-query.js";
 
 // Ring-buffer recorder for stability diagnostics and support-bundle snapshots.
-const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
-const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
-export const MAX_DIAGNOSTIC_STABILITY_LIMIT = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY;
 const MAX_DIAGNOSTIC_EXPORTER_STATES = 16;
 const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 
@@ -126,18 +130,6 @@ export type DiagnosticStabilitySnapshot = {
   };
 };
 
-type DiagnosticStabilityQueryInput = {
-  limit?: unknown;
-  type?: unknown;
-  sinceSeq?: unknown;
-};
-
-type NormalizedDiagnosticStabilityQuery = {
-  limit: number;
-  type: string | undefined;
-  sinceSeq: number | undefined;
-};
-
 type DiagnosticStabilityState = {
   records: Array<DiagnosticStabilityEventRecord | undefined>;
   capacity: number;
@@ -244,6 +236,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
   };
 
   switch (event.type) {
+    case "agent.commentary":
+      // Trusted commentary belongs to harness traces, not the stability subscription.
+      break;
     case "gateway.rpc":
     case "gateway.event_loop.sample":
     case "diagnostic.gc":
@@ -291,22 +286,20 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       assignReasonCode(record, event.reason);
       break;
     case "message.delivery.started":
-      record.channel = event.channel;
-      record.deliveryKind = event.deliveryKind;
-      break;
     case "message.delivery.completed":
-      record.channel = event.channel;
-      record.deliveryKind = event.deliveryKind;
-      record.durationMs = event.durationMs;
-      record.resultCount = event.resultCount;
-      record.outcome = "completed";
-      break;
     case "message.delivery.error":
       record.channel = event.channel;
       record.deliveryKind = event.deliveryKind;
-      record.durationMs = event.durationMs;
-      record.outcome = "error";
-      assignReasonCode(record, event.errorCategory);
+      if (event.type !== "message.delivery.started") {
+        record.durationMs = event.durationMs;
+        if (event.type === "message.delivery.completed") {
+          record.resultCount = event.resultCount;
+          record.outcome = "completed";
+        } else {
+          record.outcome = "error";
+          assignReasonCode(record, event.errorCategory);
+        }
+      }
       break;
     case "talk.event":
       record.talkEventType = event.talkEventType;
@@ -367,13 +360,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.outcome = event.trigger;
       break;
     case "queue.lane.enqueue":
-      record.source = event.lane;
-      record.queueSize = event.queueSize;
-      break;
     case "queue.lane.dequeue":
       record.source = event.lane;
       record.queueSize = event.queueSize;
-      record.waitMs = event.waitMs;
+      if (event.type === "queue.lane.dequeue") {
+        record.waitMs = event.waitMs;
+      }
       break;
     case "run.attempt":
       record.count = event.attempt;
@@ -435,32 +427,24 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.pairedToolName = event.pairedToolName;
       break;
     case "tool.execution.started":
-      record.toolName = event.toolName;
-      record.source = event.toolSource;
-      record.pluginId = event.toolOwner;
-      break;
     case "tool.execution.completed":
-      record.toolName = event.toolName;
-      record.source = event.toolSource;
-      record.pluginId = event.toolOwner;
-      record.durationMs = event.durationMs;
-      break;
     case "tool.execution.error":
-      record.toolName = event.toolName;
-      record.source = event.toolSource;
-      record.pluginId = event.toolOwner;
-      record.durationMs = event.durationMs;
-      if (event.terminalReason) {
-        record.outcome = event.terminalReason;
-      }
-      assignReasonCode(record, event.errorCategory);
-      break;
     case "tool.execution.blocked":
       record.toolName = event.toolName;
       record.source = event.toolSource;
       record.pluginId = event.toolOwner;
-      record.outcome = "blocked";
-      assignReasonCode(record, event.deniedReason);
+      if (event.type === "tool.execution.completed" || event.type === "tool.execution.error") {
+        record.durationMs = event.durationMs;
+      }
+      if (event.type === "tool.execution.error") {
+        if (event.terminalReason) {
+          record.outcome = event.terminalReason;
+        }
+        assignReasonCode(record, event.errorCategory);
+      } else if (event.type === "tool.execution.blocked") {
+        record.outcome = "blocked";
+        assignReasonCode(record, event.deniedReason);
+      }
       break;
     case "skill.used":
       record.toolName = event.toolName;
@@ -485,68 +469,52 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       assignReasonCode(record, event.reason);
       break;
     case "run.started":
-      record.provider = event.provider;
-      record.model = event.model;
-      record.channel = event.channel;
-      break;
     case "run.completed":
       record.provider = event.provider;
       record.model = event.model;
       record.channel = event.channel;
-      record.durationMs = event.durationMs;
-      record.outcome = event.outcome;
-      assignReasonCode(record, event.errorCategory);
+      if (event.type === "run.completed") {
+        record.durationMs = event.durationMs;
+        record.outcome = event.outcome;
+        assignReasonCode(record, event.errorCategory);
+      }
       break;
     case "harness.run.started":
-      record.source = event.harnessId;
-      record.pluginId = event.pluginId;
-      record.provider = event.provider;
-      record.model = event.model;
-      record.channel = event.channel;
-      break;
     case "harness.run.completed":
-      record.source = event.harnessId;
-      record.pluginId = event.pluginId;
-      record.provider = event.provider;
-      record.model = event.model;
-      record.channel = event.channel;
-      record.durationMs = event.durationMs;
-      record.outcome = event.outcome;
-      record.count = event.itemLifecycle?.completedCount;
-      break;
     case "harness.run.error":
       record.source = event.harnessId;
       record.pluginId = event.pluginId;
       record.provider = event.provider;
       record.model = event.model;
       record.channel = event.channel;
-      record.durationMs = event.durationMs;
-      record.outcome = "error";
-      record.action = event.phase;
-      assignReasonCode(record, event.errorCategory);
+      if (event.type !== "harness.run.started") {
+        record.durationMs = event.durationMs;
+        if (event.type === "harness.run.completed") {
+          record.outcome = event.outcome;
+          record.count = event.itemLifecycle?.completedCount;
+        } else {
+          record.outcome = "error";
+          record.action = event.phase;
+          assignReasonCode(record, event.errorCategory);
+        }
+      }
       break;
     case "model.call.started":
-      record.provider = event.provider;
-      record.model = event.model;
-      break;
     case "model.call.completed":
-      record.provider = event.provider;
-      record.model = event.model;
-      record.durationMs = event.durationMs;
-      record.requestBytes = event.requestPayloadBytes;
-      record.responseBytes = event.responseStreamBytes;
-      record.timeToFirstByteMs = event.timeToFirstByteMs;
-      break;
     case "model.call.error":
       record.provider = event.provider;
       record.model = event.model;
-      record.durationMs = event.durationMs;
-      record.requestBytes = event.requestPayloadBytes;
-      record.responseBytes = event.responseStreamBytes;
-      record.timeToFirstByteMs = event.timeToFirstByteMs;
-      record.failureKind = event.failureKind;
-      record.memory = event.memory ? { ...event.memory } : undefined;
-      assignReasonCode(record, event.errorCategory);
+      if (event.type !== "model.call.started") {
+        record.durationMs = event.durationMs;
+        record.requestBytes = event.requestPayloadBytes;
+        record.responseBytes = event.responseStreamBytes;
+        record.timeToFirstByteMs = event.timeToFirstByteMs;
+        if (event.type === "model.call.error") {
+          record.failureKind = event.failureKind;
+          record.memory = event.memory ? { ...event.memory } : undefined;
+          assignReasonCode(record, event.errorCategory);
+        }
+      }
       break;
     case "log.record":
       record.level = event.level;
@@ -792,57 +760,6 @@ function selectRecords(
   };
 }
 
-function parseOptionalNonNegativeInteger(value: unknown, field: string): number | undefined {
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
-  if (typeof value === "string") {
-    // Gate on strict decimal digits before parsing so non-decimal forms such as
-    // "0x2", "1e2", "0b101", "+5", or " 5 " are rejected instead of coerced.
-    if (!/^\d+$/.test(value)) {
-      throw new Error(`${field} must be a non-negative integer`);
-    }
-  }
-  const parsed = parseStrictNonNegativeInteger(value);
-  if (parsed === undefined) {
-    throw new Error(`${field} must be a non-negative integer`);
-  }
-  return parsed;
-}
-
-function parseOptionalType(value: unknown): string | undefined {
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error("type must be a non-empty string");
-  }
-  return value.trim();
-}
-
-function normalizeLimit(limit: unknown, defaultLimit = DEFAULT_DIAGNOSTIC_STABILITY_LIMIT): number {
-  const parsed = parseOptionalNonNegativeInteger(limit, "limit");
-  if (parsed === undefined) {
-    return defaultLimit;
-  }
-  if (parsed < 1 || parsed > MAX_DIAGNOSTIC_STABILITY_LIMIT) {
-    throw new Error(`limit must be between 1 and ${MAX_DIAGNOSTIC_STABILITY_LIMIT}`);
-  }
-  return parsed;
-}
-
-/** Normalizes user-facing snapshot query options. */
-export function normalizeDiagnosticStabilityQuery(
-  input: DiagnosticStabilityQueryInput = {},
-  options?: { defaultLimit?: number },
-): NormalizedDiagnosticStabilityQuery {
-  return {
-    limit: normalizeLimit(input.limit, options?.defaultLimit),
-    type: parseOptionalType(input.type),
-    sinceSeq: parseOptionalNonNegativeInteger(input.sinceSeq, "sinceSeq"),
-  };
-}
-
 /** Starts the process-wide diagnostic event recorder if it is not already active. */
 export function startDiagnosticStabilityRecorder(): void {
   const state = getDiagnosticStabilityState();
@@ -850,20 +767,12 @@ export function startDiagnosticStabilityRecorder(): void {
     return;
   }
   state.unsubscribe = onInternalDiagnosticEvent(
-    (event, metadata) => {
-      // Model-call instrumentation is trusted core telemetry required by recovery.
-      // Other trusted events retain their dedicated owners outside this ring.
-      if (
-        metadata.trusted &&
-        event.type !== "model.call.started" &&
-        event.type !== "model.call.completed" &&
-        event.type !== "model.call.error"
-      ) {
-        return;
-      }
+    (event) => {
       appendRecord(sanitizeDiagnosticEvent(event));
     },
     {
+      // Recovery needs model-call telemetry; other trusted events have dedicated owners.
+      includeTrusted: ["model.call.started", "model.call.completed", "model.call.error"],
       exclude: [
         "log.record",
         "telemetry.exporter",

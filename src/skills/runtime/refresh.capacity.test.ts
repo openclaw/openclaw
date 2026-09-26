@@ -5,7 +5,11 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { SkillSnapshot } from "../types.js";
-import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "./refresh-state.js";
+import {
+  bumpSkillsSnapshotVersion,
+  getSkillsSnapshotVersion,
+  getSkillsSourceVersion,
+} from "./refresh-state.js";
 import {
   createSkillsWatcherMock,
   useSkillsWatcherFixture,
@@ -13,12 +17,15 @@ import {
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
 
-const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
+const { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot } =
   createSkillsWatcherMock();
 
 vi.mock("chokidar", () => ({ default: { watch: watchMock } }));
 vi.mock("./refresh-ancestor-native.js", () => ({
   createNativeSkillsAncestorWatcher: nativeWatchMock,
+}));
+vi.mock("./refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: nativeContentWatchMock,
 }));
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
@@ -52,7 +59,14 @@ describe("ensureSkillsWatcher", () => {
       const seen: Array<
         Parameters<Parameters<typeof refreshModule.registerSkillsChangeListener>[0]>[0]
       > = [];
-      refreshModule.registerSkillsChangeListener((change) => seen.push(change));
+      const versions: Array<{ snapshot: number; source: number }> = [];
+      refreshModule.registerSkillsChangeListener((change) => {
+        seen.push(change);
+        versions.push({
+          snapshot: getSkillsSnapshotVersion(fixtureWorkspaceDir),
+          source: getSkillsSourceVersion(fixtureWorkspaceDir),
+        });
+      });
       const fail = () =>
         failed.emit("error", Object.assign(new Error("scan failed"), { code: "EIO" }));
       if (order === "before") {
@@ -74,14 +88,38 @@ describe("ensureSkillsWatcher", () => {
         reason: "watch",
         changedPath: undefined,
       };
-      expect(seen).toEqual([reconciliation]);
+      const unavailable = { ...reconciliation, reason: "watch-unavailable" };
+      const failedEvents = order === "before" ? [unavailable, reconciliation] : [unavailable];
+      expect(seen).toEqual(failedEvents);
       fail();
       await vi.advanceTimersByTimeAsync(250);
-      expect(seen).toEqual([reconciliation]);
-      // Errors can also be recoverable: a later completed scan must catch up.
+      expect(seen).toEqual(failedEvents);
+      // A recovered scan first observes a verification; the failed scan alone
+      // cannot establish native coverage or publish initial readiness.
       failed.emit("ready");
+      expect(seen).toEqual(failedEvents);
+      watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills")).watcher.emit("ready");
+      expect(seen).toEqual(failedEvents);
+      watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills")).watcher.emit("ready");
       await vi.advanceTimersByTimeAsync(250);
-      expect(seen).toEqual([reconciliation, reconciliation]);
+      const { shouldUseNativeSkillsWatcher } = await import("./refresh-watch-transport.js");
+      // Pooled handles cannot certify restored coverage after observation loss.
+      const available = shouldUseNativeSkillsWatcher(false)
+        ? [
+            {
+              workspaceDir: fixtureWorkspaceDir,
+              reason: "watch-available",
+              sourceScope: { executionWorkspaceDir: undefined },
+            },
+          ]
+        : [];
+      const recoveredEvents = [...failedEvents, reconciliation, ...available];
+      expect(seen).toEqual(recoveredEvents);
+      if (available.length) {
+        expect(versions.at(-1)).toEqual(versions.at(-2));
+      }
+      watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills")).watcher.emit("ready");
+      expect(seen).toEqual(recoveredEvents);
     },
   );
 

@@ -4,6 +4,57 @@ Read this file only for a non-default backend, manual driver operation, event
 interpretation, persistent fixtures, forum topics, or a failed run. The primary proof sequence stays in
 [`SKILL.md`](../SKILL.md).
 
+## Published-driver topic-binding upgrade
+
+The npm Telegram lane's standalone `telegram-published-upgrade-bindings` selector
+proves an actual binding created by an installed published Gateway survives its
+own updater and the candidate's next restart. Run it only in the lane's isolated
+container: the secretless install phase owns the published prefix, and the
+validated candidate tarball is mounted read-only for the live phase.
+
+The lane invokes:
+
+```sh
+node .agents/skills/telegram-e2e-userbot/scripts/run-published-upgrade-user-e2e.mjs \
+  --baseline /npm-global/bin/openclaw \
+  --baseline-spec openclaw@2026.9.6 \
+  --candidate /package-under-test/openclaw-2026.9.6.tgz \
+  --output /out/telegram-upgrade
+```
+
+Use the exact published version selected by the workflow. Before leasing, the
+command verifies the installed baseline, reads the candidate's build identity
+and nine reached runtime artifacts without executing package code, and prepares
+the pinned TDLib through the maintained loader. It uses existing Python 3 and
+the driver's standard-library implementation, without `uv` or a source build.
+
+One maintained credential/run scope owns fixture setup, the proxy, recorder,
+mock provider, installed Gateway children, and updater. The published Gateway
+must accept a real `sessions_spawn` with `thread:true` and `mode:session`, and
+both parent and child must reply in the actual topic before shutdown. The
+genuine published CLI then runs `update --tag file:<candidate> --yes --no-restart
+--json` with the same runner-created config, token file, workspace, and databases.
+The candidate must route the next topic turn to that same child, restart, and
+continue routing to it. Each of the three Gateway stops requires a joined exit
+code 0 with no signal; forced process cleanup cannot qualify orderly shutdown.
+Artifact hashes, native observations, accepted tool-result correlation, canonical
+session identity, and receipt-scoped cleanup all participate in the verdict.
+
+Initial windows are 900 seconds for the updater and 1,800 seconds for recording;
+the native readiness and authoritative RPC checkpoints retain their own bounded
+deadlines. A timeout fails the run and is not retried. Existing package-registry
+settings belong to the npm lane and are preserved for the updater; broker
+credentials are not inherited by it.
+
+Only `published-upgrade.json` goes to the public output directory. It reports
+package identities, proved relationships, and typed failure facts for updater,
+shutdown, checkpoints, and cleanup. Missing lease-release confirmation stays
+unknown even after fixture deletion succeeds. Raw logs, transcripts, native
+identities, credentials, and runtime state remain in separate private temporary
+storage. Successful runs remove that storage; failed runs retain it for their
+container's existing cleanup policy. Do not upload the raw temporary tree or
+replay uncertain fixture/update mutations without reconciling the owned state.
+
 ## Chat selection
 
 `--chat` accepts a TDLib chat id, `@username`, invite link, or `t.me` link.
@@ -76,6 +127,33 @@ Keep one TDLib client per restored state directory. Run custom TDLib inspection
 before the recorder starts or after it exits, under the same live lease. Bot API
 inspection can use the scenario `command` action while recording.
 
+## QA Lab participant identity fixtures
+
+The QA Lab Telegram adapter accepts optional fields on one Convex-leased Test
+Server credential: `forumGroupId`, positive numeric `forumTopicId`, and
+`participants`. Each additional participant supplies a unique lowercase `alias`,
+`testerUserId`, `tdlibArchiveBase64`, `tdlibArchiveSha256`, and `tdlibVersion`.
+The pool owner provisions these independently authorized users under the same
+lease. The SUT bot and every participant must already belong to the selected
+group and forum, and the topic must exist. No credential is acquired by merely
+listing scenarios or running deterministic support tests.
+
+For mixed-user flows, use `senderId: primary` and the additional aliases. A
+single-user fixture binds its first scenario sender label to its leased user;
+changing that label cannot impersonate a second person. `conversation.kind:
+direct` sends to the SUT DM. A group/channel conversation uses `groupId`; adding
+a positive numeric `threadId` selects that forum topic in `forumGroupId` (or the
+existing group when it is itself a forum). Each native chat/topic belongs to one
+logical conversation until transport reset. Replies require a receipt observed
+by the sending participant in that chat; TDLib message IDs cannot cross accounts.
+
+Flow preparation exposes in-memory `telegramIdentityFixture.participantAliases`
+and `forumTopicId`. Set `execution.config.requireParticipantIdentityFixture:
+true` to require the complete mixed-user/forum fixture before sending. It also
+retains the existing `readTelegramMessages()` observer for native topic evidence.
+These inputs enable real Telegram identity proof; deterministic adapter tests do
+not claim that live transport or audit inspection has run.
+
 ## Backends
 
 | Backend      | Use                                                                     |
@@ -83,6 +161,17 @@ inspection can use the scenario `command` action while recording.
 | `mock`       | Default deterministic OpenClaw `mock-openai` turn.                      |
 | `qa-mock`    | QA fixtures for tools, delays, and scenario actions.                    |
 | `claude-cli` | Real Claude CLI path for progress behavior the mock lane cannot render. |
+
+Prepare `qa-mock` with `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build` before leasing.
+The built lane starts both the provider and Gateway from that checkout's
+`dist/entry.js`; `--source-gateway` selects the development launcher for both.
+A leased run must not rebuild a dirty source checkout while waiting for provider
+readiness.
+
+The named tool-progress shell fixture emits command-style `exec` arguments.
+Use `E2E_ROOT_CONFIG_PATCH='{"tools":{"codeMode":false}}'` for that fixture, or
+choose a code-mode-aware fixture. Keep exec permissions unchanged and verify
+the actual tool result: a planned call alone does not prove the command ran.
 
 `claude-cli` uses the operator's Claude credentials and costs real usage. Its
 default model is `claude-haiku-4-5`; set `E2E_TELEGRAM_CLI_MODEL` to override it.

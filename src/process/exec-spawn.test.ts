@@ -1,9 +1,11 @@
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import process from "node:process";
-import { describe, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { describe, expect, it, vi, type MockInstance } from "vitest";
 import * as processIdentity from "../shared/pid-alive.js";
 import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
 
@@ -11,7 +13,7 @@ type ScopeCase = {
   name: string;
   exitParent: boolean;
   completion: "explicit" | "resolve" | "reject";
-  identity?: "initially-missing" | "reused-after-exit";
+  identity?: "initially-missing" | "reused-after-exit" | "reused-after-extinction";
 };
 
 const endings: ScopeCase[] = [false, true].flatMap((exitParent) =>
@@ -33,6 +35,12 @@ endings.push(
     exitParent: true,
     completion: "explicit",
     identity: "reused-after-exit",
+  },
+  {
+    name: "finishes an extinct retained group without signalling a reused root PID",
+    exitParent: true,
+    completion: "resolve",
+    identity: "reused-after-extinction",
   },
 );
 
@@ -156,11 +164,12 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
     let child: ChildProcess | undefined;
     let childResult: Promise<unknown> | undefined;
     let descendantPid: number | undefined;
+    let retiredSignals: MockInstance<typeof process.kill> | undefined;
     const failure = new Error("scope fixture failure");
     const identityProbe = vi.spyOn(processIdentity, "getFileLockProcessStartTime");
     if (identity === "initially-missing") {
       identityProbe.mockReturnValueOnce(null);
-    } else if (identity === "reused-after-exit") {
+    } else if (identity === "reused-after-exit" || identity === "reused-after-extinction") {
       identityProbe.mockReturnValue(1);
     }
     try {
@@ -188,11 +197,30 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
         if (exitParent) {
           await command;
         }
-        if (identity === "reused-after-exit") {
+        if (identity === "reused-after-exit" || identity === "reused-after-extinction") {
           expect(child.exitCode).toBe(0);
+          if (identity === "reused-after-extinction") {
+            await setImmediate();
+            // Real process-group extinction is required before simulating PID reuse.
+            expect(isChildProcessTreeAlive(child)).toBe(true);
+            process.kill(descendantPid, "SIGKILL");
+            expect(await waitForPidToExit(descendantPid)).toBe(true);
+            expect(isChildProcessTreeAlive(child)).toBe(false);
+            const kill = process.kill.bind(process);
+            let groupReads = 0;
+            retiredSignals = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+              // Once the absent group is observed, its numeric ID can be reused too.
+              if (pid === -child!.pid! && signal === 0 && groupReads++ > 0) {
+                return true;
+              }
+              return kill(pid, signal);
+            });
+          }
           identityProbe.mockReturnValue(2);
         }
-        expect(processIdentity.isPidAlive(descendantPid)).toBe(true);
+        expect(processIdentity.isPidAlive(descendantPid)).toBe(
+          identity !== "reused-after-extinction",
+        );
         if (completion === "explicit") {
           stop();
           expect(() => spawnCommand([process.execPath, "-e", ""])).toThrow(
@@ -217,7 +245,15 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
       expect(await waitForPidToExit(descendantPid)).toBe(identity !== "reused-after-exit");
       await childResult;
       expect(processIdentity.isPidAlive(unrelated.pid!)).toBe(true);
+      if (retiredSignals) {
+        expect(
+          retiredSignals.mock.calls.filter(
+            ([pid, signal]) => Math.abs(pid) === child?.pid && signal !== 0,
+          ),
+        ).toEqual([]);
+      }
     } finally {
+      retiredSignals?.mockRestore();
       identityProbe.mockRestore();
       killPidIfAlive(child?.pid);
       killPidIfAlive(descendantPid);

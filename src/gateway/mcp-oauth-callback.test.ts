@@ -83,7 +83,7 @@ describe("Gateway MCP OAuth callback", () => {
 
     expect(result.handled).toBe(true);
     expect(result.response.res.statusCode).toBe(200);
-    expect(result.response.getBody()).toContain("You're connected.");
+    expect(result.response.getBody()).toContain("You&#39;re connected.");
     expect(result.response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
     expect(mocks.readPending).toHaveBeenCalledWith("state-1234567890", mocks.context);
     expect(mocks.readStore).toHaveBeenCalledWith(STORE_KEY, mocks.context);

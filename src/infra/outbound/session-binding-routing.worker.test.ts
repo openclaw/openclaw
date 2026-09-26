@@ -1,77 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  observeParentSqlite,
+  sqliteMethods as methods,
+  emptySqliteCounts as emptyCounts,
+} from "../../../test/helpers/sqlite-parent-observer.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { resolveRuntimeConversationBindingRouteAsync } from "../../channels/plugins/binding-routing.js";
-import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "../node-sqlite.js";
+import { resolveBoundAcpDispatchSessionKey } from "../../auto-reply/reply/dispatch-from-config.context.js";
+import { resolveIngressFailureDisposition } from "../../channels/message/ingress-retry-policy.js";
+import { buildChannelInboundEventContext } from "../../plugin-sdk/channel-inbound.js";
+import {
+  getSessionBindingService,
+  resolveRuntimeConversationBindingRouteAsync,
+} from "../../plugin-sdk/conversation-binding-runtime.js";
 import {
   createAccountScopedConversationBindingManager,
   resetAccountScopedConversationBindingsForTests,
-} from "./account-scoped-conversation-bindings.js";
-import { getSessionBindingService, testing } from "./session-binding-service.js";
-
-const methods = ["construct", "close", "prepare", "exec", "get", "all", "run", "iterate"] as const;
-type SqliteCounts = Record<(typeof methods)[number], number>;
-const emptyCounts = (): SqliteCounts => ({
-  construct: 0,
-  close: 0,
-  prepare: 0,
-  exec: 0,
-  get: 0,
-  all: 0,
-  run: 0,
-  iterate: 0,
-});
-
-function observeParentSqlite() {
-  const sqlite = requireNodeSqlite();
-  const { DatabaseSync, StatementSync } = sqlite;
-  const counts = emptyCounts();
-  const restores: Array<() => void> = [];
-  const constructor = Object.getOwnPropertyDescriptor(sqlite, "DatabaseSync");
-  if (!constructor?.writable || constructor.value !== DatabaseSync) {
-    throw new Error("All eight parent SQLite counters require a writable constructor");
-  }
-  Object.defineProperty(sqlite, "DatabaseSync", {
-    ...constructor,
-    value: new Proxy(DatabaseSync, {
-      construct(target, args, newTarget) {
-        counts.construct += 1;
-        return Reflect.construct(target, args, newTarget);
-      },
-    }),
-  });
-  restores.push(() => Object.defineProperty(sqlite, "DatabaseSync", constructor));
-  try {
-    for (const [prototype, names] of [
-      [DatabaseSync.prototype, ["close", "prepare", "exec"]],
-      [StatementSync.prototype, ["get", "all", "run", "iterate"]],
-    ] as const) {
-      for (const name of names) {
-        const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
-        if (!descriptor?.writable || typeof descriptor.value !== "function") {
-          throw new Error(`Parent SQLite counter unavailable: ${name}`);
-        }
-        Object.defineProperty(prototype, name, {
-          ...descriptor,
-          value(this: unknown, ...args: unknown[]) {
-            counts[name] += 1;
-            return Reflect.apply(descriptor.value, this, args);
-          },
-        });
-        restores.push(() => Object.defineProperty(prototype, name, descriptor));
-      }
-    }
-    return {
-      counts,
-      reset: () => Object.assign(counts, emptyCounts()),
-      restore: () => restores.toReversed().forEach((restore) => restore()),
-    };
-  } catch (error) {
-    restores.toReversed().forEach((restore) => restore());
-    throw error;
-  }
-}
+} from "../../plugin-sdk/thread-bindings-runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { inspectCurrentConversationBindingRecord } from "./current-conversation-bindings.js";
+import { readSessionBindingSelectionCurrent, testing } from "./session-binding-service.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const stateKey = Symbol("binding-routing-worker-proof");
@@ -103,6 +58,7 @@ describe("awaited conversation routing storage ownership", () => {
         matchedBy: "default",
       };
       const observer = observeParentSqlite();
+      let manager: ReturnType<typeof createAccountScopedConversationBindingManager> | undefined;
       try {
         const calibration = openNodeSqliteDatabase(":memory:");
         calibration.exec("CREATE TABLE calibration (value INTEGER)");
@@ -117,7 +73,7 @@ describe("awaited conversation routing storage ownership", () => {
         }
         observer.reset();
         if (kind === "account") {
-          createAccountScopedConversationBindingManager({
+          manager = createAccountScopedConversationBindingManager({
             channel,
             accountId: "default",
             cfg: { session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } } },
@@ -137,13 +93,135 @@ describe("awaited conversation routing storage ownership", () => {
         expect(result.bindingRecord?.bindingId).toBe(binding.bindingId);
         expect(result.route.sessionKey).toBe(binding.targetSessionKey);
         expect(result.bindingOwnerAvailable).toBe(true);
+        const selection = await readSessionBindingSelectionCurrent([
+          { ...conversation, conversationId: "missing" },
+          {
+            ...conversation,
+            accountId: " DEFAULT ",
+            conversationId: " worker-route ",
+            parentConversationId: kind === "account" ? "account-ignored-parent" : undefined,
+          },
+        ]);
+        expect(selection[0]).toBeNull();
+        expect(selection[1]?.bindingId).toBe(binding.bindingId);
+        if (manager) {
+          const pending = readSessionBindingSelectionCurrent([conversation]);
+          manager.stop();
+          await expect(pending).rejects.toThrow("no longer active");
+        }
         expect(observer.counts).toEqual(emptyCounts());
       } finally {
         observer.restore();
       }
-      expect(service.resolveByConversation(conversation)?.metadata?.lastActivityAt).toEqual(
-        expect.any(Number),
-      );
+      expect(
+        inspectCurrentConversationBindingRecord(conversation)?.metadata?.lastActivityAt,
+      ).toEqual(expect.any(Number));
     },
   );
+});
+
+it.each(
+  (["generic", "account"] as const).flatMap((kind) =>
+    (["owner-retired", "database-closed"] as const).map((change) => ({ kind, change })),
+  ),
+)("preserves bounded ingress classification for $kind native $change", async ({ kind, change }) => {
+  const previousRegistry = captureActivePluginRegistrySnapshot();
+  const channel = kind === "generic" ? "native-binding-regression" : "imessage";
+  const conversation = { channel, accountId: "default", conversationId: "native-admission" };
+  const supportedRegistry = () =>
+    createTestRegistry([
+      {
+        pluginId: channel,
+        source: "test",
+        plugin: {
+          id: channel,
+          meta: { aliases: [] },
+          conversationBindings: { supportsCurrentConversationBinding: true },
+        },
+      },
+    ]);
+  const manager =
+    kind === "account"
+      ? createAccountScopedConversationBindingManager({
+          channel,
+          accountId: conversation.accountId,
+          cfg: { session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } } },
+          stateKey,
+          toStoredTargetKind: (targetKind) => targetKind,
+          toSessionBindingTargetKind: (targetKind) => targetKind,
+        })
+      : undefined;
+  try {
+    if (kind === "generic") {
+      setActivePluginRegistry(supportedRegistry());
+    }
+    const binding = await getSessionBindingService().bind({
+      conversation,
+      targetSessionKey: "agent:target:acp:native-revocation",
+      targetKind: "session",
+    });
+    const resolved = await resolveRuntimeConversationBindingRouteAsync({
+      conversation,
+      route: {
+        agentId: "main",
+        channel,
+        accountId: conversation.accountId,
+        sessionKey: "agent:main:main",
+        mainSessionKey: "agent:main:main",
+        lastRoutePolicy: "main",
+        matchedBy: "default",
+      },
+    });
+    const ctx = buildChannelInboundEventContext({
+      channel,
+      accountId: conversation.accountId,
+      messageId: `native-${kind}-${change}`,
+      from: "synthetic-user",
+      sender: { id: "synthetic-user" },
+      conversation: { kind: "direct", id: conversation.conversationId },
+      route: { ...resolved.route, routeSessionKey: resolved.route.sessionKey },
+      reply: { to: conversation.conversationId },
+      message: { rawBody: "hello" },
+    });
+    await expect(resolveBoundAcpDispatchSessionKey({ ctx, cfg: {} })).resolves.toBe(
+      binding.targetSessionKey,
+    );
+
+    // Capture the real native owner before its first awaited admission check resumes.
+    const pending = resolveBoundAcpDispatchSessionKey({ ctx, cfg: {} }).catch(
+      (error: unknown) => error,
+    );
+    if (change === "database-closed") {
+      await closeOpenClawStateDatabaseAsync();
+    } else if (manager) {
+      manager.stop();
+    } else {
+      setActivePluginRegistry(supportedRegistry());
+    }
+    const failure = await pending;
+    expect(failure).toBeInstanceOf(Error);
+    const now = Date.now();
+    const disposition = (attempts: number) =>
+      resolveIngressFailureDisposition({
+        err: failure,
+        event: { receivedAt: now - 1_000, attempts },
+        formatError: String,
+        now,
+      });
+    expect(disposition(6)).toMatchObject({ kind: "release", attempt: 7 });
+    if (change === "owner-retired") {
+      expect(disposition(7)).toMatchObject({
+        kind: "fail",
+        reason: "session-start-conflict-retry-limit",
+        attempt: 8,
+      });
+      expect(failure).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    } else {
+      expect(failure).toMatchObject({ code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" });
+      expect(disposition(7)).toMatchObject({ kind: "release", attempt: 8 });
+    }
+  } finally {
+    manager?.stop();
+    restoreActivePluginRegistrySnapshot(previousRegistry);
+  }
 });

@@ -60,7 +60,7 @@ export function resolveRequestClientIp(
     resolveRequestClientIpFromHeaders(req, trustedProxies, allowRealIpFallback)
   );
 }
-export { createAuthRateLimiter } from "../gateway/auth-rate-limit.js";
+export { createGatewayAuthRateLimiter as createAuthRateLimiter } from "../gateway/auth-rate-limit.js";
 export type { AuthRateLimiter, RateLimitConfig } from "../gateway/auth-rate-limit.js";
 export { rawDataToString } from "../infra/ws.js";
 export { normalizePluginHttpPath } from "../plugins/http-path.js";

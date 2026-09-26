@@ -28,31 +28,49 @@ describe("outbound acknowledgement worker", () => {
     vi.unstubAllEnvs();
   });
 
-  it("settles the exact queue owner without host data SQL, including a cold reopen", async () => {
-    const stateDir = fixtures.tmpDir();
-    const id = await enqueueDelivery(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "settled" }] },
-      stateDir,
-    );
-    const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
-    expect(claimId).toEqual(expect.any(String));
-    await closeOpenClawStateDatabaseAsync();
-    const context = captureDeliveryQueueStateContext(stateDir);
-    const owner = createQueuedDeliveryOwner(
-      { queueId: id, expectedPlatformSendAttemptId: claimId },
-      context,
-    );
-    const sql = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
-    try {
-      await owner.ack();
-      expect(owner.custody).toBe("released");
-      expect(sql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-    } finally {
-      sql.restore();
+  it.each([false, true])(
+    "settles the exact queue owner without host data SQL after cold reopen (generation: %s)",
+    async (generation) => {
+      const stateDir = fixtures.tmpDir();
+      const id = await enqueueDelivery(
+        {
+          channel: "matrix",
+          to: "!synthetic:example",
+          payloads: [{ text: "settled" }],
+          ...(generation
+            ? {
+                sessionGeneration: {
+                  agentId: "main",
+                  storePath: path.join(stateDir, "agent.sqlite"),
+                  sessionKey: "agent:main:test",
+                  sessionId: "test",
+                  lifecycleRevision: null,
+                },
+              }
+            : {}),
+        },
+        stateDir,
+      );
+      const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+      expect(claimId).toEqual(expect.any(String));
       await closeOpenClawStateDatabaseAsync();
-    }
-    expect(await loadPendingDelivery(id, stateDir)).toBeNull();
-  });
+      const context = captureDeliveryQueueStateContext(stateDir);
+      const owner = createQueuedDeliveryOwner(
+        { queueId: id, expectedPlatformSendAttemptId: claimId },
+        context,
+      );
+      const sql = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
+      try {
+        await owner.ack();
+        expect(owner.custody).toBe("released");
+        expect(sql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      } finally {
+        sql.restore();
+        await closeOpenClawStateDatabaseAsync();
+      }
+      expect(await loadPendingDelivery(id, stateDir)).toBeNull();
+    },
+  );
 
   it.each([null, undefined])(
     "preserves explicit %s owner checks across worker transfer",

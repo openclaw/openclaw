@@ -208,11 +208,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
     if (event.target !== this.disclosure) {
       return;
     }
-    if (this.visible) {
-      void this.load();
-    } else {
-      this.cancelRequest();
-    }
+    this.handleVisibility();
   };
 
   private readonly handleVisibility = (): void => {

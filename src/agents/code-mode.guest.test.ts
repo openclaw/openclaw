@@ -540,9 +540,6 @@ describe("Code Mode guest execution", () => {
         type: "text",
         text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
       });
-      expect(result.content[0]).toMatchObject({
-        text: expect.stringContaining("SECURITY NOTICE:"),
-      });
       expect(result.content[0]).not.toMatchObject({
         text: expect.stringContaining("<|endoftext|>"),
       });
@@ -624,7 +621,7 @@ describe("Code Mode guest execution", () => {
       error: expect.stringContaining(hostile),
     });
     expect(result.content[0]).toMatchObject({
-      text: expect.stringContaining("SECURITY NOTICE:"),
+      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
     });
     expect(result.content[0]).not.toMatchObject({
       text: expect.stringContaining("<|endoftext|>"),
@@ -751,7 +748,8 @@ describe("Code Mode guest execution", () => {
       const execTool = expectDefined(codeModeTools[0], "Code Mode exec");
       const malformed = [
         'await fake_command({ value: "first" });',
-        'return await fake_command({ value: "jq .["2"]" });',
+        String.raw`const patch = { 'newText:' const value = 1;\n };`,
+        "return await fake_command({ value: \"import test from 'node:test';\" });",
       ].join("\n");
       const details = resultDetails(
         await execTool.execute("code-call-syntax", { code: malformed }),
@@ -772,12 +770,15 @@ describe("Code Mode guest execution", () => {
       const corrected = await runUntilCompleted({
         execTool,
         waitTool: expectDefined(codeModeTools[1], "Code Mode wait"),
-        code: "return await fake_command({ value: " + JSON.stringify('jq .["2"]') + " });",
+        code:
+          "return await fake_command({ value: " +
+          JSON.stringify("import test from 'node:test';") +
+          " });",
       });
       expect(corrected).toMatchObject({
         status: "completed",
         replaySafe: false,
-        value: { name: "fake_command", input: { value: 'jq .["2"]' } },
+        value: { name: "fake_command", input: { value: "import test from 'node:test';" } },
       });
       expect(command.execute).toHaveBeenCalledTimes(1);
       expect(testing.activeRuns.size).toBe(0);

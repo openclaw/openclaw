@@ -76,6 +76,8 @@ Publication is shared with the receiver's permitted viewers, not just the named 
 
 The catalog refreshes by polling, not a live transcript stream. The source node must remain connected for listings and reads. Long transcripts are paginated; individual text fields are redacted and clipped when necessary.
 
+Progressive catalog listings used during chat startup wait at most five seconds in the foreground. Concurrent viewers share the node request and receive a pending host, retaining its last good page when available. The refreshed page arrives through the catalog's normal host update. Targeted metadata lookups, pagination, and callers without progress updates still await a complete response. Pending requests and retained pages belong to the receiver's Session Share service; configuration changes, node reconnections, and service retirement invalidate them.
+
 Listings leave cold transcript archives untouched and use any stored title metadata. To read cold history, open the session on the source Gateway first so its normal history owner restores the archive. Each source page also bounds raw transcript reads to 8 MiB; a single larger entry returns an explicit error instead of being silently skipped. Inspect that entry on the source Gateway.
 
 ## Attribute the source node
@@ -135,6 +137,10 @@ Check its group on the source, the exact `share.groups` spelling, and whether it
 **A transcript read fails after a row was visible**
 
 Refresh the catalog. The source may be offline, the session may have been deleted, or its group may no longer be shared. Reconnect the source node for an offline-host error; do not broaden its command allowlist.
+
+**Catalog refreshes sometimes take 30 seconds**
+
+When receiver diagnostics and warning logs are enabled, `gateway/session-catalog` logs discovery and node invocation phases that take at least one second. A `TIMEOUT` with `nodeCommandDispatched: false` occurred before dispatch; `true` means the receiver dispatched the command, so inspect the source node and its connection. It does not prove that the source handler started. An absent field leaves dispatch unknown. These records include bounded node error codes and durations, without node identifiers, request parameters, or error messages.
 
 **Names do not link to local profiles**
 

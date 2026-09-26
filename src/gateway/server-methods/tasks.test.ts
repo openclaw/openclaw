@@ -9,7 +9,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -104,7 +104,16 @@ describe("tasks gateway handlers", () => {
         );
         expect(changed).toBe(true);
         if (continuation) {
-          expect(result.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+          expect(result.calls[0]).toMatchObject([
+            false,
+            undefined,
+            {
+              code: "INVALID_REQUEST",
+              message:
+                "tasks.list cursor page is no longer valid; restart pagination without a cursor",
+              details: { reason: "page-invalid" },
+            },
+          ]);
         } else {
           expect(result.calls[0]?.[0]).toBe(true);
           expect(result.payload?.tasks).toMatchObject([
@@ -368,7 +377,8 @@ describe("tasks gateway handlers", () => {
       undefined,
       {
         code: "INVALID_REQUEST",
-        message: "invalid or expired tasks.list cursor; restart pagination without a cursor",
+        message: "tasks.list cursor task data changed; restart pagination without a cursor",
+        details: { reason: "tasks-changed" },
       },
     ]);
   });

@@ -15,6 +15,8 @@ export type SemanticTurnContextOptions = {
   config?: AgentDefaultsConfig["turnContextCuration"];
   signal: AbortSignal;
   assertActive: () => void;
+  /** Live eligibility bound to the prepared config owner, not provider readiness. */
+  isEligible: () => boolean;
   prompt?: string;
   agentId?: string;
   appendOnly?: boolean;
@@ -31,6 +33,9 @@ export async function observeSemanticTurnContext(
   }
   options.signal.throwIfAborted();
   options.assertActive();
+  if (!options.isEligible()) {
+    return assembled;
+  }
   // A distinct synthetic current user message informs selection without modifying
   // the engine result. Source indexes still address the original prefix.
   const messages: AgentMessage[] = [...assembled.messages];
@@ -102,16 +107,23 @@ export async function observeSemanticTurnContext(
       agentId: options.agentId,
       signal: options.signal,
       timeoutMs: options.config.timeoutMs,
+      isEligible: options.isEligible,
     });
   } catch {
     // Optional observation cannot fail a model turn, but caller cancellation
     // and replaced run authority must still escape rather than becoming fallback.
     options.signal.throwIfAborted();
     options.assertActive();
+    if (!options.isEligible()) {
+      return assembled;
+    }
     return observe("decision-error", { decisionWallMs: performance.now() - started });
   }
   options.signal.throwIfAborted();
   options.assertActive();
+  if (!options.isEligible()) {
+    return assembled;
+  }
   const decisionWallMs = performance.now() - started;
   if (before !== fingerprintCompactionMessages(assembled.messages)) {
     return observe("stale-source", { decisionWallMs });

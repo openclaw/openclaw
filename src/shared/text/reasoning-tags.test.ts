@@ -72,10 +72,6 @@ describe("stripReasoningTagsFromText", () => {
         "preserves xml fenced examples",
         "Example:\n```xml\n<think>\n  <thought>nested</thought>\n</think>\n```\nDone!",
       ],
-      [
-        "preserves plain literal opening and closing tags",
-        "Use `<think>` to open and `</think>` to close.",
-      ],
       ["preserves fenced think example", "Example:\n```\n<think>reasoning</think>\n```"],
       [
         "preserves final tags inside code examples",
@@ -112,10 +108,6 @@ describe("stripReasoningTagsFromText", () => {
       ],
       ["Internal reasoning </think> final answer", "final answer"],
       ["<reasoning>outer<think>secret</think>", ""],
-      [
-        "Use `<think>` to open and `</think>` to close. Final sentence.",
-        "Use `<think>` to open and `</think>` to close. Final sentence.",
-      ],
       ["A < think >content< /think > B", "A  B"],
       ["", ""],
       [null as unknown as string, null],
@@ -178,8 +170,9 @@ describe("stripReasoningTagsFromText", () => {
 
       const pathological = "`".repeat(100) + "<think>test</think>" + "`".repeat(100);
       const start = Date.now();
-      stripReasoningTagsFromText(pathological);
+      const result = stripReasoningTagsFromText(pathological);
       const elapsed = Date.now() - start;
+      expect(result).toBe(pathological);
       expect(elapsed).toBeLessThan(1000);
     });
 

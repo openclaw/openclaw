@@ -135,7 +135,7 @@ This gives MCP clients one place to:
     Reads recent transcript messages for one session-backed conversation. `limit` defaults to 20, max 200.
   </Accordion>
   <Accordion title="attachments_fetch">
-    Extracts non-text message content blocks and canonical persisted media metadata from one transcript message. Persisted entries use `{ "type": "openclaw_media", "media": { ... } }`, where `media` can include `url`, `contentType`, `kind`, `fileName`, dimensions, duration, or size. This is a metadata view, not a standalone durable attachment blob store.
+    Extracts non-text message content blocks and canonical persisted media metadata from one transcript message. Looks up `message_id` directly through the Gateway, so the message does not need to appear in the recent history window. Persisted entries use `{ "type": "openclaw_media", "media": { ... } }`, where `media` can include `url`, `contentType`, `kind`, `fileName`, dimensions, duration, or size. This is a metadata view, not a standalone durable attachment blob store.
   </Accordion>
   <Accordion title="events_poll">
     Reads queued live events since a numeric cursor. `limit` max 200. If the requested cursor predates retained queue history, the result also includes `gap.requested_after_cursor` and `gap.oldest_available_cursor`.

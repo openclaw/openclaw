@@ -21,6 +21,13 @@ const { spawnTerminalPty } = await import("./terminal-pty.js");
 
 const tempDirs: string[] = [];
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const tempDir of tempDirs.splice(0)) {
+    fs.rmSync(tempDir, { force: true, recursive: true });
+  }
+});
+
 async function spawnDirectTerminalPty(
   params: Parameters<typeof spawnTerminalPty>[0],
 ): ReturnType<typeof spawnTerminalPty> {
@@ -87,13 +94,6 @@ describe("terminal PTY teardown", () => {
     mocks.spawn.mockReset();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    for (const tempDir of tempDirs.splice(0)) {
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
-
   it.each([undefined, "SIGTERM"] as const)("signals the process tree for %s", async (signal) => {
     const { handle, pty } = await spawnFakePty();
     handle.kill(signal);
@@ -130,10 +130,6 @@ describe("terminal PTY invocation", () => {
 
   beforeEach(() => {
     mocks.spawn.mockReset();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
   });
 
   it.each(nonInteractiveEnvironments)(
@@ -263,7 +259,7 @@ describe("terminal PTY invocation", () => {
       const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-node-"));
       tempDirs.push(nodeDir);
       const nodePath = path.join(nodeDir, "node.exe");
-      fs.linkSync(process.execPath, nodePath);
+      fs.copyFileSync(process.execPath, nodePath);
       vi.spyOn(process, "execPath", "get").mockReturnValue(
         "C:\\Program Files\\OpenClaw\\openclaw.exe",
       );
