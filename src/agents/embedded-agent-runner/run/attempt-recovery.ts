@@ -2,6 +2,7 @@ import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
@@ -9,6 +10,7 @@ import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { findCliTerminalStopError, resolveFailoverReasonFromError } from "../../failover-error.js";
 import { classifyFailoverSignal } from "../../failover/classify.js";
+import { isPreDispatchToolCallRejectionMessage } from "../../failover/message-patterns.js";
 import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
@@ -44,6 +46,8 @@ type Dispatch = Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 type FailoverRetryController = ReturnType<typeof createEmbeddedRunFailoverRetryController>;
 type CompactionRuntime = ReturnType<typeof createEmbeddedRunCompactionRuntime>;
+
+const MAX_MALFORMED_TOOL_CALL_CONTINUATIONS = 2;
 
 export async function recoverEmbeddedRunAttempt(input: {
   runInput: PreparedEmbeddedRunInput;
@@ -132,6 +136,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       | "overflow_unrecoverable"
       | "harness_retry"
       | "harness_retry_unavailable"
+      | "malformed_tool_call_continuation"
       | "prompt_failure"
       | "prompt_recovery"
       | "no_recovery",
@@ -161,6 +166,11 @@ export async function recoverEmbeddedRunAttempt(input: {
     !attempt.didSendDeterministicApprovalPrompt;
   // Embedded settings disable session retries; this owner must resume output limits.
   const recoveryAssistant = currentAttemptCompletedAssistant ?? attemptAssistant;
+  const malformedToolCallFailure = Boolean(
+    recoveryAssistant?.stopReason === "error" &&
+    (recoveryAssistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
+      isPreDispatchToolCallRejectionMessage(recoveryAssistant.errorMessage)),
+  );
   const outputLimitFailure = Boolean(
     recoveryAssistant && isResponsesOutputLimitToolCallError(recoveryAssistant),
   );
@@ -349,6 +359,38 @@ export async function recoverEmbeddedRunAttempt(input: {
     armPostCompactionGuard: input.armPostCompactionGuard,
     usageAccumulator: input.usageAccumulator,
   };
+  // A malformed tool call is rejected before dispatch, so the failed call has
+  // no side effects. When earlier tool batches are fully settled, continue the
+  // persisted transcript instead of replaying the original user request or
+  // terminating the whole turn. Keep this bounded in case the model repeats the
+  // same malformed call.
+  if (
+    malformedToolCallFailure &&
+    !runtime.pluginHarnessOwnsTransport &&
+    !terminalInterrupted &&
+    !promptError &&
+    !timedOut &&
+    settledEvidence.allToolsProvenSettled &&
+    toolsAllowContinuation &&
+    !attempt.yieldDetected &&
+    !attempt.clientToolCalls &&
+    input.contextRecoveryState.malformedToolCallContinuationAttempts <
+      MAX_MALFORMED_TOOL_CALL_CONTINUATIONS
+  ) {
+    input.contextRecoveryState.malformedToolCallContinuationAttempts += 1;
+    runInput.laneController.throwIfAborted();
+    sessionPromptState.markOwnedTranscriptRetry();
+    sessionPromptState.continueFromCurrentTranscript({
+      includeToolFailureInstruction: Boolean(attempt.lastToolError),
+    });
+    log.warn(
+      `malformed tool call rejected after settled tools; continuing transcript ` +
+        `attempt=${input.contextRecoveryState.malformedToolCallContinuationAttempts}/${MAX_MALFORMED_TOOL_CALL_CONTINUATIONS} ` +
+        `runId=${params.runId} sessionId=${params.sessionId}`,
+    );
+    recordRecoveryDecision("accepted", "malformed_tool_call_continuation");
+    return retry();
+  }
   if (
     (currentAttemptReplaySafe || canContinueSettledMidTurnOverflow) &&
     (await recoverEmbeddedRunTimeout({

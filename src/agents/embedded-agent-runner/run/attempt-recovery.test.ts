@@ -576,6 +576,47 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
+  it("continues a malformed tool call from settled results without replaying completed tools", async () => {
+    const fixture = await recoverAfterTransportDrop({
+      errorCode: "malformed_tool_call_arguments",
+      errorMessage: "Provider completed tool call with malformed JSON arguments",
+      content: [],
+      diagnostics: [],
+    });
+
+    expect(fixture.recovery).toMatchObject({ action: "retry" });
+    expect(fixture.contextRecoveryState.malformedToolCallContinuationAttempts).toBe(1);
+    expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+      includeToolFailureInstruction: false,
+    });
+    expect(fixture.failoverRetryController.transientRetryCount).toBe(0);
+
+    expect(await fixture.recover()).toMatchObject({ action: "retry" });
+    expect(fixture.contextRecoveryState.malformedToolCallContinuationAttempts).toBe(2);
+    expect(await fixture.recover()).toEqual({ action: "proceed" });
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledTimes(2);
+  });
+
+  it.each<[string, TransportDropScenario]>([
+    ["a prior tool result is missing", { missingToolResult: true }],
+    ["a prior tool remains active", { activeCount: 1 }],
+    ["the attempt yielded", { yieldDetected: true }],
+    ["the harness owns transport", { pluginHarnessOwnsTransport: true }],
+  ])("does not continue a malformed tool call when %s", async (_label, scenario) => {
+    const fixture = await recoverAfterTransportDrop({
+      errorCode: "malformed_tool_call_arguments",
+      errorMessage: "Provider completed tool call with malformed JSON arguments",
+      content: [],
+      diagnostics: [],
+      ...scenario,
+    });
+
+    expect(fixture.recovery).toEqual({ action: "proceed" });
+    expect(fixture.contextRecoveryState.malformedToolCallContinuationAttempts).toBe(0);
+    expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
+  });
+
   it("continues after a transient transport drop on a settled failed-tool batch", async () => {
     const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
       await recoverAfterTransportDrop({
