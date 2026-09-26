@@ -8,7 +8,7 @@ read_when:
 
 ## Routing from measured wall time
 
-Use GitHub-hosted runners for independent checks that fit the workflow's remaining time. Retain Blacksmith where the measured job tail threatens completion. Qualify RunsOn by workload before assigning it a production tier. Requested Blacksmith 8/16/32 labels delivered 2/4/8 CPUs in the capacity probe; labels are not worker counts.
+Current PR routing uses GitHub-hosted runners, including Control UI E2E and the aggregate gate. A PR Blacksmith exception requires measured need beyond four CPUs or 16 GB; missing hosted measurements and historical assignment delays do not establish that need. Main and manual routing retain the historical decisions below. Qualify RunsOn by workload before assigning it a production tier. Requested Blacksmith 8/16/32 labels delivered 2/4/8 CPUs in the capacity probe; labels are not worker counts.
 
 The table compares eleven successful B1/R1 main runs with five later successful main runs: `35679872894`, `35679457587`, `35678156129`, `35677164460`, and `35675497006`. These are longitudinal observations with different source revisions, not controlled provider comparisons. Values are median [maximum] complete job seconds; a dash means unmeasured. Existing trust, retry, and [hosted assignment admission](/ci/runners#hybrid-hosted-assignment-guard) still apply.
 

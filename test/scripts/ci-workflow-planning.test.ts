@@ -2917,7 +2917,9 @@ describe("ci workflow guards", () => {
       expect(base.filter((name) => name === "macos-node")).toHaveLength(3);
       expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(2);
       expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(1);
-      expect(base).not.toContain("ci-gate");
+      expect(base.filter((name) => name === "ci-gate")).toHaveLength(
+        eventName === "pull_request" ? 1 : 0,
+      );
       expect(base.filter((name) => name === "check-lint-hosted-core-shard")).toHaveLength(
         eventName === "pull_request" ? 5 : 0,
       );
@@ -5183,7 +5185,7 @@ describe("ci workflow guards", () => {
             "source-contracts",
             ...(eventName === "workflow_dispatch" ? ["plugin-sdk-api-diff"] : []),
             ...Array.from(
-              { length: eventName === "pull_request" ? 8 : 1 },
+              { length: eventName === "pull_request" ? 12 : 1 },
               () => "extension-package-boundary",
             ),
             ...Array.from(
@@ -5205,7 +5207,7 @@ describe("ci workflow guards", () => {
           eventName === "pull_request" &&
           row.group === "extension-package-boundary"
         ) {
-          expect(["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]).toContain(
+          expect(Array.from({ length: 12 }, (_, index) => `${index + 1}/12`)).toContain(
             row.boundary_shard,
           );
           expect(row.check_name).toBe(
@@ -6122,7 +6124,7 @@ describe("ci workflow guards", () => {
     const rows: Array<{ group: string; boundary_shard: string }> = JSON.parse(
       manifest.outputs.check_additional_matrix!,
     ).include.filter((row: { group: string }) => row.group === "extension-package-boundary");
-    const shards = ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"];
+    const shards = Array.from({ length: 12 }, (_, index) => `${index + 1}/12`);
     expect(rows.map((row) => row.boundary_shard)).toEqual(shards);
     const step = readCiWorkflow().jobs["check-additional-shard"].steps.find(
       (candidate: WorkflowStep) => candidate.name === "Run additional check shard",
@@ -6133,10 +6135,15 @@ describe("ci workflow guards", () => {
     mkdirSync(bin);
     writeExecutable(path.join(bin, "pnpm"), [
       "#!/bin/sh",
-      'printf "%s\\t%s\\n" "$*" "${GOMEMLIMIT:-unset}" >> "$CALLS"',
+      'printf "%s\\t%s\\t%s\\n" "$*" "${GOMEMLIMIT:-unset}" "${GOMAXPROCS:-unset}" >> "$CALLS"',
       '[ "$*" != "${FAIL_SCRIPT:-}" ]',
     ]);
-    const runRow = (row: Record<string, unknown>, failScript = "", memoryLimit?: string) => {
+    const runRow = (
+      row: Record<string, unknown>,
+      failScript = "",
+      memoryLimit?: string,
+      goMaxProcs?: string,
+    ) => {
       const context = {
         eventName: "pull_request" as const,
         repository: "openclaw/openclaw",
@@ -6151,6 +6158,7 @@ describe("ci workflow guards", () => {
           CALLS: callsPath,
           FAIL_SCRIPT: failScript,
           GOMEMLIMIT: memoryLimit,
+          GOMAXPROCS: goMaxProcs,
           ADDITIONAL_CHECK_GROUP: "extension-package-boundary",
           EXTENSION_BOUNDARY_SHARD: String(
             evaluateWorkflowExpression(step.env.EXTENSION_BOUNDARY_SHARD, context) ?? "",
@@ -6160,29 +6168,34 @@ describe("ci workflow guards", () => {
     };
     const compile = "run test:extensions:package-boundary:compile";
     const canary = "run test:extensions:package-boundary:canary";
-    for (const failScript of ["", `${compile} --shard=1/8`, canary]) {
+    for (const failScript of ["", `${compile} --shard=1/12`, canary]) {
       writeFileSync(callsPath, "");
       const runs = rows.map((row) => runRow(row, failScript));
-      expect(runs.map(({ status }) => status)).toEqual([failScript ? 1 : 0, 0, 0, 0, 0, 0, 0, 0]);
+      expect(runs.map(({ status }) => status)).toEqual([
+        failScript ? 1 : 0,
+        ...Array.from({ length: 11 }, () => 0),
+      ]);
       expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual([
-        `${compile} --shard=1/8\t6GiB`,
-        `${canary}\tunset`,
-        ...shards.slice(1).map((shard) => `${compile} --shard=${shard}\t6GiB`),
+        `${compile} --shard=1/12\t6GiB\t4`,
+        `${canary}\tunset\tunset`,
+        ...shards.slice(1).map((shard) => `${compile} --shard=${shard}\t6GiB\t4`),
       ]);
     }
     writeFileSync(callsPath, "");
     const unsharded = runRow({ group: "extension-package-boundary" }, compile);
     expect(unsharded.status, unsharded.stderr).toBe(1);
     expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual([
-      `${compile}\tunset`,
-      `${canary}\tunset`,
+      `${compile}\tunset\tunset`,
+      `${canary}\tunset\tunset`,
     ]);
     writeFileSync(callsPath, "");
-    expect(rows.map((row) => runRow(row, "", "2GiB").status)).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(rows.map((row) => runRow(row, "", "2GiB", "1").status)).toEqual(
+      Array.from({ length: 12 }, () => 0),
+    );
     expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual([
-      `${compile} --shard=1/8\t2GiB`,
-      `${canary}\t2GiB`,
-      ...shards.slice(1).map((shard) => `${compile} --shard=${shard}\t2GiB`),
+      `${compile} --shard=1/12\t2GiB\t1`,
+      `${canary}\t2GiB\t1`,
+      ...shards.slice(1).map((shard) => `${compile} --shard=${shard}\t2GiB\t1`),
     ]);
   });
 
@@ -8629,6 +8642,29 @@ describe("ci workflow guards", () => {
     const uiE2e = workflow.jobs["checks-ui-e2e"];
     const uiE2eRealGateway = workflow.jobs["checks-ui-e2e-real-gateway"];
 
+    for (const runnerBackend of ["", "blacksmith", "hybrid", "github"] as const) {
+      for (const task of ["control-ui", "browser-extension"]) {
+        for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
+          expect(
+            evaluateWorkflowExpression(uiE2e["runs-on"], {
+              eventName,
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              runnerBackend,
+              matrix: { task },
+            }),
+            `${eventName}/${runnerBackend || "default"}/${task}`,
+          ).toBe(
+            eventName !== "push" || runnerBackend === "github"
+              ? "ubuntu-24.04"
+              : task === "control-ui"
+                ? "blacksmith-16vcpu-ubuntu-2404"
+                : "blacksmith-8vcpu-ubuntu-2404",
+          );
+        }
+      }
+    }
+
     expect(readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")).toContain(
       "ui-e2e-projects-contract-v1",
     );
@@ -8860,7 +8896,9 @@ describe("ci workflow guards", () => {
     for (const { blacksmithRunner, job, matrix, name: jobName, setup } of routedUiE2eJobs) {
       for (const { context, expected, name: scenarioName } of routingScenarios) {
         const assertionName = `${jobName}: ${scenarioName}`;
-        const expectedRunner = expected.blacksmith ? blacksmithRunner : "ubuntu-24.04";
+        const hostedPullRequest = job === uiE2e && context.eventName === "pull_request";
+        const usesBlacksmith = expected.blacksmith && !hostedPullRequest;
+        const expectedRunner = usesBlacksmith ? blacksmithRunner : "ubuntu-24.04";
         expect(
           String(job.name).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
             String(evaluateWorkflowExpression(expression, { ...context, matrix })),
@@ -8875,10 +8913,10 @@ describe("ci workflow guards", () => {
           evaluateWorkflowExpression(setup.with?.["dependency-cache"], {
             ...context,
             matrix,
-            runnerEnvironment: expected.blacksmith ? "self-hosted" : "github-hosted",
+            runnerEnvironment: usesBlacksmith ? "self-hosted" : "github-hosted",
           }),
           assertionName,
-        ).toBe(expected.dependencyCache);
+        ).toBe(hostedPullRequest ? "false" : expected.dependencyCache);
         expect(setup.with?.["cache-mode"], assertionName).toBe(
           "${{ needs.preflight.outputs.cache_mode }}",
         );

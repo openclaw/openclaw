@@ -2785,7 +2785,15 @@ AFTER_CD
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
-    expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(5);
+    for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
+      expect(
+        evaluateWorkflowExpression(workflow.jobs["checks-windows"].strategy["max-parallel"], {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        }),
+      ).toBe(eventName === "pull_request" ? 12 : 5);
+    }
     expect(workflow.jobs["checks-ui-e2e-real-gateway"].strategy["max-parallel"]).toBe(2);
     for (const [context, expected] of [
       [{ eventName: "push" }, 4],
@@ -3049,10 +3057,18 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
           }
         }
       }
-      expect(job.strategy["max-parallel"]).toBe(5);
       for (const runnerEnvironment of ["github-hosted", "self-hosted"] as const) {
         for (const frozenTarget of [false, true]) {
           for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
+            expect(
+              evaluateWorkflowExpression(job.strategy["max-parallel"], {
+                eventName,
+                repository: "openclaw/openclaw",
+                runAttempt: 1,
+                runnerEnvironment,
+                frozenTarget,
+              }),
+            ).toBe(eventName === "pull_request" ? 12 : 5);
             expect(
               evaluateWorkflowExpression(runStep.env.OPENCLAW_VITEST_MAX_WORKERS, {
                 eventName,
@@ -3820,7 +3836,7 @@ setImmediate(() => {
     expect(source).not.toContain("blacksmith-");
   });
 
-  it("keeps PR preflight hosted and preserves other hybrid control routing", () => {
+  it("keeps PR preflight and aggregation hosted and preserves other hybrid control routing", () => {
     const workflow = readCiWorkflow();
     const context = {
       eventName: "pull_request",
@@ -3832,11 +3848,11 @@ setImmediate(() => {
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const eventName of ["pull_request", "push"] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
-          jobName === "preflight"
-            ? eventName === "pull_request"
-              ? "ubuntu-24.04"
-              : "blacksmith-16vcpu-ubuntu-2404"
-            : "blacksmith-4vcpu-ubuntu-2404",
+          eventName === "pull_request" && jobName !== "security-fast"
+            ? "ubuntu-24.04"
+            : jobName === "preflight"
+              ? "blacksmith-16vcpu-ubuntu-2404"
+              : "blacksmith-4vcpu-ubuntu-2404",
         );
       }
       for (const override of [
@@ -3870,7 +3886,7 @@ setImmediate(() => {
       ["security-fast", undefined, "ubuntu-24.04"],
       ["checks-ui", undefined, "ubuntu-24.04"],
       ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
-      ["checks-ui-e2e", "control-ui", "blacksmith-16vcpu-ubuntu-2404"],
+      ["checks-ui-e2e", "control-ui", "ubuntu-24.04"],
       ["checks-ui-e2e-real-gateway", undefined, "blacksmith-32vcpu-ubuntu-2404"],
     ] as const) {
       expect(
@@ -4100,11 +4116,9 @@ setImmediate(() => {
       "security-fast": "blacksmith-4vcpu-ubuntu-2404",
       android: "blacksmith-8vcpu-ubuntu-2404",
       "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",
-      "checks-ui-e2e": "blacksmith-8vcpu-ubuntu-2404",
       "checks-ui-e2e-real-gateway": "blacksmith-32vcpu-ubuntu-2404",
       "docker-seed-e2e": "blacksmith-16vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
-      "ci-gate": "blacksmith-4vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
     } as const;
     const expectedHybridForkRunners = {
@@ -4225,7 +4239,7 @@ setImmediate(() => {
           { headRepository: "contributor/openclaw", runnerProfile: "github" },
           prRunner,
         ],
-        ["frozen target", { frozenTarget: true }, jobName === "ci-gate" ? runner : "ubuntu-24.04"],
+        ["frozen target", { frozenTarget: true }, "ubuntu-24.04"],
         [
           "admitted qualification overrides configured backend",
           {
@@ -10730,6 +10744,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(evaluateWorkflowExpression(expression, { ...context, matrix }), `${name} PR`).toBe(
         [
           "build-artifacts",
+          "checks-ui-e2e",
+          "ci-gate",
           "checks-windows",
           "check-shard",
           "check-test-types-hosted-core-shard",

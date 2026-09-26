@@ -9,24 +9,30 @@ read_when:
 ## Runners
 
 Pull requests route preflight, the failure monitor, every static-check family,
-artifact builds, and Windows tests directly to GitHub-hosted capacity. This PR policy takes
+artifact builds, Windows tests, Control UI E2E, and the final aggregate gate
+directly to GitHub-hosted capacity. This PR policy takes
 precedence over the default backend routes below without changing the repository
 variable. Hybrid PR core lint uses five separate rows and retains six separate
 extension rows. Current PR dependency scans run in three separate jobs, and three
 topology stripes divide the commands declared by `check:architecture` in
 `package.json`; malformed pipelines fail instead of dropping coverage.
-Extension package compilation uses eight PR stripes drawn from its complete,
+Extension package compilation uses twelve PR stripes drawn from its complete,
 source-size-ordered plugin inventory. Each stripe retains SDK preparation and
-the existing worker limits, with a `6GiB` Go memory target unless explicitly
-overridden. The first also runs the whole-inventory negative
+the existing worker limits. Shared preparation defaults to four Go execution
+threads and a `6GiB` memory target; explicit overrides remain authoritative.
+The owner still divides the hosted runner between two plugin compilers with
+two threads each. The first stripe also runs the whole-inventory negative
 canary, even if its compile step fails. Local, main, manual, and frozen checks
 retain the unsharded command.
-Windows retains one Vitest worker on hosted runners and four on
+Windows PRs use measured hosted file costs and up to twelve rows; main and
+manual targets retain their five-row plan. Windows retains one Vitest worker on hosted runners and four on
 Blacksmith. Declaration fixtures already overlap native compilers inside each
 file; four hosted workers caused a measured 120-second case timeout. The monitor still
 reserves five minutes of its 60-minute job budget for cancellation cleanup and
 publishes the failure cause before cancellation, so the required aggregate stays
-red. Main, manual qualification, and release routing remain unchanged.
+red. The gate retains its failure-cause and cancellation checks on hosted runners.
+Control UI keeps its existing matrix, worker limits, and Chromium commands.
+Main, manual qualification, and release routing remain unchanged.
 
 Current PR Node plans use measured hosted costs kept separately from hourly main
 costs. Smaller groups retain the complete inventory, worker limits, and test

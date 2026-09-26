@@ -13,7 +13,7 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("PR failure cancellation", () => {
-  it("keeps critical-path routing and adds default Blacksmith failure reporting", () => {
+  it("keeps PR failure reporting hosted and preserves main gate routing", () => {
     const gate = readCiWorkflow().jobs["ci-gate"];
     const context = {
       eventName: "pull_request" as const,
@@ -23,9 +23,9 @@ describe("PR failure cancellation", () => {
       preflightOutputs: { node_runner_backend: "blacksmith" },
       failFastOutputs: { failure_job_id: "42", failure_run_attempt: "1" },
     };
-    for (const runnerBackend of ["", "blacksmith"] as const) {
+    for (const runnerBackend of ["", "blacksmith", "hybrid", "runson"] as const) {
       expect(evaluateWorkflowExpression(gate["runs-on"], { ...context, runnerBackend })).toBe(
-        "blacksmith-4vcpu-ubuntu-2404",
+        "ubuntu-24.04",
       );
     }
     for (const override of [
@@ -45,6 +45,7 @@ describe("PR failure cancellation", () => {
       expect(
         evaluateWorkflowExpression(gate["runs-on"], {
           ...context,
+          eventName: "push",
           runnerBackend,
           runnerProfile: "hybrid",
           failFastOutputs: {},

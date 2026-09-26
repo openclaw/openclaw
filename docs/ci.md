@@ -19,9 +19,9 @@ job. Open the page that matches your task.
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
-The PR failure monitor, preflight, static checks, artifact build, and Windows
-tests use free GitHub-hosted runners. PR hybrid core lint runs five independent stripes, with
-six separate extension stripes. Extension package compilation uses eight PR stripes
+The PR failure monitor, preflight, static checks, artifact build, Windows tests,
+Control UI E2E, and final aggregate gate use free GitHub-hosted runners. PR hybrid core lint runs five independent stripes, with
+six separate extension stripes. Extension package compilation uses twelve PR stripes
 with the complete plugin inventory and one negative canary. Windows retains its one-worker hosted budget on
 `windows-2025`. Hosted PR Node planning uses separate measured group costs,
 serial processes, and smaller file groups. Its limits are 210 compact rows and
@@ -35,7 +35,7 @@ names the originating job. Main and manual runs retain complete matrices. See
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
 
-Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches retain unit, boundary, build, and mocked-Gateway coverage. Windows retains its complete inventory across five measured file shards.
+Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches retain unit, boundary, build, and mocked-Gateway coverage. Windows retains its complete inventory across measured file shards: up to twelve for PRs and five for other current targets.
 
 Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focused lifecycle coverage. Managed attachment UI/export, Watch operation, and Watch delivery UI suites retain every assertion in full manual/release validation. Main-tier simulator builds use the native architecture without indexing or verbose test diagnostics; logs and xcresult bundles remain available. A coalesced scheduled iOS cancellation can leave `openclaw/ci-gate` green with a notice delegating iOS proof to a later scheduled job; it does not validate the canceled revision, and the workflow can still be canceled. Genuine failures remain red. Screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
 
@@ -61,7 +61,7 @@ Short hybrid main jobs use a [40-row base threshold and 45-row hosted admission 
 
 Additional hybrid main check offloads require [fresh hosted assignment evidence](/ci/runners#hybrid-hosted-assignment-guard). PR static checks are hosted directly; main pushes can move lint and central types within their existing hosted row limit. Main artifact builds retain Blacksmith because their measured hosted tail leaves no room for the [15-minute routing objective](/ci/routing-costs). PR qualification targets an approximately 18-minute complete wall, including setup and assignment.
 
-Windows keeps its complete explicit test inventory in five [measured project-aligned shards](/ci/runners#runner-backend-modes), sharing each small project's setup within one job.
+Windows keeps its complete explicit test inventory in [measured project-aligned shards](/ci/runners#runner-backend-modes), sharing each small project's setup within one job. PRs use hosted costs and up to twelve rows; main and manual targets retain five.
 
 Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
 

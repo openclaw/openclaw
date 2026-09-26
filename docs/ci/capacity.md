@@ -19,16 +19,21 @@ See [critical-path routing](/ci/routing-costs#hosted-assignment-on-the-critical-
 Current automatic PRs use the [hosted PR policy](/ci/runners#runners): 210 compact
 rows, 256 total Node rows, and at most 200 active Node jobs. These hosted-only
 bounds add no Blacksmith registrations. PR preflight, monitor, static checks,
-artifact build, Windows, and Node rows use hosted capacity; hourly main and
+artifact build, Windows, Node, Control UI E2E, and aggregate gate use hosted capacity; hourly main and
 manual/release routing retain the policies described below. Measure hosted
 assignment waits against the shared organization pool before expanding admission.
-The eight PR extension-package compile stripes add seven hosted jobs and repeat
+The PR base budget includes every Control UI E2E row and the aggregate gate;
+the browser-extension row is counted once rather than as an optional offload.
+Windows PR planning uses its measured hosted file costs for up to twelve rows,
+with one Vitest worker per row. Main and manual targets retain five rows.
+The twelve PR extension-package compile stripes add eleven hosted jobs and repeat
 SDK preparation within each job. They keep the complete plugin inventory and
 one negative canary; expected-job counts and hosted admission derive from the
-expanded matrix. With 125 plugins, each stripe compiles 15 or 16 to leave room
+expanded matrix. With 125 plugins, each stripe compiles 10 or 11 to leave room
 for cold SDK preparation within the eight-minute job target. Native timings must
-still verify that target. Their `6GiB` Go memory target leaves space for the surrounding
-processes on hosted runners; existing overrides remain authoritative. Compiler
+still verify that target. Shared preparation defaults to four Go execution
+threads with the existing `6GiB` memory target; the parallel plugin compilers
+remain capped at two threads each. Explicit overrides remain authoritative. Compiler
 deadlines and the additional-check concurrency cap of twelve remain unchanged.
 
 OpenClaw's current GitHub runner-registration bucket reports 10,000 self-hosted
@@ -187,7 +192,7 @@ The dedicated real-Gateway lane partitions its complete selected inventory into 
 
 The original two-worker rollout had a controlled Linux comparison covering its then-complete inventory of 14 files and 25 tests, reducing invocation elapsed time from 309.374 to 202.027 seconds. Those historical results do not measure later allowlist additions, complete CI timing, or achievement of the CI latency target.
 
-Eligible `control-ui` rows request `blacksmith-16vcpu-ubuntu-2404`; the browser-extension row keeps the 8-vCPU request when optional hosted admission is closed, and eligible real-Gateway jobs request the 32-class. Backend, event, contributor-trust and cache-write boundaries are unchanged, including hybrid first attempts and trusted contributor forks. Historical [run 33692146223](https://github.com/openclaw/openclaw/actions/runs/33692146223) had two slowest UI rows requesting the 8-vCPU label but reporting two CPUs; their 356/383-second test steps set the 8:20 non-Windows wall. That run's 32-vCPU jobs reported eight CPUs. The larger request added no workers. In historical [run 33695337496](https://github.com/openclaw/openclaw/actions/runs/33695337496), all twelve UI rows on the 32-class reported eight CPUs and finished by 4:38 from workflow creation, with 102–145-second test steps. Those measurements do not establish timings on today's 16-class route. Stale file weights still need the existing refit's independent-run and replacement thresholds, rather than a one-run manual adjustment.
+Outside PRs, eligible `control-ui` rows request `blacksmith-16vcpu-ubuntu-2404`; the browser-extension row keeps the 8-vCPU request when optional hosted admission is closed, and eligible real-Gateway jobs request the 32-class. Backend, event, contributor-trust and cache-write boundaries are unchanged, including hybrid first attempts and trusted contributor forks. Historical [run 33692146223](https://github.com/openclaw/openclaw/actions/runs/33692146223) had two slowest UI rows requesting the 8-vCPU label but reporting two CPUs; their 356/383-second test steps set the 8:20 non-Windows wall. That run's 32-vCPU jobs reported eight CPUs. The larger request added no workers. In historical [run 33695337496](https://github.com/openclaw/openclaw/actions/runs/33695337496), all twelve UI rows on the 32-class reported eight CPUs and finished by 4:38 from workflow creation, with 102–145-second test steps. Those measurements do not establish timings on today's 16-class route. Stale file weights still need the existing refit's independent-run and replacement thresholds, rather than a one-run manual adjustment.
 
 In [run 35028248954, UI job 6/7](https://github.com/openclaw/openclaw/actions/runs/35028248954/job/104582299257), the six-shard Control UI plan requested the 16-class and reported four CPUs. Setup took about 3m45s before the test command. The job recorded 168 passing tests and three failures before cancellation about 25m07s after runner startup; a test completed three seconds before cancellation. The twelve-shard plan still needs native CI timing proof, and widening the plan does not resolve those assertions or guarantee completion within the unchanged deadline.
 
