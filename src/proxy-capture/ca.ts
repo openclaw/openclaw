@@ -207,9 +207,22 @@ async function generateLocalProxyLeafQueued(params: {
       `subjectAltName=${sanKind}:${params.hostname}\nextendedKeyUsage=serverAuth\n`,
       { mode: LOCAL_PROXY_PRIVATE_KEY_MODE },
     );
+    // X.509 caps CommonName at 64 bytes (RFC 5280 ub-common-name); a hostname longer than
+    // that (routine for object-storage endpoints) fails CSR generation outright. The leaf's
+    // subjectAltName above already carries the exact hostname and is what TLS clients verify
+    // against, so the CommonName here does not need to hold the hostname at all.
     await runExec(
       openssl,
-      ["req", "-new", "-key", leafKeyPath, "-subj", `/CN=${params.hostname}`, "-out", csrPath],
+      [
+        "req",
+        "-new",
+        "-key",
+        leafKeyPath,
+        "-subj",
+        "/CN=OpenClaw Secret Egress Proxy Leaf",
+        "-out",
+        csrPath,
+      ],
       { logOutput: false, timeoutMs: LOCAL_PROXY_CERT_GENERATION_TIMEOUT_MS },
     );
     await runExec(

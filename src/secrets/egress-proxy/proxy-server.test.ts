@@ -907,4 +907,58 @@ describe("secret egress proxy", () => {
     expect(auditText).not.toContain(secret);
     expect(auditText).not.toContain(sentinel);
   });
+
+  it("completes the CONNECT tunnel and TLS handshake for a hostname longer than 64 characters", async () => {
+    // Mirrors the object-storage endpoint shape from #152529: <bucket>.<account-id>.<provider-domain>.
+    const longHostname = `${"a".repeat(40)}.${"b".repeat(32)}.example.com`;
+    expect(longHostname.length).toBeGreaterThan(64);
+    const sentinel = mintSecretSentinel("unused-secret-value", { label: "long-hostname" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: [longHostname] });
+
+    // rawConnect() always issues "CONNECT localhost:<port>"; open the tunnel by hand here
+    // instead, since the client only needs to reach this process's own proxy socket. The
+    // leaf certificate is minted on demand from the hostname in the CONNECT line, so no DNS
+    // resolution of longHostname, and no request past the TLS handshake, is needed here.
+    const socket = net.connect(Number(new URL(proxy.proxyOrigin).port), "127.0.0.1");
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    socket.write(
+      `CONNECT ${longHostname}:${originPort} HTTP/1.1\r\nHost: ${longHostname}:${originPort}\r\nProxy-Authorization: ${basicProxyAuth(registeredPassword(proxyEnv))}\r\n\r\n`,
+    );
+    const response = await new Promise<string>((resolve, reject) => {
+      let buffered = "";
+      const onData = (chunk: Buffer) => {
+        buffered += chunk.toString("latin1");
+        if (buffered.includes("\r\n\r\n")) {
+          socket.off("data", onData);
+          resolve(buffered);
+        }
+      };
+      socket.on("data", onData);
+      socket.once("error", reject);
+      socket.once("close", () => resolve(buffered));
+    });
+    // Against unmodified code, leaf generation throws inside tlsServerFor() because the CSR's
+    // CommonName exceeds the X.509 64-byte cap for this hostname, and the CONNECT never
+    // completes; this assertion is what turns that into a visible test failure.
+    expect(response).toContain("200 Connection Established");
+
+    const secureSocket = tls.connect({
+      socket,
+      servername: longHostname,
+      ca: fs.readFileSync(proxy.caCertPath),
+    });
+    await new Promise<void>((resolve, reject) => {
+      secureSocket.once("secureConnect", resolve);
+      secureSocket.once("error", reject);
+    });
+    // Verifies the exact production check (X509Certificate#checkHost against the real,
+    // openssl-minted, CA-chained leaf) that a real HTTPS client performs for this hostname.
+    expect(secureSocket.authorized).toBe(true);
+    secureSocket.destroy();
+  });
 });
