@@ -117,6 +117,10 @@ effective endpoint. Existing canonical settings, including an inherited `false`,
 take precedence over retired keys. Doctor and startup report the effective
 listener and Gateway destination without changing the external callback URL.
 
+The deprecated TypeScript `webhookPort` and `webhookHost` input fields remain
+source-compatible until the next Plugin SDK major. Runtime config uses
+`legacyWebhook`; run `openclaw doctor --fix` to migrate the old keys.
+
 Accounts can share a Gateway path: backend origin and signature must identify
 exactly one account, so give accounts on the same Nextcloud backend distinct bot
 secrets when sharing a Gateway path. Separate legacy endpoints preserve their
