@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { prepareConfigRuntimeEnv } from "../../config/config-env-vars.js";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";

@@ -503,7 +503,7 @@ export async function invokeUpdateRun(
     "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
   > = {},
 ) {
-  const { updateHandlers } = await import("./update-ocm.js");
+  const { updateHandlers } = await import("./update.js");
   const onRespond = respond ?? (() => {});
   await expectDefined(
     updateHandlers["update.run"],
