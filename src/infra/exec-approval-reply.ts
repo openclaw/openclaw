@@ -349,7 +349,10 @@ export function getExecApprovalReplyMetadata(
   if (!approvalId || !approvalSlug) {
     return null;
   }
-  const approvalKind = record.approvalKind === "plugin" ? "plugin" : "exec";
+  const approvalKind =
+    record.approvalKind === "plugin" || record.approvalKind === "system-agent"
+      ? record.approvalKind
+      : "exec";
   const allowedDecisions = Array.isArray(record.allowedDecisions)
     ? record.allowedDecisions.filter(
         (value): value is ExecApprovalReplyDecision =>
