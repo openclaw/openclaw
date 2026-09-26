@@ -38,3 +38,16 @@ accepted historical reports under the usual partial-coverage policy.
 
 See the [Team Reports guide](https://docs.openclaw.ai/plugins/team-reports)
 for setup, configuration, attribution rules, exports, and troubleshooting.
+
+## Fixture benchmark
+
+From a source checkout root, measure report collection without live API calls:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs extensions/team-reports/src/report-run.benchmark.test-support.ts --worker
+```
+
+The probe uses 2,000 issues, 1,000 commits, and 1,500 messages. It reports
+main-thread heap growth and synchronous callback duration, including worker startup,
+and verifies report counts. Omit `--worker` to measure the streaming collector's
+calling isolate separately; SQLite aggregation still runs in its worker.
