@@ -545,10 +545,10 @@ function resolveOwnedApps(params: {
           needsAuth: true,
         };
       }
-      return {
-        ...toCodexPluginOwnedAccountApp(info, findCodexAppById(installedApps, info.id)),
-        name: app.name,
-      };
+      return Object.assign(
+        toCodexPluginOwnedAccountApp(info, findCodexAppById(installedApps, info.id)),
+        { name: app.name },
+      );
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

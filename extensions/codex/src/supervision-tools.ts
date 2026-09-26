@@ -635,7 +635,10 @@ async function listSessions(
             ? await readThread({ request, endpoint, threadId: entry, includeTurns: false })
             : entry;
         const session = toSession(endpoint.id, thread, loaded ? true : undefined);
-        if (session && (loaded || !sessions.some((entry) => entry.threadId === session.threadId))) {
+        if (
+          session &&
+          (loaded || !sessions.some((existing) => existing.threadId === session.threadId))
+        ) {
           sessions.push(session);
         }
       } catch (error) {
