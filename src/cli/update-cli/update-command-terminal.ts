@@ -152,9 +152,7 @@ export async function withUpdateCommandTerminalResult<T>(
     throw outcome.error;
   }
   await run?.sourceArtifactLock?.release().catch((error: unknown) => {
-    defaultRuntime.error(
-      `Warning: Source artifact lock release failed: ${formatErrorMessage(error)}`,
-    );
+    defaultRuntime.error(`Warning: Artifact lock release failed: ${formatErrorMessage(error)}`);
   });
   const activationTimeout =
     "error" in outcome

@@ -1,11 +1,10 @@
-// Source-checkout launcher; compiled consumers use the same lock owner directly.
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDirectRunUrl } from "./direct-run.mjs";
 import { runOwnedDistArtifactEntry } from "./dist-artifact-lock.mts";
 export { withDistArtifactOwnership, resolveDistArtifactLockPath } from "./dist-artifact-lock.mts";
 
-/** Run a separately sized, joined Node child without reacquiring its parent's lock. */
+/** Source launcher for a joined, separately sized Node child that reuses the lock owner. */
 export function distArtifactEntryArgs(
   script: string,
   args: string[] = [],

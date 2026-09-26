@@ -109,7 +109,8 @@ type GitUpdateTarget = {
   metadataUnreadable?: string;
 };
 
-export type UpdateRunnerOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
+export type UpdateRunnerOptions = {
+  sourceRuntimePrepared?: boolean;
   channel?: UpdateChannel;
   devTarget?: DevUpdateTarget;
   /** Expose a new checkout only after target admission; subsequent work uses the published path. */
@@ -128,23 +129,23 @@ export type UpdateRunnerOptions = Pick<UpdateRunResult, "sourceRuntimePrepared">
   /** The finalizer owns retained source/runtime rollback after successful activation. */
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
 } & (
-    | {
-        /** CLI-owned activation Doctor retains its config writer and requester authority. */
-        runGitDoctor: (
-          root: string,
-          results?: UpdateStepResult[],
-        ) => Promise<UpdateStepResult | null>;
-        prepareGitExposure?: never;
-      }
-    | {
-        runGitDoctor?: never;
-        prepareGitExposure: (
-          candidateRoot: string,
-          candidateSha: string,
-          env: NodeJS.ProcessEnv | undefined,
-        ) => Promise<void>;
-      }
-  );
+  | {
+      /** CLI-owned activation Doctor retains its config writer and requester authority. */
+      runGitDoctor: (
+        root: string,
+        results?: UpdateStepResult[],
+      ) => Promise<UpdateStepResult | null>;
+      prepareGitExposure?: never;
+    }
+  | {
+      runGitDoctor?: never;
+      prepareGitExposure: (
+        candidateRoot: string,
+        candidateSha: string,
+        env: NodeJS.ProcessEnv | undefined,
+      ) => Promise<void>;
+    }
+);
 
 export type UpdateInstallSurface =
   | { kind: "git"; mode: "git"; root: string; packageRoot: string }

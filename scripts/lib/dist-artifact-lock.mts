@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { acquireFileLock } from "@openclaw/fs-safe/file-lock";
+import { acquireFileLock, type FileLockHandle } from "@openclaw/fs-safe/file-lock";
 import { root as openLockRoot } from "@openclaw/fs-safe/root";
 import { hasUnjoinedWork } from "./managed-child-process.mts";
 import { isRecord } from "./record-shared.mjs";
@@ -26,8 +26,7 @@ function retainUnjoinedDistArtifactWork(directory: string, error: unknown) {
 export async function runOwnedDistArtifactEntry(script: string, args: string[]) {
   const directory = resolveDistArtifactLockPath(process.cwd());
   const claim = path.join(directory, `child-${process.pid}`);
-  // A killed nested wrapper cannot certify its detached compiler has joined.
-  // Its surviving claim keeps the outer owner from releasing on leader exit.
+  // A surviving wrapper claim retains ownership for possibly detached compilers.
   fs.writeFileSync(claim, "Awaiting child completion.\n", { flag: "wx" });
   inheritedOwnershipPath = directory;
   process.argv = [process.execPath, fileURLToPath(script), ...args];
@@ -42,12 +41,15 @@ export async function runOwnedDistArtifactEntry(script: string, args: string[]) 
   }
 }
 
-export async function acquireDistArtifactOwnership(rootDir: string, wait = false) {
+export async function acquireDistArtifactOwnership(
+  rootDir: string,
+  wait = false,
+): Promise<FileLockHandle> {
   const directory = resolveDistArtifactLockPath(fs.realpathSync(rootDir));
   const ownerPath = path.join(directory, "owner.json");
   let reportedWait = false;
   let owner: unknown;
-  let lock;
+  let lock: FileLockHandle;
   try {
     fs.mkdirSync(directory, { recursive: true });
     lock = await acquireFileLock(ownerPath, {

@@ -1,15 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { FileLockHandle } from "@openclaw/fs-safe/file-lock";
 import { acquireDistArtifactOwnership } from "./dist-artifact-lock.mts";
 import { isRecord } from "./record-shared.mjs";
 import type { PrepareBundledPluginRuntime } from "./runtime-artifact-contract.js";
 
-function hasPreparation(
+const hasPreparation = (
   value: unknown,
-): value is { prepareBundledPluginRuntime: PrepareBundledPluginRuntime } {
-  return isRecord(value) && typeof value.prepareBundledPluginRuntime === "function";
-}
+): value is { prepareBundledPluginRuntime: PrepareBundledPluginRuntime } =>
+  isRecord(value) && typeof value.prepareBundledPluginRuntime === "function";
 
 export async function loadSourceRuntimePreparation(root: string) {
   const stagingFile = path.join(root, "scripts", "stage-bundled-plugin-runtime.mts");
@@ -35,7 +35,10 @@ export async function loadSourceRuntimePreparation(root: string) {
   throw new Error(`Installed runtime staging is unavailable: ${stagingFile}`);
 }
 
-export async function inspectSourceUpdateArtifacts(rootDir: string) {
+export async function inspectSourceUpdateArtifacts(rootDir: string): Promise<{
+  sourceRuntimePrepared: boolean;
+  lock: FileLockHandle | undefined;
+}> {
   if (!fs.existsSync(path.join(rootDir, ".git"))) {
     return { sourceRuntimePrepared: true, lock: undefined };
   }
@@ -71,7 +74,6 @@ export async function preflightInstalledSourceArtifacts(env: NodeJS.ProcessEnv) 
     return;
   }
   if (fs.realpathSync(root) !== fs.realpathSync(process.cwd())) {
-    const prepared = await inspectSourceUpdateArtifacts(root);
-    await prepared.lock?.release();
+    await (await inspectSourceUpdateArtifacts(root)).lock?.release();
   }
 }
