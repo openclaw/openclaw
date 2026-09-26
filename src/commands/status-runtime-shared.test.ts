@@ -490,6 +490,28 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("keeps a stale child runtime from the gateway health probe", async () => {
+    const childRuntime = {
+      execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
+      available: false,
+    };
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) =>
+      request.method === "health" ? { ok: true, childRuntime } : { ok: true },
+    );
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        ...createStatusGatewayProbeBudget(1234),
+        deep: true,
+        gatewayReachable: true,
+      }),
+    ).resolves.toMatchObject({
+      health: { ok: true, childRuntime },
+    });
+  });
+
   it("keeps failed deep health probes visible in nonthrowing status snapshots", async () => {
     mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
 

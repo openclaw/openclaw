@@ -6,6 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { TableColumn } from "../../packages/terminal-core/src/table.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
+import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
@@ -280,6 +281,16 @@ export function buildStatusHealthRows(params: {
       Detail: `${params.health.durationMs}ms`,
     },
   ];
+  const childRuntimeWarning = params.health.childRuntime
+    ? formatMissingChildRuntimeWarning(params.health.childRuntime)
+    : undefined;
+  if (childRuntimeWarning) {
+    rows.push({
+      Item: "Gateway runtime",
+      Status: params.warn("WARN"),
+      Detail: childRuntimeWarning,
+    });
+  }
   const sqliteWalWarning = formatSqliteWalHealthWarning(params.sqliteWal);
   if (sqliteWalWarning) {
     rows.push({ Item: "SQLite WAL", Status: params.warn("WARN"), Detail: sqliteWalWarning });

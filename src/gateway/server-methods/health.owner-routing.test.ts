@@ -9,6 +9,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import * as childRuntime from "../../infra/child-runtime-viability.js";
 import { beginLifecycleWriteCustody } from "../../infra/lifecycle-write-custody.js";
 import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
@@ -210,6 +211,46 @@ describe("Gateway status owner routing", () => {
       });
     },
   );
+
+  it("reports a deleted child runtime executable without storing it on cached health", async () => {
+    const removed = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
+    const read = vi.spyOn(childRuntime, "readChildRuntimeViability").mockReturnValue({
+      execPath: removed,
+      available: false,
+    });
+    const cached: HealthSummary = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+    const respond = vi.fn();
+    await healthHandlers.health!({
+      req: {} as never,
+      params: {},
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot: vi.fn(async () => cached),
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+    expect(read).toHaveBeenCalled();
+    expect(respond.mock.calls[0]?.[1].childRuntime).toEqual({
+      execPath: removed,
+      available: false,
+    });
+    expect(cached).not.toHaveProperty("childRuntime");
+    expect(respond.mock.calls[0]?.[3]).toEqual({ cached: true });
+  });
 
   it("projects requested CLI facts without choosing a fleet owner or widening read scopes", async () => {
     await withStateDirEnv("openclaw-gateway-cli-status-", async ({ stateDir }) => {

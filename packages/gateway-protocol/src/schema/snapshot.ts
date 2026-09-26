@@ -173,6 +173,14 @@ const HealthSnapshotSchema = closedObject({
       hotReloadStatus: Type.Union([Type.Literal("active"), Type.Literal("disabled")]),
     }),
   ),
+  // The running process reports the Node binary it will use for child workers.
+  // A deleted Homebrew Cellar path stays reachable at the Gateway port.
+  childRuntime: Type.Optional(
+    closedObject({
+      execPath: Type.String(),
+      available: Type.Boolean(),
+    }),
+  ),
   // Channel plugins own their nested account/probe summaries, so this is the
   // one provider-contributed bag that deliberately remains unknown.
   channels: Type.Optional(Type.Record(Type.String(), Type.Unknown())),

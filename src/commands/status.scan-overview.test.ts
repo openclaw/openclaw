@@ -164,6 +164,10 @@ describe("collectStatusScanOverview", () => {
             degradedPlugins: [],
             startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
             installationReplacementWarning: "Installation replaced; draining before handoff.",
+            childRuntime: {
+              execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
+              available: false,
+            },
             sqliteWal,
           }
         : { channelAccounts: {} },
@@ -202,6 +206,10 @@ describe("collectStatusScanOverview", () => {
     expect(result.runtimeDegradation?.installationReplacementWarning).toBe(
       "Installation replaced; draining before handoff.",
     );
+    expect(result.runtimeDegradation?.childRuntime).toEqual({
+      execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
+      available: false,
+    });
   });
 
   it("can keep channel overview on metadata-only status paths", async () => {

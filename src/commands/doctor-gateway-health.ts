@@ -30,6 +30,7 @@ import type {
   DoctorMemoryStatusPayload,
 } from "../gateway/server-methods/doctor.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
+import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationSeconds } from "../infra/format-time/format-duration.js";
 import { readGatewayLastInstallationReplacement } from "../infra/gateway-boot-lifecycle.js";
@@ -336,6 +337,12 @@ export async function checkGatewayHealth(params: {
     }
     if (status.startupRecoveryWarning) {
       note(sanitizeTerminalText(status.startupRecoveryWarning), "Startup session recovery");
+    }
+    const childRuntimeWarning = status.childRuntime
+      ? formatMissingChildRuntimeWarning(status.childRuntime)
+      : undefined;
+    if (childRuntimeWarning) {
+      note(sanitizeTerminalText(childRuntimeWarning), "Gateway runtime");
     }
     if (status.installationReplacementWarning) {
       note(sanitizeTerminalText(status.installationReplacementWarning), "Installation replaced");

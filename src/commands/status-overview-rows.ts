@@ -3,6 +3,7 @@
 
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveIsNixMode } from "../config/paths.js";
+import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
@@ -41,6 +42,7 @@ type StatusDegradationSummary = Pick<
   | "startupMigrationWarning"
   | "startupRecoveryWarning"
   | "installationReplacementWarning"
+  | "childRuntime"
   | "secretEgressProxy"
 >;
 
@@ -54,6 +56,12 @@ function buildStatusDegradationRows(
   }
   if (summary.startupRecoveryWarning) {
     rows.push({ Item: "Session recovery", Value: decorate(summary.startupRecoveryWarning) });
+  }
+  const childRuntimeWarning = summary.childRuntime
+    ? formatMissingChildRuntimeWarning(summary.childRuntime)
+    : undefined;
+  if (childRuntimeWarning) {
+    rows.push({ Item: "Gateway runtime", Value: decorate(childRuntimeWarning) });
   }
   if (summary.installationReplacementWarning) {
     rows.push({
