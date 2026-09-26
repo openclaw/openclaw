@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAuthItems } from "./auth.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { discoverHermesSource } from "./source.js";
-import { resolveTargets } from "./targets.js";
 import { makeContext, makeHermesPaths, writeFile } from "./test/provider-helpers.js";
 
 let testWorkspace: TempWorkspace;
