@@ -176,6 +176,20 @@ describe("chat selection popup", () => {
     expect(secondAskSideChat).toHaveBeenCalledWith("replacement");
   });
 
+  it("dismisses the selection toolbar when the transcript scrolls", () => {
+    vi.useFakeTimers();
+    const { thread, textNode } = buildThreadWithBubble("scroll away from me");
+    selectRange(textNode, 0, 7);
+    pointerUp(thread);
+    expect(document.body.querySelector(".chat-selection-popup")).not.toBeNull();
+
+    const transcript = document.createElement("div");
+    transcript.className = "chat-transcript";
+    document.body.appendChild(transcript);
+    transcript.dispatchEvent(new Event("scroll", { bubbles: false }));
+    expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
+  });
+
   it("dismisses when the selection collapses", () => {
     vi.useFakeTimers();
     const { thread, textNode } = buildThreadWithBubble("dismiss me later");
@@ -301,6 +315,64 @@ describe("chat annotation editor", () => {
     document.querySelector<HTMLButtonElement>(".chat-annotation-editor__delete")!.click();
     expect(onDelete).toHaveBeenCalledOnce();
     expect(onSave).not.toHaveBeenCalled();
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+  });
+
+  it("keeps an unsaved comment when a layout change scrolls the transcript", () => {
+    const { input, onSave, onCancel } = editor();
+    input.value = "Short layout control.";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // Compensation for a width or height change scrolls the transcript the
+    // anchor lives in; that is not the user dismissing the editor.
+    const transcript = document.createElement("div");
+    transcript.className = "chat-transcript";
+    document.body.appendChild(transcript);
+    transcript.dispatchEvent(new Event("scroll", { bubbles: false }));
+
+    const popup = document.querySelector<HTMLElement>(".chat-annotation-editor")!;
+    expect(popup).not.toBeNull();
+    expect(input.value).toBe("Short layout control.");
+    expect(document.activeElement).toBe(input);
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unsaved comment when resizing the viewport", () => {
+    const { input, onCancel } = editor();
+    input.value = "873 characters that must survive the resize.";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    window.dispatchEvent(new Event("resize"));
+
+    expect(document.querySelector("[role=dialog]")).not.toBeNull();
+    expect(input.value).toBe("873 characters that must survive the resize.");
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("still closes an untouched editor when the transcript scrolls", () => {
+    editor({ comment: "Saved comment", expanded: true });
+    const transcript = document.createElement("div");
+    transcript.className = "chat-transcript";
+    document.body.appendChild(transcript);
+    transcript.dispatchEvent(new Event("scroll", { bubbles: false }));
+
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+  });
+
+  it.each([
+    [
+      "an outside interaction",
+      () => document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })),
+    ],
+    [
+      "Escape",
+      () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    ],
+    ["its owner retiring the pane", () => removeChatSelectionPopup("pane-a")],
+  ])("still dismisses the editor through %s", (_name, dismiss) => {
+    editor();
+    dismiss();
     expect(document.querySelector("[role=dialog]")).toBeNull();
   });
 });
