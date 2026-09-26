@@ -132,7 +132,9 @@ describe("task page access snapshots", () => {
       );
       seedTaskRegistryRowsForTests(tasks);
       await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
-      if (!warm) {
+      if (warm) {
+        openOpenClawAgentDatabase({ agentId: "main" });
+      } else {
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
       }

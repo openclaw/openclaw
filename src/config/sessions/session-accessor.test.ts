@@ -22,6 +22,7 @@ import {
   onSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
   listOpenClawRegisteredAgentDatabases,
@@ -29,11 +30,11 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   isOpenClawStateDatabaseOpen,
 } from "../../state/openclaw-state-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
-import type { TrajectoryEvent } from "../../trajectory/types.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryRoute,
@@ -99,6 +100,10 @@ import {
   replaceTranscriptEvents,
   trimTranscriptForManualCompact,
 } from "./session-accessor.sqlite-transcript-write.js";
+import {
+  createManualCompactRecords,
+  createTestTrajectoryEvent,
+} from "./session-accessor.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 import {
@@ -118,32 +123,6 @@ vi.mock("../../gateway/session-archive.runtime.js", async (importOriginal) => {
   };
 });
 
-function createTestTrajectoryEvent(sessionId: string): TrajectoryEvent {
-  return {
-    traceSchema: "openclaw-trajectory",
-    schemaVersion: 1,
-    traceId: sessionId,
-    source: "runtime",
-    type: "test.concurrent-write",
-    ts: "2026-07-09T00:00:00.000Z",
-    seq: 1,
-    sessionId,
-  };
-}
-
-function createManualCompactRecords(sessionId: string) {
-  return [
-    { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
-    ...[1, 2, 3, 4].map((index) => ({
-      type: "message",
-      id: `entry-${index}`,
-      parentId: index === 1 ? null : `entry-${index - 1}`,
-      timestamp: `2026-06-19T12:00:0${index}.000Z`,
-      message: { role: "user", content: `message ${index}`, timestamp: index },
-    })),
-  ];
-}
-
 describe("session accessor seam", () => {
   let tempDir: string;
   let storePath: string;
@@ -160,8 +139,10 @@ describe("session accessor seam", () => {
     transcriptPath = path.join(tempDir, "session.jsonl");
   });
 
-  function cleanupSessionDatabasesAndTempDirs() {
+  async function cleanupSessionDatabasesAndTempDirs() {
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanupTempDirs(tempDirs);
   }
@@ -169,7 +150,7 @@ describe("session accessor seam", () => {
   afterEach(cleanupSessionDatabasesAndTempDirs);
 
   it("releases cached agent and shared-state handles before removing test data", async () => {
-    await replaceSessionEntry(
+    replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:cleanup-probe", storePath },
       { sessionId: "cleanup-probe", updatedAt: 1 },
     );
@@ -181,7 +162,7 @@ describe("session accessor seam", () => {
     expect(isOpenClawStateDatabaseOpen()).toBe(true);
     expect(fs.existsSync(tempDir)).toBe(true);
 
-    cleanupSessionDatabasesAndTempDirs();
+    await cleanupSessionDatabasesAndTempDirs();
 
     expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
     expect(isOpenClawStateDatabaseOpen()).toBe(false);
@@ -299,6 +280,7 @@ describe("session accessor seam", () => {
       },
     );
 
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const olderReaderEntry = expectDefined(
       loadSessionEntry({ sessionKey: childKey, storePath }),
@@ -309,6 +291,7 @@ describe("session accessor seam", () => {
       { ...olderReaderEntry, label: "preserved by older reader" },
     );
 
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const reopenedChild = expectDefined(
       loadSessionEntry({ sessionKey: childKey, storePath }),
@@ -1188,6 +1171,9 @@ describe("session accessor seam", () => {
       "focused session database path",
     );
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      sessionId: "focused-session",
+    });
     const unrelatedEntryJson = "{ unrelated, intentionally invalid JSON";
     database.db
       .prepare(
@@ -2120,7 +2106,7 @@ describe("session accessor seam", () => {
         { sessionId: "wrong-owner-session", updatedAt: 10 },
       ),
     ).rejects.toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
-    const insertRawEntry = (sessionKey: string, sessionId: string, updatedAt: number) => {
+    const insertRawEntry = async (sessionKey: string, sessionId: string, updatedAt: number) => {
       const database = openOpenClawAgentDatabase({
         agentId: "ops",
         path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "ops" }).path,
@@ -2130,6 +2116,7 @@ describe("session accessor seam", () => {
           "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
         )
         .run(sessionKey, sessionId, JSON.stringify({ sessionId, updatedAt }), updatedAt);
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
     };
     for (const [storedKey, canonicalKey] of [
@@ -2138,19 +2125,21 @@ describe("session accessor seam", () => {
       ["agent:ops:nbsp\u00a0", "agent:ops:nbsp"],
     ] as const) {
       const sessionId = `${canonicalKey}-session`;
-      insertRawEntry(storedKey, sessionId, 5);
+      await insertRawEntry(storedKey, sessionId, 5);
       await expect(
         upsertSessionEntryCore(
           { agentId: "ops", sessionKey: canonicalKey, storePath },
           { sessionId: "new-session", updatedAt: 10 },
         ),
       ).rejects.toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const canonicalSessionId = `${canonicalKey}-canonical-session`;
-      insertRawEntry(canonicalKey, canonicalSessionId, 6);
+      await insertRawEntry(canonicalKey, canonicalSessionId, 6);
       expect(() =>
         loadSessionEntry({ agentId: "ops", sessionKey: canonicalKey, storePath }),
       ).toThrow("openclaw doctor --fix");
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
     }
   });
@@ -2940,6 +2929,7 @@ describe("session accessor seam", () => {
     const competingEntry = { sessionId: "label-competitor", label: "Claimed", updatedAt: 1 };
     await upsertSessionEntryCore(target, { sessionId: "label-target", updatedAt: 1 });
     await upsertSessionEntryCore(competing, competingEntry);
+    expect(loadSessionEntry(competing)?.label).toBe("Claimed");
     const databasePath = expectDefined(
       resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
       "label race database path",
