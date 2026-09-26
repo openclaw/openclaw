@@ -1,6 +1,6 @@
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
-  buildSubagentRunReadIndexFromRuns,
+  countActiveDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
 } from "../registry/subagent-registry-queries.js";
 import {
@@ -14,19 +14,26 @@ import {
   makeSettledChild,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
+afterEach(() => vi.useRealTimers());
+
 it.each([
   "older batch",
   "own descendant",
+  "cross-agent descendant",
   "same batch",
   "paused member",
   "pending cleanup",
   "unfrozen",
 ] as const)("waits only for owned work: %s", async (scenario) => {
+  vi.useFakeTimers();
   const now = Date.now();
   const sameBatch = ["same batch", "paused member", "pending cleanup"].includes(scenario);
+  const crossAgent = scenario === "cross-agent descendant";
+  const nested = scenario === "own descendant" || crossAgent;
   const short = makeSettledChild({
     runId: "short",
     requesterAgentId: "main",
+    ...(crossAgent ? { childSessionKey: "agent:research:subagent:short" } : {}),
     createdAt: now - 100,
     endedAt: now,
     requesterSettleWake: {
@@ -41,9 +48,10 @@ it.each([
   });
   const long = makeSettledChild({
     runId: "long",
-    requesterAgentId: "main",
+    requesterAgentId: crossAgent ? "research" : "main",
+    ...(crossAgent ? { requesterStorePath: "/research/sessions.json" } : {}),
     createdAt: now - 200,
-    requesterSessionKey: scenario === "own descendant" ? short.childSessionKey : REQUESTER,
+    requesterSessionKey: nested ? short.childSessionKey : REQUESTER,
     execution:
       scenario === "paused member" || scenario === "pending cleanup"
         ? { status: "terminal", startedAt: now - 200, endedAt: now }
@@ -58,21 +66,28 @@ it.each([
     },
   });
   const runs = new Map([short, long].map((entry) => [entry.runId, entry]));
-  const index = () => buildSubagentRunReadIndexFromRuns({ runs });
   registryRuntimeMock.listSubagentRunsForRequester.mockImplementation((key) =>
     [...runs.values()].filter((entry) => entry.requesterSessionKey === key),
   );
   registryRuntimeMock.hasDescendantRunAwaitingSettle.mockImplementation((...args) =>
     hasDescendantRunAwaitingSettleFromRuns(runs, ...args),
   );
-  registryRuntimeMock.countActiveDescendantRuns.mockImplementation((key) =>
-    index().countActiveDescendantRuns(key),
+  registryRuntimeMock.countActiveDescendantRuns.mockImplementation((...args) =>
+    countActiveDescendantRunsFromRuns(runs, ...args),
   );
   const early = scenario === "older batch";
   expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short }))).toBe(
     early,
   );
   expect(deliverSpy).toHaveBeenCalledTimes(early ? 1 : 0);
+  if (crossAgent) {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await vi.advanceTimersByTimeAsync(30_001);
+      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short }));
+    }
+    expect(short.requesterSettleWake?.status).toBe("pending");
+    expect(deliverSpy).not.toHaveBeenCalled();
+  }
   long.execution = { status: "terminal", startedAt: now - 200, endedAt: now + 1 };
   long.pauseReason = undefined;
   long.cleanupCompletedAt = now + 1;

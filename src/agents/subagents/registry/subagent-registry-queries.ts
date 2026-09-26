@@ -648,6 +648,7 @@ export function countActiveDescendantRunsFromRuns(
   rootSessionKey: string,
   requesterAgentId?: string,
   requesterStorePath?: string | null,
+  rootRunIds?: ReadonlySet<string>,
 ): number {
   return buildSubagentRunReadIndexFromRuns({
     runs: scopeRootDescendantsToRequesterAgent(
@@ -655,6 +656,7 @@ export function countActiveDescendantRunsFromRuns(
       rootSessionKey,
       requesterAgentId,
       requesterStorePath,
+      rootRunIds,
     ),
   }).countActiveDescendantRuns(rootSessionKey);
 }

@@ -108,12 +108,14 @@ export function countActiveDescendantRuns(
   rootSessionKey: string,
   requesterAgentId?: string,
   requesterStorePath?: string | null,
+  rootRunIds?: ReadonlySet<string>,
 ): number {
   return countActiveDescendantRunsFromRuns(
     getSubagentRunsSnapshotForSessions(subagentRuns, [rootSessionKey]),
     rootSessionKey,
     requesterAgentId,
     requesterStorePath,
+    rootRunIds,
   );
 }
 

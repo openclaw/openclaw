@@ -239,13 +239,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
 
   // Scheduling is per child, but every replay of this frozen wave is one input.
   // Retain all possible shipped sources only for exact accepted-input matching.
-  const batchSessionKeys = [
-    ...new Set(settledBatch.map((entry) => entry.childSessionKey)),
-  ].toSorted();
+  const batchSessionKeys = [...new Set(settledBatch.map((run) => run.childSessionKey))].toSorted();
   const batchCreatedAt = Math.min(...settledBatch.map((entry) => entry.createdAt));
   // Keep the batch members themselves in the settle check, including paused work.
   const rootRunIds = frozenBatchRunIds?.length ? new Set(frozenBatchRunIds) : undefined;
-  const settleRoots = frozenBatchRunIds?.length ? batchSessionKeys : [requesterSessionKey];
   const requesterHasUnsettledDescendants = () =>
     hasDescendantRunAwaitingSettle(
       requesterSessionKey,
@@ -320,9 +317,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   }
   function deferBatch(
     state: RequesterSettleWakeBatchState,
-    countTowardsLimit = !settleRoots.some(
-      (root) => countActiveDescendantRuns(root, requesterAgentId, requesterStorePath) > 0,
-    ),
+    countTowardsLimit = countActiveDescendantRuns(
+      requesterSessionKey,
+      requesterAgentId,
+      requesterStorePath,
+      rootRunIds,
+    ) === 0,
   ): void {
     const now = Date.now();
     if ((state.nextAttemptAt ?? 0) > now) {
