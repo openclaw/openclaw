@@ -4,6 +4,7 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHistoryHandler } from "./cron-history.js";
 import { cronHandlers } from "./cron.js";
@@ -71,6 +72,8 @@ it.each([
   "$method rechecks $change authority before final publication",
   async ({ method, change }) => {
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath: "/synthetic/cron",
       cronEnabled: false,
       defaultAgentId: "main",
