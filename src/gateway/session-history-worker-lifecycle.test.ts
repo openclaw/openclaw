@@ -224,7 +224,30 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
   };
 }
 
-it.each(["message-by-id", "message-count"] as const)(
+const rawHistoryKinds = ["message-by-id", "message-count", "message-lookup", "recent"] as const;
+
+function readRawHistory(
+  fixture: Awaited<ReturnType<typeof seed>>,
+  kind: (typeof rawHistoryKinds)[number],
+  signal?: AbortSignal,
+) {
+  const target = fixture.target;
+  if (kind === "message-count") {
+    return readSessionHistoryPageInWorker({ kind, params: { target } }, signal);
+  }
+  if (kind === "recent") {
+    return readSessionHistoryPageInWorker(
+      { kind, params: { target, maxMessages: 20, maxLines: 20 } },
+      signal,
+    );
+  }
+  const params = { target, messageId: `${target.sessionId}-message` };
+  return kind === "message-by-id"
+    ? readSessionHistoryPageInWorker({ kind, params }, signal)
+    : readSessionHistoryPageInWorker({ kind, params }, signal);
+}
+
+it.each(rawHistoryKinds)(
   "settles cancelled %s reads before reuse and joins their worker on close",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -240,19 +263,7 @@ it.each(["message-by-id", "message-count"] as const)(
           controller.abort(cancelled);
         }
       };
-      const pending =
-        kind === "message-by-id"
-          ? readSessionHistoryPageInWorker(
-              {
-                kind,
-                params: { target: fixture.target, messageId: "cancel-message-read-message" },
-              },
-              controller.signal,
-            )
-          : readSessionHistoryPageInWorker(
-              { kind, params: { target: fixture.target } },
-              controller.signal,
-            );
+      const pending = readRawHistory(fixture, kind, controller.signal);
       await expect(pending).rejects.toBe(cancelled);
       expect(dispatched).toBe(true);
       const worker = observed.workers.at(-1)!;
@@ -266,6 +277,30 @@ it.each(["message-by-id", "message-count"] as const)(
         "cancel-message-read-message",
       ]);
       expect(observed.workers.at(-1)).not.toBe(worker);
+    });
+  },
+);
+
+it.each(rawHistoryKinds)(
+  "rejects selected database revocation during raw %s dispatch and joins native exit",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const fixture = await seed(state, "main", "revoked-raw-read");
+      let closing: Promise<boolean> | undefined;
+      observed.dispatch = (message) => {
+        const input = asOptionalRecord(asOptionalRecord(message)?.input);
+        if (asOptionalRecord(input?.request)?.kind === kind) {
+          observed.dispatch = undefined;
+          closing = closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+        }
+      };
+      await expect(readRawHistory(fixture, kind)).rejects.toThrow("revoked");
+      expect(closing).toBeDefined();
+      await closing;
+      expect(observed.workers.at(-1)?.threadId).toBe(-1);
+      expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+        "revoked-raw-read-message",
+      ]);
     });
   },
 );

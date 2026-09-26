@@ -6,6 +6,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as storeSources from "../session-utils-store-sources.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import {
   identifiedClient,
@@ -67,11 +68,13 @@ it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving 
       ],
     });
     const hostSql = observeHostDataSql();
+    const prepareSources = vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSources");
     try {
       for (let index = 0; index < 100; index++) {
         expect(await read()).toEqual(expected);
       }
       expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+      expect(prepareSources).not.toHaveBeenCalled();
       for (const method of ["sessions.get", "sessions.describe"] as const) {
         for (let index = 0; index < 100; index++) {
           sessionChanges.emit({ agentId: scope.agentId, sessionKey: scope.sessionKey });
@@ -84,6 +87,7 @@ it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving 
             expect(result).toMatchObject({ session: { sessionId: scope.sessionId } });
           }
           expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+          expect(prepareSources).not.toHaveBeenCalled();
         }
       }
       replaceSessionEntrySync(scope, {
@@ -102,8 +106,10 @@ it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving 
           expect(result).toMatchObject({ session: { sessionId: scope.sessionId, archivedAt: 1 } });
         }
         expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+        expect(prepareSources).not.toHaveBeenCalled();
       }
     } finally {
+      prepareSources.mockRestore();
       hostSql.restore();
     }
   });

@@ -16,6 +16,7 @@ import { readSessionHistoryPageInWorker } from "../config/sessions/session-histo
 import type { SessionTranscriptHistoryWorkerInput } from "../config/sessions/session-transcript-worker.types.js";
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import * as stateContext from "../state/openclaw-state-worker-context.js";
+import * as storeSources from "./session-utils-store-sources.js";
 
 const { runWorker, readerAdmitted } = vi.hoisted(() => ({
   runWorker: vi.fn(),
@@ -123,6 +124,7 @@ function page(text: string): SessionHistoryWorkerResult {
 it.each(["rpc", "http"] as const)(
   "captures %s request identity and selectors before target preparation and queue dispatch",
   async (kind) => {
+    const prepareSources = vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSources");
     const makeRequest = (
       includeUnrelatedEnv = false,
     ): Extract<SessionHistoryWorkerRequest, { kind: "rpc" | "http" }> => {
@@ -236,8 +238,10 @@ it.each(["rpc", "http"] as const)(
     expect.soft(outcomes.every((outcome) => outcome.status === "fulfilled")).toBe(true);
     expect.soft(outcomes[0]).toEqual(outcomes[1]);
     expect.soft(dispatched).toHaveLength(1);
+    expect.soft(prepareSources).toHaveBeenCalledTimes(2);
     for (const { input, bytes } of dispatched) {
       expect.soft(input.request).toEqual(expected);
+      expect.soft(input.target.sourceDatabases).toBeDefined();
       expect.soft(input.target.transcript).toMatchObject({
         agentId: "main",
         sessionId: "history-worker",
@@ -250,8 +254,9 @@ it.each(["rpc", "http"] as const)(
 );
 
 it.each(["delta", "message-lookup", "recent", "message-by-id", "message-count"] as const)(
-  "captures %s selectors and target before asynchronous dispatch",
+  "captures %s selectors and prepares only required display topology",
   async (kind) => {
+    const prepareSources = vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSources");
     const target = {
       agentId: "main",
       sessionId: "history-worker",
@@ -329,6 +334,8 @@ it.each(["delta", "message-lookup", "recent", "message-by-id", "message-count"] 
             : { kind, messages: [] },
     );
     await pending;
+    expect(prepareSources).toHaveBeenCalledTimes(kind === "delta" ? 1 : 0);
+    expect(input.target.sourceDatabases === undefined).toBe(kind !== "delta");
     expect(input.request).toMatchObject({
       kind,
       params: {
