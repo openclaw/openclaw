@@ -943,7 +943,6 @@ ensure_vm_running`,
         .filter(Boolean),
     );
     expect(packageArtifactExports).toContain("packOpenClaw");
-    expect(packageArtifactExports).toContain("packageVersionFromTgz");
     expect(packageArtifactExports).toContain("resolveOpenClawRegistryVersion");
     expect(common).not.toContain('export * from "./package-artifact.ts"');
     expect(packageArtifact).toContain("withPackageLock");

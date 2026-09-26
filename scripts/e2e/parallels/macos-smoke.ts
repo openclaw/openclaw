@@ -11,8 +11,6 @@ import {
   extractLastOpenClawVersionFromLog,
   makeTempDir,
   isLikelyMacosDesktopHome,
-  packageBuildCommitFromTgz,
-  packageVersionFromTgz,
   parseMacosDsclUserHomeLine,
   modelProviderConfigBatchJson,
   posixCodexPlatformPackageRepairFunction,
@@ -48,6 +46,8 @@ import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
   assertDevChannelUpdate,
+  expectedPackageBuildCommit,
+  expectedPackageTargetVersion,
   installSmokeRuntimeCompanions,
   npmRegistryEnv,
   packAndServeSmokeArtifact,
@@ -295,7 +295,7 @@ class MacosSmoke {
         );
         if (this.options.targetPackageSpec) {
           this.targetExpectVersion =
-            this.artifact.version || (await packageVersionFromTgz(this.artifact.path));
+            this.artifact.version || (await expectedPackageTargetVersion(this.artifact));
         }
       } else if (this.targetInstallsDirectly()) {
         this.targetExpectVersion = run(
@@ -789,8 +789,7 @@ ${guestOpenClaw} --version`);
       die("package artifact missing");
     }
     const commit =
-      this.artifact.buildCommitShort ||
-      (await packageBuildCommitFromTgz(this.artifact.path)).slice(0, 7);
+      this.artifact.buildCommitShort || (await expectedPackageBuildCommit(this.artifact));
     this.verifyVersionContains(commit);
   }
 
