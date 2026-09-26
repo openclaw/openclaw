@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 describe("chat pane suspension", () => {
-  it("commits the latest pane state once per frame across separate invalidations", async () => {
+  it("lets the input frame finish before committing the latest pane state", async () => {
     vi.useFakeTimers();
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const client = new GatewayBrowserClient({ url: "ws://example.test" });
@@ -35,16 +35,25 @@ describe("chat pane suspension", () => {
       // Every extra DOM commit also forces the end anchor's layout observation.
       expect(pane.textContent).toBe("initial");
       const committed = lifecycle.updateComplete;
+      const inputFrame = vi.fn(() => pane.textContent);
+      requestAnimationFrame(inputFrame);
       vi.advanceTimersToNextFrame();
+      await Promise.resolve();
+      expect(inputFrame).toHaveReturnedWith("initial");
+      expect(pane.textContent).toBe("initial");
+      text = "ABCD";
+      lifecycle.requestUpdate();
       await committed;
-      expect(pane.textContent).toBe("ABC");
+      expect(pane.textContent).toBe("ABCD");
 
       text = "next frame";
       lifecycle.requestUpdate();
       await Promise.resolve();
-      expect(pane.textContent).toBe("ABC");
+      expect(pane.textContent).toBe("ABCD");
       const nextCommit = lifecycle.updateComplete;
       vi.advanceTimersToNextFrame();
+      await Promise.resolve();
+      expect(pane.textContent).toBe("ABCD");
       await nextCommit;
       expect(pane.textContent).toBe("next frame");
     } finally {
@@ -53,9 +62,14 @@ describe("chat pane suspension", () => {
     }
   });
 
-  it.each(["hide", "disconnect"] as const)(
-    "releases a pending pane frame on %s",
-    async (transition) => {
+  it.each([
+    { transition: "hide", phase: "frame" },
+    { transition: "hide", phase: "task" },
+    { transition: "disconnect", phase: "frame" },
+    { transition: "disconnect", phase: "task" },
+  ])(
+    "settles pane updates on $transition without delivering the pending $phase",
+    async ({ transition, phase }) => {
       vi.useFakeTimers();
       let visibility: DocumentVisibilityState = "visible";
       vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
@@ -70,6 +84,10 @@ describe("chat pane suspension", () => {
         text = "pending";
         lifecycle.requestUpdate();
         await Promise.resolve();
+        if (phase === "task") {
+          vi.advanceTimersToNextFrame();
+          await Promise.resolve();
+        }
         expect(pane.textContent).toBe("initial");
         const committed = lifecycle.updateComplete;
         if (transition === "hide") {

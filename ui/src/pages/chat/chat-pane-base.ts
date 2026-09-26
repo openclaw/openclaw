@@ -115,16 +115,27 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       do {
         await new Promise<void>((resolve) => {
           let frame: number | null = null;
+          let channel: MessageChannel | undefined;
           const resume = () => {
+            if (this.pendingUpdateResume !== resume) {
+              return;
+            }
             this.pendingUpdateResume = undefined;
             if (frame !== null) {
               cancelAnimationFrame(frame);
             }
+            channel?.port1.close();
+            channel?.port2.close();
             resolve();
           };
           this.pendingUpdateResume = resume;
           if (document.visibilityState !== "hidden") {
-            frame = requestAnimationFrame(resume);
+            frame = requestAnimationFrame(() => {
+              // Let the input frame finish before Lit resumes transcript layout.
+              channel = new MessageChannel();
+              channel.port1.onmessage = resume;
+              channel.port2.postMessage(null);
+            });
           }
         });
       } while (this.isConnected && document.visibilityState === "hidden");
