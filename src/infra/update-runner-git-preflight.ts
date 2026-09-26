@@ -324,25 +324,15 @@ function classifyPreflightFailure(step: UpdateStepResult): "failed" | "insuffici
   return nodeNoSpace || gitNoSpace ? "insufficient-space" : "failed";
 }
 
-async function testPreflightCandidate(params: {
-  artifactRoot: string;
-  worktreeDir: string;
-  preflightRoot: string;
-  sha: string;
-  rebaseFrom?: string;
-  runLint: boolean;
-  beforeCandidate: (revision: string) => Promise<void>;
-  validateCandidate: UpdateRunnerOptions["validateCandidate"];
-  prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
-  prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
-  runCommand: CommandRunner;
-  timeoutMs: number;
-  defaultCommandEnv: NodeJS.ProcessEnv | undefined;
-  steps: UpdateStepResult[];
-  step: StepFactory;
-  workStep: StepFactory;
-  workTimeoutMs?: number;
-}): Promise<PreflightCandidateResult> {
+async function testPreflightCandidate(
+  params: Parameters<typeof runGitCandidatePreflight>[0] & {
+    worktreeDir: string;
+    preflightRoot: string;
+    sha: string;
+    rebaseFrom?: string;
+    runLint: boolean;
+  },
+): Promise<PreflightCandidateResult> {
   if (!(await resetPreflightCandidateWorktree(params.worktreeDir, params.workStep))) {
     return { status: "failed" };
   }
@@ -445,6 +435,7 @@ async function testPreflightCandidate(params: {
       candidateCommand.env,
       path.join(params.artifactRoot, ".artifacts", "build-all-cache"),
     );
+    buildEnv.sourceRuntimePrepared = params.sourceRuntimePrepared?.toString();
     const lintArgs = managerScriptArgs(manager.manager, "lint");
     let failure =
       (await runCandidateCheck(installName, installArgv, candidateCommand.env)) ??
@@ -529,6 +520,7 @@ export async function runGitCandidatePreflight(params: {
   targetRevision?: string;
   beforeSha?: string | null;
   beforeBuiltCommit: string | null;
+  sourceRuntimePrepared?: boolean;
   beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];

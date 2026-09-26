@@ -10,7 +10,7 @@ export class CommandProcessCleanupError extends Error {
   constructor(options?: ErrorOptions) {
     super("Command cleanup could not confirm that owned work stopped", options);
     this.name = "CommandProcessCleanupError";
-    attachCommandProcessCleanup(this, "uncertain");
+    Object.defineProperty(this, commandCleanupUncertain, { value: true });
   }
 }
 
@@ -23,18 +23,6 @@ export function hasCommandProcessCleanupError(error: unknown): boolean {
       return false;
     }
   });
-}
-
-/** Attach the process owner's observed cleanup without replacing the original failure. */
-export function attachCommandProcessCleanup<T extends Error>(
-  error: T,
-  cleanup: NonNullable<SpawnResult["cleanup"]>,
-) {
-  const annotated = Object.assign(error, { cleanup });
-  if (cleanup === "uncertain") {
-    Object.defineProperty(annotated, commandCleanupUncertain, { value: true });
-  }
-  return annotated;
 }
 
 export type SpawnResult = {

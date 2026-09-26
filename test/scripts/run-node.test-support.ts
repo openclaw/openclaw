@@ -222,7 +222,6 @@ export function expectedBuildSpawn() {
     "--import",
     expect.stringMatching(/\/scripts\/tsx\.mjs$/),
     expect.stringMatching(/[\\/]scripts[\\/]lib[\\/]dist-artifact-ownership\.mts$/),
-    JSON.stringify({ pid: process.pid }),
     expect.stringMatching(/\/scripts\/build-all\.mts$/),
     "qaRuntime",
   ];

@@ -81,6 +81,20 @@ describe("published source updater candidate-build preflight", () => {
     ).toEqual([]);
   });
 
+  it.each([true, false])(
+    "consumes the modern driver's prepared fact (%s) without another admission",
+    async (prepared) => {
+      const fixture = installedCheckout();
+      const record = JSON.stringify({ pid: process.pid, startedAt: "2026-09-24T12:00:00.000Z" });
+      fixture.write(".artifacts/dist-artifacts.lock/owner.json", record);
+      expect(
+        (await fixture.run({ ...fixture.env, sourceRuntimePrepared: String(prepared) })).exitCode,
+      ).toBe(0);
+      expect(fixture.runStep).toHaveBeenCalledOnce();
+      expect(fs.readFileSync(fixture.ownerPath, "utf8")).toBe(record);
+    },
+  );
+
   it("rejects installed completion output-root hazards before candidate work", async () => {
     const fixture = installedCheckout();
     const liveRoot = path.join(fixture.root, "serving-runtime");
@@ -92,6 +106,18 @@ describe("published source updater candidate-build preflight", () => {
     expect(fixture.runStep).not.toHaveBeenCalled();
     expect(fs.existsSync(fixture.ownerPath)).toBe(false);
     expect(fs.readFileSync(fixture.serving, "utf8")).toBe("previous serving generation\n");
+  });
+
+  it("refuses an invalid prepared writer instead of treating it as a legacy stager", async () => {
+    const fixture = installedCheckout();
+    fs.unlinkSync(path.join(fixture.root, "scripts"));
+    fixture.write(
+      "scripts/stage-bundled-plugin-runtime.mts",
+      "export const prepareBundledPluginRuntime = false; export function stageBundledPluginRuntime() {}\n",
+    );
+    await expect(fixture.run()).rejects.toThrow("Installed runtime staging is unavailable");
+    expect(fixture.runStep).not.toHaveBeenCalled();
+    expect(fs.existsSync(fixture.ownerPath)).toBe(false);
   });
 
   it.each(["2026.4.27", "2026.9.4"])(

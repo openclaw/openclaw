@@ -40,8 +40,8 @@ import { createUpdateCommandExecutionGuards } from "./update-command-execution-g
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
   admitSourceUpdateArtifacts,
+  assertGitCandidateSteps,
   assertReadableGitTarget,
-  assertValidatedGitCandidate,
   recordInspectedGitTarget,
 } from "./update-command-git-admission.js";
 import { updateGitInstall } from "./update-command-git.js";
@@ -474,17 +474,11 @@ export async function executeMutableUpdate(
   };
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     assertExecutionCurrent();
-    const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
-    if (params.updateInstallKind === "git" && !opts.run?.artifactOwnership) {
-      await admitSourceUpdateArtifacts({
-        root: params.switchToGit ? resolveGitInstallDir() : params.root,
-        timeoutMs: updateStepTimeoutMs,
-        nodeRunner: params.packageUpdateNodeRunner,
-        assertCurrent: assertExecutionCurrent,
-        run: opts.run,
-        progress: params.progress,
-      });
+    if (params.switchToGit && !opts.run?.sourceArtifactLock) {
+      await admitSourceUpdateArtifacts(resolveGitInstallDir(), opts.run);
+      assertExecutionCurrent();
     }
+    const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
     const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan, {
       configValidation,
     });
@@ -552,7 +546,6 @@ export async function executeMutableUpdate(
     await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
     await prepareMutableUpdate(env, activationTimeoutMs);
     assertExecutionCurrent();
-    await opts.run?.artifactOwnership?.assertOwned();
     if (opts.run) {
       recordUpdateRunPhase(opts.run.runId, "activating", undefined, { env: opts.run.env });
     }
@@ -623,8 +616,12 @@ export async function executeMutableUpdate(
         ? await params.stagedPackage.run(packageUpdate)
         : await runPackageInstallUpdate(packageUpdate);
     } else {
+      const sourceRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
+      const sourceRuntimePrepared = await admitSourceUpdateArtifacts(sourceRoot, opts.run);
+      assertExecutionCurrent();
       result = await updateGitInstall({
         root: params.root,
+        sourceRuntimePrepared,
         switchToGit: params.switchToGit,
         installKind: params.installKind,
         timeoutMs: params.timeoutMs,
@@ -661,7 +658,7 @@ export async function executeMutableUpdate(
         invocationCwd: params.invocationCwd,
         nodeRunner: params.packageUpdateNodeRunner,
         validateCandidate: async (candidateRoot) => {
-          assertValidatedGitCandidate(await validateCandidate(candidateRoot));
+          assertGitCandidateSteps(await validateCandidate(candidateRoot));
         },
         beforeGitMutation: async (target) => {
           assertReadableGitTarget(target);

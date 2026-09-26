@@ -4,15 +4,9 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
-import { createConfigIO } from "../config/io.js";
 import { resolveConfigPath } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import {
-  CommandProcessCleanupError,
-  hasCommandProcessCleanupError,
-} from "../process/exec-result.js";
-import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import * as versionManagerPath from "../shared/version-manager-path.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
@@ -41,7 +35,6 @@ import {
   serviceRestart,
   serviceStart,
   serviceStop,
-  sourceRuntimeCompletion,
   syncPluginsForUpdateChannel,
   systemdPolicy,
   updateNpmInstalledPlugins,
@@ -394,150 +387,6 @@ describe("update-cli", () => {
         expectNoSideEffects(pluginAvailabilityPreflight, updateNpmInstalledPlugins);
       }
       expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart);
-    },
-  );
-
-  it.each([
-    { owner: "dead", cleanup: "joined", profile: "existing" },
-    { owner: "live", cleanup: "joined", profile: "existing" },
-    { owner: "absent", cleanup: "joined", profile: "existing" },
-    { owner: "absent", cleanup: "uncertain", profile: "existing" },
-    { owner: "absent", cleanup: "joined", profile: "fresh" },
-    { owner: "absent", cleanup: "settlement", profile: "fresh" },
-  ] as const)(
-    "admits artifacts before already-current Git completion (lock owner: $owner, cleanup: $cleanup, profile: $profile)",
-    async ({ owner, cleanup, profile }) => {
-      const root = await mockPackageInstallAtCaseDir("current-git-artifacts", VERSION);
-      await fs.mkdir(path.join(root, ".git"));
-      vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
-      vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({
-        installKind: "git",
-        git: { tag: `v${VERSION}`, branch: "main" },
-      });
-      const fixture = runtimeRecovery.currentGitCoreFixture(root, VERSION);
-      vi.mocked(updateGitCheckout).mockResolvedValueOnce(fixture.outcome);
-      readPackageVersion.mockResolvedValue(VERSION);
-      mockFileBackedPathExists();
-      mockRunningManagedGateway([
-        process.execPath,
-        path.join(root, "dist", "index.js"),
-        "gateway",
-        "run",
-      ]);
-      const runtime = await import("./update-cli/update-command-runtime.js");
-      const actualRuntime = await vi.importActual<typeof runtime>(
-        "./update-cli/update-command-runtime.js",
-      );
-      vi.spyOn(runtime, "prepareSourceUpdateRuntime").mockImplementation(
-        actualRuntime.prepareSourceUpdateRuntime,
-      );
-      const lock = path.join(root, ".artifacts", "dist-artifacts.lock");
-      const ownerFile = path.join(lock, "owner.json");
-      const freshState = createCaseDir("fresh-current-state");
-      const runEnv =
-        profile === "fresh"
-          ? {
-              OPENCLAW_STATE_DIR: freshState,
-              OPENCLAW_CONFIG_PATH: path.join(freshState, "openclaw.json"),
-            }
-          : undefined;
-      let heldAtSettlement: boolean | undefined;
-      if (runEnv) {
-        const executorOwner = await import("./update-cli/update-command-executor.js");
-        const withExecutor = executorOwner.withUpdateCommandExecutor;
-        vi.spyOn(executorOwner, "withUpdateCommandExecutor").mockImplementation(
-          (runId, operation, options) =>
-            withExecutor(
-              runId,
-              async (executor) => {
-                const result = await operation(executor);
-                heldAtSettlement = fsSync.existsSync(ownerFile);
-                if (cleanup === "settlement") {
-                  retainCommandProcessCleanup(Promise.resolve("uncertain"));
-                }
-                return result;
-              },
-              options,
-            ),
-        );
-      }
-      const pid = owner === "live" ? process.pid : 0x7fff_ffff;
-      const ownerRecord = JSON.stringify({ pid, startedAt: "2026-09-20T01:00:00.000Z" });
-      if (owner !== "absent") {
-        await fs.mkdir(lock, { recursive: true });
-        await fs.writeFile(ownerFile, ownerRecord);
-      }
-      sourceRuntimeCompletion.mockImplementation(async ({ artifactOwnership }) => {
-        expect(artifactOwnership).toBeDefined();
-        await artifactOwnership?.assertOwned();
-        expect(JSON.parse(await fs.readFile(ownerFile, "utf8"))).toMatchObject({
-          pid: process.pid,
-        });
-        if (cleanup === "uncertain") {
-          expect((await fs.readdir(lock)).some((entry) => entry.startsWith("child-"))).toBe(false);
-          throw new CommandProcessCleanupError();
-        }
-        return { changed: false };
-      });
-
-      const command = withEnvAsync(runEnv ?? {}, async () => {
-        if (runEnv) {
-          await useFileBackedConfig();
-          const { snapshot } = await createConfigIO({
-            env: process.env,
-            observe: false,
-            pluginValidation: "core-only",
-          }).readConfigFileSnapshotForWrite();
-          vi.mocked(readConfigFileSnapshot).mockResolvedValue(snapshot);
-        }
-        await updateCommand({ yes: true, json: true });
-      });
-      if (cleanup === "uncertain" || cleanup === "settlement") {
-        const error = await command.catch((cause: unknown) => cause);
-        expect(hasCommandProcessCleanupError(error)).toBe(true);
-        expect(JSON.parse(await fs.readFile(ownerFile, "utf8"))).toMatchObject({
-          pid: process.pid,
-        });
-        expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
-        if (cleanup === "uncertain") {
-          expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-        } else {
-          expect(heldAtSettlement).toBe(true);
-        }
-        return;
-      }
-      if (owner === "absent") {
-        await command;
-        expect(sourceRuntimeCompletion).toHaveBeenCalledOnce();
-        expect(lastWriteJsonCall()).toMatchObject(fixture.converged);
-        if (profile === "fresh") {
-          expect(heldAtSettlement).toBe(true);
-        }
-        await expect(fs.stat(ownerFile)).rejects.toMatchObject({ code: "ENOENT" });
-      } else {
-        await expect(command).rejects.toEqual(new ExitError(1));
-        expect(lastWriteJsonCall()).toMatchObject({
-          status: "error",
-          reason: "source-artifact-ownership",
-        });
-        expect(getErrorOutput()).toContain(`retained by PID ${pid}`);
-        expect(getErrorOutput()).toContain(lock);
-        expect(await fs.readFile(ownerFile, "utf8")).toBe(ownerRecord);
-        expectNoSideEffects(sourceRuntimeCompletion, updateNpmInstalledPlugins);
-      }
-      const result = lastWriteJsonCall() as UpdateRunResult;
-      expect(
-        getUpdateRun(requireValue(result.runId, "artifact admission run"), { env: runEnv }),
-      ).toMatchObject({
-        status: owner === "absent" ? "skipped" : "failed",
-        steps: expect.arrayContaining([
-          expect.objectContaining({
-            step: "source-artifact-ownership",
-            status: owner === "absent" ? "completed" : "failed",
-          }),
-        ]),
-      });
-      expectNoSideEffects(serviceStop, serviceStart, serviceRestart, candidateValidation);
     },
   );
 

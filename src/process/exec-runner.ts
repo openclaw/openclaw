@@ -30,7 +30,6 @@ import {
   type PreserveOutputLine,
 } from "./exec-output.js";
 import {
-  attachCommandProcessCleanup,
   createSanitizedCommandError,
   isPlainCommandExitFailure,
   isPlainCommandSignalFailure,
@@ -555,16 +554,15 @@ async function runCommandWithOutputEncoding(
     cleanup = "uncertain";
   }
   if (inputAdmissionError) {
-    throw attachCommandProcessCleanup(inputAdmissionError, cleanup);
+    throw Object.assign(inputAdmissionError, { cleanup });
   }
   if (terminatingOutputError) {
-    throw attachCommandProcessCleanup(terminatingOutputError, cleanup);
+    throw Object.assign(terminatingOutputError, { cleanup });
   }
   if (outputObserverError !== undefined) {
-    throw attachCommandProcessCleanup(
-      toErrorObject(outputObserverError, "Command output observer failed"),
+    throw Object.assign(toErrorObject(outputObserverError, "Command output observer failed"), {
       cleanup,
-    );
+    });
   }
   // Patched Node can report null/null after a cmd.exe shim exits. Execa turns
   // that into a cause-less failure; preserve the shim fallback only post-spawn.
@@ -612,10 +610,14 @@ async function runCommandWithOutputEncoding(
     )
   ) {
     const error = createSanitizedCommandError(result);
-    attachCommandProcessCleanup(
-      error,
-      typeof nodeChild.pid === "number" ? (cleanup === "normal" ? "uncertain" : cleanup) : "normal",
-    );
+    Object.assign(error, {
+      cleanup:
+        typeof nodeChild.pid === "number"
+          ? cleanup === "normal"
+            ? "uncertain"
+            : cleanup
+          : "normal",
+    });
     if (outputErrorStream) {
       Object.assign(error, { outputErrorStream });
     }

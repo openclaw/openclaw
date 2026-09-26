@@ -15,7 +15,6 @@ import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalizat
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { createUpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -34,6 +33,7 @@ import type {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import { releaseLegacySourceLock } from "./update-command-runtime.js";
 import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
@@ -168,9 +168,6 @@ export async function continueMigratedUpdateInFreshProcess(
         killGraceMs: 500,
         maxOutputBytes: 64 * 1024,
       });
-      if (check.cleanup === "uncertain") {
-        run.artifactOwnership?.retainUnjoined();
-      }
       assertCurrent();
       let contract: unknown;
       try {
@@ -235,7 +232,12 @@ export async function continueMigratedUpdateInFreshProcess(
     const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.updateStepTimeoutMs);
     assertCurrent();
     const resultPath = path.join(scratchDir, "result.json");
-    const { requesterAuthority, executorFence, artifactOwnership, ...runIdentity } = run;
+    const {
+      requesterAuthority,
+      executorFence,
+      sourceArtifactLock: _sourceArtifactLock,
+      ...runIdentity
+    } = run;
     const input: MigratedUpdateFinalizationInput = {
       ...handoff,
       params: {
@@ -257,15 +259,11 @@ export async function continueMigratedUpdateInFreshProcess(
       ...(windowsRecovery ? { windowsTaskAutoStartSuspended: true } : {}),
       resultPath,
     };
-    await artifactOwnership?.assertOwned();
-    const completionCommand = artifactOwnership
-      ? [workerCommand[0]!, ...(await artifactOwnership.entryArgs(workerCommand[1]!))]
-      : workerCommand;
     const runChild = (
       grant?: UpdateCommandChildGrant,
       bindChild?: (pid: number, argv?: readonly string[]) => void,
     ) =>
-      runUtf8CommandWithTimeout(completionCommand, {
+      runUtf8CommandWithTimeout(workerCommand, {
         cwd: root,
         baseEnv: {},
         env: workerEnv,
@@ -279,12 +277,10 @@ export async function continueMigratedUpdateInFreshProcess(
         killGraceMs: 500,
         maxOutputBytes: 1024 * 1024,
       });
+    await releaseLegacySourceLock(root, run.sourceArtifactLock);
     const child = executorFence
       ? await withUpdateCommandExecutorChild(executorFence, root, runChild)
       : await runChild();
-    if (child.cleanup === "uncertain") {
-      artifactOwnership?.retainUnjoined();
-    }
     if (child.stderr) {
       process.stderr.write(child.stderr);
     }
@@ -307,12 +303,6 @@ export async function continueMigratedUpdateInFreshProcess(
       !Number.isInteger(response.exitCode)
     ) {
       throw new Error("Update finalization did not confirm the admitted run's terminal outcome.");
-    }
-    if (artifactOwnership) {
-      if (child.pid === undefined) {
-        throw new Error("Completed artifact writer has no process identity.");
-      }
-      await artifactOwnership.completeChild(child.pid);
     }
     const restoreDatabases =
       params.databaseBackup !== undefined &&
@@ -362,9 +352,6 @@ export async function continueMigratedUpdateInFreshProcess(
       candidateStartAttempted: response.candidateStartAttempted,
     };
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
-      run.artifactOwnership?.retainUnjoined();
-    }
     if (error instanceof UpdateCommandRecoveryPendingError) {
       // A refused compatibility/admission check is not delegated completion and
       // cannot authorize native restoration in the old, migrated runtime.

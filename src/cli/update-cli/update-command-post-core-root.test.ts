@@ -2,10 +2,6 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  acquireDistArtifactOwnership,
-  resolveDistArtifactLockPath,
-} from "../../../scripts/lib/dist-artifact-ownership.mts";
 import * as openClawRoot from "../../infra/openclaw-root.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import * as controlPlaneSentinel from "../../infra/update-control-plane-sentinel.js";
@@ -51,62 +47,6 @@ afterEach(() => {
 });
 
 describe("managed post-core root handoff", () => {
-  it.each([true, false])(
-    "retains uncertain post-core child startup only with a process (pid known=%s)",
-    async (pidKnown) => {
-      const state = await createOpenClawTestState({ label: "post-core-unjoined-artifacts" });
-      const root = state.path("checkout");
-      await writePackageRoot(root, "9999.0.0");
-      const ownership = await acquireDistArtifactOwnership(root);
-      const lock = resolveDistArtifactLockPath(root);
-      const ownerFile = path.join(lock, "owner.json");
-      const record = await fs.readFile(ownerFile, "utf8");
-      const childFailure = new Error("fixture child startup failed");
-      mocks.spawn.mockImplementation(() => {
-        const child = Object.assign(new EventEmitter(), {
-          ...(pidKnown ? { pid: 2147483647 } : {}),
-          stdout: null,
-          stderr: null,
-        });
-        queueMicrotask(() => {
-          child.emit("error", childFailure);
-          child.emit("close", 1, null);
-        });
-        return child;
-      });
-      try {
-        await expect(
-          continuePostCoreUpdateInFreshProcess({
-            root,
-            channel: "stable",
-            requestedChannel: null,
-            opts: {
-              json: true,
-              run: {
-                runId: "post-core-startup-fixture",
-                env: state.env,
-                artifactOwnership: ownership,
-              },
-            },
-            pluginInstallRecords: {},
-            updateStartedAtMs: Date.now(),
-            timeoutMs: 1000,
-          }),
-        ).rejects.toBe(childFailure);
-        expect((await fs.readdir(lock)).some((entry) => entry.startsWith("child-"))).toBe(false);
-        await ownership.release();
-        if (pidKnown) {
-          expect(await fs.readFile(ownerFile, "utf8")).toBe(record);
-        } else {
-          await expect(fs.stat(ownerFile)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-      } finally {
-        await ownership.release();
-        await state.cleanup();
-      }
-    },
-  );
-
   it.each(["replacement", "foreign-install", "inactive-generation", "pre-core", "moving-link"])(
     "openclaw update admits the installed driver's original pnpm identity (%s)",
     async (scenario) => {

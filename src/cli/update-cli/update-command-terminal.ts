@@ -151,6 +151,11 @@ export async function withUpdateCommandTerminalResult<T>(
   if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
     throw outcome.error;
   }
+  await run?.sourceArtifactLock?.release().catch((error: unknown) => {
+    defaultRuntime.error(
+      `Warning: Source artifact lock release failed: ${formatErrorMessage(error)}`,
+    );
+  });
   const activationTimeout =
     "error" in outcome
       ? collectNestedErrorCandidates(outcome.error).find(

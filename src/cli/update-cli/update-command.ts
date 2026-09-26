@@ -21,10 +21,6 @@ import {
   type UpdateCommandExecutor,
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
-import {
-  admitSourceUpdateArtifacts,
-  withSourceUpdateArtifactLifetime,
-} from "./update-command-git-admission.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
 import { admitUpdateRequesterContinuation } from "./update-command-managed-context.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
@@ -222,15 +218,12 @@ async function runAdmittedUpdate(
       ? () => executeWith(initialization.executor)
       : () =>
           withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, () =>
-            withSourceUpdateArtifactLifetime((registerArtifactRun) => {
-              registerArtifactRun(run);
-              return withUpdateInProgressEnv(invocationCwd, () =>
-                withUpdateCommandTerminalResult((registerRun) => {
-                  registerRun(run);
-                  return withUpdateCommandExecutor(run.runId, executeWith);
-                }, opts),
-              );
-            }),
+            withUpdateInProgressEnv(invocationCwd, () =>
+              withUpdateCommandTerminalResult((registerRun) => {
+                registerRun(run);
+                return withUpdateCommandExecutor(run.runId, executeWith);
+              }, opts),
+            ),
           );
     await withUpdatePreviewSignals(opts, execute);
   } catch (error) {
@@ -454,9 +447,8 @@ async function runResolvedUpdate(
     refuseUpdate,
   };
   const pluginCount = Object.keys(configSnapshot.config.plugins?.entries ?? {}).length;
-  const progress = createUpdateRunProgress(run, presentation.progress);
   const activateCurrentCore = async () => {
-    const fence = await executor.enter(root, {
+    run.executorFence = await executor.enter(root, {
       preflight: true,
       serviceRoot: managedServiceRoot,
       activationTimeoutMs: (run.activationTimeoutMs ??=
@@ -467,20 +459,8 @@ async function runResolvedUpdate(
               pluginCount,
             })),
     });
-    run.executorFence = fence;
-    fence.assertCurrent();
+    run.executorFence.assertCurrent();
     assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
-    if (updateInstallKind === "git" && !run.artifactOwnership) {
-      recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
-      await admitSourceUpdateArtifacts({
-        root,
-        timeoutMs: updateStepTimeoutMs,
-        nodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
-        assertCurrent: () => fence.assertCurrent(),
-        run,
-        progress,
-      });
-    }
   };
   if (packageAlreadyCurrent) {
     await activateCurrentCore();
@@ -548,6 +528,7 @@ async function runResolvedUpdate(
     createUpdateCommandFinalizationFence,
   } = await import("./update-execution.runtime.js");
 
+  const progress = createUpdateRunProgress(run, presentation.progress);
   let preUpdatePluginInstallRecords: Awaited<ReturnType<typeof prepareMutableUpdateRuntime>> = {};
   let mutableUpdatePrepared = false;
   const prepareMutableUpdate: Parameters<

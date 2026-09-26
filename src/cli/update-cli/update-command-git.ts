@@ -412,6 +412,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
 
 export async function updateGitInstall(params: {
   root: string;
+  sourceRuntimePrepared?: boolean;
   switchToGit: boolean;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number | undefined;
@@ -532,6 +533,7 @@ export async function updateGitInstall(params: {
       startedAt: params.startedAt,
       opts: {
         timeoutMs: params.timeoutMs,
+        sourceRuntimePrepared: params.sourceRuntimePrepared,
         progress: params.progress,
         channel: params.channel,
         devTarget: params.devTarget,

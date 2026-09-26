@@ -4,7 +4,6 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { transformSync } from "esbuild";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
@@ -1313,20 +1312,6 @@ describe("previous release update compatibility", () => {
       ]);
     },
   );
-
-  it("records current source runtime completion imports as package assets", () => {
-    const owner = "src/cli/update-cli/update-command-runtime.ts";
-    const { code } = transformSync(fsSync.readFileSync(path.join(MODULE_ROOT, owner), "utf8"), {
-      loader: "ts",
-      format: "esm",
-      target: "esnext",
-      tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: true } },
-    });
-    const recorded = recordImportedFixture("0", {
-      "source-runtime.js": `//#region ${owner}\n${code}`,
-    });
-    expect(recorded.inventory.releases[0]?.chunks).toEqual([]);
-  });
 
   it.each(["source scripts", "different owner", "mutable binding", "dist path", "unknown script"])(
     "distinguishes source completion contracts from unknown dynamic imports (%s)",

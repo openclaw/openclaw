@@ -26,6 +26,8 @@ export type UpdateRunResult = {
   /** The executing owner's terminal failure; steps also retain superseded attempts. */
   failedStep?: UpdateStepResult;
   gitRuntime?: GitRuntimeArtifactIdentity;
+  /** The preparation owner verified that completion needs no runtime regeneration. */
+  sourceRuntimePrepared?: boolean;
   before?: { sha?: string | null; version?: string | null; buildId?: string | null };
   after?: {
     sha?: string | null;
@@ -107,7 +109,7 @@ type GitUpdateTarget = {
   metadataUnreadable?: string;
 };
 
-export type UpdateRunnerOptions = {
+export type UpdateRunnerOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
   channel?: UpdateChannel;
   devTarget?: DevUpdateTarget;
   /** Expose a new checkout only after target admission; subsequent work uses the published path. */
@@ -126,23 +128,23 @@ export type UpdateRunnerOptions = {
   /** The finalizer owns retained source/runtime rollback after successful activation. */
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
 } & (
-  | {
-      /** CLI-owned activation Doctor retains its config writer and requester authority. */
-      runGitDoctor: (
-        root: string,
-        results?: UpdateStepResult[],
-      ) => Promise<UpdateStepResult | null>;
-      prepareGitExposure?: never;
-    }
-  | {
-      runGitDoctor?: never;
-      prepareGitExposure: (
-        candidateRoot: string,
-        candidateSha: string,
-        env: NodeJS.ProcessEnv | undefined,
-      ) => Promise<void>;
-    }
-);
+    | {
+        /** CLI-owned activation Doctor retains its config writer and requester authority. */
+        runGitDoctor: (
+          root: string,
+          results?: UpdateStepResult[],
+        ) => Promise<UpdateStepResult | null>;
+        prepareGitExposure?: never;
+      }
+    | {
+        runGitDoctor?: never;
+        prepareGitExposure: (
+          candidateRoot: string,
+          candidateSha: string,
+          env: NodeJS.ProcessEnv | undefined,
+        ) => Promise<void>;
+      }
+  );
 
 export type UpdateInstallSurface =
   | { kind: "git"; mode: "git"; root: string; packageRoot: string }

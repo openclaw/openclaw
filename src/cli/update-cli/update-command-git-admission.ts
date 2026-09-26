@@ -1,76 +1,40 @@
+import { inspectSourceUpdateArtifacts } from "../../../scripts/lib/source-update-artifact-preflight.mts";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
-import type { UpdateRunnerOptions, UpdateStepProgress } from "../../infra/update-runner-types.js";
-import type { UpdateStepResult } from "../../infra/update-step-result.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { defaultRuntime } from "../../runtime.js";
+import type { UpdateRunnerOptions, UpdateRunResult } from "../../infra/update-runner-types.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
-import { prepareSourceUpdateRuntime } from "./update-command-runtime.js";
 
 type BeforeGitMutation = NonNullable<UpdateRunnerOptions["beforeGitMutation"]>;
 
-/** Artifact custody outlives both ordinary and initialized-profile executors. */
-export async function withSourceUpdateArtifactLifetime(
-  operation: (
-    registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => void,
-  ) => Promise<void>,
-): Promise<void> {
-  let run: UpdateCommandOptions["run"];
-  try {
-    await operation((admitted) => {
-      run = admitted;
-    });
-  } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
-      run?.artifactOwnership?.retainUnjoined();
-    }
-    throw error;
-  } finally {
-    await run?.artifactOwnership?.release().catch((error: unknown) => {
-      defaultRuntime.error(
-        `Warning: could not release source artifact ownership: ${String(error)}`,
-      );
+export function assertGitCandidateSteps(steps: UpdateRunResult["steps"]): void {
+  const failed = steps.find(isFailedUpdateStep);
+  if (failed) {
+    throw new UpdatePreMutationError(failed.name, failed.stderrTail ?? "Update checks failed.", {
+      failureFacts: failed.failureFacts,
     });
   }
 }
 
-export async function admitSourceUpdateArtifacts(params: {
-  root: string;
-  timeoutMs: number;
-  nodeRunner?: string;
-  assertCurrent(): void;
-  run: UpdateCommandOptions["run"];
-  progress: UpdateStepProgress;
-}) {
-  const step = {
-    name: "source-artifact-ownership",
-    command: "admit installed checkout runtime artifacts",
-    cwd: params.root,
-    index: 0,
-    total: 0,
-  };
-  const startedAt = Date.now();
-  params.progress.onStepStart?.(step);
+export async function admitSourceUpdateArtifacts(
+  root: string,
+  run: UpdateCommandOptions["run"],
+): Promise<boolean> {
   try {
-    const ownership = await prepareSourceUpdateRuntime(params);
-    if (ownership) {
-      if (!params.run) {
-        await ownership.release();
-        throw new Error("Source artifact admission requires the original update run.");
-      }
-      params.run.artifactOwnership = ownership;
+    const prepared = await inspectSourceUpdateArtifacts(root);
+    if (prepared.lock && !run) {
+      await prepared.lock.release();
+      throw new Error("Source artifact admission requires an active update run.");
     }
-    params.progress.onStepComplete?.({ ...step, durationMs: Date.now() - startedAt, exitCode: 0 });
-  } catch (error) {
-    const detail = String(error);
-    params.progress.onStepComplete?.({
-      ...step,
-      durationMs: Date.now() - startedAt,
-      exitCode: 1,
-      stderrTail: detail,
+    if (run) {
+      run.sourceArtifactLock = prepared.lock;
+    }
+    return prepared.sourceRuntimePrepared;
+  } catch (cause) {
+    throw new UpdatePreMutationError("source-artifact-ownership", formatErrorMessage(cause), {
+      cause,
     });
-    throw new UpdatePreMutationError(step.name, detail, { cause: error });
   }
 }
 
@@ -98,15 +62,6 @@ export function assertReadableGitTarget(target: Parameters<BeforeGitMutation>[0]
     const failure = createUpdatePreflightFailure("target-git-metadata", target.metadataUnreadable);
     throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
       failureFacts: failure.failureFacts,
-    });
-  }
-}
-
-export function assertValidatedGitCandidate(steps: readonly UpdateStepResult[]): void {
-  const failed = steps.find(isFailedUpdateStep);
-  if (failed) {
-    throw new UpdatePreMutationError(failed.name, failed.stderrTail ?? "Update checks failed.", {
-      failureFacts: failed.failureFacts,
     });
   }
 }

@@ -56,6 +56,7 @@ export function waitForFile(file) {
     "lib/direct-run.mjs",
     "lib/dist-artifact-ownership.mts",
     "lib/dist-artifact-lock.mts",
+    "lib/record-shared.mjs",
     "lib/failed-trailer.mts",
     "lib/managed-child-process.mts",
     "lib/vitest-resource-ownership.mts",
@@ -66,8 +67,6 @@ export function waitForFile(file) {
   }
   for (const file of [
     "scripts/lib/process-memory.mts",
-    "src/infra/windows-process-start.ts",
-    "src/infra/process-env.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
   ]) {
     write(file, fs.readFileSync(path.resolve(file), "utf8"));

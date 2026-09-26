@@ -6,9 +6,7 @@ import process from "node:process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { hasCommandProcessCleanupError } from "./exec-result.js";
 import * as execSpawn from "./exec-spawn.js";
-import * as execTermination from "./exec-termination.js";
 import { runCommandWithTimeout } from "./exec.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -44,64 +42,33 @@ describe("child input admission", () => {
     });
   });
 
-  it.each([
-    { code: undefined, uncertainCleanup: false },
-    { code: "EPIPE", uncertainCleanup: false },
-    { code: undefined, uncertainCleanup: true },
-  ])(
-    "joins the child without delivering input when admission rejects (code=$code, uncertain=$uncertainCleanup)",
-    async ({ code, uncertainCleanup }) => {
-      const createController = execTermination.createCommandTerminationController;
-      const cleanupObservation = uncertainCleanup
-        ? vi
-            .spyOn(execTermination, "createCommandTerminationController")
-            .mockImplementation((params) => {
-              const controller = createController(params);
-              return {
-                ...controller,
-                settle: async () => {
-                  await controller.settle();
-                  return "uncertain" as const;
-                },
-              };
-            })
-        : undefined;
+  it.each([undefined, "EPIPE"])(
+    "joins the child without delivering input when admission rejects (%s)",
+    async (code) => {
       let pid: number | undefined;
-      const cause = new Error("original admission cause");
-      const refusal = Object.assign(new Error("authority lost before input", { cause }), { code });
-      try {
-        const work = runCommandWithTimeout(
-          [
-            process.execPath,
-            "-e",
-            "process.stdin.on('data',()=>process.stdout.write('effect'));setInterval(()=>{},1000)",
-          ],
-          {
-            input: "forbidden",
-            timeoutMs: 5_000,
-            killProcessTree: true,
-            beforeInput: (childPid) => {
-              pid = childPid;
-              throw refusal;
-            },
+      const refusal = Object.assign(new Error("authority lost before input"), { code });
+      const work = runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          "process.stdin.on('data',()=>process.stdout.write('effect'));setInterval(()=>{},1000)",
+        ],
+        {
+          input: "forbidden",
+          timeoutMs: 5_000,
+          killProcessTree: true,
+          beforeInput: (childPid) => {
+            pid = childPid;
+            throw refusal;
           },
-        );
-        await expect(work).rejects.toBe(refusal);
-        expect(refusal).toMatchObject({
-          message: "authority lost before input",
-          cause,
-          cleanup: uncertainCleanup
-            ? "uncertain"
-            : process.platform === "win32"
-              ? "forced"
-              : "cooperative",
-        });
-        expect(hasCommandProcessCleanupError(refusal)).toBe(uncertainCleanup);
-        expect(pid).toBeTypeOf("number");
-        expect(isPidAlive(pid!)).toBe(false);
-      } finally {
-        cleanupObservation?.mockRestore();
-      }
+        },
+      );
+      await expect(work).rejects.toBe(refusal);
+      expect(refusal).toMatchObject({
+        cleanup: process.platform === "win32" ? "forced" : "cooperative",
+      });
+      expect(pid).toBeTypeOf("number");
+      expect(isPidAlive(pid!)).toBe(false);
     },
   );
 

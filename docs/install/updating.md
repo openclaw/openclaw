@@ -231,10 +231,11 @@ the installed checkout before stopping the Gateway. A retained
 timestamp, and exact recovery command while the serving Gateway stays running.
 Verify that all associated build/check processes, including detached descendants,
 have stopped before releasing that lock; a dead owner PID alone is insufficient.
-The repaired updater retains ownership through activation and completion. Older
-updaters that pass the source build-cache location, including 2026.9.6, let a
-candidate containing this fix check pre-existing installed-checkout locks before
-building. That older driver cannot retain this ownership across its later activation.
+The updater keeps that ownership until its work has settled and carries the
+prepared runtime result into completion. Already-current repairs reuse the admitted
+ownership; promoted runtime outputs do not need regeneration. Published updaters
+that pass the source build-cache location, including 2026.9.6, also receive the
+installed-checkout check during candidate builds.
 
 The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
