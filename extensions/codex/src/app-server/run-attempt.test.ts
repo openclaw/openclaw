@@ -4062,6 +4062,7 @@ describe("runCodexAppServerAttempt", () => {
         );
       }
       let compactDuringAcceptance = false;
+      let turnRequested = createDeferred<void>();
       let harness = createStartedThreadHarness(
         async (method) => {
           if (method === "turn/start" && compactDuringAcceptance) {
@@ -4074,6 +4075,9 @@ describe("runCodexAppServerAttempt", () => {
                 item: { type: "contextCompaction", id: "compact-during-start" },
               },
             });
+          }
+          if (method === "turn/start") {
+            turnRequested.resolve();
           }
         },
         { persistedThreads: [] },
@@ -4093,8 +4097,14 @@ describe("runCodexAppServerAttempt", () => {
             flush: async () => undefined,
           }),
         });
-        const { run, started } = startClockControlledAttempt(params);
-        await started;
+        turnRequested = createDeferred<void>();
+        const run = runCodexAppServerAttempt(params);
+        await Promise.race([
+          turnRequested.promise,
+          run.then(() => {
+            throw new Error("Reference attempt ended before turn/start");
+          }),
+        ]);
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         const result = await run;
         expect(readAttemptTerminal(result)).toMatchObject({
@@ -4167,7 +4177,11 @@ describe("runCodexAppServerAttempt", () => {
         });
       } else if (scenario === "cold resume") {
         harness.close();
-        harness = createResumeHarness("thread-1");
+        harness = createResumeHarness("thread-1", async (method) => {
+          if (method === "turn/start") {
+            turnRequested.resolve();
+          }
+        });
       } else if (scenario === "unsubscribed") {
         await releaseCodexAppServerLiveThread(harness.client, "thread-1");
       }
