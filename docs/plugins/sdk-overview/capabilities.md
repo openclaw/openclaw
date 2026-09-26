@@ -130,7 +130,7 @@ agent tools. Declare the ID in manifest `contracts.decisionProviders`; duplicate
 IDs are rejected. Registration and optional `isReady()` must be local, synchronous,
 and network-free. Import types from `openclaw/plugin-sdk/decisions`.
 
-Consumers call `api.runtime.decisions.evaluate(batch, { agentId?, purpose, rubricVersion,
+Consumers call `api.runtime.decisions.evaluate(batch, { agentId?, taskId?, purpose, rubricVersion,
 timeoutMs, signal })`. State and rubric entries are finite JSON. Use plain objects
 and arrays; custom prototypes, serialization hooks, and getters are rejected on
 both request and response boundaries. Choices preserve
@@ -149,7 +149,14 @@ rubric and runtime-generation provenance.
 
 Set `agents.defaults.decisionModel` to an explicit `provider/model` reference.
 Unset or empty means off. `agents.entries.<id>.decisionModel` overrides the global
-default; an empty agent value disables decisions for that agent. There is no
+default; an empty agent value disables decisions for that agent, including task
+overrides. Optional `decisionModelsByTask` maps at either scope select a model
+for a trusted task: agent task, global task, then the existing scalar selection.
+An empty task value disables that task; a task can select a model without a scalar
+default. Calls without `taskId` keep scalar behavior. Plugin task IDs use
+`<plugin-id>/<task-name>` and must belong to the calling plugin; `decision_evaluate`
+is reserved for the core tool. Keep IDs fixed in consumer code, never derive them
+from supplied evidence or `purpose`. There is no
 automatic conversational-model fallback. Selection makes the provider available
 to supported consumers. Consumers own their feature activation and evidence
 selection; provider configuration alone does not schedule background work. Evidence
@@ -172,7 +179,7 @@ vendor transport and prepared credential input. This does not make conversationa
 model credentials interchangeable with decision-provider credentials.
 
 The operator must enable and configure the provider plugin and select
-`agents.defaults.decisionModel` (or an agent override). Third-party plugins own
+`agents.defaults.decisionModel` (or an agent/task override). Third-party plugins own
 their feature's activation, evidence selection, and permission to send that
 evidence. Having credentials alone must not activate background collection or
 spending.

@@ -356,17 +356,18 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           return {
             evaluate: async (batch, options) => {
               assertRuntimeCurrent();
+              const capturedOptions = { ...options };
               const { evaluateDecisionInRegistry } = await import("../decisions/runtime.js");
               assertRuntimeCurrent();
               const result = await evaluateDecisionInRegistry(
                 batch,
-                options,
+                capturedOptions,
                 currentDecisionRegistry(),
                 getRuntimeConfig(),
                 record.id,
               );
               assertRuntimeCurrent();
-              options.signal.throwIfAborted();
+              capturedOptions.signal.throwIfAborted();
               return result;
             },
           } satisfies PluginRuntime["decisions"];

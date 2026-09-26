@@ -59,11 +59,12 @@ function registered(
   evaluate: DecisionProviderV1["evaluate"] = async () => answer,
   isReady?: () => boolean,
   providerId = "fixture",
+  pluginId = "owner",
 ) {
   const started = createDeferredCore();
   const builder = createTestPluginRegistry();
   const record = createPluginRecord({
-    id: "owner",
+    id: pluginId,
     source: "/synthetic/index.ts",
     origin: "global",
     enabled: true,
@@ -92,8 +93,8 @@ function registered(
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));
     await getPluginInstance(record)?.dispose();
   });
-  const run = (opts = options(), cfg = config) =>
-    evaluateDecisionInRegistry(batch, opts, builder.registry, cfg);
+  const run = (opts = options(), cfg = config, consumerId?: string) =>
+    evaluateDecisionInRegistry(batch, opts, builder.registry, cfg, consumerId);
   return { ...builder, record, api, run, started: started.promise };
 }
 afterEach(() => {
@@ -349,6 +350,107 @@ describe("registered decision capability", () => {
       { model: "specialist-v1", agentId: "specialist" },
     ]);
   });
+  it("routes two trusted tasks for one agent", async () => {
+    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(call);
+    const selected: OpenClawConfig = {
+      agents: {
+        defaults: {
+          decisionModelsByTask: {
+            "owner/first": "fixture/first-v1",
+            "owner/second": "fixture/second-v1",
+          },
+        },
+      },
+    };
+    expect(
+      await host.run({ ...options(), agentId: "same", taskId: "owner/first" }, selected, "owner"),
+    ).toMatchObject({ status: "ok" });
+    expect(
+      await host.run({ ...options(), agentId: "same", taskId: "owner/second" }, selected, "owner"),
+    ).toMatchObject({ status: "ok" });
+    expect(call.mock.calls.map(([, context]) => context.model)).toEqual(["first-v1", "second-v1"]);
+  });
+  it("rejects a task owned by another consumer or the core consumer", async () => {
+    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(call);
+    const selected: OpenClawConfig = {
+      agents: { defaults: { decisionModelsByTask: { "owner/check": "fixture/check-v1" } } },
+    };
+    await expect(
+      host.run({ ...options(), taskId: "owner/check" }, selected, "other"),
+    ).rejects.toThrow("Invalid decision contract");
+    await expect(
+      host.run({ ...options(), taskId: "decision_evaluate" }, selected, "owner"),
+    ).rejects.toThrow("Invalid decision contract");
+    expect(call).not.toHaveBeenCalled();
+  });
+  it("binds a multi-entry task to its complete plugin owner", async () => {
+    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(call, undefined, "fixture", "pack/one");
+    const selected: OpenClawConfig = {
+      agents: { defaults: { decisionModelsByTask: { "pack/one/check": "fixture/check-v1" } } },
+    };
+    expect(
+      await host.run({ ...options(), taskId: "pack/one/check" }, selected, "pack/one"),
+    ).toMatchObject({ status: "ok" });
+    for (const consumerId of ["pack", "pack/two", "one"]) {
+      await expect(
+        host.run({ ...options(), taskId: "pack/one/check" }, selected, consumerId),
+      ).rejects.toThrow("Invalid decision contract");
+    }
+    expect(call).toHaveBeenCalledOnce();
+  });
+  it("captures each public plugin call before awaiting runtime loading", async () => {
+    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(call);
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          decisionModelsByTask: {
+            "owner/first": "fixture/first-v1",
+            "owner/second": "fixture/second-v1",
+          },
+        },
+      },
+    });
+    const mutable = { ...options(), agentId: "first-agent" };
+    mutable.taskId = "owner/first";
+    const first = host.api.runtime.decisions.evaluate(batch, mutable);
+    mutable.agentId = "second-agent";
+    mutable.taskId = "owner/second";
+    const second = host.api.runtime.decisions.evaluate(batch, mutable);
+    expect(await Promise.all([first, second])).toMatchObject([{ status: "ok" }, { status: "ok" }]);
+    expect(call.mock.calls.map(([, { agentId, model }]) => ({ agentId, model }))).toEqual([
+      { agentId: "first-agent", model: "first-v1" },
+      { agentId: "second-agent", model: "second-v1" },
+    ]);
+  });
+  it.each(["", "fixture/check-v2"] as const)(
+    "fences a task mapping change while provider inference is pending (%j)",
+    async (nextModel) => {
+      const release = createDeferredCore();
+      const host = registered(async () => {
+        await release.promise;
+        return answer;
+      });
+      const selected: OpenClawConfig = {
+        agents: { defaults: { decisionModelsByTask: { "owner/check": "fixture/check-v1" } } },
+      };
+      setRuntimeConfigSnapshot(selected);
+      const pending = host.run({ ...options(), taskId: "owner/check" }, selected, "owner");
+      await host.started;
+      const next = structuredClone(selected);
+      next.agents!.defaults!.decisionModelsByTask!["owner/check"] = nextModel;
+      setRuntimeConfigSnapshot(next);
+      release.resolve();
+      expect(await pending).toEqual({ status: "unavailable", reason: "retiring" });
+      expect(host.registry.decisionProviders[0]!.host.inspect(next)).toMatchObject({
+        successCount: 0,
+        activeRequests: 0,
+      });
+    },
+  );
   it("fences a changed agent selection without retiring another agent's concurrent request", async () => {
     const releases = new Map<string, () => void>();
     const started = createDeferredCore();

@@ -86,7 +86,51 @@ After provider setup, merge the role selection into your configuration:
 
 An unset agent override inherits the global default. An empty agent override
 disables decisions for that agent. An unset or empty global default leaves the
-role off. There is no automatic fallback to a conversational model.
+role off unless a task-specific model is configured. There is no automatic
+fallback to a conversational model.
+
+### Select a model per task
+
+Keep `decisionModel` as the default and use `decisionModelsByTask` for tasks
+that need a different model. For example:
+
+```json5
+{
+  agents: {
+    ownership: "explicit",
+    defaults: {
+      decisionModelsByTask: {
+        decision_evaluate: "typesafe/jev-latest",
+        "example-plugin/route": "onnx/gliclass-edge-v3.0",
+      },
+    },
+    entries: {
+      support: {},
+      quiet: { decisionModel: "" },
+    },
+  },
+}
+```
+
+An explicit empty agent `decisionModel` disables all decisions first. Otherwise,
+resolution uses the agent's task entry, then the global task entry, then the
+existing agent/default `decisionModel`. An empty task entry disables that task
+instead of falling through. Task selection works without an agent-wide default;
+calls that omit a task continue to use only the existing scalar selection.
+
+`decision_evaluate` is the core tool's fixed task. Plugin consumers supply their
+own stable `<plugin-id>/<task-name>` IDs; the example plugin above is illustrative,
+not a built-in consumer. Task IDs are code-owned, not inferred from user text,
+question keys, or `purpose`. The tool cannot choose a task or model in its input.
+For multi-entry plugins, use the complete entry ID: `pack/one/check` belongs
+only to `pack/one`, not `pack` or `pack/two`. The runtime rejects a plugin's
+attempt to select another owner's task.
+
+Task-only providers use the same preparation and reload lifecycle as default
+providers. A changed selection invalidates an outstanding result. Configuring a
+task does not enable automatic assistance, grant permissions, or change the chat
+model. Choose local or hosted destinations deliberately: supplied evidence goes
+to the selected provider under its normal privacy and charging terms.
 
 For local setup verification, `openclaw onnx models` lists the presets and
 `openclaw onnx probe gliclass-edge-v3.0` runs a Choice, Score, and Boolean smoke
@@ -112,7 +156,8 @@ ONNX's token budget includes the state, instructions, and rubric.
 ## Agent evaluation tool
 
 `decision_evaluate` is a core tool. An agent receives it when that agent has an
-effective `decisionModel`, subject to normal tool policy, explicit denies, and
+effective model for the fixed `decision_evaluate` task (or an inherited
+`decisionModel`), subject to normal tool policy, explicit denies, and
 the active harness's capabilities. An unconfigured agent or one with an empty
 per-agent override does not receive the tool. The tool remains eligible whether
 or not other experimental consumers use Decision models. Provider plugins still

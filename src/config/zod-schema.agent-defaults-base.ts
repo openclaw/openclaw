@@ -6,6 +6,7 @@ import {
   AgentModelSchema,
   AgentToolModelSchema,
   DecisionModelSchema,
+  DecisionModelsByTaskSchema,
 } from "./zod-schema.agent-model.js";
 
 const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
@@ -73,6 +74,7 @@ export const AgentDefaultsBaseSchema = z
     modelSelectionScope: z.enum(["session", "agent", "global"]).optional(),
     utilityModel: z.string().optional(),
     decisionModel: DecisionModelSchema.optional(),
+    decisionModelsByTask: DecisionModelsByTaskSchema.optional(),
     imageModel: AgentToolModelSchema.optional(),
     mediaModels: z
       .object({

@@ -1,6 +1,7 @@
 // Defines agent model selection schema fragments.
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { z } from "zod";
+import { isDecisionTaskId } from "../decisions/task-ids.js";
 
 /** Decision providers require an explicit model; an empty value disables the role. */
 export const DecisionModelSchema = z
@@ -11,6 +12,13 @@ export const DecisionModelSchema = z
     (value) => value === "" || parseProviderModelRef(value) !== null,
     "Expected provider/model, or an empty string to disable decision models.",
   );
+
+const DecisionTaskIdSchema = z
+  .string()
+  .refine(isDecisionTaskId, "Expected a core task or plugin-scoped task id.");
+
+/** Optional task-specific decision models; an empty value disables that task. */
+export const DecisionModelsByTaskSchema = z.record(DecisionTaskIdSchema, DecisionModelSchema);
 
 /** Schema for agent model config accepting a string or fallback object. */
 export const AgentModelSchema = z.union([

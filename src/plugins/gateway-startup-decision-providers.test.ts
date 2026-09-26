@@ -43,6 +43,15 @@ describe("decision provider startup", () => {
       expected: ["decision-plugin"],
     },
     {
+      name: "selected by a task-only default",
+      config: {
+        agents: {
+          defaults: { decisionModelsByTask: { decision_evaluate: "decision-provider/fast" } },
+        },
+      },
+      expected: ["decision-plugin"],
+    },
+    {
       name: "explicitly disabled",
       config: {
         agents: { defaults: { decisionModel: "decision-provider/fast" } },

@@ -1,5 +1,5 @@
 import { bindOperatorModelExecution } from "../agents/admitted-run-context.js";
-import { resolveDecisionModelSetting } from "../agents/decision-model-setting.js";
+import { resolveDecisionModelSelection } from "../agents/decision-model-setting.js";
 import { normalizeModelRef } from "../agents/model-ref-shared.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,6 +17,7 @@ import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionProviderHost } from "./provider-host.js";
+import { isDecisionTaskId, isDecisionTaskOwnedBy } from "./task-ids.js";
 import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
 import { DecisionContractError, validateDecisionBatch } from "./validation.js";
 
@@ -43,10 +44,13 @@ export async function evaluateDecisionInRegistry(
   consumerId?: string,
 ): Promise<DecisionOutcome> {
   const options = { ...inputOptions };
+  const agentId = options.agentId;
+  const taskId = options.taskId;
   if (
     !inputOptions ||
-    (options.agentId !== undefined &&
-      (typeof options.agentId !== "string" || !options.agentId.trim())) ||
+    (agentId !== undefined && (typeof agentId !== "string" || !agentId.trim())) ||
+    (taskId !== undefined &&
+      (!isDecisionTaskId(taskId) || !isDecisionTaskOwnedBy(taskId, consumerId))) ||
     typeof options.purpose !== "string" ||
     !options.purpose ||
     options.purpose.length > 128 ||
@@ -68,7 +72,7 @@ export async function evaluateDecisionInRegistry(
   if (!validateDecisionBatch(batch)) {
     return skipped({ status: "unavailable", reason: "unsupported-input" });
   }
-  const selected = resolveDecisionModelSetting(config, options.agentId);
+  const { selection: selected } = resolveDecisionModelSelection(config, agentId, taskId);
   if (!selected) {
     return skipped({ status: "unavailable", reason: "disabled" });
   }

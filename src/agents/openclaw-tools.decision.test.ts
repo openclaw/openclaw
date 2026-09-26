@@ -201,6 +201,26 @@ describe("core decision_evaluate registered flow", () => {
     expect(assembled()).toBeDefined();
   });
 
+  it("assembles the explicit core tool from task-only selection", async () => {
+    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    fixture(evaluate);
+    const taskOnly: OpenClawConfig = {
+      agents: { defaults: { decisionModelsByTask: { decision_evaluate: "fixture/task-only" } } },
+    };
+    setRuntimeConfigSnapshot(taskOnly);
+    const tool = assembled("main", taskOnly);
+    expect(tool).toBeDefined();
+    expect(isDecisionAssistanceEligible(taskOnly, "main")).toBe(false);
+    await tool!.execute("task-only", batch);
+    expect(evaluate).toHaveBeenCalledWith(
+      batch,
+      expect.objectContaining({
+        agentId: "main",
+        model: "task-only",
+      }),
+    );
+  });
+
   it("preserves all answer values, structured evidence, trusted binding and provenance", async () => {
     const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     fixture(evaluate);
@@ -399,6 +419,15 @@ describe("core decision_evaluate registered flow", () => {
     const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     fixture(evaluate);
     await expect(requiredTool().execute("call", input)).rejects.toThrow("no evidence was sent");
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a task identity from tool input", async () => {
+    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    fixture(evaluate);
+    await expect(
+      requiredTool().execute("spoof", { ...batch, taskId: "other-plugin/task" }),
+    ).rejects.toThrow("no evidence was sent");
     expect(evaluate).not.toHaveBeenCalled();
   });
 

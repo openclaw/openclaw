@@ -21,6 +21,10 @@ describe("applyPluginAutoEnable providers", () => {
   it.each([
     { label: "default", agents: { defaults: { decisionModel: "judge/fast" } } },
     { label: "agent override", agents: { entries: { worker: { decisionModel: "judge/fast" } } } },
+    {
+      label: "task override",
+      agents: { defaults: { decisionModelsByTask: { decision_evaluate: "judge/fast" } } },
+    },
   ])("activates a decision contract owner selected by $label", ({ agents }) => {
     const result = applyPluginAutoEnable({
       config: { agents, plugins: { allow: ["telegram"] } },

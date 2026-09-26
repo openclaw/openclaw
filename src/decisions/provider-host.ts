@@ -249,6 +249,9 @@ export class DecisionProviderHost {
     facts: DecisionEvaluationFacts,
     consumerId?: string,
   ): Promise<DecisionOutcome> {
+    const agentId = options.agentId;
+    const taskId = options.taskId;
+    const rubricVersion = options.rubricVersion;
     options.signal.throwIfAborted();
     const instance = getPluginInstance(this.record);
     if (this.retired || this.reloadPause || !instance?.acceptingCalls || instance.owner?.revoked) {
@@ -304,7 +307,7 @@ export class DecisionProviderHost {
         return this.unavailable("deadline");
       }
       const currentConfig = readConfig();
-      const selection = resolveDecisionModelSetting(currentConfig, options.agentId);
+      const selection = resolveDecisionModelSetting(currentConfig, agentId, taskId);
       if (
         getActiveSecretsRuntimeSnapshotRevisionState() !== health.secretRevision ||
         this.health !== health ||
@@ -376,7 +379,7 @@ export class DecisionProviderHost {
           result: structuredClone(result),
           provenance: {
             providerId: this.provider.id,
-            rubricVersion: options.rubricVersion,
+            rubricVersion,
             runtimeGeneration: health.id,
           },
         };
