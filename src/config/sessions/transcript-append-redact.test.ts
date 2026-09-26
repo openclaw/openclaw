@@ -1,5 +1,4 @@
 // Transcript append redaction tests cover secret scrubbing when appending transcript entries.
-import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,10 +7,12 @@ import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
-import { resolveSessionTranscriptPathInDir } from "./paths.js";
-import { loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { appendSessionTranscriptMessage } from "./transcript-append.test-support.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
@@ -33,17 +34,6 @@ const IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING =
 const OPAQUE_COMPACTION =
   "gAAAAABpQnQrXzzZqcAfo3unbAY-ku84xgsvB0fpLkbDvSh3WS5qzfSCmcgwr8_abcdefghijvK2RyV2GQ4ohzcfYwhRwTvY76TvR7Tvr_";
 
-function readMessages(sessionFile: string) {
-  return fs
-    .readFileSync(sessionFile, "utf-8")
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as { type?: string; message?: unknown })
-    .filter((r) => r.type === "message")
-    .map((r) => r.message);
-}
-
 async function readStoredMessages(params: {
   sessionId: string;
   sessionKey: string;
@@ -55,20 +45,26 @@ async function readStoredMessages(params: {
     .map((record) => record.message);
 }
 
-describe("appendSessionTranscriptMessage - redaction", () => {
+describe("appendTranscriptMessage - redaction", () => {
   const fixture = useTempSessionsFixture("transcript-redact-test-");
 
-  beforeEach(() => {
+  let scope: { sessionId: string; sessionKey: string; storePath: string };
+
+  beforeEach(async () => {
     readLoggingConfig.mockReset();
     readLoggingConfig.mockReturnValue(undefined);
+    scope = {
+      sessionId: "redaction-session",
+      sessionKey: "agent:main:redaction",
+      storePath: fixture.storePath(),
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   });
 
-  it("masks secrets in message content before writing to disk", async () => {
-    const sessionFile = resolveSessionTranscriptPathInDir("redact-on", fixture.sessionsDir());
+  it("masks secrets in message content before SQLite persistence", async () => {
     const config: OpenClawConfig = {};
 
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
+    const appended = await appendTranscriptMessage(scope, {
       message: {
         role: "user",
         content: [{ type: "text", text: "my key is sk-abcdef1234567890xyz ok" }],
@@ -76,11 +72,12 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(appended?.appended).toBe(true);
+    const raw = JSON.stringify(await loadTranscriptEvents(scope));
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).toContain("ok"); // safe text preserved
 
-    const [msg] = readMessages(sessionFile) as Array<{
+    const [msg] = (await readStoredMessages(scope)) as Array<{
       content: Array<{ text: string }>;
     }>;
     expect(
@@ -91,15 +88,10 @@ describe("appendSessionTranscriptMessage - redaction", () => {
     ).not.toContain("sk-abcdef1234567890xyz");
   });
 
-  it("preserves image base64 payloads before writing to disk", async () => {
-    const sessionFile = resolveSessionTranscriptPathInDir(
-      "redact-image-base64",
-      fixture.sessionsDir(),
-    );
+  it("preserves image base64 payloads before SQLite persistence", async () => {
     const config: OpenClawConfig = {};
 
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
+    const appended = await appendTranscriptMessage(scope, {
       message: {
         role: "user",
         content: [
@@ -114,12 +106,13 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(appended?.appended).toBe(true);
+    const raw = JSON.stringify(await loadTranscriptEvents(scope));
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).toContain(IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING);
     expect(raw).not.toContain("AKID…MNOP");
 
-    const [msg] = readMessages(sessionFile) as Array<{
+    const [msg] = (await readStoredMessages(scope)) as Array<{
       content: Array<{ type: string; text?: string; data?: string }>;
     }>;
     expect(
@@ -136,12 +129,10 @@ describe("appendSessionTranscriptMessage - redaction", () => {
     ).toBe(IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING);
   });
 
-  it("redacts content regardless of the retired off switch", async () => {
-    const sessionFile = resolveSessionTranscriptPathInDir("redact-off", fixture.sessionsDir());
+  it("masks secrets with an empty configuration", async () => {
     const config: OpenClawConfig = {};
 
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
+    const appended = await appendTranscriptMessage(scope, {
       message: {
         role: "user",
         content: [{ type: "text", text: "my key is sk-abcdef1234567890xyz" }],
@@ -149,15 +140,13 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(appended?.appended).toBe(true);
+    const raw = JSON.stringify(await loadTranscriptEvents(scope));
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
   });
 
   it("masks secrets when config is undefined (default patterns)", async () => {
-    const sessionFile = resolveSessionTranscriptPathInDir("redact-undef", fixture.sessionsDir());
-
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
+    const appended = await appendTranscriptMessage(scope, {
       message: {
         role: "user",
         content: [{ type: "text", text: "my key is sk-abcdef1234567890xyz" }],
@@ -165,41 +154,33 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       // config intentionally omitted
     });
 
-    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(appended?.appended).toBe(true);
+    const raw = JSON.stringify(await loadTranscriptEvents(scope));
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
   });
 
-  it("masks secrets in string payloads without role before writing to disk", async () => {
-    const sessionFile = resolveSessionTranscriptPathInDir(
-      "redact-string-payload",
-      fixture.sessionsDir(),
-    );
+  it("masks secrets in string payloads without role before SQLite persistence", async () => {
     const config: OpenClawConfig = {};
 
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
+    const appended = await appendTranscriptMessage(scope, {
       message: "my key is sk-abcdef1234567890xyz ok",
       config,
     });
 
-    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(appended?.appended).toBe(true);
+    const raw = JSON.stringify(await loadTranscriptEvents(scope));
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).toContain("ok");
 
-    const [msg] = readMessages(sessionFile) as string[];
+    const [msg] = (await readStoredMessages(scope)) as string[];
     expect(msg).not.toContain("sk-abcdef1234567890xyz");
     expect(msg).toContain("ok");
   });
 
-  it("masks secrets in structured payloads without role before writing to disk", async () => {
-    const sessionFile = resolveSessionTranscriptPathInDir(
-      "redact-structured-no-role",
-      fixture.sessionsDir(),
-    );
+  it("masks secrets in structured payloads without role before SQLite persistence", async () => {
     const config: OpenClawConfig = {};
 
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
+    const appended = await appendTranscriptMessage(scope, {
       message: {
         apiKey: "plainsecretvalue123",
         password: "hunter2",
@@ -210,14 +191,15 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(appended?.appended).toBe(true);
+    const raw = JSON.stringify(await loadTranscriptEvents(scope));
     expect(raw).not.toContain("plainsecretvalue123");
     expect(raw).not.toContain("hunter2");
     expect(raw).not.toContain("nestedplainsecret123");
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).toContain("visible");
 
-    const [msg] = readMessages(sessionFile) as Array<{
+    const [msg] = (await readStoredMessages(scope)) as Array<{
       apiKey: string;
       password: string;
       nested: { accessToken: string[] };
@@ -239,16 +221,11 @@ describe("appendSessionTranscriptMessage - redaction", () => {
   });
 
   it("uses configured custom patterns when cfg omits logging", async () => {
-    const sessionFile = resolveSessionTranscriptPathInDir(
-      "redact-config-pattern-fallback",
-      fixture.sessionsDir(),
-    );
     readLoggingConfig.mockReturnValue({
       redactPatterns: [EMAIL_PATTERN],
     });
 
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
+    const appended = await appendTranscriptMessage(scope, {
       message: {
         role: "user",
         content: [{ type: "text", text: "email peter@dc.io and key sk-abcdef1234567890xyz ok" }],
@@ -258,21 +235,17 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       },
     });
 
-    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(appended?.appended).toBe(true);
+    const raw = JSON.stringify(await loadTranscriptEvents(scope));
     expect(raw).not.toContain("peter@dc.io");
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).toContain("ok");
   });
 
-  it("masks secrets in assistant tool-call arguments before writing to disk", async () => {
-    const sessionFile = resolveSessionTranscriptPathInDir(
-      "redact-tool-call-args",
-      fixture.sessionsDir(),
-    );
+  it("masks secrets in assistant tool-call arguments before SQLite persistence", async () => {
     const config: OpenClawConfig = {};
 
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
+    const appended = await appendTranscriptMessage(scope, {
       message: {
         role: "assistant",
         content: [
@@ -292,14 +265,15 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(appended?.appended).toBe(true);
+    const raw = JSON.stringify(await loadTranscriptEvents(scope));
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).not.toContain("plainsecretvalue123");
     expect(raw).not.toContain("hunter2");
     expect(raw).toContain("OPENAI_API_KEY=sk-abc…0xyz openclaw health");
     expect(raw).toContain("openclaw health");
 
-    const [msg] = readMessages(sessionFile) as Array<{
+    const [msg] = (await readStoredMessages(scope)) as Array<{
       content: Array<{
         arguments: {
           command: string;
@@ -343,15 +317,10 @@ describe("appendSessionTranscriptMessage - redaction", () => {
     ).toBe("***");
   });
 
-  it("masks secrets in tool-result details before writing to disk", async () => {
-    const sessionFile = resolveSessionTranscriptPathInDir(
-      "redact-tool-result-details",
-      fixture.sessionsDir(),
-    );
+  it("masks secrets in tool-result details before SQLite persistence", async () => {
     const config: OpenClawConfig = {};
 
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
+    const appended = await appendTranscriptMessage(scope, {
       message: {
         role: "toolResult",
         toolCallId: "call_1",
@@ -369,14 +338,15 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(appended?.appended).toBe(true);
+    const raw = JSON.stringify(await loadTranscriptEvents(scope));
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).not.toContain("plainsecretvalue123");
     expect(raw).not.toContain("hunter2");
     expect(raw).not.toContain("nestedplainsecret123");
     expect(raw).toContain("visible");
 
-    const [msg] = readMessages(sessionFile) as Array<{
+    const [msg] = (await readStoredMessages(scope)) as Array<{
       content: Array<{ text: string }>;
       details: {
         apiKey: string;
@@ -405,16 +375,11 @@ describe("appendSessionTranscriptMessage - redaction", () => {
   });
 
   it("preserves env placeholders in persisted tool results", async () => {
-    const sessionFile = resolveSessionTranscriptPathInDir(
-      "issue-80379-tool-result-env-placeholders",
-      fixture.sessionsDir(),
-    );
     const config: OpenClawConfig = {};
     const toolOutput =
       'DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"\nTELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"';
 
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
+    const appended = await appendTranscriptMessage(scope, {
       message: {
         role: "toolResult",
         toolCallId: "call_80379",
@@ -426,11 +391,12 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(appended?.appended).toBe(true);
+    const raw = JSON.stringify(await loadTranscriptEvents(scope));
     expect(raw).toContain("${DISCORD_BOT_TOKEN:-}");
     expect(raw).toContain("${TELEGRAM_BOT_TOKEN:-}");
 
-    const [msg] = readMessages(sessionFile) as Array<{
+    const [msg] = (await readStoredMessages(scope)) as Array<{
       content: Array<{ text: string }>;
     }>;
     expect(
