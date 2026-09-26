@@ -424,7 +424,11 @@ describe("gateway connection state", () => {
         );
       }
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      const state = createGatewayConnectionState({ bootId: "presence-boundaries", cfg });
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "presence-boundaries",
+        cfg,
+      });
       const detach = state.attachSessionRowProjection(projection);
       const peers = ["reader", "admin", "trailing-reader"].map((name) => {
         const peer = makeClient(`presence-${name}`, { count: 0 });
