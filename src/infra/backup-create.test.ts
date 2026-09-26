@@ -3893,6 +3893,59 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("omits regenerable managed worktrees", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-worktree-deps-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const worktree = state.statePath("worktrees", "group", "wb-card");
+        const dependency = path.join(worktree, "node_modules", "package", "index.js");
+        const nestedDependency = path.join(
+          worktree,
+          "vendor",
+          "app",
+          "node_modules",
+          "nested-package",
+          "index.js",
+        );
+        await fs.mkdir(path.dirname(dependency), { recursive: true });
+        await fs.mkdir(path.dirname(nestedDependency), { recursive: true });
+        await fs.writeFile(path.join(worktree, "uncommitted.txt"), "preserve me\n", "utf8");
+        await fs.writeFile(dependency, "reinstallable\n", "utf8");
+        await fs.writeFile(nestedDependency, "also reinstallable\n", "utf8");
+
+        const result = await createBackupArchive({
+          output: state.path("backup.tar.gz"),
+          includeWorkspace: true,
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+
+        expect(entries.some((entry) => entry.includes("/worktrees/"))).toBe(false);
+        expect(
+          entries.some((entry) => entry.includes("/worktrees/group/wb-card/node_modules/")),
+        ).toBe(false);
+        expect(entries.some((entry) => entry.includes("/vendor/app/node_modules/"))).toBe(false);
+        expect(result.skipped).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: "managed state",
+              sourcePath: state.statePath("worktrees"),
+              reason: "regenerable",
+            }),
+          ]),
+        );
+
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await expect(
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
+      },
+    );
+  });
+
   it("preserves configured state paths nested under managed runtime roots", async () => {
     await withOpenClawTestState(
       {

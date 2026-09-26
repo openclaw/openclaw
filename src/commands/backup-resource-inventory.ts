@@ -72,7 +72,15 @@ export type BackupResourceInventory = BackupResourcePolicy &
     ) => BackupCoreDatabase | { role: "plugin" } | { role: "unresolvable-link" } | undefined;
   }>;
 
-const MANAGED_STATE_ROOTS = ["dev", "git", "npm", "npm-runtime", "tmp", "tools"] as const;
+const MANAGED_STATE_ROOTS = [
+  "dev",
+  "git",
+  "npm",
+  "npm-runtime",
+  "tmp",
+  "tools",
+  "worktrees",
+] as const;
 
 async function listDefaultAgentTemporaryRoots(
   stateDir: string,
