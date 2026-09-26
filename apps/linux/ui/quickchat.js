@@ -1328,7 +1328,12 @@ async function showDashboard() {
   }
 }
 
-window.addEventListener("resize", scheduleWidgetSync);
+window.addEventListener("resize", () => {
+  scheduleWidgetSync();
+  if (openPopover) {
+    positionPopover(openPopover);
+  }
+});
 elements.input.addEventListener("input", () => {
   sendError = "";
   renderStatus();

@@ -196,6 +196,7 @@ function createQuickChatHarness(): Record<string, any> {
   };
   const Date = { now: () => fakeNow };
   const window = {
+    innerHeight: 900,
     __TAURI__: {
       core: {
         invoke(
@@ -324,6 +325,7 @@ this.harness = {
   requestHide,
   clearReply,
   toggleReply,
+  openNamedPopover,
   setGatewayUp(surface = "https://gateway.example/__openclaw__/cap/fixture-capability", gatewayGeneration = 1) {
     setGatewayState({state: "up", canvasSurfaceUrl: surface, gatewayGeneration});
     if (visibilitySequence === 0) reveal();
@@ -408,6 +410,24 @@ this.harness = {
       const resize = windowListeners.get("resize");
       assert.ok(resize, "renderer registered its resize handler");
       resize();
+    },
+    popoverStyle: (selector: string) => {
+      const el = elements.get(selector);
+      assert.ok(el, `${selector} exists`);
+      return { top: el.style.top, bottom: el.style.bottom };
+    },
+    setAnchorBounds: (selector: string, bounds: Record<string, number>) => {
+      const el = elements.get(selector);
+      assert.ok(el, `${selector} exists`);
+      el.getBoundingClientRect = () => bounds;
+    },
+    fireResize: () => {
+      const resize = windowListeners.get("resize");
+      assert.ok(resize, "renderer registered its resize handler");
+      resize();
+    },
+    setWindowInnerHeight: (value: number) => {
+      window.innerHeight = value;
     },
     widgetSurfaceRefreshCount: () => widgetSurfaceRefreshCount,
     setWidgetSurfaceRefreshFails: (value: boolean) => {
@@ -1494,6 +1514,25 @@ test("adding a widget preserves the existing native webview identity", async () 
   assert.equal(layouts[0].visible, true);
   assert.equal(layouts[1].key, "second");
   assert.equal(layouts[1].visible, false);
+});
+
+test("resizing the window repositions an already-open popover", async () => {
+  const harness = createQuickChatHarness();
+  harness.setAnchorBounds("#agent-chip", { x: 52, y: 174, width: 220, height: 32, bottom: 206 });
+  await harness.openNamedPopover("agents");
+  await harness.drain();
+  const opened = harness.popoverStyle("#agent-menu");
+  assert.equal(opened.top, "214px");
+
+  harness.setAnchorBounds("#agent-chip", { x: 52, y: 40, width: 220, height: 32, bottom: 72 });
+  harness.fireResize();
+
+  const resized = harness.popoverStyle("#agent-menu");
+  assert.equal(
+    resized.top,
+    "80px",
+    "the open popover must track the anchor's new position after a resize",
+  );
 });
 
 test("hiding clears buffered pre-ack frames", async () => {
