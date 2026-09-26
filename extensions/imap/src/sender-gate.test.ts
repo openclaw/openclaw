@@ -1,4 +1,5 @@
-import { authenticate } from "mailauth";
+import { generateKeyPairSync } from "node:crypto";
+import { authenticate, dkimSign } from "mailauth";
 import { simpleParser } from "mailparser";
 import type { IdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -305,6 +306,107 @@ describe("IMAP sender admission", () => {
       strength: "unverified",
       reason: "authentication-temperror",
       transient: true,
+    });
+  });
+
+  it("keeps a nested DKIM key-lookup timeout retryable when DMARC resolves to fail", async () => {
+    const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
+    const authentication = createImapAuthResult("fail");
+    authentication.dkim.results.push({
+      signingDomain: "example.com",
+      selector: "default",
+      status: { result: "temperror", comment: "DNS failure: ETIMEOUT" },
+      info: "dkim=temperror (DNS failure: ETIMEOUT) header.i=@example.com header.s=default",
+    });
+    await expect(
+      evaluateImapSender({
+        ...mail,
+        account: account(),
+        authenticator: async () => authentication,
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      strength: "unverified",
+      reason: "authentication-temperror",
+      transient: true,
+    });
+  });
+
+  it("retries a real DKIM key-lookup timeout that DMARC resolves to fail", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
+    const unsigned = Buffer.from(
+      [
+        "From: trusted@example.com",
+        "To: reader@example.com",
+        "Subject: signed fixture",
+        "Date: Wed, 16 Sep 2026 10:00:00 +0000",
+        "",
+        "Hello from a trusted sender",
+      ].join("\r\n"),
+    );
+    // The declared options type requires the signature fields at the top level while
+    // the signer emits signatures from signatureData, so provide both.
+    const signed = await dkimSign(unsigned, {
+      signingDomain: "example.com",
+      selector: "default",
+      privateKey: privateKeyPem,
+      signatureData: [
+        { signingDomain: "example.com", selector: "default", privateKey: privateKeyPem },
+      ],
+    });
+    expect(signed.errors).toEqual([]);
+    const raw = Buffer.concat([Buffer.from(signed.signatures), unsigned]);
+    const authentication = await authenticate(raw, {
+      disableArc: true,
+      disableBimi: true,
+      resolver: async (domain) => {
+        if (domain === "default._domainkey.example.com") {
+          throw Object.assign(new Error("queryTxt ETIMEOUT"), { code: "ETIMEOUT" });
+        }
+        return domain === "_dmarc.example.com" ? [["v=DMARC1; p=reject"]] : [];
+      },
+    });
+    expect(authentication.dkim.results).toMatchObject([
+      { signingDomain: "example.com", status: { result: "temperror" } },
+    ]);
+    expect(authentication.dmarc).toMatchObject({ status: { result: "fail" }, policy: "reject" });
+    await expect(
+      evaluateImapSender({
+        raw,
+        mail: await simpleParser(raw),
+        internalDate: new Date(),
+        account: account(),
+        authenticator: async () => authentication,
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      strength: "unverified",
+      reason: "authentication-temperror",
+      transient: true,
+    });
+  });
+
+  it("does not retry a permanently failed signature", async () => {
+    const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
+    const authentication = createImapAuthResult("fail");
+    authentication.dkim.results.push({
+      signingDomain: "example.com",
+      selector: "default",
+      status: { result: "fail", comment: "bad signature" },
+      info: "dkim=fail (bad signature) header.i=@example.com header.s=default",
+    });
+    await expect(
+      evaluateImapSender({
+        ...mail,
+        account: account(),
+        authenticator: async () => authentication,
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      strength: "unverified",
+      reason: "dmarc-fail",
+      transient: false,
     });
   });
 });
