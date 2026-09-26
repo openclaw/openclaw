@@ -36,10 +36,7 @@ import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
 } from "../tasks/agent-harness-task-runtime-scope.js";
-import {
-  DetachedTaskAssignmentUnsupportedError,
-  SUBAGENT_KILL_TASK_ERROR,
-} from "../tasks/detached-task-runtime-contract.js";
+import { DetachedTaskAssignmentUnsupportedError } from "../tasks/detached-task-runtime-contract.js";
 import { captureDetachedTaskRuntimeOwner } from "../tasks/detached-task-runtime-state.js";
 import {
   finalizeTaskRunByRunIdAsync,
@@ -54,6 +51,7 @@ import {
   transitionTaskAssignment,
 } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords, type TaskRecord } from "../tasks/runtime-internal.js";
+import { projectTaskContentForPersistence } from "../tasks/task-content.js";
 import { captureTaskExecutionOwner } from "../tasks/task-execution-owner.js";
 import {
   captureTaskRegistryRunSelection,
@@ -84,38 +82,6 @@ type AssignmentOwnership = {
   expectedTask?: TaskPersistenceReceipt;
   completionCustody?: AgentHarnessCompletionCustody;
 };
-
-type HarnessTaskContent = {
-  task?: string;
-  label?: string;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  eventSummary?: string | null;
-  error?: string;
-};
-
-/** Keep native task lifecycle receipts durable, not their temporary conversation content. */
-function projectHarnessTaskContentForPersistence<T extends HarnessTaskContent>(
-  requesterSessionKey: string,
-  params: T,
-): T {
-  if (!isIncognitoSessionKey(requesterSessionKey)) {
-    return params;
-  }
-  return {
-    ...params,
-    ...(params.task !== undefined ? { task: "Incognito task" } : {}),
-    ...(params.label !== undefined ? { label: "Incognito task" } : {}),
-    ...(params.progressSummary !== undefined ? { progressSummary: null } : {}),
-    ...(params.terminalSummary !== undefined ? { terminalSummary: null } : {}),
-    ...(params.eventSummary !== undefined ? { eventSummary: null } : {}),
-    ...(params.error !== undefined
-      ? {
-          error: params.error === SUBAGENT_KILL_TASK_ERROR ? params.error : "Incognito task error.",
-        }
-      : {}),
-  };
-}
 
 /** Retains admitted completion work for this exact physical requester lifecycle. */
 export function captureAgentHarnessCompletionCustody(
@@ -233,6 +199,7 @@ export function createAgentHarnessTaskRuntime(
   const runtime = params.runtime;
   const scope = assertAgentHarnessTaskRuntimeScope(params.scope);
   const requesterSessionKey = scope.requesterSessionKey;
+  const incognito = isIncognitoSessionKey(requesterSessionKey);
   const taskKind = normalizeOptionalString(params.taskKind);
   const runIdPrefix = normalizeOptionalString(params.runIdPrefix);
   // Remote and unidentified harnesses must not inherit the Gateway's identity.
@@ -280,7 +247,7 @@ export function createAgentHarnessTaskRuntime(
   ): TaskRecord | null => {
     assertRunId(taskParams.runId);
     return createRunningTaskRun({
-      ...projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams),
+      ...projectTaskContentForPersistence(incognito, taskParams),
       runtime,
       ...(taskKind ? { taskKind } : {}),
       requesterSessionKey,
@@ -306,8 +273,10 @@ export function createAgentHarnessTaskRuntime(
     tryCreateRunningTaskRun,
     recordTaskRunProgressByRunId(taskParams) {
       assertRunId(taskParams.runId);
-      const { expectedTask, completionCustody, ...progress } =
-        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
+      const { expectedTask, completionCustody, ...progress } = projectTaskContentForPersistence(
+        incognito,
+        taskParams,
+      );
       if (expectedTask) {
         return transitionAssignment(
           { kind: "state", params: { ...progress, runtime, sessionKey: requesterSessionKey } },
@@ -322,8 +291,10 @@ export function createAgentHarnessTaskRuntime(
     },
     finalizeTaskRunByRunId(taskParams) {
       assertRunId(taskParams.runId);
-      const { expectedTask, completionCustody, ...terminal } =
-        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
+      const { expectedTask, completionCustody, ...terminal } = projectTaskContentForPersistence(
+        incognito,
+        taskParams,
+      );
       if (expectedTask) {
         return transitionAssignment(
           { kind: "state", params: { ...terminal, runtime, sessionKey: requesterSessionKey } },
@@ -338,8 +309,10 @@ export function createAgentHarnessTaskRuntime(
     },
     setDetachedTaskDeliveryStatusByRunId(taskParams) {
       assertRunId(taskParams.runId);
-      const { expectedTask, completionCustody, ...delivery } =
-        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
+      const { expectedTask, completionCustody, ...delivery } = projectTaskContentForPersistence(
+        incognito,
+        taskParams,
+      );
       if (expectedTask) {
         return transitionAssignment(
           { kind: "delivery", params: { ...delivery, runtime, sessionKey: requesterSessionKey } },
@@ -355,8 +328,10 @@ export function createAgentHarnessTaskRuntime(
     async finalizeTaskRunByRunIdAsync(taskParams) {
       assertRunId(taskParams.runId);
       assertRuntimeCurrent();
-      const { expectedTask, completionCustody, ...terminal } =
-        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
+      const { expectedTask, completionCustody, ...terminal } = projectTaskContentForPersistence(
+        incognito,
+        taskParams,
+      );
       const scoped = { ...terminal, runtime, sessionKey: requesterSessionKey };
       return expectedTask
         ? await transitionTaskAssignmentAsync(
@@ -370,8 +345,10 @@ export function createAgentHarnessTaskRuntime(
     async setDetachedTaskDeliveryStatusByRunIdAsync(taskParams) {
       assertRunId(taskParams.runId);
       assertRuntimeCurrent();
-      const { expectedTask, completionCustody, ...delivery } =
-        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
+      const { expectedTask, completionCustody, ...delivery } = projectTaskContentForPersistence(
+        incognito,
+        taskParams,
+      );
       const scoped = { ...delivery, runtime, sessionKey: requesterSessionKey };
       return expectedTask
         ? await transitionTaskAssignmentAsync(
