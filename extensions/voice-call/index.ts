@@ -295,7 +295,15 @@ export default definePluginEntry({
       }
     };
 
-    const commands = createVoiceCallCommandService(ensureRuntime);
+    const ensureRuntimeForCommands = async (): Promise<VoiceCallRuntime> => {
+      // Reuse the live runtime while a call is in flight instead of forcing a fresh
+      // ensureRuntime() pass: the latter can spawn a second runtime (and its webhook
+      // listener) while the first is still serving the active call.
+      const liveSlot = runtimeCoordinator.slot;
+      if (liveSlot && liveSlot.state === "running") return liveSlot.runtime;
+      return ensureRuntime();
+    };
+    const commands = createVoiceCallCommandService(ensureRuntimeForCommands);
     const registerGatewayCommand = (
       method: string,
       handler: (options: GatewayRequestHandlerOptions) => unknown,
