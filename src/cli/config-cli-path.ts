@@ -275,6 +275,11 @@ export function setAtPath(
       if (index === undefined) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
       }
+      if (index > current.length) {
+        throw new Error(
+          `Cannot set array index ${index}; array "${formatConfigSetPath(path.slice(0, i))}" has ${current.length} element(s). Use index ${current.length} to append or a lower index to update.`,
+        );
+      }
       const existing = current[index];
       if (!existing || typeof existing !== "object") {
         current[index] = nextIsIndex ? [] : {};
@@ -297,6 +302,11 @@ export function setAtPath(
     const index = parseConfigPathArrayIndex(last);
     if (index === undefined) {
       throw new Error(`Expected numeric index for array segment "${last}"`);
+    }
+    if (index > current.length) {
+      throw new Error(
+        `Cannot set array index ${index}; array "${formatConfigSetPath(path.slice(0, -1))}" has ${current.length} element(s). Use index ${current.length} to append or a lower index to update.`,
+      );
     }
     current[index] = value;
     return;

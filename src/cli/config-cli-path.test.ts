@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
-import { mergeAtPath, parseConfigSetValue } from "./config-cli-path.js";
+import { mergeAtPath, parseConfigSetValue, setAtPath } from "./config-cli-path.js";
 
 function nestedRecord(depth: number, leaf: Record<string, unknown>): Record<string, unknown> {
   let value = leaf;
@@ -74,5 +74,41 @@ describe("parseConfigSetValue", () => {
       cursor = cursor.nested;
     }
     expect(cursor).toEqual({ retained: true, added: true });
+  });
+});
+
+describe("setAtPath array bounds", () => {
+  it("rejects an out-of-range nested array index instead of writing a sparse null hole", () => {
+    const root = { items: [{ id: "a" }, { id: "b" }] };
+    expect(() => setAtPath(root, ["items", "5", "name"], "x")).toThrow(
+      'Cannot set array index 5; array "items" has 2 element(s). Use index 2 to append or a lower index to update.',
+    );
+    expect(root.items).toEqual([{ id: "a" }, { id: "b" }]);
+  });
+
+  it("rejects an out-of-range leaf array index instead of writing a sparse null hole", () => {
+    const root = { items: [{ id: "a" }] };
+    expect(() => setAtPath(root, ["items", "3"], { name: "y" })).toThrow(
+      'Cannot set array index 3; array "items" has 1 element(s). Use index 1 to append or a lower index to update.',
+    );
+    expect(root.items).toEqual([{ id: "a" }]);
+  });
+
+  it("allows appending at the exact current length without a null hole", () => {
+    const root = { items: [{ id: "a" }, { id: "b" }] };
+    setAtPath(root, ["items", "2", "name"], "append");
+    expect(structuredClone(root.items)).toEqual([{ id: "a" }, { id: "b" }, { name: "append" }]);
+  });
+
+  it("allows the first element into an empty array", () => {
+    const root = { list: [] };
+    setAtPath(root, ["list", "0", "id"], "first");
+    expect(structuredClone(root.list)).toEqual([{ id: "first" }]);
+  });
+
+  it("allows in-bounds writes", () => {
+    const root = { items: [{ id: "a" }, { id: "b" }] };
+    setAtPath(root, ["items", "0", "name"], "overwrite");
+    expect(root.items).toEqual([{ id: "a", name: "overwrite" }, { id: "b" }]);
   });
 });
