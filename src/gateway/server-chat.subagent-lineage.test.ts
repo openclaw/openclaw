@@ -79,7 +79,9 @@ function createLineageHarness(projection: SessionRowProjection, key: string) {
 
 it("keeps prepared lineage current across publications and store lifetimes without SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { session: { scope: "global" } };
+    const cfg: OpenClawConfig = {
+      session: { scope: "global", mainKey: "dashboard:lineage-alias" },
+    };
     setRuntimeConfigSnapshot(cfg);
     // New keys can publish prepared metadata after their physical store is admitted.
     replaceSessionEntrySync(
@@ -167,7 +169,16 @@ it("keeps prepared lineage current across publications and store lifetimes witho
           harness.expectLineage(undefined);
         }
       }
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: "global" },
+        { sessionId: "lineage-alias", updatedAt: 1, spawnedBy: fallback },
+      );
+      subagentRuns.set(runId, { ...run, childSessionKey: "global" });
+      publishSubagentRunChanges(["global"]);
       await projection.ensureMaterialized();
+      const alias = createLineageHarness(projection, "agent:main:dashboard:lineage-alias");
+      harnesses.push(alias);
+      alias.expectLineage(controller);
       projection.dispose();
       for (const harness of harnesses) {
         harness.expectLineage(undefined);
@@ -178,7 +189,7 @@ it("keeps prepared lineage current across publications and store lifetimes witho
       }
       projection.dispose();
       subagentRuns.delete(runId);
-      publishSubagentRunChanges([key]);
+      publishSubagentRunChanges([key, "global"]);
     }
   });
 });

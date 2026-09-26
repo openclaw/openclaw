@@ -43,7 +43,8 @@ export function createSessionRowRelationReads(owner: {
           sessionKey: query.key,
           read: (agentId, key) => {
             if (!isIncognitoSessionKey(key)) {
-              return owner.lookup({ ...query, agentId, key })?.sharingEntry;
+              const row = owner.lookup({ ...query, agentId, key });
+              return row?.key === key ? row.sharingEntry : undefined;
             }
             const database = getOpenIncognitoAgentDatabase(
               agentId,
