@@ -344,3 +344,17 @@ after terminal persistence and the current completion handoff finish, before
 sleeping delivery retries. Keep the hold until delivery settles. After restart,
 recovery must obtain fresh custody from a live registration and validate its
 historical task and requester; stored history never grants authority.
+
+### Yielded harness progress ownership
+
+A scoped `createAgentHarnessTaskRuntime(...)` can register a process-local progress
+owner with `registerProgressOwner({ runIds, agentId, isCurrent, onStopped })`.
+Register only after an intentional, successful requester yield. The host-issued
+scope supplies the original delivery target; callers cannot override it.
+
+The returned `notify()` queues a coalesced snapshot and `dispose()` revokes queued
+publication. The harness must validate its exact live parent and child ownership
+in `isCurrent`, notify after the foreground owner has released, and dispose on
+resume, reset, cancellation, or monitor retirement. Task identity and Gateway
+lifecycle are revalidated before delivery. This presentation capability does not
+change task notification policy or confer completion-delivery ownership.

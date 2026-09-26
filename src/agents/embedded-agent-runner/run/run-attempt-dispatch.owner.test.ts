@@ -57,6 +57,9 @@ type DispatchCase = {
   remoteSkills: boolean;
   skillCatalog: "host" | "sandbox" | "none";
   oneShotCliRun?: boolean;
+  origin?: { channel: string; accountId?: string; to?: string; threadId?: string | number };
+  messageChannel?: string;
+  messageProvider?: string;
   managedWorkspace?: boolean;
   realManagedWorkspace?: boolean;
   hostMedia?: "allowed" | "outside";
@@ -70,6 +73,14 @@ const dispatchCases: DispatchCase[] = [
     remoteSkills: false,
     skillCatalog: "host" as const,
     oneShotCliRun: undefined,
+    origin: {
+      channel: "discord",
+      accountId: "work",
+      to: "channel:synthetic",
+      threadId: "thread-1",
+    },
+    messageChannel: "discord",
+    messageProvider: "telegram",
   },
   {
     agentId: "work",
@@ -77,6 +88,8 @@ const dispatchCases: DispatchCase[] = [
     remoteSkills: false,
     skillCatalog: "sandbox" as const,
     oneShotCliRun: true,
+    origin: { channel: "telegram", accountId: "personal", to: "-100123456", threadId: 42 },
+    messageProvider: "telegram",
   },
   {
     agentId: "work",
@@ -84,6 +97,7 @@ const dispatchCases: DispatchCase[] = [
     remoteSkills: false,
     skillCatalog: "none" as const,
     oneShotCliRun: false,
+    origin: undefined,
   },
   {
     agentId: "main",
@@ -91,6 +105,8 @@ const dispatchCases: DispatchCase[] = [
     remoteSkills: true,
     skillCatalog: "none" as const,
     oneShotCliRun: true,
+    origin: { channel: "discord", accountId: undefined, to: undefined, threadId: undefined },
+    messageChannel: "discord",
   },
   {
     agentId: "work",
@@ -145,6 +161,9 @@ it.each(dispatchCases)(
     remoteSkills,
     skillCatalog,
     oneShotCliRun,
+    origin,
+    messageChannel,
+    messageProvider,
     managedWorkspace,
     realManagedWorkspace,
     hostMedia,
@@ -329,6 +348,11 @@ it.each(dispatchCases)(
             }
           : {}),
         sessionFile: "global",
+        messageChannel,
+        messageProvider,
+        agentAccountId: origin?.accountId,
+        messageTo: origin?.to,
+        messageThreadId: origin?.threadId,
         prompt: remoteSkills ? "Use the skill at /host/skills/demo/SKILL.md." : "hello",
         ...(skillsSnapshot ? { skillsSnapshot } : {}),
         ...(remoteSkills
@@ -577,6 +601,9 @@ it.each(dispatchCases)(
             sandboxSessionKey,
             gitCoauthorPrompt,
           }),
+        );
+        expect(runAttempt.mock.calls[0]?.[0].agentHarnessTaskRuntimeScope?.requesterOrigin).toEqual(
+          origin,
         );
         expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
           config,

@@ -291,6 +291,7 @@ export class CodexNativeSubagentCompletionDelivery {
   }
 
   finish(state: ParentState, child: ChildState): void {
+    state.progressOwner?.notify();
     child.completionTaskPhase ??= "delivery";
     if (child.completionDeliveryTimer) {
       clearTimeout(child.completionDeliveryTimer);
@@ -474,6 +475,7 @@ export class CodexNativeSubagentCompletionDelivery {
         throw new Error("Codex native subagent task finalization was not persisted.");
       }
       child.completionTaskPhase = "delivery";
+      state.progressOwner?.notify();
     }
     if (!state.requesterSessionKey || !state.taskRuntimeScope) {
       this.dependencies.unregisterChild(child);

@@ -20,6 +20,8 @@ export type AgentRunContext = {
   sessionId?: string;
   /** Gateway lifecycle generation captured when the run was registered. */
   lifecycleGeneration?: string;
+  /** Immutable token for the latest admitted execution claim, even when this context is reused. */
+  executionClaimId?: string;
   /** Producer-owned start captured from this run's accepted lifecycle event. */
   lifecycleStartedAt?: number;
   activeModel?: AgentRunModel;

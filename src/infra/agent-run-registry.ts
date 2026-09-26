@@ -20,6 +20,7 @@ import {
   getAgentRunRegistryState,
   bumpAgentRunIndexVersion,
   getAgentRunContextOwnerStatus,
+  storeRunContext,
 } from "./agent-run-registry-state.js";
 import type {
   AgentRunContext,
@@ -101,14 +102,6 @@ export function registerAgentRunDelegatedAuthorityClosedHandler(
 /** Connects registry cleanup to the event sequencer without reversing ownership. */
 export function registerAgentRunSequenceResetHandler(handler: (runId: string) => void): void {
   getAgentRunRegistryState().sequenceResetHandler = handler;
-}
-
-function storeRunContext(runId: string, context: AgentRunContext, predecessor?: AgentRunContext) {
-  // Callers supply a fresh record; scheduler leases never transfer with its metadata.
-  context.capacityWaits = undefined;
-  context.registeredAt ??= Date.now();
-  getAgentRunRegistryState().contexts.set(runId, context);
-  recordAgentEventRouting(runId, context, predecessor);
 }
 
 /** Registers or merges per-run context used by later agent event emissions. */
@@ -269,13 +262,18 @@ export function claimAgentRunContext(
   }
   if (existing?.lifecycleGeneration === lifecycleGeneration) {
     const versionBeforeRegister = readAgentRunIndexVersion();
+    existing.executionClaimId = randomUUID();
     registerAgentRunContext(runId, { ...context, lifecycleGeneration }, claimId);
     if (readAgentRunIndexVersion() === versionBeforeRegister) {
       bumpAgentRunIndexVersion(existing);
     }
     return claimId;
   }
-  storeRunContext(runId, { ...context, lifecycleGeneration }, existing);
+  storeRunContext(
+    runId,
+    { ...context, lifecycleGeneration, executionClaimId: randomUUID() },
+    existing,
+  );
   state.sequenceResetHandler?.(runId);
   clearAgentRunUsage(runId);
   bumpAgentRunIndexVersion(context, existing);

@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { recordAgentEventRouting } from "./agent-event-execution-context.js";
 import type {
   AgentRunContext,
   AgentRunContextOwnership,
@@ -17,6 +18,18 @@ export function getAgentRunRegistryState(): AgentRunRegistryState {
     lifecycleGeneration: randomUUID(),
     version: 0,
   }));
+}
+
+export function storeRunContext(
+  runId: string,
+  context: AgentRunContext,
+  predecessor?: AgentRunContext,
+) {
+  // Callers supply a fresh record; scheduler leases never transfer with its metadata.
+  context.capacityWaits = undefined;
+  context.registeredAt ??= Date.now();
+  getAgentRunRegistryState().contexts.set(runId, context);
+  recordAgentEventRouting(runId, context, predecessor);
 }
 
 export function getAgentRunContextOwnerStatus(

@@ -602,3 +602,57 @@ describe.each(["sticker", "poll"] as const)("Discord structured %s content", (ki
     expect(writes()[0]?.body).toHaveProperty(kind === "sticker" ? "sticker_ids" : "poll");
   });
 });
+
+// Background task publishers have a captured dispatch owner, not a fresh inbound message.
+describe("Discord background progress edits", () => {
+  it.each([false, true])(
+    "retains the original edit authority across channel lookup (revoked=%s)",
+    async (revokeAfterLookup) => {
+      let active = true;
+      const assertCurrent = () => {
+        if (!active) {
+          throw new Error("background progress owner revoked");
+        }
+      };
+      vi.mocked(runtime.fetchChannelInfoDiscord).mockImplementationOnce(async (channel, opts) => {
+        const info = await original.fetchChannelInfoDiscord(channel, { ...opts, rest });
+        if (revokeAfterLookup) {
+          active = false;
+        }
+        return info;
+      });
+      const pending = handleDiscordMessageAction({
+        action: "edit",
+        accountId: "default",
+        params: {
+          to: `channel:${channelId}`,
+          messageId,
+          message: "Background work: waiting for approval. Last activity: 12:00 UTC.",
+        },
+        cfg: {
+          channels: {
+            discord: {
+              token,
+              groupPolicy: "allowlist",
+              guilds: { [guildId]: { channels: { [channelId]: { enabled: true } } } },
+            },
+          },
+        },
+        assertDirectAdapterHandoff: assertCurrent,
+      });
+      if (revokeAfterLookup) {
+        await expect(pending).rejects.toThrow(/revoked/);
+        expect(writes()).toEqual([]);
+      } else {
+        await pending;
+        expect(writes()).toEqual([
+          {
+            method: "PATCH",
+            path: `/v10/channels/${channelId}/messages/${messageId}`,
+            body: { content: "Background work: waiting for approval. Last activity: 12:00 UTC." },
+          },
+        ]);
+      }
+    },
+  );
+});

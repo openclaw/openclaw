@@ -4,8 +4,7 @@ import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
+import { createRunTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
@@ -538,9 +537,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       : {}),
     ...(params.sessionKey
       ? {
-          agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
-            requesterSessionKey: params.sessionKey,
-            gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
+          agentHarnessTaskRuntimeScope: createRunTaskRuntimeScope(params.sessionKey, {
+            ...params,
+            requesterSessionId: sessionId,
+            requesterLifecycleRevision: params.sessionTarget?.expectedLifecycleRevision,
+            requesterAgentId: workspaceResolution.agentId,
           }),
         }
       : {}),

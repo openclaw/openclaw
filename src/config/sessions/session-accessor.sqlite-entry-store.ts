@@ -639,6 +639,7 @@ export function writeSessionEntry(
               kind: "entry" as const,
               previousSessionId: canonicalPreviousEntry?.sessionId,
               sessionId: normalizedEntry.sessionId,
+              lifecycleRevision: normalizedEntry.lifecycleRevision,
               category: normalizedEntry.category?.trim() || null,
               clearMembers:
                 canonicalPreviousEntry !== undefined &&
