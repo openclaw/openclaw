@@ -300,8 +300,7 @@ describe("OpenAI realtime voice provider routing", () => {
       expected: true,
     },
     {
-      name:
-        "gateway-relay | gpt-realtime-2.1 | Platform API key | standard endpoint | not applicable",
+      name: "gateway-relay | gpt-realtime-2.1 | Platform API key | standard endpoint | not applicable",
       surface: "gateway-relay" as const,
       providerConfig: { model: "gpt-realtime-2.1", apiKey: "test-api-key-platform" },
       agentId: "main",

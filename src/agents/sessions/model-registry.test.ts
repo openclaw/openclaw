@@ -36,7 +36,6 @@ function writeGeneratedPluginCatalog(
   });
 }
 
-
 function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfigInput {
   return {
     oauth: {
