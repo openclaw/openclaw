@@ -7,6 +7,8 @@ import {
 import type {
   ModelApi,
   ModelProviderConfig,
+  ProviderModelAuthPolicyContext,
+  ProviderModelAuthPolicy,
   ProviderFastModePolicyContext,
   ProviderModelRouteCandidate,
   ProviderModelRouteResolution,
@@ -32,6 +34,53 @@ import {
 } from "./model-route-contract.js";
 import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
+import {
+  IDENTITY_AUTH_FLOW,
+  TOKEN_SHARING_AUTH_FLOW,
+  TOKEN_SHARING_RESOURCE,
+} from "./token-sharing.js";
+
+/** Credential storage mode and the endpoint it authorizes are independent. */
+export function resolveModelAuthPolicy(
+  ctx: ProviderModelAuthPolicyContext,
+): ProviderModelAuthPolicy | undefined {
+  if (ctx.provider.trim().toLowerCase() !== "openai") {
+    return undefined;
+  }
+  const api = ctx.api?.trim().toLowerCase();
+  if (ctx.mode === "oauth" && ctx.authFlow === IDENTITY_AUTH_FLOW) {
+    return {
+      authRequirement: null,
+      compatible: false,
+      incompatibilityReason:
+        "requires token-sharing consent. Sign in again and enable sharing, or explicitly choose another inference credential",
+    };
+  }
+  if (ctx.mode === "oauth" && ctx.authFlow === TOKEN_SHARING_AUTH_FLOW) {
+    return {
+      authRequirement: "api-key",
+      compatible:
+        (!api || api === "openai-responses") &&
+        (!ctx.baseUrl || ctx.baseUrl.replace(/\/$/, "") === TOKEN_SHARING_RESOURCE),
+      incompatibilityReason:
+        "requires the public OpenAI Responses endpoint for ChatGPT token sharing",
+    };
+  }
+  const subscription = ctx.mode === "oauth" || ctx.mode === "token";
+  const apiKey = ctx.mode === "api-key" || ctx.mode === "api_key";
+  const codex = api === "openai-chatgpt-responses";
+  return {
+    authRequirement: subscription
+      ? "subscription"
+      : apiKey || ctx.mode === "aws-sdk"
+        ? "api-key"
+        : null,
+    compatible: api === undefined || (codex ? subscription : apiKey),
+    incompatibilityReason: codex
+      ? "requires a ChatGPT subscription (OAuth or token) profile"
+      : "requires an OpenAI API key profile",
+  };
+}
 
 export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
   if (!ctx.api || !ctx.baseUrl || ctx.runtimeId !== "openclaw") {

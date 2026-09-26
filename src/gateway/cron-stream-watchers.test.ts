@@ -213,13 +213,9 @@ describe("cron stream watchers", () => {
       ...fakeSupervisor().supervisor,
       spawn,
     } satisfies ProcessSupervisor;
-    const watchers = createWatchers({
+    const { watchers } = createCronStreamWatcherFixture({
       getProcessSupervisor: () => supervisor,
       minIntervalMs: 1,
-      updateState: vi.fn(async () => {}),
-      recordFailure: vi.fn(async () => {}),
-      fireBatch: vi.fn(async () => "fired" as const),
-      logger: { info: vi.fn(), warn: vi.fn() },
     });
     const jobs = [job({ id: "stubborn-job" }), job({ id: "healthy-job" })];
     await watchers.reconcile(jobs, true);
@@ -267,13 +263,9 @@ describe("cron stream watchers", () => {
       ...fakeSupervisor().supervisor,
       spawn,
     } satisfies ProcessSupervisor;
-    const watchers = createWatchers({
+    const { watchers } = createCronStreamWatcherFixture({
       getProcessSupervisor: () => supervisor,
       minIntervalMs: 1,
-      updateState: vi.fn(async () => {}),
-      recordFailure: vi.fn(async () => {}),
-      fireBatch: vi.fn(async () => "fired" as const),
-      logger: { info: vi.fn(), warn: vi.fn() },
     });
     await watchers.reconcile([job({ id: "stubborn-job" })], true);
     await settle();
@@ -337,14 +329,11 @@ describe("cron stream watchers", () => {
       spawn,
     } satisfies ProcessSupervisor;
     const recordFailure = vi.fn(async () => {});
-    const watchers = createWatchers({
+    const { watchers } = createCronStreamWatcherFixture({
       getProcessSupervisor: () => supervisor,
       minIntervalMs: 1,
       retryBackoffMs: [1],
-      updateState: vi.fn(async () => {}),
       recordFailure,
-      fireBatch: vi.fn(async () => "fired" as const),
-      logger: { info: vi.fn(), warn: vi.fn() },
     });
     await watchers.reconcile([job()], true);
     await vi.advanceTimersByTimeAsync(10);
@@ -515,12 +504,8 @@ describe("cron stream watchers", () => {
         ...fakeSupervisor().supervisor,
         spawn: vi.fn(async () => await spawned),
       } satisfies ProcessSupervisor;
-      const watchers = createWatchers({
+      const { watchers } = createCronStreamWatcherFixture({
         getProcessSupervisor: () => supervisor,
-        updateState: vi.fn(async () => {}),
-        recordFailure: vi.fn(async () => {}),
-        fireBatch: vi.fn(async () => "fired" as const),
-        logger: { info: vi.fn(), warn: vi.fn() },
       });
 
       const starting = watchers.start(job());
@@ -803,13 +788,10 @@ describe("cron stream watchers", () => {
     vi.useRealTimers();
     const supervisor = createProcessSupervisor();
     const fireBatch = vi.fn(async () => "fired" as const);
-    const watchers = createWatchers({
+    const { watchers } = createCronStreamWatcherFixture({
       getProcessSupervisor: () => supervisor,
       minIntervalMs: 1,
-      updateState: vi.fn(async () => {}),
-      recordFailure: vi.fn(async () => {}),
       fireBatch,
-      logger: { info: vi.fn(), warn: vi.fn() },
     });
     await watchers.reconcile(
       [

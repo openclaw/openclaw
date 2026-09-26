@@ -105,7 +105,7 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
     { runId: siblingRunId, childSessionKey: siblingSessionKey, expectsCompletionMessage: true },
   ];
   for (const child of children) {
-    registerSubagentRun({
+    await registerSubagentRun({
       ...child,
       requesterSessionKey,
       requesterAgentId: "main",

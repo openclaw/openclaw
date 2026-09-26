@@ -17,7 +17,11 @@ import {
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
 } from "./registry.js";
-import { prepareSnapshotBranchDeletion, withExactStateGitLocks } from "./removal-git.js";
+import {
+  prepareSnapshotBranchDeletion,
+  removeManagedCheckout,
+  withExactStateGitLocks,
+} from "./removal-git.js";
 import { createRemovalRecoveryInventory } from "./removal-recovery-inventory.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { resolveRepository } from "./service-preparation.js";
@@ -67,12 +71,10 @@ async function recoverRemovalWithAllocation(params: {
   ) {
     throw preserved("Worktree repository identity changed");
   }
+  const pendingRef = `refs/openclaw/removals/${record.id}`;
+  const removalRefs = [record.snapshotRef!, pendingRef, `refs/heads/${record.branch}`];
   const assertDirectRefFiles = () => {
-    for (const ref of [
-      record.snapshotRef!,
-      `refs/openclaw/removals/${record.id}`,
-      `refs/heads/${record.branch}`,
-    ]) {
+    for (const ref of removalRefs) {
       const filename = path.join(repository.commonDir, ref);
       const info = fsSync.lstatSync(filename, { throwIfNoEntry: false });
       // Packed refs cannot be symbolic. A loose replacement must be an ordinary
@@ -88,11 +90,7 @@ async function recoverRemovalWithAllocation(params: {
     }
   };
   const assertDirectRefs = async (options: Parameters<typeof runGit>[2]) => {
-    for (const ref of [
-      record.snapshotRef!,
-      `refs/openclaw/removals/${record.id}`,
-      `refs/heads/${record.branch}`,
-    ]) {
+    for (const ref of removalRefs) {
       const symbolic = await runGit(record.repoRoot, ["symbolic-ref", "--quiet", ref], options);
       if (symbolic.code !== 1) {
         throw preserved("Removal refs must remain direct refs");
@@ -136,7 +134,6 @@ async function recoverRemovalWithAllocation(params: {
     ) {
       throw preserved("Completed removal identity changed");
     }
-    const pendingRef = `refs/openclaw/removals/${record.id}`;
     const pending = await runGit(
       record.repoRoot,
       ["rev-parse", "--verify", "--quiet", pendingRef],
@@ -206,7 +203,6 @@ async function recoverRemovalWithAllocation(params: {
     killProcessTree: true,
     env: { GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1", GIT_OPTIONAL_LOCKS: "0" },
   };
-  const pendingRef = `refs/openclaw/removals/${record.id}`;
   try {
     const provisioned = await getRegistryWorktreeProvisionedPaths(params.env, record.id);
     if (!provisioned || provisioned.length) {
@@ -466,26 +462,15 @@ async function recoverRemovalWithAllocation(params: {
           }
           await assertRefs();
           assertIdentity();
-          const removed = await withWorktreeGitConfig(
+          await withWorktreeGitConfig(
             record.path,
             true,
             options,
             async (git) =>
-              await runOutsideCommandProcessScope(() =>
-                git.run(record.repoRoot, ["worktree", "remove", "--", record.path], {
-                  beforeRun: () => {
-                    // The trusted status view cannot execute repository filters.
-                    // No await separates the final inventory from native admission.
-                    inventory.assertComplete();
-                  },
-                  killProcessTree: true,
-                  waitForExit: true,
-                }),
-              ),
+              // The trusted status view cannot execute repository filters.
+              // No await separates the final inventory from native admission.
+              await removeManagedCheckout(record, git, true, inventory.assertComplete),
           );
-          if (removed.code !== 0) {
-            throw commandError("git worktree remove", removed);
-          }
         },
         [record.snapshotRef!, pendingRef],
       );

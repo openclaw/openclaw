@@ -94,14 +94,14 @@ async function handleAuth(
     sendText(res, 415, "Unsupported media type");
     return;
   }
-  const cfg = currentConfig(api);
+  const cfg = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
   const ip =
     resolveRequestClientIp(
       req,
       cfg.gateway?.trustedProxies,
       cfg.gateway?.allowRealIpFallback === true,
     ) ?? "unknown";
-  if (!consumeRateLimit(ip)) {
+  if (rateLimit.isRateLimited(ip)) {
     sendText(res, 429, "Too many requests");
     return;
   }
@@ -173,10 +173,6 @@ async function handleAuth(
   });
 }
 
-function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-}
-
 function parseAuthBody(
   value: unknown,
 ): { initData: string; launchTicket: string; accountId?: string } | null {
@@ -191,10 +187,6 @@ function parseAuthBody(
     launchTicket: value.launchTicket,
     ...(typeof value.accountId === "string" ? { accountId: value.accountId } : {}),
   };
-}
-
-function consumeRateLimit(ip: string): boolean {
-  return !rateLimit.isRateLimited(ip);
 }
 
 function rememberReplay(hash: string, expiresAtMs: number): boolean {

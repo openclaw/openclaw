@@ -17,7 +17,6 @@ import {
   markObservedDialogsHandledRemotelyForPage,
   refLocator,
   respondToObservedDialogOnPage,
-  retirePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
 } from "./pw-session.js";
 import {
@@ -87,7 +86,6 @@ export const pwAi = {
   downloadCurrentDocumentViaPlaywright,
   closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection,
-  retirePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
   createPageViaPlaywright,
   ensurePageState,

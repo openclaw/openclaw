@@ -53,7 +53,6 @@ const sdk = {
   ClickPosition: { Coordinates: { new: mocks.createClickPosition } },
   ClickButton: { Left: 0, Right: 1, Middle: 2 },
   CuaDriver: { create: mocks.create, createConfigured: mocks.createConfigured },
-  EscalationReason: { Other: "other" },
   DriverError: { Tool: { instanceOf: mocks.isToolError } },
   InputDeliveryMode: { Foreground: 1 },
   ScrollBy: { Line: 0 },
@@ -62,12 +61,7 @@ const sdk = {
   createTrustedSession: mocks.createTrustedSession,
 };
 
-import {
-  ClickButton,
-  createCuaDriver,
-  EscalationReason,
-  ScrollDirection,
-} from "./driver-client.js";
+import { ClickButton, createCuaDriver, ScrollDirection } from "./driver-client.js";
 
 const authorization = {
   allowedModes: ["unrestricted"],
@@ -207,7 +201,7 @@ describe("CUA Driver direct session", () => {
     await driver.typeText("hello");
     await driver.pressKey({ key: "a", modifiers: ["cmd"] });
     await driver.getCursorPosition();
-    await driver.escalateScope(EscalationReason.Other);
+    await driver.getSessionState();
 
     const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
     const target = { tag: "Desktop", inner: { displayId: "primary" } };

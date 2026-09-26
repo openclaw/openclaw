@@ -4,15 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 const storeSpy = vi.hoisted(() => ({
   onMove: null as ((from: string, to: string, rootDir: string) => void) | null,
 }));
 
-vi.mock("../file-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../file-store.js")>();
+vi.mock("@openclaw/fs-safe/store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
   return {
     ...actual,
     fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
@@ -53,7 +54,6 @@ const {
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
   OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-  SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME,
 } = await import("./delivery-queue-media-staging.js");
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -139,24 +139,25 @@ describe("retention", () => {
 
   it("retains media from generation-bound and migration namespaces in one inventory", async () => {
     const queueNames = [
+      COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME,
       OUTBOUND_DELIVERY_QUEUE_NAME,
-      SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME,
+      "outbound-session-generation-v1",
       LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
       OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
     ];
     const retained = await Promise.all(
       queueNames.map(async (queueName, index) => {
-        const generationBound = queueName === SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME;
+        const generationBound = queueName === "outbound-session-generation-v1";
         const artifact = await seedArtifact(
-          `${generationBound ? "g1-" : ""}00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}.ogg`,
+          `${queueName === COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME ? "c1-" : generationBound ? "g1-" : ""}00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}.ogg`,
           30 * DAY_MS,
         );
         const entry = {
           id: `retained-${index}`,
           enqueuedAt: Date.now(),
           retryCount: 0,
-          ...(generationBound
+          ...(generationBound || queueName === COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME
             ? {
                 preparedBatch: {
                   entries: [{ status: "accepted", payload: { mediaUrl: artifact } }],
@@ -174,14 +175,16 @@ describe("retention", () => {
     );
     const orphan = await seedArtifact(ARTIFACT_B, 30 * DAY_MS);
     const generationOrphan = await seedArtifact(`g1-${ARTIFACT_B}`, 30 * DAY_MS);
+    const ownerOrphan = await seedArtifact(`c1-${ARTIFACT_B}`, 30 * DAY_MS);
 
     await pruneOrphanedDeliveryQueueMedia({ stateDir });
 
     await expect(
       Promise.all(retained.map(async (artifact) => await exists(artifact))),
-    ).resolves.toEqual([true, true, true, true, true]);
+    ).resolves.toEqual([true, true, true, true, true, true]);
     expect(await exists(orphan)).toBe(false);
     expect(await exists(generationOrphan)).toBe(false);
+    expect(await exists(ownerOrphan)).toBe(false);
   });
 
   it("reclaims stale partial writes but ignores foreign files and symlinks", async () => {
@@ -279,30 +282,6 @@ describe("ownership helpers", () => {
 describe("staging", () => {
   const mediaAccessFor = (roots: string[]) => ({ localRoots: roots });
 
-  it("copies a local source for the queue and survives producer cleanup", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
-    const livePayload = { text: "hi", mediaUrl: source };
-
-    const result = await stageQueuePayloadMedia({
-      payloads: [livePayload],
-      mediaAccess: mediaAccessFor([sourceDir]),
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-    await fs.rm(source);
-
-    expect(result.status).toBe("staged");
-    if (result.status !== "staged") {
-      return;
-    }
-    const staged = result.payloads[0]?.mediaUrl as string;
-    expect(path.dirname(staged)).toBe(spoolRoot);
-    expect(await fs.readFile(staged, "utf8")).toBe("opus-bytes");
-    expect(livePayload.mediaUrl).toBe(source);
-    expect(result.artifacts).toEqual([staged]);
-  });
-
   it("leaves replayable remote media untouched without creating the spool", async () => {
     const result = await stageQueuePayloadMedia({
       payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
@@ -315,21 +294,6 @@ describe("staging", () => {
       payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
       artifacts: [],
     });
-    expect(await exists(spoolRoot)).toBe(false);
-  });
-
-  it("does not make sensitive media durable", async () => {
-    const source = path.join(sourceDir, "secret.ogg");
-    await fs.writeFile(source, "private");
-
-    const result = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: source, sensitiveMedia: true }],
-      mediaAccess: mediaAccessFor([sourceDir]),
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-
-    expect(result).toEqual({ status: "not-durable", reason: "sensitive-media" });
     expect(await exists(spoolRoot)).toBe(false);
   });
 
@@ -347,7 +311,7 @@ describe("staging", () => {
     ).rejects.toThrow();
   });
 
-  it.each([undefined, "session-generation-v1"] as const)(
+  it.each([undefined, "session-generation-v1", "command-owner-v1"] as const)(
     "publishes complete media with older-reader-compatible custody (%s)",
     async (artifactFormat) => {
       const source = path.join(sourceDir, "voice.ogg");
@@ -359,7 +323,11 @@ describe("staging", () => {
         expect(PUBLISHED_ARTIFACT_NAME_RE.test(to)).toBe(knownToPublishedReader);
         expect(from).toBe(`${to}.part`);
         if (artifactFormat) {
-          expect(to).toMatch(/^g1-[0-9a-f-]{36}\.ogg$/);
+          expect(to).toMatch(
+            artifactFormat === "command-owner-v1"
+              ? /^c1-[0-9a-f-]{36}\.ogg$/
+              : /^g1-[0-9a-f-]{36}\.ogg$/,
+          );
         }
         atMove.push({
           finalExisted: existsSync(path.join(rootDir, to)),

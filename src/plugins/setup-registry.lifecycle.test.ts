@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   setGatewayPluginMetadataSnapshot,
@@ -554,7 +555,9 @@ describe("plugin setup module lifecycle", () => {
     "keeps setup lazy imports with their transferred owner (changed: %s)",
     async (changed) => {
       const { cache, record, rootDir, source } = fixture();
-      const owner = withPluginCache(cache, retainGatewayPluginMetadata);
+      const owner = withPluginCache(cache, () =>
+        retainGatewayPluginMetadata(createTestGatewayScheduler()),
+      );
       const next = createPluginCache();
       const event = `setup-transfer-${changed}`;
       const listeners = process.listenerCount(event);
@@ -607,8 +610,12 @@ describe("plugin setup module lifecycle", () => {
 
   it("retains shared setup callbacks until the last metadata owner joins their cleanup", async () => {
     const { cache, record, rootDir, source } = fixture();
-    const first = withPluginCache(cache, retainGatewayPluginMetadata);
-    const second = withPluginCache(cache, retainGatewayPluginMetadata);
+    const first = withPluginCache(cache, () =>
+      retainGatewayPluginMetadata(createTestGatewayScheduler()),
+    );
+    const second = withPluginCache(cache, () =>
+      retainGatewayPluginMetadata(createTestGatewayScheduler()),
+    );
     const firstCache = createPluginCache();
     const secondCache = createPluginCache();
     const event = "setup-shared-metadata";
@@ -661,7 +668,9 @@ describe("plugin setup module lifecycle", () => {
       joining = second.close();
       await cleanupEntered.promise;
       expect(() => {
-        late = withPluginCache(secondCache, retainGatewayPluginMetadata);
+        late = withPluginCache(secondCache, () =>
+          retainGatewayPluginMetadata(createTestGatewayScheduler()),
+        );
       }).toThrow("Gateway plugin metadata is shutting down");
       expect(settled).toBe(false);
       expect(cleanup).toHaveBeenCalledOnce();
@@ -684,14 +693,18 @@ describe("plugin setup module lifecycle", () => {
   it("selects a live metadata owner before awaiting a sibling's cleanup", async () => {
     const { cache, record, rootDir, source, loader } = fixture();
     const secondCache = createPluginCache();
-    const first = withPluginCache(cache, retainGatewayPluginMetadata);
+    const first = withPluginCache(cache, () =>
+      retainGatewayPluginMetadata(createTestGatewayScheduler()),
+    );
     const entered = createDeferred();
     const release = createDeferred();
     let second: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
     let closing: ReturnType<typeof first.close> | undefined;
     let newcomer: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
     try {
-      second = withPluginCache(secondCache, retainGatewayPluginMetadata);
+      second = withPluginCache(secondCache, () =>
+        retainGatewayPluginMetadata(createTestGatewayScheduler()),
+      );
       fs.writeFileSync(source, 'module.exports = () => "ready";');
       const snapshot = withPluginCache(cache, () =>
         createPluginMetadataSnapshotFixture({ plugins: [record] }),
@@ -722,12 +735,12 @@ describe("plugin setup module lifecycle", () => {
       await entered.promise;
       expect(getProcessPluginCache() === secondCache).toBe(true);
       expect(getGatewayPluginMetadataSnapshot()).toBe(survivingSnapshot);
-      expect(() => retainGatewayPluginMetadata()).toThrow(
+      expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(
         "Gateway plugin metadata is shutting down",
       );
       release.resolve();
       await closing;
-      newcomer = retainGatewayPluginMetadata();
+      newcomer = retainGatewayPluginMetadata(createTestGatewayScheduler());
       newcomer.publish(survivingSnapshot);
       await second.close();
       expect(getGatewayPluginMetadataSnapshot()).toBe(survivingSnapshot);

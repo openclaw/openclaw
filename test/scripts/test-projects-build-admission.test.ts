@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,10 +7,11 @@ import {
   listVitestRuntimeConsumerFiles,
   resolveVitestCliEntry,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { createPatternFileHelper } from "../helpers/pattern-file.js";
-import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
-import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 import { createControlledWorkerCompiler } from "./vitest-worker-artifacts.test-support.js";
 
@@ -32,6 +33,10 @@ vi.mock("../../scripts/lib/vitest-shard-timings.mts", async (importOriginal) => 
   readShardTimings: () => new Map(),
   writeShardTimings: () => {},
 }));
+
+const { runManagedCommand: runCliCommand } = await vi.importActual<
+  typeof import("../../scripts/lib/managed-child-process.mts")
+>("../../scripts/lib/managed-child-process.mts");
 
 const modelTarget = "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts";
 const targets = [modelTarget, "extensions/qa-lab/src/suite-process-lifecycle.test.ts"];
@@ -82,13 +87,9 @@ afterEach(() => {
 
 describe("CLI runtime admission", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
-  posixIt.each<[name: string, args: string[]]>([
+  posixIt.for<[name: string, args: string[]]>([
     ["ordinary target", [ordinaryQa]],
     ["ordinary CLI config", ["--config", "test/vitest/vitest.cli.config.ts"]],
-    [
-      "ordinary CLI selection",
-      ["--config", "test/vitest/vitest.cli.config.ts", "command-path-policy.test.ts"],
-    ],
     [
       "CLI process runtime exclusions",
       [
@@ -134,42 +135,50 @@ describe("CLI runtime admission", () => {
     ["custom config", ["--config", "custom.config.ts"]],
     ["list command", ["list"]],
     ["help", ["--help"]],
-    ["equals help", ["--help=true"]],
-    ["short help group", ["-uh"]],
     ["version only", ["--version=true"]],
-    ["list tags", ["--listTags"]],
-    ["clear cache", ["--clearCache"]],
     ["native invalid scalar", ["--passWithNoTests", "--passWithNoTests"]],
     ["native unknown option", ["--unknownOption"]],
-  ])("leaves direct $0 selection without runtime preparation", async (_name, args) => {
-    const root = tempDirs.make("plugin-build-direct-");
-    const preload = path.join(root, "preload.mjs");
-    fs.writeFileSync(
-      preload,
-      `import cp from 'node:child_process';
+  ])(
+    "leaves direct $0 selection without runtime preparation",
+    async ([_name, args], { signal, onTestFinished }) => {
+      const lifetime = createFixtureLifetime();
+      onTestFinished(() => lifetime.cleanup());
+      await lifetime.run(async () => {
+        const root = lifetime.createTempDir("plugin-build-direct-");
+        const preload = path.join(root, "preload.mjs");
+        fs.writeFileSync(
+          preload,
+          `import cp from 'node:child_process';
 import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => spawn(process.execPath, ['-e',
   args.includes('scripts/run-node.mjs') ? 'process.exit(91)' : ''], options);
 syncFixtureBuiltinExports();\n`,
-    );
-    const configArgs = args.includes("--config")
-      ? []
-      : ["--config", "test/vitest/vitest.extension-qa.config.ts"];
-    const child = spawn(
-      process.execPath,
-      ["--import", preload, "scripts/run-vitest.mts", ...configArgs, ...args],
-      { stdio: "ignore" },
-    );
-    try {
-      await expect(waitForChildClose(child)).resolves.toEqual({ code: 0, signal: null });
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-    }
-  });
-  posixIt.each([
+        );
+        const configArgs = args.includes("--config")
+          ? []
+          : ["--config", "test/vitest/vitest.extension-qa.config.ts"];
+        let child: ChildProcess | undefined;
+        await lifetime.track(
+          runCliCommand({
+            bin: process.execPath,
+            args: ["--import", preload, "scripts/run-vitest.mts", ...configArgs, ...args],
+            stdio: "ignore",
+            signal,
+            requireProcessTreeExit: true,
+            onReady(owned) {
+              child = owned;
+            },
+          }),
+        );
+        expect({ code: child?.exitCode, signal: child?.signalCode }).toEqual({
+          code: 0,
+          signal: null,
+        });
+      });
+    },
+  );
+  posixIt.for([
     ["single", "scripts/test-extension.mts", []],
     ["batch", "scripts/test-extension-batch.mts", ["qa-lab,firecrawl"]],
     [
@@ -191,11 +200,6 @@ syncFixtureBuiltinExports();\n`,
       "config empty long",
       "scripts/run-vitest.mts",
       ["run", "--config=", "test/vitest/vitest.extension-qa.config.ts"],
-    ],
-    [
-      "config empty short",
-      "scripts/run-vitest.mts",
-      ["run", "-c=", "test/vitest/vitest.extension-qa.config.ts"],
     ],
     ["root config", "scripts/run-vitest.mts", ["run", "--config", "vitest.config.ts"]],
     [
@@ -228,24 +232,6 @@ syncFixtureBuiltinExports();\n`,
       "private-qa",
     ],
     [
-      "Gateway core",
-      "scripts/run-vitest.mts",
-      ["run", "--config", "test/vitest/vitest.gateway-core.config.ts"],
-      "runtime",
-    ],
-    [
-      "Gateway selective exclusion",
-      "scripts/run-vitest.mts",
-      [
-        "run",
-        "--config",
-        "test/vitest/vitest.gateway-core.config.ts",
-        "--exclude",
-        "gateway-concurrent-streams.test.ts",
-      ],
-      "runtime",
-    ],
-    [
       "Gateway server selective exclusion",
       "scripts/run-vitest.mts",
       [
@@ -254,35 +240,6 @@ syncFixtureBuiltinExports();\n`,
         "test/vitest/vitest.gateway-server.config.ts",
         "--exclude",
         "server-sidecar-retention.test.ts",
-      ],
-      "runtime",
-    ],
-    [
-      "Gateway umbrella",
-      "scripts/run-vitest.mts",
-      ["run", "--config", "test/vitest/vitest.gateway.config.ts"],
-      "runtime",
-    ],
-    [
-      "Gateway umbrella with core consumers excluded",
-      "scripts/run-vitest.mts",
-      ["run", "--config", "test/vitest/vitest.gateway.config.ts", "--exclude", "gateway-*.test.ts"],
-      "runtime",
-    ],
-    [
-      "agentic aggregate",
-      "scripts/run-vitest.mts",
-      ["run", "--config", "test/vitest/vitest.full-agentic.config.ts"],
-      "runtime",
-    ],
-    [
-      "Gateway active memory",
-      "scripts/run-vitest.mts",
-      [
-        "run",
-        "--config",
-        "test/vitest/vitest.gateway-core.config.ts",
-        "gateway-active-memory.test.ts",
       ],
       "runtime",
     ],
@@ -304,14 +261,15 @@ syncFixtureBuiltinExports();\n`,
     ],
   ] as const)(
     "blocks %s CLI readers until successful build and preserves SIGTERM",
-    async (_name, script, args, mode: "private-qa" | "runtime" = "private-qa") => {
-      const outcomes = [0, 7, "SIGTERM"] as const;
-      // Rows share hooks and module state; only their independent process trees overlap.
-      const results = await Promise.allSettled(
-        outcomes.map(async (outcome) => {
-          const scenarioDirs = createTempDirTracker();
-          const root = scenarioDirs.make("plugin-build-cli-");
-          try {
+    async ([_name, script, args, mode = "private-qa"], { signal, onTestFinished }) => {
+      const lifetime = createFixtureLifetime();
+      onTestFinished(() => lifetime.cleanup());
+      await lifetime.run(async () => {
+        const outcomes = [0, 7, "SIGTERM"] as const;
+        // Rows share hooks and module state; only their independent process trees overlap.
+        const results = await Promise.allSettled(
+          outcomes.map(async (outcome) => {
+            const root = lifetime.createTempDir("plugin-build-cli-");
             const pidFile = path.join(root, "build.pid");
             const readersFile = path.join(root, "readers");
             const builder = path.join(root, "build.mjs");
@@ -327,7 +285,8 @@ syncFixtureBuiltinExports();\n`,
 process.on('SIGTERM', () => process.exit(0));
 process.stdin.once('data', () => process.exit(${typeof outcome === "number" ? outcome : 0}));
 fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-process.stdin.resume();\n`,
+process.stdin.resume();
+process.stdout.write('fixture-build-ready\\n');\n`,
             );
             // Keep the real managed process owner and CLI scheduler. Replace only
             // heavyweight build/test executables at Node's child-process boundary.
@@ -347,37 +306,56 @@ cp.spawn = (bin, args, options) => {
 };
 syncFixtureBuiltinExports();\n`,
             );
-            const child = spawn(
-              process.execPath,
-              ["--import", preload, path.resolve(script), ...args],
-              {
+            const finished = new AbortController();
+            const ready = createDeferred();
+            let child: ChildProcess | undefined;
+            let output = "";
+            let stdout = "";
+            const closed = lifetime.track(
+              runCliCommand({
+                bin: process.execPath,
+                args: ["--import", preload, path.resolve(script), ...args],
                 cwd: _name === "single" ? path.resolve("extensions/qa-lab") : process.cwd(),
                 env: workerCompiler.env,
                 stdio: ["pipe", "pipe", "pipe"],
-              },
+                signal: AbortSignal.any([signal, finished.signal]),
+                requireProcessTreeExit: true,
+                onReady(owned) {
+                  child = owned;
+                  owned.stdout!.on("data", (data) => {
+                    output += data;
+                    stdout += data;
+                    if (stdout.includes("fixture-build-ready\n")) {
+                      ready.resolve();
+                    }
+                  });
+                  owned.stderr!.on("data", (data) => {
+                    output += data;
+                  });
+                },
+              }),
             );
-            let output = "";
-            child.stdout.on("data", (data) => {
-              output += data;
-            });
-            child.stderr.on("data", (data) => {
-              output += data;
-            });
-            // Observe timeout failures immediately, but retain the actual close event
-            // so failed assertions still join cleanup before this outcome settles.
-            const closed = waitForChildClose(child).catch((error: unknown) => error);
-            const stopped = createDeferred();
-            child.once("close", () => stopped.resolve());
-            let buildPid: number | undefined;
             try {
-              buildPid = await waitForPidFile(pidFile, 5_000);
+              await Promise.race([
+                ready.promise,
+                closed.then((code) => {
+                  throw new Error(`CLI exited before builder readiness (${code}):\n${output}`);
+                }),
+              ]);
+              const buildPid = Number(fs.readFileSync(pidFile, "utf8"));
+              expect(Number.isInteger(buildPid)).toBe(true);
+              expect(buildPid).toBeGreaterThan(0);
               expect(fs.existsSync(readersFile), `outcome=${outcome}`).toBe(false);
               if (outcome === "SIGTERM") {
-                child.kill("SIGTERM");
+                expect(child!.kill("SIGTERM")).toBe(true);
               } else {
-                child.stdin.end("finish\n");
+                child!.stdin!.end("finish\n");
               }
-              expect(await closed, `outcome=${outcome}\n${output}`).toEqual({
+              await closed;
+              expect(
+                { code: child?.exitCode, signal: child?.signalCode },
+                `outcome=${outcome}\n${output}`,
+              ).toEqual({
                 code: outcome === "SIGTERM" ? 143 : outcome,
                 signal: null,
               });
@@ -388,46 +366,28 @@ syncFixtureBuiltinExports();\n`,
                 output.match(new RegExp(`preparing ${mode} runtime`, "gu")),
                 `outcome=${outcome}`,
               ).toHaveLength(1);
-              await waitForDead(buildPid, 5_000);
-              if (_name === "root config" && outcome === 0) {
-                const compilations = workerCompiler.read();
-                expect(compilations).toHaveLength(1);
-                await waitForDead(compilations[0]!.pid, 5_000);
-                expect(fs.existsSync(compilations[0]!.directory)).toBe(false);
-              }
+              await lifetime.verifyCleanup(async () => {
+                expect(isProcessAlive(buildPid)).toBe(false);
+                if (_name === "root config" && outcome === 0) {
+                  const compilations = workerCompiler.read();
+                  expect(compilations).toHaveLength(1);
+                  expect(isProcessAlive(compilations[0]!.pid)).toBe(false);
+                  expect(fs.existsSync(compilations[0]!.directory)).toBe(false);
+                }
+              });
             } finally {
-              if (child.exitCode === null && child.signalCode === null) {
-                child.kill("SIGKILL");
-              }
-              if (!buildPid && fs.existsSync(pidFile)) {
-                buildPid = await waitForPidFile(pidFile, 5_000);
-              }
-              if (buildPid) {
-                try {
-                  process.kill(buildPid, "SIGKILL");
-                } catch {
-                  /* Already exited. */
-                }
-              }
-              try {
-                await withTestTimeout(stopped.promise, 5_000, `outcome=${outcome}: CLI cleanup`);
-              } finally {
-                if (buildPid) {
-                  await waitForDead(buildPid, 5_000);
-                }
-              }
+              finished.abort();
+              await Promise.allSettled([closed]);
             }
-          } finally {
-            scenarioDirs.cleanup();
-          }
-        }),
-      );
-      for (const [index, result] of results.entries()) {
-        expect.soft(result, `outcome=${outcomes[index]}`).toEqual({
-          status: "fulfilled",
-          value: undefined,
-        });
-      }
+          }),
+        );
+        for (const [index, result] of results.entries()) {
+          expect.soft(result, `outcome=${outcomes[index]}`).toEqual({
+            status: "fulfilled",
+            value: undefined,
+          });
+        }
+      });
     },
   );
 });

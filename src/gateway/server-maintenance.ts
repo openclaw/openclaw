@@ -2,6 +2,7 @@
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
+import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import {
@@ -11,7 +12,10 @@ import {
 } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
+import {
+  hasAgentRunContextExecutionOwner,
+  sweepStaleRunContexts,
+} from "../infra/agent-run-registry.js";
 import {
   captureDeliveryQueueStateContext,
   pruneExpiredDeliveryQueueTombstones,
@@ -246,8 +250,9 @@ export function startGatewayMaintenanceTimers(params: {
         limits: resolveWorktreeCleanupLimits(),
       });
     });
+  let worktreeGcInFlight: Promise<void> | undefined;
   const performWorktreeGc = () =>
-    periodicWork
+    (worktreeGcInFlight ??= periodicWork
       .track(runWorktreeGc)
       .then((result) => {
         if (!result) {
@@ -261,15 +266,28 @@ export function startGatewayMaintenanceTimers(params: {
       })
       .catch((err: unknown) => {
         params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
-      });
+      })
+      .finally(() => {
+        worktreeGcInFlight = undefined;
+      }));
+  // Retention is hourly best-effort work; leave the first hour free for Gateway warmup.
   const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
-  if (!restartDrainSignal.aborted) {
-    void performWorktreeGc();
-  }
 
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
   let mediaCleanupStopped = false;
+  const createMediaCleanupLoader = (label: string, run: () => Promise<unknown>) => {
+    const loader = createLazyPromiseLoader(async () => {
+      try {
+        await run();
+      } catch (error) {
+        params.logHealth.error(`${label} failed: ${formatError(error)}`);
+      } finally {
+        loader.clear();
+      }
+    });
+    return loader;
+  };
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ??
     (async () => {
@@ -281,15 +299,10 @@ export function startGatewayMaintenanceTimers(params: {
       }
     });
   let deliveryQueueMediaGcStartedAtMs = 0;
-  const deliveryQueueMediaGcLoader = createLazyPromiseLoader(async () => {
-    try {
-      await runDeliveryQueueMediaGc();
-    } catch (error) {
-      params.logHealth.error(`delivery queue maintenance failed: ${formatError(error)}`);
-    } finally {
-      deliveryQueueMediaGcLoader.clear();
-    }
-  });
+  const deliveryQueueMediaGcLoader = createMediaCleanupLoader(
+    "delivery queue maintenance",
+    runDeliveryQueueMediaGc,
+  );
   let deliveryQueueMediaGcStartPromise: Promise<void> | undefined;
   const performDeliveryQueueMediaGc = () => {
     if (mediaCleanupStopped) {
@@ -466,10 +479,16 @@ export function startGatewayMaintenanceTimers(params: {
     // growth when many unique clients connect over time.
     pruneStaleControlPlaneBuckets(now);
 
-    // Sweep stale buffers for runs that were never explicitly aborted.
-    // Only reap orphaned buffers after the abort controller is gone; active
-    // runs can legitimately sit idle while tools/models work.
+    // Idle execution and queued delivery retain their projection until their owners settle.
     for (const [runId, record] of params.chatRunState.runs) {
+      if (
+        params.chatAbortControllers.has(runId) ||
+        params.chatQueuedTurns.has(runId) ||
+        hasAgentRunContextExecutionOwner(runId) ||
+        isActiveEmbeddedRunId(runId)
+      ) {
+        continue;
+      }
       if (record.abortMarker !== undefined) {
         if (now - chatAbortMarkerTimestampMs(record.abortMarker) > ABORTED_RUN_TTL_MS) {
           params.chatRunState.deleteAbortMarker(runId);
@@ -477,16 +496,7 @@ export function startGatewayMaintenanceTimers(params: {
         }
         continue;
       }
-      if (params.chatAbortControllers.has(runId)) {
-        continue;
-      }
-      const staleTimestamp = [
-        record.deltaSentAt,
-        record.bufferUpdatedAt,
-        record.agentText?.assistant?.lastSentAt,
-        record.agentText?.thinking?.lastSentAt,
-      ].some((timestamp) => timestamp !== undefined && now - timestamp > ABORTED_RUN_TTL_MS);
-      if (staleTimestamp) {
+      if (now - record.lastActivityAt > ABORTED_RUN_TTL_MS) {
         params.chatRunState.clearRun(runId);
       }
     }
@@ -494,15 +504,10 @@ export function startGatewayMaintenanceTimers(params: {
     sweepStaleRunContexts();
   }, 60_000);
 
-  const playbackTranscodeCacheCleanupLoader = createLazyPromiseLoader(async () => {
-    try {
-      await prunePlaybackTranscodeCache();
-    } catch (err) {
-      params.logHealth.error(`playback transcode cache cleanup failed: ${formatError(err)}`);
-    } finally {
-      playbackTranscodeCacheCleanupLoader.clear();
-    }
-  });
+  const playbackTranscodeCacheCleanupLoader = createMediaCleanupLoader(
+    "playback transcode cache cleanup",
+    prunePlaybackTranscodeCache,
+  );
   const runManagedOutgoingMediaGc =
     params.runManagedOutgoingMediaGc ??
     (async () => {
@@ -519,15 +524,10 @@ export function startGatewayMaintenanceTimers(params: {
         },
       });
     });
-  const managedOutgoingCleanupLoader = createLazyPromiseLoader(async () => {
-    try {
-      await runManagedOutgoingMediaGc();
-    } catch (err) {
-      params.logHealth.error(`managed outgoing media cleanup failed: ${formatError(err)}`);
-    } finally {
-      managedOutgoingCleanupLoader.clear();
-    }
-  });
+  const managedOutgoingCleanupLoader = createMediaCleanupLoader(
+    "managed outgoing media cleanup",
+    runManagedOutgoingMediaGc,
+  );
 
   let mediaCleanupInFlight: Promise<void> | null = null;
   const runMediaCleanup = () => {

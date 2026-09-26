@@ -144,7 +144,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-sensitive-environment";
     const sessionId = "session-sensitive-worker";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim, store } = claimWorkerPlacement({
+    const { claim, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       runId: "run-worker-receipts",
@@ -225,7 +225,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-admission-replacement";
     const sessionId = "session-admission-replacement";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim: first, store } = claimWorkerPlacement({
+    const { claim: first, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       runId: "run-admission-replacement",
@@ -276,10 +276,10 @@ describe("worker environment service", () => {
         expect(support.testState.prepareInstallation).toHaveBeenCalledOnce(),
       );
 
-      store.releaseTurn(first);
+      await store.releaseTurn(first);
       releaseAgentRunDelegatedAuthority(firstAuthority);
       const placement = store.get(sessionId)!;
-      const second = store.claimTurn({
+      const second = await store.claimTurn({
         sessionId,
         agentId: placement.agentId,
         sessionKey: placement.sessionKey,
@@ -325,7 +325,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-inherited-claim";
     const sessionId = "session-inherited-claim";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim, store } = claimWorkerPlacement({
+    const { claim, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       sessionId,
@@ -386,7 +386,7 @@ describe("worker environment service", () => {
       workerService.pushLiveEvent(identity, support.assistantEvent(identity, "stale")),
     ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
     expect(
-      workerService.startInference(identity, support.inferenceRequest(identity), {
+      await workerService.startInference(identity, support.inferenceRequest(identity), {
         connectionId: "inherited-claim",
         send: vi.fn(),
       }),
@@ -406,7 +406,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-claim-credential";
     const sessionId = "session-claim-credential";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim: first, store } = claimWorkerPlacement({
+    const { claim: first, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       sessionId,
@@ -443,9 +443,9 @@ describe("worker environment service", () => {
     ).resolves.toEqual({ ok: false, reason: "placement-mismatch" });
     const firstAdmission = await workerService.admitWorker(admission);
     expect(firstAdmission).toMatchObject({ ok: true, identity: { turnClaim: first } });
-    store.releaseTurn(first);
+    await store.releaseTurn(first);
     const placement = store.get(sessionId)!;
-    const second = store.claimTurn({
+    const second = await store.claimTurn({
       sessionId,
       agentId: placement.agentId,
       sessionKey: placement.sessionKey,
@@ -480,7 +480,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-claim-inference";
     const sessionId = "session-claim-inference";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim: first, store } = claimWorkerPlacement({
+    const { claim: first, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       sessionId,
@@ -503,9 +503,9 @@ describe("worker environment service", () => {
     const admitClaim = async (claim: WorkerSessionTurnClaim) => {
       const instance = createOperationalRunInstanceRef(claim.runId);
       const authority = claimAgentRunDelegatedAuthority(instance);
-      support.testState.releaseTurnOwners.push(() => {
+      support.testState.releaseTurnOwners.push(async () => {
         if (store.validateTurnClaim(claim)) {
-          store.releaseTurn(claim);
+          await store.releaseTurn(claim);
         }
         releaseAgentRunDelegatedAuthority(authority);
       });
@@ -543,7 +543,7 @@ describe("worker environment service", () => {
       return admitted.identity;
     };
     const firstIdentity = await admitClaim(first);
-    const started = workerService.startInference(
+    const started = await workerService.startInference(
       firstIdentity,
       support.inferenceRequest(firstIdentity),
       {
@@ -568,10 +568,10 @@ describe("worker environment service", () => {
       first.runId,
     );
     expect(originalCancellation?.runIds).toEqual([first.runId]);
-    store.releaseTurn(first);
+    await store.releaseTurn(first);
     expect(signals[0]?.aborted).toBe(true);
     const placement = store.get(sessionId)!;
-    const second = store.claimTurn({
+    const second = await store.claimTurn({
       sessionId,
       agentId: placement.agentId,
       sessionKey: placement.sessionKey,
@@ -580,7 +580,7 @@ describe("worker environment service", () => {
       owner: { kind: "worker", environmentId, ownerEpoch: environmentIdentity.ownerEpoch },
     });
     const secondIdentity = await admitClaim(second);
-    const replacement = workerService.startInference(
+    const replacement = await workerService.startInference(
       secondIdentity,
       { ...support.inferenceRequest(secondIdentity), turnId: "turn-replacement" },
       { connectionId: "claim-inference-b", send: vi.fn() },
@@ -590,14 +590,14 @@ describe("worker environment service", () => {
     }
     replacement.launch();
     await support.waitForFast(() => expect(signals).toHaveLength(2));
-    expect(originalCancellation?.cancel()).toEqual([]);
+    expect(await originalCancellation?.cancel()).toEqual([]);
     expect(signals[1]?.aborted).toBe(false);
     expect(
       captureWorkerInferenceCancellation(workerService, sessionId, first.runId)?.runIds,
     ).toEqual([first.runId]);
-    expect(() => store.releaseTurn(first)).toThrow("turn claim changed before release");
+    await expect(store.releaseTurn(first)).rejects.toThrow("turn claim changed before release");
     expect(signals[1]?.aborted).toBe(false);
-    store.releaseTurn(second);
+    await store.releaseTurn(second);
     expect(signals[1]?.aborted).toBe(true);
   });
 
@@ -850,12 +850,14 @@ describe("worker environment service", () => {
     expect(liveApply).toHaveBeenCalledTimes(2);
 
     expect(
-      workerService.startInference(identity, support.inferenceRequest(identity), {
+      await workerService.startInference(identity, support.inferenceRequest(identity), {
         connectionId: "connection-terminal-fence",
         send: vi.fn(),
       }),
     ).toEqual({ ok: false, closeReason: "placement-mismatch" });
-    expect(workerService.cancelInference(identity, support.inferenceRequest(identity))).toEqual({
+    expect(
+      await workerService.cancelInference(identity, support.inferenceRequest(identity)),
+    ).toEqual({
       ok: false,
       closeReason: "placement-mismatch",
     });
@@ -917,14 +919,14 @@ describe("worker environment service", () => {
     );
     const request = support.inferenceRequest(identity);
     expect(
-      workerService.startInference(
+      await workerService.startInference(
         identity,
         { ...request, sessionId: "session-other" },
         { connectionId: "connection-a", send: vi.fn() },
       ),
     ).toEqual({ ok: false, reason: "session-not-attached" });
     expect(
-      workerService.startInference(
+      await workerService.startInference(
         identity,
         { ...request, runEpoch: request.runEpoch + 1 },
         { connectionId: "connection-b", send: vi.fn() },
@@ -932,7 +934,7 @@ describe("worker environment service", () => {
     ).toEqual({ ok: false, reason: "epoch-mismatch" });
 
     const send = vi.fn();
-    const started = workerService.startInference(identity, request, {
+    const started = await workerService.startInference(identity, request, {
       connectionId: "connection-c",
       send,
     });
@@ -982,10 +984,14 @@ describe("worker environment service", () => {
       ok: false,
       details: { reason: "epoch-mismatch" },
     });
-    const started = workerService.startInference(identity, support.inferenceRequest(identity), {
-      connectionId: "connection-rotation",
-      send: vi.fn(),
-    });
+    const started = await workerService.startInference(
+      identity,
+      support.inferenceRequest(identity),
+      {
+        connectionId: "connection-rotation",
+        send: vi.fn(),
+      },
+    );
     if (!started.ok) {
       throw new Error("inference fixture failed to start");
     }

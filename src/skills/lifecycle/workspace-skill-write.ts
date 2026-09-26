@@ -1,9 +1,9 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveRootPathSync } from "@openclaw/fs-safe/advanced";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
-import { isPathInside } from "../../infra/path-safety.js";
 
 const ALLOWED_SUPPORT_FILE_ROOTS = new Set(
   "assets examples references scripts templates".split(" "),
@@ -73,9 +73,6 @@ export function normalizeWorkspaceSkillSupportPath(input: string): string {
       `Support file paths must be under one of: ${[...ALLOWED_SUPPORT_FILE_ROOTS].join(", ")}.`,
     );
   }
-  if (trimmed === "PROPOSAL.md" || trimmed === "SKILL.md") {
-    throw new Error("Support files cannot replace the proposal or skill markdown file.");
-  }
   return trimmed;
 }
 
@@ -110,17 +107,13 @@ export async function readWorkspaceSupportFile(params: {
   skillDir: string;
   relativePath: string;
 }): Promise<string | null> {
-  const relativePath = normalizeWorkspaceSkillSupportPath(params.relativePath);
-  if (!(await pathExists(path.join(params.skillDir, ...relativePath.split("/"))))) {
-    return null;
-  }
-  const skillRoot = await root(params.skillDir);
-  const read = await skillRoot.read(relativePath, {
-    hardlinks: "reject",
-    maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
-    symlinks: "reject",
-  });
-  return read.buffer.toString("utf8");
+  return readPreparedWorkspaceFile(
+    {
+      rootDir: params.skillDir,
+      relativePath: normalizeWorkspaceSkillSupportPath(params.relativePath),
+    },
+    MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
+  );
 }
 
 export async function prepareWorkspaceSkillMutation(params: {
@@ -246,7 +239,6 @@ export async function applyWorkspaceSkillMutation(
   const assertMutationAuthorized =
     typeof options === "function" ? undefined : options.assertMutationAuthorized;
   const written: PreparedWorkspaceSkillFileMutation[] = [];
-  const writtenSupportPaths: string[] = [];
   try {
     for (const file of mutation.supportFiles) {
       await writePreparedWorkspaceFile(
@@ -256,7 +248,6 @@ export async function applyWorkspaceSkillMutation(
         assertMutationAuthorized,
       );
       written.push(file);
-      writtenSupportPaths.push(file.path);
     }
     await writePreparedWorkspaceFile(
       mutation.skillFile,
@@ -269,7 +260,7 @@ export async function applyWorkspaceSkillMutation(
       await restorePreparedWorkspaceFiles(written.toReversed());
     } catch (restoreError) {
       const failure = new Error(
-        `Skill write failed and ${writtenSupportPaths.length} support file restoration(s) failed.`,
+        `Skill write failed and ${written.length} support file restoration(s) failed.`,
         { cause: error },
       );
       Object.assign(failure, { restoreError });
@@ -294,13 +285,20 @@ export async function restoreWorkspaceSkillMutation(
 export async function isWorkspaceSkillMutationApplied(
   mutation: PreparedWorkspaceSkillMutation,
 ): Promise<boolean> {
+  return matchesWorkspaceSkillMutation(mutation, "content");
+}
+
+async function matchesWorkspaceSkillMutation(
+  mutation: PreparedWorkspaceSkillMutation,
+  field: "content" | "previousContent",
+): Promise<boolean> {
   const skillContent = await readPreparedWorkspaceFile(mutation.skillFile, 1024 * 1024);
-  if (skillContent !== mutation.skillFile.content) {
+  if (skillContent !== mutation.skillFile[field]) {
     return false;
   }
   for (const file of mutation.supportFiles) {
     const content = await readPreparedWorkspaceFile(file, MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES);
-    if (content !== file.content) {
+    if (content !== file[field]) {
       return false;
     }
   }
@@ -311,17 +309,7 @@ export async function isWorkspaceSkillMutationRestored(
   mutation: PreparedWorkspaceSkillMutation,
 ): Promise<boolean> {
   try {
-    const skillContent = await readPreparedWorkspaceFile(mutation.skillFile, 1024 * 1024);
-    if (skillContent !== mutation.skillFile.previousContent) {
-      return false;
-    }
-    for (const file of mutation.supportFiles) {
-      const content = await readPreparedWorkspaceFile(file, MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES);
-      if (content !== file.previousContent) {
-        return false;
-      }
-    }
-    return true;
+    return await matchesWorkspaceSkillMutation(mutation, "previousContent");
   } catch {
     return false;
   }
@@ -418,7 +406,7 @@ async function restorePreparedWorkspaceFiles(
 }
 
 async function readPreparedWorkspaceFile(
-  file: PreparedWorkspaceSkillFileMutation,
+  file: Pick<PreparedWorkspaceSkillFileMutation, "rootDir" | "relativePath">,
   maxBytes: number,
 ): Promise<string | null> {
   if (!(await pathExists(path.join(file.rootDir, file.relativePath)))) {
@@ -452,25 +440,13 @@ export function assertInsideSkillsRoot(
   if (resolvedTarget !== resolvedRoot && !isPathInside(resolvedRoot, resolvedTarget)) {
     throw new Error(`${label} must stay inside the Skill Workshop directory.`);
   }
-  const rootRealPath = tryRealpathSync(resolvedRoot) ?? resolvedRoot;
-  let lexicalCursor = resolvedRoot;
-  let realCursor = rootRealPath;
-  for (const segment of path
-    .relative(resolvedRoot, resolvedTarget)
-    .split(path.sep)
-    .filter(Boolean)) {
-    lexicalCursor = path.join(lexicalCursor, segment);
-    realCursor = tryRealpathSync(lexicalCursor) ?? path.join(realCursor, segment);
-  }
-  if (realCursor !== rootRealPath && !isPathInside(rootRealPath, path.resolve(realCursor))) {
-    throw new Error(`${label} must stay inside the Skill Workshop directory.`);
-  }
-}
-
-function tryRealpathSync(filePath: string): string | null {
   try {
-    return fsSync.realpathSync(filePath);
-  } catch {
-    return null;
+    resolveRootPathSync({
+      rootPath: resolvedRoot,
+      absolutePath: resolvedTarget,
+      boundaryLabel: "Skill Workshop directory",
+    });
+  } catch (cause) {
+    throw new Error(`${label} must stay inside the Skill Workshop directory.`, { cause });
   }
 }

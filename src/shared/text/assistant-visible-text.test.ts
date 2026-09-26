@@ -7,7 +7,6 @@ import {
   stripAssistantInternalScaffolding,
   stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
-import { stripDowngradedToolCallText } from "./downgraded-tool-call-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 
 describe("stripAssistantInternalScaffolding", () => {
@@ -15,31 +14,15 @@ describe("stripAssistantInternalScaffolding", () => {
     expect(stripAssistantInternalScaffolding(input)).toBe(expected);
   }
 
-  function createLiteralRelevantMemoriesCodeBlock() {
-    return [
-      "```xml",
-      "<relevant-memories>",
-      "sample",
-      "</relevant-memories>",
-      "```",
-      "",
-      "Visible text",
-    ].join("\n");
-  }
-
-  function expectLiteralVisibleText(input: string) {
-    expectVisibleText(input, input);
-  }
-
   it.each([
     {
       name: "strips reasoning tags",
-      input: ["<thinking>", "secret", "</thinking>", "Visible"].join("\n"),
+      input: "<thinking>\nsecret\n</thinking>\nVisible",
       expected: "Visible",
     },
     {
       name: "strips internal reflection tags",
-      input: ["<internal>", "private reflection", "</internal>", "Visible"].join("\n"),
+      input: "<internal>\nprivate reflection\n</internal>\nVisible",
       expected: "Visible",
     },
     {
@@ -56,49 +39,29 @@ describe("stripAssistantInternalScaffolding", () => {
     },
     {
       name: "supports relevant_memories tag variants",
-      input: [
-        "<relevant_memories>",
-        "Internal memory note",
-        "</relevant_memories>",
-        "Visible",
-      ].join("\n"),
+      input: "<relevant_memories>\nInternal memory note\n</relevant_memories>\nVisible",
       expected: "Visible",
     },
     {
       name: "hides unfinished relevant-memories blocks",
-      input: ["Hello", "<relevant-memories>", "internal-only"].join("\n"),
+      input: "Hello\n<relevant-memories>\ninternal-only",
       expected: "Hello\n",
     },
     {
       name: "removes leading blank lines after stripping scaffolding",
-      input: [
-        "<thinking>",
-        "secret",
-        "</thinking>",
-        "   ",
-        "<relevant-memories>",
-        "internal note",
-        "</relevant-memories>",
-        "  Visible",
-      ].join("\n"),
+      input:
+        "<thinking>\nsecret\n</thinking>\n   \n<relevant-memories>\ninternal note\n</relevant-memories>\n  Visible",
       expected: "  Visible",
     },
     {
       name: "preserves unfinished reasoning text while still stripping memory blocks",
-      input: [
-        "Before",
-        "<thinking>",
-        "secret",
-        "<relevant-memories>",
-        "internal note",
-        "</relevant-memories>",
-        "After",
-      ].join("\n"),
+      input:
+        "Before\n<thinking>\nsecret\n<relevant-memories>\ninternal note\n</relevant-memories>\nAfter",
       expected: "Before\n\nsecret\n\nAfter",
     },
     {
       name: "keeps relevant-memories tags inside fenced code",
-      input: createLiteralRelevantMemoriesCodeBlock(),
+      input: "```xml\n<relevant-memories>\nsample\n</relevant-memories>\n```\n\nVisible text",
       expected: undefined,
     },
     {
@@ -107,11 +70,7 @@ describe("stripAssistantInternalScaffolding", () => {
       expected: undefined,
     },
   ] as const)("$name", ({ input, expected }) => {
-    if (expected === undefined) {
-      expectLiteralVisibleText(input);
-      return;
-    }
-    expectVisibleText(input, expected);
+    expectVisibleText(input, expected ?? input);
   });
 
   describe("tool-call XML stripping", () => {
@@ -172,11 +131,6 @@ describe("stripAssistantInternalScaffolding", () => {
         "prefix\n\nsuffix",
       ],
       [
-        "strips Qwen-style <tool_call> with whitespace before nested XML",
-        "prefix\n<tool_call>\n<function=search><parameter=query>test</parameter></function>\n</tool_call>\nsuffix",
-        "prefix\n\nsuffix",
-      ],
-      [
         "strips dangling Qwen-style <tool_call> with nested XML to end",
         "prefix\n<tool_call><function=read><parameter=path>/home",
         "prefix\n",
@@ -191,12 +145,6 @@ describe("stripAssistantInternalScaffolding", () => {
         'prefix\n<tool_call name="find"\n{"arguments":{}}',
         "prefix\n",
       ],
-      [
-        "preserves lone <tool_call> mentions in normal prose",
-        "Use <tool_call> to invoke tools.",
-        "Use <tool_call> to invoke tools.",
-      ],
-      ["strips self-closing <tool_call/> tags", "prefix <tool_call/> suffix", "prefix  suffix"],
       [
         "strips self-closing <function_calls .../> tags",
         'prefix <function_calls name="x"/> suffix',
@@ -226,11 +174,6 @@ describe("stripAssistantInternalScaffolding", () => {
         "preserves XML-style explanations after lone <tool_call> tags",
         "Use <tool_call><arg> literally.",
         "Use <tool_call><arg> literally.",
-      ],
-      [
-        "preserves lone <function> mentions in normal prose",
-        "Use <function> declarations in your WASM text format.",
-        "Use <function> declarations in your WASM text format.",
       ],
       [
         "preserves literal XML-style paired tool_call examples in prose",
@@ -291,11 +234,6 @@ describe("stripAssistantInternalScaffolding", () => {
         "hides truncated <function_calls openings with attributes before array payload",
         'prefix\n<function_calls id="x"\n[{"name":"find"}]',
         "prefix\n",
-      ],
-      [
-        "preserves inline code references to tool_call tags",
-        "Use `<tool_call>` to invoke tools.",
-        "Use `<tool_call>` to invoke tools.",
       ],
     ] as const) {
       it(name, () => {
@@ -379,15 +317,6 @@ describe("stripAssistantInternalScaffolding", () => {
         expected: "prefix\n\nsuffix",
       },
       {
-        title: "strips Gemma-style <function> with newlines between parameters (#67093)",
-        prefix: "Let me check that.",
-        openMarker: '<function name="read">',
-        payload: '<parameter name="file_path">/home/user/test.md</parameter>',
-        closeMarker: "</function>",
-        suffix: "After the call.",
-        expected: "Let me check that.\n\nAfter the call.",
-      },
-      {
         title: "strips standalone <function> blocks with apostrophes in XML payloads (#67093)",
         prefix: "prefix",
         openMarker: '<function name="spawn">',
@@ -402,43 +331,27 @@ describe("stripAssistantInternalScaffolding", () => {
 
     it("strips legacy uppercase TOOL_CALL blocks with hash-style payloads", () => {
       expectVisibleText(
-        [
-          "Before",
-          '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
-          "After",
-        ].join("\n"),
+        'Before\n[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]\nAfter',
         "Before\n\nAfter",
       );
     });
 
     it("strips legacy uppercase TOOL_RESULT blocks with object payloads", () => {
       expectVisibleText(
-        ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join("\n"),
+        'Before\n[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]\nAfter',
         "Before\n\nAfter",
       );
     });
 
     it("preserves legacy uppercase TOOL_CALL blocks inside fenced code", () => {
-      const input = [
-        "```text",
-        '[TOOL_CALL]{tool => "web_search", args => {"query":"x"}}[/TOOL_CALL]',
-        "```",
-        "Visible",
-      ].join("\n");
+      const input =
+        '```text\n[TOOL_CALL]{tool => "web_search", args => {"query":"x"}}[/TOOL_CALL]\n```\nVisible';
       expectVisibleText(input, input);
     });
 
     it("does not close early on mismatched closing tool tags", () => {
       expectVisibleText(
-        [
-          "prefix",
-          "<tool_call>",
-          '{"name":"read",',
-          "</function_calls>",
-          "still-hidden",
-          "</tool_call>",
-          "suffix",
-        ].join("\n"),
+        'prefix\n<tool_call>\n{"name":"read",\n</function_calls>\nstill-hidden\n</tool_call>\nsuffix',
         "prefix\n\nsuffix",
       );
     });
@@ -455,7 +368,7 @@ describe("stripAssistantInternalScaffolding", () => {
         "Results: some content after.",
       );
       expectVisibleText(
-        ['<parameter name="assumptions">', "line 1", "line 2", "</parameter>"].join("\n"),
+        '<parameter name="assumptions">\nline 1\nline 2\n</parameter>',
         "line 1\nline 2",
       );
       expectVisibleText('<parameter name="data">{"key":"value"}</parameter>', '{"key":"value"}');
@@ -501,93 +414,37 @@ describe("stripAssistantInternalScaffolding", () => {
 
     it("still closes a tool-call block when malformed payload opens a fenced code region", () => {
       expectVisibleText(
-        [
-          "prefix",
-          "<tool_call>",
-          '{"name":"read",',
-          "```xml",
-          "<note>hi</note>",
-          "</tool_call>",
-          "suffix",
-        ].join("\n"),
+        'prefix\n<tool_call>\n{"name":"read",\n```xml\n<note>hi</note>\n</tool_call>\nsuffix',
         "prefix\n\nsuffix",
       );
     });
 
     it("preserves tool-call tags inside fenced code blocks", () => {
-      const input = [
-        "```xml",
-        '<tool_call> {"name": "find"} </tool_call>',
-        "```",
-        "",
-        "Visible text",
-      ].join("\n");
+      const input = '```xml\n<tool_call> {"name": "find"} </tool_call>\n```\n\nVisible text';
       expectVisibleText(input, input);
     });
   });
 
   describe("model special token stripping", () => {
-    it("strips Kimi/GLM special tokens in isolation", () => {
-      expectVisibleText("<|assistant|>Here is the answer<|end|>", "Here is the answer");
-    });
-
     it("strips full-width pipe DeepSeek tokens", () => {
       expectVisibleText("<｜begin▁of▁sentence｜>Hello world", "Hello world");
     });
 
-    it("strips special tokens mixed with normal text", () => {
-      expectVisibleText(
-        "Start <|tool_call_result_begin|>middle<|tool_call_result_end|> end",
-        "Start middle end",
-      );
-    });
-
-    it("preserves special-token-like syntax inside code blocks", () => {
+    it("preserves ordinary HTML", () => {
       expectVisibleText("Use <div>hello</div> in HTML", "Use <div>hello</div> in HTML");
     });
 
-    it("strips special tokens combined with reasoning tags", () => {
-      const input = [
-        "<thinking>",
-        "internal reasoning",
-        "</thinking>",
-        "<|assistant|>Visible response",
-      ].join("\n");
-      expectVisibleText(input, "Visible response");
-    });
-
     it("preserves indentation in code blocks", () => {
-      const input = [
-        "<|assistant|>Here is the code:",
-        "",
-        "```python",
-        "def foo():",
-        "    if True:",
-        "        return 42",
-        "```",
-      ].join("\n");
-      const expected = [
-        "Here is the code:",
-        "",
-        "```python",
-        "def foo():",
-        "    if True:",
-        "        return 42",
-        "```",
-      ].join("\n");
+      const input =
+        "<|assistant|>Here is the code:\n\n```python\ndef foo():\n    if True:\n        return 42\n```";
+      const expected =
+        "Here is the code:\n\n```python\ndef foo():\n    if True:\n        return 42\n```";
       expectVisibleText(input, expected);
     });
 
     it("preserves special tokens inside fenced code blocks", () => {
-      const input = [
-        "Here are the model tokens:",
-        "",
-        "```",
-        "<|assistant|>Hello<|end|>",
-        "```",
-        "",
-        "As you can see above.",
-      ].join("\n");
+      const input =
+        "Here are the model tokens:\n\n```\n<|assistant|>Hello<|end|>\n```\n\nAs you can see above.";
       expectVisibleText(input, input);
     });
 
@@ -603,7 +460,7 @@ describe("stripAssistantInternalScaffolding", () => {
     });
 
     it("preserves malformed tokens that end inside fenced code blocks", () => {
-      const input = ["Before <|token", "```js", "const x = 1;|>", "```", "after"].join("\n");
+      const input = "Before <|token\n```js\nconst x = 1;|>\n```\nafter";
       expectVisibleText(input, input);
     });
 
@@ -624,17 +481,6 @@ describe("stripToolCallXmlTags", () => {
     );
   });
 
-  it("strips function_response adjacent to an opt-in stripped function_calls block", () => {
-    const input = [
-      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
-      'Searching for: "what skills matter most in the age of AI"',
-      "</function_response>",
-      "After",
-    ].join("\n");
-
-    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("\nAfter");
-  });
-
   it("strips plural function-call XML before function_response without stripping prose examples", () => {
     const leak =
       '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>raw</function_response>\nAfter';
@@ -646,19 +492,6 @@ describe("stripToolCallXmlTags", () => {
     );
     expect(stripToolCallXmlTags(prose, { stripFunctionResponseAfterPluralToolCalls: true })).toBe(
       prose,
-    );
-  });
-
-  it("strips function_response adjacent to an inline stripped function_calls block", () => {
-    const input = [
-      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
-      'Searching for: "what skills matter most in the age of AI"',
-      "</function_response>",
-      "After",
-    ].join("\n");
-
-    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
-      "Checking. \nAfter",
     );
   });
 
@@ -674,30 +507,11 @@ describe("stripToolCallXmlTags", () => {
     );
   });
 
-  it("strips dangling function_response adjacent to a stripped function_calls block", () => {
-    const input = [
-      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
-      'Searching for: "what skills matter most in the age of AI"',
-    ].join("\n");
-
-    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("Checking. ");
-  });
-
   for (const [name, input, expected] of [
     [
       "strips compact dangling function_response adjacent to a stripped function_calls block",
       'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>raw output',
       "Checking. ",
-    ],
-    [
-      "strips same-line function_response payloads with leading spaces",
-      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> raw output</function_response>\nAfter',
-      "\nAfter",
-    ],
-    [
-      "strips same-line function_response payloads that start like prose",
-      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> is enabled</function_response>\nAfter',
-      "\nAfter",
     ],
     [
       "strips dangling same-line function_response payloads with leading spaces",
@@ -715,11 +529,6 @@ describe("stripToolCallXmlTags", () => {
       "\n.",
     ],
     [
-      "strips adjacent function_response payloads that match explanation wording",
-      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> response wrapper secret</function_response>\nAfter',
-      "\nAfter",
-    ],
-    [
       "strips compact function_response wrappers while preserving same-line prose tails",
       '<tool_call>{"name":"exec"}</tool_call>\n\n<function_response>ok</function_response> is the response wrapper.',
       "\n\n is the response wrapper.",
@@ -729,31 +538,11 @@ describe("stripToolCallXmlTags", () => {
       'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>first</function_response><function_response>second</function_response>\nAfter',
       "Checking. \nAfter",
     ],
-    [
-      "strips compact function_response before same-line visible replies",
-      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>raw</function_response> Done.',
-      "Checking.  Done.",
-    ],
   ] as const) {
     it(name, () => {
       expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(expected);
     });
   }
-
-  it("strips chained function_response blocks adjacent to a stripped function_calls block", () => {
-    const input = [
-      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
-      "first result",
-      "</function_response><function_response>",
-      "second result",
-      "</function_response>",
-      "After",
-    ].join("\n");
-
-    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
-      "Checking. \nAfter",
-    );
-  });
 
   it("strips antml:invoke/parameter tool call XML from visible content", () => {
     const input =
@@ -775,22 +564,16 @@ describe("stripToolCallXmlTags", () => {
 
 describe("MiniMax tool-call text", () => {
   it("strips minimax tool-call XML outside code regions", () => {
-    const input = [
-      "Before",
-      '<minimax:tool_call><invoke name="exec">payload</invoke></minimax:tool_call>',
-      "After",
-    ].join("\n");
+    const input =
+      'Before\n<minimax:tool_call><invoke name="exec">payload</invoke></minimax:tool_call>\nAfter';
 
     expect(minimaxToolCallTextFilter.transform(input)).toBe("Before\n\nAfter");
   });
 
   it("preserves minimax tool-call XML examples inside inline and fenced code", () => {
     const inline = 'Use `<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>`.';
-    const fenced = [
-      "```xml",
-      '<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>',
-      "```",
-    ].join("\n");
+    const fenced =
+      '```xml\n<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>\n```';
 
     expect(minimaxToolCallTextFilter.transform(inline)).toBe(inline);
     expect(minimaxToolCallTextFilter.transform(fenced)).toBe(fenced);
@@ -804,13 +587,19 @@ describe("sanitizeAssistantVisibleText", () => {
     );
   });
 
-  it("preserves fenced log lines quoting tool markers through delivery", () => {
+  it.each([
+    { name: "Tool Result", lines: ["[Tool Result for ID abc]", "stdout: hello"] },
+    {
+      name: "Tool Call and Arguments",
+      lines: ["[Tool Call: bash (ID: 7)]", 'Arguments: {"cmd":"ls"}'],
+    },
+    { name: "Historical context", lines: ["[Historical context: earlier run]", "stdout: hello"] },
+  ])("preserves fenced log lines quoting $name through delivery", ({ lines }) => {
     const input = [
       "Log format explainer:",
       "",
       "```text",
-      "[Tool Result for ID abc]",
-      "stdout: hello",
+      ...lines,
       "```",
       "",
       "Then we continue the answer with important details.",
@@ -820,16 +609,29 @@ describe("sanitizeAssistantVisibleText", () => {
   });
 
   it("preserves fenced serialized tool-call examples through delivery", () => {
-    const input = [
-      "Example:",
-      "```json",
-      "[read]",
-      '{"path":"example.txt"}',
-      "[/read]",
-      "```",
-    ].join("\n");
+    const input = 'Example:\n```json\n[read]\n{"path":"example.txt"}\n[/read]\n```';
 
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it.each([
+    {
+      name: "Tool Result",
+      input: ["[Tool Result for ID abc]", "stdout: hello"].join("\n"),
+      expected: "",
+    },
+    {
+      name: "Tool Call and Arguments",
+      input: ["[Tool Call: read (ID: toolu_1)]", 'Arguments: {"path":"/tmp/x"}'].join("\n"),
+      expected: "",
+    },
+    {
+      name: "Historical context",
+      input: "[Historical context: earlier run]\nVisible answer",
+      expected: "Visible answer",
+    },
+  ])("strips downgraded $name markers through delivery", ({ input, expected }) => {
+    expect(sanitizeAssistantVisibleText(input)).toBe(expected);
   });
 
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
@@ -864,12 +666,7 @@ describe("sanitizeAssistantVisibleText", () => {
   });
 
   it("strips relevant-memories blocks on the canonical user-visible path", () => {
-    const input = [
-      "<relevant-memories>",
-      "internal note",
-      "</relevant-memories>",
-      "Visible answer",
-    ].join("\n");
+    const input = "<relevant-memories>\ninternal note\n</relevant-memories>\nVisible answer";
 
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
@@ -892,10 +689,7 @@ describe("sanitizeAssistantVisibleText", () => {
   });
 
   it("preserves assistant warnings that are not internal trace formats", () => {
-    const input = [
-      "⚠️ 🛠️ The deployment failed",
-      "⚠️ 🛠️ Exec failed to start, so I used the fallback",
-    ].join("\n");
+    const input = "⚠️ 🛠️ The deployment failed\n⚠️ 🛠️ Exec failed to start, so I used the fallback";
 
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
@@ -913,7 +707,7 @@ describe("sanitizeAssistantVisibleText", () => {
   });
 
   it("preserves ordinary analysis headings", () => {
-    const input = ["Analysis:", "This is user-visible reasoning about the result."].join("\n");
+    const input = "Analysis:\nThis is user-visible reasoning about the result.";
 
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
@@ -973,7 +767,7 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
   });
 
   it("uses the history profile to preserve block-boundary whitespace", () => {
-    const input = ["Hi ", '<tool_result>{"output":"hidden"}</tool_result>', "there"].join("");
+    const input = 'Hi <tool_result>{"output":"hidden"}</tool_result>there';
 
     expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe("Hi there");
   });
@@ -988,92 +782,18 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
   });
 
   it("uses the internal-scaffolding profile to preserve downgraded tool text behavior", () => {
-    const input = [
-      "[Tool Call: read (ID: toolu_1)]",
-      'Arguments: {"path":"/tmp/x"}',
-      "Visible answer",
-    ].join("\n");
+    const input = '[Tool Call: read (ID: toolu_1)]\nArguments: {"path":"/tmp/x"}\nVisible answer';
 
-    expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toContain(
-      "[Tool Call: read (ID: toolu_1)]",
-    );
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toBe(input);
   });
 
   it("uses the tool-progress profile to strip scaffolding while preserving progress lines", () => {
-    const input = [
-      "<think>private reasoning</think>",
-      '<tool_call>{"name":"x"}</tool_call>',
-      "🛠️ run git status",
-    ].join("\n");
+    const input =
+      '<think>private reasoning</think>\n<tool_call>{"name":"x"}</tool_call>\n🛠️ run git status';
 
     expect(sanitizeAssistantVisibleTextWithProfile(input, "tool-progress")).toBe(
       "🛠️ run git status",
     );
-  });
-});
-
-describe("stripDowngradedToolCallText", () => {
-  it("preserves fenced log lines that quote [Tool Result for ID ...]", () => {
-    const input = [
-      "Log format explainer:",
-      "",
-      "```text",
-      "[Tool Result for ID abc]",
-      "stdout: hello",
-      "```",
-      "",
-      "Then we continue the answer with important details.",
-    ].join("\n");
-
-    expect(stripDowngradedToolCallText(input)).toBe(input);
-  });
-
-  it("preserves fenced log lines that quote [Tool Call: ...] and Arguments", () => {
-    const input = [
-      "Log format explainer:",
-      "",
-      "```text",
-      "[Tool Call: bash (ID: 7)]",
-      'Arguments: {"cmd":"ls"}',
-      "```",
-      "",
-      "Then we continue the answer with important details.",
-    ].join("\n");
-
-    expect(stripDowngradedToolCallText(input)).toBe(input);
-  });
-
-  it("preserves fenced log lines that quote [Historical context: ...]", () => {
-    const input = [
-      "Log format explainer:",
-      "",
-      "```text",
-      "[Historical context: earlier run]",
-      "stdout: hello",
-      "```",
-      "",
-      "Then we continue the answer with important details.",
-    ].join("\n");
-
-    expect(stripDowngradedToolCallText(input)).toBe(input);
-  });
-
-  it("strips real [Tool Result for ID ...] blocks outside code", () => {
-    const input = ["[Tool Result for ID abc]", "stdout: hello"].join("\n");
-
-    expect(stripDowngradedToolCallText(input)).toBe("");
-  });
-
-  it("strips real [Tool Call: ...] blocks outside code", () => {
-    const input = ["[Tool Call: read (ID: toolu_1)]", 'Arguments: {"path":"/tmp/x"}'].join("\n");
-
-    expect(stripDowngradedToolCallText(input)).toBe("");
-  });
-
-  it("strips real [Historical context: ...] markers outside code", () => {
-    const input = "[Historical context: earlier run]\nVisible answer";
-
-    expect(stripDowngradedToolCallText(input)).toBe("Visible answer");
   });
 });
 

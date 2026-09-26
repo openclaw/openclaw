@@ -94,15 +94,11 @@ function normalizeBundleMcpMode(
   return mode ?? "claude-config-file";
 }
 
-function normalizeBackendKey(key: string): string {
-  return normalizeProviderId(key);
-}
-
 function resolveRegisteredBackend(provider: string) {
-  const normalized = normalizeBackendKey(provider);
+  const normalized = normalizeProviderId(provider);
   return cliBackendsDeps
     .resolveRuntimeCliBackends()
-    .find((entry) => normalizeBackendKey(entry.id) === normalized);
+    .find((entry) => normalizeProviderId(entry.id) === normalized);
 }
 
 function resolveCliBackendModelProvider(
@@ -117,7 +113,7 @@ function addCliRuntimeModelBinding(
   params: { backend: Pick<CliBackendPlugin, "id" | "modelProvider">; pluginId?: string },
 ): void {
   const provider = resolveCliBackendModelProvider(params.backend);
-  const runtime = normalizeBackendKey(params.backend.id);
+  const runtime = normalizeProviderId(params.backend.id);
   if (!provider || !runtime) {
     return;
   }
@@ -175,7 +171,7 @@ export function listCliRuntimeProviderIds(
   return [
     ...new Set(
       listCliRuntimeModelBackendBindings(params)
-        .map((binding) => normalizeBackendKey(binding.runtime))
+        .map((binding) => normalizeProviderId(binding.runtime))
         .filter(Boolean),
     ),
   ].toSorted();
@@ -188,7 +184,7 @@ export function resolveCliRuntimeCanonicalProvider(params: {
   env?: NodeJS.ProcessEnv;
   includeSetupRegistry?: boolean;
 }): string | undefined {
-  const runtime = normalizeBackendKey(params.runtime ?? "");
+  const runtime = normalizeProviderId(params.runtime ?? "");
   if (!runtime) {
     return undefined;
   }
@@ -217,12 +213,13 @@ export function resolveCliRuntimeModelBackendBinding(params: {
   env?: NodeJS.ProcessEnv;
 }): CliRuntimeModelBackendBinding | undefined {
   const provider = normalizeProviderId(params.provider ?? "");
-  const runtime = normalizeBackendKey(params.runtime ?? "");
+  const runtime = normalizeProviderId(params.runtime ?? "");
   if (!provider || !runtime) {
     return undefined;
   }
   const runtimeBinding = listCliRuntimeModelBackendBindings().find(
-    (binding) => binding.provider === provider && binding.runtime === runtime,
+    (binding) =>
+      binding.runtime === runtime && (binding.provider === provider || runtime === provider),
   );
   if (runtimeBinding) {
     return runtimeBinding;
@@ -240,9 +237,9 @@ export function resolveCliRuntimeModelBackendBinding(params: {
     return undefined;
   }
   const setupProvider = resolveCliBackendModelProvider(setupBackend.backend);
-  return setupProvider === provider
+  return setupProvider && (setupProvider === provider || runtime === provider)
     ? {
-        provider,
+        provider: setupProvider,
         runtime,
         ...(setupBackend.pluginId ? { pluginId: setupBackend.pluginId } : {}),
       }
@@ -261,12 +258,12 @@ export function isCliRuntimeModelBackendForProvider(params: {
 
 /** Resolves live-test defaults advertised by a CLI backend plugin. */
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
-  const normalized = normalizeBackendKey(provider);
+  const normalized = normalizeProviderId(provider);
   const entry =
     cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized }) ??
     cliBackendsDeps
       .resolveRuntimeCliBackends()
-      .find((backend) => normalizeBackendKey(backend.id) === normalized);
+      .find((backend) => normalizeProviderId(backend.id) === normalized);
   if (!entry) {
     return null;
   }
@@ -286,7 +283,7 @@ export function resolveCliBackendConfig(
   cfg?: OpenClawConfig,
   options: { agentId?: string } = {},
 ): ResolvedCliBackend | null {
-  const normalized = normalizeBackendKey(provider);
+  const normalized = normalizeProviderId(provider);
   const normalizeContext: CliBackendNormalizeConfigContext = {
     backendId: normalized,
     ...(options.agentId ? { agentId: options.agentId } : {}),

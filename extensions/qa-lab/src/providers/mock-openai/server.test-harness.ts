@@ -1,9 +1,20 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { Type } from "typebox";
 import { afterEach, expect } from "vitest";
 import type { QaMockOpenAiServerOptions } from "./server-options.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 export type MockServer = { baseUrl: string };
+
+export const guestCodeModeExecTool = {
+  name: "exec",
+  description: "Run JavaScript in OpenClaw.",
+  parameters: Type.Object({
+    title: Type.String({ minLength: 1, maxLength: 120, pattern: "\\S" }),
+    code: Type.String(),
+    restartSafe: Type.Optional(Type.Boolean()),
+  }),
+};
 
 export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";

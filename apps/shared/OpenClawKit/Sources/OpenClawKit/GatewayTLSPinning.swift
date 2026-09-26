@@ -885,6 +885,28 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return WebSocketTaskBox(task: task)
     }
 
+    // periphery:ignore - Public response-only probe for app-owned ingress authorization.
+    /// Read headers without buffering a response body, while retaining the route's TLS policy.
+    public func response(for request: URLRequest) async throws -> URLResponse {
+        self.registerExpectedAuthority(url: request.url)
+        try Task.checkCancellation()
+        let delegate = GatewayHTTPResponseDelegate(owner: self)
+        let task = self.session.dataTask(with: request)
+        // Task delegates forward unimplemented authentication callbacks to the session owner.
+        task.delegate = delegate
+        defer { task.cancel() }
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            task.resume()
+            var responses = delegate.responses.stream.makeAsyncIterator()
+            guard let response = try await responses.next() else { throw CancellationError() }
+            try Task.checkCancellation()
+            return response
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
     public func data(
         for request: URLRequest,
         maximumBytes: Int,
@@ -897,6 +919,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
+        try Task.checkCancellation()
         // AsyncBytes owns a task delegate; without ours, its authentication
         // handling bypasses the session-level certificate policy.
         let (bytes, response) = try await self.session.bytes(for: request, delegate: self)
@@ -1001,6 +1024,57 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
             self.recordTLSFailure(failure)
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
+    }
+}
+
+private final class GatewayHTTPResponseDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    let responses = AsyncThrowingStream<URLResponse, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    private let owner: GatewayTLSPinningSession
+
+    init(owner: GatewayTLSPinningSession) {
+        self.owner = owner
+    }
+
+    private func finish(with response: URLResponse) {
+        self.responses.continuation.yield(response)
+        self.responses.continuation.finish()
+    }
+
+    func urlSession(
+        _: URLSession,
+        dataTask _: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void)
+    {
+        self.finish(with: response)
+        completionHandler(.cancel)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void)
+    {
+        self.owner.urlSession(
+            session,
+            task: task,
+            willPerformHTTPRedirection: response,
+            newRequest: request)
+        { nextRequest in
+            if nextRequest == nil {
+                // Declining a redirect normally drains its body. Complete from the headers
+                // before cancellation so a stalled sign-in page cannot stall this probe.
+                self.finish(with: response)
+                task.cancel()
+            }
+            completionHandler(nextRequest)
+        }
+    }
+
+    func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
+        self.responses.continuation.finish(throwing: error ?? URLError(.badServerResponse))
     }
 }
 

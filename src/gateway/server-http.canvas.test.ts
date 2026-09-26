@@ -13,7 +13,6 @@ import {
   mintPluginNodeCapabilityToken,
   refreshClientPluginNodeCapability,
   setClientPluginNodeCapability,
-  type PluginNodeCapabilitySurface,
 } from "./plugin-node-capability.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -42,16 +41,18 @@ async function requestHostedDocument(params: {
   );
 }
 
+type HostedDocumentContext = {
+  clients: Set<GatewayWsClient>;
+  document: Awaited<ReturnType<typeof createCanvasDocument>>;
+  origin: string;
+};
+
 async function withHostedDocumentServer<T>(
   params: {
     config: OpenClawConfig;
     skipHost?: string;
   },
-  run: (context: {
-    clients: Set<GatewayWsClient>;
-    document: Awaited<ReturnType<typeof createCanvasDocument>>;
-    origin: string;
-  }) => Promise<T>,
+  run: (context: HostedDocumentContext) => Promise<T>,
 ): Promise<T> {
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-canvas-gateway-"));
   tempDirs.push(stateDir);
@@ -100,8 +101,8 @@ async function withHostedDocumentServer<T>(
   );
 }
 
-function createConnectedClient(): GatewayWsClient {
-  return {
+function connectCanvasClient({ clients, document, origin }: HostedDocumentContext) {
+  const client: GatewayWsClient = {
     socket: {} as GatewayWsClient["socket"],
     connect: {
       role: "node",
@@ -110,36 +111,25 @@ function createConnectedClient(): GatewayWsClient {
     connId: "canvas-node",
     usesSharedGatewayAuth: false,
   };
-}
-
-function requireCanvasCapability(entryUrl: string): PluginNodeCapabilitySurface {
-  const surface = resolveCanvasNodeCapability([entryUrl]);
+  const surface = resolveCanvasNodeCapability([document.entryUrl]);
   if (!surface) {
-    throw new Error(`expected Canvas capability surface for ${entryUrl}`);
+    throw new Error(`expected Canvas capability surface for ${document.entryUrl}`);
   }
-  return surface;
-}
-
-function installCanvasCapability(params: {
-  capability: string;
-  client: GatewayWsClient;
-  expiresAtMs: number;
-  origin: string;
-  surface: PluginNodeCapabilitySurface;
-}): string {
-  const scopedUrl = buildPluginNodeCapabilityScopedHostUrl(params.origin, params.capability);
+  const capability = mintPluginNodeCapabilityToken();
+  const scopedUrl = buildPluginNodeCapabilityScopedHostUrl(origin, capability);
   if (!scopedUrl) {
     throw new Error("expected scoped Canvas host URL");
   }
-  params.client.pluginSurfaceUrls = { canvas: scopedUrl };
-  params.client.pluginNodeCapabilitySurfaces = { canvas: params.surface };
+  client.pluginSurfaceUrls = { canvas: scopedUrl };
+  client.pluginNodeCapabilitySurfaces = { canvas: surface };
   setClientPluginNodeCapability({
-    client: params.client,
-    surface: params.surface,
-    capability: params.capability,
-    expiresAtMs: params.expiresAtMs,
+    client,
+    surface,
+    capability,
+    expiresAtMs: Date.now() + 60_000,
   });
-  return scopedUrl;
+  clients.add(client);
+  return { client, capability, surface, scopedUrl };
 }
 
 async function expectUnauthorized(response: Response): Promise<void> {
@@ -171,40 +161,9 @@ describe("core Canvas Gateway host switches", () => {
 });
 
 describe("core Canvas Gateway capability authorization", () => {
-  it("serves a document through a live capability-scoped URL", async () => {
-    await withHostedDocumentServer({ config: {} }, async ({ clients, document, origin }) => {
-      const client = createConnectedClient();
-      const capability = mintPluginNodeCapabilityToken();
-      const surface = requireCanvasCapability(document.entryUrl);
-      const scopedUrl = installCanvasCapability({
-        capability,
-        client,
-        expiresAtMs: Date.now() + 60_000,
-        origin,
-        surface,
-      });
-      clients.add(client);
-
-      const response = await fetch(`${scopedUrl}${document.entryUrl}`);
-      expect(response.status).toBe(200);
-      expect(await response.text()).toContain("hosted");
-    });
-  });
-
   it("rejects an invalidated client's capability without extending its expiry", async () => {
     await withHostedDocumentServer({ config: {} }, async ({ clients, document, origin }) => {
-      const client = createConnectedClient();
-      const capability = mintPluginNodeCapabilityToken();
-      const surface = requireCanvasCapability(document.entryUrl);
-      const expiresAtMs = Date.now() + 60_000;
-      const scopedUrl = installCanvasCapability({
-        capability,
-        client,
-        expiresAtMs,
-        origin,
-        surface,
-      });
-      clients.add(client);
+      const { client, scopedUrl } = connectCanvasClient({ clients, document, origin });
 
       const activeResponse = await fetch(`${scopedUrl}${document.entryUrl}`);
       expect(activeResponse.status).toBe(200);
@@ -219,17 +178,11 @@ describe("core Canvas Gateway capability authorization", () => {
 
   it("returns the production unauthorized response after the capability expires", async () => {
     await withHostedDocumentServer({ config: {} }, async ({ clients, document, origin }) => {
-      const client = createConnectedClient();
-      const capability = mintPluginNodeCapabilityToken();
-      const surface = requireCanvasCapability(document.entryUrl);
-      const scopedUrl = installCanvasCapability({
-        capability,
-        client,
-        expiresAtMs: Date.now() + 60_000,
+      const { client, capability, surface, scopedUrl } = connectCanvasClient({
+        clients,
+        document,
         origin,
-        surface,
       });
-      clients.add(client);
       expect((await fetch(`${scopedUrl}${document.entryUrl}`)).status).toBe(200);
 
       setClientPluginNodeCapability({
@@ -245,17 +198,15 @@ describe("core Canvas Gateway capability authorization", () => {
 
   it("serves a rotated capability URL and rejects the previous URL", async () => {
     await withHostedDocumentServer({ config: {} }, async ({ clients, document, origin }) => {
-      const client = createConnectedClient();
-      const capability = mintPluginNodeCapabilityToken();
-      const surface = requireCanvasCapability(document.entryUrl);
-      const oldScopedUrl = installCanvasCapability({
-        capability,
+      const {
         client,
-        expiresAtMs: Date.now() + 60_000,
-        origin,
         surface,
+        scopedUrl: oldScopedUrl,
+      } = connectCanvasClient({
+        clients,
+        document,
+        origin,
       });
-      clients.add(client);
       expect((await fetch(`${oldScopedUrl}${document.entryUrl}`)).status).toBe(200);
 
       const refreshed = refreshClientPluginNodeCapability({ client, surface });

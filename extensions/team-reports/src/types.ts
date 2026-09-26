@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { TeamReportsConfig } from "./config.js";
 import type { reportDocumentSchema, summaryDocumentSchema } from "./store-schema.js";
 
 export type { Period, PeriodDescriptor } from "./periods.js";
@@ -81,24 +82,18 @@ export type SourceRuntime = {
 };
 
 /** Resolved (secret already materialized) GitHub source configuration. */
-export type GithubSourceConfig = {
+export type GithubSourceConfig = Omit<
+  TeamReportsConfig["github"],
+  "token" | "ignoreCommentPatterns"
+> & {
   token: string;
-  orgs: string[];
-  teams: Array<{ org: string; slug: string }>;
-  includeDirectCollaborators: boolean;
-  /** "owner/name" entries to skip. */
-  excludeRepos: string[];
-  apiBaseUrl: string;
   /** Compiled from config `github.ignoreCommentPatterns`. */
   ignoreCommentPatterns: RegExp[];
 };
 
 /** Resolved (secret already materialized) Discord source configuration. */
-export type DiscordSourceConfig = {
+export type DiscordSourceConfig = Omit<NonNullable<TeamReportsConfig["discord"]>, "token"> & {
   token: string;
-  guildId: string;
-  channels: Array<{ id: string; excerpts: boolean }>;
-  excerptMaxChars: number;
   apiBaseUrl: string;
 };
 

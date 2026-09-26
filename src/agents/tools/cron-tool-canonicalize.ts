@@ -1,8 +1,3 @@
-/**
- * Cron tool argument canonicalization.
- *
- * Recovers flat or partial model/tool inputs into the structured cron job/patch shape.
- */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
@@ -125,30 +120,26 @@ function setScheduleAtMs(schedule: Record<string, unknown>, value: unknown): voi
   const atMs = typeof value === "number" ? value : Number(value);
   // Invalid/out-of-range timestamps stay raw so cron gateway validation reports the user error.
   schedule.at = Number.isFinite(atMs) ? (timestampMsToIsoString(Math.floor(atMs)) ?? value) : value;
+  if (!isCronScheduleKind(schedule.kind)) {
+    schedule.kind = "at";
+  }
 }
 
 function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   const schedule = isRecord(value.schedule) ? { ...value.schedule } : {};
-  let hasSchedule = isRecord(value.schedule);
 
   if (schedule.atMs !== undefined) {
     setScheduleAtMs(schedule, schedule.atMs);
     delete schedule.atMs;
-    if (!isCronScheduleKind(schedule.kind)) {
-      schedule.kind = "at";
+  }
+  for (const [from, to] of [
+    ["every", "everyMs"],
+    ["cron", "expr"],
+    ["stagger", "staggerMs"],
+  ] as const) {
+    if (schedule[to] === undefined) {
+      moveDefinedField({ source: schedule, target: schedule, from, to });
     }
-  }
-  if (schedule.everyMs === undefined && schedule.every !== undefined) {
-    schedule.everyMs = schedule.every;
-    delete schedule.every;
-  }
-  if (schedule.expr === undefined && schedule.cron !== undefined) {
-    schedule.expr = schedule.cron;
-    delete schedule.cron;
-  }
-  if (schedule.staggerMs === undefined && schedule.stagger !== undefined) {
-    schedule.staggerMs = schedule.stagger;
-    delete schedule.stagger;
   }
   if (schedule.exact === true && schedule.staggerMs === undefined) {
     schedule.staggerMs = 0;
@@ -158,7 +149,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   if (isCronScheduleKind(value.kind) && !isCronScheduleKind(schedule.kind)) {
     schedule.kind = value.kind;
     delete value.kind;
-    hasSchedule = true;
   }
 
   const movedAt = moveDefinedField({ source: value, target: schedule, from: "at" });
@@ -169,10 +159,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   if (value.atMs !== undefined) {
     setScheduleAtMs(schedule, value.atMs);
     delete value.atMs;
-    if (!isCronScheduleKind(schedule.kind)) {
-      schedule.kind = "at";
-    }
-    hasSchedule = true;
   }
 
   const movedEveryMs =
@@ -204,15 +190,12 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     "batchMs",
     "maxBatchBytes",
   ] as const) {
-    hasSchedule = moveDefinedField({ source: value, target: schedule, from: key }) || hasSchedule;
+    moveDefinedField({ source: value, target: schedule, from: key });
   }
-  hasSchedule =
-    moveDefinedField({ source: value, target: schedule, from: "stagger", to: "staggerMs" }) ||
-    hasSchedule;
+  moveDefinedField({ source: value, target: schedule, from: "stagger", to: "staggerMs" });
 
   if (value.exact === true && schedule.staggerMs === undefined) {
     schedule.staggerMs = 0;
-    hasSchedule = true;
   }
   delete value.exact;
 
@@ -228,23 +211,21 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     }
   }
 
-  if (hasSchedule || Object.keys(schedule).length > 0) {
+  if (isRecord(value.schedule) || Object.keys(schedule).length > 0) {
     value.schedule = schedule;
   }
 }
 
 function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   const payload = isRecord(value.payload) ? { ...value.payload } : {};
-  let hasPayload = isRecord(value.payload);
 
   for (const key of CRON_FLAT_PAYLOAD_KEYS) {
-    hasPayload = moveDefinedField({ source: value, target: payload, from: key }) || hasPayload;
+    moveDefinedField({ source: value, target: payload, from: key });
   }
 
   if (isCronPayloadKind(value.kind) && !isCronPayloadKind(payload.kind)) {
     payload.kind = value.kind;
     delete value.kind;
-    hasPayload = true;
   }
 
   if (!isCronPayloadKind(payload.kind)) {
@@ -269,34 +250,18 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
     }
   }
 
-  if (hasPayload || Object.keys(payload).length > 0) {
+  if (isRecord(value.payload) || Object.keys(payload).length > 0) {
     value.payload = payload;
   }
 }
 
-/**
- * Normalizes whitespace-padded cron object keys. Some tool-call
- * extraction/serialization pipelines can produce keys with trailing spaces
- * (e.g. "schedule " instead of "schedule"), which causes strict gateway
- * validation to reject the job with "unexpected property" errors.
- *
- * Only recognized CRON_RECOVERABLE_OBJECT_KEYS are trimmed — arbitrary keys
- * (including special ones like "__proto__") are never mutated.
- *
- * If both the padded and canonical form of a key exist (e.g. "schedule " and
- * "schedule"), the padded key is preserved so strict gateway validation
- * rejects the ambiguous input rather than silently picking one value.
- */
+// Repair only recognized padded keys; keep canonical/padded conflicts for Gateway rejection.
 function repairPaddedCronKeys(value: Record<string, unknown>): void {
   for (const key of Object.keys(value)) {
     const trimmed = key.trim();
-    if (trimmed !== key && CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed)) {
-      if (!(trimmed in value)) {
-        value[trimmed] = value[key];
-        delete value[key];
-      }
-      // When the canonical key already exists, preserve the padded duplicate
-      // so strict gateway validation sees the conflict and rejects the input.
+    if (trimmed !== key && CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed) && !(trimmed in value)) {
+      value[trimmed] = value[key];
+      delete value[key];
     }
   }
 }

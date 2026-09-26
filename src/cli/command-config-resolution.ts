@@ -28,34 +28,17 @@ export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawCo
   effectiveConfig: TConfig;
   diagnostics: string[];
 }> {
-  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
-    config: params.config,
-    commandName: params.commandName,
-    targetIds: params.targetIds,
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-    ...(params.mode ? { mode: params.mode } : {}),
-    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
-    ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
-    ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),
-    ...(params.allowLocalExecSecretRefs !== undefined
-      ? { allowLocalExecSecretRefs: params.allowLocalExecSecretRefs }
-      : {}),
-    ...(params.scrubUnresolvedSecretRefs !== undefined
-      ? { scrubUnresolvedSecretRefs: params.scrubUnresolvedSecretRefs }
-      : {}),
-    ...(params.gatewaySecretResolveTimeoutMs !== undefined
-      ? { gatewaySecretResolveTimeoutMs: params.gatewaySecretResolveTimeoutMs }
-      : {}),
-  });
-  if (params.runtime) {
+  const { runtime, autoEnable, env, ...resolution } = params;
+  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway(resolution);
+  if (runtime) {
     for (const entry of diagnostics) {
-      params.runtime.error(`[secrets] ${entry}`);
+      runtime.error(`[secrets] ${entry}`);
     }
   }
-  const effectiveConfig = params.autoEnable
+  const effectiveConfig = autoEnable
     ? applyPluginAutoEnable({
         config: resolvedConfig,
-        env: params.env ?? process.env,
+        env: env ?? process.env,
       }).config
     : resolvedConfig;
   return {

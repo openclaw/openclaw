@@ -1,6 +1,6 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
-import type { OpenClawPluginApi } from "./api.js";
 import { isMemoryMachineOutput } from "./cli-output-mode.js";
 import type { MemoryConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
@@ -137,8 +137,7 @@ export function registerMemoryCli(
         .option("--agent <id>", "Agent id (default: configured default agent)")
         .option("--limit <n>", "Max results", "5")
         .action(async (query, opts) => {
-          let operationError: unknown;
-          let operationFailed = false;
+          let failure: { error: unknown } | undefined;
           try {
             const agentId = resolveCliAgentId(opts.agent);
             const limit = parsePositiveIntegerOption(opts.limit, "--limit");
@@ -157,23 +156,16 @@ export function registerMemoryCli(
               score: r.score,
             }));
             defaultRuntime.writeJson(output);
-          } catch (err) {
-            operationError = err;
-            operationFailed = true;
+          } catch (error) {
+            failure = { error };
           }
-          let closeError: unknown;
-          let closeFailed = false;
           try {
             await embeddings.close?.();
-          } catch (err) {
-            closeError = err;
-            closeFailed = true;
+          } catch (error) {
+            failure ??= { error };
           }
-          if (operationFailed) {
-            throw operationError;
-          }
-          if (closeFailed) {
-            throw closeError;
+          if (failure) {
+            throw failure.error;
           }
         });
 

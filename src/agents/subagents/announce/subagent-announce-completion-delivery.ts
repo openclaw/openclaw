@@ -31,7 +31,6 @@ import type { AgentInternalEvent } from "../../internal-events.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import {
   SourceOwnerChangedError,
-  sourceOwnerChangedResult,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
@@ -39,7 +38,10 @@ import {
   sendSubagentAnnounceMessage,
   tryResolveSubagentRequesterAgentId,
 } from "./subagent-announce-delivery.runtime.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import {
+  sourceOwnerChangedResult,
+  type SubagentAnnounceDeliveryResult,
+} from "./subagent-announce-dispatch.js";
 import type { SubagentCompletionToolHandoffRegistration } from "./subagent-announce-handoff.js";
 import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
 

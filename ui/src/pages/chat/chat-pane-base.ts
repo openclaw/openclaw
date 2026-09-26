@@ -16,7 +16,7 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
-import { applicationContext } from "../../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
 import {
   createQuestionPromptState,
@@ -53,11 +53,7 @@ import {
 import { getAcceptedChatHistorySession, getChatHistoryLoadState } from "./chat-history-state.ts";
 import { sameChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
-import type {
-  ChatPaneConnectionScope,
-  ChatPageContext,
-  PaneSessionChangeOptions,
-} from "./chat-pane-shared.ts";
+import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -93,7 +89,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
-    const liveDraft = getChatComposerState(this.paneId).composerTextarea?.value;
+    const liveDraft = getChatComposerState(this.presentationId).composerTextarea?.value;
     const draftChanged = liveDraft !== undefined && liveDraft !== state.chatMessage;
     if (draftChanged) {
       // Page suspension can interrupt IME before compositionend; commit the
@@ -141,11 +137,15 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
 
   // Relative labels still need a minute tick; external PR state is server-pushed.
-  readonly minutePoll = new PollController(this, 60_000, () => {
-    this.requestUpdate();
-  });
+  readonly minutePoll = new PollController(
+    this,
+    60_000,
+    () => this.requestUpdate(),
+    true,
+    "visible",
+  );
   @consume({ context: applicationContext, subscribe: true })
-  protected context!: ChatPageContext;
+  protected context!: ApplicationContext;
   @property({ attribute: false }) paneId = "single";
   @property({ attribute: false }) presentationId = "single";
   @property({ attribute: false }) chatMessagesBySession?: ChatMessageCache;
@@ -298,7 +298,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     replacementSessionKey: string,
     preserveDraft?: boolean,
   ) => void;
-  @property({ attribute: false }) paneTitle = "";
+  @property({ attribute: false }) presentationTitle: string | undefined;
   @property({ attribute: false }) narrow = false;
   @property({ attribute: false }) mergedChrome = false;
   @property({ attribute: false }) navDrawerOpen = false;
@@ -602,7 +602,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected abstract resolveBoardProvider(): BoardProvider;
   protected abstract handleBoardCommand(event: BoardCommandEvent): void;
   protected abstract reconcileWaitingApprovalSnapshot(
-    approvalQueue?: ChatPageContext["overlays"]["snapshot"]["approvalQueue"],
+    approvalQueue?: ApplicationContext["overlays"]["snapshot"]["approvalQueue"],
   ): boolean;
   protected abstract publishHeaderError(error: unknown, owner?: string): void;
   protected abstract probeSessionDiscussion(sessionKey: string): Promise<void>;
@@ -614,9 +614,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     client: GatewayBrowserClient,
     generation: number,
   ): Promise<void>;
-  protected abstract applyGatewaySnapshot(snapshot: ChatPageContext["gateway"]["snapshot"]): void;
-  protected abstract applyApplicationConfig(config: ChatPageContext["config"]["current"]): void;
-  protected abstract applySessionsState(state: ChatPageContext["sessions"]["state"]): void;
+  protected abstract applyGatewaySnapshot(
+    snapshot: ApplicationContext["gateway"]["snapshot"],
+  ): void;
+  protected abstract applyApplicationConfig(config: ApplicationContext["config"]["current"]): void;
+  protected abstract applySessionsState(state: ApplicationContext["sessions"]["state"]): void;
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;

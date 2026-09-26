@@ -15,7 +15,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
-import { isExpiredIncognitoSession } from "./chat-history-state.ts";
+import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
 import {
@@ -24,7 +24,6 @@ import {
   NEW_SESSION_LIST_LOADING_MESSAGE,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
 import { canCreateChatSession } from "./chat-state-route.ts";
 import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
 
@@ -161,18 +160,9 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const context = this.context;
     const sessions = context.sessions;
     const client = state.client;
-    const connectionGeneration = this.connectionGeneration;
+    const scope = { context, state, client, generation: this.connectionGeneration };
     const isCurrent = () =>
-      this.isConnected &&
-      this.state === state &&
-      this.context === context &&
-      this.context.sessions === sessions &&
-      state.client === client &&
-      state.connected &&
-      this.connectedClient === client &&
-      context.gateway.snapshot.client === client &&
-      context.gateway.snapshot.phase === "connected" &&
-      this.connectionGeneration === connectionGeneration;
+      this.isConnectionScopeCurrent(scope) && this.context.sessions === sessions;
     const sourceSessionKey = state.sessionKey;
     const agentId =
       scopedAgentParamsForSession(state, sourceSessionKey).agentId ??
@@ -186,8 +176,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       params,
     });
     if (!access.allowed) {
-      setChatError(state, access.reason);
-      state.requestUpdate?.();
+      setChatError(state, access.reason, true);
       return false;
     }
 
@@ -200,15 +189,11 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         return false;
       }
       if (!recovery) {
-        if (isCurrent()) {
-          setChatError(state, state.sessionsError ?? NEW_SESSION_CREATE_FAILED_MESSAGE);
-          state.requestUpdate?.();
-        }
+        setChatError(state, state.sessionsError ?? NEW_SESSION_CREATE_FAILED_MESSAGE, true);
         return false;
       }
       if (recovery.continuation.status === "rejected") {
-        setChatError(state, formatUiError(recovery.continuation.error.message));
-        state.requestUpdate?.();
+        setChatError(state, formatUiError(recovery.continuation.error.message), true);
         return false;
       }
       const nextSessionKey = recovery.key;
@@ -259,36 +244,20 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
           ? { requiredScope: "operator.admin" as const }
           : { params: createRequestParams, sessionScope: true }),
       });
-    const publishCreateAccessError = (reason: string) => {
-      state.lastError = reason;
-      state.chatError = reason;
-      state.requestUpdate?.();
-    };
-    const connectionGeneration = this.connectionGeneration;
+    const scope = { context, state, client, generation: this.connectionGeneration };
     const isCurrent = () =>
-      this.isConnected &&
-      this.state === state &&
-      this.context === context &&
-      this.context.sessions === sessions &&
-      state.client === client &&
-      state.connected &&
-      this.connectedClient === client &&
-      context.gateway.snapshot.client === client &&
-      context.gateway.snapshot.phase === "connected" &&
-      this.connectionGeneration === connectionGeneration;
+      this.isConnectionScopeCurrent(scope) && this.context.sessions === sessions;
     if (!canCreateChatSession(state)) {
-      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
-      state.requestUpdate?.();
+      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE, true);
       return false;
     }
     if (state.sessionsLoading) {
-      setChatError(state, NEW_SESSION_LIST_LOADING_MESSAGE);
-      state.requestUpdate?.();
+      setChatError(state, NEW_SESSION_LIST_LOADING_MESSAGE, true);
       return false;
     }
     const initialAccess = readCreateAccess();
     if (!initialAccess.allowed) {
-      publishCreateAccessError(initialAccess.reason);
+      setChatError(state, initialAccess.reason, true);
       return false;
     }
     if (
@@ -299,13 +268,12 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return false;
     }
     if (!canCreateChatSession(state)) {
-      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
-      state.requestUpdate?.();
+      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE, true);
       return false;
     }
     const currentAccess = readCreateAccess();
     if (!currentAccess.allowed) {
-      publishCreateAccessError(currentAccess.reason);
+      setChatError(state, currentAccess.reason, true);
       return false;
     }
 
@@ -335,8 +303,8 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
               (state.sessionsLoading
                 ? NEW_SESSION_LIST_LOADING_MESSAGE
                 : NEW_SESSION_CREATE_FAILED_MESSAGE),
+            true,
           );
-          state.requestUpdate?.();
         }
         return false;
       }
@@ -350,6 +318,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
           ? { mentions: state.chatMentions.map((mention) => ({ ...mention })) }
           : {}),
         ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
+        ...(state.chatReplyTarget ? { replyTarget: state.chatReplyTarget } : {}),
       });
       return true;
     } finally {

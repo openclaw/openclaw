@@ -1,16 +1,31 @@
 import { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCommandTerminationController } from "./exec-termination.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 
 const proc = vi.hoisted(() => ({
   entries: vi.fn<() => string[]>(),
   stat: vi.fn<(path: string) => string>(),
   wait: vi.fn<(pid: number, status: null, options: number) => number>(),
+  alive: vi.fn<() => boolean>(),
 }));
 
 vi.mock("node:fs", () => ({ readdirSync: proc.entries, readFileSync: proc.stat }));
 vi.mock("node:module", () => ({
   createRequire: () => () => ({ load: () => ({ func: () => proc.wait }) }),
+}));
+vi.mock("../infra/windows-install-roots.js", () => ({
+  getWindowsSystem32ExePath: () => {
+    throw new Error("Linux cleanup must not launch taskkill");
+  },
+}));
+vi.mock("../shared/pid-alive.js", () => ({ getFileLockProcessStartTime: () => null }));
+vi.mock("./child-process-tree.js", () => ({ isChildProcessTreeAlive: proc.alive }));
+vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
+vi.mock("./exec-spawn.js", () => ({
+  COMMAND_PROCESS_TREE_KILL_GRACE_MS: 300,
+  runOutsideCommandProcessScope: vi.fn(),
+  spawnCommand: vi.fn(),
 }));
 
 const ROOT = 400;
@@ -52,11 +67,38 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   Object.defineProperty(process, "platform", { value: originalPlatform });
 });
 
 describe("adopted process-group cleanup", () => {
+  it("settles a cooperative descendant throughout a longer command grace period", async () => {
+    const child = trackedRoot(true);
+    vi.spyOn(process, "kill").mockReturnValue(true);
+    proc.alive.mockReturnValue(true);
+    setProcesses([{ pid: 401, ppid: process.pid, pgid: ROOT, state: "S" }]);
+    proc.wait.mockImplementation((pid) => {
+      proc.alive.mockReturnValue(false);
+      setProcesses([]);
+      return pid;
+    });
+    const termination = createCommandTerminationController({
+      child,
+      cancelController: new AbortController(),
+      processTree: { mode: "graceful" },
+      killGraceMs: 45_000,
+      isChildExited: () => true,
+      isCommandSettled: () => false,
+    });
+    termination.terminate();
+    await vi.advanceTimersByTimeAsync(31_000);
+    setProcesses([{ pid: 401, ppid: process.pid, pgid: ROOT, state: "Z" }]);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(termination.settle()).resolves.toBe("cooperative");
+    expect(proc.wait.mock.calls).toEqual([[401, null, 1]]);
+  });
+
   it("waits for tracked-root exit and leaves tracked, live, and unrelated children intact", () => {
     const child = trackedRoot();
     setProcesses([

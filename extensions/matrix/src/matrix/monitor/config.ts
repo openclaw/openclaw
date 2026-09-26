@@ -1,18 +1,18 @@
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";
-import { resolveMatrixTargets } from "../../resolve-targets.js";
-import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
-import { resolveMatrixAccountConfig } from "../account-config.js";
-import { isMatrixQualifiedUserId, isMatrixRoomId } from "../target-ids.js";
-import { normalizeMatrixUserId } from "./allowlist.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
   canonicalizeAllowlistWithResolvedIds,
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
-  type RuntimeEnv,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/allow-from";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { resolveMatrixTargets } from "../../resolve-targets.js";
+import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
+import { isMatrixQualifiedUserId, isMatrixRoomId } from "../target-ids.js";
+import { normalizeMatrixUserId } from "./allowlist.js";
 
 type MatrixRoomsConfig = Record<string, MatrixRoomConfig>;
 type ResolveMatrixTargetsFn = typeof resolveMatrixTargets;

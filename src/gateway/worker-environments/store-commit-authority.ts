@@ -1,6 +1,7 @@
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
+import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
 import type {
   WorkerEnvironmentCommitAdmission,
   WorkerEnvironmentFacts,
@@ -41,13 +42,22 @@ export function encodeWorkerEnvironmentTransferAuthority(
   ]);
 }
 
+export function digestWorkerEnvironmentAttachmentAuthority(
+  attachment: WorkerEnvironmentAttachmentRecord | undefined,
+): string {
+  // Activity timestamps also participate in idle-cleanup guards.
+  return sha256StableValue(attachment ?? null).digest;
+}
+
 export function createWorkerEnvironmentCommitAdmission(
   facts: WorkerEnvironmentFacts,
 ): WorkerEnvironmentCommitAdmission {
   const environments = new Map(facts.environments.map((row) => [row.environmentId, row]));
   const credentials = new Map(facts.credentials.map((row) => [row.environmentId, row]));
+  const attachments = new Map(facts.attachments.map((row) => [row.environmentId, row]));
   return facts.ids.map((environmentId) => ({
     environmentId,
+    attachmentAuthority: digestWorkerEnvironmentAttachmentAuthority(attachments.get(environmentId)),
     recordAuthority: digestWorkerEnvironmentRecordAuthority(
       environments.get(environmentId),
       credentials.get(environmentId),

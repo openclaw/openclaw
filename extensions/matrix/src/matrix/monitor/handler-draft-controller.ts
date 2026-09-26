@@ -2,12 +2,15 @@ import {
   createChannelProgressDraftCompositor,
   createLivePreviewLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type {
+  BlockReplyContext,
+  GetReplyOptions,
+  ReplyPayload,
+} from "openclaw/plugin-sdk/reply-runtime";
 import type { CoreConfig, MatrixConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { formatMatrixToolProgressMarkdownCode } from "./handler-helpers.js";
 import { loadMatrixDraftStream, type MatrixDraftStreamHandle } from "./handler-runtime.js";
-import type { BlockReplyContext, ReplyPayload } from "./runtime-api.js";
 
 export async function createMatrixDraftController(params: {
   streaming: MatrixStreamingMode;

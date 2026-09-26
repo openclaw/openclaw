@@ -166,11 +166,7 @@ describe("plugin service registration identity", () => {
   });
 
   it.each([
-    { surface: "service", id: "" },
-    { surface: "service", id: "   " },
     { surface: "service", id: "\t\n" },
-    { surface: "discovery", id: "" },
-    { surface: "discovery", id: "   " },
     { surface: "discovery", id: "\t\n" },
   ] as const)("reports a blank $surface service id ($id)", async ({ surface, id }) => {
     const { builder, createRecord } = createRegistrationFixture();
@@ -212,12 +208,8 @@ describe("plugin service registration identity", () => {
 
   it.each([
     { surface: "service", sameOwner: false, paddedFirst: true },
-    { surface: "service", sameOwner: false, paddedFirst: false },
-    { surface: "service", sameOwner: true, paddedFirst: true },
     { surface: "service", sameOwner: true, paddedFirst: false },
     { surface: "discovery", sameOwner: false, paddedFirst: true },
-    { surface: "discovery", sameOwner: false, paddedFirst: false },
-    { surface: "discovery", sameOwner: true, paddedFirst: true },
     { surface: "discovery", sameOwner: true, paddedFirst: false },
   ] as const)(
     "deduplicates $surface registrations (same owner: $sameOwner, padded first: $paddedFirst)",

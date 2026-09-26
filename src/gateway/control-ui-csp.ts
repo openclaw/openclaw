@@ -56,12 +56,13 @@ export function buildControlUiCspHeader(opts?: {
     scriptTokens.push("'wasm-unsafe-eval'");
   }
   // Web Awesome resolves its bundled system icons to data: SVGs, then fetches
-  // them before rendering. This allows local bytes only, not another origin.
+  // them before rendering. Attachment previews fetch browser-owned Blob URLs.
   const connectTokens = [
     "'self'",
     "ws:",
     "wss:",
     "data:",
+    "blob:",
     "https://api.openai.com",
     "https://tweakcn.com",
   ];
@@ -88,7 +89,7 @@ export function buildControlUiCspHeader(opts?: {
     "frame-ancestors 'none'",
     // Gateway selection can move to a remote dedicated MCP Apps origin after
     // this document loads. The component still validates the exact endpoint.
-    "frame-src 'self' http: https:",
+    "frame-src 'self' blob: http: https:",
     `script-src ${scriptTokens.join(" ")}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: blob: https:",

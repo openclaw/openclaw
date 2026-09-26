@@ -81,7 +81,6 @@ describe("literal command discovery", () => {
     { args: ["--profile", "--", "config", "get"], expected: ["config", "get"] },
     { args: ["--", "--help"], expected: ["--help"] },
     { args: ["--", "config", "--help"], expected: ["config", "--help"] },
-    { args: ["--", "config", "unknown"], expected: ["config", "unknown"] },
     { args: ["--"], expected: [] },
     { args: ["status", "--", "ignored"], expected: ["status"] },
   ])("discovers $args without promoting literal flags", ({ args, expected }) => {

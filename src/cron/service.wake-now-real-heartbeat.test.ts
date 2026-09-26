@@ -40,12 +40,16 @@ import {
 } from "./active-jobs.js";
 import { CronService, type CronEvent } from "./service.js";
 import type { CronServiceDeps } from "./service/state.js";
-import { loadCronJobsStoreSync } from "./store.js";
+import { loadCronJobsStore } from "./store.js";
 
 installHeartbeatRunnerTestRuntime();
 beforeAll(async () => {
-  // Load the real dispatch graph before this real-time scheduler fixture starts its watchdog.
-  await import("../auto-reply/dispatch.js");
+  // Dispatch lazily loads fast-abort handling even with an injected reply resolver.
+  // Load both graphs before this real-time scheduler fixture starts its watchdog.
+  await Promise.all([
+    import("../auto-reply/dispatch.js"),
+    import("../auto-reply/reply/abort.runtime.js"),
+  ]);
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -261,7 +265,7 @@ async function runMainCronCase(
         : mode === "scheduled"
           ? terminal.runAtMs! + terminal.durationMs! + 30_000
           : scheduledNextRunAtMs;
-      const persisted = loadCronJobsStoreSync(sandbox.cronStorePath).jobs.find(
+      const persisted = (await loadCronJobsStore(sandbox.cronStorePath)).jobs.find(
         (entry) => entry.id === job.id,
       );
       for (const completed of [cron.getJob(job.id), persisted, terminal.job]) {

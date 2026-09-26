@@ -9,10 +9,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
-import {
-  emitSessionIdentityMutation,
-  emitSessionLifecycleEvent,
-} from "../sessions/session-lifecycle-events.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -217,12 +214,6 @@ it("does not carry a pending transcript refresh into a replacement session", asy
       displayName: "Replacement",
       parentSessionKey: "agent:main:parent",
     });
-    emitSessionIdentityMutation({
-      kind: "reset",
-      agentId: target.agentId,
-      previous: { sessionId: target.sessionId, sessionKeys: [target.sessionKey] },
-      current: { sessionId: "replacement", sessionKeys: [target.sessionKey] },
-    });
     await projection.ensureMaterialized();
     expect(projection.snapshot(query).row?.sessionId).toBe("replacement");
     expect(vi.getTimerCount()).toBe(0);
@@ -309,12 +300,6 @@ it("eventually fills legacy titles and previews without waiting during startup o
         });
       });
       replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
-      emitSessionIdentityMutation({
-        kind: "reset",
-        agentId: "main",
-        previous: { sessionId: target.sessionId, sessionKeys: [target.sessionKey] },
-        current: { sessionId: "replacement", sessionKeys: [target.sessionKey] },
-      });
       expect(
         repairedProjection.snapshot(
           { agentId: "main", key: target.sessionKey },

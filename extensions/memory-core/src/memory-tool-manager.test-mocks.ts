@@ -170,10 +170,6 @@ export function getMemoryCloseMockCalls(): number {
   return stubManager.close.mock.calls.length;
 }
 
-export function getMemorySearchManagerMockConfigs(): unknown[] {
-  return getMemorySearchManagerMock.mock.calls.map(([params]) => params.cfg);
-}
-
 export function getMemorySearchManagerMockParams(): MemoryManagerParams[] {
   return getMemorySearchManagerMock.mock.calls.map(([params]) => params);
 }

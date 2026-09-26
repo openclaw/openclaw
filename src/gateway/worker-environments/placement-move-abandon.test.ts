@@ -11,6 +11,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import { environmentsHandlers } from "../server-methods/environments.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
@@ -134,6 +135,7 @@ describe("offline device placement abandonment", () => {
     }
     const provider = createProvider({ id: providerId, destroy: vi.fn(async () => {}) });
     const environments = createWorkerEnvironmentService({
+      scheduler: createTestGatewayScheduler(),
       store,
       getConfig: () => ({}),
       resolveProvider: () => provider,
@@ -366,7 +368,7 @@ describe("offline device placement abandonment", () => {
       const active = await harness.service.dispatch(REQUEST);
       harness.markEnvironmentNodeDeviceId("device-1");
       seedEnvironment(active);
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         sessionId: active.sessionId,
         sessionKey: active.sessionKey,
         agentId: active.agentId,
@@ -439,7 +441,7 @@ describe("offline device placement abandonment", () => {
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -474,7 +476,7 @@ describe("offline device placement abandonment", () => {
     const active = await harness.service.dispatch({ ...REQUEST, executionMode: "remote-exec" });
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -512,7 +514,9 @@ describe("offline device placement abandonment", () => {
         expectedGeneration: active.generation + 1,
       }),
     ).toThrow("Cannot reconcile stale worker placement");
-    expect(() => placements.releaseTurn(claim)).toThrow("turn claim changed before release");
+    await expect(placements.releaseTurn(claim)).rejects.toThrow(
+      "turn claim changed before release",
+    );
     expect(closeToolState).toHaveBeenCalledOnce();
     expect(closed).toHaveBeenCalledOnce();
     unregister();
@@ -533,7 +537,7 @@ describe("offline device placement abandonment", () => {
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
-    placements.claimTurn({
+    await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -596,7 +600,7 @@ describe("offline device placement abandonment", () => {
       if (scenario.outcome === "persist-error") {
         throw new Error("partial transcript persistence failed");
       }
-      placements.releaseTurn({
+      await placements.releaseTurn({
         sessionId: source.sessionId,
         claimId: "offline-device-claim",
         runId: "offline-device-run",
@@ -608,7 +612,7 @@ describe("offline device placement abandonment", () => {
         },
       });
       if (scenario.outcome === "rotated-claim") {
-        placements.claimTurn({
+        await placements.claimTurn({
           sessionId: source.sessionId,
           sessionKey: source.sessionKey,
           agentId: source.agentId,
@@ -633,7 +637,7 @@ describe("offline device placement abandonment", () => {
     const source = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(source);
-    placements.claimTurn({
+    await placements.claimTurn({
       sessionId: source.sessionId,
       sessionKey: source.sessionKey,
       agentId: source.agentId,

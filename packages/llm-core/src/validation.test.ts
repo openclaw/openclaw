@@ -197,14 +197,19 @@ describe("validateToolArguments", () => {
   });
 
   it("rejects non-decimal numeric strings for plain JSON schemas", () => {
-    expect(() =>
-      validateToolArguments(decimalTool, {
-        type: "toolCall",
-        id: "call-1",
-        name: "decimal-tool",
-        arguments: { amount: "0x10", count: "0b10" },
-      }),
-    ).toThrow(/Validation failed for tool "decimal-tool"/);
+    for (const input of [
+      { amount: "0x10", count: 3 },
+      { amount: 16, count: "0b10" },
+    ]) {
+      expect(() =>
+        validateToolArguments(decimalTool, {
+          type: "toolCall",
+          id: "call-1",
+          name: "decimal-tool",
+          arguments: input,
+        }),
+      ).toThrow(/Validation failed for tool "decimal-tool"/);
+    }
   });
 
   it("coerces additional properties without changing declared string fields", () => {
@@ -321,48 +326,40 @@ const objectTool = {
 } as Tool;
 
 describe("validateToolArguments — stringified JSON coercion", () => {
-  it("coerces stringified JSON array to array for plain JSON schemas", () => {
+  it.each([
+    { label: "serialized", input: '["test","debug"]', expected: ["test", "debug"] },
+    { label: "native", input: ["already", "array"], expected: ["already", "array"] },
+  ])("validates $label array arguments for plain JSON schemas", ({ input, expected }) => {
     expect(
       validateToolArguments(arrayTool, {
         type: "toolCall",
         id: "call-2",
         name: "array-tool",
-        arguments: { tags: '["test","debug"]' },
+        arguments: { tags: input },
       }),
-    ).toEqual({ tags: ["test", "debug"] });
+    ).toEqual({ tags: expected });
   });
 
-  it("coerces stringified JSON object to object for plain JSON schemas", () => {
+  it.each([
+    {
+      label: "serialized",
+      input: '{"enabled":true,"retries":3}',
+      expected: { enabled: true, retries: 3 },
+    },
+    {
+      label: "native",
+      input: { enabled: false, retries: 1 },
+      expected: { enabled: false, retries: 1 },
+    },
+  ])("validates $label object arguments for plain JSON schemas", ({ input, expected }) => {
     expect(
       validateToolArguments(objectTool, {
         type: "toolCall",
         id: "call-3",
         name: "object-tool",
-        arguments: { config: '{"enabled":true,"retries":3}' },
+        arguments: { config: input },
       }),
-    ).toEqual({ config: { enabled: true, retries: 3 } });
-  });
-
-  it("passes through valid arrays unchanged", () => {
-    expect(
-      validateToolArguments(arrayTool, {
-        type: "toolCall",
-        id: "call-4",
-        name: "array-tool",
-        arguments: { tags: ["already", "array"] },
-      }),
-    ).toEqual({ tags: ["already", "array"] });
-  });
-
-  it("passes through valid objects unchanged", () => {
-    expect(
-      validateToolArguments(objectTool, {
-        type: "toolCall",
-        id: "call-5",
-        name: "object-tool",
-        arguments: { config: { enabled: false, retries: 1 } },
-      }),
-    ).toEqual({ config: { enabled: false, retries: 1 } });
+    ).toEqual({ config: expected });
   });
 
   it("rejects invalid JSON string for array param", () => {
@@ -411,5 +408,176 @@ describe("validateToolArguments — stringified JSON coercion", () => {
         arguments: { config: hugeObj },
       }),
     ).toThrow(/Validation failed for tool "object-tool"/);
+  });
+});
+
+describe("validateToolArguments — root references", () => {
+  function validate(parameters: Tool["parameters"], value: unknown) {
+    return validateToolArguments(
+      { name: "refs", description: "", parameters },
+      {
+        type: "toolCall",
+        id: "refs-call",
+        name: "refs",
+        arguments: { value },
+      },
+    );
+  }
+
+  it.each(["anyOf", "oneOf"])("checks %s alternatives in their root context", (keyword) => {
+    const parameters = {
+      type: "object",
+      properties: {
+        value: { [keyword]: [{ $ref: "#/$defs/positive" }, { $ref: "#/$defs/absent" }] },
+      },
+      $defs: {
+        positive: { $ref: "#/$defs/limit~1value~0" },
+        "limit/value~": { type: "integer", minimum: 1 },
+        absent: { type: "null" },
+      },
+    };
+    expect(validate(parameters, null)).toEqual({ value: null });
+    expect(validate(parameters, "2")).toEqual({ value: 2 });
+    for (const invalid of [0, false, "", -1, "invalid"]) {
+      expect(() => validate(parameters, invalid)).toThrow(/Validation failed/);
+    }
+  });
+
+  it("preserves TypeBox refinements when choosing a coercion alternative", () => {
+    const value = Type.Union([Type.Refine(Type.Number(), (number) => number >= 10), Type.String()]);
+    for (const options of [{}, { $defs: { unused: { type: "string" } } }]) {
+      const parameters = Type.Object({ value }, options);
+      expect(validate(parameters, "02")).toEqual({ value: "02" });
+    }
+  });
+
+  it("keeps union branch validators bound to each tool's root", () => {
+    const branch = { anyOf: [{ $ref: "#/$defs/value" }, { type: "null" }] };
+    for (const type of ["array", "object", "array"]) {
+      const definition =
+        type === "array"
+          ? { type, items: { type: "integer" } }
+          : { type, properties: { count: { type: "integer" } } };
+      const parameters = {
+        type: "object",
+        properties: { value: branch },
+        $defs: { value: definition },
+      };
+      expect(validate(parameters, type === "array" ? '["2"]' : '{"count":"2"}')).toEqual({
+        value: type === "array" ? [2] : { count: 2 },
+      });
+    }
+  });
+
+  it("coerces recursive definitions at distinct data locations and preserves siblings", () => {
+    const node = { $ref: "#/$defs/node" };
+    const parameters = {
+      type: "object",
+      properties: { value: { ...node, maxProperties: 2 } },
+      $defs: {
+        node: {
+          type: "object",
+          properties: {
+            count: { type: "integer" },
+            next: node,
+            children: { type: "array", items: node },
+            named: { type: "object", additionalProperties: node },
+          },
+          required: ["count"],
+          additionalProperties: false,
+        },
+      },
+    };
+    const input = {
+      count: "1",
+      children: [
+        '{"count":"2","next":{"count":"3"}}',
+        { count: "4", named: { last: '{"count":"5"}' } },
+      ],
+    };
+    expect(validate(parameters, JSON.stringify(input))).toEqual({
+      value: {
+        count: 1,
+        children: [
+          { count: 2, next: { count: 3 } },
+          { count: 4, named: { last: { count: 5 } } },
+        ],
+      },
+    });
+    expect(() => validate(parameters, { count: "1", next: { count: "2" }, children: [] })).toThrow(
+      /must NOT have more than|must not have more than/i,
+    );
+  });
+
+  it("applies reference siblings without dropping their coercion or validation", () => {
+    const parameters = {
+      type: "object",
+      properties: {
+        value: {
+          $ref: "#/$defs/base",
+          properties: { enabled: { type: "boolean" } },
+          required: ["enabled"],
+        },
+      },
+      $defs: {
+        base: { type: "object", properties: { count: { type: "integer" } }, required: ["count"] },
+      },
+    };
+    expect(validate(parameters, '{"enabled":"true","count":"2"}')).toEqual({
+      value: { enabled: true, count: 2 },
+    });
+    expect(() => validate(parameters, '{"count":"2"}')).toThrow(/enabled/);
+  });
+
+  it("does not resolve scoped references against an outer definition table", () => {
+    const parameters = {
+      type: "object",
+      properties: {
+        value: {
+          $id: "https://example.invalid/scoped",
+          type: "object",
+          properties: { text: { $ref: "#/$defs/item" }, free: true },
+          $defs: { item: { type: "string" } },
+        },
+      },
+      $defs: { item: { type: "array", items: { type: "integer" } } },
+    };
+    expect(validate(parameters, { text: "[1]", free: "[2]" })).toEqual({
+      value: { text: "[1]", free: "[2]" },
+    });
+  });
+
+  it("coerces references inside tuple and allOf schemas", () => {
+    const parameters = {
+      type: "object",
+      properties: { value: { allOf: [{ $ref: "#/$defs/tuple" }] } },
+      $defs: {
+        tuple: { type: "array", items: [{ $ref: "#/$defs/count" }, { $ref: "#/$defs/tags" }] },
+        count: { type: "integer" },
+        tags: { type: "array", items: { type: "string" } },
+      },
+    };
+    expect(validate(parameters, ["2", '["a","b"]'])).toEqual({ value: [2, ["a", "b"]] });
+  });
+
+  it("keeps invalid and oversized strings out of referenced containers", () => {
+    for (const definition of [
+      { type: "array", items: { type: "integer" } },
+      { type: "object", properties: { count: { type: "integer" } }, required: ["count"] },
+    ]) {
+      const parameters = {
+        type: "object",
+        properties: { value: { $ref: "#/$defs/value" } },
+        $defs: { value: definition },
+      };
+      for (const invalid of [
+        "not-json",
+        "false",
+        "null",
+        " ".repeat(64 * 1024) + (definition.type === "array" ? "[1]" : '{"count":1}'),
+      ]) {
+        expect(() => validate(parameters, invalid)).toThrow(/Validation failed/);
+      }
+    }
   });
 });

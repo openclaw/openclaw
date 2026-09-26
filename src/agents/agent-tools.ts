@@ -149,6 +149,7 @@ export function createOpenClawCodingToolsInternal(
       skillsSnapshot: options?.skillsSnapshot,
       sandboxToolPolicy: sandbox?.tools,
       runtimeToolAllowlist: options?.runtimeToolAllowlist,
+      runtimePluginToolGrant: options?.runtimePluginToolGrant,
       inheritRuntimeToolAllowlist: options?.inheritRuntimeToolAllowlist,
       inputProvenance: options?.inputProvenance,
       trustedInternalHandoff: options?.trustedInternalHandoff,

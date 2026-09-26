@@ -120,7 +120,7 @@
    native macOS hosts without the full strip, they sit below the drag region. */
 .shell-chrome-controls {
   position: fixed;
-  top: 10px;
+  top: calc((var(--rail-header-height) - var(--shell-chrome-control-size)) / 2);
   left: calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset));
   z-index: 45;
   display: flex;
@@ -807,7 +807,8 @@ openclaw-settings-save-indicator:empty {
   min-width: 0;
 }
 
-.settings-save-indicator--recovery {
+.settings-save-indicator--recovery,
+.settings-save-indicator--rejected {
   flex-direction: column;
   align-items: flex-start;
   white-space: pre-line;
@@ -1128,9 +1129,6 @@ openclaw-settings-save-indicator:empty {
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  /* 9px top pad centers the brand row's 30px icons on the app's shared
-     24px chrome centerline (pane-header actions, floating toggles). The
-     macOS app overrides this with its 50px titlebar clearance. */
   padding: 9px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
   border: none;
   border-radius: 0;
@@ -1147,6 +1145,20 @@ openclaw-settings-save-indicator:empty {
   min-height: 34px;
   padding: 0 2px 10px 0;
   flex-shrink: 0;
+}
+
+/* Desktop web shares the pane centerline. Drawers and native windows keep
+   the identity row below their own chrome and retain its separate clearance. */
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
+  .sidebar-shell {
+    padding-top: 0;
+  }
+
+  .sidebar-brand {
+    min-height: var(--rail-header-height);
+    padding-bottom: 0;
+    margin-bottom: 9px;
+  }
 }
 
 .sidebar-brand__actions {
@@ -1559,7 +1571,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-sessions__head {
   --sidebar-session-group-action-size: 22px;
-  --sidebar-session-group-count-slot: 24px;
 
   position: relative;
   display: flex;
@@ -1590,7 +1601,8 @@ openclaw-settings-save-indicator:empty {
   cursor: grabbing;
 }
 
-.sidebar-session-group-toggle {
+.sidebar-session-group-toggle,
+.sidebar-session-group-status {
   display: flex;
   align-items: center;
   gap: var(--sidebar-row-gap);
@@ -1675,6 +1687,18 @@ openclaw-settings-save-indicator:empty {
   width: 12px;
   height: 12px;
   flex: 0 0 12px;
+}
+
+/* Keep counts on the trailing edge, after any running and attention indicators. */
+.sidebar-session-group-status {
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.sidebar-session-group-status > .sidebar-session-group-count {
+  order: 1;
+  min-width: 24px;
+  text-align: right;
 }
 
 .sidebar-session-group-count {
@@ -1848,54 +1872,6 @@ openclaw-settings-save-indicator:empty {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-/* Reserve the new-session button's width so provider counts line up. */
-.sidebar-session-catalog-new-spacer {
-  width: var(--sidebar-session-group-action-size);
-  height: var(--sidebar-session-group-action-size);
-  flex: 0 0 var(--sidebar-session-group-action-size);
-}
-
-.sidebar-session-catalog-action-reserve {
-  display: none;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  /* Keep hover actions immediately left of the fixed count. */
-  .sidebar-session-catalog-grouping,
-  .sidebar-session-catalog-new {
-    position: absolute;
-    top: 50%;
-    right: calc(10px + var(--sidebar-session-group-count-slot));
-    transform: translateY(-50%);
-  }
-
-  .sidebar-recent-sessions__group--catalog-can-create
-    > .sidebar-recent-sessions__head
-    > .sidebar-session-catalog-grouping {
-    right: calc(
-      10px + var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
-        8px
-    );
-  }
-
-  .sidebar-session-catalog-action-reserve {
-    display: block;
-    flex: 0 0
-      calc(var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size));
-  }
-
-  .sidebar-recent-sessions__group--catalog-can-create .sidebar-session-catalog-action-reserve {
-    flex-basis: calc(
-      var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
-        var(--sidebar-session-group-action-size) + 8px
-    );
-  }
-
-  .sidebar-session-catalog-new-spacer {
-    display: none;
-  }
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -4639,8 +4615,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
    window title, trailing actions at the right edge, intro text below. The
    row matches the Mac app titlebar (52px injected by DashboardWindowController;
    50px mirrors .macos-titlebar-controls for older builds) so the traffic lights
-   and hosted buttons share its centerline; the collapsed-sidebar web cluster in
-   browsers (top: 10px, 32px buttons) lands on the same centerline. The side
+   and hosted buttons share its centerline; browser rows use the shared rail
+   height below to align with sidebar and collapsed-navigation controls. The side
    columns reserve that cluster on the left and the trailing cell on the right,
    so the centered cell stays exact at normal widths and merely shifts, never
    overlaps, in narrow columns. Older Mac builds drop the web cluster below the
@@ -4715,6 +4691,12 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
       gap: 10px;
     }
   }
+}
+
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop))
+  .shell:not(.shell--mobile-nav):not(.shell--settings)
+  .content:not(.content--chat) {
+  --page-toolbar-height: var(--rail-header-height);
 }
 
 html.openclaw-native-macos

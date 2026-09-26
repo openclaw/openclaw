@@ -39,6 +39,6 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/capability-model-ref.ts src/catalog.ts src/model-ref.ts src/normalization.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts media-generation-core"
   }
 }

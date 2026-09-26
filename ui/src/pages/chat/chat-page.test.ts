@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./chat-pane.ts", () => ({}));
 
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { loadSettings } from "../../app/settings.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import {
   buildCatalogSessionKey,
@@ -52,7 +52,7 @@ type RenderedPane = HTMLElement & {
   sessionKey: string;
   presented: boolean;
   active: boolean;
-  paneTitle: string;
+  presentationTitle: string | undefined;
   narrow: boolean;
   mergedChrome: boolean;
   onOpenSplitView?: () => void;
@@ -857,24 +857,6 @@ describe("chat page split layout host", () => {
     });
   });
 
-  it("replaces and activates the pane under a layout center drop", () => {
-    const page = new ChatPage();
-    page.data = { sessionKey: "main" };
-    setLayout(page, createSplitLayout("main"));
-    const navigation = setNavigationContext(page);
-
-    applySessionDrop(page, WORK_SESSION_KEY, "p1", { kind: "center" });
-
-    const layout = getLayout(page);
-    expect(layout?.columns.at(0)?.panes.at(0)?.sessionKey).toBe(WORK_SESSION_KEY);
-    expect(layout?.activePaneId).toBe("p1");
-    expect(loadSettings().chatSplitLayout).toEqual(layout);
-    expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: sessionPath(WORK_SESSION_KEY),
-      search: "?__openclawSessionFacePreference=1",
-    });
-  });
-
   it("leaves a same-session center drop unchanged", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
@@ -931,6 +913,78 @@ describe("chat page split layout host", () => {
       search: "?__openclawSessionFacePreference=1",
     });
   });
+
+  it.each(["unbound", "unrelated"] as const)(
+    "does not reuse a sibling's drop indicator over an %s target",
+    async (destination) => {
+      const page = new ChatPage();
+      page.data = { sessionKey: "main" };
+      setNavigationContext(page);
+      const layout = setPaneSession(createSplitLayout("main"), "p1", "global");
+      patchSettings({ chatSplitLayout: layout });
+      document.body.append(page);
+      await page.updateComplete;
+      const bound = expectDefined(
+        page.querySelector<RenderedPane>("openclaw-chat-pane.chat-pane-cache__pane--visible"),
+        "bound pane",
+      );
+      const unbound = expectDefined(
+        page.querySelector<HTMLElement>("[data-unbound-pane-id]"),
+        "unbound pane",
+      );
+      const container = expectDefined(
+        page.querySelector<HTMLElement>(".chat-split-view__drop-container"),
+        "drop container",
+      );
+      vi.spyOn(bound, "getBoundingClientRect").mockReturnValue({
+        left: 200,
+        top: 0,
+        width: 200,
+        height: 200,
+      } as DOMRect);
+      vi.spyOn(unbound, "getBoundingClientRect").mockReturnValue({
+        left: 0,
+        top: 0,
+        width: 200,
+        height: 200,
+      } as DOMRect);
+      vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 200,
+      } as DOMRect);
+      let frame: FrameRequestCallback | undefined;
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frame = callback;
+        return 1;
+      });
+      const dataTransfer = {
+        types: [SESSION_DRAG_MIME],
+        getData: (type: string) => (type === SESSION_DRAG_MIME ? WORK_SESSION_KEY : ""),
+      } as unknown as DataTransfer;
+      const dispatch = (target: HTMLElement, type: string, x: number) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperties(event, {
+          dataTransfer: { value: dataTransfer },
+          clientX: { value: x },
+          clientY: { value: 100 },
+        });
+        target.dispatchEvent(event);
+      };
+      dispatch(bound, "dragover", 300);
+      frame?.(0);
+      const target = destination === "unbound" ? unbound : container;
+      dispatch(target, "dragover", 100);
+      frame?.(0);
+      dispatch(target, "drop", 100);
+      expect(getLayout(page)?.columns.map((column) => column.panes[0]?.sessionKey)).toEqual([
+        destination === "unbound" ? WORK_SESSION_KEY : "global",
+        "main",
+      ]);
+      expect(getDropIndicator(page)).toBeNull();
+    },
+  );
 
   it("accepts an owned header drop and ignores unrelated targets", async () => {
     const page = new ChatPage();
@@ -1009,6 +1063,8 @@ describe("chat page split layout host", () => {
     } as unknown as DragEvent);
 
     expect(getLayout(page)?.columns.at(0)?.panes.at(0)?.sessionKey).toBe(WORK_SESSION_KEY);
+    expect(getLayout(page)?.activePaneId).toBe("p1");
+    expect(loadSettings().chatSplitLayout).toEqual(getLayout(page));
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: sessionPath(WORK_SESSION_KEY),
       search: "?__openclawSessionFacePreference=1",

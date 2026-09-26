@@ -407,7 +407,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved shared preview lifecycle factory and delivery/lifecycle types.
       // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
       // +1: supported read-only admitted operator scopes for tool presentation.
-      4570,
+      // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
+      // +5: approved meeting participation contract: four types and one callable (#152327).
+      // +2: shared workspace context preparation and bounded instruction snapshots.
+      // +1: Gateway-verified legacy webhook endpoint attribution.
+      4580,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -567,7 +571,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved shared preview lifecycle factory.
       // +1: approved canonical resolveConfigPath callable for pre-config native browser admission.
       // +1: supported read-only readGatewayToolOperatorScopes callable.
-      2682,
+      // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
+      // +1: approved runMeetingParticipationWithBrowser callable (#152327).
+      // +2: shared workspace context preparation and bounded instruction snapshots.
+      // +1: Gateway-verified legacy webhook endpoint attribution.
+      2688,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -597,7 +605,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: infra-runtime re-exports number coercion directly from its canonical owner.
       // -1: channel-message pins its published compatibility exports explicitly.
       // -1: infra-runtime pins its existing diagnostics type-query surface.
-      48,
+      // -1: infra-runtime pins its existing local-file-access exports.
+      47,
       env,
     ),
   };

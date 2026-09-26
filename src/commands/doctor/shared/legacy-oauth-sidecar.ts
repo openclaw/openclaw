@@ -4,6 +4,7 @@ import { createDecipheriv, hash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -12,7 +13,6 @@ import { LEGACY_OAUTH_REF_PROVIDER } from "../../../agents/auth-profiles/legacy-
 import type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
 import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
-import { isPathInside } from "../../../infra/path-safety.js";
 
 export { isLegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 export type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";

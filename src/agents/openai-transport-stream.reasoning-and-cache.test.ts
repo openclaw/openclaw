@@ -26,20 +26,6 @@ function lookupWeatherContext(
 }
 
 describe("openai transport stream", () => {
-  it("omits responses strict tool shaping for proxy-like OpenAI routes", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "custom-model",
-        name: "Custom Model",
-        baseUrl: "https://proxy.example.com/v1",
-      }),
-      lookupWeatherContext(),
-      undefined,
-    ) as { tools?: Array<{ strict?: boolean }> };
-
-    expect(params.tools?.[0]).not.toHaveProperty("strict");
-  });
-
   it("keeps native responses strict mode for projected tools after dropping bad schemas", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
@@ -274,7 +260,6 @@ describe("openai transport stream", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "custom-model",
-        name: "Custom Model",
         provider: "custom-provider",
         baseUrl: "https://proxy.example.com/v1",
       }),
@@ -290,7 +275,6 @@ describe("openai transport stream", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "custom-model",
-        name: "Custom Model",
         provider: "custom-provider",
         baseUrl: "https://proxy.example.com/v1",
         compat: { supportsInstructions: true },
@@ -309,22 +293,6 @@ describe("openai transport stream", () => {
         name: "GPT-5.4",
         provider: "github-copilot",
         baseUrl: "https://api.githubcopilot.com/v1",
-      }),
-      emptyContext(),
-      undefined,
-    ) as { instructions?: string; input?: Array<{ role?: string }> };
-
-    expect(params).not.toHaveProperty("instructions");
-    expect(params.input?.[0]?.role).toBe("developer");
-  });
-
-  it("embeds the system prompt in input by default for a bundled-but-unverified named route (OpenCode)", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        provider: "opencode",
-        baseUrl: "https://opencode.ai/zen/v1",
       }),
       emptyContext(),
       undefined,

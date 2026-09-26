@@ -144,8 +144,10 @@ never needs the agent.
   panel. With Dashboard active in the side panel, choose **Swap** in the task
   toolbar, then **Focus** for a dashboard-only view. **Restore split** brings
   the side panel back. A tab with one full-width widget fills the focused
-  dashboard edge to edge, using all available width and height without a card
-  border or surrounding padding. Embedded MCP apps follow the available space
+  dashboard, using all available width and height without a card border.
+  Standard HTML widgets keep their content padding when maximized; widgets
+  explicitly set to full-bleed or frameless remain edge to edge.
+  Embedded MCP apps follow the available space
   when you resize the window or restore the split.
   Its widget controls move into the task toolbar’s **…** menu, leaving no
   hover pill or drag and resize handles over the page. Granted permissions

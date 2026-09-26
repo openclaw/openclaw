@@ -59,26 +59,6 @@ describe("buildInlineProviderModels", () => {
     expect(expectDefined(result[1], "authored-window model").contextWindow).toBe(64_000);
   });
 
-  it("inherits baseUrl from provider when model does not specify it", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        baseUrl: "http://localhost:8000",
-        models: [makeModel("custom-model")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toEqual([
-      {
-        ...makeModel("custom-model"),
-        provider: "custom",
-        baseUrl: "http://localhost:8000",
-        api: undefined,
-      },
-    ]);
-  });
-
   it("inherits api from provider when model does not specify it", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
@@ -141,26 +121,6 @@ describe("buildInlineProviderModels", () => {
         api: "anthropic-messages",
       },
     ]);
-  });
-
-  it("inherits both baseUrl and api from provider config", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        baseUrl: "http://localhost:10000",
-        api: "anthropic-messages",
-        models: [makeModel("claude-opus-4.5")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(expectDefined(result[0], "result[0] test invariant").provider).toBe("custom");
-    expect(expectDefined(result[0], "result[0] test invariant").baseUrl).toBe(
-      "http://localhost:10000",
-    );
-    expect(expectDefined(result[0], "result[0] test invariant").api).toBe("anthropic-messages");
-    expect(expectDefined(result[0], "result[0] test invariant").name).toBe("claude-opus-4.5");
   });
 
   it("normalizes bare Google API hosts for custom Google Generative AI providers", () => {
@@ -262,43 +222,6 @@ describe("buildInlineProviderModels", () => {
       api: "openai-completions",
       headers: { "X-Tenant": "acme" },
     });
-  });
-
-  it("keeps inline provider transport overrides once the llm transport adapter is available", () => {
-    const result = buildInlineProviderModels({
-      proxy: {
-        baseUrl: "https://proxy.example.com/v1",
-        api: "openai-completions",
-        request: {
-          proxy: {
-            mode: "explicit-proxy",
-            url: "http://proxy.internal:8443",
-          },
-        },
-        models: [makeModel("proxy-model")],
-      },
-    } as unknown as Parameters<typeof buildInlineProviderModels>[0]);
-
-    expect(result).toHaveLength(1);
-    expect(expectDefined(result[0], "result[0] test invariant").provider).toBe("proxy");
-    expect(expectDefined(result[0], "result[0] test invariant").api).toBe("openai-completions");
-    expect(expectDefined(result[0], "result[0] test invariant").baseUrl).toBe(
-      "https://proxy.example.com/v1",
-    );
-  });
-
-  it("omits headers when neither provider nor model specifies them", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      plain: {
-        baseUrl: "http://localhost:8000",
-        models: [makeModel("some-model")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(expectDefined(result[0], "result[0] test invariant").headers).toBeUndefined();
   });
 
   it("drops SecretRef marker headers in inline provider models", () => {

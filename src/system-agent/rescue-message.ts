@@ -245,6 +245,12 @@ function formatUnsupportedRemoteOperation(operation: SystemAgentOperation): stri
       "Run `openclaw setup` locally and say `connect " + operation.channel + "` instead.",
     ].join(" ");
   }
+  if (operation.kind === "config-unset") {
+    return [
+      "OpenClaw rescue cannot remove configuration settings.",
+      "Ask your regular agent to remove the setting, or run `openclaw config unset <path>` locally.",
+    ].join(" ");
+  }
   if (operation.kind === "doctor-fix") {
     return [
       "OpenClaw rescue cannot run doctor repairs from a message channel because they can change the inference route powering this session.",

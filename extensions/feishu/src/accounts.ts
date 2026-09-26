@@ -19,7 +19,7 @@ import type {
 
 const {
   listAccountIds: listFeishuAccountIds,
-  resolveDefaultAccountId,
+  resolveDefaultAccountId: resolveDefaultFeishuAccountId,
   resolveAccountConfig: resolveMergedFeishuAccountConfig,
 } = createAccountListHelpers<FeishuConfig>("feishu", {
   allowUnlistedDefaultAccount: true,
@@ -31,7 +31,7 @@ const {
   },
 });
 
-export { listFeishuAccountIds };
+export { listFeishuAccountIds, resolveDefaultFeishuAccountId };
 
 type FeishuCredentialResolutionMode = "inspect" | "strict";
 type FeishuResolvedSecretRef = NonNullable<ReturnType<typeof coerceSecretRef>>;
@@ -177,17 +177,10 @@ export function resolveDefaultFeishuAccountSelection(cfg: ClawdbotConfig): {
 }
 
 /**
- * Resolve the default account ID.
- */
-export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
-  return resolveDefaultAccountId(cfg);
-}
-
-/**
  * Merge top-level config with account-specific config.
  * Account-specific fields override top-level fields.
  */
-function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
+export function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
   const merged = resolveMergedFeishuAccountConfig(cfg, accountId);
   const topTools = feishuCfg?.tools;

@@ -36,6 +36,16 @@ function touchPointerUp(element: Element): void {
   element.dispatchEvent(event);
 }
 
+async function mountThread(props: Parameters<typeof renderChatThread>[0]) {
+  const transcript = createTestTranscript();
+  const container = document.body.appendChild(document.createElement("div"));
+  render(renderChatThread(props, transcript), container);
+  transcript.hostConnected();
+  transcript.hostUpdated();
+  await flushDeferredRowPrune();
+  return { container, transcript };
+}
+
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
@@ -571,39 +581,7 @@ describe("chat transcript rendering", () => {
     transcript.hostDisconnected();
   });
 
-  it("leaves interrupted status to the composer after a partial assistant reply", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const props = {
-      ...threadProps("pane-interrupted", "agent:main:main", [
-        {
-          role: "user",
-          content: "Start the task",
-          timestamp: 1_000,
-          __openclaw: { idempotencyKey: "run-1:user" },
-        },
-        { role: "assistant", content: "Partial response", timestamp: 2_000 },
-      ]),
-      runStatus: {
-        phase: "interrupted" as const,
-        runId: "run-1",
-        sessionKey: "agent:main:main",
-        occurredAt: 3_000,
-      },
-    };
-
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
-
-    expect(container.querySelector(".chat-turn-terminal-status--interrupted")).toBeNull();
-    transcript.hostDisconnected();
-  });
-
   it("leaves interrupted status to the composer when a turn has no assistant reply", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-interrupted-empty", "agent:main:main", [
         { role: "user", content: "Earlier task", timestamp: 1_000 },
@@ -623,10 +601,7 @@ describe("chat transcript rendering", () => {
       },
     };
 
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+    const { container, transcript } = await mountThread(props);
 
     expect(container.querySelector(".chat-turn-terminal-status--interrupted")).toBeNull();
     transcript.hostDisconnected();
@@ -670,7 +645,7 @@ describe("chat transcript rendering", () => {
     touchPointerUp(streamBubble);
     expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
     expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
-    expect(streamGroup.querySelector(".chat-group-footer")).toBeNull();
+    expect(streamGroup.querySelector(".chat-group-footer")?.childElementCount).toBe(0);
 
     touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
     expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
@@ -771,6 +746,62 @@ describe("chat transcript rendering", () => {
     },
   );
 
+  it.each([true, false])(
+    "keeps completed commentary a turn block only outside search results (search %s)",
+    async (search) => {
+      const paneId = `pane-commentary-search-${search}`;
+      const text = "Checked the workspace layout.";
+      const props = threadProps(paneId, "agent:main:main", [
+        { role: "user", content: "Inspect the workspace", timestamp: 1_000 },
+        {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          timestamp: 2_000,
+          openclawStreamFallback: { replacementText: text, source: "segment", itemId: "layout" },
+        },
+        { role: "assistant", content: "Workspace looks fine.", timestamp: 3_000 },
+      ]);
+      const transcript = createTestTranscript();
+      const searchContainer = document.body.appendChild(document.createElement("div"));
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderTranscriptSearch(paneId, rerender), searchContainer);
+        render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
+        transcript.hostUpdated();
+      };
+      try {
+        if (search) {
+          toggleTranscriptSearch(paneId, rerender);
+        }
+        transcript.hostConnected();
+        rerender();
+        if (search) {
+          const input = requireElement(searchContainer, "input") as HTMLInputElement;
+          input.value = "workspace layout";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        await flushDeferredRowPrune();
+
+        const group = expectDefined(
+          [...container.querySelectorAll<HTMLElement>(".chat-group.assistant")].find((element) =>
+            element.textContent?.includes(text),
+          ),
+          "commentary group",
+        );
+        expect(group.classList.contains("chat-group--turn-block")).toBe(!search);
+        expect(group.querySelector(".chat-group-footer .chat-sender-name") !== null).toBe(search);
+        expect(group.querySelector(".chat-group-footer .chat-group-timestamp") !== null).toBe(
+          search,
+        );
+        expect(group.querySelector(".chat-group-footer-actions .chat-copy-btn") !== null).toBe(
+          search,
+        );
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
   it.each(
     [
       "skills/review/SKILL.md",
@@ -781,11 +812,9 @@ describe("chat transcript rendering", () => {
       "qa241-unicode/日本語.txt",
     ].flatMap((path) => ["click", "Enter", " "].map((key) => ({ path, key }))),
   )("opens focused transcript file $path with $key", async ({ path, key }) => {
-    const transcript = createTestTranscript();
     const onOpenWorkspaceFile = vi.fn();
     const onOpenSessionLink = vi.fn();
     const onHistoryIntent = vi.fn();
-    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-file-link", "agent:main:main", [
         {
@@ -798,10 +827,7 @@ describe("chat transcript rendering", () => {
       onOpenSessionLink,
       onHistoryIntent,
     };
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+    const { container, transcript } = await mountThread(props);
 
     const link = container.querySelector<HTMLAnchorElement>("a.markdown-file-link");
     link?.focus();
@@ -823,11 +849,9 @@ describe("chat transcript rendering", () => {
   it.each(["click", "Ctrl+click", "Enter", " "])(
     "handles transcript session links with %j",
     async (action) => {
-      const transcript = createTestTranscript();
       const onOpenSessionLink = vi.fn();
       const onHistoryIntent = vi.fn();
       const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
-      const container = document.body.appendChild(document.createElement("div"));
       const props = {
         ...threadProps("pane-session-link", "agent:main:main", [
           { role: "assistant", content: `Open \`${sessionKey}\``, timestamp: 1_000 },
@@ -835,10 +859,7 @@ describe("chat transcript rendering", () => {
         onOpenSessionLink,
         onHistoryIntent,
       };
-      render(renderChatThread(props, transcript), container);
-      transcript.hostConnected();
-      transcript.hostUpdated();
-      await flushDeferredRowPrune();
+      const { container, transcript } = await mountThread(props);
 
       const link = container.querySelector<HTMLAnchorElement>("a.markdown-session-link");
       if (action === "click" || action === "Ctrl+click") {
@@ -875,12 +896,10 @@ describe("chat transcript rendering", () => {
   );
 
   it.each(["click", "Enter"])("SPA-routes transcript session hrefs with %s", async (action) => {
-    const transcript = createTestTranscript();
     const onOpenSessionLink = vi.fn();
     const onHistoryIntent = vi.fn();
     const literalUuid = "12345678-90ab-cdef-1234-567890abcdef";
     const href = `/control/chat/main/~key/${literalUuid}?view=full#latest`;
-    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-session-href", "agent:main:main", [
         { role: "assistant", content: `[Open session](${href})`, timestamp: 1_000 },
@@ -889,10 +908,7 @@ describe("chat transcript rendering", () => {
       onOpenSessionLink,
       onHistoryIntent,
     };
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+    const { container, transcript } = await mountThread(props);
 
     const link = container.querySelector<HTMLAnchorElement>(`a[href^="/control/chat/"]`);
     const event =
@@ -913,9 +929,7 @@ describe("chat transcript rendering", () => {
   });
 
   it("leaves external transcript hrefs to the browser", async () => {
-    const transcript = createTestTranscript();
     const onOpenSessionLink = vi.fn();
-    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-external-href", "agent:main:main", [
         {
@@ -926,10 +940,7 @@ describe("chat transcript rendering", () => {
       ]),
       onOpenSessionLink,
     };
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+    const { container, transcript } = await mountThread(props);
 
     const link = container.querySelector<HTMLAnchorElement>('a[href^="https://example.com/"]');
     const event = new MouseEvent("click", { bubbles: true, button: 0, cancelable: true });

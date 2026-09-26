@@ -49,6 +49,7 @@ function createProcess(params: { stdin?: TestStdin | null; stdout?: EventEmitter
     on: events.on.bind(events),
     once: events.once.bind(events),
     off: events.off.bind(events),
+    emit: events.emit.bind(events),
   };
   return proc;
 }
@@ -98,6 +99,29 @@ describe("local meeting realtime audio transport", () => {
     ).toThrow("audio bridge command must not be empty");
     expect(spawn).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "stops output after input spawn throws (output spawn failed: %s)",
+    (outputSpawnFailed) => {
+      const output = createProcess({ stdin: createStdin(true) });
+      if (outputSpawnFailed) {
+        output.kill.mockReturnValueOnce(false);
+      }
+      const failure = new Error("input spawn failed");
+      const spawn = vi
+        .fn()
+        .mockReturnValueOnce(output)
+        .mockImplementationOnce(() => {
+          throw failure;
+        });
+
+      expect(() => createTransportWith({ spawn: spawn as never })).toThrow(failure);
+      expect(output.kill).toHaveBeenCalledWith("SIGTERM");
+      if (outputSpawnFailed) {
+        expect(() => output.emit("error", new Error("output spawn failed"))).not.toThrow();
+      }
+    },
+  );
 
   it("keeps empty barge-in validation lazy until monitoring starts", async () => {
     const output = createProcess({ stdin: createStdin(true) });

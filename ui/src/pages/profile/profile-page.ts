@@ -309,31 +309,22 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderIdentity() {
-    if (!this.selfUser) {
+    if (!this.selfUser || !this.canWrite || !this.ownProfile) {
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
         ${renderSettingsSection(
           { title: t("profilePage.identity.title") },
-          renderSettingsEmpty(t("profilePage.identity.unidentified")),
-        )}
-      </div>`;
-    }
-    if (!this.canWrite) {
-      return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
-        ${renderSettingsSection(
-          { title: t("profilePage.identity.title") },
-          renderSettingsEmpty(t("profilePage.identity.writeRequired")),
-        )}
-      </div>`;
-    }
-    if (!this.ownProfile) {
-      return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
-        ${renderSettingsSection(
-          { title: t("profilePage.identity.title") },
-          this.identityLoading
-            ? renderSettingsLoadingSkeleton({ label: t("profilePage.identity.loading"), rows: 2 })
-            : renderSettingsEmpty(
-                this.identityError ?? t("profilePage.identity.profileUnavailable"),
-              ),
+          !this.selfUser
+            ? renderSettingsEmpty(t("profilePage.identity.unidentified"))
+            : !this.canWrite
+              ? renderSettingsEmpty(t("profilePage.identity.writeRequired"))
+              : this.identityLoading
+                ? renderSettingsLoadingSkeleton({
+                    label: t("profilePage.identity.loading"),
+                    rows: 2,
+                  })
+                : renderSettingsEmpty(
+                    this.identityError ?? t("profilePage.identity.profileUnavailable"),
+                  ),
         )}
       </div>`;
     }

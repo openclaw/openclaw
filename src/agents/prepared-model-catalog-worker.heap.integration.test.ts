@@ -115,7 +115,6 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     workerOptions: {
       resourceLimits: { maxOldGenerationSizeMb: 512 },
       workerData: {
-        kind: "gateway",
         sourceCaptureDirectory: makeTempDir("openclaw-catalog-heap-captures-"),
       },
       env: fixture.env,

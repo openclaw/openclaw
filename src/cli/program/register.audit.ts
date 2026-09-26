@@ -5,12 +5,11 @@ import {
   AUDIT_ACTIVITY_KINDS,
   AUDIT_ACTIVITY_STATUSES,
 } from "../../../packages/gateway-protocol/src/schema/audit-activity.js";
-import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
-import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { auditListCommand, type AuditListCommandOptions } from "../../commands/audit.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatHumanList } from "../../shared/human-list.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { formatDocsHelp } from "../help-format.js";
 
 /** Register the bounded operator audit query command. */
 export function registerAuditCommand(program: Command): void {
@@ -34,11 +33,7 @@ export function registerAuditCommand(program: Command): void {
     .option("--limit <count>", "Maximum records (1-500; decisions 1-100)")
     .option("--explain", "Inspect execution identity and run-admission reasoning", false)
     .option("--json", "Output a bounded JSON page", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/audit", "docs.openclaw.ai/cli/audit")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/audit"))
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await auditListCommand(

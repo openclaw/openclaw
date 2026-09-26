@@ -178,6 +178,7 @@ describe("background exec task tracking", () => {
         timedOut: false,
       } satisfies ExecProcessOutcome,
       status: "succeeded",
+      terminalSummary: "Command completed",
       error: undefined,
     },
     {
@@ -194,6 +195,7 @@ describe("background exec task tracking", () => {
         reason: "secret output\nCommand timed out",
       } satisfies ExecProcessOutcome,
       status: "timed_out",
+      terminalSummary: "Command timed out",
       error: "Command timed out",
     },
     {
@@ -207,6 +209,7 @@ describe("background exec task tracking", () => {
         timedOut: false,
       } satisfies ExecProcessOutcome,
       status: "failed",
+      terminalSummary: "Command failed",
       error: "Command failed (exit code 17)",
     },
     {
@@ -223,11 +226,12 @@ describe("background exec task tracking", () => {
         reason: "secret output\nCommand aborted",
       } satisfies ExecProcessOutcome,
       status: "cancelled",
+      terminalSummary: "Command stopped",
       error: "Cancelled by operator",
     },
   ])(
     "finalizes $label before wake without persisting process output",
-    async ({ outcome, status, error }) => {
+    async ({ outcome, status, terminalSummary, error }) => {
       const finalize = vi.fn();
       await finalizeBackgroundExecTask({
         handle: {
@@ -242,6 +246,7 @@ describe("background exec task tracking", () => {
       expect(finalize).toHaveBeenCalledWith(
         expect.objectContaining({
           status,
+          terminalSummary,
           ...(error ? { error } : { clearError: true }),
         }),
       );

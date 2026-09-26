@@ -56,7 +56,6 @@ const resolveRuntimeTranscriptReadTargetMock = vi.fn(async (scope: Record<string
   sessionKey: scope.sessionKey,
   storePath: scope.storePath ?? resolveDefaultSessionStorePath("main"),
 }));
-let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.test-support.js").createDeferredTurnMaintenanceAbortSignal;
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.test-support.js").resetDeferredTurnMaintenanceStateForTest;
 let waitForDeferredTurnMaintenanceForSession: typeof import("./context-engine-maintenance.js").waitForDeferredTurnMaintenanceForSession;
 
@@ -88,60 +87,10 @@ async function loadContextEngineMaintenanceModuleForTest() {
   // Import once and reset the owned singleton state between cases.
   ({ runContextEngineMaintenance, waitForDeferredTurnMaintenanceForSession } =
     await import("./context-engine-maintenance.js"));
-  ({ createDeferredTurnMaintenanceAbortSignal, resetDeferredTurnMaintenanceStateForTest } =
+  ({ resetDeferredTurnMaintenanceStateForTest } =
     await import("./context-engine-maintenance.test-support.js"));
   resetDeferredTurnMaintenanceStateForTest();
 }
-
-describe("createDeferredTurnMaintenanceAbortSignal", () => {
-  beforeEach(async () => {
-    await loadContextEngineMaintenanceModuleForTest();
-  });
-
-  it("aborts on termination signals and unregisters listeners", () => {
-    const listeners = new Map<string, Set<() => void>>();
-    const kill = vi.fn();
-    const processLike = {
-      on(event: "SIGINT" | "SIGTERM", listener: () => void) {
-        const bucket = listeners.get(event) ?? new Set<() => void>();
-        bucket.add(listener);
-        listeners.set(event, bucket);
-        return this;
-      },
-      off(event: "SIGINT" | "SIGTERM", listener: () => void) {
-        listeners.get(event)?.delete(listener);
-        return this;
-      },
-      listenerCount(event: "SIGINT" | "SIGTERM") {
-        return listeners.get(event)?.size ?? 0;
-      },
-      kill,
-      pid: 4242,
-    } as unknown as NonNullable<
-      Parameters<typeof createDeferredTurnMaintenanceAbortSignal>[0]
-    >["processLike"];
-
-    const { abortSignal, dispose } = createDeferredTurnMaintenanceAbortSignal({ processLike });
-    const second = createDeferredTurnMaintenanceAbortSignal({ processLike });
-    expect(listeners.get("SIGINT")?.size ?? 0).toBe(1);
-    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(1);
-
-    const sigtermListeners = Array.from(listeners.get("SIGTERM") ?? []);
-    expect(sigtermListeners).toHaveLength(1);
-    sigtermListeners[0]?.();
-
-    expect(abortSignal?.aborted).toBe(true);
-    expect(second.abortSignal?.aborted).toBe(true);
-    expect(kill).toHaveBeenCalledWith(4242, "SIGTERM");
-    expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
-    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
-
-    dispose();
-    second.dispose();
-    expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
-    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
-  });
-});
 
 describe("runContextEngineMaintenance", () => {
   beforeEach(async () => {
@@ -808,8 +757,18 @@ describe("runContextEngineMaintenance", () => {
           expect(secondEngine["dispose"]).toHaveBeenCalledTimes(1);
 
           trigger();
-          await waitForDeferredTurnMaintenanceForSession(sessionKey);
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          const settled = await Promise.race([
+            waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => true),
+            new Promise<false>((resolve) => {
+              timeout = setTimeout(() => resolve(false), 500);
+            }),
+          ]);
+          if (timeout) {
+            clearTimeout(timeout);
+          }
 
+          expect(settled).toBe(true);
           expect(observedSignal?.aborted).toBe(true);
           expect(firstMaintain).toHaveBeenCalledTimes(1);
           expect(secondMaintain).not.toHaveBeenCalled();
@@ -828,6 +787,7 @@ describe("runContextEngineMaintenance", () => {
             queuedCount: 0,
           });
         } finally {
+          trigger();
           releaseFirstMaintenance.resolve();
           await Promise.allSettled(deferred ? [deferred] : []);
           await Promise.allSettled([

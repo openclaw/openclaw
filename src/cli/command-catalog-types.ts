@@ -4,7 +4,7 @@ export type CliCommandPluginLoadPolicy =
   | "always"
   | "text-only"
   | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
-type CliConfigGuardMode = "run" | "skip" | "validate" | "when-suppressed";
+type CliConfigGuardMode = "run" | "skip" | "validate" | "defer" | "when-suppressed";
 type CliConfigGuardPolicy =
   | CliConfigGuardMode
   | ((ctx: { argv: string[]; commandPath: string[] }) => CliConfigGuardMode);

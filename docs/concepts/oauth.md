@@ -283,6 +283,7 @@ Related docs:
 
 ## Related
 
+- [OpenAI authentication](/providers/openai/authentication) - login methods, identity, and capabilities
 - [Authentication](/gateway/authentication) - model provider auth overview
 - [Secrets](/gateway/secrets) - credential storage and SecretRef
 - [Configuration Reference](/gateway/config-secrets-env#auth-storage) - auth config keys

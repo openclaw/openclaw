@@ -20,11 +20,6 @@ enum NodeHostStatsReporter {
         var memoryFreeBytes: () throws -> UInt64 = { try NodeHostStatsReporter.sampleFreeMemory() }
     }
 
-    private struct NodeEventRequestPayload: Encodable {
-        let event = NodeHostStatsReporter.eventName
-        let payloadJSON: String
-    }
-
     static func makePayload(sampler: Sampler = Sampler()) throws -> Payload {
         let memoryTotalBytes = sampler.memoryTotalBytes()
         let memoryFreeBytes = try min(sampler.memoryFreeBytes(), memoryTotalBytes)
@@ -32,22 +27,6 @@ enum NodeHostStatsReporter {
             cpuCount: max(1, min(4096, sampler.cpuCount())),
             memoryTotalBytes: memoryTotalBytes,
             memoryFreeBytes: memoryFreeBytes)
-    }
-
-    static func makeNodeEventRequestPayloadJSON(
-        payload: Payload,
-        encoder: JSONEncoder = JSONEncoder()) throws -> String
-    {
-        guard let payloadJSON = try String(data: encoder.encode(payload), encoding: .utf8),
-              let requestJSON = try String(
-                  data: encoder.encode(NodeEventRequestPayload(payloadJSON: payloadJSON)),
-                  encoding: .utf8)
-        else {
-            throw EncodingError.invalidValue(payload, EncodingError.Context(
-                codingPath: [],
-                debugDescription: "Failed to encode node.event payload as UTF-8"))
-        }
-        return requestJSON
     }
 
     private static func sampleFreeMemory() throws -> UInt64 {

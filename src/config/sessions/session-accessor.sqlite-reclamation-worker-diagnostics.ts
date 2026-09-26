@@ -9,6 +9,41 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 const log = createSubsystemLogger("session-sqlite");
 const SLOW_RECLAMATION_WORKER_MS = 1_000;
 
+export type SqliteReclamationWorkerRetirementReason =
+  | "matches-mismatch"
+  | "revoked"
+  | "exclusive-handoff"
+  | "idle-ttl"
+  | "failure"
+  | "pressure";
+
+export function logSqliteReclamationWorkerRetirement(params: {
+  reason: SqliteReclamationWorkerRetirementReason;
+  kind: string;
+  startedAt: number;
+  opsServed: number;
+  workerThreadId?: number;
+}): void {
+  try {
+    const { startedAt, ...details } = params;
+    const ageMs = Math.round(performance.now() - startedAt);
+    log.info(
+      `reclamation worker retired reason=${params.reason} kind=${params.kind} ageMs=${ageMs} opsServed=${params.opsServed}`,
+      { ...details, ageMs },
+    );
+  } catch {
+    // Diagnostics cannot turn settled native cleanup into a failure.
+  }
+}
+
+/** A commit guard saw newer inputs; the caller owns the retry, so the Worker did not fail. */
+export class SqliteReclamationInputsChangedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SqliteReclamationInputsChangedError";
+  }
+}
+
 export function logSqliteReclamationWorkerOutcome(params: {
   startedAt: number;
   outcome: "resolved" | "rejected";
@@ -31,10 +66,15 @@ export function logSqliteReclamationWorkerOutcome(params: {
       2_048,
     );
   };
-  log.warn(
-    elapsedMs >= SLOW_RECLAMATION_WORKER_MS
+  const slow = elapsedMs >= SLOW_RECLAMATION_WORKER_MS;
+  const superseded = params.failure instanceof SqliteReclamationInputsChangedError;
+  const level = superseded && !slow ? "debug" : "warn";
+  log[level](
+    slow
       ? "slow SQLite reclamation Worker operation"
-      : "SQLite reclamation Worker failed",
+      : superseded
+        ? "SQLite reclamation Worker superseded by newer inputs"
+        : "SQLite reclamation Worker failed",
     {
       pid: process.pid,
       threadId,

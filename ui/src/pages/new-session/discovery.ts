@@ -9,6 +9,8 @@ import type {
   RequiredNodeCommand,
   RuntimeTargetIssue,
   WorkerExecutionMode,
+  WorkerMachineOption,
+  WorkerOperatingSystem,
   WorkerSlotSummary,
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 
@@ -40,21 +42,8 @@ export type DraftCloudProfile = {
   operatingSystems?: DraftOperatingSystem[];
 };
 
-export type DraftOperatingSystem = {
-  id: string;
-  label: string;
-  default?: boolean;
-  disabledReason?: string;
-};
-
-export type DraftMachineOption = {
-  id: string;
-  label: string;
-  os?: string;
-  cpu?: number;
-  memoryGb?: number;
-  default?: boolean;
-};
+export type DraftOperatingSystem = WorkerOperatingSystem;
+export type DraftMachineOption = WorkerMachineOption;
 
 export type DraftEnvironment = {
   id: string;

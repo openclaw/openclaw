@@ -1,14 +1,14 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BrowserProfileUnavailableError } from "../errors.js";
 import { assertBrowserNavigationResultAllowed } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import { getPwAiModule } from "../pw-ai-module.js";
 import { mintBrowserScreencastToken } from "../screencast/tokens.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { getProfileLifecycle, isProfileGenerationCurrent } from "../server-context.lifecycle.js";
 import {
   browserNavigationPolicyForProfile,
-  getPwAiModule,
   readBody,
-  resolveTargetIdFromBody,
   withRouteTabContext,
 } from "./agent.shared.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -42,7 +42,7 @@ export function registerBrowserAgentScreencastRoutes(
       req,
       res,
       ctx,
-      targetId: resolveTargetIdFromBody(body),
+      targetId: normalizeOptionalString(body.targetId),
       enforceCurrentUrlAllowed: true,
       run: async ({ profileCtx, tab, cdpUrl, signal, resolveTabUrl }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
@@ -53,7 +53,7 @@ export function registerBrowserAgentScreencastRoutes(
           });
           return;
         }
-        if (!(await getPwAiModule())) {
+        if (!(await getPwAiModule({ mode: "soft" }))) {
           res.status(501).json({
             error: "Browser screencast requires Playwright in this gateway build.",
             code: "SCREENCAST_UNSUPPORTED",

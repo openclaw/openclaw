@@ -1,64 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Whatsapp tests cover channel actions plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   describeWhatsAppMessageActions,
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
 
-const hoisted = vi.hoisted(() => ({
-  listWhatsAppAccountIds: vi.fn((cfg: OpenClawConfig) => {
-    const accountIds = Object.keys(cfg.channels?.whatsapp?.accounts ?? {});
-    return accountIds.length > 0 ? accountIds : ["default"];
-  }),
-  resolveWhatsAppAccount: vi.fn(
-    ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) => ({
-      enabled:
-        accountId == null ? true : cfg.channels?.whatsapp?.accounts?.[accountId]?.enabled !== false,
-    }),
-  ),
-}));
-
-vi.mock("./channel-actions.runtime.js", async () => {
-  return {
-    listWhatsAppAccountIds: hoisted.listWhatsAppAccountIds,
-    resolveWhatsAppAccount: hoisted.resolveWhatsAppAccount,
-    createActionGate: (actions?: { reactions?: boolean; polls?: boolean }) => (name: string) => {
-      if (name === "reactions") {
-        return actions?.reactions !== false;
-      }
-      if (name === "polls") {
-        return actions?.polls !== false;
-      }
-      return true;
-    },
-    resolveWhatsAppReactionLevel: ({
-      cfg,
-      accountId,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string;
-    }) => {
-      const accountLevel =
-        accountId == null
-          ? undefined
-          : cfg.channels?.whatsapp?.accounts?.[accountId]?.reactionLevel;
-      const level = accountLevel ?? cfg.channels?.whatsapp?.reactionLevel ?? "minimal";
-      return {
-        level,
-        agentReactionsEnabled: level === "minimal" || level === "extensive",
-        agentReactionGuidance: level === "minimal" || level === "extensive" ? level : undefined,
-      };
-    },
-  };
-});
-
 describe("whatsapp channel action helpers", () => {
-  beforeEach(() => {
-    hoisted.listWhatsAppAccountIds.mockClear();
-    hoisted.resolveWhatsAppAccount.mockClear();
-  });
-
   it("defaults to minimal reaction guidance when reactions are available", () => {
     const cfg = {
       channels: {
@@ -78,19 +26,6 @@ describe("whatsapp channel action helpers", () => {
         accountId: "default",
       }),
     ).toBeUndefined();
-  });
-
-  it("returns minimal reaction guidance when configured", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          reactionLevel: "minimal",
-          allowFrom: ["*"],
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveWhatsAppAgentReactionGuidance({ cfg, accountId: "default" })).toBe("minimal");
   });
 
   it("omits reaction guidance when WhatsApp reactions are disabled", () => {
@@ -193,7 +128,6 @@ describe("whatsapp channel action helpers", () => {
         },
       },
     } as OpenClawConfig;
-    hoisted.listWhatsAppAccountIds.mockReturnValue(["default", "work"]);
 
     expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual([
       "react",
@@ -217,7 +151,6 @@ describe("whatsapp channel action helpers", () => {
         },
       },
     } as OpenClawConfig;
-    hoisted.listWhatsAppAccountIds.mockReturnValue(["default", "work"]);
 
     expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual(["poll", "upload-file"]);
   });

@@ -98,12 +98,18 @@ export function listSkillCommandsForWorkspace(
 
 export async function prepareSkillCommandsForWorkspace(
   params: WorkspaceSkillCommandParams,
+  assertCurrent?: () => void,
 ): Promise<SkillCommandSpec[]> {
+  assertCurrent?.();
   await prepareRemoteSkillConnections();
-  return prepareWorkspaceSkillCommandSpecs(
+  assertCurrent?.();
+  const commands = await prepareWorkspaceSkillCommandSpecs(
     params.workspaceDir,
     resolveWorkspaceSkillCommandOptions(params),
+    assertCurrent,
   );
+  assertCurrent?.();
+  return commands;
 }
 
 /** Resolve Gateway-bundled commands with the active Harness eligibility checks. */

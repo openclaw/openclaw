@@ -230,10 +230,8 @@ class PermissionRequester internal constructor(
             }
         val launched =
           withContext(Dispatchers.Main) {
-            if (activeActivityHost.value != active) return@withContext false
-            val host = active.host
-            if (host.activity.isFinishing || host.activity.isDestroyed) return@withContext false
-            host.permissionRequestLauncher(permissions.toTypedArray(), requestCode)
+            if (!isCurrentActiveHost(active)) return@withContext false
+            active.host.permissionRequestLauncher(permissions.toTypedArray(), requestCode)
             true
           }
         if (launched) return@withTimeout
@@ -266,9 +264,9 @@ class PermissionRequester internal constructor(
       error("unreachable")
     }
 
-  private suspend fun showSettingsForPermanentDenials(
+  internal suspend fun showSettingsForPermanentDenials(
     grants: Map<String, Boolean>,
-    timeoutMs: Long,
+    timeoutMs: Long = 20_000,
   ) {
     if (grants.values.none { granted -> !granted }) return
     withTimeout(timeoutMs) {

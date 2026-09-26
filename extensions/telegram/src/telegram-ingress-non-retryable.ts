@@ -1,10 +1,9 @@
-// Telegram plugin module classifies non-retryable spooled dispatch failures.
 import {
   collectErrorGraphCandidates,
   formatErrorMessage,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
-import { isTelegramMessageDispatchReplayForgetError } from "./message-dispatch-dedupe.js";
+import { TelegramMessageDispatchReplayForgetError } from "./message-dispatch-dedupe.js";
 import { TelegramIngressPayloadError } from "./telegram-ingress-spool.payload.js";
 
 const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
@@ -35,7 +34,7 @@ export function resolveTelegramIngressNonRetryableFailure(
     if (candidate instanceof TelegramIngressPayloadError) {
       return { reason: "invalid-event", message };
     }
-    if (isTelegramMessageDispatchReplayForgetError(candidate)) {
+    if (candidate instanceof TelegramMessageDispatchReplayForgetError) {
       // A committed dispatch key that cannot be rolled back makes retry unsafe:
       // the next replay can be duplicate-suppressed and then deleted.
       return { reason: "dispatch-dedupe-rollback-failed", message };

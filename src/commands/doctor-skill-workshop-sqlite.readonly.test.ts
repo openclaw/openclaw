@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
@@ -22,6 +22,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readWorkshopMigrationRecords } from "./doctor-skill-workshop-sources.js";
 import {
@@ -80,14 +81,8 @@ describe("read-only Skill Workshop migration inspection", () => {
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
       const before = await snapshotDatabase(databasePath);
       const filesBefore = (await fs.readdir(state.stateDir, { recursive: true })).toSorted();
-      const native = requireNodeSqlite();
-      const counters = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((method) =>
-          vi.spyOn(native.StatementSync.prototype, method),
-        ),
-      ];
+      requireNodeSqlite();
+      const sql = observeMainThreadSql();
       try {
         const result = await runDoctorLintChecks(
           {
@@ -111,11 +106,9 @@ describe("read-only Skill Workshop migration inspection", () => {
           records: [{ record, ownerAgentId: "main" }],
           appliedEvents: events,
         });
-        expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+        sql.expectIdle();
       } finally {
-        for (const counter of counters) {
-          counter.mockRestore();
-        }
+        sql.restore();
       }
       await closeOpenClawStateDatabaseAsync();
       expect(await snapshotDatabase(databasePath)).toEqual(before);

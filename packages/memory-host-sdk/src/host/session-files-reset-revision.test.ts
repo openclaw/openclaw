@@ -9,13 +9,16 @@ import {
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  appendTranscriptEvent,
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
+  readActiveTranscriptEntryAnchor,
   readTranscriptStatsSync,
   replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
+import { runWithSessionTranscriptReadFence } from "../../../../src/config/sessions/session-transcript-read-fence.js";
 import { WorkerTaskPool } from "../../../../src/infra/worker-task-pool.js";
 import { registerSecretValueForRedaction } from "../../../../src/logging/secret-redaction-registry.js";
 import {
@@ -31,6 +34,10 @@ import {
   matchesSessionEntryPrefixHash,
   type SessionFileEntry,
 } from "./session-files.js";
+import {
+  readSessionResetRecallCutoff,
+  readSessionResetRecallCutoffInProcess,
+} from "./session-reset-recall-read.js";
 
 function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
   if (!entry) {
@@ -91,7 +98,7 @@ describe("SQLite session snapshots and reset content revision", () => {
           content: "Internal poll.",
           provenance: { kind: "internal_system", sourceTool: "heartbeat" },
         },
-        { role: "toolResult", content: "Background result." },
+        { role: "toolResult", content: "Background result.", details: "x".repeat(64_000) },
         {
           role: "assistant",
           content: [
@@ -115,6 +122,15 @@ describe("SQLite session snapshots and reset content revision", () => {
           __openclaw: { senderIsOwner: true },
         },
         { role: "assistant", content: [{ type: "text", text: "Photo answer." }] },
+        {
+          role: "assistant",
+          timestamp: 1000,
+          content: [
+            { type: "thinking", thinking: "x".repeat(64_000) },
+            { type: "text", text: "" },
+          ],
+          providerReplay: { payload: "x".repeat(64_000) },
+        },
       ];
       const records = [
         { type: "custom", customType: "metadata", data: {} },
@@ -179,7 +195,7 @@ describe("SQLite session snapshots and reset content revision", () => {
       );
       const observations = messages
         .filter((message) => message.role !== "toolResult")
-        .map((message) => [message, observedAt]);
+        .map((message) => [message, "timestamp" in message ? 1_000_000 : observedAt]);
       expect(sqliteObserver.mock.calls).toEqual(observations);
       expect(archiveObserver.mock.calls).toEqual(observations);
       const cutoff = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
@@ -291,6 +307,7 @@ describe("SQLite session snapshots and reset content revision", () => {
         storePath: path.join(tmpDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
       };
       expect(await buildSessionEntry(scope.sessionKey, scope)).toBeNull();
+      expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "invalid" });
       expect(fsSync.existsSync(scope.storePath)).toBe(false);
       await upsertSessionEntryCore(scope, {
         sessionId: scope.sessionId,
@@ -309,6 +326,7 @@ describe("SQLite session snapshots and reset content revision", () => {
       expect((await buildSessionEntry(scope.sessionKey, scope))?.content).toBe(
         "User: Visible transcript",
       );
+      expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "absent" });
       expect(fsSync.existsSync(scope.storePath)).toBe(!incognito);
     },
   );
@@ -335,11 +353,32 @@ describe("SQLite session snapshots and reset content revision", () => {
     };
     const records = [
       first,
+      {
+        type: "message",
+        id: "tool-result",
+        message: { role: "toolResult", content: "payload-only-probe".repeat(4096) },
+      },
       kept,
       { type: "reset", id: "reset", parentId: "kept", firstKeptEntryId: "kept" },
     ];
     expect(replaceTranscriptEventsSync(scope, records)).toBe(true);
     const before = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
+    expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "valid", cutoffLine: 3 });
+    const parse = JSON.parse;
+    const payloadGuard = vi.spyOn(JSON, "parse").mockImplementation((...args) => {
+      if (args[0].includes("payload-only-probe")) {
+        throw new Error("Reset metadata must not hydrate message payloads");
+      }
+      return Reflect.apply(parse, JSON, args);
+    });
+    try {
+      expect(readSessionResetRecallCutoffInProcess(scope)).toEqual({
+        state: "valid",
+        cutoffLine: 3,
+      });
+    } finally {
+      payloadGuard.mockRestore();
+    }
     const observed: unknown[] = [];
     const during = requireSessionEntry(
       await buildSessionEntry(scope.sessionKey, {
@@ -361,11 +400,43 @@ describe("SQLite session snapshots and reset content revision", () => {
       configurable: false,
       enumerable: false,
       writable: false,
-      value: { state: "valid", cutoffLine: 2 },
+      value: { state: "valid", cutoffLine: 3 },
     });
     const after = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
     expect(after.content).toBe("User: first");
     expect(Object.getOwnPropertyDescriptor(after, cutoff)?.value).toEqual({ state: "absent" });
+  });
+
+  it("carries the admitted input fence through the reset metadata worker", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "metadata-fence",
+      sessionKey: "agent:main:chat:metadata-fence",
+      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    expect(
+      replaceTranscriptEventsSync(scope, [
+        {
+          type: "message",
+          id: "admitted",
+          parentId: null,
+          message: { role: "user", content: "input" },
+        },
+      ]),
+    ).toBe(true);
+    const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
+    if (!anchor) {
+      throw new Error("expected persisted input anchor");
+    }
+    await appendTranscriptEvent(scope, { type: "reset", id: "later-reset", parentId: "admitted" });
+    expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "valid", cutoffLine: 2 });
+    expect(
+      await runWithSessionTranscriptReadFence(
+        { ...anchor, logicalTurnId: "metadata-read", role: "user" },
+        () => readSessionResetRecallCutoff(scope),
+      ),
+    ).toEqual({ state: "absent" });
   });
 
   it("accepts a transcript append but invalidates its prefix hash after reset", async () => {

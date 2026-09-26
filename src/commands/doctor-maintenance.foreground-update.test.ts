@@ -175,7 +175,7 @@ it.each([
             message: expect.stringContaining(
               outcome === "authority-lost"
                 ? "update owner was revoked"
-                : "another OpenClaw process owns gateway-lifecycle",
+                : "OpenClaw state database is busy (gateway-lifecycle)",
             ),
           }),
         });
@@ -208,7 +208,7 @@ it.each(["ordinary", "unfenced", "supervised"] as const)(
           runtime: { log, error: vi.fn(), exit: vi.fn() },
           ...(kind === "unfenced" ? {} : { assertCurrent: () => {} }),
         }),
-      ).rejects.toThrow("another OpenClaw process owns gateway-lifecycle");
+      ).rejects.toThrow("OpenClaw state database is busy (gateway-lifecycle)");
       expect(log).not.toHaveBeenCalled();
     } finally {
       predecessor?.release();

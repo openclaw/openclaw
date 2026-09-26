@@ -1,4 +1,3 @@
-// Secrets CLI tests cover secret command registration, reads, writes, and redaction.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -99,19 +98,10 @@ function createConfigureInteractiveResult(options?: {
       generatedBy: "openclaw secrets configure",
       targets: options?.targets ?? [],
     },
-    preflight: {
-      mode: "dry-run" as const,
-      changed: options?.changed ?? false,
-      changedFiles: options?.changed ? ["/tmp/openclaw.json"] : [],
-      checks: {
-        resolvability: true,
-        resolvabilityComplete: options?.resolvabilityComplete ?? true,
-      },
-      refsChecked: 0,
-      skippedExecRefs: 0,
-      warningCount: 0,
-      warnings: [],
-    },
+    preflight: createSecretsApplyResult({
+      changed: options?.changed,
+      resolvabilityComplete: options?.resolvabilityComplete,
+    }),
   };
 }
 
@@ -136,6 +126,32 @@ function createConfigureInteractiveResultWithPlanBytes(bytes: number) {
   target.ref.id = "x".repeat(bytes - emptyBytes);
   expect(Buffer.byteLength(`${JSON.stringify(configured.plan, null, 2)}\n`, "utf8")).toBe(bytes);
   return configured;
+}
+
+function createAuditReport(options: {
+  status: string;
+  plaintextCount?: number;
+  unresolvedRefCount?: number;
+  refsChecked?: number;
+}) {
+  return {
+    version: 1,
+    status: options.status,
+    filesScanned: [],
+    summary: {
+      plaintextCount: options.plaintextCount ?? 0,
+      unresolvedRefCount: options.unresolvedRefCount ?? 0,
+      shadowedRefCount: 0,
+      storeResidueCount: 0,
+      legacyResidueCount: 0,
+    },
+    resolution: {
+      refsChecked: options.refsChecked ?? 0,
+      skippedExecRefs: 0,
+      resolvabilityComplete: true,
+    },
+    findings: [],
+  };
 }
 
 function createSecretsApplyResult(options?: {
@@ -175,11 +191,11 @@ async function withPlanFile(
 }
 
 describe("secrets CLI", () => {
-  const createProgram = () => {
+  const runSecrets = async (args: string[]) => {
     const program = new Command();
     program.exitOverride();
     registerSecretsCli(program);
-    return program;
+    await program.parseAsync(args, { from: "user" });
   };
 
   beforeEach(() => {
@@ -200,7 +216,7 @@ describe("secrets CLI", () => {
 
   it("calls secrets.reload and prints human output", async () => {
     callGatewayFromCli.mockResolvedValue({ ok: true, warningCount: 1 });
-    await createProgram().parseAsync(["secrets", "reload"], { from: "user" });
+    await runSecrets(["secrets", "reload"]);
     const reloadCall = mockCall(callGatewayFromCli);
     expect(reloadCall[0]).toBe("secrets.reload");
     if (reloadCall[1] === undefined) {
@@ -214,7 +230,7 @@ describe("secrets CLI", () => {
 
   it("prints JSON when requested", async () => {
     callGatewayFromCli.mockResolvedValue({ ok: true, warningCount: 0 });
-    await createProgram().parseAsync(["secrets", "reload", "--json"], { from: "user" });
+    await runSecrets(["secrets", "reload", "--json"]);
     expect(runtimeLogs.at(-1)).toContain('"ok": true');
   });
 
@@ -253,9 +269,7 @@ describe("secrets CLI", () => {
   ])("prints one JSON failure when $name fails", async (testCase) => {
     await testCase.prepare();
 
-    await expect(createProgram().parseAsync(testCase.args, { from: "user" })).rejects.toThrow(
-      `__exit__:${testCase.exitCode}`,
-    );
+    await expect(runSecrets(testCase.args)).rejects.toThrow(`__exit__:${testCase.exitCode}`);
 
     expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
     expect(runtimeLogs).toHaveLength(1);
@@ -273,9 +287,7 @@ describe("secrets CLI", () => {
       ),
     );
 
-    await expect(
-      createProgram().parseAsync(["secrets", "reload"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runSecrets(["secrets", "reload"])).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors.at(-1)).toContain(
       "Could not reload secrets because the Gateway did not respond: gateway closed (1006 abnormal closure).",
@@ -286,30 +298,13 @@ describe("secrets CLI", () => {
   });
 
   it("writes one audit report before exiting with the check code", async () => {
-    const report = {
-      version: 1,
-      status: "findings",
-      filesScanned: [],
-      summary: {
-        plaintextCount: 1,
-        unresolvedRefCount: 0,
-        shadowedRefCount: 0,
-        storeResidueCount: 0,
-        legacyResidueCount: 0,
-      },
-      resolution: {
-        refsChecked: 0,
-        skippedExecRefs: 0,
-        resolvabilityComplete: true,
-      },
-      findings: [],
-    };
+    const report = createAuditReport({ status: "findings", plaintextCount: 1 });
     runSecretsAudit.mockResolvedValue(report);
     resolveSecretsAuditExitCode.mockReturnValue(1);
 
-    await expect(
-      createProgram().parseAsync(["secrets", "audit", "--check", "--json"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runSecrets(["secrets", "audit", "--check", "--json"])).rejects.toThrow(
+      "__exit__:1",
+    );
     expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(false);
     const exitCodeCall = mockCall(resolveSecretsAuditExitCode);
     if (exitCodeCall[0] === undefined) {
@@ -323,30 +318,15 @@ describe("secrets CLI", () => {
   });
 
   it("keeps an unresolved audit report intact at exit 2", async () => {
-    const report = {
-      version: 1,
+    const report = createAuditReport({
       status: "unresolved",
-      filesScanned: [],
-      summary: {
-        plaintextCount: 0,
-        unresolvedRefCount: 1,
-        shadowedRefCount: 0,
-        storeResidueCount: 0,
-        legacyResidueCount: 0,
-      },
-      resolution: {
-        refsChecked: 1,
-        skippedExecRefs: 0,
-        resolvabilityComplete: true,
-      },
-      findings: [],
-    };
+      unresolvedRefCount: 1,
+      refsChecked: 1,
+    });
     runSecretsAudit.mockResolvedValue(report);
     resolveSecretsAuditExitCode.mockReturnValue(2);
 
-    await expect(
-      createProgram().parseAsync(["secrets", "audit", "--json"], { from: "user" }),
-    ).rejects.toThrow("__exit__:2");
+    await expect(runSecrets(["secrets", "audit", "--json"])).rejects.toThrow("__exit__:2");
 
     expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
     expect(mockFirstObjectArg(defaultRuntime.writeJson)).toBe(report);
@@ -354,75 +334,18 @@ describe("secrets CLI", () => {
   });
 
   it("forwards --allow-exec to secrets audit", async () => {
-    runSecretsAudit.mockResolvedValue({
-      version: 1,
-      status: "clean",
-      filesScanned: [],
-      summary: {
-        plaintextCount: 0,
-        unresolvedRefCount: 0,
-        shadowedRefCount: 0,
-        storeResidueCount: 0,
-        legacyResidueCount: 0,
-      },
-      resolution: {
-        refsChecked: 1,
-        skippedExecRefs: 0,
-        resolvabilityComplete: true,
-      },
-      findings: [],
-    });
+    runSecretsAudit.mockResolvedValue(createAuditReport({ status: "clean", refsChecked: 1 }));
     resolveSecretsAuditExitCode.mockReturnValue(0);
 
-    await createProgram().parseAsync(["secrets", "audit", "--allow-exec"], { from: "user" });
+    await runSecrets(["secrets", "audit", "--allow-exec"]);
     expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(true);
-  });
-
-  it("runs secrets configure then apply when confirmed", async () => {
-    runSecretsConfigureInteractive.mockResolvedValue(
-      createConfigureInteractiveResult({
-        changed: true,
-        targets: [
-          {
-            type: "skills.entries.apiKey",
-            path: "skills.entries.qa-secret-test.apiKey",
-            pathSegments: ["skills", "entries", "qa-secret-test", "apiKey"],
-            ref: {
-              source: "env",
-              provider: "default",
-              id: "QA_SECRET_TEST_API_KEY",
-            },
-          },
-        ],
-      }),
-    );
-    confirm.mockResolvedValue(true);
-    runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write", changed: true }));
-
-    await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
-    expect(runSecretsConfigureInteractive).toHaveBeenCalledTimes(1);
-    const applyArgs = mockFirstObjectArg(runSecretsApply);
-    expect(applyArgs.write).toBe(true);
-    if (!applyArgs.plan || typeof applyArgs.plan !== "object") {
-      throw new Error("expected apply plan object");
-    }
-    const applyPlan = applyArgs.plan as { targets?: unknown[] };
-    expect(Array.isArray(applyPlan.targets)).toBe(true);
-    const [target] = applyPlan.targets ?? [];
-    expectObjectFields(target, {
-      type: "skills.entries.apiKey",
-      path: "skills.entries.qa-secret-test.apiKey",
-    });
-    expect(runtimeLogs.at(-1)).toContain("Secrets applied");
   });
 
   it("emits one JSON document when --yes applies configure output", async () => {
     runSecretsConfigureInteractive.mockResolvedValue(createConfigureInteractiveResult());
     runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write", changed: true }));
 
-    await createProgram().parseAsync(["secrets", "configure", "--json", "--yes"], {
-      from: "user",
-    });
+    await runSecrets(["secrets", "configure", "--json", "--yes"]);
 
     expect(runSecretsApply).toHaveBeenCalledTimes(1);
     expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
@@ -431,24 +354,35 @@ describe("secrets CLI", () => {
     );
   });
 
-  it("shows the irreversibility warning on the interactive apply path (#83883)", async () => {
-    runSecretsConfigureInteractive.mockResolvedValue(
-      createConfigureInteractiveResult({ changed: true }),
-    );
-    // Interactive path: no --apply flag. First confirm is "Apply this plan
-    // now?", second must be the one-way-migration irreversibility warning.
-    confirm.mockResolvedValueOnce(true); // Apply this plan now?
-    confirm.mockResolvedValueOnce(true); // one-way migration warning
+  it("shows the irreversibility warning before applying configured targets (#83883)", async () => {
+    const configured = createConfigureInteractiveResult({
+      changed: true,
+      targets: [
+        {
+          type: "skills.entries.apiKey",
+          path: "skills.entries.qa-secret-test.apiKey",
+          pathSegments: ["skills", "entries", "qa-secret-test", "apiKey"],
+          ref: { source: "env", provider: "default", id: "QA_SECRET_TEST_API_KEY" },
+        },
+      ],
+    });
+    runSecretsConfigureInteractive.mockResolvedValue(configured);
+    confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
     runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write", changed: true }));
 
-    await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
+    await runSecrets(["secrets", "configure"]);
 
-    // Before the fix the interactive path skipped the irreversibility prompt
-    // (it checked opts.apply), so confirm was called only once.
+    expect(runSecretsConfigureInteractive).toHaveBeenCalledTimes(1);
     expect(confirm).toHaveBeenCalledTimes(2);
-    const secondPrompt = confirm.mock.calls[1]?.[0] as { message?: string } | undefined;
-    expect(secondPrompt?.message ?? "").toContain("one-way");
-    expect(runSecretsApply).toHaveBeenCalledTimes(1);
+    expect(confirm.mock.calls[1]?.[0]).toMatchObject({
+      message: expect.stringContaining("one-way"),
+    });
+    expect(runSecretsApply).toHaveBeenCalledExactlyOnceWith({
+      plan: configured.plan,
+      write: true,
+      allowExec: false,
+    });
+    expect(runtimeLogs.at(-1)).toContain("Secrets applied");
   });
 
   it("cancels apply when the interactive irreversibility warning is declined (#83883)", async () => {
@@ -458,7 +392,7 @@ describe("secrets CLI", () => {
     confirm.mockResolvedValueOnce(true); // Apply this plan now?
     confirm.mockResolvedValueOnce(false); // decline the irreversibility warning
 
-    await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
+    await runSecrets(["secrets", "configure"]);
 
     expect(confirm).toHaveBeenCalledTimes(2);
     expect(runSecretsApply).not.toHaveBeenCalled();
@@ -469,7 +403,7 @@ describe("secrets CLI", () => {
     runSecretsConfigureInteractive.mockResolvedValue(createConfigureInteractiveResult());
     confirm.mockResolvedValue(false);
 
-    await createProgram().parseAsync(["secrets", "configure", "--agent", "ops"], { from: "user" });
+    await runSecrets(["secrets", "configure", "--agent", "ops"]);
     expectObjectFields(mockFirstObjectArg(runSecretsConfigureInteractive), {
       agentId: "ops",
       allowExecInPreflight: false,
@@ -487,9 +421,7 @@ describe("secrets CLI", () => {
     confirm.mockResolvedValue(false);
 
     try {
-      await createProgram().parseAsync(["secrets", "configure", "--plan-out", planPath], {
-        from: "user",
-      });
+      await runSecrets(["secrets", "configure", "--plan-out", planPath]);
 
       expect((await fs.stat(planPath)).size).toBe(16 * 1024 * 1024);
       expect(runtimeLogs).toContain(`Plan written to ${planPath}`);
@@ -509,11 +441,9 @@ describe("secrets CLI", () => {
     );
 
     try {
-      await expect(
-        createProgram().parseAsync(["secrets", "configure", "--plan-out", planPath], {
-          from: "user",
-        }),
-      ).rejects.toThrow("__exit__:1");
+      await expect(runSecrets(["secrets", "configure", "--plan-out", planPath])).rejects.toThrow(
+        "__exit__:1",
+      );
 
       expect(runtimeErrors.at(-1)).toContain("Secrets plan exceeds 16777216 bytes");
       await expect(fs.access(planPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -528,9 +458,7 @@ describe("secrets CLI", () => {
     await withPlanFile(async (planPath) => {
       await fs.truncate(planPath, 16 * 1024 * 1024 + 1);
       await expect(
-        createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
-          from: "user",
-        }),
+        runSecrets(["secrets", "apply", "--from", planPath, "--dry-run"]),
       ).rejects.toThrow("__exit__:1");
 
       expect(runSecretsApply).not.toHaveBeenCalled();
@@ -543,9 +471,7 @@ describe("secrets CLI", () => {
     async () => {
       runSecretsApply.mockResolvedValue(createSecretsApplyResult());
       await withPlanFile(async (planPath) => {
-        await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
-          from: "user",
-        });
+        await runSecrets(["secrets", "apply", "--from", planPath, "--dry-run"]);
       });
       runSecretsApply.mockReset();
       runtimeLogs.length = 0;
@@ -557,10 +483,7 @@ describe("secrets CLI", () => {
 
       let timedOut = false;
       let timeout: NodeJS.Timeout | undefined;
-      const parse = createProgram().parseAsync(
-        ["secrets", "apply", "--from", fifoPath, "--dry-run"],
-        { from: "user" },
-      );
+      const parse = runSecrets(["secrets", "apply", "--from", fifoPath, "--dry-run"]);
 
       try {
         await expect(
@@ -594,12 +517,7 @@ describe("secrets CLI", () => {
     await withPlanFile(async (planPath) => {
       runSecretsApply.mockResolvedValue(createSecretsApplyResult());
 
-      await createProgram().parseAsync(
-        ["secrets", "apply", "--from", planPath, "--dry-run", "--allow-exec"],
-        {
-          from: "user",
-        },
-      );
+      await runSecrets(["secrets", "apply", "--from", planPath, "--dry-run", "--allow-exec"]);
       expectObjectFields(mockFirstObjectArg(runSecretsApply), {
         write: false,
         allowExec: true,
@@ -611,9 +529,7 @@ describe("secrets CLI", () => {
     await withPlanFile(async (planPath) => {
       runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write" }));
 
-      await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--allow-exec"], {
-        from: "user",
-      });
+      await runSecrets(["secrets", "apply", "--from", planPath, "--allow-exec"]);
       expectObjectFields(mockFirstObjectArg(runSecretsApply), {
         write: true,
         allowExec: true,
@@ -623,9 +539,9 @@ describe("secrets CLI", () => {
 
   it("shows a user-friendly error when the secrets plan file is malformed JSON", async () => {
     await withPlanFile(async (planPath) => {
-      await expect(
-        createProgram().parseAsync(["secrets", "apply", "--from", planPath], { from: "user" }),
-      ).rejects.toThrow("__exit__:1");
+      await expect(runSecrets(["secrets", "apply", "--from", planPath])).rejects.toThrow(
+        "__exit__:1",
+      );
 
       expect(runtimeErrors.at(-1)).toContain(`Malformed JSON in secrets plan file: ${planPath}`);
       expect(runSecretsApply).not.toHaveBeenCalled();
@@ -634,9 +550,7 @@ describe("secrets CLI", () => {
 
   it("rejects --from when the plan file does not exist", async () => {
     await expect(
-      createProgram().parseAsync(["secrets", "apply", "--from", "/nonexistent/path/plan.json"], {
-        from: "user",
-      }),
+      runSecrets(["secrets", "apply", "--from", "/nonexistent/path/plan.json"]),
     ).rejects.toThrow("__exit__:1");
 
     const errorOutput = runtimeErrors.join("\n");
@@ -646,9 +560,9 @@ describe("secrets CLI", () => {
   });
 
   it("treats --help as the required --from value", async () => {
-    await expect(
-      createProgram().parseAsync(["secrets", "apply", "--from", "--help"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runSecrets(["secrets", "apply", "--from", "--help"])).rejects.toThrow(
+      "__exit__:1",
+    );
 
     expect(runtimeErrors.join("\n")).toContain("Secrets plan file not found: --help");
     expect(runSecretsApply).not.toHaveBeenCalled();
@@ -662,9 +576,9 @@ describe("secrets CLI", () => {
         }),
       );
 
-      await expect(
-        createProgram().parseAsync(["secrets", "apply", "--from", planPath], { from: "user" }),
-      ).rejects.toThrow("__exit__:1");
+      await expect(runSecrets(["secrets", "apply", "--from", planPath])).rejects.toThrow(
+        "__exit__:1",
+      );
 
       expect(runtimeErrors.join("\n")).toContain(
         "Secrets plan file not found during apply | provider diagnostic",
@@ -676,9 +590,7 @@ describe("secrets CLI", () => {
     await withPlanFile(async (planPath) => {
       runSecretsApply.mockResolvedValue(createSecretsApplyResult({ resolvabilityComplete: false }));
 
-      await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
-        from: "user",
-      });
+      await runSecrets(["secrets", "apply", "--from", planPath, "--dry-run"]);
       const skippedExecNotes = runtimeLogs.filter((line) =>
         line.includes("Secrets apply dry-run note: skipped"),
       );
@@ -692,7 +604,7 @@ describe("secrets CLI", () => {
     );
     confirm.mockResolvedValue(false);
 
-    await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
+    await runSecrets(["secrets", "configure"]);
     const preflightSkippedExecNotes = runtimeLogs.filter((line) =>
       line.includes("Preflight note: skipped"),
     );
@@ -703,9 +615,7 @@ describe("secrets CLI", () => {
     runSecretsConfigureInteractive.mockResolvedValue(createConfigureInteractiveResult());
     runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write" }));
 
-    await createProgram().parseAsync(["secrets", "configure", "--apply", "--yes", "--allow-exec"], {
-      from: "user",
-    });
+    await runSecrets(["secrets", "configure", "--apply", "--yes", "--allow-exec"]);
     expect(mockFirstObjectArg(runSecretsConfigureInteractive).allowExecInPreflight).toBe(true);
     expectObjectFields(mockFirstObjectArg(runSecretsApply), {
       write: true,

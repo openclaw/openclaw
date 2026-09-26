@@ -2751,7 +2751,7 @@ describe("memory-core doctor dreaming migration", () => {
     await fs.access(`${legacyPath}.migrated`);
   });
 
-  it("removes retired QMD workspace homes without following model or home symlinks", async () => {
+  it("preserves nonempty QMD homes and does not schedule them for migration", async () => {
     const stateDir = path.join(rootDir, "state");
     const qmdHome = path.join(stateDir, "agents", "main", "qmd");
     const canonicalAgentFile = path.join(
@@ -2798,18 +2798,19 @@ describe("memory-core doctor dreaming migration", () => {
     await fs.symlink(symlinkHomeTarget, symlinkHome);
 
     const migration = qmdWorkspaceMigration();
-    expect(migration.doctorOnly).toBe(true);
-    await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
-      preview: [
-        `- Retired Memory Core QMD workspace: ${qmdHome} -> remove derived index, config, cache, and session-export artifacts`,
-      ],
-    });
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
     await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
-      changes: [`Removed retired Memory Core QMD workspace: ${qmdHome}`],
+      changes: [],
       warnings: [],
     });
 
-    await expect(fs.access(qmdHome)).rejects.toMatchObject({ code: "ENOENT" });
+    for (const relativePath of [
+      "xdg-cache/qmd/index.sqlite",
+      "xdg-config/qmd/index.yml",
+      "sessions/session.md",
+    ]) {
+      await expect(fs.readFile(path.join(qmdHome, relativePath), "utf8")).resolves.toBe("derived");
+    }
     await expect(fs.access(canonicalAgentFile)).resolves.toBeUndefined();
     await expect(fs.readFile(retainedResetTranscript, "utf8")).resolves.toContain(
       "Retained reset transcript recall fact",
@@ -2826,6 +2827,58 @@ describe("memory-core doctor dreaming migration", () => {
       changes: [],
       warnings: [],
     });
+  });
+
+  it.each(["foreign", "mixed", "empty"])("safely retires a %s QMD home", async (layout) => {
+    const qmdHome = path.join(rootDir, "state", "agents", "main", "qmd");
+    const foreignConfig = path.join(qmdHome, "xdg-config", "qmd", "index.yml");
+    await fs.mkdir(qmdHome, { recursive: true });
+    if (layout !== "empty") {
+      await fs.mkdir(path.dirname(foreignConfig), { recursive: true });
+      await fs.writeFile(foreignConfig, "collections:\n  private: {}\n");
+    }
+    if (layout === "mixed") {
+      await fs.mkdir(path.join(qmdHome, "sessions"));
+      await fs.writeFile(path.join(qmdHome, "sessions", "session.md"), "# Session session\n");
+    }
+    const migration = qmdWorkspaceMigration();
+    const detected = await migration.detectLegacyState(migrationParams());
+    expect(detected === null).toBe(layout !== "empty");
+    const result = await migration.migrateLegacyState(migrationParams());
+    expect(result.warnings).toEqual([]);
+    if (layout === "empty") {
+      await expect(fs.access(qmdHome)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      await expect(fs.readFile(foreignConfig, "utf8")).resolves.toBe(
+        "collections:\n  private: {}\n",
+      );
+      if (layout === "mixed") {
+        await expect(
+          fs.readFile(path.join(qmdHome, "sessions", "session.md"), "utf8"),
+        ).resolves.toBe("# Session session\n");
+      }
+    }
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
+  });
+
+  it("preserves QMD files created between inspection and removal without blocking Doctor", async () => {
+    const qmdHome = path.join(rootDir, "state", "agents", "main", "qmd");
+    const configPath = path.join(qmdHome, "index.yml");
+    await fs.mkdir(qmdHome, { recursive: true });
+    const remove = fs.rmdir;
+    vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
+      if (target === qmdHome) {
+        await fs.writeFile(configPath, "standalone QMD configuration\n");
+      }
+      return remove(target);
+    });
+
+    const result = await qmdWorkspaceMigration().migrateLegacyState(migrationParams());
+
+    await expect(fs.readFile(configPath, "utf8")).resolves.toBe("standalone QMD configuration\n");
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings).toContainEqual(expect.stringContaining(qmdHome));
+    await expect(qmdWorkspaceMigration().detectLegacyState(migrationParams())).resolves.toBeNull();
   });
 
   it("removes only exact stale QMD lock sidecars and is idempotent", async () => {

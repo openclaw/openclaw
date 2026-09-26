@@ -355,7 +355,7 @@ class SidebarCatalogGroupingTest {
           )
         }
       }
-      composeRule.onNodeWithText("Work").assertDoesNotExist()
+      composeRule.onNodeWithText("Overview").assertDoesNotExist()
       composeRule.onNodeWithText("Home").assertIsDisplayed()
       composeRule.onNodeWithText("Settings").assertIsDisplayed().performTouchInput(dragOnePageDown)
 
@@ -378,7 +378,7 @@ class SidebarCatalogGroupingTest {
       composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
       composeRule.onNodeWithText("Edit pinned items").performClick()
       composeRule.onNodeWithText("EDIT PINNED ITEMS").assertIsDisplayed()
-      composeRule.onNodeWithText("Work").assertIsDisplayed().performTouchInput(dragOnePageDown)
+      composeRule.onNodeWithText("Overview").assertIsDisplayed().performTouchInput(dragOnePageDown)
       composeRule.runOnIdle {
         assertEquals(listOf("home", "settings", "work", "skills", "threads"), prefs.sidebarPageOrder.value)
         assertEquals(listOf("settings", "home", "skills", "threads"), prefs.sidebarVisiblePages.value)

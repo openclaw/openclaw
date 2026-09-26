@@ -61,7 +61,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     // Lists, summaries, and artifact paths own stdout; startup notes must not corrupt them.
     policy: { ownsProtocolStdout: true, hideBanner: true },
   },
-  { commandPath: ["message"], policy: { loadPlugins: "never" } },
+  // The message runner selects config preparation from the action's execution mode.
+  { commandPath: ["message"], policy: { configGuard: "defer", loadPlugins: "never" } },
   { commandPath: ["docs"], policy: { configGuard: "skip" } },
   // Destructive maintenance owns a validity-aware, non-observing config read.
   // Startup migrations would mutate the SQLite state these commands may refuse to remove.

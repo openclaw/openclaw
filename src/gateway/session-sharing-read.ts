@@ -87,17 +87,18 @@ export function canReceiveSessionEvent(params: {
   const hidesForeignSessions =
     (params.prepared ? sharing.sessionCap : operatorSessionCap(client, policyConfig)) === "none";
   // Discovery remains lazy; these facts belong only to this recipient check, never a socket send.
-  const lookup: Omit<Parameters<typeof resolveSessionSharingTarget>[0], "sessionKey"> = {
-    cfg,
-    agentId: params.agentId,
-    exactRead: sessionKeys.length === 1,
-    storeCache: new Map(),
-    targetDiscoveryCache: new Map(),
-  };
+  const lookup = params.prepared
+    ? undefined
+    : {
+        agentId: params.agentId,
+        exactRead: sessionKeys.length === 1,
+        storeCache: new Map(),
+        targetDiscoveryCache: new Map(),
+      };
   const resolveTarget = (sessionKey: string) =>
     params.prepared
       ? params.prepared.target(sessionKey, params.agentId)
-      : resolveSessionSharingTarget({ ...lookup, sessionKey });
+      : resolveSessionSharingTarget({ cfg, ...lookup, sessionKey });
   const visible = sessionKeys.every((sessionKey) => {
     const target = params.prepared ? resolveTarget(sessionKey) : undefined;
     const snapshot = params.prepared
@@ -108,7 +109,7 @@ export function canReceiveSessionEvent(params: {
             : isIncognitoSessionKey(sessionKey),
           createdActor: target?.entry.createdActor,
         }
-      : loadSharingSnapshot({ ...lookup, sessionKey });
+      : loadSharingSnapshot({ cfg, ...lookup, sessionKey });
     const isCreator = sharing.isCreator(snapshot.createdActor);
     if (snapshot.incognito || (hidesForeignSessions && !isCreator)) {
       return false;
@@ -201,6 +202,22 @@ export function prepareProjectedSessionSharing(params: {
     sessionCap,
     isMember,
   });
+}
+
+/** Deleted metadata cannot establish a profile's child-session entitlement. */
+export function canReadSessionWithoutSharingMetadata(params: {
+  cfg: OpenClawConfig;
+  client: GatewayClient | null;
+  sessionKey: string;
+}): boolean {
+  const sharing = prepareProjectedSessionSharing({ ...params, isMember: () => false });
+  // Match the existing missing-row event policy: no creator and draft visibility.
+  return (
+    sharing.entryFilter?.(params.sessionKey, {
+      visibility: "draft",
+      incognito: isIncognitoSessionKey(params.sessionKey) ? true : undefined,
+    }) ?? true
+  );
 }
 
 export function createSessionListEntryFilter(

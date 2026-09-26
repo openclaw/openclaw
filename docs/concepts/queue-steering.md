@@ -8,7 +8,7 @@ read_when:
 title: "Steering queue"
 ---
 
-When a normal prompt arrives while a session run is already streaming and the queue mode is `steer` (the default, no config needed), OpenClaw tries to send that prompt into the active runtime. OpenClaw and the native Codex app-server harness implement the delivery details differently.
+When a normal prompt arrives while a session run is active and the queue mode is `steer` (the default, no config needed), OpenClaw tries to send that prompt into the active runtime, including during tool execution. OpenClaw and the native Codex app-server harness implement the delivery details differently.
 
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 

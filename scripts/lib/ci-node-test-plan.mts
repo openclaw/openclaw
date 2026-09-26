@@ -204,6 +204,17 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches = [
+  {
+    testFile: "src/gateway/client-callsites.guard.test.ts",
+    watchGlobs: ["{src,extensions}/**/!(*.test|*.test-support|*.e2e|*.e2e.test|*.live.test).ts"],
+  },
+  ...[
+    "test/scripts/package-acceptance-workflow.test.ts",
+    "test/scripts/upgrade-survivor-missing-load-path.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: ["scripts/e2e/lib/upgrade-survivor/**"],
+  })),
   ...["test/scripts/android-app-i18n.test.ts", "test/scripts/apple-app-i18n.test.ts"].map(
     (testFile): PolicyTestWatch => ({
       // Both suites read this inventory by filename, not through the import graph.
@@ -342,8 +353,16 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
   "test/vitest/vitest.full-extensions.config.ts",
 ]);
 
+export const SOURCE_CHANNEL_TEST_POLICY = {
+  config: "test/vitest/vitest.channels.config.ts",
+  env: {
+    NODE_OPTIONS: "--max-old-space-size=8192",
+    OPENCLAW_VITEST_MAX_WORKERS: "1",
+  },
+} as const;
+
 const EXCLUDED_PROJECT_CONFIGS = new Set([
-  "test/vitest/vitest.channels.config.ts",
+  SOURCE_CHANNEL_TEST_POLICY.config,
   // checks-ui owns the Chromium project; Node stripes retain Node-driven Playwright tests.
   "test/vitest/vitest.ui-browser.config.ts",
 ]);
@@ -388,6 +407,13 @@ const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
 // Hosted run 35477045216 timed out after an hour on a 203-file serial stripe;
 // its 196-file sibling took 2867s. Bound admission independently of stale costs.
 const COMPACT_HOSTED_STORAGE_STATE_MAX_FILES = 64;
+// Hourly hosted run 35983526919 spent ~25 minutes in each of these owners.
+// Bound the main-tier work independently of stale whole-owner timing estimates.
+const COMPACT_HOSTED_MAIN_MAX_FILES = new Map([
+  ["agentic-control-plane-agent-chat", 30],
+  ["agentic-gateway-methods", 96],
+]);
+const HOSTED_MAIN_UPDATE_TEST = "src/cli/update-cli.test.ts";
 // Trusted forks can use the GitHub profile on Blacksmith. Every compact
 // profile must fit the same runner-registration allowance.
 const COMPACT_NODE_TEST_JOB_CAP = 90;
@@ -2365,9 +2391,15 @@ function partitionRuntimeTestFiles(configs: string[], files: string[]) {
   };
 }
 
+const GATEWAY_CORE_NODE_TEST_CONFIGS = [
+  "test/vitest/vitest.gateway-core.config.ts",
+  "test/vitest/vitest.gateway-client.config.ts",
+];
+
 function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
   const unitFastFiles = new Set(getUnitFastTestFiles());
   const excludedGatewayFiles = new Set([
+    ...databaseWorkerCoreTestFiles,
     ...gatewayDatabaseWorkerTestFiles,
     ...gatewayServerExcludedTestFiles,
     ...gatewayServerIsolatedTestFiles,
@@ -2382,10 +2414,7 @@ function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
   const packageFiles = ["packages/gateway-client/src", "packages/gateway-protocol/src"]
     .flatMap((rootDir) => listTestFiles(rootDir))
     .filter((file) => isStripeEligibleTestFile(file, unitFastFiles));
-  const configs = [
-    "test/vitest/vitest.gateway-core.config.ts",
-    "test/vitest/vitest.gateway-client.config.ts",
-  ];
+  const configs = GATEWAY_CORE_NODE_TEST_CONFIGS;
   // The pretest runtime build is charged per job, so a stripe holding one of
   // these files pays it for the whole stripe. Striping spreads them, which made
   // every gateway-core job pay a 275s build to run ~120s of tests. Keep them in
@@ -2431,6 +2460,12 @@ const TUI_PTY_NODE_TEST_SHARD: NodeTestSplitShard = {
   },
   requiresDist: true,
   runner: "blacksmith-4vcpu-ubuntu-2404",
+};
+const AGENTS_EMBEDDED_NODE_TEST_SHARD: NodeTestSplitShard = {
+  shardName: "agentic-agents-embedded",
+  configs: embeddedAgentVitestProjectOwners.map((owner) => owner.config),
+  env: AGENTS_EMBEDDED_AGENT_ENV,
+  requiresDist: false,
 };
 
 const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[] | (() => NodeTestSplitShard[])>([
@@ -2549,12 +2584,7 @@ const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[] | (() => NodeTest
       },
       ...createAgenticCommandSplitShards(resolveTestFilesBuildMode),
       ...createAgentCoreSplitShards(),
-      {
-        shardName: "agentic-agents-embedded",
-        configs: embeddedAgentVitestProjectOwners.map((owner) => owner.config),
-        env: AGENTS_EMBEDDED_AGENT_ENV,
-        requiresDist: false,
-      },
+      AGENTS_EMBEDDED_NODE_TEST_SHARD,
       {
         shardName: "agentic-agents-support",
         configs: [agentVitestProjectOwners.support.config],
@@ -2723,10 +2753,26 @@ function resolveSplitNodeShards(name: string): NodeTestSplitShard[] | undefined 
 }
 
 export function nodeTestConfigRequiresCanonicalMetadata(config: string): boolean {
+  const toolingOwner = canonicalNodeTestOwners.some(
+    (owner) => owner.name === "core-tooling" && owner.projects.includes(config),
+  );
   if (config === TOOLING_CONFIG) {
-    return canonicalNodeTestOwners.some(
-      (owner) => owner.name === "core-tooling" && owner.projects.includes(config),
-    );
+    return toolingOwner;
+  }
+  // Gateway environment overrides belong to exclusive configs. The remaining
+  // environment owners share these descriptors with shard construction.
+  if (
+    !toolingOwner &&
+    !isExclusiveCiTestConfig(config) &&
+    !(
+      GATEWAY_CORE_NODE_TEST_CONFIGS.includes(config) &&
+      GATEWAY_CORE_NODE_TEST_CONFIGS.some(isExclusiveCiTestConfig)
+    ) &&
+    ![TUI_PTY_NODE_TEST_SHARD, AGENTS_EMBEDDED_NODE_TEST_SHARD].some((shard) =>
+      shard.configs.includes(config),
+    )
+  ) {
+    return false;
   }
   canonicalMetadataConfigs ??= new Set(
     createNodeTestShardsForOwners(canonicalNodeTestOwners, {
@@ -3441,18 +3487,23 @@ function splitOversizedCompactGroup(
   hostedToolingTailDonation?: HostedToolingTailDonation,
   onHostedToolingTailDonation?: (donation: HostedToolingTailDonation) => void,
   selectedToolingFiles?: ReadonlySet<string>,
+  hostedMain = false,
 ): Array<{ group: NodeTestShardGroup; seconds: number }> {
   // Hybrid groups must fit both the first-attempt runner and hosted retries;
   // a faster retry estimate must not leave a slow first attempt unsplit.
   const isCliProcess = group.shard_name === "agentic-cli-process";
   const isTooling = isParallelToolingGroup(group);
-  const storageStateFileLimit =
-    runnerBackend === "github" && group.shard_name === "core-runtime-infra-storage-state"
+  const hostedFileLimit =
+    (hostedMain ? COMPACT_HOSTED_MAIN_MAX_FILES.get(group.shard_name) : undefined) ??
+    (runnerBackend === "github" && group.shard_name === "core-runtime-infra-storage-state"
       ? COMPACT_HOSTED_STORAGE_STATE_MAX_FILES
-      : undefined;
-  const exceedsStorageStateFileLimit =
-    storageStateFileLimit !== undefined &&
-    (group.includePatterns?.length ?? 0) > storageStateFileLimit;
+      : undefined);
+  const exceedsHostedFileLimit =
+    hostedFileLimit !== undefined && (group.includePatterns?.length ?? 0) > hostedFileLimit;
+  const splitHostedUpdate =
+    hostedMain &&
+    (group.includePatterns?.length ?? 0) > 1 &&
+    group.includePatterns!.includes(HOSTED_MAIN_UPDATE_TEST);
   const measuredProfileSeconds = estimateCompactGroupSeconds(group, runnerBackend);
   const measuredHostedSeconds = estimateCompactGroupSeconds(group, "github");
   if (!canSplitWholeConfigGroup(group.shard_name)) {
@@ -3492,7 +3543,8 @@ function splitOversizedCompactGroup(
     );
   if (
     !isCliProcess &&
-    !exceedsStorageStateFileLimit &&
+    !exceedsHostedFileLimit &&
+    !splitHostedUpdate &&
     !runtimePartition &&
     !hasSplitTimingHistory &&
     Math.max(measuredProfileSeconds, measuredHostedSeconds) <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS
@@ -3638,15 +3690,26 @@ function splitOversizedCompactGroup(
     const partitioned = runtimePartition ? [runtimePartition.runtimeFiles, ...stripes] : stripes;
     // Preserve prerequisite ownership and the existing weighted stripes. The
     // family guard prevents cost packing from joining these serial chunks again.
-    return storageStateFileLimit === undefined
-      ? partitioned
-      : partitioned.flatMap((stripeFiles) =>
-          Array.from(
-            { length: Math.ceil(stripeFiles.length / storageStateFileLimit) },
-            (_, index) =>
-              stripeFiles.slice(index * storageStateFileLimit, (index + 1) * storageStateFileLimit),
-          ),
-        );
+    const bounded =
+      hostedFileLimit === undefined
+        ? partitioned
+        : partitioned.flatMap((stripeFiles) =>
+            Array.from({ length: Math.ceil(stripeFiles.length / hostedFileLimit) }, (_, index) =>
+              stripeFiles.slice(index * hostedFileLimit, (index + 1) * hostedFileLimit),
+            ),
+          );
+    // The update file alone contributed 827 seconds of serial case time.
+    // Preserve the other storage files' existing order, workers and ownership.
+    return splitHostedUpdate
+      ? bounded.flatMap((stripeFiles) =>
+          stripeFiles.includes(HOSTED_MAIN_UPDATE_TEST) && stripeFiles.length > 1
+            ? [
+                [HOSTED_MAIN_UPDATE_TEST],
+                stripeFiles.filter((file) => file !== HOSTED_MAIN_UPDATE_TEST),
+              ]
+            : [stripeFiles],
+        )
+      : bounded;
   };
   const timingEnv = parallelCommands ? { ...group.env, ...PINNED_COMPACT_GROUP_ENV } : group.env;
   let stripes = createStripes(splitSeconds);
@@ -3699,7 +3762,8 @@ function splitOversizedCompactGroup(
         : completeBlacksmithSeconds;
   if (
     !runtimePartition &&
-    !exceedsStorageStateFileLimit &&
+    !exceedsHostedFileLimit &&
+    !splitHostedUpdate &&
     (!parallelGateway || completeMeasuredSeconds === 0) &&
     Math.max(splitSeconds, completeMeasuredSeconds) <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS
   ) {
@@ -4254,6 +4318,7 @@ function createCompactNodeTestShardBundles(
             hostedToolingTailDonation,
             collectTailDonation,
             selectedToolingFiles,
+            compactMode === "push" && options.runnerBackend === "github",
           )
         : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     const reducedToolingTier =
@@ -4305,9 +4370,19 @@ function createCompactNodeTestShardBundles(
         !planned.group.requiresDist &&
         !isExclusiveCompactGroup(planned.group) &&
         runnerRank(planned.group) >= 0;
+      const dedicatedHostedMainGroup =
+        compactMode === "push" &&
+        options.runnerBackend === "github" &&
+        (/^agentic-control-plane-agent-chat(?:-hosted-\d+)?$/u.test(planned.group.shard_name) ||
+          (/^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(planned.group.shard_name) &&
+            (planned.group.includePatterns?.length ?? 0) > 32) ||
+          planned.group.includePatterns?.includes(HOSTED_MAIN_UPDATE_TEST));
       const key = JSON.stringify([
         sharesHostedCapacity ? "hosted-ordinary" : planned.group.runner,
         shard.requiresDist,
+        // Keep measured heavy children alone despite their stale packing estimates.
+        // Small Gateway tails and its runtime prerequisite keep ordinary packing.
+        dedicatedHostedMainGroup ? planned.group.shard_name : undefined,
       ]);
       const groups = groupsByRunner.get(key);
       if (groups) {
@@ -4457,7 +4532,11 @@ function createCompactNodeTestShardBundles(
         })
       );
     };
-    const bins = packNodeTestGroups(anchorGroups, canShareCompactJob, packsHostedTooling);
+    const bins = packNodeTestGroups(
+      anchorGroups,
+      canShareCompactJob,
+      options.runnerBackend === "github",
+    );
     if (options.runnerBackend === "github") {
       for (const bin of bins) {
         bin.sort((a, b) => runnerRank(b) - runnerRank(a));

@@ -1,5 +1,5 @@
-Chevrotain 11.1.2 and its @chevrotain/cst-dts-gen, @chevrotain/gast,
-@chevrotain/regexp-to-ast, and @chevrotain/utils packages.
+Chevrotain 11.1.2 and its @chevrotain/gast, @chevrotain/regexp-to-ast,
+and @chevrotain/utils packages.
 
 Source: https://github.com/Chevrotain/chevrotain/tree/v11.1.2
 

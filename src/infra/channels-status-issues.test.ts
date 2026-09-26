@@ -77,15 +77,10 @@ describe("collectChannelStatusIssues", () => {
   });
 
   it("skips plugins without collectors and concatenates collector output in plugin order", () => {
-    const collectTelegramIssues = vi.fn((): ChannelStatusIssue[] => [
-      {
-        channel: "telegram",
-        accountId: "default",
-        kind: "runtime",
-        message: "telegram down",
-      },
-    ]);
-    const collectSlackIssues = vi.fn((): ChannelStatusIssue[] => [
+    const telegramIssues: ChannelStatusIssue[] = [
+      { channel: "telegram", accountId: "default", kind: "runtime", message: "telegram down" },
+    ];
+    const slackIssues: ChannelStatusIssue[] = [
       {
         channel: "slack",
         accountId: "default",
@@ -98,7 +93,9 @@ describe("collectChannelStatusIssues", () => {
         kind: "auth",
         message: "slack auth failed",
       },
-    ]);
+    ];
+    const collectTelegramIssues = vi.fn(() => telegramIssues);
+    const collectSlackIssues = vi.fn(() => slackIssues);
     const telegramAccounts = [{ accountId: "tg-1" }];
     const slackAccounts = [{ accountId: "sl-1" }];
     mocks.listChannelPlugins.mockReturnValueOnce([
@@ -115,61 +112,10 @@ describe("collectChannelStatusIssues", () => {
           slack: slackAccounts,
         },
       }),
-    ).toEqual([
-      {
-        channel: "telegram",
-        accountId: "default",
-        kind: "runtime",
-        message: "telegram down",
-      },
-      {
-        channel: "slack",
-        accountId: "default",
-        kind: "permissions",
-        message: "slack warning",
-      },
-      {
-        channel: "slack",
-        accountId: "default",
-        kind: "auth",
-        message: "slack auth failed",
-      },
-    ]);
+    ).toEqual([...telegramIssues, ...slackIssues]);
 
     expect(collectTelegramIssues).toHaveBeenCalledWith(telegramAccounts);
     expect(collectSlackIssues).toHaveBeenCalledWith(slackAccounts);
-  });
-
-  it("adds runtime warnings for stale connected channel transports", () => {
-    const now = Date.now();
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    mocks.listChannelPlugins.mockReturnValue([createPlugin("feishu")]);
-
-    const issues = collectChannelStatusIssues({
-      channelAccounts: {
-        feishu: [
-          {
-            accountId: "work",
-            enabled: true,
-            configured: true,
-            running: true,
-            connected: true,
-            lastStartAt: now - DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS - 120_000,
-            lastTransportActivityAt: now - DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS - 60_000,
-          },
-        ],
-      },
-    });
-
-    expect(issues).toContainEqual({
-      channel: "feishu",
-      accountId: "work",
-      kind: "runtime",
-      message:
-        "Channel reports connected, but transport activity is stale; inbound delivery may be broken.",
-      fix: "restart the channel or gateway",
-    });
   });
 
   it.each([

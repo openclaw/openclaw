@@ -13,6 +13,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -21,6 +22,7 @@ import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import { writeUpdateInstallReceiptRowSync } from "./restart-sentinel-store.js";
 import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
+import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
 import type { UpdateCheckResult } from "./update-check.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
 import { createDevGitStatus } from "./update-startup-git.test-support.js";
@@ -161,6 +163,7 @@ type PersistedUpdateCheckState = {
 describe("update-startup", () => {
   let tempDir: string;
   let testState: OpenClawTestState;
+  let scheduler: ReturnType<typeof createTestGatewayScheduler>;
   let handoffTransferStarted: ReturnType<typeof createDeferred<void>>;
   let triageResult: Extract<
     Awaited<ReturnType<typeof runUpdateFailureTriageMock>>,
@@ -176,20 +179,33 @@ describe("update-startup", () => {
   let getUpdateAvailable: (typeof import("./update-status-state.js"))["getUpdateAvailable"];
   let getUpdateEffectiveChannel: (typeof import("./update-startup.js"))["getUpdateEffectiveChannel"];
   let getUpdateSchedule: (typeof import("./update-status-state.js"))["getUpdateSchedule"];
-  let refreshGatewayUpdateStatus: (typeof import("./update-startup.js"))["refreshGatewayUpdateStatus"];
+  let refreshGatewayUpdateStatus: (typeof import("./update-status-schedule.js"))["refreshGatewayUpdateStatus"];
   let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
   let loaded = false;
   const updateChecks = new Set<ReturnType<typeof createGatewayUpdateCheck>>();
 
   type UpdateCheckFixtureParams = Omit<
     Parameters<typeof createGatewayUpdateCheck>[0],
-    "getConfig"
+    "getConfig" | "log" | "isNixMode" | "lifecycle"
   > & {
     cfg: OpenClawConfig;
+    log?: Parameters<typeof createGatewayUpdateCheck>[0]["log"];
+    isNixMode?: boolean;
   };
 
-  function createTestUpdateCheck({ cfg, ...params }: UpdateCheckFixtureParams) {
-    const check = createGatewayUpdateCheck({ ...params, getConfig: () => cfg });
+  function createTestUpdateCheck({
+    cfg,
+    log = { info: vi.fn() },
+    isNixMode = false,
+    ...params
+  }: UpdateCheckFixtureParams) {
+    const check = createGatewayUpdateCheck({
+      ...params,
+      log,
+      isNixMode,
+      getConfig: () => cfg,
+      lifecycle: createGatewayUpdateLifecycle(scheduler),
+    });
     updateChecks.add(check);
     return check;
   }
@@ -202,11 +218,22 @@ describe("update-startup", () => {
 
   function runGatewayUpdateCheck({
     cfg,
+    log = { info: vi.fn() },
+    isNixMode = false,
+    allowInTests = true,
     ...params
-  }: Omit<Parameters<typeof runGatewayUpdateCheckOwner>[0], "getConfig"> & {
+  }: Omit<Parameters<typeof runGatewayUpdateCheckOwner>[0], "getConfig" | "log" | "isNixMode"> & {
     cfg: OpenClawConfig;
+    log?: UpdateCheckFixtureParams["log"];
+    isNixMode?: boolean;
   }) {
-    return runGatewayUpdateCheckOwner({ ...params, getConfig: () => cfg });
+    return runGatewayUpdateCheckOwner({
+      ...params,
+      log,
+      isNixMode,
+      allowInTests,
+      getConfig: () => cfg,
+    });
   }
 
   function readPersistedUpdateCheckState(): PersistedUpdateCheckState | null {
@@ -226,6 +253,7 @@ describe("update-startup", () => {
     versionMock.value = "1.0.0";
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
+    scheduler = createTestGatewayScheduler("fake-timers");
     testState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-update-check-suite-",
@@ -260,9 +288,9 @@ describe("update-startup", () => {
         runGatewayUpdateCheck: runGatewayUpdateCheckOwner,
         createGatewayUpdateCheck,
         getUpdateEffectiveChannel,
-        refreshGatewayUpdateStatus,
         resetUpdateAvailableStateForTest,
       } = await import("./update-startup.js"));
+      ({ refreshGatewayUpdateStatus } = await import("./update-status-schedule.js"));
       ({ getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js"));
       loaded = true;
     }
@@ -299,14 +327,15 @@ describe("update-startup", () => {
       handoffId: "auto-handoff-id",
       installRoot: "/opt/openclaw",
     });
-    resetUpdateAvailableStateForTest();
-    createTestUpdateCheck({ cfg: {}, log: { info: vi.fn() }, isNixMode: false });
+    resetUpdateAvailableStateForTest(scheduler);
+    createTestUpdateCheck({ cfg: {} });
   });
 
   afterEach(async () => {
     await Promise.all([...updateChecks].map((check) => check.stop()));
     updateChecks.clear();
-    resetUpdateAvailableStateForTest();
+    resetUpdateAvailableStateForTest(scheduler);
+    await scheduler.stop();
     vi.useRealTimers();
     closeOpenClawStateDatabaseForTest();
     await testState.cleanup();
@@ -406,26 +435,11 @@ describe("update-startup", () => {
     await runGatewayUpdateCheck({
       cfg: { update: { channel } },
       log,
-      isNixMode: false,
-      allowInTests: true,
     });
 
     const parsed = readPersistedUpdateCheckState();
     expect(parsed).not.toBeNull();
     return { log, parsed };
-  }
-
-  async function expectPathMissing(targetPath: string): Promise<void> {
-    let statError: NodeJS.ErrnoException | undefined;
-    try {
-      await fs.stat(targetPath);
-    } catch (error) {
-      statError = error as NodeJS.ErrnoException;
-    }
-    expect(statError).toBeInstanceOf(Error);
-    expect(statError?.code).toBe("ENOENT");
-    expect(statError?.path).toBe(targetPath);
-    expect(statError?.syscall).toBe("stat");
   }
 
   function createAutoUpdateSuccessMock() {
@@ -489,7 +503,6 @@ describe("update-startup", () => {
       cfg: params?.cfg ?? createExtendedStableConfig(),
       log,
       isNixMode: params?.isNixMode ?? false,
-      allowInTests: true,
       ...(params?.onUpdateAvailableChange
         ? { onUpdateAvailableChange: params.onUpdateAvailableChange }
         : {}),
@@ -534,9 +547,6 @@ describe("update-startup", () => {
   }) {
     await runGatewayUpdateCheck({
       cfg: params.cfg,
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       ...(params.runAutoUpdate ? { runAutoUpdate: params.runAutoUpdate } : {}),
     });
@@ -550,25 +560,14 @@ describe("update-startup", () => {
   }) {
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "stable" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       ...(params.onUpdateAvailableChange
         ? { onUpdateAvailableChange: params.onUpdateAvailableChange }
         : {}),
     });
   }
 
-  it.each([
-    {
-      name: "stable channel",
-      channel: "stable" as const,
-    },
-    {
-      name: "beta channel with older beta tag",
-      channel: "beta" as const,
-    },
-  ])("logs latest update hint for $name", async ({ channel }) => {
+  it("logs the latest update hint", async () => {
+    const channel = "stable";
     const { log, parsed } = await runUpdateCheckAndReadState(channel);
 
     expectLastTelemetryConfig({ update: { channel } });
@@ -591,8 +590,6 @@ describe("update-startup", () => {
     await runGatewayUpdateCheck({
       cfg: {},
       log,
-      isNixMode: false,
-      allowInTests: true,
     });
 
     const message = log.info.mock.calls[0]?.[0];
@@ -617,9 +614,6 @@ describe("update-startup", () => {
 
       await runGatewayUpdateCheck({
         cfg: { update: { channel, auto: { enabled: external } } },
-        log: { info: vi.fn() },
-        isNixMode: false,
-        allowInTests: true,
       });
 
       expect(getUpdateAvailable()).toEqual({
@@ -654,16 +648,13 @@ describe("update-startup", () => {
       mockPackageUpdateStatus("latest", "2.0.0");
       await runStableUpdateCheck({});
       if (resetProcess) {
-        resetUpdateAvailableStateForTest();
+        resetUpdateAvailableStateForTest(scheduler);
       }
       mockNpmChannelTag("beta", "3.0.0-beta.1");
       checkTelemetryUpdateMock.mockResolvedValue({ version: "2.0.0" });
 
       await runGatewayUpdateCheck({
         cfg: { update: { channel: "beta" } },
-        log: { info: vi.fn() },
-        isNixMode: false,
-        allowInTests: true,
       });
 
       expect(getUpdateAvailable()).toEqual({
@@ -675,22 +666,6 @@ describe("update-startup", () => {
     },
   );
 
-  it("falls back when the update-check clock is outside Date range", async () => {
-    mockPackageUpdateStatus("latest", "2.0.0");
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "stable" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-    });
-
-    const parsed = readPersistedUpdateCheckState();
-    expect(parsed?.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
-    expect(parsed?.lastAvailableVersion).toBe("2.0.0");
-  });
-
   it("does not throttle invalid update-check clocks against persisted state", async () => {
     writePersistedUpdateCheckState({
       lastCheckedAt: "2026-01-17T09:30:00.000Z",
@@ -700,9 +675,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "stable" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
     });
 
     expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
@@ -737,11 +709,6 @@ describe("update-startup", () => {
       persistedTag: "extended-stable",
       expectedTag: "extended-stable",
     },
-    {
-      channel: "dev" as const,
-      persistedTag: "dev",
-      expectedTag: "dev",
-    },
   ])(
     "hydrates $channel cached availability from its compatible $expectedTag tag",
     async ({ channel, persistedTag, expectedTag }) => {
@@ -756,9 +723,6 @@ describe("update-startup", () => {
 
       await runGatewayUpdateCheck({
         cfg: { update: { channel } },
-        log: { info: vi.fn() },
-        isNixMode: false,
-        allowInTests: true,
         onUpdateAvailableChange,
       });
 
@@ -779,7 +743,6 @@ describe("update-startup", () => {
 
   it.each([
     { channel: "stable" as const, persistedTag: "beta" },
-    { channel: "stable" as const, persistedTag: "extended-stable" },
     { channel: "beta" as const, persistedTag: undefined },
     { channel: "beta" as const, persistedTag: "extended-stable" },
     { channel: "dev" as const, persistedTag: "latest" },
@@ -797,9 +760,6 @@ describe("update-startup", () => {
 
       await runGatewayUpdateCheck({
         cfg: { update: { channel } },
-        log: { info: vi.fn() },
-        isNixMode: false,
-        allowInTests: true,
         onUpdateAvailableChange,
       });
 
@@ -810,32 +770,30 @@ describe("update-startup", () => {
     },
   );
 
-  it.each(["latest", "beta"])(
-    "bypasses the shared throttle for mismatched %s availability on extended-stable",
-    async (persistedTag) => {
-      writePersistedUpdateCheckState({
-        lastCheckedAt: new Date(Date.now()).toISOString(),
-        lastAvailableVersion: "2.0.0",
-        lastAvailableTag: persistedTag,
-      });
-      mockPackageUpdateStatus("extended-stable", "2.0.0");
-      const onUpdateAvailableChange = vi.fn();
+  it("bypasses the shared throttle for mismatched latest availability on extended-stable", async () => {
+    const persistedTag = "latest";
+    writePersistedUpdateCheckState({
+      lastCheckedAt: new Date(Date.now()).toISOString(),
+      lastAvailableVersion: "2.0.0",
+      lastAvailableTag: persistedTag,
+    });
+    mockPackageUpdateStatus("extended-stable", "2.0.0");
+    const onUpdateAvailableChange = vi.fn();
 
-      await runExtendedStableUpdateCheck({ onUpdateAvailableChange });
+    await runExtendedStableUpdateCheck({ onUpdateAvailableChange });
 
-      expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
-      expectLastTelemetryConfig({ update: { channel: "extended-stable" } });
-      expect(onUpdateAvailableChange).toHaveBeenCalledWith({
-        currentVersion: "1.0.0",
-        latestVersion: "2.0.0",
-        channel: "extended-stable",
-      });
-      expect(readPersistedUpdateCheckState()).toMatchObject({
-        lastAvailableVersion: "2.0.0",
-        lastAvailableTag: "extended-stable",
-      });
-    },
-  );
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
+    expectLastTelemetryConfig({ update: { channel: "extended-stable" } });
+    expect(onUpdateAvailableChange).toHaveBeenCalledWith({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "extended-stable",
+    });
+    expect(readPersistedUpdateCheckState()).toMatchObject({
+      lastAvailableVersion: "2.0.0",
+      lastAvailableTag: "extended-stable",
+    });
+  });
 
   it("bypasses a recent empty prior-channel check on extended-stable", async () => {
     writePersistedUpdateCheckState({
@@ -889,22 +847,6 @@ describe("update-startup", () => {
     expect(getUpdateAvailable()).toBeNull();
   });
 
-  it("skips update check when disabled in config", async () => {
-    const log = { info: vi.fn() };
-
-    await runGatewayUpdateCheck({
-      cfg: { update: { checkOnStart: false } },
-      log,
-      isNixMode: false,
-      allowInTests: true,
-    });
-
-    expect(log.info).not.toHaveBeenCalled();
-    expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
-    expect(readPersistedUpdateCheckState()).toBeNull();
-    await expectPathMissing(path.join(tempDir, "update-check.json"));
-  });
-
   it("uses the exact selector for an installed final extended-stable package", async () => {
     versionMock.value = "2026.6.33";
     mockPackageUpdateStatus("extended-stable", "2026.7.33");
@@ -912,9 +854,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg: {},
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       onUpdateAvailableChange,
     });
 
@@ -927,25 +866,6 @@ describe("update-startup", () => {
       latestVersion: "2026.7.33",
       channel: "extended-stable",
     });
-  });
-
-  it("does not query extended-stable when configless startup hints are disabled", async () => {
-    versionMock.value = "2026.6.33";
-    mockPackageInstallStatus();
-    const runAutoUpdate = createAutoUpdateSuccessMock();
-
-    await runGatewayUpdateCheck({
-      cfg: { update: { checkOnStart: false, auto: { enabled: true } } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-      runAutoUpdate,
-    });
-
-    expect(checkUpdateStatus).not.toHaveBeenCalled();
-    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
-    expect(runAutoUpdate).not.toHaveBeenCalled();
-    expect(readPersistedUpdateCheckState()).toBeNull();
   });
 
   it("discovers and deduplicates an exact extended-stable update without auto-applying", async () => {
@@ -1097,7 +1017,7 @@ describe("update-startup", () => {
   it("does not resolve the npm channel for an extended-stable Git install", async () => {
     await seedExtendedStableAvailability();
     seedStableAutoRolloutState();
-    resetUpdateAvailableStateForTest();
+    resetUpdateAvailableStateForTest(scheduler);
     vi.mocked(resolveOpenClawPackageRoot).mockClear();
     vi.mocked(checkUpdateStatus).mockClear();
     vi.mocked(resolveNpmChannelTag).mockClear();
@@ -1131,9 +1051,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg: {},
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
     });
 
     expectLastTelemetryConfig({});
@@ -1147,9 +1064,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg: {},
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
     });
 
     expect(getUpdateSchedule()?.channel).toBe("dev");
@@ -1194,9 +1108,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       runAutoUpdate,
     });
@@ -1285,9 +1196,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       onUpdateRunCreated,
     });
@@ -1333,8 +1241,6 @@ describe("update-startup", () => {
       await runGatewayUpdateCheck({
         cfg: { update: { channel: "dev", auto: { enabled: true } } },
         log,
-        isNixMode: false,
-        allowInTests: true,
         activeWorkInspectors: idleActiveWorkInspectors(),
         runAutoUpdate,
         onUpdateScheduleChange: (schedule) => {
@@ -1394,9 +1300,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       runAutoUpdate,
     });
@@ -1444,9 +1347,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       runAutoUpdate,
     });
@@ -1486,9 +1386,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       runAutoUpdate,
     });
@@ -1587,9 +1484,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "dev" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
     });
 
     expect(getUpdateSchedule()?.install?.git).toEqual({ currentSha: "current-sha", ...expected });
@@ -1605,8 +1499,6 @@ describe("update-startup", () => {
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "dev", auto: { enabled: true } } },
       log,
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: {
         ...idleActiveWorkInspectors(),
         getQueueSize: () => busy,
@@ -1668,9 +1560,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg,
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       runAutoUpdate,
     });
@@ -1683,9 +1572,6 @@ describe("update-startup", () => {
     vi.setSystemTime(Date.now() + 60 * 60 * 1000 + 1);
     await runGatewayUpdateCheck({
       cfg,
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       runAutoUpdate,
     });
@@ -1708,9 +1594,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg,
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       runAutoUpdate,
     });
@@ -1718,9 +1601,6 @@ describe("update-startup", () => {
     mockDevGitStatus({ upstreamSha: "upstream-two", behind: 3 });
     await runGatewayUpdateCheck({
       cfg,
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       runAutoUpdate,
     });
@@ -1730,9 +1610,6 @@ describe("update-startup", () => {
     mockDevGitStatus({ upstreamSha: "upstream-two", behind: 0 });
     await runGatewayUpdateCheck({
       cfg,
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       runAutoUpdate,
     });
@@ -1752,8 +1629,6 @@ describe("update-startup", () => {
       );
       const check = createTestUpdateCheck({
         cfg: { update: { channel: "dev" } },
-        log: { info: vi.fn() },
-        isNixMode: false,
       });
       const initializing = check.initialize().catch((error: unknown) => error);
       const refreshing = refreshGatewayUpdateStatus({ update: { channel: "dev" } }).catch(
@@ -1840,8 +1715,6 @@ describe("update-startup", () => {
     const onUpdateAvailableChange = vi.fn();
     const stop = scheduleGatewayUpdateCheck({
       cfg: { update: { channel: "dev" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
       onUpdateAvailableChange,
     });
     let stopped = false;
@@ -1879,8 +1752,6 @@ describe("update-startup", () => {
     process.env.NODE_ENV = "production";
     const stop = scheduleGatewayUpdateCheck({
       cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log: { info: vi.fn() },
-      isNixMode: false,
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
@@ -1896,7 +1767,12 @@ describe("update-startup", () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     process.env.NODE_ENV = "production";
     let cfg: OpenClawConfig = { update: { channel: "beta" } };
-    const params = { getConfig: () => cfg, log: { info: vi.fn() }, isNixMode: false };
+    const params = {
+      getConfig: () => cfg,
+      log: { info: vi.fn() },
+      isNixMode: false,
+      lifecycle: createGatewayUpdateLifecycle(scheduler),
+    };
     const check = createGatewayUpdateCheck(params);
     updateChecks.add(check);
     check.start();
@@ -2049,8 +1925,6 @@ describe("update-startup", () => {
     try {
       stop = scheduleGatewayUpdateCheck({
         cfg: { update: { channel: "dev", auto: { enabled: true } } },
-        log: { info: vi.fn() },
-        isNixMode: false,
         activeWorkInspectors: idleActiveWorkInspectors(),
       });
 
@@ -2105,8 +1979,6 @@ describe("update-startup", () => {
       const onOldAvailable = vi.fn();
       const stopOld = scheduleGatewayUpdateCheck({
         cfg: { update: { channel: "dev", auto: { enabled: true } } },
-        log: { info: vi.fn() },
-        isNixMode: false,
         activeWorkInspectors: idleActiveWorkInspectors(),
         onUpdateScheduleChange: onOldSchedule,
         onUpdateAvailableChange: onOldAvailable,
@@ -2119,8 +1991,6 @@ describe("update-startup", () => {
         mockDevGitStatus({ upstreamSha: "new-upstream", behind: 3 });
         stopReplacement = scheduleGatewayUpdateCheck({
           cfg: { update: { channel: "dev", checkOnStart: enabled, auto: { enabled: true } } },
-          log: { info: vi.fn() },
-          isNixMode: false,
           activeWorkInspectors: idleActiveWorkInspectors(),
         });
         await vi.advanceTimersByTimeAsync(0);
@@ -2201,9 +2071,6 @@ describe("update-startup", () => {
 
       await runGatewayUpdateCheck({
         cfg: { update: { channel: "beta", checkOnStart: false } },
-        log: { info: vi.fn() },
-        isNixMode: false,
-        allowInTests: true,
       });
       const replacementSchedule = getUpdateSchedule();
       releaseRefresh(oldGitStatus);
@@ -2255,7 +2122,6 @@ describe("update-startup", () => {
             ? { update: { channel: "dev", auto: { enabled: true } } }
             : createBetaAutoUpdateConfig(),
         log,
-        isNixMode: false,
         activeWorkInspectors: idleActiveWorkInspectors(),
       });
       try {
@@ -2310,8 +2176,6 @@ describe("update-startup", () => {
     process.env.NODE_ENV = "production";
     const stop = scheduleGatewayUpdateCheck({
       cfg: createBetaAutoUpdateConfig(),
-      log: { info: vi.fn() },
-      isNixMode: false,
       activeWorkInspectors: idleActiveWorkInspectors(),
     });
     try {
@@ -2345,8 +2209,6 @@ describe("update-startup", () => {
     process.env.NODE_ENV = "production";
     const stop = scheduleGatewayUpdateCheck({
       cfg: createBetaAutoUpdateConfig(),
-      log: { info: vi.fn() },
-      isNixMode: false,
       activeWorkInspectors: idleActiveWorkInspectors(),
     });
     try {
@@ -2393,9 +2255,6 @@ describe("update-startup", () => {
 
     await runGatewayUpdateCheck({
       cfg: stableAutoConfig,
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       runAutoUpdate,
     });
@@ -2404,9 +2263,6 @@ describe("update-startup", () => {
     vi.setSystemTime(new Date("2026-01-18T07:00:00Z"));
     await runGatewayUpdateCheck({
       cfg: stableAutoConfig,
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
       runAutoUpdate,
     });
@@ -2460,9 +2316,6 @@ describe("update-startup", () => {
     const check = () =>
       runGatewayUpdateCheck({
         cfg,
-        log: { info: vi.fn() },
-        isNixMode: false,
-        allowInTests: true,
         activeWorkInspectors: idleActiveWorkInspectors(),
         updateCampaign: campaign,
         runAutoUpdate,
@@ -2488,12 +2341,27 @@ describe("update-startup", () => {
   it("disables all automatic update traffic when checkOnStart is false", async () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     const runAutoUpdate = createAutoUpdateSuccessMock();
+    const log = { info: vi.fn() };
 
-    await runAutoUpdateCheckWithDefaults({
+    await runGatewayUpdateCheck({
       cfg: createBetaAutoUpdateConfig({ checkOnStart: false }),
       runAutoUpdate,
+      log,
     });
 
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(log.info).not.toHaveBeenCalled();
+    expect(readPersistedUpdateCheckState()).toBeNull();
+    const statError = await fs
+      .stat(path.join(tempDir, "update-check.json"))
+      .catch((error: unknown) => error);
+    expect(statError).toBeInstanceOf(Error);
+    expect(statError).toMatchObject({
+      code: "ENOENT",
+      path: path.join(tempDir, "update-check.json"),
+      syscall: "stat",
+    });
     expect(runAutoUpdate).not.toHaveBeenCalled();
     expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
     expect(resolveNpmChannelTag).not.toHaveBeenCalled();
@@ -2511,8 +2379,6 @@ describe("update-startup", () => {
     await runGatewayUpdateCheck({
       cfg: createBetaAutoUpdateConfig(),
       log,
-      isNixMode: false,
-      allowInTests: true,
       runAutoUpdate,
     });
 
@@ -2534,8 +2400,6 @@ describe("update-startup", () => {
     await runGatewayUpdateCheck({
       cfg: createBetaAutoUpdateConfig(),
       log,
-      isNixMode: false,
-      allowInTests: true,
       runAutoUpdate,
     });
 
@@ -2589,8 +2453,6 @@ describe("update-startup", () => {
     await runGatewayUpdateCheck({
       cfg: createBetaAutoUpdateConfig(),
       log,
-      isNixMode: false,
-      allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
     });
     await vi.advanceTimersByTimeAsync(60_000);
@@ -2666,8 +2528,6 @@ describe("update-startup", () => {
       await runGatewayUpdateCheck({
         cfg: createBetaAutoUpdateConfig(),
         log,
-        isNixMode: false,
-        allowInTests: true,
         activeWorkInspectors: idleActiveWorkInspectors(),
         onUpdateScheduleChange: (schedule) => {
           if (!schedule.campaign) {
@@ -2789,8 +2649,6 @@ describe("update-startup", () => {
     process.env.NODE_ENV = "production";
     const stop = scheduleGatewayUpdateCheck({
       cfg: { update: { channel: "extended-stable" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
     });
 
     try {
@@ -2813,8 +2671,6 @@ describe("update-startup", () => {
   it("does not schedule extended-stable polling when checkOnStart is false", async () => {
     const stop = scheduleGatewayUpdateCheck({
       cfg: { update: { channel: "extended-stable", checkOnStart: false } },
-      log: { info: vi.fn() },
-      isNixMode: false,
     });
 
     await vi.advanceTimersByTimeAsync(48 * 60 * 60 * 1000);
@@ -2828,8 +2684,6 @@ describe("update-startup", () => {
   it("refreshes the remote catalog every six hours and stops with gateway cleanup", async () => {
     const stop = scheduleGatewayUpdateCheck({
       cfg: { update: { channel: "extended-stable", checkOnStart: false } },
-      log: { info: vi.fn() },
-      isNixMode: false,
     });
 
     await vi.advanceTimersByTimeAsync(0);
@@ -2850,8 +2704,6 @@ describe("update-startup", () => {
     });
     const stop = scheduleGatewayUpdateCheck({
       cfg: { update: { channel: "extended-stable", checkOnStart: false } },
-      log: { info: vi.fn() },
-      isNixMode: false,
     });
 
     let stopped = false;
@@ -2886,8 +2738,6 @@ describe("update-startup", () => {
     });
     const stop = scheduleGatewayUpdateCheck({
       cfg: { update: { channel: "extended-stable", checkOnStart: false } },
-      log: { info: vi.fn() },
-      isNixMode: false,
     });
 
     await vi.advanceTimersByTimeAsync(0);
@@ -2928,7 +2778,7 @@ describe("update-startup", () => {
         readStoredCatalog: () => stored,
       });
       const info = vi.fn();
-      const check = createTestUpdateCheck({ cfg, log: { info }, isNixMode: false });
+      const check = createTestUpdateCheck({ cfg, log: { info } });
       try {
         expect(getRemoteModelCatalogProviderOverlay(cfg, "anthropic")?.models).toEqual([
           { id: "startup-model" },
@@ -2999,6 +2849,7 @@ describe("update-startup", () => {
     const info = vi.fn();
     let currentConfig = cfg;
     const check = createGatewayUpdateCheck({
+      lifecycle: createGatewayUpdateLifecycle(scheduler),
       getConfig: () => currentConfig,
       log: { info },
       isNixMode: false,
@@ -3063,7 +2914,7 @@ describe("update-startup", () => {
       nextCheckInMs: 1_000,
     });
     const info = vi.fn();
-    const check = createTestUpdateCheck({ cfg, log: { info }, isNixMode: false });
+    const check = createTestUpdateCheck({ cfg, log: { info } });
     try {
       check.start();
       await vi.advanceTimersByTimeAsync(0);

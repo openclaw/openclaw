@@ -5,6 +5,7 @@ import path from "node:path";
 import { configureFsSafeNative } from "@openclaw/fs-safe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { root } from "../../infra/fs-safe.js";
+import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import {
   bindWorkspaceSkillUsage,
   consumeRunSkillUsage,
@@ -20,6 +21,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { normalizeToolParameters } from "../agent-tools.schema.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { listCoreToolSections } from "../tool-catalog.js";
 import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
@@ -82,7 +84,7 @@ afterEach(async () => {
 });
 
 describe("skill_workshop tool", () => {
-  it("describes action selection and pending-proposal discovery in its schema", () => {
+  it("describes and routes personal library and Workshop proposal actions", async () => {
     const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
     const schema = JSON.stringify(tool.parameters);
     const lazyDescription = listCoreToolSections()
@@ -110,6 +112,77 @@ describe("skill_workshop tool", () => {
     expect(schema).not.toContain("action fails if content or support files changed");
     expect(tool.description).toContain(lazyDescription);
     expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
+
+    const invoke = vi.fn<SkillLibraryAuthoringCapability["invoke"]>(async () => ({
+      entries: [],
+      profileId: null,
+      multipleProfiles: false,
+      defaultTarget: "workspace",
+      canManageWorkspace: true,
+      defaultSelectionLimit: 20,
+    }));
+    const combined = normalizeToolParameters(
+      createSkillWorkshopTool({
+        workspaceDir: testState.workspaceDir,
+        libraryAuthoring: {
+          target: "personal",
+          defaultTarget: "workspace",
+          multipleProfiles: false,
+          bind: vi.fn(),
+          invoke,
+        },
+      }),
+      { modelProvider: "openai" },
+    );
+    for (const [input, message] of [
+      [{ action: "list", target: "personal", limit: 50 }, /personal.*limit/s],
+      [
+        { action: "prepare_patch", target: "personal", skill_name: "ordinary" },
+        /personal.*action/s,
+      ],
+      [
+        { action: "read", target: "personal", skill_id: "private-input-sentinel".repeat(3) },
+        /skill_id.*36 characters/s,
+      ],
+      [
+        {
+          action: "create",
+          target: "personal",
+          files: [
+            { path: "references/example.txt", content: "private-input-sentinel".repeat(1600) },
+          ],
+        },
+        /files\/0\/content.*32768 characters/s,
+      ],
+      [
+        { action: "list", target: "personal", query: "private-input-sentinel" },
+        /unsupported fields "query"/,
+      ],
+    ] as const) {
+      const failure = await combined.execute("invalid", input).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ message: expect.stringMatching(message) });
+      expect(String(failure)).not.toContain("private-input-sentinel");
+    }
+    expect(invoke).not.toHaveBeenCalled();
+    expect(await combined.execute("workshop-list", { action: "list", limit: 50 })).toMatchObject({
+      details: { proposals: [] },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+    const personal = await combined.execute("personal-list", {
+      action: "list",
+      target: "personal",
+    });
+    expect(
+      JSON.parse(personal.content.find((block) => block.type === "text")!.text!),
+    ).toMatchObject({ entries: [] });
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: "list" }));
+    expect(combined.description).toContain("Omit target");
+    expect(combined.description).toContain("skill_id");
+    expect(combined.description).toContain("expected_revision");
+    expect(combined.description).toContain("limit maximum 50, default 20");
+    expect(combined.description).toContain("read/prepare_patch/patch/update use skill_name");
+    expect(combined.description).toContain("inspect/revise use proposal_id or name");
+    expect(combined.description).toContain("update needs complete proposal_content");
   });
 
   it("evaluates an exact pending draft and exposes the persisted result", async () => {

@@ -382,11 +382,11 @@ describe("AppSidebar interleaved zone", () => {
 
   it("writes reordered entries after a route drop", async () => {
     const { sidebar } = await mountZone();
-    sidebar.sidebarEntries = ["route:usage", "route:plugins", "route:tasks"];
+    sidebar.sidebarEntries = ["route:usage", "route:plugins", "route:cron"];
     const onUpdate = vi.fn();
     sidebar.onUpdateSidebarEntries = onUpdate;
     await sidebar.updateComplete;
-    const source = zoneEntry(sidebar, "route:tasks");
+    const source = zoneEntry(sidebar, "route:cron");
     const target = zoneEntry(sidebar, "route:usage");
     vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
       top: 10,
@@ -398,7 +398,7 @@ describe("AppSidebar interleaved zone", () => {
     dispatchDragEvent(target, "dragover", dataTransfer, 11);
     dispatchDragEvent(target, "drop", dataTransfer, 11);
 
-    expect(onUpdate).toHaveBeenCalledWith(["route:tasks", "route:usage", "route:plugins"]);
+    expect(onUpdate).toHaveBeenCalledWith(["route:cron", "route:usage", "route:plugins"]);
   });
 
   it("pins and inserts a session dropped from Threads", async () => {

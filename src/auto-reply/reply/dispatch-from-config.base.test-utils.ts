@@ -7,6 +7,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   interruptSessionWorkAdmissions,
@@ -554,24 +555,15 @@ describe("dispatchReplyFromConfig", () => {
       OriginatingTo: "channel:C123",
     });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      _opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => ({ text: "hi" }) satisfies ReplyPayload;
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
-      | [
-          {
-            originatingAccountId?: unknown;
-            shouldRouteToOriginating?: unknown;
-          },
-          unknown,
-        ]
-      | undefined;
+    const replyDispatchCall = firstMockCall(
+      hookMocks.runner.runReplyDispatch,
+      "reply dispatch",
+    ) as [PluginHookReplyDispatchEvent, unknown];
     expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(false);
     expect(replyDispatchCall?.[0]?.originatingAccountId).toBe("work");
   });
@@ -2009,24 +2001,11 @@ describe("dispatchReplyFromConfig", () => {
       OriginatingTo: "telegram:999",
     });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      _opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => ({ text: "hi" }) satisfies ReplyPayload;
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | {
-          accountId?: unknown;
-          channel?: unknown;
-          groupId?: unknown;
-          isGroup?: unknown;
-          threadId?: unknown;
-          to?: unknown;
-        }
-      | undefined;
+    const routeCall = firstRouteReplyCall();
     expect(routeCall?.channel).toBe("telegram");
     expect(routeCall?.to).toBe("telegram:999");
     expect(routeCall?.accountId).toBe("acc-1");
@@ -2060,9 +2039,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | { accountId?: unknown; channel?: unknown; to?: unknown }
-      | undefined;
+    const routeCall = firstRouteReplyCall();
     expect(routeCall?.channel).toBe("telegram");
     expect(routeCall?.to).toBe("telegram:999");
     expect(routeCall?.accountId).toBe("acc-1");
@@ -2070,18 +2047,10 @@ describe("dispatchReplyFromConfig", () => {
       .calls[0]?.[0] as { accountId?: unknown; messageProvider?: unknown } | undefined;
     expect(normalizerOptions?.messageProvider).toBe("telegram");
     expect(normalizerOptions?.accountId).toBe("acc-1");
-    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
-      | [
-          {
-            originatingAccountId?: unknown;
-            originatingChannel?: unknown;
-            originatingThreadId?: unknown;
-            originatingTo?: unknown;
-            shouldRouteToOriginating?: unknown;
-          },
-          unknown,
-        ]
-      | undefined;
+    const replyDispatchCall = firstMockCall(
+      hookMocks.runner.runReplyDispatch,
+      "reply dispatch",
+    ) as [PluginHookReplyDispatchEvent, unknown];
     expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(true);
     expect(replyDispatchCall?.[0]?.originatingChannel).toBe("telegram");
     expect(replyDispatchCall?.[0]?.originatingTo).toBe("telegram:999");
@@ -2130,15 +2099,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | {
-          accountId?: unknown;
-          channel?: unknown;
-          replyDelivery?: unknown;
-          threadId?: unknown;
-          to?: unknown;
-        }
-      | undefined;
+    const routeCall = firstRouteReplyCall();
     expect(routeCall?.channel).toBe("feishu");
     expect(routeCall?.to).toBe("user:ou_123");
     expect(routeCall?.accountId).toBe("work");
@@ -2147,19 +2108,10 @@ describe("dispatchReplyFromConfig", () => {
       chatType: "channel",
       replyToMode: "all",
     });
-    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
-      | [
-          {
-            originatingAccountId?: unknown;
-            originatingChannel?: unknown;
-            originatingChatType?: unknown;
-            originatingThreadId?: unknown;
-            originatingTo?: unknown;
-            shouldRouteToOriginating?: unknown;
-          },
-          unknown,
-        ]
-      | undefined;
+    const replyDispatchCall = firstMockCall(
+      hookMocks.runner.runReplyDispatch,
+      "reply dispatch",
+    ) as [PluginHookReplyDispatchEvent, unknown];
     expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(true);
     expect(replyDispatchCall?.[0]?.originatingChannel).toBe("feishu");
     expect(replyDispatchCall?.[0]?.originatingTo).toBe("user:ou_123");
@@ -2191,9 +2143,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | { accountId?: unknown; channel?: unknown; to?: unknown }
-      | undefined;
+    const routeCall = firstRouteReplyCall();
     expect(routeCall?.channel).toBe("discord");
     expect(routeCall?.to).toBe("channel:123");
     expect(routeCall?.accountId).toBe("default");

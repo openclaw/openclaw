@@ -18,18 +18,8 @@ function outputParentHelpWithoutStartupBanner(parent: Command): void {
 }
 
 /**
- * Wire a parent command so that invoking it without a subcommand prints the
- * parent's own help and exits with status `0`.
- *
- * Commander's default behavior for a parent with subcommands is to print help
- * and set `process.exitCode = 1`, which differs from `<parent> --help` (which
- * exits 0). That asymmetry breaks shell `&&` chains and surfaces a misleading
- * `ELIFECYCLE Command failed with exit code 1.` line for users running through
- * pnpm. See #73077.
- *
- * Apply this helper only to parent commands that do not have their own default
- * action. Commander does not expose a public "has action handler" API, so
- * callers keep that ownership explicit instead of probing private internals.
+ * Bare parent help exits successfully instead of Commander's default status 1 (#73077).
+ * Apply only to parents without a default action; Commander has no public action-handler probe.
  */
 export function applyParentDefaultHelpAction(parent: Command): void {
   parentDefaultHelpCommands.add(parent);

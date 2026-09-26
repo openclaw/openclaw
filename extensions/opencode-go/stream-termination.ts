@@ -63,123 +63,38 @@ function isProviderProgressEvent(event: AssistantMessageEvent): boolean {
 const STALLED_STREAM_ERROR_MESSAGE =
   "opencode-go stream timed out after provider-owned SSE boundary stalled";
 
-function buildStalledErrorEvent(
+function buildStreamErrorEvent(
   partial: AssistantMessage | undefined,
   model: Parameters<ProviderStreamFn>[0],
-): AssistantMessageEvent {
-  if (partial) {
-    return {
-      type: "error",
-      reason: "error",
-      error: {
-        ...partial,
-        stopReason: "error",
-        errorMessage: STALLED_STREAM_ERROR_MESSAGE,
-      },
-    };
-  }
-  return {
-    type: "error",
-    reason: "error",
-    error: synthesizeMinimalAssistantMessage(STALLED_STREAM_ERROR_MESSAGE, "error", model),
-  };
-}
-
-function buildUnterminatedErrorEvent(
-  partial: AssistantMessage | undefined,
-  model: Parameters<ProviderStreamFn>[0],
-): AssistantMessageEvent {
-  if (partial) {
-    return {
-      type: "error",
-      reason: "error",
-      error: {
-        ...partial,
-        stopReason: "error",
-        errorMessage: "opencode-go stream ended without a terminal event",
-      },
-    };
-  }
-  return {
-    type: "error",
-    reason: "error",
-    error: synthesizeMinimalAssistantMessage(
-      "opencode-go stream ended without a terminal event",
-      "error",
-      model,
-    ),
-  };
-}
-
-function buildCaughtErrorEvent(
-  partial: AssistantMessage | undefined,
-  error: unknown,
-  model: Parameters<ProviderStreamFn>[0],
-): AssistantMessageEvent {
-  const message = error instanceof Error ? error.message : String(error);
-  if (partial) {
-    return {
-      type: "error",
-      reason: "error",
-      error: {
-        ...partial,
-        stopReason: "error",
-        errorMessage: message,
-      },
-    };
-  }
-  return {
-    type: "error",
-    reason: "error",
-    error: synthesizeMinimalAssistantMessage(message, "error", model),
-  };
-}
-
-function synthesizeMinimalAssistantMessage(
   errorMessage: string,
-  stopReason: AssistantMessage["stopReason"],
-  model: Parameters<ProviderStreamFn>[0],
-): AssistantMessage {
+): AssistantMessageEvent {
   return {
-    role: "assistant",
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    type: "error",
+    reason: "error",
+    error: {
+      ...(partial ?? {
+        role: "assistant",
+        content: [],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        timestamp: Date.now(),
+      }),
+      stopReason: "error",
+      errorMessage,
     },
-    stopReason,
-    errorMessage,
-    timestamp: Date.now(),
   };
 }
 
-/**
- * Wraps an opencode-go provider stream function so that an SSE socket that
- * fails to deliver a first event or stops producing progress is aborted at the
- * provider-owned raw boundary via the injected AbortSignal, instead of waiting
- * for the much later shared runtime stuck-session recovery.
- *
- * Behavior:
- * - Provider-scoped: only applies when `model.provider === options.provider`.
- * - Idle-based: the timer covers stream creation, first event delivery, and
- *   every gap after provider progress begins; if no event arrives within
- *   `idleTimeoutMs`, the wrapper calls `controller.abort()` on the AbortSignal
- *   injected into the underlying call (so the OpenAI SDK request is genuinely
- *   interrupted, not just the iterator) and pushes a terminal `error` event
- *   downstream.
- * - Terminal-safe: when the underlying stream emits `done` or `error`, the
- *   wrapper forwards the event, clears all timers, and ends the stream.
- *
- * The wrapper never shortens the natural end of a normal completion, because
- * provider progress refreshes the idle timer and a terminal event cancels it entirely.
- */
+// Abort at the provider-owned SSE boundary; the shared recovery watchdog fires later.
 export function createOpencodeGoStalledStreamWrapper(
   underlying: ProviderStreamFn,
   options: OpencodeGoStalledStreamWrapperOptions,
@@ -227,10 +142,6 @@ export function createOpencodeGoStalledStreamWrapper(
       }
     };
 
-    const cleanup = () => {
-      clearIdleTimer();
-    };
-
     const releaseBaseStream = () => {
       if (baseIterator?.return) {
         void Promise.resolve(baseIterator.return()).catch(() => undefined);
@@ -242,11 +153,9 @@ export function createOpencodeGoStalledStreamWrapper(
         return;
       }
       settled = true;
-      cleanup();
+      clearIdleTimer();
       output.push(event);
-      output.end(
-        event.type === "done" ? (event as { message: AssistantMessage }).message : undefined,
-      );
+      output.end(event.type === "done" ? event.message : undefined);
     };
 
     const abortStalledStream = () => {
@@ -257,7 +166,7 @@ export function createOpencodeGoStalledStreamWrapper(
       clearIdleTimer();
       controller.abort(new Error("opencode-go stream stalled"));
       releaseBaseStream();
-      output.push(buildStalledErrorEvent(lastSeenPartial, model));
+      output.push(buildStreamErrorEvent(lastSeenPartial, model, STALLED_STREAM_ERROR_MESSAGE));
       output.end();
     };
 
@@ -266,10 +175,6 @@ export function createOpencodeGoStalledStreamWrapper(
       idleTimer = setTimeout(abortStalledStream, timeoutMs);
       idleTimer.unref?.();
     };
-
-    const armFirstEventTimer = () => armTimer(firstEventTimeoutMs);
-
-    const armIdleTimer = () => armTimer(idleTimeoutMs);
 
     const trackPartial = (event: AssistantMessageEvent) => {
       const partial =
@@ -287,12 +192,12 @@ export function createOpencodeGoStalledStreamWrapper(
       }
     };
 
-    armFirstEventTimer();
+    armTimer(firstEventTimeoutMs);
     let baseStreamResult: ReturnType<ProviderStreamFn>;
     try {
       baseStreamResult = underlying(model, context, wrappedOptions);
     } catch (error) {
-      cleanup();
+      clearIdleTimer();
       throw error;
     }
 
@@ -312,7 +217,13 @@ export function createOpencodeGoStalledStreamWrapper(
             return;
           }
           if (result.done) {
-            finishWith(buildUnterminatedErrorEvent(lastSeenPartial, model));
+            finishWith(
+              buildStreamErrorEvent(
+                lastSeenPartial,
+                model,
+                "opencode-go stream ended without a terminal event",
+              ),
+            );
             return;
           }
           const event = result.value;
@@ -324,15 +235,21 @@ export function createOpencodeGoStalledStreamWrapper(
           trackPartial(event);
           output.push(event);
           if (isProviderProgressEvent(event)) {
-            armIdleTimer();
+            armTimer(idleTimeoutMs);
           }
         }
       } catch (error) {
         if (!settled) {
-          finishWith(buildCaughtErrorEvent(lastSeenPartial, error, model));
+          finishWith(
+            buildStreamErrorEvent(
+              lastSeenPartial,
+              model,
+              error instanceof Error ? error.message : String(error),
+            ),
+          );
         }
       } finally {
-        cleanup();
+        clearIdleTimer();
       }
     })();
 

@@ -48,8 +48,10 @@ export function resolveCliStartupPolicy(params: {
     skipConfigGuard:
       nativeCheck ||
       configGuard === "skip" ||
+      configGuard === "defer" ||
       (configGuard === "when-suppressed" && suppressDoctorStdout),
-    ...(configGuard === "validate" ? { validateConfigOnly: true } : {}),
+    // Deferred actions own full preparation; early routing/proxy reads need only core config.
+    ...(configGuard === "validate" || configGuard === "defer" ? { validateConfigOnly: true } : {}),
     loadPlugins:
       !nativeCheck &&
       shouldLoadPlugins({

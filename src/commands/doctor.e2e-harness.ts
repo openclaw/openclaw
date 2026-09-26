@@ -538,7 +538,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
 vi.mock("../runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
   return {
-    ExitError: actual.ExitError,
+    ...actual,
     defaultRuntime: {
       log: () => {},
       error: () => {},

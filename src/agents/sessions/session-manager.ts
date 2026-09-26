@@ -38,6 +38,7 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import type { AppendPersistenceOptions, FileEntry, SessionEntry } from "./session-manager-types.js";
 import type {
   SessionManagerBoundedContext,
@@ -86,6 +87,26 @@ export class SessionManager extends SessionManagerBranching {
   ) {
     super(cwd, persistenceTarget, loadedEntries, boundedContext, transcriptMutationAt, version);
     this.retainTranscriptWriter();
+  }
+
+  async [sessionManagerReadInitialContext]() {
+    if (!this.persistenceTarget || !this.boundedContextLimits || this.pendingDeliberateAppend) {
+      return this.buildSessionContext();
+    }
+    // A deliberate local branch owns its view; a concurrent selection must not
+    // install the database's different active path into the same writer.
+    const initial = this.captureTranscriptView();
+    const context = await SessionManager.openModelContextAsync(this.persistenceTarget, {
+      cwd: this.cwd,
+      limits: this.boundedContextLimits,
+    });
+    const current = this.captureTranscriptView();
+    if (
+      Object.keys(initial).some((key) => Reflect.get(initial, key) !== Reflect.get(current, key))
+    ) {
+      throw new Error("Session manager changed during initial context read");
+    }
+    return context.buildSessionContext();
   }
 
   /** Makes pending append-oriented persistence durable without rewriting committed entries. */

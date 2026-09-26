@@ -26,6 +26,14 @@ import type { UpdateRunResult } from "./update-runner-types.js";
 import { formatUpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };
+
+const IN_PROGRESS_REPORT_PREFIX = "⬆️ OpenClaw update in progress: ";
+
+/** Recognizes pending projections written by this renderer, including shipped reports. */
+export function isUpdateRunReportInProgress(markdown: string): boolean {
+  return markdown.startsWith(IN_PROGRESS_REPORT_PREFIX);
+}
+
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type ReportInput = Pick<
   UpdateRunRecord,
@@ -269,7 +277,7 @@ export function renderUpdateRunReport(
       headline = `↩️ OpenClaw update rolled back to ${after ?? running ?? before ?? "the previous version"}: ${reason}.`;
       break;
     case "running":
-      headline = `⬆️ OpenClaw update in progress: ${run.phase}.`;
+      headline = `${IN_PROGRESS_REPORT_PREFIX}${run.phase}.`;
       break;
   }
   headline = bounded(headline, 500);
@@ -293,8 +301,21 @@ export function renderUpdateRunReport(
     }
   }
   for (const step of run.steps) {
+    if (run.status === "running" && step.status === "in_progress" && step.detail) {
+      lines.push(
+        `Waiting: ${step.step}${step.startedAtMs !== undefined ? ` (started ${new Date(step.startedAtMs).toISOString()})` : ""} — ${step.detail}`,
+      );
+    }
     if (step.snapshotCapacity) {
       lines.push(formatUpdateSnapshotCapacity(step.snapshotCapacity));
+    }
+    if (
+      step.detail &&
+      (step.step.startsWith("diagnostic:database snapshot") ||
+        step.step.startsWith("diagnostic:database migration writes") ||
+        step.step.startsWith("diagnostic:database rollback"))
+    ) {
+      lines.push(step.detail);
     }
     if (step.configWriteRefusal) {
       lines.push(formatUpdateDoctorConfigWriteRefusal(step.configWriteRefusal));

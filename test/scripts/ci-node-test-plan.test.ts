@@ -74,6 +74,7 @@ import {
   isGatewayServerTestFile,
 } from "../vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "../vitest/vitest.gateway-server.config.ts";
+import { createGatewayVitestConfig } from "../vitest/vitest.gateway.config.ts";
 import { createInfraVitestConfig } from "../vitest/vitest.infra.config.ts";
 import { createLoggingVitestConfig } from "../vitest/vitest.logging.config.ts";
 import { createMediaUnderstandingVitestConfig } from "../vitest/vitest.media-understanding.config.ts";
@@ -2306,6 +2307,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   it("bundles split shards with deterministic unique identities and unchanged coverage", () => {
     const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
     const bundled = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
+    expect(
+      bundled.some((shard) => {
+        if (!shard.shardName.startsWith("bundle-")) {
+          return false;
+        }
+        const patterns = new Set(shard.includePatterns);
+        return (
+          base.filter((owner) => owner.includePatterns?.some((pattern) => patterns.has(pattern)))
+            .length > 1
+        );
+      }),
+    ).toBe(true);
     const gatewayOwner = expectDefined(
       base.find((shard) => shard.shardName === "agentic-gateway-server-isolated"),
       "full Gateway owner",
@@ -2324,20 +2337,21 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(stripe.timeoutMinutes).toBe(gatewayOwner.timeoutMinutes);
       expect(stripe.planConcurrency).toBe(gatewayOwner.planConcurrency);
     }
+    const gatewayPatterns = [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles];
     const basePatterns = base
-      .flatMap(
-        (shard) =>
-          shard.includePatterns ??
-          (shard === gatewayOwner
-            ? [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles]
-            : []),
-      )
+      .flatMap((shard) => shard.includePatterns ?? (shard === gatewayOwner ? gatewayPatterns : []))
       .toSorted((a, b) => a.localeCompare(b));
     const bundledPatterns = bundled
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
 
-    expect(bundled.length - gatewayStripes.length).toBeLessThan(base.length - 1);
+    const outputBundles = bundled.filter((shard) => shard.shardName.startsWith("bundle-"));
+    const bundledConfigs = new Set(outputBundles.flatMap((shard) => shard.configs));
+    // Required 64-file splits can offset bundling savings in the total owner count.
+    const inputChunks = base
+      .filter((shard) => shard.configs.every((config) => bundledConfigs.has(config)))
+      .reduce((count, shard) => count + Math.ceil((shard.includePatterns?.length ?? 0) / 64), 0);
+    expect(outputBundles.length).toBeLessThan(inputChunks);
     expect(new Set(bundled.map((shard) => shard.checkName)).size).toBe(bundled.length);
     expect(bundledPatterns).toEqual(basePatterns);
     expect(
@@ -2540,6 +2554,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(commandRuntimeGroup.env?.OPENCLAW_VITEST_MAX_WORKERS).toBeUndefined();
     expect(commandRuntimeGroup.fallbackMaxWorkers).toBe(2);
     expect(commandRuntimeGroup.includePatterns?.toSorted()).toEqual([
+      "src/commands/doctor-agent-database-order.process.test.ts",
       "src/commands/doctor-config-flow.legacy-composition.test.ts",
       "src/commands/doctor-config-preflight.process.test.ts",
       "src/commands/doctor-config-preflight.refusal.process.test.ts",
@@ -4228,6 +4243,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   it("preserves runtime preparation and core-only ownership in full and compact plans", () => {
     const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
     const doctorRuntimeTargets = [
+      "src/commands/doctor-agent-database-order.process.test.ts",
       "src/commands/doctor-config-flow.legacy-composition.test.ts",
       "src/commands/doctor-config-preflight.process.test.ts",
       "src/commands/doctor-config-preflight.refusal.process.test.ts",
@@ -4637,6 +4653,21 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       if (owner === "agentic-cli" && runnerBackend !== "github") {
         expect(plan.map((job) => job.runner)).toEqual([EXTRA_LARGE_NODE_TEST_RUNNER]);
       }
+      if (owner === "agentic-gateway-core-2") {
+        const changed = expectDefined(
+          createChangedNodeTestShards([target], { runnerBackend }),
+          "changed Gateway client plan",
+        );
+        expect(changed.flatMap((job) => job.targets ?? [])).not.toContain(target);
+        const changedOwner = expectDefined(
+          changed.find((job) =>
+            job.groups?.some((group) => group.includePatterns?.includes(target)),
+          ),
+          "changed Gateway client process owner",
+        );
+        expect(changedOwner.groups).toEqual(groups);
+        expect(changedOwner.planConcurrency).toBe(1);
+      }
     },
   );
 
@@ -4718,7 +4749,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     timings: Record<string, number>;
     fileSeconds: (file: string) => number;
     options: {
-      compactMode: "pull-request";
+      compactMode: "push" | "pull-request";
       runnerBackend: string;
       includeReleaseOnlyPluginShards: false;
       compactNodeJobCap?: number;
@@ -4765,6 +4796,51 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       vi.resetModules();
     }
   }
+
+  it.each(["push", "pull-request"] as const)(
+    "exchanges hosted anchors before opening another %s job",
+    async (compactMode) => {
+      const anchors = [126, 105, 63, 42, 42, 42].map((seconds, index) => ({
+        name: `exchange-anchor-${index}`,
+        seconds,
+      }));
+      const shards = anchors.map(({ name }) => ({
+        config: `test/vitest/vitest.${name}.config.ts`,
+        name,
+        projects: [`test/vitest/vitest.${name}.config.ts`],
+      }));
+      const plan = await createToolingFixturePlan({
+        files: [],
+        shards,
+        timings: Object.fromEntries(anchors.map(({ name, seconds }) => [name, seconds])),
+        fileSeconds: () => 0,
+        options: {
+          compactMode,
+          runnerBackend: "github",
+          includeReleaseOnlyPluginShards: false,
+          compactNodeJobCap: 2,
+        },
+      });
+      expect(plan).toHaveLength(2);
+      expect(
+        plan
+          .flatMap((job) => job.groups)
+          .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name)),
+      ).toEqual(
+        shards.map(({ name, projects }) => ({
+          shard_name: name,
+          configs: projects,
+          requiresDist: false,
+          runner: BUNDLED_NODE_TEST_RUNNER,
+        })),
+      );
+      for (const job of plan) {
+        expect(job.predictedSeconds).toBe(210);
+        expect(job.planConcurrency).toBe(1);
+        expect(job.groups.length).toBeLessThanOrEqual(10);
+      }
+    },
+  );
 
   it.each([
     { profile: "blacksmith", expectedSeconds: 840, whaleSeconds: 200 },
@@ -5603,12 +5679,33 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         createWizardVitestConfig({}),
         createCommandsVitestConfig({}),
         createRuntimeConfigVitestConfig({}),
+        createGatewayVitestConfig({}),
+        createGatewayCoreVitestConfig({}),
+        createGatewayClientVitestConfig({}),
+        createGatewayMethodsVitestConfig({}),
+        createGatewayMethodsIsolatedVitestConfig({}),
+        createGatewayServerVitestConfig({}),
+        createGatewayServerIsolatedVitestConfig({}),
+        createGatewayDatabaseWorkersVitestConfig({}),
       ].flatMap(listMatchedTestFiles),
     );
     for (const file of databaseWorkerCoreTestFiles) {
       expect(admitted.has(file), file).toBe(true);
       expect(former.has(file), file).toBe(false);
     }
+    const gatewayWorkerFiles = databaseWorkerCoreTestFiles.filter((file) =>
+      file.startsWith("src/gateway/"),
+    );
+    const gatewayPlanFiles = defaultShards
+      .filter((shard) => shard.shardName.startsWith("agentic-gateway-core"))
+      .flatMap((shard) => shard.includePatterns ?? []);
+    expect(gatewayPlanFiles.filter((file) => gatewayWorkerFiles.includes(file))).toEqual([]);
+    const infraPlanFiles = defaultShards
+      .filter((shard) => shard.configs.includes("test/vitest/vitest.infra.config.ts"))
+      .flatMap((shard) => shard.includePatterns ?? []);
+    expect(infraPlanFiles.filter((file) => gatewayWorkerFiles.includes(file)).toSorted()).toEqual(
+      gatewayWorkerFiles.toSorted(),
+    );
     const recoveryTest = "src/wizard/setup.inference-recovery.integration.test.ts";
     expect(admitted.has(recoveryTest), recoveryTest).toBe(true);
     expect(former.has(recoveryTest), recoveryTest).toBe(false);
@@ -6899,88 +6996,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("splits auto-reply into balanced core/top-level and reply subtree shards", () => {
-    const shards = defaultShards;
-    const autoReplyShards = shards
-      .filter((shard) => shard.shardName.startsWith("auto-reply"))
-      .map((shard) => ({
-        checkName: shard.checkName,
-        configs: shard.configs,
-        requiresDist: shard.requiresDist,
-        shardName: shard.shardName,
-      }));
-
-    expect(autoReplyShards).toEqual([
-      {
-        checkName: "checks-node-auto-reply-core-top-level",
-        configs: [
-          "test/vitest/vitest.auto-reply-core.config.ts",
-          "test/vitest/vitest.auto-reply-top-level.config.ts",
-        ],
-        requiresDist: false,
-        shardName: "auto-reply-core-top-level",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-agent-runner",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-agent-runner",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-commands-1",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-commands-1",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-commands-2",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-commands-2",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-commands-3",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-commands-3",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-dispatch",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-dispatch",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-dispatch-core",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-dispatch-core",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-dispatch-delivery",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-dispatch-delivery",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-dispatch-lifecycle",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-dispatch-lifecycle",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-session",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-session",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-state-routing",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-state-routing",
-      },
-    ]);
+  it("preserves auto-reply project ownership when splitting shards", () => {
+    const expected = fullSuiteVitestShards
+      .filter((shard) => shard.name === "auto-reply")
+      .flatMap((shard) => shard.projects);
+    const actual = defaultShards
+      .filter((shard) => shard.shardName.startsWith("auto-reply-"))
+      .flatMap((shard) => shard.configs);
+    expect(new Set(actual)).toEqual(new Set(expected));
   });
 
   it("covers every auto-reply reply test exactly once across split shards", () => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Android release helper that builds signed release artifacts from the pinned
+ * Android release helper that builds signed release artifacts from the selected
  * version metadata, verifies signatures, and writes SHA-256 checksum files.
  */
 
@@ -19,9 +19,10 @@ import {
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  checkAndroidVersioning,
-  resolveAndroidVersion,
+  syncAndroidVersioning,
+  resolveAndroidBuildVersion,
 } from "../../../scripts/lib/android-version.ts";
+import { renderMobileReleaseNotes } from "../../../scripts/lib/mobile-release-notes.ts";
 
 type ReleaseArtifact = {
   flavorName: "play" | "wear" | "third-party";
@@ -393,8 +394,20 @@ function main() {
     return;
   }
 
-  checkAndroidVersioning({ rootDir });
-  const version = resolveAndroidVersion(rootDir);
+  const version = resolveAndroidBuildVersion(rootDir);
+  if (process.env.OPENCLAW_ANDROID_RELEASE_PLAN) {
+    for (const audience of ["phone", "wear"] as const) {
+      renderMobileReleaseNotes({
+        rootDir,
+        platform: "android",
+        version: version.canonicalVersion,
+        build: String(version.versionCode),
+        audience,
+      });
+    }
+  } else {
+    syncAndroidVersioning({ mode: "check", rootDir });
+  }
   const buildMetadata = resolveAndroidBuildMetadata();
   const artifacts = releaseArtifacts(version.canonicalVersion).filter(
     (artifact) => options.artifact === "all" || artifact.flavorName === options.artifact,
@@ -402,6 +415,7 @@ function main() {
 
   console.log(`Android versionName: ${version.canonicalVersion}`);
   console.log(`Android versionCode: ${version.versionCode}`);
+  console.log(`Android Wear versionCode: ${version.wearVersionCode}`);
   console.log(`Android build commit: ${buildMetadata.commit}`);
   console.log(`Android build timestamp: ${buildMetadata.timestamp}`);
   for (const artifact of artifacts) {
@@ -420,6 +434,9 @@ function main() {
     "./gradlew",
     [
       ...androidBuildMetadataGradleArgs(buildMetadata),
+      `-POPENCLAW_ANDROID_VERSION_NAME=${version.canonicalVersion}`,
+      `-POPENCLAW_ANDROID_VERSION_CODE=${version.versionCode}`,
+      `-POPENCLAW_ANDROID_WEAR_VERSION_CODE=${version.wearVersionCode}`,
       ...artifacts.map((artifact) => artifact.gradleTask),
     ],
     {

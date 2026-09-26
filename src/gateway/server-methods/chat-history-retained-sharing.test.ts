@@ -8,12 +8,61 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { chatHistoryHandlers, handleChatHistoryRequest } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
 import type { RespondFn } from "./types.js";
 
 describe("retained transcript sharing", () => {
+  it("uses committed sharing policy when publishing a retained task page", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "none" } },
+            },
+          },
+        },
+      };
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:retained-task-policy",
+        sessionId: "retained-task-policy",
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        visibility: "shared",
+      });
+      await appendTranscriptMessage(scope, {
+        message: { role: "assistant", content: "Retained task output" },
+      });
+      const context = await createHistoryReadContext({
+        getRuntimeConfig: () => cfg,
+        getCommittedRuntimeConfig: () => ({}),
+      });
+      const respond = vi.fn<RespondFn>();
+      await handleChatHistoryRequest({
+        method: "chat.history",
+        retainedTranscript: { sessionId: scope.sessionId, requireCurrentSession: true },
+        params: { sessionKey: scope.sessionKey },
+        client: null,
+        context,
+        respond,
+        req: { type: "req", id: "retained-task-policy", method: "chat.history" },
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining({
+          messages: [expect.objectContaining({ content: "Retained task output" })],
+        }),
+      );
+    });
+  });
+
   it.each(["chat.history", "chat.startup"] as const)(
     "%s requires current sharing authority for a retained transcript",
     async (method) => {

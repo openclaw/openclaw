@@ -19,7 +19,11 @@ import type {
   PluginApprovalRequest,
   PluginApprovalRequestPayload,
 } from "../../infra/plugin-approvals.js";
-import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalRequestPayload,
+  SystemAgentApprovalResolved,
+} from "../../infra/system-agent-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
@@ -104,6 +108,8 @@ export type PreparedSessionApprovalReplay = {
   replay: SessionApprovalReplay;
   /** Check in the response frame; a publication may race promise delivery. */
   isCurrent: () => boolean;
+  /** Retain publication fencing through the response, then release the replay scope. */
+  release: () => void;
 };
 
 /** Minimal hosted OpenClaw contract retained by the gateway request router. */
@@ -224,6 +230,8 @@ type GatewayKernelContext = {
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
   forwardExecApprovalRequest?: (request: ExecApprovalRequest) => Promise<boolean>;
+  forwardSystemAgentApprovalRequest?: (request: SystemAgentApprovalRequest) => Promise<boolean>;
+  forwardSystemAgentApprovalResolved?: (resolved: SystemAgentApprovalResolved) => Promise<void>;
   execApprovalIosPushDelivery?: {
     handleRequested?: (
       request: ExecApprovalRequest,
@@ -279,8 +287,7 @@ type GatewayKernelContext = {
   getHealthCache: () => HealthSummary | null;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
-  incrementPresenceVersion: () => number;
-  getHealthVersion: () => number;
+  publishPresence: () => void;
   /** Instance-local native approval subscribers; never derived from a network client. */
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;

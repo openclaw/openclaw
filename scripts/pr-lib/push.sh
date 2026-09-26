@@ -385,6 +385,20 @@ push_prep_head_to_pr_branch() {
   fi
   local replaced_hosted_ancestry
   replaced_hosted_ancestry=$(classify_replaced_hosted_ancestry "$pushed_from_sha" "$prep_head_sha") || return 1
+  if [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ]; then
+    verify_correction_review_snapshot "$PREP_PUBLICATION_PR" "$PREP_PUBLICATION_REVIEW_SNAPSHOT" || return 1
+  fi
+
+  # A verified retry retains its original publication lease. Another operation
+  # may own the selected receipt, so replace this file if it records an older pair.
+  if [ "$remote_sha" = "$prep_head_sha" ] && { [ -e "$result_env_path" ] || [ -L "$result_env_path" ]; }; then
+    local PUSH_PREP_HEAD_SHA="" PUSH_LOCAL_PREP_HEAD_SHA="" PUSHED_FROM_SHA=""
+    local PUSH_REPLACED_HOSTED_ANCESTRY="" PR_HEAD_SHA_AFTER_PUSH=""
+    read_prep_publication_result "$result_env_path" || return 1
+    if [ "$PUSH_PREP_HEAD_SHA" = "$prep_head_sha" ] && [ "$PUSH_LOCAL_PREP_HEAD_SHA" = "$local_prep_head_sha" ]; then
+      return 0
+    fi
+  fi
 
   # merge-verify owns relevance-aware mainline drift checks. Requiring every
   # prepared head to contain main here forces needless rebases, while GraphQL

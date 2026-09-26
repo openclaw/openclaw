@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorSequenceResult,
@@ -22,6 +23,7 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
+import { collectFeishuWebhookNotes } from "./webhook-route.js";
 
 const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
@@ -106,19 +108,11 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
 }
 
 function existsDir(dir: string): boolean {
-  try {
-    return fs.statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
+  return safeStatSync(dir)?.isDirectory() ?? false;
 }
 
 function existsFile(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
+  return safeStatSync(filePath)?.isFile() ?? false;
 }
 
 function resolveFeishuAgentSessionsDir(agentId: string): string {
@@ -438,10 +432,8 @@ function inspectSessionTranscript(params: {
   storePath: string;
   transcriptPath: string;
 }): FeishuDoctorFinding | null {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(params.transcriptPath);
-  } catch {
+  const stat = safeStatSync(params.transcriptPath);
+  if (!stat) {
     return null;
   }
   if (!stat.isFile()) {
@@ -895,28 +887,22 @@ function formatRepairChange(report: FeishuDoctorRepairReport): string {
   ].join("\n");
 }
 
-function hasConfiguredFeishuChannel(cfg: OpenClawConfig): boolean {
-  return Boolean(cfg.channels?.feishu);
-}
-
 async function runFeishuDoctorSequence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
 }): Promise<ChannelDoctorSequenceResult> {
-  if (!hasConfiguredFeishuChannel(params.cfg)) {
-    return { changeNotes: [], warningNotes: [] };
-  }
-
-  const inspection = inspectFeishuDoctorState({ cfg: params.cfg, env: params.env });
-  if (inspection.findings.length === 0) {
-    return { changeNotes: [], warningNotes: [] };
+  const notes = collectFeishuWebhookNotes(params);
+  const inspection = params.cfg.channels?.feishu ? inspectFeishuDoctorState(params) : undefined;
+  if (!inspection || inspection.findings.length === 0) {
+    return { changeNotes: [], ...notes };
   }
 
   if (!params.shouldRepair) {
     return {
       changeNotes: [],
-      warningNotes: [formatPreviewWarning(inspection)],
+      ...notes,
+      warningNotes: [...notes.warningNotes, formatPreviewWarning(inspection)],
     };
   }
 
@@ -927,14 +913,14 @@ async function runFeishuDoctorSequence(params: {
   });
   return {
     changeNotes: [formatRepairChange(report)],
-    warningNotes: report.warnings,
+    ...notes,
+    warningNotes: [...notes.warningNotes, ...report.warnings],
   };
 }
 
 export const feishuDoctor: ChannelDoctorAdapter = {
   legacyConfigRules,
   normalizeCompatibilityConfig,
-  runConfigSequence: async ({ cfg, env, shouldRepair }) =>
-    await runFeishuDoctorSequence({ cfg, env, shouldRepair }),
+  runConfigSequence: runFeishuDoctorSequence,
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

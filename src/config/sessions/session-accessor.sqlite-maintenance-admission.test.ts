@@ -1,4 +1,3 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { expect, test, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -73,12 +72,11 @@ vi.mock("./session-accessor.sqlite-reclamation-commit.js", async (importOriginal
     _gate: SharedArrayBuffer,
     _database: unknown,
     assertCurrent: () => void,
-    run: (authorize: () => unknown[]) => Promise<T>,
+    run: (authorize: () => void) => Promise<T>,
   ) =>
     await run(() => {
       assertCurrent();
       storage.committed = true;
-      return [];
     }),
 }));
 vi.mock("./session-accessor.sqlite-reclamation-worker.js", async () => {
@@ -99,31 +97,32 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async () => {
   };
 });
 
-test("maintenance finalization retains FIFO across preliminary admission without inverting archive ownership", async () => {
+test("maintenance preparation yields to foreground writes and retains commit admission through publication", async () => {
   storage.committed = false;
   storage.release.mockClear();
+  const preparation = createDeferredCore();
   const validationGap = createDeferredCore();
+  const commitGap = createDeferredCore();
   const archiveEntered = createDeferredCore();
   const releaseArchive = createDeferredCore();
   const admissions: number[] = [];
   const order: string[] = [];
   const worker = new Worker(
     `const { parentPort } = require("node:worker_threads");
-     let released = false;
-     let continueRequested = false;
      parentPort.on("message", (message) => {
        if (message.type === "start") {
+         parentPort.postMessage({ type: "preparation" });
+       } else if (message.type === "prepare") {
          parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 1 });
        } else if (message.type === "continue") {
-         continueRequested = true;
-         if (released) parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 2 });
+         parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 2 });
        } else if (message.type === "admission" && message.admissionId === 1) {
          parentPort.postMessage({ type: "admission-release", operationId: 1, admissionId: 1 });
          parentPort.postMessage({ type: "validation-gap" });
-         released = true;
-         if (continueRequested) parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 2 });
        } else if (message.type === "admission" && message.admissionId === 2) {
          parentPort.postMessage({ type: "commit-request", operationId: 1 });
+         parentPort.postMessage({ type: "commit-gap" });
+       } else if (message.type === "settle") {
          parentPort.postMessage({ type: "reclaimed", operationId: 1, settled: true,
            result: { kind: "maintenance-finalize", value: {
              archivedTranscripts: [], changedEntries: [], committedEntries: [] } } });
@@ -133,8 +132,12 @@ test("maintenance finalization retains FIFO across preliminary admission without
     { eval: true, execArgv: [] },
   );
   worker.on("message", (message) => {
-    if (message.type === "validation-gap") {
+    if (message.type === "preparation") {
+      preparation.resolve();
+    } else if (message.type === "validation-gap") {
       validationGap.resolve();
+    } else if (message.type === "commit-gap") {
+      commitGap.resolve();
     }
   });
   storage.run.mockImplementation((params) =>
@@ -157,6 +160,7 @@ test("maintenance finalization retains FIFO across preliminary admission without
   await archiveEntered.promise;
   const finalization = runSqliteSessionReclamation({
     forceInProcess: false,
+    onWorkerResult: () => order.push("published"),
     plan: {
       kind: "maintenance-finalize",
       agentId: "main",
@@ -166,26 +170,43 @@ test("maintenance finalization retains FIFO across preliminary admission without
     },
   });
   let precedingWriter: Promise<void> | undefined;
+  let preparationWriter: Promise<void> | undefined;
+  let validationWriter: Promise<void> | undefined;
   let laterWriter: Promise<void> | undefined;
   let laterObservedCommit = false;
   try {
-    await nextTurn();
     // A preceding archive request can still acquire this store's writer.
-    let precedingWriterRan = false;
     precedingWriter = runExclusiveSqliteSessionWrite(
       options,
       async () => {
-        precedingWriterRan = true;
         order.push("preceding-writer");
       },
       "session-entry.patch",
     );
-    await nextTurn();
-    expect(precedingWriterRan).toBe(true);
     await precedingWriter;
     releaseArchive.resolve();
     await earlierArchive;
+    await preparation.promise;
+    preparationWriter = runExclusiveSqliteSessionWrite(
+      options,
+      async () => {
+        order.push("preparation-writer");
+      },
+      "session-entry.patch",
+    );
+    worker.postMessage({ type: "prepare" }, []);
     await validationGap.promise;
+    expect(order).toEqual(["preceding-writer", "preparation-writer"]);
+    validationWriter = runExclusiveSqliteSessionWrite(
+      options,
+      async () => {
+        order.push("validation-writer");
+      },
+      "session-entry.patch",
+    );
+    worker.postMessage({ type: "continue" }, []);
+    await commitGap.promise;
+    expect(order).toEqual(["preceding-writer", "preparation-writer", "validation-writer"]);
     laterWriter = runExclusiveSqliteSessionWrite(
       options,
       async () => {
@@ -194,19 +215,30 @@ test("maintenance finalization retains FIFO across preliminary admission without
       },
       "session-entry.patch",
     );
-    await nextTurn();
-    expect(order).toEqual(["preceding-writer"]);
-    worker.postMessage({ type: "continue" }, []);
+    worker.postMessage({ type: "settle" }, []);
     await expect(finalization).resolves.toMatchObject({ kind: "maintenance-finalize" });
-    await laterWriter;
+    await Promise.all([preparationWriter, validationWriter, laterWriter]);
     expect(admissions).toEqual([1, 2]);
     expect(laterObservedCommit).toBe(true);
-    expect(order).toEqual(["preceding-writer", "later-writer"]);
+    expect(order).toEqual([
+      "preceding-writer",
+      "preparation-writer",
+      "validation-writer",
+      "published",
+      "later-writer",
+    ]);
     expect(storage.release).toHaveBeenCalledOnce();
   } finally {
     releaseArchive.resolve();
-    worker.postMessage({ type: "continue" }, []);
-    await Promise.allSettled([earlierArchive, precedingWriter, finalization, laterWriter]);
+    worker.postMessage({ type: "settle" }, []);
+    await Promise.allSettled([
+      earlierArchive,
+      precedingWriter,
+      preparationWriter,
+      validationWriter,
+      finalization,
+      laterWriter,
+    ]);
     await worker.terminate();
   }
 });

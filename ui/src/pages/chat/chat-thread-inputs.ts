@@ -51,9 +51,6 @@ export function placeChatInputs(
   activeInputKey?: string;
 } {
   const orderedQueue = (props.queue ?? []).toSorted(compareChatQueueOrder);
-  const activeSubmission = currentRunId
-    ? orderedQueue.find((queued) => queued.sendRunId === currentRunId)
-    : undefined;
   const { queue, pendingInputs } = selectChatInputDisplay(
     history,
     orderedQueue,
@@ -92,12 +89,8 @@ export function placeChatInputs(
     markSearchVisibility(input.message, inputItems);
     if (input.state === "queued") {
       blocks.push({ items: inputItems, runId: input.runId });
-      // Acceptance replaces the local bubble, not its presentation floor.
-      if (
-        activeSubmission?.sendRunId &&
-        input.runId === activeSubmission.sendRunId &&
-        !hiddenKeys.has(first.key)
-      ) {
+      // The active run owns this floor even when a fresh client has no local send.
+      if (currentRunId && input.runId === currentRunId && !hiddenKeys.has(first.key)) {
         activeInputKey = first.key;
       }
       continue;

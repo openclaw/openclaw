@@ -30,8 +30,6 @@ final class NotifyOverlayController {
         self.dismissTask?.cancel()
         self.model.title = title
         self.model.body = body
-        self.ensureWindow()
-        self.hostingView?.rootView = NotifyOverlayView(controller: self)
         self.presentWindow()
 
         if autoDismissAfter > 0 {
@@ -72,7 +70,7 @@ final class NotifyOverlayController {
             isFirstPresent: isFirst,
             target: target)
         { window in
-            self.updateWindowFrame(animate: true)
+            OverlayPanelFactory.applyFrame(window: self.window, target: self.targetFrame(), animate: true)
             window.orderFrontRegardless()
         }
     }
@@ -98,10 +96,6 @@ final class NotifyOverlayController {
         let visible = screen.visibleFrame
         let origin = CGPoint(x: visible.maxX - size.width - 8, y: visible.maxY - size.height - 8)
         return NSRect(origin: origin, size: size)
-    }
-
-    private func updateWindowFrame(animate: Bool = false) {
-        OverlayPanelFactory.applyFrame(window: self.window, target: self.targetFrame(), animate: animate)
     }
 
     private func measuredHeight() -> CGFloat {

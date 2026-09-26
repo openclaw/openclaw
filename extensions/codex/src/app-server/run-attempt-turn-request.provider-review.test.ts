@@ -43,7 +43,9 @@ vi.mock("./run-attempt-lifecycle.js", () => ({
   emitCodexAppServerEvent: vi.fn(),
   withCodexAppServerFastModeServiceTier: (value: unknown) => value,
 }));
-vi.mock("./run-attempt-state.js", () => ({ joinPresentSections: () => "developer instructions" }));
+vi.mock("./developer-instruction-sections.js", () => ({
+  joinPresentSections: () => "developer instructions",
+}));
 vi.mock("./thread-lifecycle.js", () => ({
   buildTurnStartParams: (_params: unknown, options: { threadId: string; promptText: string }) => ({
     threadId: options.threadId,

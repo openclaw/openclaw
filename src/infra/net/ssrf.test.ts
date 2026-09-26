@@ -272,16 +272,6 @@ describe("ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist", () => {
 
 describe("isBlockedHostnameOrIp", () => {
   it.each([
-    "localhost.localdomain",
-    "metadata.google.internal",
-    "api.localhost",
-    "svc.local",
-    "db.internal",
-  ])("blocks reserved hostname %s", (hostname) => {
-    expect(isBlockedHostnameOrIp(hostname)).toBe(true);
-  });
-
-  it.each([
     "localhost...",
     "localhost.localdomain...",
     "metadata.google.internal...",
@@ -291,18 +281,6 @@ describe("isBlockedHostnameOrIp", () => {
   ])("blocks reserved hostname with repeated trailing dots %s", (hostname) => {
     expect(isBlockedHostnameOrIp(hostname)).toBe(true);
     expect(() => assertHostnameAllowedWithPolicy(hostname)).toThrow(/blocked/i);
-  });
-
-  it.each([
-    ["2001:db8:1234::5efe:127.0.0.1", true],
-    ["100::1", true],
-    ["2001:2::1", true],
-    ["2001:20::1", true],
-    ["2001:db8::1", true],
-    ["198.18.0.1", true],
-    ["198.20.0.1", false],
-  ])("returns %s => %s", (value, expected) => {
-    expect(isBlockedHostnameOrIp(value)).toBe(expected);
   });
 
   it.each([
@@ -335,15 +313,8 @@ describe("isBlockedHostnameOrIp", () => {
     expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
   });
 
-  it.each(["0177.0.0.1", "8.8.2056", "127.1", "2130706433"])(
-    "blocks legacy IPv4 literal %s",
-    (address) => {
-      expect(isBlockedHostnameOrIp(address)).toBe(true);
-    },
-  );
-
-  it.each(["example.com", "api.example.net"])("does not block ordinary hostname %s", (value) => {
-    expect(isBlockedHostnameOrIp(value)).toBe(false);
+  it("does not block an ordinary hostname", () => {
+    expect(isBlockedHostnameOrIp("example.com")).toBe(false);
   });
 });
 

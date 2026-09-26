@@ -40,7 +40,7 @@ export type PersonDay = {
   reviewComments: number;
   discordMessages: number;
 };
-export type RunPeriod = { period: Period; key: string };
+type RunPeriod = { period: Period; key: string };
 export type ReportRun = {
   id: string;
   kind: "closed-day" | "intraday" | "manual";

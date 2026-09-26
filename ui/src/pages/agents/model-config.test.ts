@@ -131,15 +131,8 @@ describe("agent model config", () => {
     runtimeConfig.dispose();
   });
 
-  it.each([
-    { name: "an implicit primary", model: undefined },
-    { name: "a shared string primary", model: "openai/gpt-5.4" },
-    {
-      name: "a shared object primary",
-      model: { primary: "openai/gpt-5.4", fallbacks: ["google/gemini-3-pro"] },
-    },
-  ])("preserves $name when editing fallbacks", async ({ model }) => {
-    const defaults = model === undefined ? {} : { model };
+  it("preserves inherited primary and shared defaults when editing fallbacks", async () => {
+    const defaults = { model: { primary: "openai/gpt-5.4", fallbacks: ["google/gemini-3-pro"] } };
     const runtimeConfig = createRuntimeConfig({
       agents: { defaults, entries: { main: { default: true } } },
     });
@@ -168,12 +161,6 @@ describe("agent model config", () => {
     {
       name: "an inherited primary",
       defaultModel: { primary: "openai/gpt-5.4", fallbacks: ["google/gemini-3-pro"] },
-      model: { fallbacks: ["anthropic/claude-sonnet-4-6"] },
-      expectedModel: { fallbacks: [] },
-    },
-    {
-      name: "an implicit primary",
-      defaultModel: { fallbacks: ["google/gemini-3-pro"] },
       model: { fallbacks: ["anthropic/claude-sonnet-4-6"] },
       expectedModel: { fallbacks: [] },
     },

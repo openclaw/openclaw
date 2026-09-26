@@ -83,6 +83,10 @@ runtime when they only need plugin-owned static descriptors.
 
 ## Verification
 
+- A change to session-creation publication ownership or restart-delivery custody
+  must prove the public `sessions.create` path in an isolated Gateway with an
+  explicit non-main session, followed by a post-publication read or turn.
+  Direct creation-helper tests alone do not establish this composition.
 - Benchmark the affected Gateway test file before/after with
   `pnpm test <file>`.
 - Run `pnpm build` when changing Gateway lazy-loading or bundled plugin

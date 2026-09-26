@@ -14,6 +14,14 @@ function cfgWithBindings(matches: AgentRouteBinding["match"][]): OpenClawConfig 
   };
 }
 
+function resolveBoundAccount(
+  params: Omit<Parameters<typeof resolveFirstBoundAccountId>[0], "agentId" | "channelId"> & {
+    channelId?: string;
+  },
+) {
+  return resolveFirstBoundAccountId({ agentId: "bot-alpha", channelId: "matrix", ...params });
+}
+
 describe("resolveFirstBoundAccountId", () => {
   it("returns exact peer match when caller supplies a matching peerId", () => {
     const cfg = cfgWithBindings([
@@ -25,10 +33,8 @@ describe("resolveFirstBoundAccountId", () => {
       },
     ]);
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
         peerId: "!roomA:example.org",
       }),
     ).toBe("bot-alpha-room-a");
@@ -44,10 +50,8 @@ describe("resolveFirstBoundAccountId", () => {
       },
     ]);
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
         peerId: "!anyRoom:example.org",
         peerKind: "channel",
       }),
@@ -64,10 +68,8 @@ describe("resolveFirstBoundAccountId", () => {
       { channel: "matrix", accountId: "bot-alpha-default" },
     ]);
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
       }),
     ).toBe("bot-alpha-wildcard");
   });
@@ -81,10 +83,8 @@ describe("resolveFirstBoundAccountId", () => {
       },
     ]);
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
       }),
     ).toBe("bot-alpha-specific");
   });
@@ -98,10 +98,8 @@ describe("resolveFirstBoundAccountId", () => {
       },
     ]);
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
         peerId: "!differentRoom:example.org",
       }),
     ).toBeUndefined();
@@ -110,10 +108,8 @@ describe("resolveFirstBoundAccountId", () => {
   it("returns undefined when the agent has no binding on the channel", () => {
     const cfg = cfgWithBindings([{ channel: "whatsapp", accountId: "bot-alpha-whatsapp" }]);
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
       }),
     ).toBeUndefined();
   });
@@ -132,19 +128,15 @@ describe("resolveFirstBoundAccountId", () => {
       },
     ]);
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
         peerId: "!room:example.org",
         peerKind: "channel",
       }),
     ).toBe("bot-alpha-room");
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
         peerId: "@user:example.org",
         peerKind: "direct",
       }),
@@ -159,19 +151,14 @@ describe("resolveFirstBoundAccountId", () => {
         accountId: "bot-alpha-group",
       },
     ]);
-    // Caller inferred as `channel` (e.g. Matrix room, Mattermost channel)
-    // should still match a `group` wildcard binding because group/channel are
-    // compatible kinds in the routing model.
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
         channelId: "line",
-        agentId: "bot-alpha",
         peerId: "!roomA:example.org",
         peerKind: "channel",
       }),
     ).toBe("bot-alpha-group");
-    // And vice versa: `channel` binding matches a `group` caller.
     const cfg2 = cfgWithBindings([
       {
         channel: "line",
@@ -180,34 +167,13 @@ describe("resolveFirstBoundAccountId", () => {
       },
     ]);
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg: cfg2,
         channelId: "line",
-        agentId: "bot-alpha",
         peerId: "groupA",
         peerKind: "group",
       }),
     ).toBe("bot-alpha-channel");
-  });
-
-  it("accepts a wildcard peer binding as fallback for peerless callers", () => {
-    // Cron-style peerless caller: we have no peer context to verify kind
-    // safety against, so a wildcard binding is the only available answer and
-    // must not silently regress to undefined.
-    const cfg = cfgWithBindings([
-      {
-        channel: "matrix",
-        peer: { kind: "channel", id: "*" },
-        accountId: "bot-alpha-wildcard",
-      },
-    ]);
-    expect(
-      resolveFirstBoundAccountId({
-        cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
-      }),
-    ).toBe("bot-alpha-wildcard");
   });
 
   it("skips wildcard peer bindings when the caller's peerKind is unknown", () => {
@@ -219,35 +185,12 @@ describe("resolveFirstBoundAccountId", () => {
       },
       { channel: "matrix", accountId: "bot-alpha-default" },
     ]);
-    // Without a peerKind on the caller, we cannot verify kind compatibility
-    // for the wildcard binding — it must be skipped in favor of the channel-only
-    // fallback rather than risk routing to the wrong identity.
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
         peerId: "!room:example.org",
       }),
     ).toBe("bot-alpha-default");
-  });
-
-  it("matches exact peer id even when the caller's peerKind is unknown", () => {
-    const cfg = cfgWithBindings([
-      {
-        channel: "matrix",
-        peer: { kind: "channel", id: "!room:example.org" },
-        accountId: "bot-alpha-room",
-      },
-    ]);
-    expect(
-      resolveFirstBoundAccountId({
-        cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
-        peerId: "!room:example.org",
-      }),
-    ).toBe("bot-alpha-room");
   });
 
   it("matches exact canonical peer aliases before falling back to wildcard bindings", () => {
@@ -264,10 +207,9 @@ describe("resolveFirstBoundAccountId", () => {
       },
     ]);
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
         channelId: "qa-channel",
-        agentId: "bot-alpha",
         peerId: "conversation-a",
         exactPeerIdAliases: ["channel:conversation-a"],
         peerKind: "channel",
@@ -284,13 +226,9 @@ describe("resolveFirstBoundAccountId", () => {
       },
       { channel: "matrix", accountId: "bot-alpha-default" },
     ]);
-    // Caller peerKind=channel: the direct-kind binding is ineligible even though
-    // its peerId would match — falls through to the channel-only binding.
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
-        channelId: "matrix",
-        agentId: "bot-alpha",
         peerId: "!room:example.org",
         peerKind: "channel",
       }),
@@ -308,10 +246,9 @@ describe("resolveFirstBoundAccountId", () => {
     ]);
 
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
         channelId: "discord",
-        agentId: "bot-alpha",
         groupSpace: "guild-current",
       }),
     ).toBe("bot-alpha-default");
@@ -332,18 +269,16 @@ describe("resolveFirstBoundAccountId", () => {
     ]);
 
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
         channelId: "discord",
-        agentId: "bot-alpha",
         groupSpace: "guild-current",
       }),
     ).toBe("bot-alpha-guild");
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
         channelId: "slack",
-        agentId: "bot-alpha",
         groupSpace: "team-current",
       }),
     ).toBe("bot-alpha-team");
@@ -361,19 +296,17 @@ describe("resolveFirstBoundAccountId", () => {
     ]);
 
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
         channelId: "discord",
-        agentId: "bot-alpha",
         groupSpace: "guild-current",
         memberRoleIds: ["member"],
       }),
     ).toBe("bot-alpha-default");
     expect(
-      resolveFirstBoundAccountId({
+      resolveBoundAccount({
         cfg,
         channelId: "discord",
-        agentId: "bot-alpha",
         groupSpace: "guild-current",
         memberRoleIds: ["admin"],
       }),

@@ -212,7 +212,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     const createAdmission = admission.createSqliteWorkerOperationAdmission;
     const admissionSpy = vi
       .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback) =>
+      .mockImplementation((callback, attachment) =>
         createAdmission((request, grant) => {
           callback(request, () => {
             const granted = grant();
@@ -221,7 +221,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
             }
             return granted;
           });
-        }),
+        }, attachment),
       );
     const execSpy = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
       const normalized = sql.trim().toUpperCase();

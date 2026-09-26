@@ -115,17 +115,9 @@ public enum TalkConfigParsing {
         supportedLocaleIDs: Set<String>) -> String?
     {
         let supported = Set(supportedLocaleIDs.compactMap(self.normalizedSpeechLocaleID))
-        var seen = Set<String>()
         let candidates = (preferredLocaleIDs + [fallbackLocaleID])
             .compactMap(self.normalizedSpeechLocaleID)
-
-        for candidate in candidates {
-            guard seen.insert(candidate).inserted else { continue }
-            if supported.isEmpty || supported.contains(candidate) {
-                return candidate
-            }
-        }
-        return nil
+        return candidates.first { supported.isEmpty || supported.contains($0) }
     }
 
     private static func normalizedTalkProviderID(_ raw: String?) -> String? {

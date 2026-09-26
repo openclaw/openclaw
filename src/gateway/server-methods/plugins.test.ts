@@ -103,7 +103,9 @@ describe("plugin management Gateway handlers", () => {
     expect(result).toEqual({
       ok: true,
       response: {
-        plugins: [{ ...workboard, runtime: { state: "unloaded" } }],
+        plugins: [
+          { ...workboard, catalogId: "local_d29ya2JvYXJk", runtime: { state: "unloaded" } },
+        ],
         diagnostics: [],
         mutationAllowed: true,
         generation: undefined,
@@ -112,10 +114,18 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it("projects an opaque catalog identity only for a proven ClawHub counterpart", async () => {
+  it("projects opaque local identities without inventing ClawHub publication", async () => {
     managementMocks.list.mockResolvedValue({
       plugins: [
         { ...workboard, clawhubPackage: "@openclaw/workboard" },
+        {
+          id: "diffs",
+          name: "Diffs",
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+          clawhubPackage: "@openclaw/diffs",
+        },
         { ...workboard, id: "local-only", name: "Local only" },
       ],
       diagnostics: [],
@@ -127,97 +137,48 @@ describe("plugin management Gateway handlers", () => {
     expect(result.response).toMatchObject({
       plugins: [
         { clawhubPackage: "@openclaw/workboard", catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA" },
-        { id: "local-only" },
+        { clawhubPackage: "@openclaw/diffs", catalogId: "ch_QG9wZW5jbGF3L2RpZmZz" },
+        { id: "local-only", catalogId: "local_bG9jYWwtb25seQ" },
       ],
     });
     expect(
-      (result.response as { plugins: Array<{ catalogId?: string }> }).plugins[1]?.catalogId,
+      (result.response as { plugins: Array<{ clawhubPackage?: string }> }).plugins[2]
+        ?.clawhubPackage,
     ).toBeUndefined();
   });
 
-  it.each([
-    {
-      label: "bundled installed plugin",
-      inspection: {
-        ok: true,
-        reviewToken,
-        plugin: {
-          id: "workboard",
-          name: "Workboard",
-          origin: "bundled",
-          installed: true,
-          enabled: true,
-        },
-        source: { kind: "bundled" },
-        grants: {
-          hooks: {
-            allowPromptInjection: { effective: true },
-            allowConversationAccess: { effective: true },
-          },
+  it("returns the complete plugin consent snapshot including grants, integrity, and trust", async () => {
+    const inspection = {
+      ok: true,
+      reviewToken,
+      plugin: {
+        id: "community-plugin",
+        name: "Community Plugin",
+        origin: "global",
+        installed: true,
+        enabled: false,
+      },
+      source: {
+        kind: "clawhub",
+        packageName: "community/plugin",
+        integrity: "sha512-pinned",
+        integrityKind: "ssri",
+      },
+      grants: {
+        hooks: {
+          allowPromptInjection: { effective: false, configured: false },
+          allowConversationAccess: { effective: true, configured: true },
         },
       },
-    },
-    {
-      label: "external plugin with explicit grants, integrity, and trust",
-      inspection: {
-        ok: true,
-        reviewToken,
-        plugin: {
-          id: "community-plugin",
-          name: "Community Plugin",
-          origin: "global",
-          installed: true,
-          enabled: false,
-        },
-        source: {
-          kind: "clawhub",
-          packageName: "community/plugin",
-          integrity: "sha512-pinned",
-          integrityKind: "ssri",
-        },
-        grants: {
-          hooks: {
-            allowPromptInjection: { effective: false, configured: false },
-            allowConversationAccess: { effective: true, configured: true },
-          },
-        },
-        trust: {
-          disposition: "review-required",
-          reasons: ["Install script"],
-          checkedAt: "2026-08-25T00:00:00.000Z",
-          acknowledgedAt: "2026-08-25T01:00:00.000Z",
-          pending: false,
-          stale: true,
-        },
+      trust: {
+        disposition: "review-required",
+        reasons: ["Install script"],
+        checkedAt: "2026-08-25T00:00:00.000Z",
+        acknowledgedAt: "2026-08-25T01:00:00.000Z",
+        pending: false,
+        stale: true,
       },
-    },
-    {
-      label: "not-installed official catalog plugin",
-      inspection: {
-        ok: true,
-        reviewToken,
-        plugin: {
-          id: "diffs",
-          name: "Diffs",
-          origin: "official",
-          installed: false,
-          enabled: false,
-        },
-        source: {
-          kind: "official-catalog",
-          packageName: "@openclaw/diffs",
-          integrity: "sha256-catalog-pin",
-          integrityKind: "sha256",
-        },
-        grants: {
-          hooks: {
-            allowPromptInjection: { effective: true },
-            allowConversationAccess: { effective: false },
-          },
-        },
-      },
-    },
-  ])("returns the complete consent snapshot for a $label", async ({ inspection }) => {
+    };
     managementMocks.inspect.mockResolvedValue(inspection);
     const config = { plugins: { entries: {} } };
 
@@ -471,6 +432,7 @@ describe("plugin management Gateway handlers", () => {
           description: "Long-term memory.",
           icon: "database",
           order: 0,
+          pinnedPackages: ["@openclaw/bundled-memory", "memory-plus"],
         },
       ],
       items: [
@@ -488,7 +450,18 @@ describe("plugin management Gateway handlers", () => {
       ],
     });
     managementMocks.list.mockResolvedValue({
-      plugins: [],
+      plugins: [
+        {
+          id: "bundled-memory",
+          name: "Bundled Memory",
+          origin: "bundled",
+          packageName: "@openclaw/bundled-memory",
+          categories: ["memory"],
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+        },
+      ],
       diagnostics: [],
       mutationAllowed: true,
     });
@@ -500,12 +473,16 @@ describe("plugin management Gateway handlers", () => {
     expect(catalogMocks.browse).not.toHaveBeenCalled();
     expect(result.response).toMatchObject({
       items: [
+        expect.objectContaining({
+          catalog: expect.objectContaining({ categoryRanks: { memory: 0 } }),
+        }),
         {
           catalog: {
             featured: true,
             featuredRank: 1,
             trending: true,
             trendingRank: 0,
+            categoryRanks: { memory: 1 },
           },
         },
       ],
@@ -593,7 +570,13 @@ describe("plugin management Gateway handlers", () => {
         mutationAllowed: true,
       });
       managementMocks.inspect.mockResolvedValue({
-        declared: { mcpServers: ["workboard", "unsupported"], skills: ["Local planning"] },
+        declared: {
+          tools: ["workboard_read"],
+          providers: [],
+          channels: [],
+          mcpServers: ["workboard", "unsupported"],
+          skills: ["Local planning"],
+        },
         components: {
           ...emptyInstalledPluginComponents(),
           mapped: ["skills", "mcpServers"],
@@ -612,6 +595,7 @@ describe("plugin management Gateway handlers", () => {
           plugin: { local: { pluginId: "workboard", installed: true, action: "manage" } },
           detail: {
             origin: "local",
+            contracts: { tools: ["workboard_read"] },
             mcpServers: ["workboard"],
             skills: [{ name: "Local planning" }],
           },
@@ -749,20 +733,26 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it("preserves the Official filter for direct search requests", async () => {
+  it("includes built-in plugins while preserving the Official search filter", async () => {
     catalogMocks.browse.mockResolvedValue({ items: [] });
     managementMocks.list.mockResolvedValue({
-      plugins: [],
+      plugins: [
+        { ...workboard, name: "Memory Board", origin: "bundled" },
+        { ...workboard, id: "community", name: "Memory Community", origin: "global" },
+      ],
       diagnostics: [],
       mutationAllowed: true,
     });
 
-    await callHandler("plugins.catalog.browse", {
+    const result = await callHandler("plugins.catalog.browse", {
       query: "memory",
       intent: "official",
       pageSize: 25,
     });
 
+    expect(result.response).toMatchObject({
+      items: [{ catalog: { name: "Memory Board", official: true, author: "openclaw" } }],
+    });
     expect(catalogMocks.browse).toHaveBeenCalledWith({
       query: "memory",
       intent: "official",
@@ -805,9 +795,16 @@ describe("plugin management Gateway handlers", () => {
       ok: true,
       plugin: localOnly,
       source: { kind: "official-catalog" },
+      overview: {
+        capabilities: {
+          channels: ["workboard-chat"],
+          providers: ["workboard-models"],
+          contracts: {},
+        },
+      },
       declared: {
-        channels: [],
-        providers: [],
+        channels: ["workboard-chat"],
+        providers: ["workboard-models"],
         tools: ["workboard_read"],
         contracts: [],
         hooks: [],
@@ -837,7 +834,7 @@ describe("plugin management Gateway handlers", () => {
     });
     expect(result.response).toMatchObject({
       plugin: {
-        catalog: { name: "Workboard", categories: ["tools"] },
+        catalog: { name: "Workboard", categories: ["tools"], official: false },
         local: {
           state: "not-installed",
           action: "install",
@@ -846,6 +843,9 @@ describe("plugin management Gateway handlers", () => {
       },
       detail: {
         origin: "local",
+        contracts: { tools: ["workboard_read"] },
+        channels: ["workboard-chat"],
+        providers: ["workboard-models"],
         packageName: "@openclaw/workboard",
         mcpServers: [],
         skills: [],

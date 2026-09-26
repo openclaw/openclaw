@@ -92,35 +92,11 @@ export function resolveWhereChip(params: {
       autoDeviceDisabledReason,
     };
   }
-  if (params.deviceId) {
-    return {
-      kind: "device",
-      label: device?.label ?? params.deviceId,
-      cloudMachines: [],
-      selectedMachineId: "",
-      operatingSystems: [],
-      selectedOsId: "",
-      devices,
-      cloudProfiles: params.cloudProfiles,
-      autoDeviceDisabledReason,
-    };
-  }
-  if (params.autoDevice) {
-    return {
-      kind: "auto-device",
-      label: t("newSession.autoDevice"),
-      cloudMachines: [],
-      selectedMachineId: "",
-      operatingSystems: [],
-      selectedOsId: "",
-      devices,
-      cloudProfiles: params.cloudProfiles,
-      autoDeviceDisabledReason,
-    };
-  }
   return {
-    kind: "local",
-    label: t("newSession.local"),
+    kind: params.deviceId ? "device" : params.autoDevice ? "auto-device" : "local",
+    label: params.deviceId
+      ? (device?.label ?? params.deviceId)
+      : t(params.autoDevice ? "newSession.autoDevice" : "newSession.local"),
     cloudMachines: [],
     selectedMachineId: "",
     operatingSystems: [],
@@ -269,7 +245,6 @@ export function renderWhereChip(params: {
         : "newSession.autoDeviceHint",
     );
   const busy = params.submitting || params.pendingPlacement;
-  const destinationDisabled = busy;
   const showDeviceSkeletons = params.catalogLoading && devices.length === 0;
   const showCloudSkeletons = params.isAdmin && params.catalogLoading && cloudProfiles.length === 0;
   let cleanupScrollFade: (() => void) | undefined;
@@ -457,7 +432,7 @@ export function renderWhereChip(params: {
                       checked: params.state.kind === "local",
                       onSelect: () => params.onSelectDevice(""),
                     },
-                    destinationDisabled,
+                    busy,
                   )
                 : nothing
             }
@@ -488,7 +463,7 @@ export function renderWhereChip(params: {
                     title: device.disabledReason,
                     onSelect: () => params.onSelectDevice(device.deviceId),
                   },
-                  destinationDisabled,
+                  busy,
                 );
               },
             )}
@@ -523,7 +498,7 @@ export function renderWhereChip(params: {
               selectedMachine: params.state.selectedMachineId,
               onSelectOs: params.onSelectCloudOs,
               onSelectMachine: params.onSelectCloudMachine,
-              submitting: destinationDisabled,
+              submitting: busy,
               compact: true,
               disabled: Boolean(params.cloudDisabledReason),
               disabledReason: params.cloudDisabledReason,
@@ -545,7 +520,7 @@ export function renderWhereChip(params: {
                       title: t("newSession.catalogUnavailable"),
                       onSelect: () => undefined,
                     },
-                    destinationDisabled,
+                    busy,
                   )
                 : nothing
             }

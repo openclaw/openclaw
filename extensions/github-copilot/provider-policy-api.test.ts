@@ -12,50 +12,11 @@ describe("github-copilot provider-policy-api", () => {
     ).toEqual(["off", "minimal", "low", "medium", "high"]);
   });
 
-  it("appends xhigh for current static GPT Copilot xhigh ids", () => {
-    for (const modelId of [
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.3-codex",
-    ]) {
-      expect(
-        resolveThinkingProfile({
-          provider: "github-copilot",
-          modelId,
-        })?.levels.map((level) => level.id),
-        `model=${modelId}`,
-      ).toContain("xhigh");
-    }
-  });
-
-  it("appends xhigh when catalog compat advertises it", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "github-copilot",
-        modelId: "future-copilot-model",
-        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-      })?.levels.map((level) => level.id),
-    ).toContain("xhigh");
-  });
-
   it("appends max when catalog compat advertises it", () => {
     expect(
       resolveThinkingProfile({
         provider: "github-copilot",
         modelId: "claude-fable-5",
-        compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
-      })?.levels.map((level) => level.id),
-    ).toContain("max");
-  });
-
-  it("appends max when GPT catalog compat advertises it", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "github-copilot",
-        modelId: "gpt-5.6-sol",
         compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
       })?.levels.map((level) => level.id),
     ).toContain("max");

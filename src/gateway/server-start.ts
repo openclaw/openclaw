@@ -101,15 +101,17 @@ async function startGatewayServerWithSdkHost(
     releasePostReadyWork();
     return await rethrowGatewayStartupError(err, closeOnStartupFailure);
   }
-  let postReadyWorkTimer: ReturnType<typeof setTimeout> | undefined;
   void startupSettled.then(
     () => {
       if (gatewayKernel.lifecycle.closePreludeStarted) {
         return;
       }
       // Deferred sidecars must finish before the I/O window for background work begins.
-      postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
-      postReadyWorkTimer.unref?.();
+      gatewayKernel.scheduler.schedule({
+        id: "startup:post-ready-work",
+        delayMs: POST_READY_WORK_START_DELAY_MS,
+        run: releasePostReadyWork,
+      });
     },
     // The caller owns deferred startup failure; close releases the background waiters.
     () => {},
@@ -125,7 +127,6 @@ async function startGatewayServerWithSdkHost(
         closePromise = sdkResourceHost
           .run(async () => {
             const prelude = beginClosePrelude(optsLocal);
-            clearTimeout(postReadyWorkTimer);
             releasePostReadyWork();
             await prelude;
             const close = await prepareClose(optsLocal);

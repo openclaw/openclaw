@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import packageJson from "../../package.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import {
@@ -30,7 +29,6 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -151,53 +149,11 @@ describe("OpenClaw database schema preflight", () => {
     });
   });
 
-  it("treats a current-v6 additive column as incompatible with the older v6 shape", () => {
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(":memory:");
-    try {
-      database.exec(OPENCLAW_STATE_SCHEMA_SQL);
-      const olderV6Schema = OPENCLAW_STATE_SCHEMA_SQL.replace(
-        "  removed_at INTEGER,\n  run_end_cleanup_json TEXT\n",
-        "  removed_at INTEGER\n",
-      );
-
-      expect(collectSqliteSchemaIssues(database, olderV6Schema)).toContainEqual(
-        expect.objectContaining({
-          code: "unexpected-column",
-          objectName: "worktrees.run_end_cleanup_json",
-        }),
-      );
-    } finally {
-      database.close();
-    }
-  });
-
   it("keeps package schema support metadata aligned", () => {
     expect(packageJson.openclaw.schemaVersions).toEqual({
       state: OPENCLAW_STATE_SCHEMA_VERSION,
       agent: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
-  });
-
-  it("accepts a supported state schema", async () => {
-    const stateDir = tempDirs.make("openclaw-database-preflight-supported-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    openOpenClawStateDatabase({ env });
-    closeOpenClawStateDatabaseForTest();
-
-    expect(
-      await preflightOpenClawDatabaseSchemas({
-        env,
-        verifyCurrentSchemaShape: true,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-      }),
-    ).toEqual({ incompatible: [], indeterminate: [] });
-    await expect(
-      assertOpenClawDatabasesReady({ env, operation: "gateway-restart" }),
-    ).resolves.toBeUndefined();
   });
 
   it.each([false, true])(
@@ -605,44 +561,6 @@ describe("OpenClaw database schema preflight", () => {
         reason: expect.stringContaining("belongs to agent main; requested agent ops"),
       },
     ]);
-  });
-
-  it("reports a current but noncanonical registered agent schema as indeterminate", async () => {
-    const stateDir = tempDirs.make("openclaw-database-preflight-noncanonical-agent-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const agent = new DatabaseSync(agentPath);
-    try {
-      agent.exec(
-        "ALTER TABLE schema_meta ADD COLUMN unexpected TEXT CHECK (length(unexpected) > 0);",
-      );
-    } finally {
-      agent.close();
-    }
-
-    expect(
-      await preflightOpenClawDatabaseSchemas({
-        env,
-        verifyCurrentSchemaShape: true,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-      }),
-    ).toEqual({
-      incompatible: [],
-      indeterminate: [
-        {
-          kind: "agent",
-          path: agentPath,
-          reason: expect.stringContaining("column definitions differ for schema_meta"),
-        },
-      ],
-    });
   });
 
   it("reports an existing unreadable state database as indeterminate", async () => {

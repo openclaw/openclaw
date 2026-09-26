@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
+import type { ChatGoalDraftMode, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
 import * as draftStore from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import {
@@ -12,6 +12,8 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   ChatComposerPersistence,
   loadChatComposerSnapshot,
+  loadChatComposerDraftRevision,
+  restoreChatComposerState,
   persistChatComposerState,
 } from "./composer-persistence.ts";
 import * as durableComposer from "./durable-composer-persistence.ts";
@@ -300,36 +302,92 @@ it("captures once per restore admission while pending, settled, reset, and switc
   }
 });
 
-it("keeps a synchronous new edit when an older stored draft has a higher revision", async () => {
-  // Scheduling must stay below the stored revision even if the test process pauses.
-  vi.spyOn(Date, "now").mockReturnValue(1_000);
-  const pending = createDeferred<Awaited<ReturnType<typeof draftStore.readDurableComposerDraft>>>();
-  const read = vi.spyOn(draftStore, "readDurableComposerDraft").mockReturnValue(pending.promise);
-  const storedRevision = nextDraftRevision() + 100;
-  const state = createState();
-  let owner: typeof state | undefined = state;
-  const persistence = new ChatComposerPersistence(() => owner);
-  try {
+it.each(["text", "reply", "cancel reply"] as const)(
+  "keeps a synchronous %s edit when an older stored draft has a higher revision",
+  async (edit) => {
+    // Scheduling must stay below the stored revision even if the test process pauses.
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const pending =
+      createDeferred<Awaited<ReturnType<typeof draftStore.readDurableComposerDraft>>>();
+    const read = vi.spyOn(draftStore, "readDurableComposerDraft").mockReturnValue(pending.promise);
+    const storedRevision = nextDraftRevision() + 100;
+    const previousReply = { messageId: "previous", text: "Previous selection" };
+    const newerReply = { messageId: "newer", text: "New selection" };
+    const state = {
+      ...createState(),
+      chatReplyTarget: edit === "cancel reply" ? previousReply : null,
+    };
+    expect(persistChatComposerState(state, state.sessionKey, { draftRevision: 1 })).toBe(true);
+    let owner: typeof state | undefined = state;
+    const persistence = new ChatComposerPersistence(() => owner);
+    try {
+      persistence.start();
+      if (edit === "text") {
+        state.chatMessage = "New edit during restore";
+      } else {
+        state.chatReplyTarget = edit === "reply" ? newerReply : null;
+      }
+      persistence.schedule();
+      await settleStorage();
+      expect(read).toHaveBeenCalledOnce();
+      pending.resolve({
+        status: "found",
+        draft: {
+          revision: storedRevision,
+          text: "Older saved draft",
+          replyTarget: previousReply,
+          attachments: [],
+          writeId: "stored-draft",
+        },
+      });
+      await settleStorage();
+      expect(state.chatMessage).toBe(edit === "text" ? "New edit during restore" : "");
+      expect(state.chatReplyTarget).toEqual(edit === "reply" ? newerReply : null);
+    } finally {
+      owner = undefined;
+      persistence.stop();
+      pending.resolve({ status: "not-found", revision: 0 });
+      await settleStorage();
+    }
+  },
+);
+
+it.each(["goal", "reply"] as const)(
+  "persists empty %s selection and versions cancellation",
+  (kind) => {
+    const state = {
+      ...createState(),
+      client: null,
+      connected: false,
+      chatGoalDraftMode: null as ChatGoalDraftMode | null,
+      chatReplyTarget: null as ChatReplyTarget | null,
+    };
+    const persistence = new ChatComposerPersistence(() => state);
     persistence.start();
-    state.chatMessage = "New edit during restore";
+    if (kind === "goal") {
+      state.chatGoalDraftMode = { action: "start", sessionId: "session-a" };
+    } else {
+      state.chatReplyTarget = { messageId: "original", text: "Selected quote" };
+    }
     persistence.schedule();
-    await settleStorage();
-    expect(read).toHaveBeenCalledOnce();
-    pending.resolve({
-      status: "found",
-      draft: {
-        revision: storedRevision,
-        text: "Older saved draft",
-        attachments: [],
-        writeId: "stored-draft",
-      },
-    });
-    await settleStorage();
-    expect(state.chatMessage).toBe("New edit during restore");
-  } finally {
-    owner = undefined;
+    persistence.persistNow();
+    const revision = loadChatComposerDraftRevision(state, state.sessionKey);
+    const restored = {
+      ...createState(),
+      client: null,
+      connected: false,
+      chatGoalDraftMode: null as ChatGoalDraftMode | null,
+      chatReplyTarget: null as ChatReplyTarget | null,
+    };
+    expect(restoreChatComposerState(restored)).toBe(true);
+    expect(restored.chatGoalDraftMode ?? null).toEqual(state.chatGoalDraftMode ?? null);
+    expect(restored.chatReplyTarget ?? null).toEqual(state.chatReplyTarget ?? null);
+    state.chatGoalDraftMode = null;
+    state.chatReplyTarget = null;
+    persistence.schedule();
+    persistence.persistNow();
+    expect(loadChatComposerDraftRevision(state, state.sessionKey)).toBeGreaterThan(revision);
+    expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
     persistence.stop();
-    pending.resolve({ status: "not-found", revision: 0 });
-    await settleStorage();
-  }
-});
+  },
+);

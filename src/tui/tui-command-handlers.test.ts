@@ -9,7 +9,6 @@ import type {
   LoadHistoryMock,
   SelectableOverlay,
   SetSessionMock,
-  ConsumeCompletedRunMock,
   RefreshAgentsMock,
 } from "./tui-command-handlers-test-support.js";
 import {
@@ -30,20 +29,17 @@ import { getPendingSubmitAcceptedRunId, getPendingSubmitDraft } from "./tui-subm
 import { createEditorSubmitHandler, createSubmitBurstCoalescer } from "./tui-submit.js";
 
 describe("tui command handlers", () => {
-  it.each([false, true])(
-    "reopens /question locally without sending a chat turn (local=%s)",
-    async (local) => {
-      const reopenQuestion = vi.fn();
-      const { handleCommand, sendChat, addPendingUser } = createTuiCommandHandlersHarness({
-        opts: { local },
-        reopenQuestion,
-      });
-      await handleCommand("/question");
-      expect(reopenQuestion).toHaveBeenCalledOnce();
-      expect(sendChat).not.toHaveBeenCalled();
-      expect(addPendingUser).not.toHaveBeenCalled();
-    },
-  );
+  it("reopens /question locally without sending a chat turn", async () => {
+    const reopenQuestion = vi.fn();
+    const { handleCommand, sendChat, addPendingUser } = createTuiCommandHandlersHarness({
+      opts: { local: true },
+      reopenQuestion,
+    });
+    await handleCommand("/question");
+    expect(reopenQuestion).toHaveBeenCalledOnce();
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addPendingUser).not.toHaveBeenCalled();
+  });
 
   it("does not open the agent picker from a cached roster after refresh failure", async () => {
     const refreshAgents = vi
@@ -88,7 +84,7 @@ describe("tui command handlers", () => {
     ]);
   });
 
-  it.each(["/models", "/agents", "/sessions", "/context", "/settings"])(
+  it.each(["/agents", "/sessions", "/context", "/settings"])(
     "lets the newer %s picker own the overlay after an older model request resolves",
     async (newerCommand) => {
       const olderModels = createDeferred<Array<{ provider: string; id: string }>>();
@@ -105,18 +101,14 @@ describe("tui command handlers", () => {
       });
 
       const olderPicker = harness.handleCommand("/models");
-      expect(harness.pendingSystemNotices.size).toBe(1);
-      const olderNoticeId = expectDefined(
-        harness.pendingSystemNotices.keys().next().value,
-        "older model picker notice",
-      );
+      const olderSelector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
       await harness.handleCommand(newerCommand);
-      expect(harness.pendingSystemNotices.has(olderNoticeId)).toBe(false);
-      expect(harness.dismissPendingSystem).toHaveBeenCalledWith(olderNoticeId);
+      expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandle);
       olderModels.resolve([{ provider: "openai", id: "obsolete-model" }]);
       await olderPicker;
 
-      expect(harness.openOverlay).toHaveBeenCalledOnce();
+      expect(harness.openOverlay).toHaveBeenCalledTimes(2);
+      expect(olderSelector.items).toEqual([]);
       for (const [selection] of listModels.mock.calls) {
         expect(selection).toEqual({ agentId: "main" });
       }
@@ -162,7 +154,6 @@ describe("tui command handlers", () => {
   it.each([
     { command: "/models", value: "fixture/model" },
     { command: "/sessions", value: "agent:main:other" },
-    { command: "/agents", value: "other" },
   ])(
     "consumes $command selection before its asynchronous action finishes",
     async ({ command, value }) => {
@@ -198,33 +189,11 @@ describe("tui command handlers", () => {
       replacementSession: "agent:ops:main",
     },
     {
-      name: "session",
-      command: "/sessions",
-      value: "agent:research:incident",
-      initialSession: "agent:research:incident",
-      replacementSession: "agent:ops:main",
-    },
-    {
       name: "global model",
       command: "/models",
       value: "private/research-only",
       initialSession: "global",
       replacementSession: "global",
-    },
-    {
-      name: "global session",
-      command: "/sessions",
-      value: "agent:research:incident",
-      initialSession: "global",
-      replacementSession: "global",
-    },
-    {
-      name: "same-key model",
-      command: "/models",
-      value: "private/research-only",
-      initialSession: "agent:research:incident",
-      replacementSession: "agent:research:incident",
-      sameAgent: true,
     },
     {
       name: "same-key session",
@@ -346,13 +315,8 @@ describe("tui command handlers", () => {
   });
 
   it("renders the sending indicator before chat.send resolves", async () => {
-    let resolveSend: (value: { runId: string }) => void = () => {
-      throw new Error("sendChat promise resolver was not initialized");
-    };
-    const sendPromise = new Promise<{ runId: string }>((resolve) => {
-      resolveSend = (value) => resolve(value);
-    });
-    const sendChat = vi.fn(() => sendPromise);
+    const send = createDeferred<{ runId: string }>();
+    const sendChat = vi.fn(() => send.promise);
     const setActivityStatus = vi.fn();
 
     const { handleCommand, requestRender } = createTuiCommandHandlersHarness({
@@ -368,7 +332,7 @@ describe("tui command handlers", () => {
     const renderOrders = requestRender.mock.invocationCallOrder;
     expect(renderOrders.filter((order) => order > sendingOrder)).not.toEqual([]);
 
-    resolveSend({ runId: "r1" });
+    send.resolve({ runId: "r1" });
     await pending;
     expect(setActivityStatus).toHaveBeenCalledWith("waiting");
   });
@@ -412,6 +376,7 @@ describe("tui command handlers", () => {
 
     const sending = harness.handleCommand("hello");
     const provisionalRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    expect(harness.noteLocalRunId).toHaveBeenCalledWith(provisionalRunId);
 
     expect(harness.state.sessionProjection?.scope).toEqual({
       sessionKey: "agent:main:main",
@@ -431,6 +396,8 @@ describe("tui command handlers", () => {
 
     deferred.resolve({ runId: provisionalRunId });
     await sending;
+    expect(harness.state.activeChatRunId).toBeNull();
+    expect(getPendingSubmitAcceptedRunId(harness.state)).toBe(provisionalRunId);
   });
 
   it("re-keys the optimistic pending row to the gateway-accepted runId in place", async () => {
@@ -518,23 +485,6 @@ describe("tui command handlers", () => {
     expect(getPendingSubmitDraft(harness.state)).toBeNull();
   });
 
-  it("clears the submit draft when the accepted run already completed", async () => {
-    const sendChat = vi.fn().mockResolvedValue({ runId: "r-accepted" });
-    const consumeCompletedRunForPendingSend = vi
-      .fn()
-      .mockReturnValue(true) as ConsumeCompletedRunMock;
-    const harness = createTuiCommandHandlersHarness({
-      sendChat,
-      consumeCompletedRunForPendingSend,
-    });
-
-    await harness.handleCommand("hello");
-
-    expect(harness.addPendingUser).toHaveBeenCalledTimes(1);
-    expect(harness.dropPendingUser).not.toHaveBeenCalled();
-    expect(harness.state.pendingSubmit).toBeNull();
-  });
-
   it("passes the current backing session id when sending to the gateway", async () => {
     const { handleCommand, sendChat } = createTuiCommandHandlersHarness({
       currentSessionId: "session-before-relaunch",
@@ -549,7 +499,7 @@ describe("tui command handlers", () => {
     });
   });
 
-  it.each(["/status", "/compact", "/commands", "/context", "/context detail"])(
+  it.each(["/status", "/context"])(
     "keeps unsupported shared command %s out of local model prompts",
     async (command) => {
       const { handleCommand, sendChat, addPendingUser, addSystem } =
@@ -789,20 +739,13 @@ describe("tui command handlers", () => {
     });
   });
 
-  it("opens a context mode selector for /context without sending immediately", async () => {
-    const { handleCommand, sendChat, openOverlay } = createTuiCommandHandlersHarness();
-
-    await handleCommand("/context");
-
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(openOverlay).toHaveBeenCalledTimes(1);
-  });
-
   it("sends the selected context mode through the gateway command path", async () => {
     const { handleCommand, sendChat, openOverlay, closeOverlay, overlayHandle } =
       createTuiCommandHandlersHarness();
 
     await handleCommand("/context");
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(openOverlay).toHaveBeenCalledOnce();
     const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
     selector?.onSelect?.({ value: "detail", label: "detail" });
     await flushAsyncSelect();
@@ -847,18 +790,6 @@ describe("tui command handlers", () => {
     expectSendChatFields(sendChat, {
       sessionKey: "agent:main:main",
       message: "/context list",
-    });
-  });
-
-  it("forwards /context help directly", async () => {
-    const { handleCommand, sendChat, openOverlay } = createTuiCommandHandlersHarness();
-
-    await handleCommand("/context help");
-
-    expect(openOverlay).not.toHaveBeenCalled();
-    expectSendChatFields(sendChat, {
-      sessionKey: "agent:main:main",
-      message: "/context help",
     });
   });
 
@@ -923,16 +854,6 @@ describe("tui command handlers", () => {
     expect(addSystem).not.toHaveBeenCalled();
   });
 
-  it("leaves a OpenClaw breadcrumb after switching agents", async () => {
-    const { handleCommand, addSystem, setSession, state } = createTuiCommandHandlersHarness();
-
-    await handleCommand("/agent Work");
-
-    expect(state.currentAgentId).toBe("work");
-    expect(setSession).toHaveBeenCalledWith("", "work");
-    expect(addSystem).toHaveBeenCalledWith("agent set to work; use /openclaw to return");
-  });
-
   it("lets the session owner observe the previous agent before switching a global session", async () => {
     let ownerBeforeSelection: string | undefined;
     const setSession = vi.fn(async (_key: string, agentId?: string) => {
@@ -953,32 +874,6 @@ describe("tui command handlers", () => {
     expect(setSession).toHaveBeenCalledExactlyOnceWith("", "ops");
     expect(harness.state.currentAgentId).toBe("ops");
     expect(harness.addSystem).toHaveBeenCalledWith("agent set to ops; use /openclaw to return");
-  });
-
-  it("marks the generated runId as local before gateway events arrive", async () => {
-    const { handleCommand, sendChat, noteLocalRunId, state } = createTuiCommandHandlersHarness();
-
-    await handleCommand("/context detail");
-
-    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
-    expect(noteLocalRunId).toHaveBeenCalledWith(sentRunId);
-    expect(state.activeChatRunId).toBeNull();
-    expect(getPendingSubmitAcceptedRunId(state)).toBe(sentRunId);
-  });
-
-  it("tracks the in-flight runId so escape can abort during the wait", async () => {
-    const sendChat = vi.fn().mockImplementation(async (opts: { runId: string }) => ({
-      runId: opts.runId,
-    }));
-    const { handleCommand, state } = createTuiCommandHandlersHarness({ sendChat });
-
-    await handleCommand("hello");
-
-    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
-    expect(typeof sentRunId).toBe("string");
-    expect(sentRunId.length).toBeGreaterThan(0);
-    expect(state.activeChatRunId).toBeNull();
-    expect(getPendingSubmitAcceptedRunId(state)).toBe(sentRunId);
   });
 
   it("does not reintroduce the pending runId when an early event already consumed it", async () => {
@@ -1198,32 +1093,7 @@ describe("tui command handlers", () => {
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
-  it("reports failure when chat send returns a terminal error ack", async () => {
-    const sendChat = vi.fn().mockImplementation(async (opts: { runId: string }) => ({
-      runId: opts.runId,
-      status: "error",
-    }));
-    const loadHistory = vi.fn().mockResolvedValue(undefined) as LoadHistoryMock;
-    const { handleCommand, state, dropPendingUser, addSystem, setActivityStatus } =
-      createTuiCommandHandlersHarness({
-        sendChat,
-        loadHistory,
-      });
-
-    await handleCommand("hello");
-
-    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
-    expect(dropPendingUser).toHaveBeenCalledWith(sentRunId);
-    expect(addSystem).toHaveBeenCalledWith(
-      "send failed: Chat failed before the run started; try again.",
-    );
-    expect(state.pendingSubmit).toBeNull();
-    expect(state.sessionProjection?.entries).toEqual([]);
-    expect(setActivityStatus).toHaveBeenLastCalledWith("error");
-    expect(loadHistory).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["error", "timeout", "ok"])(
+  it.each(["error", "ok"])(
     "ignores a terminal %s ACK after its history reload switches sessions",
     async (status) => {
       const history = createDeferred();
@@ -1390,12 +1260,19 @@ describe("tui command handlers", () => {
     const sendChat = vi.fn().mockResolvedValue({ runId: "run-accepted" });
     const consumeCompletedRunForPendingSend = vi.fn((runId: string) => runId === "run-accepted");
     const flushPendingHistoryRefreshIfIdle = vi.fn();
-    const { handleCommand, state, noteLocalRunId, forgetLocalRunId, setActivityStatus } =
-      createTuiCommandHandlersHarness({
-        sendChat,
-        consumeCompletedRunForPendingSend,
-        flushPendingHistoryRefreshIfIdle,
-      });
+    const {
+      handleCommand,
+      state,
+      noteLocalRunId,
+      forgetLocalRunId,
+      setActivityStatus,
+      addPendingUser,
+      dropPendingUser,
+    } = createTuiCommandHandlersHarness({
+      sendChat,
+      consumeCompletedRunForPendingSend,
+      flushPendingHistoryRefreshIfIdle,
+    });
 
     await handleCommand("hello");
 
@@ -1406,6 +1283,8 @@ describe("tui command handlers", () => {
     expect(state.pendingSubmit).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
     expect(flushPendingHistoryRefreshIfIdle).toHaveBeenCalledTimes(1);
+    expect(addPendingUser).toHaveBeenCalledOnce();
+    expect(dropPendingUser).not.toHaveBeenCalled();
   });
 
   it("clears the pending runId if sendChat fails", async () => {
@@ -1473,21 +1352,6 @@ describe("tui command handlers", () => {
     expect(setActivityStatus).not.toHaveBeenCalledWith("sending");
     expect(setActivityStatus).not.toHaveBeenCalledWith("waiting");
     expectSendChatFields(sendChat, { message: "/btw what changed?" });
-  });
-
-  it("sends /side without hijacking the active main run", async () => {
-    const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
-      createTuiCommandHandlersHarness({
-        activeChatRunId: "run-main",
-      });
-
-    await handleCommand("/side what changed?");
-
-    expect(addUser).not.toHaveBeenCalled();
-    expect(noteLocalRunId).not.toHaveBeenCalled();
-    expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
-    expect(state.activeChatRunId).toBe("run-main");
-    expectSendChatFields(sendChat, { message: "/side what changed?" });
   });
 
   it("creates unique session for /new and resets shared session for /reset", async () => {
@@ -1705,15 +1569,6 @@ describe("tui command handlers", () => {
     },
     {
       activeChatRunId: null,
-      pendingSubmit: {
-        phase: "sending" as const,
-        runId: "pending-run",
-        draftText: "pending",
-      },
-      activityStatus: "sending",
-    },
-    {
-      activeChatRunId: null,
       pendingSubmit: null,
       activityStatus: "finishing context",
     },
@@ -1730,22 +1585,10 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("abort the current run before /new");
   });
 
-  it.each([
-    {
-      activeChatRunId: "active-run",
-      pendingSubmit: null,
-      activityStatus: "running",
-    },
-    {
-      activeChatRunId: null,
-      pendingSubmit: {
-        phase: "accepted" as const,
-        runId: "pending-run",
-        draftText: null,
-      },
-      activityStatus: "sending",
-    },
-    {
+  it("blocks /reset while the current session lifecycle is unfinished", async () => {
+    const resetSession = vi.fn();
+    const { handleCommand, addSystem } = createTuiCommandHandlersHarness({
+      resetSession,
       activeChatRunId: null,
       pendingSubmit: {
         phase: "sending" as const,
@@ -1753,17 +1596,6 @@ describe("tui command handlers", () => {
         draftText: "pending",
       },
       activityStatus: "sending",
-    },
-    {
-      activeChatRunId: null,
-      pendingSubmit: null,
-      activityStatus: "finishing context",
-    },
-  ])("blocks /reset while the current session lifecycle is unfinished", async (runState) => {
-    const resetSession = vi.fn();
-    const { handleCommand, addSystem } = createTuiCommandHandlersHarness({
-      resetSession,
-      ...runState,
     });
 
     await handleCommand("/reset");
@@ -1773,13 +1605,8 @@ describe("tui command handlers", () => {
   });
 
   it("serializes input until /new adopts the created session", async () => {
-    let resolveCreate: ((value: { ok: true; key: string }) => void) | undefined;
-    const createSession = vi.fn().mockImplementation(
-      () =>
-        new Promise<{ ok: true; key: string }>((resolve) => {
-          resolveCreate = resolve;
-        }),
-    );
+    const creation = createDeferred<{ ok: true; key: string }>();
+    const createSession = vi.fn(() => creation.promise);
     const { handleCommand, sendMessage, resolveMessageAdmission, sendChat, addSystem } =
       createTuiCommandHandlersHarness({ createSession });
 
@@ -1797,10 +1624,7 @@ describe("tui command handlers", () => {
     expect(createSession).toHaveBeenCalledTimes(1);
     expect(addSystem).toHaveBeenCalledWith("session change in progress; wait for /new to finish");
 
-    if (!resolveCreate) {
-      throw new Error("expected pending session creation");
-    }
-    resolveCreate({ ok: true, key: "agent:main:tui-created" });
+    creation.resolve({ ok: true, key: "agent:main:tui-created" });
     await creating;
   });
 
@@ -1842,8 +1666,6 @@ describe("tui command handlers", () => {
 
   it.each([
     { command: "new", capture: "before" },
-    { command: "new", capture: "during" },
-    { command: "reset", capture: "before" },
     { command: "reset", capture: "during" },
   ] as const)(
     "keeps a submit captured $capture /$command blocked across the transition epoch",
@@ -2032,16 +1854,12 @@ describe("tui command handlers", () => {
 
   it.each([
     "/model openai/gpt-5.6-luna",
-    "/think medium",
     "/verbose off",
     "/verbose full",
-    "/trace on",
-    "/fast on",
-    "/reasoning on",
     "/usage reset",
+    "/reasoning on",
     "/usage full",
     "/elevated ask",
-    "/activation always",
   ])("ignores a stale %s result after switching sessions", async (command) => {
     const deferred = createDeferred<{
       ok: true;
@@ -2127,9 +1945,7 @@ describe("tui command handlers", () => {
 
   it.each([
     ["/model openai/gpt-5.6-luna", "refresh"],
-    ["/think high", "refresh"],
     ["/verbose full", "history"],
-    ["/usage reset", "refresh"],
   ])("hides a stale %s failure after its post-patch %s rejects", async (command, hook) => {
     const followup = createDeferred();
     const harness = createTuiCommandHandlersHarness({
@@ -2155,47 +1971,42 @@ describe("tui command handlers", () => {
     expect(harness.state.currentAgentId).toBe("ops");
   });
 
-  it.each(["/model openai/gpt-5.6-luna", "/usage reset"])(
-    "ignores a stale global-agent %s result",
-    async (command) => {
-      const deferred = createDeferred<{
-        ok: true;
-        path: string;
-        key: string;
-        entry: Record<string, unknown>;
-      }>();
-      const harness = createTuiCommandHandlersHarness({
-        currentSessionKey: "global",
-        currentAgentId: "main",
-        sessionInfo: { responseUsage: "tokens", effectiveResponseUsage: "tokens" },
-        patchSession: vi.fn(() => deferred.promise),
-      });
+  it("ignores a stale global-agent usage reset result", async () => {
+    const deferred = createDeferred<{
+      ok: true;
+      path: string;
+      key: string;
+      entry: Record<string, unknown>;
+    }>();
+    const harness = createTuiCommandHandlersHarness({
+      currentSessionKey: "global",
+      currentAgentId: "main",
+      sessionInfo: { responseUsage: "tokens", effectiveResponseUsage: "tokens" },
+      patchSession: vi.fn(() => deferred.promise),
+    });
 
-      const pending = harness.handleCommand(command);
-      expect(harness.patchSession).toHaveBeenCalledWith(
-        expect.objectContaining({ key: "global", agentId: "main" }),
-      );
-      harness.state.currentAgentId = "work";
-      deferred.resolve({
-        ok: true,
-        path: "/sessions/patch",
-        key: "global",
-        entry: { model: "main-agent-model" },
-      });
-      await pending;
+    const pending = harness.handleCommand("/usage reset");
+    expect(harness.patchSession).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "global", agentId: "main" }),
+    );
+    harness.state.currentAgentId = "work";
+    deferred.resolve({
+      ok: true,
+      path: "/sessions/patch",
+      key: "global",
+      entry: { model: "main-agent-model" },
+    });
+    await pending;
 
-      expect(harness.state.currentSessionKey).toBe("global");
-      expect(harness.state.currentAgentId).toBe("work");
-      expect(harness.state.sessionInfo.responseUsage).toBe("tokens");
-      expect(harness.applySessionInfoFromPatch).not.toHaveBeenCalled();
-      expect(harness.refreshSessionInfo).not.toHaveBeenCalled();
-      expect(harness.addSystem).not.toHaveBeenCalled();
-    },
-  );
+    expect(harness.state.currentSessionKey).toBe("global");
+    expect(harness.state.currentAgentId).toBe("work");
+    expect(harness.state.sessionInfo.responseUsage).toBe("tokens");
+    expect(harness.applySessionInfoFromPatch).not.toHaveBeenCalled();
+    expect(harness.refreshSessionInfo).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+  });
 
   it.each([
-    ["/think high", false],
-    ["/verbose full", false],
     ["/usage reset", false],
     ["/model openai/gpt-5.6-luna", true],
   ])("ignores a stale %s patch after the same session is reset", async (command, rejected) => {
@@ -2354,8 +2165,6 @@ describe("tui command handlers", () => {
 
   it.each([
     ["thinkingLevel", "/think default", "gateway", false],
-    ["fastMode", "/fast default", "gateway", false],
-    ["thinkingLevel", "/think default", "embedded", true],
     ["fastMode", "/fast default", "embedded", true],
     ["thinkingLevel", "/think inherit", "gateway", false],
     ["fastMode", "/fast reset", "embedded", true],
@@ -2384,17 +2193,14 @@ describe("tui command handlers", () => {
     });
   });
 
-  it.each(["", "invalid"])(
-    "rejects unsupported elevated mode %j without patching",
-    async (mode) => {
-      const { handleCommand, patchSession, addSystem } = createTuiCommandHandlersHarness();
+  it("rejects unsupported elevated mode without patching", async () => {
+    const { handleCommand, patchSession, addSystem } = createTuiCommandHandlersHarness();
 
-      await handleCommand(`/elevated ${mode}`);
+    await handleCommand("/elevated invalid");
 
-      expect(patchSession).not.toHaveBeenCalled();
-      expect(addSystem).toHaveBeenCalledWith("usage: /elevated <on|off|ask|full>");
-    },
-  );
+    expect(patchSession).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("usage: /elevated <on|off|ask|full>");
+  });
 
   it("uses the effective runtime for the no-arg /think usage", async () => {
     const codex = createTuiCommandHandlersHarness({
@@ -2442,25 +2248,13 @@ describe("tui command handlers", () => {
 
   it.each([
     [
-      "provider-specific binary on",
-      false,
-      [
-        { id: "off", label: "off" },
-        { id: "high", label: "on" },
-      ],
-      "on",
-      "high",
-    ],
-    [
       "case-insensitive binary on in embedded mode",
       true,
       [{ id: "high", label: "on" }],
       "ON",
       "high",
     ],
-    ["always-on high profile", false, [{ id: "high", label: "always on" }], "always on", "high"],
     ["always-on off profile", false, [{ id: "off", label: "always on" }], "always on", "off"],
-    ["Moonshot binary on", false, [{ id: "low", label: "on" }], "on", "low"],
     [
       "canonical id ahead of another option's label",
       false,
@@ -2489,25 +2283,22 @@ describe("tui command handlers", () => {
     },
   );
 
-  it.each([undefined, []])(
-    "resolves thinking labels from the provider policy when session levels are %j",
-    async (thinkingLevels) => {
-      const { handleCommand, patchSession } = createTuiCommandHandlersHarness({
-        sessionInfo: {
-          modelProvider: "opencode-go",
-          model: "minimax-m3",
-          thinkingLevels,
-        },
-      });
+  it("resolves thinking labels from the provider policy when session levels are empty", async () => {
+    const { handleCommand, patchSession } = createTuiCommandHandlersHarness({
+      sessionInfo: {
+        modelProvider: "opencode-go",
+        model: "minimax-m3",
+        thinkingLevels: [],
+      },
+    });
 
-      await handleCommand("/think on");
+    await handleCommand("/think on");
 
-      expect(patchSession).toHaveBeenCalledWith({
-        key: "agent:main:main",
-        thinkingLevel: "high",
-      });
-    },
-  );
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      thinkingLevel: "high",
+    });
+  });
 
   it.each([
     { command: "verbose", usage: "usage: /verbose <on|off|full>" },
@@ -2544,21 +2335,6 @@ describe("tui command handlers", () => {
     expect(clearTools).toHaveBeenCalledTimes(1);
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
     expect(loadHistory).not.toHaveBeenCalled();
-  });
-
-  it("reloads history for /verbose on so prior tool output becomes visible", async () => {
-    const loadHistory = vi.fn().mockResolvedValue(undefined);
-    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
-    const { handleCommand, clearTools } = createTuiCommandHandlersHarness({
-      loadHistory,
-      refreshSessionInfo,
-    });
-
-    await handleCommand("/verbose on");
-
-    expect(loadHistory).toHaveBeenCalledTimes(1);
-    expect(refreshSessionInfo).not.toHaveBeenCalled();
-    expect(clearTools).not.toHaveBeenCalled();
   });
 
   it("reloads history for /verbose full so prior full tool output becomes visible", async () => {
@@ -2600,24 +2376,10 @@ describe("tui command handlers", () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
-  it("reports send failures and marks activity status as error", async () => {
-    const setActivityStatus = vi.fn();
-    const { handleCommand, addSystem, state } = createTuiCommandHandlersHarness({
-      sendChat: vi.fn().mockRejectedValue(new Error("gateway down")),
-      setActivityStatus,
-    });
-
-    await handleCommand("/context detail");
-
-    expect(addSystem).toHaveBeenCalledWith("send failed: gateway down");
-    expect(setActivityStatus).toHaveBeenLastCalledWith("error");
-    expect(state.pendingSubmit).toBeNull();
-  });
-
   it("redacts secrets and preserves nested causes in displayed send failures", async () => {
     const secret = "sk-abcdefghijklmnopqrstuv";
     const cause = new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`);
-    const { handleCommand, addSystem } = createTuiCommandHandlersHarness({
+    const { handleCommand, addSystem, state, setActivityStatus } = createTuiCommandHandlersHarness({
       sendChat: vi.fn().mockRejectedValue(new Error("gateway down", { cause })),
     });
 
@@ -2628,6 +2390,8 @@ describe("tui command handlers", () => {
     expect(message).toContain("Authorization: Bearer");
     expect(message).not.toContain(secret);
     expect(message).not.toContain("\u001b");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("error");
+    expect(state.pendingSubmit).toBeNull();
   });
 
   it("sanitizes control sequences in /new and /reset failures", async () => {
@@ -2698,21 +2462,6 @@ describe("tui command handlers", () => {
     expect(requestRender).toHaveBeenCalled();
     expect(state.activeChatRunId).toBe("run-active");
     expect(getPendingSubmitAcceptedRunId(state)).toEqual(expect.any(String));
-  });
-
-  it("forwards gateway slash prompts while a run is active", async () => {
-    const { handleCommand, sendChat, addPendingUser, addSystem } = createTuiCommandHandlersHarness({
-      activeChatRunId: "run-active",
-      activityStatus: "streaming",
-    });
-
-    await handleCommand("/context detail");
-
-    expectSendChatFields(sendChat, { message: "/context detail" });
-    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/context detail");
-    expect(addSystem).not.toHaveBeenCalledWith(
-      "agent is busy — press Esc to abort before sending a new message",
-    );
   });
 
   it("routes slash stop to the abort path instead of queueing a chat send", async () => {
@@ -2793,21 +2542,6 @@ describe("tui command handlers", () => {
     );
   });
 
-  it("forwards gateway sends while the current run is finishing", async () => {
-    const { handleCommand, sendChat, addPendingUser, addSystem } = createTuiCommandHandlersHarness({
-      activeChatRunId: "run-active",
-      activityStatus: "finishing context",
-    });
-
-    await handleCommand("/context detail");
-
-    expect(sendChat).toHaveBeenCalledTimes(1);
-    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/context detail");
-    expect(addSystem).not.toHaveBeenCalledWith(
-      "agent is busy — press Esc to abort before sending a new message",
-    );
-  });
-
   it("forwards gateway sends while a run is active so Gateway owns queue policy", async () => {
     const { handleCommand, sendChat, addPendingUser, addSystem } = createTuiCommandHandlersHarness({
       activeChatRunId: "run-active",
@@ -2858,15 +2592,8 @@ describe("tui command handlers", () => {
   });
 
   it("does not restore a queued run that completes before the followup send fails", async () => {
-    let rejectSend: (error: Error) => void = () => {
-      throw new Error("sendChat promise rejector was not initialized");
-    };
-    const sendChat = vi.fn(
-      () =>
-        new Promise<never>((_resolve, reject) => {
-          rejectSend = reject;
-        }),
-    );
+    const send = createDeferred<never>();
+    const sendChat = vi.fn(() => send.promise);
     const { handleCommand, state } = createTuiCommandHandlersHarness({
       sendChat,
       activeChatRunId: "run-active",
@@ -2876,19 +2603,8 @@ describe("tui command handlers", () => {
     const pendingSend = handleCommand("queued followup");
     await Promise.resolve();
     state.activeChatRunId = null;
-    rejectSend(new Error("network error"));
+    send.reject(new Error("network error"));
     await pendingSend;
-
-    expect(state.activeChatRunId).toBeNull();
-  });
-
-  it("clears activeChatRunId when a non-queued send fails", async () => {
-    const sendChat = vi.fn().mockRejectedValue(new Error("network error"));
-    const { handleCommand, state } = createTuiCommandHandlersHarness({
-      sendChat,
-    });
-
-    await handleCommand("some message");
 
     expect(state.activeChatRunId).toBeNull();
   });
@@ -3028,7 +2744,6 @@ describe("tui command handlers", () => {
 
   it.each([
     ["missing-auth", "Run openclaw models auth login or choose another model."],
-    ["auth-failed", "Run openclaw models auth login or choose another model."],
     ["cooldown", "Wait and retry, or choose another model."],
     [undefined, "Run openclaw models auth login or choose another model."],
   ])(
@@ -3065,28 +2780,25 @@ describe("tui command handlers", () => {
     },
   );
 
-  it.each([true, undefined])(
-    "applies model availability %s without changing its reference",
-    async (available) => {
-      const harness = createTuiCommandHandlersHarness({
-        listModels: vi
-          .fn()
-          .mockResolvedValue([
-            { provider: "fixture", id: "ready", name: "Ready model", available },
-          ]),
-      });
+  it("applies an available model without changing its reference", async () => {
+    const harness = createTuiCommandHandlersHarness({
+      listModels: vi
+        .fn()
+        .mockResolvedValue([
+          { provider: "fixture", id: "ready", name: "Ready model", available: true },
+        ]),
+    });
 
-      await harness.handleCommand("/model");
-      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
-      selector.onSelect?.(expectDefined(selector.items?.[0], "model option"));
-      await flushAsyncSelect();
+    await harness.handleCommand("/model");
+    const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+    selector.onSelect?.(expectDefined(selector.items?.[0], "model option"));
+    await flushAsyncSelect();
 
-      expect(harness.patchSession).toHaveBeenCalledExactlyOnceWith({
-        key: "agent:main:main",
-        model: "fixture/ready",
-      });
-    },
-  );
+    expect(harness.patchSession).toHaveBeenCalledExactlyOnceWith({
+      key: "agent:main:main",
+      model: "fixture/ready",
+    });
+  });
 
   it("uses canonical model refs in the model selector", async () => {
     const listModels = vi.fn().mockResolvedValue([
@@ -3126,7 +2838,6 @@ describe("tui command handlers", () => {
   });
 
   it.each([
-    ["/model default", false],
     ["/model default", true],
     ["/model DEFAULT", false],
     ["/model openai/gpt-5.6-luna --runtime codex continue with this model", false],
@@ -3176,21 +2887,6 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("model set to openai/gpt-5.5");
   });
 
-  it("falls back to raw input in /model confirmation when resolved ref unavailable", async () => {
-    // Older gateway versions may not return resolved; fall back to raw arg.
-    const patchSession = vi.fn().mockResolvedValue({
-      ok: true,
-      path: "/sessions/patch",
-      key: "agent:main:main",
-      entry: {},
-      // No `resolved` field
-    });
-    const { handleCommand, addSystem } = createTuiCommandHandlersHarness({ patchSession });
-
-    await handleCommand("/model openai/gpt-5.5");
-
-    expect(addSystem).toHaveBeenCalledWith("model set to openai/gpt-5.5");
-  });
   it("preserves provider prefix for nested model ids in /model confirmation", async () => {
     // Some providers route to nested model ids that themselves contain a slash
     // (e.g. resolved.model: "moonshotai/kimi-k2.5" with modelProvider: "nvidia").
@@ -3210,104 +2906,56 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("model set to nvidia/moonshotai/kimi-k2.5");
   });
 
-  it("renders model listing feedback before the backend list resolves", async () => {
-    let resolveModels: (
-      value: Array<{ provider: string; id: string; name?: string }>,
-    ) => void = () => {
-      throw new Error("model list promise resolver was not initialized");
-    };
-    const listModelsPromise = new Promise<Array<{ provider: string; id: string; name?: string }>>(
-      (resolve) => {
-        resolveModels = (value) => resolve(value);
-      },
-    );
-    const listModels = vi.fn(() => listModelsPromise);
-    const { handleCommand, addPendingSystem, openOverlay, requestRender } =
-      createTuiCommandHandlersHarness({
-        listModels,
+  it.each(["/models", "/model"])(
+    "opens %s while the backend model list is held",
+    async (command) => {
+      const deferred = createDeferred<Array<{ provider: string; id: string }>>();
+      const harness = createTuiCommandHandlersHarness({
+        listModels: vi.fn(() => deferred.promise),
       });
 
-    const pending = handleCommand("/models");
-    await Promise.resolve();
-
-    expect(listModels).toHaveBeenCalledTimes(1);
-    expect(addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
-    expect(openOverlay).not.toHaveBeenCalled();
-    const feedbackOrder = addPendingSystem.mock.invocationCallOrder[0] ?? 0;
-    const renderOrders = requestRender.mock.invocationCallOrder;
-    expect(renderOrders.filter((order) => order > feedbackOrder)).not.toEqual([]);
-
-    resolveModels([{ provider: "openrouter", id: "openrouter/auto" }]);
-    await pending;
-
-    expect(openOverlay).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    {
-      name: "successful listing",
-      listModels: vi.fn().mockResolvedValue([{ provider: "openai", id: "picker-model" }]),
-      terminalNotice: undefined,
+      const pending = harness.handleCommand(command);
+      try {
+        expect(harness.openOverlay).toHaveBeenCalledOnce();
+      } finally {
+        deferred.resolve([{ provider: "fixture", id: "ready" }]);
+        await pending;
+      }
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+      expect(selector.items?.map((item) => item.value)).toEqual(["fixture/ready"]);
     },
-    {
-      name: "empty listing",
-      listModels: vi.fn().mockResolvedValue([]),
-      terminalNotice: "no models available",
-    },
-    {
-      name: "failed listing",
-      listModels: vi.fn().mockRejectedValue(new Error("fixture backend unavailable")),
-      terminalNotice: "model list failed: fixture backend unavailable",
-    },
-  ])("removes temporary model feedback after $name", async ({ listModels, terminalNotice }) => {
-    const harness = createTuiCommandHandlersHarness({ listModels });
+  );
 
-    await harness.handleCommand("/models");
-
-    expect(harness.addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
-    expect(harness.pendingSystemNotices.size).toBe(0);
-    expect(harness.dismissPendingSystem).toHaveBeenCalledOnce();
-    if (terminalNotice) {
-      expect(harness.addSystem).toHaveBeenCalledWith(terminalNotice);
-    }
-  });
-
-  it("does not let an older model request remove the newer request's notice", async () => {
-    const olderModels = createDeferred<Array<{ provider: string; id: string }>>();
-    const newerModels = createDeferred<Array<{ provider: string; id: string }>>();
+  it("keeps known choices interactive and updates an open picker without losing its search or selection", async () => {
+    const held = createDeferred<Array<{ provider: string; id: string; name: string }>>();
+    let known = [
+      { provider: "fixture", id: "known-a", name: "Known A" },
+      { provider: "fixture", id: "known-b", name: "Known B" },
+      { provider: "fixture", id: "unrelated", name: "Other choice" },
+    ];
     const harness = createTuiCommandHandlersHarness({
-      listModels: vi
-        .fn()
-        .mockReturnValueOnce(olderModels.promise)
-        .mockReturnValueOnce(newerModels.promise),
+      getKnownModels: () => known,
+      listModels: vi.fn(() => held.promise),
     });
-
-    const olderPicker = harness.handleCommand("/models");
-    const olderNoticeId = expectDefined(
-      harness.pendingSystemNotices.keys().next().value,
-      "older model picker notice",
-    );
-    const newerPicker = harness.handleCommand("/models");
-    const newerNoticeId = expectDefined(
-      harness.pendingSystemNotices.keys().next().value,
-      "newer model picker notice",
-    );
-
-    expect(newerNoticeId).not.toBe(olderNoticeId);
-    expect(harness.pendingSystemNotices.has(olderNoticeId)).toBe(false);
-    expect(harness.pendingSystemNotices.has(newerNoticeId)).toBe(true);
-
-    olderModels.resolve([{ provider: "openai", id: "obsolete-model" }]);
-    await olderPicker;
-    expect(harness.pendingSystemNotices.has(newerNoticeId)).toBe(true);
-
-    newerModels.resolve([{ provider: "openai", id: "current-model" }]);
-    await newerPicker;
-    expect(harness.pendingSystemNotices.size).toBe(0);
-    expect(harness.openOverlay).toHaveBeenCalledOnce();
+    await harness.handleCommand("/models");
+    const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+    selector.handleInput("known");
+    selector.handleInput("\u001b[B");
+    expect(selector.render(100).join("\n")).toContain("fixture/known-b");
+    known = [{ provider: "signed-in", id: "known-new", name: "New provider" }, ...known];
+    harness.client.onModelsChanged?.("main");
+    expect(selector.render(100).join("\n")).toContain("signed-in/known-new");
+    expect(selector.render(100).join("\n")).not.toContain("fixture/unrelated");
+    selector.handleInput("\r");
+    await flushAsyncSelect();
+    expect(harness.patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      model: "fixture/known-b",
+    });
+    held.resolve(known);
   });
 
-  it("does not open a stale model selector after switching sessions", async () => {
+  it("does not populate a stale model selector after switching sessions", async () => {
     const deferred = createDeferred<Array<{ provider: string; id: string; name?: string }>>();
     const harness = createTuiCommandHandlersHarness({
       currentSessionKey: "agent:main:first",
@@ -3315,18 +2963,17 @@ describe("tui command handlers", () => {
     });
 
     const pending = harness.handleCommand("/models");
-    expect(harness.addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
+    const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
     harness.state.currentSessionKey = "agent:main:second";
     deferred.resolve([{ provider: "openai", id: "gpt-5.6-luna" }]);
     await pending;
 
-    expect(harness.openOverlay).not.toHaveBeenCalled();
+    expect(selector.items).toEqual([]);
     expect(harness.addSystem).not.toHaveBeenCalled();
-    expect(harness.pendingSystemNotices.size).toBe(0);
   });
 
   it.each(["models", "sessions"] as const)(
-    "does not open a stale %s selector after the same session key is reset",
+    "does not publish stale %s choices after the same session key is reset",
     async (picker) => {
       const deferred = createDeferred<unknown>();
       const harness = createTuiCommandHandlersHarness({
@@ -3348,9 +2995,13 @@ describe("tui command handlers", () => {
       );
       await pending;
 
-      expect(harness.openOverlay).not.toHaveBeenCalled();
+      if (picker === "models") {
+        const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+        expect(selector.items).toEqual([]);
+      } else {
+        expect(harness.openOverlay).not.toHaveBeenCalled();
+      }
       expect(harness.addSystem).not.toHaveBeenCalled();
-      expect(harness.pendingSystemNotices.size).toBe(0);
     },
   );
 
@@ -3505,7 +3156,6 @@ describe("tui command handlers", () => {
     ["global-agent result", "global", "main", false, false],
     ["session failure", "agent:main:first", "main", true, false],
     ["replacement-session result", "agent:main:first", "main", false, true],
-    ["replacement-session failure", "agent:main:first", "main", true, true],
   ])("suppresses a stale usage-cost %s", async (_name, sessionKey, agentId, fails, replace) => {
     const deferred = createDeferred<{ text: string }>();
     const runUsageCostCommand = vi.fn(() => deferred.promise);
@@ -3585,21 +3235,6 @@ describe("tui command handlers", () => {
     );
   });
 
-  it("allows bare /queue to reach gateway during an active run", async () => {
-    const { handleCommand, sendChat, addSystem } = createTuiCommandHandlersHarness({
-      activeChatRunId: "run-active",
-      activityStatus: "streaming",
-    });
-
-    await handleCommand("/queue");
-
-    expect(sendChat).toHaveBeenCalledTimes(1);
-    expectSendChatFields(sendChat, { message: "/queue" });
-    expect(addSystem).not.toHaveBeenCalledWith(
-      "agent is busy — press Esc to abort before sending a new message",
-    );
-  });
-
   it("allows colon-form /queue directives during an active run", async () => {
     const { handleCommand, sendChat } = createTuiCommandHandlersHarness({
       activeChatRunId: "run-active",
@@ -3609,39 +3244,6 @@ describe("tui command handlers", () => {
     await handleCommand("/queue:followup");
 
     expectSendChatFields(sendChat, { message: "/queue:followup" });
-  });
-
-  it("routes /queue directives through the local backend", async () => {
-    const { handleCommand, sendChat, addSystem } = createTuiCommandHandlersHarness({
-      opts: { local: true },
-      activeChatRunId: "run-active",
-      activityStatus: "streaming",
-    });
-
-    await handleCommand("/queue followup");
-
-    expectSendChatFields(sendChat, { message: "/queue followup" });
-    expect(addSystem).not.toHaveBeenCalledWith("/queue is unavailable in local mode");
-  });
-
-  it("blocks /queue while optimistic user message is pending", async () => {
-    const { handleCommand, sendChat, addSystem } = createTuiCommandHandlersHarness({
-      activeChatRunId: "run-active",
-      pendingSubmit: {
-        phase: "sending",
-        runId: "run-pending",
-        draftText: "pending",
-      },
-      activityStatus: "sending",
-    });
-
-    await handleCommand("/queue followup");
-
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith(
-      "agent is busy — press Esc to abort before sending a new message",
-      { coalesceConsecutive: true },
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

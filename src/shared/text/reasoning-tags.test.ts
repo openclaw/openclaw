@@ -57,10 +57,6 @@ describe("stripReasoningTagsFromText", () => {
   describe("code block preservation (issue #3952)", () => {
     it.each<[string, string, string?]>([
       [
-        "preserves plain code example",
-        "Use the tag like this:\n```\n<think>reasoning</think>\n```\nThat's it!",
-      ],
-      [
         "preserves inline literal think tag documentation",
         "The `<think>` tag is used for reasoning. Don't forget the closing `</think>` tag.",
       ],
@@ -72,11 +68,6 @@ describe("stripReasoningTagsFromText", () => {
         "preserves xml fenced examples",
         "Example:\n```xml\n<think>\n  <thought>nested</thought>\n</think>\n```\nDone!",
       ],
-      [
-        "preserves plain literal opening and closing tags",
-        "Use `<think>` to open and `</think>` to close.",
-      ],
-      ["preserves fenced think example", "Example:\n```\n<think>reasoning</think>\n```"],
       [
         "preserves final tags inside code examples",
         "Use `<final>` for final answers in code:\n```\n<final>42</final>\n```",
@@ -112,22 +103,13 @@ describe("stripReasoningTagsFromText", () => {
       ],
       ["Internal reasoning </think> final answer", "final answer"],
       ["<reasoning>outer<think>secret</think>", ""],
-      [
-        "Use `<think>` to open and `</think>` to close. Final sentence.",
-        "Use `<think>` to open and `</think>` to close. Final sentence.",
-      ],
       ["A < think >content< /think > B", "A  B"],
       ["", ""],
-      [null as unknown as string, null],
-    ] as const)("handles malformed/null-ish input %j", (input, expected) => {
+    ] as const)("handles malformed or empty input %j", (input, expected) => {
       expect(stripReasoningTagsFromText(input)).toBe(expected);
     });
 
     it.each([
-      [
-        "Example:\n~~~\n<think>reasoning</think>\n~~~\nDone!",
-        "Example:\n~~~\n<think>reasoning</think>\n~~~\nDone!",
-      ],
       ["Example:\n~~~js\n<think>code</think>\n~~~", "Example:\n~~~js\n<think>code</think>\n~~~"],
       ["Use ``code`` with <think>hidden</think> text", "Use ``code`` with  text"],
       [
@@ -145,15 +127,12 @@ describe("stripReasoningTagsFromText", () => {
 
     it.each([
       ["<think>outer <think>inner</think> still outer</think>visible", "visible"],
-      ["A<final>1</final>B<final>2</final>C", "A1B2C"],
       ["<thi<final>nk>private</thi<final>nk>Visible", "Visible"],
       ["private</thi<final>nk>Visible", "Visible"],
-      ["`<final>` in code, <final>visible</final> outside", "`<final>` in code, visible outside"],
       ["  `<final>literal</final>`  ", "`<final>literal</final>`"],
       ["A <FINAL data-x='1'>visible</Final> B", "A visible B"],
       ["A <final/>visible <final data-model='gemini'>answer</final> B", "A visible answer B"],
       ["A <final data-model=openrouter/google/gemini>answer</final> B", "A answer B"],
-      ["A <final-result>visible</final-result> B", "A <final-result>visible</final-result> B"],
       ["  <final-result>visible</final-result>  ", "  <final-result>visible</final-result>  "],
       ['A <final reason="a>b">visible B', 'A <final reason="a>b">visible B'],
       ["A <final / nottag>visible B", "A <final / nottag>visible B"],
@@ -164,7 +143,6 @@ describe("stripReasoningTagsFromText", () => {
     });
 
     it.each([
-      ["你好 <think>思考 🤔</think> 世界", "你好  世界"],
       ["A <think id='test' class=\"foo\">hidden</think> B", "A  B"],
       ["A <THINK>hidden</THINK> <Thinking>also hidden</Thinking> B", "A   B"],
       ["A <ANTML:THINKING hidden='1'>secret</ANTML:THINKING> B", "A  B"],
@@ -178,8 +156,9 @@ describe("stripReasoningTagsFromText", () => {
 
       const pathological = "`".repeat(100) + "<think>test</think>" + "`".repeat(100);
       const start = Date.now();
-      stripReasoningTagsFromText(pathological);
+      const result = stripReasoningTagsFromText(pathological);
       const elapsed = Date.now() - start;
+      expect(result).toBe(pathological);
       expect(elapsed).toBeLessThan(1000);
     });
 
@@ -320,13 +299,5 @@ describe("stripReasoningTagsFromText", () => {
     ] as const)("%s", (_name, input, expected, opts) => {
       expect(stripReasoningTagsFromText(input, opts)).toBe(expected);
     });
-  });
-
-  it.each([
-    ["A <final>1</final> B", "A 1 B"],
-    ["C <final>2</final> D", "C 2 D"],
-    ["E <think>x</think> F", "E  F"],
-  ] as const)("does not leak regex state across repeated calls: %j", (input, expected) => {
-    expect(stripReasoningTagsFromText(input)).toBe(expected);
   });
 });

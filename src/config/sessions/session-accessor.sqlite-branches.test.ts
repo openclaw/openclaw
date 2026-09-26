@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -67,21 +66,32 @@ function trackFullTranscriptLoads(env: NodeJS.ProcessEnv): () => number {
 }
 
 function trackBranchSummaryReads(): () => number {
-  const diagnostics = channel("openclaw.worker.task");
   let reads = 0;
-  const record = (value: unknown) => {
+  const postMessage: unknown = Object.getOwnPropertyDescriptor(
+    Worker.prototype,
+    "postMessage",
+  )?.value;
+  if (typeof postMessage !== "function") {
+    throw new Error("expected Worker.postMessage to be an own method");
+  }
+  vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    ...args: Parameters<Worker["postMessage"]>
+  ) {
+    const [message] = args;
     if (
-      typeof value === "object" &&
-      value !== null &&
-      "worker" in value &&
-      typeof value.worker === "string" &&
-      value.worker.startsWith("session-transcript.worker")
+      message &&
+      typeof message === "object" &&
+      "input" in message &&
+      message.input &&
+      typeof message.input === "object" &&
+      "kind" in message.input &&
+      message.input.kind === "branch-summaries"
     ) {
       reads++;
     }
-  };
-  diagnostics.subscribe(record);
-  diagnosticCleanups.push(() => diagnostics.unsubscribe(record));
+    Reflect.apply(postMessage, this, args);
+  });
   return () => reads;
 }
 

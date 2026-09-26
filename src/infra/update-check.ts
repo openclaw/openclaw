@@ -10,7 +10,6 @@ import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
   channelToNpmTag,
   DEV_BRANCH,
-  resolveDevUpstreamRefs,
   selectNpmChannelVersion,
   type UpdateChannel,
 } from "./update-channels.js";
@@ -18,8 +17,12 @@ import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
 } from "./update-check-package-target.js";
-import { resolveGitRepositoryMetadata, type GitTrackingTarget } from "./update-git-metadata.js";
-import { readBuiltRuntimeCommit } from "./update-git-runtime.js";
+import {
+  readGitReceiptFetchTarget,
+  readGitBranchFetchTarget,
+  resolveGitRepositoryMetadata,
+} from "./update-git-metadata.js";
+import { readBuiltRuntimeCommit, readGitRuntimeArtifactStatus } from "./update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
@@ -51,6 +54,7 @@ type GitUpdateStatus = {
   behind: number | null;
   fetchOk: boolean | null;
   builtSha?: string | null;
+  artifacts?: Awaited<ReturnType<typeof readGitRuntimeArtifactStatus>>;
   countsCached?: true;
   stale?: UpdateFetchFailure;
   error?: string;
@@ -343,36 +347,9 @@ async function checkGitUpdateStatus(params: {
   if (error) {
     return { ...base, error };
   }
-  const trackingRevisions =
-    branch === "HEAD"
-      ? params.useDetachedDevUpstream
-        ? resolveDevUpstreamRefs(true, [`refs/remotes/origin/${DEV_BRANCH}`])
-        : []
-      : resolveDevUpstreamRefs(false);
-  let tracking: GitTrackingTarget | null = null;
-  for (const revision of trackingRevisions) {
-    const display = await readGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", revision);
-    if (!display) {
-      continue;
-    }
-    let fetch: GitTrackingTarget["fetch"] = "prune";
-    if (branch === "HEAD") {
-      if (revision === `${DEV_BRANCH}@{upstream}`) {
-        const [remote, mergeRef] = await Promise.all([
-          readGit("config", "--get", `branch.${DEV_BRANCH}.remote`),
-          readGit("config", "--get", `branch.${DEV_BRANCH}.merge`),
-        ]);
-        if (!remote || !mergeRef) {
-          continue;
-        }
-        fetch = { remote, mergeRef };
-      } else {
-        fetch = { remote: "origin", mergeRef: `refs/heads/${DEV_BRANCH}` };
-      }
-    }
-    tracking = { revision, display, fetch };
-    break;
-  }
+  const trackingBranch =
+    branch === "HEAD" ? (params.useDetachedDevUpstream ? DEV_BRANCH : null) : branch;
+  let tracking = trackingBranch ? await readGitBranchFetchTarget(readGit, trackingBranch) : null;
 
   const commitAtSeconds = Number.parseInt(commitAtRaw ?? "", 10);
   const commitAtMs = Number.isSafeInteger(commitAtSeconds) ? commitAtSeconds * 1000 : null;
@@ -384,34 +361,82 @@ async function checkGitUpdateStatus(params: {
     params.upstreamFallback?.currentSha.trim().toLowerCase() === sha.toLowerCase()
       ? params.upstreamFallback.upstreamRef.trim() || null
       : null;
-  const upstream = tracking?.display ?? receiptUpstream;
-  const upstreamSource = tracking
+  const receiptTarget = receiptUpstream
+    ? await readGitReceiptFetchTarget(readGit, receiptUpstream, Boolean(params.fetch))
+    : null;
+  // A matching receipt owns the intended upstream even when it cannot resolve.
+  // Only an install with neither configured tracking nor receipt intent uses Dev's default.
+  if (
+    !tracking &&
+    !receiptUpstream &&
+    branch === "HEAD" &&
+    trackingBranch &&
+    (await readGit("remote", "get-url", "--", "origin"))
+  ) {
+    tracking = { remote: "origin", mergeRef: `refs/heads/${trackingBranch}` };
+  }
+  const fetchTarget = tracking ?? receiptTarget;
+  const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
+  let fetchOk: boolean | null = null;
+  let fetchedCommit: string | null = null;
+  if (params.fetch && fetchTarget) {
+    if (fetchTarget.remote === ".") {
+      fetchOk = true;
+    } else {
+      const exclusions =
+        (await readGit("config", "--get-all", `remote.${fetchTarget.remote}.fetch`))
+          ?.split("\n")
+          .filter((refspec) => refspec.startsWith("^")) ?? [];
+      // Select one source; Git retains configured destination/force policy. Explicit
+      // exclusions and FETCH_HEAD prevent an unfetched old ref from looking fresh.
+      const fetched = await runGit(
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-prune",
+        "--no-prune-tags",
+        "--no-recurse-submodules",
+        "--",
+        fetchTarget.remote,
+        fetchTarget.mergeRef,
+        ...exclusions,
+      );
+      fetchedCommit =
+        fetched?.code === 0 ? await readGit("rev-parse", "--verify", "FETCH_HEAD^{commit}") : null;
+      fetchOk = fetched?.code === 0 && fetchedCommit !== null;
+    }
+  }
+  // Command-local defaults let Git resolve a fresh SHA-only Dev checkout's own
+  // mapping after fetch, without creating a branch or changing its configuration.
+  const trackingRevision =
+    tracking && trackingBranch
+      ? await readGit(
+          "-c",
+          `branch.${trackingBranch}.remote=${tracking.remote}`,
+          "-c",
+          `branch.${trackingBranch}.merge=${tracking.mergeRef}`,
+          "rev-parse",
+          "--symbolic-full-name",
+          `${trackingBranch}@{upstream}`,
+        )
+      : null;
+  const upstream = trackingRevision
+    ? await readGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", trackingRevision)
+    : receiptUpstream;
+  const upstreamSource = trackingRevision
     ? ("tracking" as const)
     : receiptUpstream
       ? ("receipt" as const)
       : undefined;
-
-  const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
-
-  const fetchTarget =
-    tracking?.fetch && tracking.fetch !== "prune"
-      ? [
-          "--",
-          tracking.fetch.remote,
-          `+${tracking.fetch.mergeRef}:refs/remotes/${tracking.display}`,
-        ]
-      : ["--prune"];
-  const fetchOk = params.fetch
-    ? (await runGit("fetch", "--quiet", ...fetchTarget))?.code === 0
-    : null;
-
-  // Freeze the post-fetch upstream for both graph queries. Active tracking wins;
-  // a matching successful update receipt keeps intentional detached installs comparable.
-  const upstreamRevision = `${upstreamSource === "tracking" ? tracking?.revision : upstream}^{commit}`;
-  const upstreamCommit =
+  const upstreamRevision = `${trackingRevision ?? receiptTarget?.revision ?? upstream}^{commit}`;
+  let upstreamCommit =
     (!params.fetch || fetchOk === true) && upstream && sha
       ? await readGit("rev-parse", "--verify", upstreamRevision)
       : null;
+  if (params.fetch && fetchTarget?.remote !== "." && upstreamCommit !== fetchedCommit) {
+    upstreamCommit = null;
+  }
+
   const mergeBase = sha && upstreamCommit ? await readGit("merge-base", sha, upstreamCommit) : null;
   const counts =
     sha && upstreamCommit && mergeBase
@@ -428,13 +453,14 @@ async function checkGitUpdateStatus(params: {
     upstream,
     ...(upstreamSource ? { upstreamSource } : {}),
     upstreamSha: upstreamCommit,
-    ...(await resolveGitRepositoryMetadata(readGit, tracking, branch)),
+    ...(await resolveGitRepositoryMetadata(readGit, fetchTarget)),
     commitAtMs,
     dirty,
     ahead: parsed ? Number(parsed[1]) : null,
     behind: parsed ? Number(parsed[2]) : null,
     fetchOk,
     builtSha: await readBuiltRuntimeCommit(root),
+    artifacts: await readGitRuntimeArtifactStatus({ root, sha }),
   };
 }
 

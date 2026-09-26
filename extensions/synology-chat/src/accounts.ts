@@ -1,8 +1,3 @@
-/**
- * Account resolution: reads config from channels.synology-chat,
- * merges per-account overrides, falls back to environment variables.
- */
-
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -21,7 +16,6 @@ import type {
   SynologyWebhookPathSource,
 } from "./types.js";
 
-/** Extract the channel config from the full OpenClaw config object. */
 function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig | undefined {
   return cfg?.channels?.["synology-chat"] as SynologyChatChannelConfig | undefined;
 }
@@ -69,7 +63,6 @@ function resolveWebhookPathSource(params: {
   return "default";
 }
 
-/** Parse allowedUserIds from string or array to string[]. */
 function parseAllowedUserIds(raw: string | string[] | undefined): string[] {
   if (!raw) {
     return [];
@@ -95,14 +88,6 @@ function normalizeRateLimitPerMinuteValue(raw: unknown): number | undefined {
   return parsed != null && parsed >= 0 ? parsed : undefined;
 }
 
-function parseRateLimitPerMinute(raw: string | undefined): number {
-  return normalizeRateLimitPerMinuteValue(raw) ?? 30;
-}
-
-/**
- * Resolve a specific account by ID with full defaults applied.
- * Falls back to env vars for the "default" account.
- */
 export function resolveAccount(
   cfg: OpenClawConfig,
   accountId?: string | null,
@@ -119,7 +104,7 @@ export function resolveAccount(
   const envIncomingUrl = normalizeOptionalString(process.env.SYNOLOGY_CHAT_INCOMING_URL) ?? "";
   const envNasHost = normalizeOptionalString(process.env.SYNOLOGY_NAS_HOST) ?? "localhost";
   const envAllowedUserIds = normalizeOptionalString(process.env.SYNOLOGY_ALLOWED_USER_IDS) ?? "";
-  const envRateLimitValue = parseRateLimitPerMinute(process.env.SYNOLOGY_RATE_LIMIT);
+  const envRateLimitValue = normalizeRateLimitPerMinuteValue(process.env.SYNOLOGY_RATE_LIMIT) ?? 30;
   const envBotName = normalizeOptionalString(process.env.OPENCLAW_BOT_NAME) ?? "OpenClaw";
   const webhookPathSource = resolveWebhookPathSource({ accountId: id, channelCfg, rawAccount });
   const dangerouslyAllowInheritedWebhookPath =

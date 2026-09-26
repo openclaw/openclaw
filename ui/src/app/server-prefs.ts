@@ -278,10 +278,11 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
   if (!reset) {
     throw new Error(`Server UI preference is not resettable: ${key}`);
   }
+  // SAFETY: SYNCED_PREFS pairs each key's write() with that key's own value type.
+  const write = specification.write as
+    | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
+    | undefined;
   if (state?.provenance === "device-local") {
-    const write = specification.write as
-      | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
-      | undefined;
     if (!write) {
       throw new Error(`Server UI preference cannot restore a retained local value: ${key}`);
     }
@@ -304,14 +305,8 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
   requestServerUiPrefReset(key, "server");
   // The resolved state owns the reset target, including the Gateway fallback
   // while the profile is still loading. Config preferences use product defaults.
-  if (state) {
-    // SAFETY: SYNCED_PREFS pairs each key's write() with that key's own value type.
-    const write = specification.write as
-      | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
-      | undefined;
-    if (write) {
-      return applyReset(write(state.resetValue));
-    }
+  if (state && write) {
+    return applyReset(write(state.resetValue));
   }
   return applyReset(reset(loadSettings()));
 }
@@ -528,7 +523,7 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
         }
       }
     }
-    const useProfile = Boolean(profileBatch && Object.keys(profileBatch).length);
+    const useProfile = Object.keys(profileBatch).length > 0;
     const batch = useProfile ? profileBatch : { ...pendingPrefs };
     const afterCommit = pushAfterCommit;
     for (let attempt = 0; attempt < 2; attempt += 1) {

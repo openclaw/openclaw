@@ -12,6 +12,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("node:worker_threads", async () => {
   const { EventEmitter } = await import("node:events");
   return {
+    isMainThread: false,
     get workerData() {
       return fixture.data;
     },
@@ -40,9 +41,6 @@ vi.mock("../infra/state-database-coordinator.js", () => ({
   acquireStateDatabaseCoordinator: () => ({ release() {} }),
   acquireStateDatabaseHandleLease: () => ({ release() {} }),
   retainHeldStateDatabaseCoordinator: () => undefined,
-}));
-vi.mock("../infra/sqlite-coordinator.js", () => ({
-  runWithSqliteCoordinator: (_handle: unknown, _label: string, run: () => unknown) => run(),
 }));
 vi.mock("../infra/sqlite-busy-timeout.js", () => ({
   runWithSqliteBusyTimeout: (_db: unknown, _ms: number, run: () => unknown) => run(),

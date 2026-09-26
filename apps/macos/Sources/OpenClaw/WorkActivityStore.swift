@@ -100,23 +100,7 @@ final class WorkActivityStore {
     }
 
     func resolveIconState(override selection: IconOverrideSelection) {
-        switch selection {
-        case .system:
-            self.iconState = self.deriveIconState()
-        case .idle:
-            self.iconState = .idle
-        default:
-            let base = selection.toIconState()
-            switch base {
-            case let .workingMain(kind),
-                 let .workingOther(kind):
-                self.iconState = .overridden(kind)
-            case let .overridden(kind):
-                self.iconState = .overridden(kind)
-            case .idle:
-                self.iconState = .idle
-            }
-        }
+        self.iconState = selection.fixedIconState() ?? self.deriveIconState()
     }
 
     private func setJobActive(_ activity: Activity) {

@@ -245,7 +245,7 @@ describe("workspace inputs at harness dispatch", () => {
     },
   );
 
-  it("transfers canonical documents after native image projection without a transcript recorder", async () => {
+  it("transfers canonical documents preserved by native image projection without a transcript recorder", async () => {
     const prepare = vi.fn<NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>>(
       async () => "Read /remote/.inputs/report.pdf",
     );
@@ -262,13 +262,13 @@ describe("workspace inputs at harness dispatch", () => {
         skipPromptSubmission: false,
         pluginHarness: true,
       });
-      expect(projected.media).toBeUndefined();
+      expect(projected.media).toEqual(media);
       await runEmbeddedAttemptWithBackend({ ...f.params, ...projected } as never, undefined, media);
       expect(prepare.mock.calls[0]?.[0].media).toBe(media);
       expect(harnessMocks.runAttempt.mock.calls[0]?.[0]).toMatchObject({
         prompt: "Inspect attachment\n\nRead /remote/.inputs/report.pdf",
         transcriptPrompt: "Inspect attachment",
-        media: undefined,
+        media,
       });
     } finally {
       f.cleanup();

@@ -29,11 +29,15 @@ for credential topology. A smoke-test artifact with ad-hoc signing proves no
 release readiness. Real publish reuses the successful notarized preflight and
 validation for the same tag/source SHA.
 
-The real publish (`openclaw-macos-publish.yml` in `openclaw/releases`) requires
-the public GitHub release; flip it as soon as core npm is visible. Preflights
-resume from notarization checkpoints without rebuilding: pass
-`resume_notarization_run_id=<run>`, `resume_notarization_run_attempt=1`, and
-`resume_notarization_variant=all`. The appcast lands as an auto-opened PR
+The real publish (`openclaw-macos-publish.yml` in `openclaw/releases`) attaches
+assets to the GitHub release whether it is still a draft or public. Let the
+selected publisher activate the release after its required checks; do not
+make a draft public to bypass a failed gate. See
+[publication recovery](publication-recovery.md). A re-dispatched preflight for the same tag
+and source resumes every variant from its newest checkpoint without rebuilding;
+`ignore_checkpoints=true` forces a rebuild and `resume_notarization_run_id`,
+`resume_notarization_run_attempt`, `resume_notarization_variant` only pin one
+specific run. The appcast lands as an auto-opened PR
 `chore(release): update appcast for <version>` that must be merged; macOS is
 not complete until it is. Record preflight/publish run ids in the handoff.
 
@@ -68,6 +72,9 @@ publication, not proof that the Linux app shipped; follow its `Linux App Release
 builder and verify the AppImage, `.deb`, signed `latest.json`, and
 `SHA256SUMS.linux-app.txt` before reporting Linux complete.
 
+A successful request is reused even if its independent builder later fails;
+recover the builder rather than expecting a core publication retry to rebuild it.
+
 The website resolves desktop download assets at build time. After Linux assets
 publish, rebuild `openclaw.ai` through its existing deployment owner and verify
 the deployed Apps card shows the intended version and both download URLs resolve
@@ -94,6 +101,10 @@ This tooling does not change shipped updater or
 download URLs. Keep client cutover and signed installed-client migration under
 separate approval; never claim local helper tests or unsigned packages prove it.
 
+Creating `linux-stable` requires the release-owner GitHub App's contents and
+workflows permissions; `GITHUB_TOKEN` is insufficient. For an approved client
+migration, compare versions using the shipped old updater's comparator.
+
 Core finalization does not depend on canonical Linux metadata. After successful
 finalization/readback, a bounded detached mirror-only request uses the original
 validated publisher identity. It does not wait for the metadata queue in the
@@ -106,8 +117,7 @@ after preparatory reads, including after a deletion and before its replacement.
 Verify both canonical and legacy endpoints after publication, including when a
 newer Gateway release appeared during the Linux build. If canonical metadata is
 missing after an interrupted deletion, normal publication refuses recovery.
-Use the explicit owner reconciliation procedure in
-`docs/reference/RELEASING.md` under **Linux companion publication**: preserve the
+Have the release owner reconcile it explicitly: preserve the
 last verified Linux floor and all intervening publication evidence, exclude
 other writers, revalidate release/source/inventory and immutable bytes, and
 read back both endpoints. Version/hash inputs or current Gateway `latest` alone

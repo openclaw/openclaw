@@ -16,6 +16,7 @@ import {
   formatGeneratedAttachmentLines,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { ToolInputError } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import {
@@ -23,19 +24,18 @@ import {
   type VideoGenerationTaskHandle,
 } from "./media-generate-background.js";
 import {
+  buildMediaGenerateToolExecutionResult,
   describeMediaGenerationResult,
   resolveMediaGenerationResultGeometry,
   type MediaGenerateToolExecutionResult,
 } from "./media-generate-result-shared.js";
 import {
   buildMediaReferenceDetails,
-  buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
   loadMediaToolReferences,
   resolveMediaToolSandboxConfig,
   type LoadedMediaToolReference,
 } from "./media-tool-shared.js";
-import type { ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const GENERATED_VIDEO_MEDIA_SUBDIR = "tool-video-generation";
 const GENERATED_VIDEO_PROBE_BUDGET_MS = 3000;
@@ -328,28 +328,14 @@ export async function executeVideoGenerationJob(params: {
     ...formatGeneratedAttachmentLines(attachments),
   ].filter((entry): entry is string => Boolean(entry));
 
-  return {
-    provider: result.provider,
-    model: result.model,
-    urlOnlyUrls: deliveredVideos.flatMap((video) =>
-      video.kind === "url" ? [video.media.url] : [],
-    ),
-    count: deliveredVideos.length,
-    mediaUrls: allMediaUrls,
+  const executionResult = buildMediaGenerateToolExecutionResult({
+    result,
     attachments,
-    contentText: lines.join("\n"),
-    wakeResult: lines.join("\n"),
+    mediaUrls: allMediaUrls,
+    lines,
+    taskHandle: params.taskHandle,
+    warning,
     details: {
-      provider: result.provider,
-      model: result.model,
-      count: deliveredVideos.length,
-      media: {
-        mediaUrls: allMediaUrls,
-        attachments,
-      },
-      attachments,
-      paths: allMediaUrls,
-      ...buildTaskRunDetails(params.taskHandle),
       ...buildMediaReferenceDetails({
         entries: params.loadedReferenceImages,
         singleKey: "image",
@@ -392,11 +378,13 @@ export async function executeVideoGenerationJob(params: {
         : {}),
       ...(params.filename ? { filename: params.filename } : {}),
       ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-      attempts: result.attempts,
-      ...(result.normalization ? { normalization: result.normalization } : {}),
-      metadata: result.metadata,
-      ...(warning ? { warning } : {}),
-      ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
     },
+  });
+  return {
+    ...executionResult,
+    urlOnlyUrls: deliveredVideos.flatMap((video) =>
+      video.kind === "url" ? [video.media.url] : [],
+    ),
+    mediaUrls: allMediaUrls,
   };
 }

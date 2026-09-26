@@ -20,20 +20,22 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
   captureChannelReadAuthority: () => undefined,
 }));
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({ parseMediaContentLength: Number }));
-vi.mock("./read-response-with-limit.js", () => ({
+vi.mock("openclaw/plugin-sdk/response-limit-runtime", () => ({
   readResponseWithLimit: async (response: Response) => {
     const bytes = Buffer.from(await response.arrayBuffer());
     await boundary.afterRead?.();
     return bytes;
   },
 }));
-vi.mock("./transport-runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/extension-shared", () => ({
   buildTimeoutAbortSignal: ({ signal }: { signal?: AbortSignal }) => ({
     signal,
     cleanup() {
       boundary.cleanups++;
     },
   }),
+}));
+vi.mock("openclaw/plugin-sdk/ssrf-dispatcher", () => ({
   closeDispatcher: async (dispatcher?: object) => {
     if (dispatcher) {
       boundary.closed++;
@@ -44,6 +46,8 @@ vi.mock("./transport-runtime-api.js", () => ({
     await boundary.dns?.();
     return {};
   },
+}));
+vi.mock("openclaw/plugin-sdk/runtime-fetch", () => ({
   fetchWithRuntimeDispatcherOrMockedGlobal: async (url: string, init: RequestInit) => {
     boundary.dispatched.push([url, init]);
     return boundary.fetch(url, init);

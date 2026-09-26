@@ -1,11 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  defaultRuntime,
+  shortenHomePath,
+  theme,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveMemoryPluginConfig, withMemoryCommand } from "./cli-runtime-common.js";
-import { defaultRuntime, shortenHomePath, theme } from "./cli.host.runtime.js";
 import type { MemoryRemBackfillOptions, MemoryRemHarnessOptions } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
+import { DAILY_MEMORY_FILENAME_RE } from "./dreaming-ingestion-state.js";
 import { seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
@@ -46,24 +51,19 @@ export async function runMemorySessionBackfill(
         pluginConfig,
         cfg,
       });
-      let result;
-      try {
-        result = await runSessionBackfill({
-          agentId,
-          workspaceDir,
-          pluginConfig,
-          ...(opts.from !== undefined ? { from: opts.from } : {}),
-          ...(opts.to !== undefined ? { to: opts.to } : {}),
-          ...(opts.limitDays !== undefined ? { limitDays: opts.limitDays } : {}),
-          ...(opts.rem !== undefined ? { rem: opts.rem } : {}),
-          ...(opts.apply !== undefined ? { apply: opts.apply } : {}),
-          ...(opts.rollback !== undefined ? { rollback: opts.rollback } : {}),
-          ...(opts.archiveFiles !== undefined ? { archiveFiles: opts.archiveFiles } : {}),
-          ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
-        });
-      } catch (error) {
-        throw new Error(error instanceof Error ? error.message : String(error), { cause: error });
-      }
+      const result = await runSessionBackfill({
+        agentId,
+        workspaceDir,
+        pluginConfig,
+        ...(opts.from !== undefined ? { from: opts.from } : {}),
+        ...(opts.to !== undefined ? { to: opts.to } : {}),
+        ...(opts.limitDays !== undefined ? { limitDays: opts.limitDays } : {}),
+        ...(opts.rem !== undefined ? { rem: opts.rem } : {}),
+        ...(opts.apply !== undefined ? { apply: opts.apply } : {}),
+        ...(opts.rollback !== undefined ? { rollback: opts.rollback } : {}),
+        ...(opts.archiveFiles !== undefined ? { archiveFiles: opts.archiveFiles } : {}),
+        ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
+      });
       if (opts.json) {
         defaultRuntime.writeJson(result);
         return;
@@ -432,7 +432,6 @@ export async function runMemoryRemBackfill(
     },
   });
 }
-const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
   const resolvedPath = path.resolve(inputPath);
   let stat;
@@ -445,14 +444,14 @@ async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
     throw err;
   }
   if (stat.isFile()) {
-    return DAILY_MEMORY_FILE_NAME_RE.test(path.basename(resolvedPath)) ? [resolvedPath] : [];
+    return DAILY_MEMORY_FILENAME_RE.test(path.basename(resolvedPath)) ? [resolvedPath] : [];
   }
   if (!stat.isDirectory()) {
     return [];
   }
   const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
   return entries
-    .filter((entry) => entry.isFile() && DAILY_MEMORY_FILE_NAME_RE.test(entry.name))
+    .filter((entry) => entry.isFile() && DAILY_MEMORY_FILENAME_RE.test(entry.name))
     .map((entry) => path.join(resolvedPath, entry.name))
     .toSorted((a, b) => path.basename(a).localeCompare(path.basename(b)));
 }
@@ -493,7 +492,7 @@ async function withHistoricalMemoryWorkspace<T>(
   }
 }
 function extractIsoDayFromPath(filePath: string): string | null {
-  const match = path.basename(filePath).match(DAILY_MEMORY_FILE_NAME_RE);
+  const match = path.basename(filePath).match(DAILY_MEMORY_FILENAME_RE);
   return match?.[1] ?? null;
 }
 function normalizeRelativePath(baseDir: string, filePath: string): string {

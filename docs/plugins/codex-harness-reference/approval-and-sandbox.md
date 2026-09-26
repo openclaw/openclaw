@@ -10,6 +10,11 @@ sidebarTitle: "Approval and sandbox"
 
 The approval and sandbox posture of a Codex turn, and where native execution runs. Part of the [Codex harness reference](/plugins/codex-harness-reference); [Where each section moved](/plugins/codex-harness-reference#where-each-section-moved) lists every section.
 
+For native plugin/app tools, also follow the
+[app approval decision order](/plugins/codex-native-plugins#approval-decision-order).
+App admission, tool enablement, per-tool approval modes, and OpenClaw's
+elicitation response are separate from the general presets below.
+
 ## Approval and sandbox modes
 
 Local stdio app-server sessions default to YOLO mode:

@@ -457,6 +457,7 @@ function decorate(row: GatewaySessionRow, fixture: RowFixture, cfg: OpenClawConf
       sharedHost: null,
       createdAtMs: START,
       idleSinceAtMs: null,
+      destroyRequestedAtMs: null,
       attachedSessionIds: [],
       desktopAvailable: false,
       desktopApps: [],

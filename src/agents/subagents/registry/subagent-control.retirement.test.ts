@@ -86,7 +86,7 @@ it.each([
       defaultSessionId: "child-session",
     });
     if (transition === "retirement with retained predecessor") {
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "predecessor",
         childSessionKey: ancestorKey,
         requesterSessionKey: controllerSessionKey,
@@ -103,7 +103,7 @@ it.each([
       ["ancestor", ancestorKey, controllerSessionKey, false],
       ["child", childKey, ancestorKey, true],
     ] as const) {
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: owner,
@@ -251,7 +251,7 @@ it.each([
           } else if (transition === "controller replacement") {
             ancestor.controllerSessionKey = "agent:other:main";
           } else if (transition === "new direct child after retirement") {
-            registerSubagentRun({
+            await registerSubagentRun({
               runId: "late",
               childSessionKey: "agent:main:subagent:late-child",
               requesterSessionKey: ancestorKey,
@@ -337,7 +337,7 @@ it.each(
     ["draining-ancestor", ancestorKey, controllerSessionKey, false],
     ["draining-child", childKey, ancestorKey, true],
   ] as const) {
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey,
       requesterSessionKey: owner,
@@ -467,7 +467,7 @@ it.each(["default", "template", "fixed JSON-style", "exact SQLite"])(
       { storePath, sessionKey: childSessionKey },
       { sessionId, updatedAt: Date.now() },
     );
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "fixed-store-child",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -510,7 +510,7 @@ it.each(["default", "template", "fixed JSON-style", "exact SQLite"])(
 it("does not create a missing child database while binding cancellation", async () => {
   const childSessionKey = "agent:missing:subagent:unprepared";
   const databasePath = path.join(fixture.stateDir, "agents/missing/agent/openclaw-agent.sqlite");
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: "unprepared",
     childSessionKey,
     requesterSessionKey: "agent:main:main",

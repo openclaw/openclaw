@@ -34,7 +34,7 @@ import {
 } from "../tasks/task-flow-registry.store.kernel.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";

@@ -9,6 +9,11 @@ import {
   markPluginRegistryRetired,
   revokePluginRecord,
 } from "../plugins/registry-lifecycle.js";
+import {
+  createPluginRegistryOwner,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   DetachedTaskRuntimeOwnerRetiredError,
@@ -224,6 +229,89 @@ describe("detached-task-runtime", () => {
     mockCreateRunningTaskRunCoreWithReceiptAsync.mockReset();
   });
 
+  it.each([
+    {
+      name: "Gateway A's core-owned successor while Gateway B is live and active",
+      gatewayB: true,
+      settles: true,
+    },
+    {
+      name: "a successor that registers a plugin task runtime",
+      successorRuntime: true,
+      settles: false,
+    },
+    {
+      name: "a closing Gateway A while Gateway B is live and active",
+      gatewayB: true,
+      closeGatewayA: true,
+      settles: false,
+    },
+    {
+      // A published build shares this process state but never links its registries.
+      name: "a generation left unlinked by a published build while Gateway B is live and active",
+      unlinked: true,
+      gatewayB: true,
+      settles: false,
+    },
+  ])(
+    "settles, but never admits, work from a replaced plugin generation on $name",
+    async ({ successorRuntime, gatewayB, closeGatewayA, unlinked, settles }) => {
+      const task = createFakeTaskRecord();
+      const transition = vi
+        .spyOn(taskTransitions, "transitionTaskRecordsByRunAsync")
+        .mockResolvedValue([task]);
+      const spawning = createEmptyPluginRegistry();
+      setActivePluginRegistry(spawning);
+      const gatewayA = unlinked ? undefined : createPluginRegistryOwner(spawning);
+      try {
+        // A plugin reload publishes Gateway A's successor and retires the admitting generation.
+        const successor = createEmptyPluginRegistry();
+        setActivePluginRegistry(successor);
+        gatewayA?.publish(successor);
+        markPluginRegistryRetired(spawning);
+        if (successorRuntime) {
+          setDetachedTaskLifecycleRuntime({ ...getDetachedTaskLifecycleRuntime() });
+        }
+        if (gatewayB) {
+          // Gateway B becomes the process-active projection; it never succeeds A.
+          const other = createEmptyPluginRegistry();
+          setActivePluginRegistry(other);
+          createPluginRegistryOwner(other);
+        }
+        if (closeGatewayA) {
+          await gatewayA?.close();
+        }
+        // The retired scope cannot admit new work, even while core owns tasks.
+        expect(() =>
+          withPluginRuntimeRegistryScope(spawning, () =>
+            createPreparedRunningTask({
+              runtime: "subagent",
+              ownerKey: "agent:main:main",
+              runId: "run-after-retirement",
+              task: "new work from a retired scope",
+            }),
+          ),
+        ).toThrow(DetachedTaskRuntimeOwnerRetiredError);
+        expect(mockCreateRunningTaskRunCoreWithReceiptAsync).not.toHaveBeenCalled();
+        expect(mockCreateRunningTaskRunCore).not.toHaveBeenCalled();
+        // Work it already admitted still settles.
+        const settlement = withPluginRuntimeRegistryScope(spawning, () =>
+          finalizeTaskRunByRunIdAsync({ runId: task.runId!, status: "succeeded", endedAt: 200 }),
+        );
+        if (settles) {
+          await expect(settlement).resolves.toEqual([task]);
+          expect(transition).toHaveBeenCalledOnce();
+        } else {
+          await expect(settlement).rejects.toBeInstanceOf(DetachedTaskRuntimeOwnerRetiredError);
+          expect(transition).not.toHaveBeenCalled();
+        }
+      } finally {
+        transition.mockRestore();
+        resetPluginRuntimeStateForTest();
+      }
+    },
+  );
+
   describe("awaited creation", () => {
     async function withRuntimeOwner(
       run: (registry: ReturnType<typeof createEmptyPluginRegistry>) => Promise<void>,
@@ -252,6 +340,63 @@ describe("detached-task-runtime", () => {
       runId: "run-owned",
       task: "Owned task",
     } as const;
+
+    it.each(["finalize", "complete", "fail"] as const)(
+      "projects Incognito content before a legacy runtime's create and %s callbacks",
+      async (terminalMethod) =>
+        withRuntimeOwner(async () => {
+          const content = "Synthetic private legacy task content";
+          const writes: unknown[] = [];
+          const task = createFakeTaskRecord();
+          const finish = (terminal: { runId: string }) => {
+            writes.push(structuredClone(terminal));
+            return [task];
+          };
+          setDetachedTaskLifecycleRuntime({
+            ...getDetachedTaskLifecycleRuntime(),
+            createRunningTaskRun(input) {
+              writes.push(structuredClone(input));
+              return task;
+            },
+            finalizeTaskRunByRunId: terminalMethod === "finalize" ? finish : undefined,
+            completeTaskRunByRunId: finish,
+            failTaskRunByRunId: finish,
+          });
+          for (const incognito of [false, true]) {
+            writes.length = 0;
+            const prepared = prepareRunningTaskRun({
+              ...params,
+              ownerKey: incognito
+                ? "agent:main:dashboard:incognito-synthetic-legacy"
+                : params.ownerKey,
+              task: content,
+              label: content,
+              progressSummary: content,
+            });
+            if (prepared.kind !== "legacy") {
+              throw new Error("Expected the registered synchronous runtime");
+            }
+            prepared.finalizeRun({
+              runId: params.runId,
+              status: terminalMethod === "complete" ? "succeeded" : "failed",
+              endedAt: 200,
+              terminalSummary: content,
+              error: content,
+            });
+            expect.soft(writes).toEqual([
+              expect.objectContaining({
+                task: incognito ? "Incognito task" : content,
+                label: incognito ? "Incognito task" : content,
+                progressSummary: incognito ? null : content,
+              }),
+              expect.objectContaining({
+                terminalSummary: incognito ? null : content,
+                error: incognito ? "Incognito task error." : content,
+              }),
+            ]);
+          }
+        }),
+    );
 
     it.each(["core", "legacy"] as const)(
       "preserves %s failure custody without retrying the write",
@@ -624,7 +769,7 @@ describe("detached-task-runtime", () => {
     );
   });
 
-  it("dispatches lifecycle operations through the installed runtime", async () => {
+  it("dispatches lifecycle operations through the installed runtime", () => {
     const defaultRuntime = getDetachedTaskLifecycleRuntime();
     const queuedTask = createFakeTaskRecord({
       taskId: "task-queued",
@@ -694,10 +839,6 @@ describe("detached-task-runtime", () => {
         createdAtOrAfter: 1,
       }),
     ).toEqual({ lookup: "available", task: runningTask });
-    await getDetachedTaskLifecycleRuntime().cancelDetachedTaskRunById({
-      cfg: {} as never,
-      taskId: runningTask.taskId,
-    });
 
     const queuedArgs = requireFirstCallArg(vi.mocked(fakeRuntime.createQueuedTaskRun), "queued");
     expect(queuedArgs.runId).toBe("run-queued");
@@ -740,10 +881,6 @@ describe("detached-task-runtime", () => {
       runtime: "cli",
       sessionKey: "agent:main:main",
       createdAtOrAfter: 1,
-    });
-    expect(fakeRuntime.cancelDetachedTaskRunById).toHaveBeenCalledWith({
-      cfg: {} as never,
-      taskId: runningTask.taskId,
     });
 
     resetDetachedTaskLifecycleRuntimeForTests();
@@ -794,47 +931,6 @@ describe("detached-task-runtime", () => {
   });
 
   describe("tryRecoverTaskBeforeMarkLost", () => {
-    it("returns recovered when hook returns recovered true", async () => {
-      const task = createFakeTaskRecord({ taskId: "task-recover", runtime: "subagent" });
-      setDetachedTaskLifecycleRuntime({
-        ...getDetachedTaskLifecycleRuntime(),
-        tryRecoverTaskBeforeMarkLost: vi.fn(() => ({ recovered: true })),
-      });
-      const result = await tryRecoverTaskBeforeMarkLost({
-        taskId: task.taskId,
-        runtime: task.runtime,
-        task,
-        now: 123,
-      });
-      expect(result).toEqual({ recovered: true });
-    });
-
-    it("returns not recovered when hook returns recovered false", async () => {
-      const task = createFakeTaskRecord({ taskId: "task-no-recover", runtime: "cron" });
-      setDetachedTaskLifecycleRuntime({
-        ...getDetachedTaskLifecycleRuntime(),
-        tryRecoverTaskBeforeMarkLost: vi.fn(() => ({ recovered: false })),
-      });
-      const result = await tryRecoverTaskBeforeMarkLost({
-        taskId: task.taskId,
-        runtime: task.runtime,
-        task,
-        now: 456,
-      });
-      expect(result).toEqual({ recovered: false });
-    });
-
-    it("returns not recovered when hook is not provided", async () => {
-      const task = createFakeTaskRecord({ taskId: "task-no-hook", runtime: "cli" });
-      const result = await tryRecoverTaskBeforeMarkLost({
-        taskId: task.taskId,
-        runtime: task.runtime,
-        task,
-        now: 789,
-      });
-      expect(result).toEqual({ recovered: false });
-    });
-
     it("returns not recovered and logs warning when hook throws", async () => {
       const task = createFakeTaskRecord({ taskId: "task-throw", runtime: "acp" });
       setDetachedTaskLifecycleRuntime({

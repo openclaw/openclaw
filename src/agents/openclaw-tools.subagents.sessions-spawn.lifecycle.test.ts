@@ -113,7 +113,7 @@ async function executeBoundAccountSpawn(params: {
     },
     bindings: params.bindings,
   });
-  setupSessionsSpawnGatewayMock({
+  const ctx = setupSessionsSpawnGatewayMock({
     onAgentSubagentSpawn: (hookParams) => {
       const rec = hookParams as { accountId?: string } | undefined;
       spawnAccountId = rec?.accountId;
@@ -126,8 +126,18 @@ async function executeBoundAccountSpawn(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     cleanup: "keep",
   });
-  expectAcceptedRunDetails(result.details);
-  return spawnAccountId;
+  const childSessionKey = ctx.getChild().sessionKey;
+  try {
+    expectAcceptedRunDetails(result.details);
+    if (!childSessionKey) {
+      throw new Error("missing child sessionKey");
+    }
+    return spawnAccountId;
+  } finally {
+    if (childSessionKey) {
+      await waitForRunCleanup(childSessionKey);
+    }
+  }
 }
 
 async function emitLifecycleEndAndFlush(params: {
@@ -308,12 +318,22 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       task: "do thing",
     });
 
-    expectAcceptedRunDetails(result.details);
-    const childAgentCall = ctx.calls.find((call) => {
-      const params = call.params as { lane?: string } | undefined;
-      return call.method === "agent" && params?.lane === "subagent";
-    });
-    expect(childAgentCall?.timeoutMs).toBe(125_000);
+    const childSessionKey = ctx.getChild().sessionKey;
+    try {
+      expectAcceptedRunDetails(result.details);
+      const childAgentCall = ctx.calls.find((call) => {
+        const params = call.params as { lane?: string } | undefined;
+        return call.method === "agent" && params?.lane === "subagent";
+      });
+      expect(childAgentCall?.timeoutMs).toBe(125_000);
+      if (!childSessionKey) {
+        throw new Error("missing child sessionKey");
+      }
+    } finally {
+      if (childSessionKey) {
+        await waitForRunCleanup(childSessionKey);
+      }
+    }
   });
 
   it("sessions_spawn retires bundle MCP runtime when run-mode cleanup completes", async () => {
@@ -339,27 +359,33 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       agentChannel: "whatsapp",
     });
 
-    await executeSpawnAndExpectAccepted({
-      tool,
-      callId: "call-mcp-retire",
-      cleanup: "keep",
-    });
-
-    await announceFlowStartedPromise;
-    const child = ctx.getChild();
-    if (!child.sessionKey) {
-      throw new Error("missing child sessionKey");
+    try {
+      await executeSpawnAndExpectAccepted({
+        tool,
+        callId: "call-mcp-retire",
+        cleanup: "keep",
+      });
+      const child = ctx.getChild();
+      if (!child.sessionKey) {
+        throw new Error("missing child sessionKey");
+      }
+      await announceFlowStartedPromise;
+      await getOrCreateSessionMcpRuntime({
+        sessionId: "session:subagent:mcp-retire",
+        sessionKey: child.sessionKey,
+        workspaceDir: "/tmp/openclaw-subagent-mcp-retire",
+        cfg: unopenedMcpConfig,
+      });
+      expect(bundleMcpRuntimeTesting.getCachedSessionIds()).toContain(
+        "session:subagent:mcp-retire",
+      );
+    } finally {
+      resumeAnnounceFlow?.("delivered");
+      const childSessionKey = ctx.getChild().sessionKey;
+      if (childSessionKey) {
+        await waitForRunCleanup(childSessionKey);
+      }
     }
-    await getOrCreateSessionMcpRuntime({
-      sessionId: "session:subagent:mcp-retire",
-      sessionKey: child.sessionKey,
-      workspaceDir: "/tmp/openclaw-subagent-mcp-retire",
-      cfg: unopenedMcpConfig,
-    });
-    expect(bundleMcpRuntimeTesting.getCachedSessionIds()).toContain("session:subagent:mcp-retire");
-
-    resumeAnnounceFlow?.("delivered");
-    await waitForRunCleanup(child.sessionKey);
     await waitForSessionsSpawnEvent(
       "bundle MCP runtime retirement",
       () => !bundleMcpRuntimeTesting.getCachedSessionIds().includes("session:subagent:mcp-retire"),

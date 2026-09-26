@@ -256,45 +256,32 @@ function buildFeishuPayloadButton(button: MessagePresentationButton): Record<str
 function buildFeishuCardElementsForBlock(
   block: MessagePresentationBlock,
 ): Record<string, unknown>[] {
-  if (block.type === "text") {
-    return [{ tag: "markdown", content: escapeFeishuCardMarkdownText(block.text) }];
-  }
-  if (block.type === "context") {
-    return [
-      {
-        tag: "markdown",
-        content: `<font color='grey'>${escapeFeishuCardMarkdownText(block.text)}</font>`,
-      },
-    ];
-  }
   if (block.type === "divider") {
     return [{ tag: "hr" }];
   }
   if (block.type === "buttons") {
     return block.buttons.map(buildFeishuPayloadButton);
   }
-  if (block.type === "chart") {
-    return [
-      {
-        tag: "markdown",
-        content: escapeFeishuCardMarkdownText(renderMessagePresentationChartFallbackText(block)),
-      },
-    ];
+  let text: string;
+  switch (block.type) {
+    case "text":
+    case "context":
+      text = block.text;
+      break;
+    case "chart":
+      text = renderMessagePresentationChartFallbackText(block);
+      break;
+    case "table":
+      text = renderMessagePresentationTableFallbackText(block);
+      break;
+    default:
+      text = renderMessagePresentationFallbackText({ presentation: { blocks: [block] } });
   }
-  if (block.type === "table") {
-    return [
-      {
-        tag: "markdown",
-        content: escapeFeishuCardMarkdownText(renderMessagePresentationTableFallbackText(block)),
-      },
-    ];
-  }
+  const content = escapeFeishuCardMarkdownText(text);
   return [
     {
       tag: "markdown",
-      content: escapeFeishuCardMarkdownText(
-        renderMessagePresentationFallbackText({ presentation: { blocks: [block] } }),
-      ),
+      content: block.type === "context" ? `<font color='grey'>${content}</font>` : content,
     },
   ];
 }
@@ -325,9 +312,7 @@ function buildFeishuPresentationCardElements(params: {
     });
   }
   for (const block of params.presentation.blocks) {
-    for (const element of buildFeishuCardElementsForBlock(block)) {
-      elements.push(element);
-    }
+    elements.push(...buildFeishuCardElementsForBlock(block));
   }
   if (elements.length > 0) {
     return elements;

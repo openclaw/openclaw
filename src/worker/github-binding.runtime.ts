@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import {
   managedGitHubIdentityEnvironment,
   writeManagedGitHubProfileFiles,
@@ -7,7 +8,6 @@ import {
 } from "../agents/github-tool-identity.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { executeGitCommand } from "../infra/git-exec.js";
-import { inspectPathPermissions } from "../infra/permissions.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { WorkerGitHubLaunchBinding } from "./launch-descriptor.js";

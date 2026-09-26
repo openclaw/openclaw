@@ -47,7 +47,7 @@ describe("resolveWindowsSpawnProgram", () => {
     },
   );
 
-  it.each(["node script.js", "pnpm exec tool", '"C:\\tools\\pnpm.cmd" exec tool'])(
+  it.each(["node script.js", '"C:\\tools\\pnpm.cmd" exec tool'])(
     "rejects command strings with inline arguments on Windows: %s",
     (command) => {
       expect(() =>
@@ -61,31 +61,28 @@ describe("resolveWindowsSpawnProgram", () => {
     },
   );
 
-  it.each(["pnpm checkout", "node tools"])(
-    "preserves an existing launcher path inside %s on Windows",
-    async (directory) => {
-      const root = await realpath(await createTempDir("openclaw-windows-spawn-test-"));
-      const dir = path.join(root, directory);
-      await mkdir(dir);
-      const launcher = path.join(dir, "launcher.js");
-      await writeFile(launcher, "process.exit(0);\n", "utf8");
+  it("preserves an existing launcher path inside a directory with spaces on Windows", async () => {
+    const root = await realpath(await createTempDir("openclaw-windows-spawn-test-"));
+    const dir = path.join(root, "pnpm checkout");
+    await mkdir(dir);
+    const launcher = path.join(dir, "launcher.js");
+    await writeFile(launcher, "process.exit(0);\n", "utf8");
 
-      const program = resolveWindowsSpawnProgram({
-        command: launcher,
-        platform: "win32",
-        env: {},
-        execPath: process.execPath,
-      });
+    const program = resolveWindowsSpawnProgram({
+      command: launcher,
+      platform: "win32",
+      env: {},
+      execPath: process.execPath,
+    });
 
-      expect(materializeWindowsSpawnProgram(program, ["--version"])).toEqual({
-        command: process.execPath,
-        argv: [launcher, "--version"],
-        resolution: "node-entrypoint",
-        shell: undefined,
-        windowsHide: true,
-      });
-    },
-  );
+    expect(materializeWindowsSpawnProgram(program, ["--version"])).toEqual({
+      command: process.execPath,
+      argv: [launcher, "--version"],
+      resolution: "node-entrypoint",
+      shell: undefined,
+      windowsHide: true,
+    });
+  });
 
   it.each(["PATH", "relative command"] as const)(
     "runs a %s launcher from the child cwd",

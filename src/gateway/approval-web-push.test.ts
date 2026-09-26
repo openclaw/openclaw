@@ -14,8 +14,9 @@ const prepareWebPushApprovalDeliveriesMock = vi.fn();
 const listWebPushApprovalDeliveryTargetsMock = vi.fn();
 const deleteWebPushApprovalDeliveryTargetsMock = vi.fn();
 const listTerminalWebPushApprovalDeliveryIdsMock = vi.fn();
-const resolveUserProfileIdMock = vi.fn();
-const resolveOperatorRolePolicyForProfileMock = vi.fn();
+const getUserPreferenceValuesMock = vi.fn();
+const prepareUserProfileCatalogMock = vi.fn();
+const resolveOperatorRolePolicyForAssignmentMock = vi.fn();
 const isApprovalRecordVisibleToClientMock = vi.fn();
 const getOperatorApprovalDetailedMock = vi.hoisted(() => vi.fn());
 
@@ -38,7 +39,6 @@ vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
 
 vi.mock("../infra/push-web.js", () => ({
   deleteWebPushApprovalDeliveryTargets: deleteWebPushApprovalDeliveryTargetsMock,
-  listBoundWebPushSubscriptions: listBoundWebPushSubscriptionsMock,
   withBoundWebPushSubscriptions: async <T>(
     stateDir: string | undefined,
     prepare: (
@@ -53,8 +53,21 @@ vi.mock("../infra/push-web.js", () => ({
   prepareWebPushNotificationSender: prepareWebPushNotificationSenderMock,
 }));
 
-vi.mock("../state/user-profiles.js", () => ({
-  resolveUserProfileId: resolveUserProfileIdMock,
+vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
+  prepareUserProfileCatalog: prepareUserProfileCatalogMock,
+}));
+
+vi.mock("../state/user-preferences.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-preferences.js")>()),
+  getUserPreferenceValues: getUserPreferenceValuesMock,
+}));
+
+vi.mock("./session-sharing-preparation.js", () => ({
+  prepareSessionMutationFacts: async () => ({
+    readCurrent: () => ({ target: null, membership: new Set<string>() }),
+    release: () => {},
+  }),
 }));
 
 vi.mock("./operator-role-policy.js", async () => {
@@ -63,7 +76,7 @@ vi.mock("./operator-role-policy.js", async () => {
   );
   return {
     ...actual,
-    resolveOperatorRolePolicyForProfile: resolveOperatorRolePolicyForProfileMock,
+    resolveOperatorRolePolicyForAssignment: resolveOperatorRolePolicyForAssignmentMock,
   };
 });
 
@@ -162,8 +175,16 @@ describe("approval Web Push delivery", () => {
       nextAfterApprovalId: null,
       throughApprovalId: null,
     });
-    resolveUserProfileIdMock.mockImplementation((profileId: string) => profileId);
-    resolveOperatorRolePolicyForProfileMock.mockReturnValue(undefined);
+    prepareUserProfileCatalogMock.mockResolvedValue({
+      readCurrentIdentity: (profileId: string) => ({
+        profileId,
+        role: null,
+        aliases: new Set([profileId]),
+      }),
+      release: () => {},
+    });
+    getUserPreferenceValuesMock.mockResolvedValue({ values: new Map(), isCurrent: () => true });
+    resolveOperatorRolePolicyForAssignmentMock.mockReturnValue(undefined);
     isApprovalRecordVisibleToClientMock.mockImplementation(
       ({ record, client }) =>
         !record.requestedByDeviceId || record.requestedByDeviceId === client?.connect?.device?.id,
@@ -355,7 +376,7 @@ describe("approval Web Push delivery", () => {
         pairedOperator("unbound-profile-device", ["operator.approvals", "operator.read"]),
       ],
     });
-    resolveOperatorRolePolicyForProfileMock.mockImplementation((profileId: string) =>
+    resolveOperatorRolePolicyForAssignmentMock.mockImplementation((profileId: string) =>
       profileId === "profile-missing"
         ? undefined
         : {
@@ -416,7 +437,7 @@ describe("approval Web Push delivery", () => {
       pending: [],
       paired: [pairedOperator("current-device", tokenScopes)],
     });
-    resolveOperatorRolePolicyForProfileMock.mockReturnValue({
+    resolveOperatorRolePolicyForAssignmentMock.mockReturnValue({
       sessions: { others: "none" },
       agents: [],
       scopes: profileScopes,
@@ -494,8 +515,12 @@ describe("approval Web Push delivery", () => {
     const tightenedConfig = { gateway: { roles: { definitions: {} } } };
     let runtimeConfig: typeof tightenedConfig | Record<string, never> = {};
     const getRuntimeConfig = vi.fn(() => runtimeConfig);
-    resolveOperatorRolePolicyForProfileMock.mockImplementation(
-      (_profileId: string, cfg: typeof tightenedConfig | Record<string, never>) =>
+    resolveOperatorRolePolicyForAssignmentMock.mockImplementation(
+      (
+        _profileId: string,
+        _role: string | null,
+        cfg: typeof tightenedConfig | Record<string, never>,
+      ) =>
         "gateway" in cfg
           ? { sessions: { others: "none" }, agents: [], scopes: ["operator.read"] }
           : undefined,
@@ -509,13 +534,18 @@ describe("approval Web Push delivery", () => {
     preparation.resolve(preparedWebPushSendMock);
 
     await expect(requested).resolves.toBe(false);
-    expect(getRuntimeConfig).toHaveBeenCalledOnce();
+    expect(getRuntimeConfig).toHaveBeenCalled();
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
   });
 
-  it.for(["resolved", "expired"] as const)(
-    "does not send after the approval becomes %s during transport preparation",
-    async (terminalState, testContext) => {
+  it.for([
+    { terminalState: "resolved", phase: "transport" },
+    { terminalState: "expired", phase: "transport" },
+    { terminalState: "resolved", phase: "preferences" },
+    { terminalState: "expired", phase: "preferences" },
+  ] as const)(
+    "does not send after the approval becomes $terminalState during $phase preparation",
+    async ({ terminalState, phase }, testContext) => {
       const manager = createTestApprovalManager(testContext);
       const record = manager.create(
         { command: "echo ok" },
@@ -528,24 +558,35 @@ describe("approval Web Push delivery", () => {
         pending: [],
         paired: [pairedOperator("current-device", ["operator.approvals", "operator.read"])],
       });
-      let finishPreparation: ((sender: typeof preparedWebPushSendMock) => void) | undefined;
-      prepareWebPushNotificationSenderMock.mockReturnValueOnce(
-        new Promise((resolve) => {
-          finishPreparation = resolve;
-        }),
-      );
+      const preparationStarted = createDeferred();
+      const preparationReady = createDeferred();
+      const waitForPreparation = async () => {
+        preparationStarted.resolve();
+        await preparationReady.promise;
+      };
+      if (phase === "transport") {
+        prepareWebPushNotificationSenderMock.mockImplementationOnce(async () => {
+          await waitForPreparation();
+          return preparedWebPushSendMock;
+        });
+      } else {
+        getUserPreferenceValuesMock.mockImplementationOnce(async () => {
+          await waitForPreparation();
+          return { values: new Map(), isCurrent: () => true };
+        });
+      }
 
       const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
       const webPushDelivery = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
       const delivery = webPushDelivery.handleRequested(record);
-      await vi.waitFor(() => expect(prepareWebPushNotificationSenderMock).toHaveBeenCalledOnce());
+      await preparationStarted.promise;
       if (terminalState === "resolved") {
         record.resolvedAtMs = Date.now();
         record.status = "denied";
       } else {
         record.expiresAtMs = Date.now() - 1;
       }
-      expectDefined(finishPreparation, "transport preparation resolver")(preparedWebPushSendMock);
+      preparationReady.resolve();
 
       await expect(delivery).resolves.toBe(false);
       expect(preparedWebPushSendMock).not.toHaveBeenCalled();
@@ -791,47 +832,40 @@ describe("approval Web Push delivery", () => {
     expect(approvalDeliveryTargets.get(record.id)?.size).toBe(0);
   });
 
-  it.for(["same-process", "restart"] as const)(
-    "does not send a terminal approval link to a rebound subscription after %s resolution",
-    async (mode, testContext) => {
-      const manager = createTestApprovalManager(testContext);
-      const record = manager.create(
-        { command: "sensitive command" },
-        60_000,
-        `exec:rebound-terminal-${mode}`,
-      );
-      const original = boundSubscription("original-device", "profile-original");
-      listBoundWebPushSubscriptionsMock.mockResolvedValue([original]);
-      listDevicePairingMock.mockReturnValue({
-        pending: [],
-        paired: [pairedOperator("original-device", ["operator.approvals", "operator.read"])],
-      });
-      preparedWebPushSendMock.mockResolvedValueOnce([
-        { ok: true, subscriptionId: original.subscriptionId, statusCode: 201 },
-      ]);
+  it("does not send a terminal approval link to a rebound subscription after restart", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create(
+      { command: "sensitive command" },
+      60_000,
+      "exec:rebound-terminal-restart",
+    );
+    const original = boundSubscription("original-device", "profile-original");
+    listBoundWebPushSubscriptionsMock.mockResolvedValue([original]);
+    listDevicePairingMock.mockReturnValue({
+      pending: [],
+      paired: [pairedOperator("original-device", ["operator.approvals", "operator.read"])],
+    });
+    preparedWebPushSendMock.mockResolvedValueOnce([
+      { ok: true, subscriptionId: original.subscriptionId, statusCode: 201 },
+    ]);
 
-      const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
-      const firstProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
-      await expect(firstProcess.handleRequested(record)).resolves.toBe(true);
+    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
+    const firstProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    await expect(firstProcess.handleRequested(record)).resolves.toBe(true);
 
-      // The durable store retains the original binding but the mutable
-      // subscription row now belongs to someone else, so it returns no target.
-      listWebPushApprovalDeliveryTargetsMock.mockResolvedValue([]);
-      if (mode === "restart") {
-        listTerminalWebPushApprovalDeliveryIdsMock.mockResolvedValue({
-          approvalIds: [record.id],
-          nextAfterApprovalId: null,
-          throughApprovalId: record.id,
-        });
-        const restartedProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
-        await restartedProcess.recoverTerminalDeliveries();
-      } else {
-        await firstProcess.handleResolved({ id: record.id });
-      }
+    // The durable store retains the original binding but the mutable
+    // subscription row now belongs to someone else, so it returns no target.
+    listWebPushApprovalDeliveryTargetsMock.mockResolvedValue([]);
+    listTerminalWebPushApprovalDeliveryIdsMock.mockResolvedValue({
+      approvalIds: [record.id],
+      nextAfterApprovalId: null,
+      throughApprovalId: record.id,
+    });
+    const restartedProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    await restartedProcess.recoverTerminalDeliveries();
 
-      expect(preparedWebPushSendMock).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(preparedWebPushSendMock).toHaveBeenCalledTimes(1);
+  });
 
   it.for(["same-process", "restart"] as const)(
     "does not send a terminal approval link after device authority is revoked in %s delivery",
@@ -891,7 +925,7 @@ describe("approval Web Push delivery", () => {
       pending: [],
       paired: [pairedOperator("policy-device", ["operator.approvals", "operator.read"])],
     });
-    resolveOperatorRolePolicyForProfileMock.mockReturnValue(undefined);
+    resolveOperatorRolePolicyForAssignmentMock.mockReturnValue(undefined);
     preparedWebPushSendMock.mockResolvedValueOnce([
       { ok: true, subscriptionId: delivered.subscriptionId, statusCode: 201 },
     ]);
@@ -903,16 +937,16 @@ describe("approval Web Push delivery", () => {
     const delivery = createApprovalWebPushDelivery({ getRuntimeConfig });
     await expect(delivery.handleRequested(record)).resolves.toBe(true);
     getRuntimeConfig.mockReturnValue(tightenedConfig);
-    resolveOperatorRolePolicyForProfileMock.mockReturnValue({
+    resolveOperatorRolePolicyForAssignmentMock.mockReturnValue({
       sessions: { others: "none" },
       agents: [],
       scopes: ["operator.read"],
     });
     await delivery.handleResolved({ id: record.id });
 
-    expect(getRuntimeConfig).toHaveBeenCalledTimes(3);
-    expect(resolveOperatorRolePolicyForProfileMock).toHaveBeenLastCalledWith(
+    expect(resolveOperatorRolePolicyForAssignmentMock).toHaveBeenLastCalledWith(
       "profile-policy",
+      null,
       tightenedConfig,
     );
     expect(preparedWebPushSendMock).toHaveBeenCalledTimes(1);

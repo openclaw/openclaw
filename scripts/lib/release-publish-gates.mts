@@ -31,10 +31,7 @@ export function evaluateReleasePublishGates(input: {
   manifest: unknown;
   releaseTag: string;
   npmDistTag: string;
-  stableSoakWaiver?: string;
-  laneWaiver?: string;
   consumer: ReleasePublishConsumer;
-  currentStableSoakWaiver?: string;
   expectedSha?: string;
   expectedReleaseProfile?: string;
 }): ReleasePublishGate[] {
@@ -49,21 +46,17 @@ export function evaluateReleasePublishGates(input: {
     });
   };
   const profile = scalar(field(manifest, "releaseProfile"));
-  let waiver = input.stableSoakWaiver?.trim();
   try {
-    // Re-resolve with the live variable so a revoked sealed waiver is not regranted here.
-    waiver = resolveReleasePublishInputs(manifest, {
-      stableSoakWaiver: input.stableSoakWaiver,
-      currentStableSoakWaiver: input.currentStableSoakWaiver,
+    resolveReleasePublishInputs(manifest, {
       targetSha: input.expectedSha,
       npmDistTag: input.npmDistTag,
-    }).stableSoakWaiver;
+    });
   } catch (error) {
     add(
       "publish-inputs",
       false,
       error instanceof Error ? error.message : String(error),
-      "Reseal publication inputs for the exact release source and npm selector.",
+      "Reseal publication inputs for the exact release source and npm selector without waivers.",
     );
   }
   const rerunGroup = scalar(field(manifest, "rerunGroup"));
@@ -103,89 +96,49 @@ export function evaluateReleasePublishGates(input: {
   const stableTag = !input.releaseTag.includes("-alpha.") && !input.releaseTag.includes("-beta.");
   const soaked = consumer === "stable-closeout" ? soak === "true" : scalar(soak) === "true";
   const soakRequired = consumer === "stable-closeout" || stableTag;
-  // Operator fast path: every waiver reason must name the target version so a
-  // waiver recorded for one release train cannot authorize another.
-  const targetVersion = input.releaseTag.replace(/^v/u, "");
-  const versionBound = (reason: string | undefined) =>
-    !reason || reason === targetVersion || reason.startsWith(`${targetVersion} `);
-  const acknowledgement = input.laneWaiver?.trim();
-  if (soakRequired && (!versionBound(waiver) || !versionBound(acknowledgement))) {
-    add(
-      "waiver-target",
-      false,
-      `Waiver reasons must start with the target version ${targetVersion}.`,
-      "Prefix stable_soak_waiver and lane_waiver reasons with the target version.",
-    );
-  }
-  // Strict default: stable tags need blocking performance evidence; the
-  // operator fast path accepts a waiver only beside a passing advisory child.
   const performance = field(field(manifest, "controls"), "performanceBlocking");
-  const performanceSucceeded =
-    field(field(field(manifest, "childRuns"), "productPerformance"), "conclusion") === "success";
   const blocking =
     consumer === "stable-closeout" ? performance === true : scalar(performance) === "true";
   const blockingRequired =
     soakRequired || (consumer === "publisher" ? profile !== "beta" : input.npmDistTag !== "beta");
-  if (blockingRequired && !blocking) {
-    gates.push({
-      id: `${consumer}.performance`,
-      status: waiver && performanceSucceeded ? "WARN" : "FAIL",
-      message: waiver
-        ? performanceSucceeded
-          ? `Blocking product performance waived by operator: ${waiver}; advisory performance child passed.`
-          : "Waiving blocking product performance requires a successful product performance child run."
-        : "Full release validation manifest does not record blocking product performance evidence.",
-      remediation:
-        "Run blocking product performance validation, or supply stable_soak_waiver with a successful product performance child.",
-    });
-  }
-  // Strict default: stable tags need stable/full validation unless waived.
+  add(
+    "performance",
+    !blockingRequired || blocking,
+    "Full release validation manifest does not record blocking product performance evidence.",
+    "Rerun Full Release Validation with blocking product performance validation.",
+  );
   if (soakRequired) {
-    const strictProfile = profile === "stable" || profile === "full";
-    gates.push({
-      id: `${consumer}.stable-profile`,
-      status: strictProfile ? "PASS" : waiver ? "WARN" : "FAIL",
-      message: strictProfile
-        ? "Stable validation profile requirement satisfied."
-        : waiver
-          ? `Stable validation profile waived by operator (${profile}): ${waiver}`
-          : `Stable releases require stable/full validation; got ${profile}`,
-      remediation:
-        "Run Full Release Validation with release_profile=stable or full, or supply the operator's explicit reason in stable_soak_waiver.",
-    });
+    add(
+      "stable-profile",
+      profile === "stable" || profile === "full",
+      `Stable releases require stable/full validation; got ${profile}`,
+      "Rerun Full Release Validation with release_profile=stable or full.",
+    );
   }
-  gates.push({
-    id: `${consumer}.soak`,
-    status: !soakRequired || soaked ? "PASS" : waiver ? "WARN" : "FAIL",
-    message:
-      !soakRequired || soaked
-        ? "Release soak requirement satisfied."
-        : waiver
-          ? `Stable soak waived by operator: ${waiver}`
-          : "Stable releases require Full Release Validation with runReleaseSoak=true.",
-    remediation: "Run release soak or supply the operator's explicit reason in stable_soak_waiver.",
-  });
-  // Strict default: a stable publication with failed non-proof lanes, or with
-  // evidence sealed under an operator lane waiver, needs the operator's
-  // lane_waiver reason; the waived lanes travel into the receipt.
-  const laneWaiver = scalar(field(field(manifest, "validationInputs"), "laneWaiver")).trim();
+  add(
+    "soak",
+    !soakRequired || soaked,
+    "Stable releases require Full Release Validation with runReleaseSoak=true.",
+    "Rerun Full Release Validation with release soak.",
+  );
+  const waived =
+    field(field(manifest, "validationInputs"), "laneWaiver") ||
+    field(field(manifest, "publishInputs"), "stableSoakWaiver");
   const advisory = field(manifest, "advisoryJobs");
-  const failedLanes = (Array.isArray(advisory) ? advisory : [])
-    .filter((job) => scalar(field(job, "conclusion")) !== "success")
-    .map((job) => `${scalar(field(job, "child"))} ${scalar(field(job, "job"))}`);
-  if (laneWaiver || (soakRequired && failedLanes.length > 0)) {
-    const acknowledged = Boolean(acknowledgement);
-    gates.push({
-      id: `${consumer}.lane-waiver`,
-      status: acknowledged ? "WARN" : "FAIL",
-      message: acknowledged
-        ? `Operator lane waiver: ${acknowledgement}; waived lanes (${failedLanes.length}): ${failedLanes.join(", ") || "none"}`
-        : laneWaiver
-          ? `Full Release Validation evidence was sealed under an operator lane waiver (${laneWaiver}); pass lane_waiver=<reason> to acknowledge it.`
-          : `Stable publication with failed non-proof lanes (${failedLanes.length}) requires lane_waiver=<version reason>: ${failedLanes.join(", ")}`,
-      remediation:
-        "Acknowledge with lane_waiver=<target version> <reason>, or fix the lanes and reseal Full Release Validation.",
-    });
+  add(
+    "selected-lanes",
+    !waived && (advisory === undefined || (Array.isArray(advisory) && advisory.length === 0)),
+    "Waived or advisory release evidence is no longer accepted.",
+    "Fix failed selected lanes and rerun Full Release Validation without waivers.",
+  );
+  if (consumer === "stable-closeout") {
+    for (const gate of gates) {
+      if (gate.status === "FAIL") {
+        gate.remediation =
+          "Use the original strict published evidence. Historical waiver-bearing closeout replay is unsupported; a fresh validation run cannot replace its published binding.";
+        gate.message += ` ${gate.remediation}`;
+      }
+    }
   }
   return gates;
 }
@@ -194,29 +147,25 @@ export function evaluateReleaseBootstrapGate(input: {
   releaseTag?: unknown;
   publishTag?: unknown;
   releaseProfile?: unknown;
-  stableSoakWaiver?: unknown;
   packageVersion?: string;
 }): ReleasePublishGate {
   const version = typeof input.releaseTag === "string" ? input.releaseTag.slice(1) : "";
   const parsed = parseReleaseVersion(version);
-  const waiver = typeof input.stableSoakWaiver === "string" ? input.stableSoakWaiver.trim() : "";
   const eligible =
     input.releaseTag === `v${version}` &&
     parsed?.channel === "stable" &&
     parsed.patch < 33 &&
     input.publishTag === "latest" &&
     (input.packageVersion === undefined || input.packageVersion === version) &&
-    (input.releaseProfile === "stable" ||
-      input.releaseProfile === "full" ||
-      (input.releaseProfile === "beta" && Boolean(waiver)));
+    (input.releaseProfile === "stable" || input.releaseProfile === "full");
   return {
     id: "plugin-npm.stable-bootstrap",
     status: eligible ? "PASS" : "FAIL",
     message: eligible
       ? "Stable npm bootstrap approval is eligible for this release."
-      : "Stable npm bootstrap requires a regular stable tag matching the package version, latest, and stable/full validation or beta validation with an operator soak waiver.",
+      : "Stable npm bootstrap requires a regular stable tag matching the package version, latest, and stable/full validation.",
     remediation:
-      "Select stable/full validation, or beta validation plus an explicit stable_soak_waiver, for the regular stable/latest release. The parent must attest the exact selected package set before bootstrap publication.",
+      "Select stable/full validation for the regular stable/latest release. The parent must attest the exact selected package set before bootstrap publication.",
   };
 }
 
@@ -279,8 +228,6 @@ function main() {
   const env = process.env;
   const resolved = resolveReleasePublishInputs(manifest, {
     pluginSdkApiAcknowledgement: env.PLUGIN_SDK_API_ACKNOWLEDGEMENT,
-    stableSoakWaiver: env.STABLE_SOAK_WAIVER,
-    currentStableSoakWaiver: env.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER ?? "",
     targetSha: env.EXPECTED_SHA,
     npmDistTag: env.RELEASE_NPM_DIST_TAG,
   });
@@ -289,9 +236,6 @@ function main() {
     consumer,
     releaseTag: env.RELEASE_TAG ?? "",
     npmDistTag: env.RELEASE_NPM_DIST_TAG ?? "",
-    stableSoakWaiver: resolved.stableSoakWaiver,
-    currentStableSoakWaiver: env.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER ?? "",
-    laneWaiver: env.LANE_WAIVER,
     expectedSha: env.EXPECTED_SHA,
     expectedReleaseProfile: env.EXPECTED_RELEASE_PROFILE,
   });
@@ -299,29 +243,11 @@ function main() {
     if (gate.status === "FAIL") {
       throw new Error(gate.message);
     }
-    if (gate.status !== "WARN") {
-      continue;
-    }
-    if (consumer === "stable-closeout" && gate.id.endsWith(".soak")) {
-      continue;
-    }
-    const warning = gate.message
-      .replaceAll("%", "%25")
-      .replaceAll("\r", "%0D")
-      .replaceAll("\n", "%0A");
-    console.log(`::warning::${warning}`);
-    if (
-      consumer !== "stable-closeout" &&
-      (gate.id.endsWith(".soak") || gate.id.endsWith(".lane-waiver")) &&
-      env.GITHUB_STEP_SUMMARY
-    ) {
-      appendFileSync(env.GITHUB_STEP_SUMMARY, `- ${gate.message}\n`);
-    }
   }
   if (consumer !== "stable-closeout" && env.GITHUB_OUTPUT) {
     appendFileSync(
       env.GITHUB_OUTPUT,
-      `stable_soak_waiver=${JSON.stringify(resolved.stableSoakWaiver)}\nplugin_sdk_api_acknowledgement=${resolved.pluginSdkApiAcknowledgement}\nnpm_decisions=${JSON.stringify(resolved.npmDecisions ?? [])}\n`,
+      `plugin_sdk_api_acknowledgement=${resolved.pluginSdkApiAcknowledgement}\nnpm_decisions=${JSON.stringify(resolved.npmDecisions ?? [])}\n`,
     );
   }
   if (consumer === "publisher" && env.GITHUB_OUTPUT) {

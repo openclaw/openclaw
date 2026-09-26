@@ -10,7 +10,8 @@ import {
   withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
 import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
-import type { CommandRunner, RunStepOptions, UpdateStepResult } from "./update-runner-types.js";
+import type { CommandRunner, RunStepOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 

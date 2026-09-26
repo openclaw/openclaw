@@ -266,20 +266,6 @@ function normalizeClaudeAssistantMessage(
   };
 }
 
-function hasTextContent(messages: readonly Record<string, unknown>[]): boolean {
-  return messages.some(
-    (message) =>
-      Array.isArray(message.content) &&
-      message.content.some(
-        (block) =>
-          isRecord(block) &&
-          block.type === "text" &&
-          typeof block.text === "string" &&
-          block.text.length > 0,
-      ),
-  );
-}
-
 function appendOutputTruncationMarker(messages: Record<string, unknown>[]): void {
   const marker = { type: "text", text: TRUNCATED_CONTENT_SUFFIX };
   if (messages.length < MAX_CAPTURED_OUTPUT_MESSAGES) {
@@ -428,7 +414,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
     const messages = capturedAssistantMessages.slice();
     const responseText = output?.rawText ?? output?.text;
     if (
-      !hasTextContent(messages) &&
+      !messages.some(assistantMessageHasText) &&
       responseText &&
       messages.length < MAX_CAPTURED_OUTPUT_MESSAGES
     ) {

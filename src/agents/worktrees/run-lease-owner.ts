@@ -82,19 +82,15 @@ function inspectRunLeases(
       isPidDefinitelyDead: checks.isPidDefinitelyDead,
       getProcessStartTime: checks.getProcessStartTime,
     });
+    if (stale) {
+      staleKeys.push(row.lease_key);
+      continue;
+    }
     if (row.lease_key === WORKTREE_REMOVING_LEASE_KEY) {
       // A removal marker whose remover process died before finalize must self-heal,
       // otherwise a still-live worktree stays permanently unadmittable. A live marker
       // carries the owning claim token so a competing remover is rejected.
-      if (stale) {
-        staleKeys.push(row.lease_key);
-      } else {
-        removingToken = row.owner;
-      }
-      continue;
-    }
-    if (stale) {
-      staleKeys.push(row.lease_key);
+      removingToken = row.owner;
       continue;
     }
     if (payload.pid !== undefined) {

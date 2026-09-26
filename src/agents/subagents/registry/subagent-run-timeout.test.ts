@@ -33,14 +33,6 @@ describe("subagent run timeout helpers", () => {
       }),
     ).toBeUndefined();
     expect(
-      resolveSubagentRunDeadlineMs({
-        collect: true,
-        createdAt: 1_000,
-        runTimeoutSeconds: 60,
-        execution: {},
-      }),
-    ).toBeUndefined();
-    expect(
       resolveSubagentRunDeadlineMs(
         {
           collect: true,

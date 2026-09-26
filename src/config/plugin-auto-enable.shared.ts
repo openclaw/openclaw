@@ -387,7 +387,7 @@ export function resolvePluginAutoEnableReadiness(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   discovery?: PluginDiscoveryResult,
-  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy,
 ): { mayNeedAutoEnable: boolean; configuredChannelIds: string[] } {
   if (arePluginsGloballyDisabled(cfg)) {
     return { mayNeedAutoEnable: false, configuredChannelIds: [] };

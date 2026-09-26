@@ -48,6 +48,18 @@ export function executePluginStateCommand(
   hasRetainedDatabase: boolean,
 ): PluginStateWorkerOperations[keyof PluginStateWorkerOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
+  const failure = (error: unknown) =>
+    err(
+      capturePluginStateWorkerFailure(
+        wrapPluginStateError(
+          error,
+          description.operation,
+          description.code,
+          description.message,
+          options.path,
+        ),
+      ),
+    );
   if (
     command.type === "pluginState.lookup" ||
     command.type === "pluginState.lookupMany" ||
@@ -106,17 +118,7 @@ export function executePluginStateCommand(
           );
       }
     } catch (error) {
-      return err(
-        capturePluginStateWorkerFailure(
-          wrapPluginStateError(
-            error,
-            description.operation,
-            description.code,
-            description.message,
-            options.path,
-          ),
-        ),
-      );
+      return failure(error);
     }
   }
   let database: OpenClawStateDatabase;
@@ -184,16 +186,6 @@ export function executePluginStateCommand(
       ),
     );
   } catch (error) {
-    return err(
-      capturePluginStateWorkerFailure(
-        wrapPluginStateError(
-          error,
-          description.operation,
-          description.code,
-          description.message,
-          options.path,
-        ),
-      ),
-    );
+    return failure(error);
   }
 }

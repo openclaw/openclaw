@@ -483,6 +483,19 @@ describe("file links", () => {
     expect(link?.dataset.fileKind).toBe(kind);
   });
 
+  it.each(["constructor", "__proto__", "notes.constructor", "notes.__proto__"])(
+    "uses the generic file glyph for the prototype-shaped filename %s",
+    (name) => {
+      const path = `/tmp/${name}`;
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(`[Read file](${path})`, { fileLinks: true }),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.dataset.filePath).toBe(path);
+      expect(link?.dataset.fileKind).toBe("file");
+    },
+  );
+
   it.each([
     "skills/review/SKILL.md:12",
     "`skills/review/SKILL.md:12`",

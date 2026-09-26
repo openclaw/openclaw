@@ -6,13 +6,9 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import {
-  admitQueuedMessageForSession,
-  removeQueuedMessage,
-  removeQueuedMessageWithoutReleasing,
-  subscribeChatOutboxProjection,
-} from "./chat-queue.ts";
+import { admitQueuedMessageForSession, removeQueuedMessage } from "./chat-queue.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
@@ -223,7 +219,7 @@ it.each(["discard", "ack", "consumed"] as const)(
         },
         onRequestUpdate: () => host.requestUpdate?.(),
       });
-      const stop = subscribeChatOutboxProjection(host, (item) =>
+      const stop = chatOutboxOwner(host).subscribe(host, (item) =>
         getTranscriptState(paneId).transcriptRenderContext.onAsyncQuestionDiscard?.(item),
       );
       return { element, host, props, stop };
@@ -276,7 +272,7 @@ it.each(["discard", "ack", "consumed"] as const)(
           },
         );
       } else {
-        expect(removeQueuedMessageWithoutReleasing(first.host, row.id)?.id).toBe(row.id);
+        expect(chatOutboxOwner(first.host).remove(first.host, row.id)?.id).toBe(row.id);
       }
       for (const { element, host, props } of panes) {
         expect(host.chatQueue).toEqual([]);

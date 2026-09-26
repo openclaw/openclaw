@@ -356,7 +356,7 @@ describe("controlUi.githubPreview", () => {
     });
   });
 
-  it.each(["unchanged", "agent", "system"])(
+  it.each(["agent", "system"])(
     "delivers public metadata only while its fallback identity remains selected: %s",
     async (selection) => {
       const preview = {
@@ -405,15 +405,11 @@ describe("controlUi.githubPreview", () => {
         { kind: "issue", number: 99815, owner: "openclaw", repo: "openclaw" },
         undefined,
       );
-      if (selection === "unchanged") {
-        expect(respond).toHaveBeenCalledWith(true, preview, undefined);
-      } else {
-        expect(respond).toHaveBeenCalledWith(false, undefined, {
-          code: "UNAVAILABLE",
-          message: new githubIdentity.GitHubIdentityError("changed").message,
-          retryable: true,
-        });
-      }
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "UNAVAILABLE",
+        message: new githubIdentity.GitHubIdentityError("changed").message,
+        retryable: true,
+      });
     },
   );
 
@@ -519,7 +515,17 @@ describe("controlUi.githubPreview", () => {
 
 describe("controlUi.sessionPullRequests.subscribe", () => {
   it("replaces the connection watch set", async () => {
-    const replace = vi.fn().mockResolvedValue(undefined);
+    const replace = vi.fn(
+      (
+        _connId: string,
+        _sessionKeys: readonly string[],
+        _refreshSessionKeys: ReadonlySet<string> | undefined,
+        onAdmitted: (() => void) | undefined,
+      ) => {
+        onAdmitted?.();
+        return Promise.resolve();
+      },
+    );
     const handlers = createControlUiHandlers(vi.fn());
     const respond = vi.fn<RespondFn>();
 
@@ -537,13 +543,28 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       ),
     );
 
-    expect(replace).toHaveBeenCalledWith("conn-control-ui", ["agent:main:main", "agent:work:main"]);
+    expect(replace).toHaveBeenCalledWith(
+      "conn-control-ui",
+      ["agent:main:main", "agent:work:main"],
+      undefined,
+      expect.any(Function),
+    );
     expect(respond).toHaveBeenCalledWith(true, { subscribed: true }, undefined);
   });
 
   it("acknowledges a subscription before its cold snapshots finish loading", async () => {
     const { promise: hydration, resolve: finishHydration } = createDeferred();
-    const replace = vi.fn(() => hydration);
+    const replace = vi.fn(
+      (
+        _connId: string,
+        _sessionKeys: readonly string[],
+        _refreshSessionKeys: ReadonlySet<string> | undefined,
+        onAdmitted: (() => void) | undefined,
+      ) => {
+        onAdmitted?.();
+        return hydration;
+      },
+    );
     const handlers = createControlUiHandlers(vi.fn());
     const respond = vi.fn<RespondFn>();
 
@@ -556,15 +577,31 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
         context: { controlUiSessionPullRequests: { replace } },
       }),
     );
+    await Promise.resolve();
 
-    expect(replace).toHaveBeenCalledWith("conn-control-ui", ["agent:main:cold"]);
+    expect(replace).toHaveBeenCalledWith(
+      "conn-control-ui",
+      ["agent:main:cold"],
+      undefined,
+      expect.any(Function),
+    );
     expect(respond).toHaveBeenCalledWith(true, { subscribed: true }, undefined);
     finishHydration();
     await request;
   });
 
   it("accepts an empty replace-set as unsubscribe", async () => {
-    const replace = vi.fn().mockResolvedValue(undefined);
+    const replace = vi.fn(
+      (
+        _connId: string,
+        _sessionKeys: readonly string[],
+        _refreshSessionKeys: ReadonlySet<string> | undefined,
+        onAdmitted: (() => void) | undefined,
+      ) => {
+        onAdmitted?.();
+        return Promise.resolve();
+      },
+    );
     const handlers = createControlUiHandlers(vi.fn());
     const respond = vi.fn<RespondFn>();
 
@@ -578,7 +615,7 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       }),
     );
 
-    expect(replace).toHaveBeenCalledWith("conn-control-ui", []);
+    expect(replace).toHaveBeenCalledWith("conn-control-ui", [], undefined, expect.any(Function));
     expect(respond).toHaveBeenCalledWith(true, { subscribed: false }, undefined);
   });
 

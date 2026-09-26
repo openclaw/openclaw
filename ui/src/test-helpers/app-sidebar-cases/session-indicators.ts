@@ -588,6 +588,7 @@ describe("AppSidebar session indicators", () => {
         expect.objectContaining({
           sessionKeys: expect.arrayContaining([keys.openPullRequest, keys.mergedPullRequest]),
         }),
+        { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
       );
     });
     gatewayHarness.publishEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {

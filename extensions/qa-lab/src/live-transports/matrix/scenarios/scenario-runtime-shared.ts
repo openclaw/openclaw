@@ -260,7 +260,7 @@ export function createMatrixQaDriverScenarioClient(context: MatrixQaScenarioCont
   });
 }
 
-export async function primeMatrixQaActorCursor(params: {
+async function primeMatrixQaActorCursor(params: {
   accessToken: string;
   actorId: MatrixQaActorId;
   baseUrl: string;

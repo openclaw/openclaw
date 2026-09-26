@@ -106,11 +106,7 @@ async function resolveSlackGroupAllowlist(params: {
         token: auth,
         entries: params.entries,
         buildWithoutToken: (input) => ({ input, resolved: false, id: undefined }),
-        resolveEntries: async ({ token, entries }) =>
-          await resolveSlackChannelAllowlist({
-            token,
-            entries,
-          }),
+        resolveEntries: resolveSlackChannelAllowlist,
       });
       const resolvedKeys = resolved
         .filter((entry) => entry.resolved && entry.id)

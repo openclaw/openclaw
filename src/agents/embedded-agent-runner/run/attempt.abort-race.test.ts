@@ -28,6 +28,90 @@ describe("runEmbeddedAttempt abort races", () => {
     tempPaths.length = 0;
   });
 
+  it.each([
+    { stage: "construction", cleanupFails: false },
+    { stage: "projection", cleanupFails: false },
+    { stage: "construction", cleanupFails: true },
+  ])(
+    "joins cleanup after $stage fails (cleanupFails=$cleanupFails)",
+    async ({ stage, cleanupFails }) => {
+      const preparationError = new Error("tool preparation failed");
+      const held = createDeferred();
+      const started = createDeferred();
+      const cleanupScope = createAgentCleanupScope();
+      let toolSignal: AbortSignal | undefined;
+      const cleanup = vi.fn(async (_reason: string) => {
+        started.resolve();
+        await held.promise;
+        if (cleanupFails) {
+          throw new Error("registered resource teardown failed");
+        }
+      });
+      hoisted.createOpenClawCodingToolsMock.mockImplementation((options: unknown) => {
+        const toolOptions = options as {
+          abortSignal: AbortSignal;
+          registerRunCleanup: (cleanup: (reason: string) => Promise<void>) => void;
+        };
+        toolSignal = toolOptions.abortSignal;
+        toolOptions.registerRunCleanup(cleanup);
+        if (stage === "construction") {
+          throw preparationError;
+        }
+        return [
+          {
+            get name(): string {
+              throw preparationError;
+            },
+          },
+        ];
+      });
+      const attempt = cleanupScope.run(() =>
+        createContextEngineAttemptRunner({
+          contextEngine: createContextEngineBootstrapAndAssemble(),
+          sessionKey: "agent:main:triage:failed-tool-preparation",
+          tempPaths,
+          attemptOverrides: {
+            oneShotCliRun: true,
+            disableTools: false,
+            forceRestartSafeTools: stage === "projection",
+          },
+        }),
+      );
+      let settled = false;
+      const result = attempt
+        .then(
+          () => ({ kind: "resolved" as const }),
+          (error: unknown) => ({ kind: "rejected" as const, error }),
+        )
+        .then((outcome) => {
+          settled = true;
+          return outcome;
+        });
+      try {
+        expect(
+          await Promise.race([
+            started.promise.then(() => "cleanup-started"),
+            result.then((outcome) => outcome.kind),
+          ]),
+        ).toBe("cleanup-started");
+        expect(settled).toBe(false);
+        expect(toolSignal?.aborted).toBe(true);
+        expect(cleanup).toHaveBeenCalledExactlyOnceWith("error");
+        held.resolve();
+        const outcome = await result;
+        expect(outcome.kind).toBe("rejected");
+        if (outcome.kind === "rejected") {
+          expect(outcome.error).toBe(preparationError);
+        }
+        expect(cleanupScope.outcome).toBe(cleanupFails ? "uncertain" : "closed");
+        expect(hoisted.createAgentSessionMock).not.toHaveBeenCalled();
+      } finally {
+        held.resolve();
+        await result;
+      }
+    },
+  );
+
   it.each([false, true])(
     "bounds registered one-shot cleanup after a completed turn (fails=%s)",
     async (fails) => {

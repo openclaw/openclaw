@@ -1,9 +1,5 @@
 // ClawHub lifecycle facade: public API plus install/update coordination.
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  getAgentWorkspaceAccess,
-  WorkspaceAccessUnavailableError,
-} from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { downloadClawHubSkillArchive } from "../../infra/clawhub-artifacts.js";
 import type { ClawHubTrustErrorCode } from "../../infra/clawhub-install-trust.js";
@@ -32,7 +28,11 @@ import {
   resolveTrackedUpdateTarget,
   type ClawHubSkillInstallPreflightResult,
 } from "./clawhub-status.js";
-import { parseRequestedClawHubSkillRef, readClawHubSkillsLockfile } from "./clawhub-store.js";
+import {
+  parseRequestedClawHubSkillRef,
+  readClawHubSkillsLockfile,
+  resolveWorkspaceClawHubSkills,
+} from "./clawhub-store.js";
 import {
   guardTrackedSkillLocalState,
   type ClawHubSkillUninstallPlan,
@@ -118,13 +118,8 @@ export async function preflightSkillFromClawHub(params: {
   logger?: Logger;
 }): Promise<ClawHubSkillInstallPreflightResult> {
   try {
-    const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
-    const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
-    if (access && !access.clawHubSkills) {
-      throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
-    }
-    const preflightOwner =
-      access?.clawHubSkills?.preflightSkillOwnerState ?? preflightSkillOwnerState;
+    const tracking = resolveWorkspaceClawHubSkills(params.workspaceDir);
+    const preflightOwner = tracking?.preflightSkillOwnerState ?? preflightSkillOwnerState;
     const requested = parseRequestedClawHubSkillRef(params.slug);
     const resolved = await resolveInstallVersion({
       slug: requested.slug,
@@ -236,12 +231,7 @@ export async function updateSkillsFromClawHub(params: {
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 }): Promise<UpdateClawHubSkillResult[]> {
-  const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
-  const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
-  if (access && !access.clawHubSkills) {
-    throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
-  }
-  const tracking = access?.clawHubSkills;
+  const tracking = resolveWorkspaceClawHubSkills(params.workspaceDir);
   const lock = await (tracking?.readClawHubSkillsLockfile ?? readClawHubSkillsLockfile)(
     params.workspaceDir,
   );

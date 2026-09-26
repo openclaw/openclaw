@@ -133,13 +133,14 @@ function pluginTheme(): ThemeCatalogEntry {
 
 function beforeWorkerCommit(checkpoint: () => void) {
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
-    createAdmission((request, grant) => {
-      if (request.stage === "commit") {
-        checkpoint();
-      }
-      admit(request, grant);
-    }),
+  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+    (admit, attachment) =>
+      createAdmission((request, grant) => {
+        if (request.stage === "commit") {
+          checkpoint();
+        }
+        admit(request, grant);
+      }, attachment),
   );
 }
 

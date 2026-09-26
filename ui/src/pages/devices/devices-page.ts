@@ -79,9 +79,6 @@ class DevicesPage extends OpenClawLightDomElement {
   @state() private canAdmin = false;
   @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
   @state() private execApprovalsTargetNodeId: string | null = null;
-  private pendingConfirmation: AbortController | null = null;
-  // Dialog orchestration (destructive confirmations + the alias editor) lives
-  // in its own controller; the page exposes only the narrow seam it needs.
   private readonly dialogs = new DevicesDialogController({
     canManagePairing: () => this.canManagePairing,
     gatewayConnected: () => this.gateway.connected,
@@ -89,10 +86,6 @@ class DevicesPage extends OpenClawLightDomElement {
     gatewayClient: () => this.gateway.client,
     gatewayUrl: () => this.context.gateway.connection.gatewayUrl,
     runPageTask: (task) => this.runPageTask(task),
-    pendingDialog: () => this.pendingConfirmation,
-    setPendingDialog: (controller) => {
-      this.pendingConfirmation = controller;
-    },
     setDevicesError: (message) => {
       this.pageState.devicesError = message;
       // The controller writes outside the page's task cycle; the callout must
@@ -249,7 +242,7 @@ class DevicesPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
-    this.cancelPendingConfirmation();
+    this.dialogs.cancel();
     this.subscriptions.clear();
     void this.presenceTask.run([null, null]);
     this.resetInventoryDetails();
@@ -327,7 +320,7 @@ class DevicesPage extends OpenClawLightDomElement {
   }
 
   private resetServerState(snapshot: ApplicationGatewaySnapshot) {
-    this.cancelPendingConfirmation();
+    this.dialogs.cancel();
     this.pageState.requestGeneration += 1;
     const next = createInitialDevicesState({
       client: snapshot.client,
@@ -440,14 +433,9 @@ class DevicesPage extends OpenClawLightDomElement {
     return this.presenceTask.run([gateway, client]);
   }
 
-  private cancelPendingConfirmation() {
-    this.pendingConfirmation?.abort();
-    this.pendingConfirmation = null;
-  }
-
   // A rotation always ends in a dialog: with the replacement when the Gateway issued it
   // to this operator, otherwise with what it did instead. The reveal sits deliberately
-  // outside pendingConfirmation, which a reconnect aborts — aborting a shown secret
+  // outside the confirmation slot, which a reconnect aborts — aborting a shown secret
   // would destroy the only copy the Gateway can hand out.
   private async reportRotationOutcome(
     device: { id: string; name: string },

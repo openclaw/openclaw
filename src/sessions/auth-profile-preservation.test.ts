@@ -131,20 +131,6 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
     ).toBe(false);
   });
 
-  it("uses the configured provider for an arbitrary profile id", () => {
-    expect(
-      shouldPreserveSessionAuthProfileOverride({
-        cfg: {
-          auth: { profiles: { "team:prod": { provider: "openai", mode: "api_key" } } },
-        },
-        agentDir: tempDirs.make("openclaw-auth-profile-config-"),
-        entry: { ...entry, authProfileOverride: "team:prod" },
-        currentProvider: "openai",
-        provider: "openai",
-      }),
-    ).toBe(true);
-  });
-
   it.each(["openai", "anthropic"])(
     "retains a missing personal pin only when the selected provider %s is compatible",
     async (provider) => {

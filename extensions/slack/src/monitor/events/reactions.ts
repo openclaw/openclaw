@@ -1,8 +1,9 @@
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { allowListMatches, normalizeAllowListLower } from "../allow-list.js";
+import { allowListMatches } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import type { SlackReactionEvent } from "../types.js";
@@ -25,7 +26,7 @@ function shouldEmitSlackReactionNotification(params: {
     return Boolean(ctx.botUserId && event.item_user === ctx.botUserId);
   }
   if (ctx.reactionMode === "allowlist") {
-    const allowList = normalizeAllowListLower(ctx.reactionAllowlist);
+    const allowList = normalizeStringEntriesLower(ctx.reactionAllowlist);
     if (allowList.length === 0) {
       return false;
     }

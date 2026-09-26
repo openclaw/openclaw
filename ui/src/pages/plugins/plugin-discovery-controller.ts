@@ -1,5 +1,6 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
+import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type {
@@ -17,6 +18,11 @@ const NO_CATALOG_CURSOR: string | null = null;
 type CatalogPageLoad = {
   items: PluginDiscoveryEntry[];
   overview: boolean;
+  selection: {
+    intent: PluginDiscoveryIntent;
+    category: string | null;
+    query: string;
+  };
   categories?: PluginDiscoveryCategory[];
   nextCursor?: string;
   remoteError?: string;
@@ -26,14 +32,6 @@ type PluginDiscoveryGateway = {
   getClient: () => GatewayBrowserClient | null;
   isConnected: () => boolean;
 };
-
-function compareOfficialDownloads(left: PluginDiscoveryEntry, right: PluginDiscoveryEntry): number {
-  if (left.catalog.official !== right.catalog.official) {
-    return left.catalog.official ? -1 : 1;
-  }
-  const downloadOrder = (right.catalog.downloads ?? 0) - (left.catalog.downloads ?? 0);
-  return downloadOrder || left.catalog.name.localeCompare(right.catalog.name);
-}
 
 function rankedOverviewShelf(
   items: readonly PluginDiscoveryEntry[],
@@ -64,6 +62,7 @@ function appendUniqueEntries(
 
 export class PluginDiscoveryController {
   result: PluginDiscoveryResult | null = null;
+  private resultSelection: CatalogPageLoad["selection"] | null = null;
   error: string | null = null;
   remoteError: string | null = null;
   categories: PluginDiscoveryCategory[] = [];
@@ -126,6 +125,7 @@ export class PluginDiscoveryController {
           items: page.items,
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         };
+        this.resultSelection = page.selection;
         this.remoteError = page.remoteError ?? null;
         if (page.overview) {
           // The overview is already fetched for cards. Use its canonical categories
@@ -173,7 +173,9 @@ export class PluginDiscoveryController {
         this.result = {
           items:
             this.intent === "all" && !this.committedQuery
-              ? items.toSorted(compareOfficialDownloads)
+              ? items.toSorted((left, right) =>
+                  comparePluginCatalogEntries(left, right, this.category),
+                )
               : items,
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         };
@@ -186,7 +188,16 @@ export class PluginDiscoveryController {
   }
 
   get loading(): boolean {
-    return this.gateway.isConnected() && this.browseTask.status === TaskStatus.PENDING;
+    // Keep keyed cards and their open controls during a same-selection refresh.
+    // New filters must wait for their own result instead of showing the old selection.
+    return (
+      this.gateway.isConnected() &&
+      this.browseTask.status === TaskStatus.PENDING &&
+      (!this.result ||
+        this.resultSelection?.intent !== this.intent ||
+        this.resultSelection.category !== this.category ||
+        this.resultSelection.query !== this.committedQuery)
+    );
   }
 
   get categoriesLoading(): boolean {
@@ -250,11 +261,14 @@ export class PluginDiscoveryController {
     );
     const items =
       params.intent === "all" && !params.query
-        ? page.items.toSorted(compareOfficialDownloads)
+        ? page.items.toSorted((left, right) =>
+            comparePluginCatalogEntries(left, right, params.category),
+          )
         : page.items;
     return {
       items,
       overview,
+      selection: { intent: params.intent, category: params.category, query: params.query },
       ...(page.categories ? { categories: page.categories } : {}),
       ...(page.nextCursor && !params.query ? { nextCursor: page.nextCursor } : {}),
       ...(page.remoteError ? { remoteError: page.remoteError } : {}),
@@ -276,6 +290,7 @@ export class PluginDiscoveryController {
     this.committedQuery = this.query.trim();
     void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
     this.result = null;
+    this.resultSelection = null;
     this.categories = [];
     this.categoriesReady = false;
     this.categoriesError = null;

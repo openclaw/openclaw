@@ -67,11 +67,11 @@ function resolveGitScheduleStatus(
   if (!git || git.error || !git.sha) {
     return { ...metadata, status: "unavailable", reason: "git-unavailable" };
   }
-  if (git.fetchOk !== true) {
-    return { ...metadata, status: "unavailable", reason: "fetch-failed" };
-  }
   if (!git.upstream) {
     return { ...metadata, status: "unavailable", reason: "no-upstream" };
+  }
+  if (git.fetchOk !== true) {
+    return { ...metadata, status: "unavailable", reason: "fetch-failed" };
   }
   if (!git.upstreamSha) {
     return { ...metadata, status: "unavailable", reason: "no-upstream-sha" };

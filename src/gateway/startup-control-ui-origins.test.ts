@@ -24,12 +24,10 @@ describe("maybeSeedControlUiAllowedOriginsAtStartup", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("does not rewrite config when origins already exist", async () => {
-    const config: OpenClawConfig = {
-      gateway: {
-        controlUi: { allowedOrigins: ["https://control.example.com"] },
-      },
-    };
+  it.each<OpenClawConfig>([
+    { gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } } },
+    { gateway: { publicOrigin: "https://control.example.com" } },
+  ])("does not rewrite an already configured origin policy: %j", async (config) => {
     const log = { info: vi.fn(), warn: vi.fn() };
 
     const result = await maybeSeedControlUiAllowedOriginsAtStartup({

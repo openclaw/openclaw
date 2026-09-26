@@ -11,7 +11,7 @@ Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Pro
 
 ## Manual dispatches
 
-Ordinary manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 24 minimum compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, full iOS build/test and screenshot qualification, and Control UI/native app i18n. Their logical runner profile is always `github`, independent of the physical fallback selected by `runs-on`. Node 24 minimum compatibility runs in Full Release Validation and manual dispatches only; push and pull request CI skip it. The exact-head `release_gate` fallback instead keeps the pull request's macOS, iOS smoke, and generated-native-locale scope without selecting iOS screenshots or native tests. Automatic source PRs and release gates verify native extraction inventory and Android/Apple localization safety without requiring translated or platform-generated output in the same PR. The serialized Native App Locale Refresh workflow rebuilds those artifacts in one isolated PR and enables exact-head auto-merge after required checks pass. Native parity remains blocking for generated-artifact PRs, generated-scope release gates, ordinary manual CI, full-scope release validation, and release prep. CI reports proven obsolete native translation IDs and Android generated rows as warnings while the locale refresh catches up; active-key coverage, correctness, and all other parity checks remain blocking. See [local checks](/ci/local-proof) for the exact boundary. Control UI locale parity remains advisory on automatic PR and `main` runs and blocking on manual/release CI. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); full-scope release validation enables Android by passing `include_android=true` without setting `release_gate`; npm qualification scopes defer Android. Plugin prerelease static checks, the full `agentic-plugins` sweep, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
+Ordinary manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 24 minimum compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, full iOS build/test and screenshot qualification, and Control UI/native app i18n. Their logical runner profile is always `github`, independent of the physical fallback selected by `runs-on`. Node 24 minimum compatibility runs in Full Release Validation and manual dispatches only; push and pull request CI skip it. The exact-head `release_gate` fallback instead keeps the pull request's macOS, iOS smoke, and generated-native-locale scope without selecting iOS screenshots or native tests. Automatic source PRs and release gates verify native extraction inventory and Android/Apple localization safety without requiring translated or platform-generated output in the same PR. The serialized Native App Locale Refresh workflow rebuilds those artifacts in one isolated PR and enables exact-head auto-merge after required checks pass. Native parity remains blocking for generated-artifact PRs, generated-scope release gates, ordinary manual CI, full-scope release validation, and release prep. CI reports proven obsolete native translation IDs, Android generated rows, and Apple catalog rows as warnings while the locale refresh catches up; active-key coverage, correctness, and all other parity checks remain blocking. See [local checks](/ci/local-proof) for the exact boundary. Control UI locale parity remains advisory on automatic PR and `main` runs and blocking on manual/release CI. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); full-scope release validation enables Android by passing `include_android=true` without setting `release_gate`; npm qualification scopes defer Android. Plugin prerelease static checks, the full `agentic-plugins` sweep, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
 
 PR baseline ratchets derive their comparison state from the checked-out synthetic merge tree and verify its head parent against the event head. The max-lines entry chains the environment-variable budget with the same fork-point ref before the assertion-safety check, so production source growth cannot first surface on `main`. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; ratchet baselines are compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated. Release-gate merge-tree lint uses the same five core stripes as hosted PR CI plus one extension stripe, so no single hosted runner owns the full type-aware lint workload.
 
@@ -52,7 +52,7 @@ advance; ClawHub, native-app, website, regular npm `latest`, and private
 dist-tag surfaces are excluded. Core-resume recovery verifies existing registry
 bytes before resuming evidence and finalization; Docker-only recovery leaves
 GitHub finalization untouched. See [Monthly Gateway extended-stable
-publication](/reference/RELEASING#monthly-gateway-extended-stable-publication)
+publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md)
 for commands and recovery.
 
 ### Windows Testbox Probe
@@ -110,6 +110,36 @@ frozen Windows runner can retain temporary namespaces when descendant settlement
 is unverified. Do not delete them during the run or infer settlement from a
 zero process status. Preserve that diagnostic, inspect final runner cleanup,
 and report any missing teardown evidence separately from the test result.
+
+#### Installed repair-worker compatibility and cleanup
+
+Set `installed_repair_worker=true` with one `installed_startup_package` binding,
+`runner_label=windows-2025`, and `keepalive_minutes=0`. Pin `target_ref` to the
+same reviewed commit as the dispatched workflow. Leave other proof modes off.
+The existing package owner installs and verifies the exact candidate artifact;
+the native admission gate requires a fresh hosted runner without credentials,
+operator mounts, Tailnet attachment, or managed identity.
+
+The probe authenticates and installs npm versions 2026.9.4 and 2026.9.5, then
+calls their unchanged published repair controllers against the installed candidate
+worker. Version 2026.9.4 delegates its verifying phase; 2026.9.5 also delegates
+validation. Each must receive the deferred unavailable result without provider
+requests, validation calls, or changes to synthetic state. This proves controller
+compatibility, not a complete installed-updater upgrade.
+
+Separate cells use the candidate's packaged executor and ledger owners to admit
+real delegated work against a loopback model fixture and reject a wrong receiver.
+A real tool starts descendant processes. Both normal and forced worker exits must
+remove them before the parent executor settles, while the outer observer and its
+Windows Job launcher remain alive. Parent or outer cleanup cannot satisfy that
+assertion. Original 90-second worker,
+60-second turn, 120-second cell, and two-second extinction deadlines remain fixed.
+
+The `windows-installed-startup-<runId>-<attempt>` artifact retains
+`repair-results.json`, the failed or completed cells, native Job observations,
+PID/start identities, exact package/controller/runtime/tooling hashes, synthetic
+provider counts, state effects, and final cleanup. The probe stops after a failed
+cell and never substitutes successful runner teardown for worker qualification.
 
 #### Installed Gateway startup measurements
 

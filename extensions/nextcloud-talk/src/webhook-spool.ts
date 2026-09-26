@@ -15,7 +15,7 @@ import {
   NEXTCLOUD_TALK_REPLAY_DEDUPE_TTL_MS,
 } from "./replay-migration-contract.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
-import type { NextcloudTalkInboundMessage, NextcloudTalkWebhookPayload } from "./types.js";
+import type { NextcloudTalkInboundMessage } from "./types.js";
 import {
   inspectNextcloudTalkWebhookEnvelope,
   migrateNextcloudTalkLegacyReplayState,
@@ -39,7 +39,8 @@ function describeIgnoredWebhookEvent(rawEvent: string): string {
   return `type=${type} objectType=${objectType}`;
 }
 
-const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
+// Activity Streams payload: https://nextcloud-talk.readthedocs.io/en/latest/bots/
+const NextcloudTalkWebhookPayloadSchema = z.object({
   type: z.enum(["Create", "Update", "Delete"]),
   actor: z.object({
     type: z.literal("Person"),

@@ -77,8 +77,8 @@ In `require` mode, an unavailable or unloadable helper normally causes `helper-u
 
 ## Plugin and core guidance
 
-- Plugin-facing file access should go through `openclaw/plugin-sdk/*` helpers, not raw `fs`. This applies when a path comes from a message, model output, config, or plugin input.
-- Core code should use the fs-safe wrappers under `src/infra/*` so OpenClaw's process policy applies consistently.
+- Plugin-facing file access should use `openclaw/plugin-sdk/*` helpers when a path comes from a message, model output, config, or plugin input. Plugins can use reviewed fs-safe primitives directly when they declare their own fs-safe dependency and retain the applicable path policy.
+- Core code should import fs-safe primitives from their focused package entry points. Keep OpenClaw adapters where they own behavior, including secret-directory mode repair, archive durability, producer isolation, and public SDK compatibility. Pure re-exports are unnecessary: fs-safe owns its process defaults.
 - Archive extraction should use the fs-safe archive helpers with explicit size, entry-count, link, and destination limits.
 - Secrets should use OpenClaw secret helpers or fs-safe secret/private-state helpers. Do not hand-roll mode checks around `fs.writeFile`.
 - For hostile local-user isolation, do not rely on fs-safe alone. Run separate gateways under separate OS users/hosts, or use sandboxing.

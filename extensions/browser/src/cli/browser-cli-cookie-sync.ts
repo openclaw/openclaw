@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   cacheKeychainSecret,
   type KeychainSecretReader,
@@ -17,7 +19,6 @@ import {
   runBrowserCliCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { defaultRuntime } from "./core-api.js";
 
 const COOKIE_SYNC_DEBOUNCE_MS = 1_500;
 
@@ -50,10 +51,6 @@ function parseCookieSyncDomains(raw: string | undefined): string[] {
     throw new Error("--domains must include at least one non-empty domain");
   }
   return domains;
-}
-
-function describeGatewayTarget(parent: BrowserParentOpts): string {
-  return parent.url?.trim() || "configured/default";
 }
 
 function formatCookieSyncSummary(summary: CookieSyncSummary): string {
@@ -95,7 +92,7 @@ async function pushSystemProfileCookies(params: {
     browser: source.browser,
     systemProfile: source.systemProfile,
     into: params.options.into,
-    gateway: describeGatewayTarget(params.parent),
+    gateway: params.parent.url?.trim() || "configured/default",
     total: source.counts.total,
     pushed,
     skipped: source.counts.skipped,
@@ -121,12 +118,14 @@ async function watchSystemProfileCookies(params: {
   let pending = false;
   let stopped = false;
   let stopError: Error | undefined;
-  let resolveStopped: (() => void) | undefined;
-  let rejectStopped: ((error: Error) => void) | undefined;
-  const stoppedPromise = new Promise<void>((resolve, reject) => {
-    resolveStopped = resolve;
-    rejectStopped = reject;
-  });
+  const stoppedResult = createDeferred<void>();
+  const settleStopped = () => {
+    if (stopError) {
+      stoppedResult.reject(stopError);
+    } else {
+      stoppedResult.resolve();
+    }
+  };
 
   const runCycle = async () => {
     if (stopped) {
@@ -152,11 +151,7 @@ async function watchSystemProfileCookies(params: {
     } finally {
       inFlight = false;
       if (stopped) {
-        if (stopError) {
-          rejectStopped?.(stopError);
-        } else {
-          resolveStopped?.();
-        }
+        settleStopped();
       } else if (pending) {
         void runCycle();
       }
@@ -185,11 +180,7 @@ async function watchSystemProfileCookies(params: {
     watcher.close();
     controller.abort(new Error("cookie sync stopped"));
     if (!inFlight) {
-      if (stopError) {
-        rejectStopped?.(stopError);
-      } else {
-        resolveStopped?.();
-      }
+      settleStopped();
     }
   };
   const fail = (error: Error) => {
@@ -201,7 +192,7 @@ async function watchSystemProfileCookies(params: {
   process.once("SIGTERM", stop);
   try {
     await runCycle();
-    await stoppedPromise;
+    await stoppedResult.promise;
   } finally {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
@@ -210,7 +201,6 @@ async function watchSystemProfileCookies(params: {
   }
 }
 
-/** Register `browser cookie-sync`. */
 export function registerBrowserCookieSyncCommand(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

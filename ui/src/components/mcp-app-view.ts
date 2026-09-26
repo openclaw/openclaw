@@ -42,8 +42,6 @@ type McpAppViewPayload = {
 type HostContext = NonNullable<
   NonNullable<ConstructorParameters<typeof AppBridge>[3]>["hostContext"]
 >;
-type ScheduleFrame = (callback: FrameRequestCallback) => number;
-type ScheduleFallback = (callback: () => void, delayMs: number) => number;
 type McpAppResources = {
   bridge: OpenClawAppBridge | null;
   cleanups: Set<() => void>;
@@ -60,18 +58,15 @@ type McpAppBinding = {
 
 const MCP_APP_TEARDOWN_TIMEOUT_MS = 250;
 
-async function waitForMcpAppHandlerRegistration(
-  scheduleFrame: ScheduleFrame = window.requestAnimationFrame.bind(window),
-  scheduleFallback: ScheduleFallback = window.setTimeout.bind(window),
-): Promise<void> {
+async function waitForMcpAppHandlerRegistration(): Promise<void> {
   await Promise.race([
     new Promise<void>((resolve) => {
-      scheduleFrame(() => {
-        scheduleFrame(() => resolve());
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => resolve());
       });
     }),
     new Promise<void>((resolve) => {
-      scheduleFallback(resolve, 1_000);
+      window.setTimeout(resolve, 1_000);
     }),
   ]);
 }
@@ -239,13 +234,6 @@ export class McpAppView extends LitElement {
     };
   }
 
-  private runResourceCleanups(resources: McpAppResources) {
-    for (const cleanup of resources.cleanups) {
-      resources.cleanups.delete(cleanup);
-      cleanup();
-    }
-  }
-
   private async teardownResources(resources: McpAppResources | null | undefined) {
     if (!resources || resources.disposed) {
       await this.teardownPromise;
@@ -255,7 +243,10 @@ export class McpAppView extends LitElement {
     if (this.resources === resources) {
       this.resources = null;
     }
-    this.runResourceCleanups(resources);
+    for (const cleanup of resources.cleanups) {
+      resources.cleanups.delete(cleanup);
+      cleanup();
+    }
     const teardown = (async () => {
       if (resources.bridge) {
         let timeout: number | undefined;

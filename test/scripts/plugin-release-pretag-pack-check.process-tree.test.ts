@@ -369,7 +369,9 @@ describe("pretag executable and per-stage deadlines", () => {
       const stageCode = `import { appendFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 appendFileSync(${JSON.stringify(recordPath)}, JSON.stringify({ args: process.argv.slice(2), prebuilt: process.env.OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD, outputDir: process.env.OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR }) + "\\n");
-await delay(600);
+// Six sequential stages must collectively exceed one 2s stage budget while
+// each individual stage remains comfortably within it.
+await delay(350);
 `;
       writeFileSync(join(scriptsDir, "check-plugin-npm-runtime-builds.mts"), stageCode);
       writeFileSync(join(scriptsDir, "pack.mts"), stageCode);

@@ -147,7 +147,6 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
             activeLeafEntryId,
             buildTailPage,
           }) => {
-            const localMessagesWithBoundaryFilter = incrementalTail.rawMessages;
             const {
               readChatHistoryCliSessionImportSnapshot,
               resolveChatHistoryWithCliSessionImports,
@@ -155,12 +154,12 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
             const importedMessages = await readChatHistoryCliSessionImportSnapshot({
               entry,
               provider,
-              localMessages: localMessagesWithBoundaryFilter,
+              localMessages: incrementalTail.rawMessages,
             });
             const cliHistory = resolveChatHistoryWithCliSessionImports({
               entry,
               provider,
-              localMessages: localMessagesWithBoundaryFilter,
+              localMessages: incrementalTail.rawMessages,
               preparedImportedMessages: importedMessages,
             });
             if ((offset !== undefined || messageId) && !cliHistory.imported) {

@@ -1,4 +1,3 @@
-// Skill install service coordinates skill installation from archives, URLs, and registries.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -48,28 +47,25 @@ function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInst
   };
 }
 
-function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
+function buildNodeInstallCommand(prefs: SkillsInstallPreferences): string[] {
   switch (prefs.nodeManager) {
     case "pnpm":
-      return ["pnpm", "add", "-g", "--ignore-scripts", packageName];
+      return ["pnpm", "add", "-g", "--ignore-scripts"];
     case "yarn":
-      return ["yarn", "global", "add", "--ignore-scripts", packageName];
+      return ["yarn", "global", "add", "--ignore-scripts"];
     case "bun":
-      return ["bun", "add", "-g", "--ignore-scripts", packageName];
+      return ["bun", "add", "-g", "--ignore-scripts"];
     default:
-      return ["npm", "install", "-g", "--ignore-scripts", packageName];
+      return ["npm", "install", "-g", "--ignore-scripts"];
   }
 }
 
 function resolveDefaultNodeInstallStateDir(): string {
   const cwd = process.cwd();
-  const getuid = process.getuid?.bind(process);
-  const homedir = os.homedir;
-  const platform = process.platform;
-  if (platform !== "win32" && getuid?.() === 0) {
+  if (process.platform !== "win32" && process.getuid?.() === 0) {
     return path.join(path.parse(cwd).root, "var", "lib", "openclaw");
   }
-  return path.join(homedir(), ".openclaw");
+  return path.join(os.homedir(), ".openclaw");
 }
 
 async function buildNodeInstallEnv(prefs: SkillsInstallPreferences): Promise<NodeJS.ProcessEnv> {
@@ -93,15 +89,23 @@ const SAFE_GO_MODULE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*@[a-z0-9v._-]+$/;
 const SAFE_UV_PACKAGE =
   /^[a-z0-9][a-z0-9._-]*(\[[a-z0-9,._-]+\])?(([><=!~]=?|===?)[a-z0-9.*_-]+)?$/i;
 
-function assertSafeInstallerValue(value: string, kind: string, pattern: RegExp): string | null {
+function buildValidatedInstallCommand(
+  value: string | undefined,
+  kind: string,
+  pattern: RegExp,
+  command: readonly string[],
+): { argv: string[] | null; error?: string } {
+  if (!value) {
+    return { argv: null, error: `missing ${kind}` };
+  }
   const trimmed = value.trim();
   if (!trimmed || trimmed.startsWith("-")) {
-    return `${kind} value is empty or starts with a dash`;
+    return { argv: null, error: `${kind} value is empty or starts with a dash` };
   }
   if (!pattern.test(trimmed)) {
-    return `${kind} value contains invalid characters: ${trimmed}`;
+    return { argv: null, error: `${kind} value contains invalid characters: ${trimmed}` };
   }
-  return null;
+  return { argv: [...command, trimmed] };
 }
 
 function buildInstallCommand(
@@ -112,48 +116,29 @@ function buildInstallCommand(
   error?: string;
 } {
   switch (spec.kind) {
-    case "brew": {
-      if (!spec.formula) {
-        return { argv: null, error: "missing brew formula" };
-      }
-      const err = assertSafeInstallerValue(spec.formula, "brew formula", SAFE_BREW_FORMULA);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return { argv: ["brew", "install", spec.formula.trim()] };
-    }
-    case "node": {
-      if (!spec.package) {
-        return { argv: null, error: "missing node package" };
-      }
-      const err = assertSafeInstallerValue(spec.package, "node package", SAFE_NODE_PACKAGE);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return {
-        argv: buildNodeInstallCommand(spec.package.trim(), prefs),
-      };
-    }
-    case "go": {
-      if (!spec.module) {
-        return { argv: null, error: "missing go module" };
-      }
-      const err = assertSafeInstallerValue(spec.module, "go module", SAFE_GO_MODULE);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return { argv: ["go", "install", spec.module.trim()] };
-    }
-    case "uv": {
-      if (!spec.package) {
-        return { argv: null, error: "missing uv package" };
-      }
-      const err = assertSafeInstallerValue(spec.package, "uv package", SAFE_UV_PACKAGE);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return { argv: ["uv", "tool", "install", spec.package.trim()] };
-    }
+    case "brew":
+      return buildValidatedInstallCommand(spec.formula, "brew formula", SAFE_BREW_FORMULA, [
+        "brew",
+        "install",
+      ]);
+    case "node":
+      return buildValidatedInstallCommand(
+        spec.package,
+        "node package",
+        SAFE_NODE_PACKAGE,
+        buildNodeInstallCommand(prefs),
+      );
+    case "go":
+      return buildValidatedInstallCommand(spec.module, "go module", SAFE_GO_MODULE, [
+        "go",
+        "install",
+      ]);
+    case "uv":
+      return buildValidatedInstallCommand(spec.package, "uv package", SAFE_UV_PACKAGE, [
+        "uv",
+        "tool",
+        "install",
+      ]);
     case "download": {
       return { argv: null, error: "download install handled separately" };
     }
@@ -190,22 +175,14 @@ async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<s
   }
 
   for (const candidate of ["/opt/homebrew/bin", "/usr/local/bin"]) {
-    try {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    } catch {
-      // ignore
+    if (fs.existsSync(candidate)) {
+      return candidate;
     }
   }
   return undefined;
 }
 
-type CommandResult = {
-  code: number | null;
-  stdout: string;
-  stderr: string;
-};
+type CommandResult = Pick<SkillInstallResult, "code" | "stdout" | "stderr">;
 
 function createInstallFailure(params: {
   message: string;
@@ -239,12 +216,7 @@ async function runCommandSafely(
   optionsOrTimeout: number | CommandOptions,
 ): Promise<CommandResult> {
   try {
-    const result = await runCommandWithTimeout(argv, optionsOrTimeout);
-    return {
-      code: result.code,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    };
+    return await runCommandWithTimeout(argv, optionsOrTimeout);
   } catch (err) {
     return {
       code: null,
@@ -290,15 +262,21 @@ async function ensureUvInstalled(params: {
     });
   }
 
-  const brewResult = await runCommandSafely([params.brewExe, "install", "uv"], {
-    timeoutMs: params.timeoutMs,
-  });
+  return installPrerequisiteViaBrew("uv", params.brewExe, params.timeoutMs);
+}
+
+async function installPrerequisiteViaBrew(
+  name: "uv" | "go",
+  brewExe: string,
+  timeoutMs: number,
+): Promise<SkillInstallResult | undefined> {
+  const brewResult = await runCommandSafely([brewExe, "install", name], { timeoutMs });
   if (brewResult.code === 0) {
     return undefined;
   }
 
   return createInstallFailure({
-    message: "Failed to install uv (brew)",
+    message: `Failed to install ${name} (brew)`,
     ...brewResult,
   });
 }
@@ -497,16 +475,7 @@ async function ensureGoInstalled(params: {
   }
 
   if (params.brewExe) {
-    const brewResult = await runCommandSafely([params.brewExe, "install", "go"], {
-      timeoutMs: params.timeoutMs,
-    });
-    if (brewResult.code === 0) {
-      return undefined;
-    }
-    return createInstallFailure({
-      message: "Failed to install go (brew)",
-      ...brewResult,
-    });
+    return installPrerequisiteViaBrew("go", params.brewExe, params.timeoutMs);
   }
 
   if (hasBinary("apt-get")) {
@@ -674,16 +643,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     }),
   );
   if (scanResult?.blocked) {
-    return withWarnings(
-      {
-        ok: false,
-        message: scanResult.blocked.reason,
-        stdout: "",
-        stderr: "",
-        code: null,
-      },
-      warnings,
-    );
+    return withWarnings(createInstallFailure({ message: scanResult.blocked.reason }), warnings);
   }
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.
@@ -695,13 +655,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
   if (!spec) {
     return withWarnings(
-      {
-        ok: false,
-        message: `Installer not found: ${params.installId}`,
-        stdout: "",
-        stderr: "",
-        code: null,
-      },
+      createInstallFailure({ message: `Installer not found: ${params.installId}` }),
       warnings,
     );
   }
@@ -724,13 +678,12 @@ export async function installSkillDependencies(
   const { skillKey, spec, preferences: prefs } = params;
   const timeoutMs = Math.min(Math.max(params.timeoutMs, 1_000), 900_000);
   if (spec.kind === "download") {
-    const downloadResult = await installDownloadSpec({ skillKey, spec, timeoutMs });
-    return downloadResult;
+    return installDownloadSpec({ skillKey, spec, timeoutMs });
   }
 
   const command = buildInstallCommand(spec, prefs);
   if (command.error) {
-    return { ok: false, message: command.error, stdout: "", stderr: "", code: null };
+    return createInstallFailure({ message: command.error });
   }
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
@@ -775,9 +728,7 @@ export async function installSkillDependencies(
     // Keep the just-installed command discoverable without requiring a gateway restart.
     process.env.PATH = envOverrides.PATH;
   }
-  const normalizedResult =
-    spec.kind === "go" && !installResult.ok && isGoToolchainPrerequisiteFailure(installResult)
-      ? { ...installResult, skipReason: "go" as const }
-      : installResult;
-  return normalizedResult;
+  return spec.kind === "go" && !installResult.ok && isGoToolchainPrerequisiteFailure(installResult)
+    ? { ...installResult, skipReason: "go" as const }
+    : installResult;
 }

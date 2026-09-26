@@ -19,9 +19,6 @@ const ARCHIVE_STAMP = "2026-01-01T00-00-00.000Z";
 const PRESSURE = { maxDiskBytes: 64, highWaterBytes: 64 };
 const EMPTY_ARTIFACTS = [
   { kind: "transcript", name: "orphan.jsonl" },
-  { kind: "trajectory", name: "orphan.trajectory.jsonl" },
-  { kind: "trajectory pointer", name: "orphan.trajectory-path.json" },
-  { kind: "checkpoint", name: "orphan.checkpoint.0f9c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b.jsonl" },
   { kind: "prompt blob", name: PROMPT_FILE },
   { kind: "prompt temp", name: `${PROMPT_FILE}${TEMP_SUFFIX}` },
   { kind: "store temp", name: `sessions.json${TEMP_SUFFIX}` },

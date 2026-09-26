@@ -340,6 +340,16 @@ function resolveDefaultPluginRegistryProxy(): PluginRegistry {
   return workerRuntimeState.defaultPluginRegistry;
 }
 
+async function settlePluginCacheRetirements(): Promise<void> {
+  const { waitForPluginCacheRetirement } = await vi.importActual<
+    typeof import("../src/plugins/plugin-cache.js")
+  >("../src/plugins/plugin-cache.js");
+  const { failures } = await waitForPluginCacheRetirement();
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Plugin cache retirement failed during test cleanup");
+  }
+}
+
 async function installDefaultPluginRegistry(): Promise<void> {
   // Worker module resets retire the lifecycle maps. Activate through the current
   // real module, never a cached closure or a suite's partial runtime mock.
@@ -349,6 +359,7 @@ async function installDefaultPluginRegistry(): Promise<void> {
   workerRuntimeState.materializedDefaultPluginRegistry = null;
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(resolveDefaultPluginRegistryProxy());
+  await settlePluginCacheRetirements();
 }
 
 // Some suites import channel/plugin consumers at module top level, before
@@ -393,4 +404,5 @@ afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
   clearSessionStoreCacheForTest();
   await drainFileLockStateForTest();
+  await settlePluginCacheRetirements();
 });

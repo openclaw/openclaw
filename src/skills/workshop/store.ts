@@ -83,12 +83,8 @@ export function createSkillProposalId(name: string, now = new Date()): string {
   return `${normalized.slice(0, 60)}-${date}-${suffix}`;
 }
 
-function contentSizeBytes(content: string): number {
-  return Buffer.byteLength(content, "utf8");
-}
-
 function assertSkillProposalContentSize(content: string): void {
-  if (contentSizeBytes(content) > MAX_PROPOSAL_BYTES) {
+  if (Buffer.byteLength(content, "utf8") > MAX_PROPOSAL_BYTES) {
     throw new Error("Skill proposal is too large.");
   }
 }
@@ -111,7 +107,7 @@ export function prepareSkillProposalSupportFiles(
       throw new Error(`Duplicate support file path: ${filePath}`);
     }
     seen.add(filePath);
-    const sizeBytes = contentSizeBytes(file.content);
+    const sizeBytes = Buffer.byteLength(file.content, "utf8");
     if (sizeBytes > MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES) {
       throw new Error(`Support file is too large: ${filePath}`);
     }
@@ -193,7 +189,9 @@ export async function readSkillProposal(
         ? { agentId: stored.row.owner_agent_id }
         : {}),
   };
-  if (readOptions.reconcile === false) {
+  // Terminal generations cannot be revised or retired by proposal writers.
+  // Keep filesystem integrity checks, but do not acquire a write lease to read them.
+  if (readOptions.reconcile === false || stored.record.status !== "pending") {
     return await readSkillProposalBundle(stored.record, options);
   }
   if (await reconcileInterruptedApply(proposalId, scopedOptions)) {
@@ -226,6 +224,9 @@ export async function readSkillProposalRecord(
   let stored = await readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
+  }
+  if (stored.record.status !== "pending") {
+    return stored.record;
   }
   const scopedOptions = {
     ...options,
@@ -385,38 +386,32 @@ export async function updateSkillProposalRecord(params: {
   );
 }
 
-function listStoredProposals(options: SkillWorkshopStoreOptions, scope: SkillProposalLookupScope) {
-  return executeSkillWorkshopOperation(
-    "workshop.proposals.list",
-    { agentId: scope.agentId },
-    options,
-  );
-}
-
 export async function readSkillProposalManifest(
   sourceOptions: SkillWorkshopDirectoryStoreOptions,
-  lookupScope: SkillProposalLookupScope = {},
+  lookupScope: SkillProposalLookupScope & { status?: SkillProposalRecord["status"] } = {},
 ): Promise<SkillProposalManifest> {
   const options = captureSkillWorkshopStoreOptions(sourceOptions);
-  const scope = { agentId: lookupScope.agentId };
-  const before = await listStoredProposals(options, scope);
+  const scope = { agentId: lookupScope.agentId, status: lookupScope.status };
+  const before = await executeSkillWorkshopOperation(
+    "workshop.proposals.list",
+    { agentId: scope.agentId, status: "pending" },
+    options,
+  );
   await Promise.all(
-    before
-      .filter(({ record }) => record.status === "pending")
-      .map(({ record, row }) =>
-        reconcileInterruptedApply(record.id, {
-          ...options,
-          ...(scope.agentId
-            ? { agentId: scope.agentId }
-            : row.owner_agent_id
-              ? { agentId: row.owner_agent_id }
-              : {}),
-        }),
-      ),
+    before.map(({ record, row }) =>
+      reconcileInterruptedApply(record.id, {
+        ...options,
+        ...(scope.agentId
+          ? { agentId: scope.agentId }
+          : row.owner_agent_id
+            ? { agentId: row.owner_agent_id }
+            : {}),
+      }),
+    ),
   );
-  const proposals = (await listStoredProposals(options, scope)).map(({ record }) =>
-    manifestEntryFromRecord(record),
-  );
+  const proposals = (
+    await executeSkillWorkshopOperation("workshop.proposals.list", scope, options)
+  ).map(({ record }) => manifestEntryFromRecord(record));
   return {
     schema: SKILL_WORKSHOP_MANIFEST_SCHEMA,
     updatedAt: proposals[0]?.updatedAt ?? new Date(0).toISOString(),
@@ -465,7 +460,7 @@ async function readProposalSupportFiles(
       symlinks: "reject",
     });
     const content = read.buffer.toString("utf8");
-    const sizeBytes = contentSizeBytes(content);
+    const sizeBytes = Buffer.byteLength(content, "utf8");
     const hash = hashSkillProposalContent(content);
     if (file.sizeBytes !== sizeBytes || file.hash !== hash) {
       throw new Error(`Proposal support file changed without updating metadata: ${filePath}`);

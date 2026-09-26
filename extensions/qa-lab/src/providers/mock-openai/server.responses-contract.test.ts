@@ -1,5 +1,7 @@
+import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { startQaMockOpenAiServer } from "./server.js";
+import { guestCodeModeExecTool } from "./server.test-harness.js";
 
 describe("mock Responses contract", () => {
   it.each([undefined, false])("returns a JSON Response when stream is %s", async (stream) => {
@@ -53,12 +55,7 @@ describe("mock Responses contract", () => {
               {
                 type: "function",
                 name: "exec",
-                parameters: {
-                  type: "object",
-                  properties: { code: { type: "string" } },
-                  required: ["code"],
-                  additionalProperties: false,
-                },
+                parameters: guestCodeModeExecTool.parameters,
               },
             ],
           }),
@@ -66,7 +63,14 @@ describe("mock Responses contract", () => {
         expect(response.status).toBe(200);
         const body = await response.json();
         expect(body.output[0]).toMatchObject({ type: "function_call", name: "exec" });
-        expect(JSON.parse(body.output[0].arguments)).toEqual({ code: expect.any(String) });
+        const args = JSON.parse(body.output[0].arguments);
+        validateToolArguments(guestCodeModeExecTool, {
+          type: "toolCall",
+          id: body.output[0].call_id,
+          name: "exec",
+          arguments: args,
+        });
+        expect(args).toEqual({ title: expect.any(String), code: expect.any(String) });
       } finally {
         await server.stop();
       }

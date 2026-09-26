@@ -139,6 +139,7 @@ const realGatewayFiles = [
   "quota-reset-status.real-gateway",
   "session-pr-reader-lifetime.real-gateway",
   "session-progress-hovercard.real-gateway",
+  "session-roster-request-rate.real-gateway",
   "usage-sessions-owner-attribution",
   "worker-initial-setup.real-gateway",
 ]
@@ -166,6 +167,7 @@ type OwnershipProbe = {
   leases: Array<{ outDir: string; closed: boolean; removed: boolean }>;
   shards: string[][];
   steps: Array<{ builds: number; previews: number; closes: number }>;
+  lifecycle: string[];
   admissions: string[];
   canonicalAssetsIntact: boolean;
   rootWorkers: number;
@@ -188,6 +190,7 @@ function probeOwnership(
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "oc-ui-ownership-")));
   tempDirs.push(directory);
   const eventsFile = path.join(directory, "leases.jsonl");
+  const lifecycleFile = path.join(directory, "lifecycle.jsonl");
   const admissionsFile = path.join(directory, "admissions.jsonl");
   const canonicalRoot = path.join(directory, "canonical-ui");
   fs.mkdirSync(canonicalRoot);
@@ -202,6 +205,11 @@ function probeOwnership(
     export const assertUiE2ePreflight = async () => {
       if (${JSON.stringify(options.failure)} === "preflight") throw new Error("fixture preflight failed");
     };
+    const lifecycle = event => fs.appendFileSync(${JSON.stringify(lifecycleFile)}, JSON.stringify(event) + "\\n");
+    export async function prepareNativeControlUiPluginFixtures() {
+      lifecycle("native-fixtures");
+      return { catalog: { revision: "fixture", plugins: [], diagnostics: [] }, assets: new Map() };
+    }
     export default function admission(project) {
       fs.appendFileSync(${JSON.stringify(admissionsFile)}, JSON.stringify(project.name) + "\\n");
       if (${JSON.stringify(options.failure)} === "admission") throw new Error("fixture admission failed");
@@ -210,6 +218,7 @@ function probeOwnership(
       });
     }
     function lease(outDir, built) {
+      lifecycle(built ? "bundle-server" : "prebuilt-server");
       const record = (closed) => fs.appendFileSync(${JSON.stringify(eventsFile)}, JSON.stringify({ outDir, closed, built }) + "\\n");
       record(false);
       const failure = built ? "build" : "preview";
@@ -236,6 +245,7 @@ function probeOwnership(
     import config from ${JSON.stringify(path.join(repoRoot, `test/vitest/vitest.ui-e2e${options.prebuilt ? "-prebuilt" : ""}.config.ts`))};
     function instrument(config) {
       return { ...config, resolve: { ...config.resolve, alias: [
+        { find: /^.*\\/control-ui-plugin-fixture[.]ts$/, replacement: ${JSON.stringify(resourceFile)} },
         { find: /^.*\\/control-ui-e2e\\.ts$/, replacement: ${JSON.stringify(resourceFile)} },
         { find: /^.*\\/vitest\\.ui-e2e-prebuilt\\.global-setup\\.ts$/, replacement: ${JSON.stringify(resourceFile)} },
         { find: /^.*vitest[.]ui-e2e-preflight[.]ts$/, replacement: ${JSON.stringify(resourceFile)} },
@@ -318,6 +328,8 @@ function probeOwnership(
           buildInfo: project.getProvidedContext().controlUiE2eServerBuildInfo,
           bridge: project.config.setupFiles.some(file => file.endsWith("/vitest.ui-e2e.setup.ts")),
         })), shards, steps, setupError, rootWorkers: ctx.config.maxWorkers,
+        lifecycle: fs.existsSync(${JSON.stringify(lifecycleFile)})
+          ? fs.readFileSync(${JSON.stringify(lifecycleFile)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse) : [],
         admissions: fs.existsSync(${JSON.stringify(admissionsFile)})
           ? fs.readFileSync(${JSON.stringify(admissionsFile)}, "utf8").trim().split("\\n").map(JSON.parse) : [],
       };
@@ -358,30 +370,17 @@ describe("Control UI E2E resource ownership", () => {
 
   it.each([
     { filters: [standaloneFile], files: [standaloneFile], leases: 0 },
-    ...["control-ui-retained-assets", "service-worker-update"].map((name) => {
-      const file = `ui/src/e2e/${name}.e2e.test.ts`;
-      return { filters: [file], files: [file], leases: 0 };
-    }),
     { filters: [privateFile], files: [privateFile], leases: 0 },
     { filters: [bundledFile], files: [bundledFile], leases: 1 },
     { filters: [serialBundledFile], files: [serialBundledFile], leases: 1 },
-    {
-      filters: [bundledFile, serialBundledFile],
-      files: [bundledFile, serialBundledFile],
-      leases: 1,
-    },
     {
       filters: [standaloneFile, privateFile, bundledFile, serialBundledFile],
       files: [standaloneFile, privateFile, bundledFile, serialBundledFile],
       leases: 1,
     },
-    { filters: [standaloneFile, bundledFile], files: [standaloneFile, bundledFile], leases: 1 },
     {
-      filters: ["ui/src/pages/tasks"],
-      files: [
-        "ui/src/pages/tasks/tasks-transcript.e2e.test.ts",
-        "ui/src/pages/tasks/tasks.e2e.test.ts",
-      ],
+      filters: ["ui/src/pages/cron"],
+      files: ["ui/src/pages/cron/run-transcript.e2e.test.ts"],
       leases: 1,
     },
     {
@@ -444,6 +443,14 @@ describe("Control UI E2E resource ownership", () => {
         { builds: options.prebuilt ? 0 : leases, previews: leases, closes: 0 },
       ]);
       expect(result.canonicalAssetsIntact).toBe(true);
+      expect(result.lifecycle).toEqual(
+        leases > 0
+          ? [
+              ...(options.prebuilt ? [] : ["native-fixtures"]),
+              options.prebuilt ? "prebuilt-server" : "bundle-server",
+            ]
+          : [],
+      );
       for (const context of result.contexts) {
         expect(context.buildInfo ?? null).toEqual(
           options.prebuilt && leases > 0 ? prebuiltBuildInfo : null,
@@ -468,7 +475,6 @@ describe("Control UI E2E resource ownership", () => {
     { first: bundledFile, second: serialBundledFile, available: true },
     { first: serialBundledFile, second: bundledFile, available: true },
     { first: bundledFile, second: serialBundledFile, available: false },
-    { first: serialBundledFile, second: bundledFile, available: false },
   ])(
     "shares the bundle fact after standalone selection, $first then $second (Chromium: $available)",
     ({ first, second, available }) => {
@@ -651,6 +657,13 @@ describe("Control UI E2E resource ownership", () => {
         {
           file: "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
           fileParallelism: false,

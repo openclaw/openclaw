@@ -1,5 +1,4 @@
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
-// Xai provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import type {
   RealtimeTranscriptionProviderPlugin,
@@ -24,9 +23,8 @@ type XaiTranscriptionRuntime = Pick<
 >;
 
 type XaiRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
-  apiKey: string;
   // Late-bound bearer; called per (re)connect.
-  resolveApiKey?: () => Promise<string>;
+  resolveApiKey: () => Promise<string>;
   baseUrl: string;
   sampleRate: number;
   encoding: XaiRealtimeTranscriptionEncoding;
@@ -153,7 +151,7 @@ function createXaiRealtimeTranscriptionSession(
     callbacks: config,
     url: () => toXaiRealtimeWsUrl(config),
     headers: async () => {
-      const apiKey = config.resolveApiKey ? await config.resolveApiKey() : config.apiKey;
+      const apiKey = await config.resolveApiKey();
       return {
         Authorization: `Bearer ${apiKey}`,
         ...xaiUserAgentHeaderFor(config.baseUrl),
@@ -185,12 +183,9 @@ export function buildXaiRealtimeTranscriptionProvider(
     createSession: (req) => {
       const config = normalizeXaiRealtimeTranscriptionProviderConfig(req.providerConfig);
       // createSession must stay sync per RealtimeTranscriptionProviderPlugin; bearer is resolved lazily in headers().
-      const seedApiKey =
-        normalizeOptionalString(config.apiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
       return createXaiRealtimeTranscriptionSession(
         {
           ...req,
-          apiKey: seedApiKey ?? "",
           resolveApiKey: () =>
             resolveXaiRealtimeApiKey(config.apiKey, req.cfg, runtime.resolveApiKeyForProvider),
           baseUrl: normalizeXaiRealtimeBaseUrl(config.baseUrl),

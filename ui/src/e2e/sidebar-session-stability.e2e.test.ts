@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
@@ -40,6 +43,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.clock.install();
     const gateway = await installMockGateway(page, {
       sessions: [parentRow, childRow, siblingRow],
       methodResponses: {
@@ -92,12 +96,15 @@ suite.define(() => {
       const childRequests = (await gateway.getRequests("sessions.list", childMatch)).length;
       expect(childRequests).toBeGreaterThan(0);
       await gateway.deferNext("sessions.list", childMatch);
+      await pauseVirtualClock(page);
       await gateway.emitGatewayEvent("sessions.changed", {
         key: parentKey,
         sessionKey: parentKey,
         reason: "run",
         updatedAt: baseTime + 2,
       });
+      await page.clock.fastForward(5_001);
+      await page.clock.resume();
       await gateway.waitForRequest("sessions.list", { after: childRequests, match: childMatch });
       await gateway.resolveDeferred("sessions.list", sessionsListResponse(refreshedChildren));
       // The sibling proves the new child snapshot rendered before checking the selected row.
@@ -170,6 +177,7 @@ suite.define(() => {
         viewport: { height: 900, width },
       });
       const page = await context.newPage();
+      await page.clock.install();
       if (textScale !== 100) {
         await page.addInitScript(
           ({ scale, settingsKey }) => {
@@ -266,12 +274,15 @@ suite.define(() => {
         const childMatch = { spawnedBy: parentKey };
         const childRequests = (await gateway.getRequests("sessions.list", childMatch)).length;
         await gateway.deferNext("sessions.list", childMatch);
+        await pauseVirtualClock(page);
         await gateway.emitGatewayEvent("sessions.changed", {
           key: parentKey,
           sessionKey: parentKey,
           reason: "run",
           updatedAt: baseTime + 2,
         });
+        await page.clock.fastForward(5_001);
+        await page.clock.resume();
         await gateway.waitForRequest("sessions.list", {
           after: childRequests,
           match: childMatch,
@@ -333,6 +344,7 @@ suite.define(() => {
         : undefined,
     });
     const page = await context.newPage();
+    await page.clock.install();
     const proofVideo = page.video();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -373,6 +385,7 @@ suite.define(() => {
         sessionsListResponse([parentRow, completedChild, ...siblingRows]),
       );
       const listCount = (await gateway.getRequests("sessions.list")).length;
+      await pauseVirtualClock(page);
       await gateway.emitGatewayEvent("sessions.changed", {
         activeRunIds: [],
         endedAt: completedChild.endedAt,
@@ -384,6 +397,8 @@ suite.define(() => {
         status: "done",
         updatedAt: completedChild.updatedAt,
       });
+      await page.clock.fastForward(5_001);
+      await page.clock.resume();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(listCount);

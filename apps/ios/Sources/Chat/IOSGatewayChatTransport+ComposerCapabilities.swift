@@ -30,19 +30,16 @@ extension IOSGatewayChatTransport {
 
         async let configRequest = self.composerResponse(
             OpenClawChatGatewayRequests.composerConfigGet(),
-            method: "config.get",
             canRead: canRead,
             route: route)
         async let skillsRequest = self.composerResponse(
             OpenClawChatGatewayRequests.composerSkillsStatus(agentID: targetAgentID),
-            method: "skills.status",
             canRead: canRead,
             route: route)
         async let toolsRequest = self.composerResponse(
             OpenClawChatGatewayRequests.composerToolsEffective(
                 sessionKey: target.sessionKey,
                 agentID: target.agentID),
-            method: "tools.effective",
             canRead: canRead,
             route: route)
         let (
@@ -104,15 +101,12 @@ extension IOSGatewayChatTransport {
             skillsAvailable: skillsSurface.loaded,
             connectorsAvailable: configSurface.loaded,
             toolAccessAvailable: toolsSurface.loaded,
-            permissionMutationAvailable: sessionSettingsAvailable && settingsSupport.settingsCAS &&
-                patchAdvertised && canWrite,
+            permissionMutationAvailable: sessionSettingsAvailable && settingsSupport.settingsCAS && canWrite,
             sessionSettingsCASAvailable: settingsSupport.settingsCAS,
-            toolOverrideMutationAvailable: sessionSettingsAvailable && patchAdvertised &&
-                settingsSupport.settingsCAS && canAdmin,
+            toolOverrideMutationAvailable: sessionSettingsAvailable && settingsSupport.settingsCAS && canAdmin,
             toolOverrideMutationRequiresGatewayUpgrade: sessionSettingsAvailable &&
                 !settingsSupport.settingsCAS,
-            canSelectFullPermission: sessionSettingsAvailable && settingsSupport.settingsCAS &&
-                patchAdvertised && canAdmin,
+            canSelectFullPermission: sessionSettingsAvailable && settingsSupport.settingsCAS && canAdmin,
             loadFailureMessage: failureMessage)
     }
 
@@ -140,12 +134,11 @@ extension IOSGatewayChatTransport {
 
     private func composerResponse(
         _ request: OpenClawChatGatewayRequest,
-        method: String,
         canRead: Bool,
         route: GatewayNodeSessionRoute) async -> ComposerResponse
     {
         guard canRead,
-              await self.gateway.supportsServerMethod(method, ifCurrentRoute: route) == true
+              await self.gateway.supportsServerMethod(request.method, ifCurrentRoute: route) == true
         else { return .unavailable }
         do {
             let data = try await self.gateway.request(
@@ -270,11 +263,7 @@ extension IOSGatewayChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        let route: GatewayNodeSessionRoute? = if let outboxGatewayID {
-            await self.gateway.currentRoute(ifGatewayID: outboxGatewayID)
-        } else {
-            await self.gateway.currentRoute()
-        }
+        let route = await self.currentSessionMutationRoute()
         guard let route,
               let supportsRoutingContract = await gateway.supportsServerCapability(
                   .chatSendRoutingContract,

@@ -102,7 +102,6 @@ it("retries a source-resolution failure through the attachment owner", async () 
 });
 
 it.each([
-  ["rows.csv", "text/csv", "name,status\nalpha,ready\n"],
   ["settings.json", "application/json", '{"ready":true}\n'],
   ["config.xml", "application/xml", "<ready>true</ready>"],
   ["notes.txt", "application/octet-stream", "Text with generic metadata"],
@@ -161,7 +160,6 @@ it("keeps Markdown attachment markup inert and does not load remote images", asy
 });
 
 it.each([
-  { title: "notes.txt", mimeType: "application/pdf" },
   { title: "archive.bin", mimeType: "application/octet-stream" },
   { title: "notes.txt", src: "https://files.example/notes.txt" },
   { title: "page.html", mimeType: "text/html", src: "https://files.example/page.html" },

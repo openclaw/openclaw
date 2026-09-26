@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_DESKTOP_COMPUTER_COMMAND } from "../infra/node-commands.js";
-import {
-  registerComputerUseProvider,
-  type ComputerUseCapabilityDescriptor,
-} from "../plugins/computer-use-contract.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
+import { registerComputerUseProvider } from "../plugins/computer-use-registration.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -48,6 +46,7 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
     JSON.stringify({ ok: true }),
   );
   const close = vi.fn(async (_reason: string) => {});
+  const stopWatching = vi.fn<() => Promise<void>>(async () => {});
   const openExecution = vi.fn(async (_context: unknown) => ({ snapshot, act, close }));
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(createPluginRecord({ id: "fixture", enabled: true, status: "loaded" }));
@@ -68,6 +67,7 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
       openExecution,
       watchAvailability: (_context, notify) => {
         availabilityChanged = notify;
+        return stopWatching;
       },
     },
   );
@@ -107,6 +107,7 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
     snapshot,
     act,
     close,
+    stopWatching,
     openExecution,
     onManifestChanged,
     setProviderGeneration(value: string) {
@@ -158,6 +159,54 @@ describe("private worker computer runtime", () => {
       await host.runtime.close();
     }
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "joins registered availability cleanup through runtime close when it will %s",
+    async (outcome) => {
+      const host = await startComputer();
+      const physicalStop = createDeferredCore();
+      const entered = createDeferredCore();
+      const failure = new Error("availability retirement failed");
+      let reentrant: Promise<void> | undefined;
+      host.stopWatching.mockImplementationOnce(async () => {
+        reentrant = host.runtime.close();
+        entered.resolve();
+        await physicalStop.promise;
+      });
+      let closed = false;
+      const closing = host.runtime.close();
+      const observed = closing.then(
+        () => {
+          closed = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          closed = true;
+          return error;
+        },
+      );
+      try {
+        await entered.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(closed).toBe(false);
+        expect(host.runtime.close()).toBe(closing);
+        expect(reentrant).toBe(closing);
+        if (outcome === "reject") {
+          physicalStop.reject(failure);
+          expect(await observed).toBe(failure);
+        } else {
+          physicalStop.resolve();
+          expect(await observed).toBeUndefined();
+        }
+        expect(host.stopWatching).toHaveBeenCalledOnce();
+      } finally {
+        physicalStop.resolve();
+        await observed;
+      }
+    },
+  );
 
   it("awaits the registered provider preparation before publishing the first manifest", async () => {
     const gate = createDeferredCore();

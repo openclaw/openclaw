@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { Directive, directive, type ElementPart } from "lit/directive.js";
-import { scrollState } from "./scroll-state.ts";
+import { revealInScrollRegion, scrollState } from "./scroll-state.ts";
 
 export function handleComposerMenuKeydown(
   event: KeyboardEvent,
@@ -20,7 +20,7 @@ export function handleComposerMenuKeydown(
   }
   if (
     !["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Tab"].includes(event.key) ||
-    ((event.key === "Home" || event.key === "End") &&
+    (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) &&
       (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey)) ||
     (menu.count === 0 && !menu.consumeEmpty)
   ) {
@@ -120,16 +120,8 @@ function scrollActiveOptionIntoView(activeId: string | null): void {
   requestAnimationFrame(() => {
     const activeOption = document.getElementById(activeId);
     const scrollRegion = activeOption?.closest<HTMLElement>(".slash-menu__scroll");
-    if (!activeOption || !scrollRegion) {
-      return;
-    }
-    const menuBounds = scrollRegion.getBoundingClientRect();
-    const optionBounds = activeOption.getBoundingClientRect();
-    // scrollIntoView also moves the short-landscape composer and page.
-    if (optionBounds.top < menuBounds.top) {
-      scrollRegion.scrollTop -= menuBounds.top - optionBounds.top;
-    } else if (optionBounds.bottom > menuBounds.bottom) {
-      scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
+    if (activeOption && scrollRegion) {
+      revealInScrollRegion(scrollRegion, activeOption);
     }
   });
 }

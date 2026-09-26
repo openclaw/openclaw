@@ -447,6 +447,30 @@ describe("block HTML islands", () => {
     }
   });
 
+  it("maps Telegram <pre> blocks between rich islands", () => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(
+      [
+        "<hr/>",
+        "<b>Summary</b>",
+        "<pre>Alpha / Beta     10 / 20",
+        "Gamma &lt;b&gt;   <i>30</i></pre>",
+        "",
+        "<hr/>",
+        '<pre>\n<code class="language-python">print("ok")',
+        "</code>\n</pre>",
+      ].join("\n"),
+    );
+    expect(blocks).toEqual([
+      { type: "divider" },
+      { type: "paragraph", text: { type: "bold", text: "Summary" } },
+      { type: "pre", text: "Alpha / Beta     10 / 20\nGamma <b>   <i>30</i>" },
+      { type: "divider" },
+      { type: "pre", text: '\nprint("ok")\n\n', language: "python" },
+    ]);
+    expect(plainText).not.toContain("<pre>");
+    expect(plainText).not.toContain("<code");
+  });
+
   it("maps tg-collage children to media blocks", () => {
     const block = single(
       '<tg-collage><img src="https://example.com/1.png"/><img src="https://example.com/2.png"/></tg-collage>',

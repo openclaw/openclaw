@@ -1,4 +1,3 @@
-// Telegram helper module supports setup surface.helpers behavior.
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
   applySetupAccountConfigPatch,

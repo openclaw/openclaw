@@ -20,6 +20,7 @@ export async function restoreDoctorGatewayService(params: {
   writeConfig?: (nextConfig: OpenClawConfig) => Promise<OpenClawConfig>;
   options: DoctorOptions;
   runtime: RuntimeEnv;
+  signal: AbortSignal;
   warnings: string[];
   settle: <T>(operation: () => Promise<T>) => Promise<T>;
   assertCustody?: () => void;
@@ -147,7 +148,11 @@ export async function restoreDoctorGatewayService(params: {
             cfg,
             "local",
             params.runtime,
-            createDoctorPrompter({ runtime: params.runtime, options: params.options }),
+            createDoctorPrompter({
+              runtime: params.runtime,
+              options: params.options,
+              signal: params.signal,
+            }),
             {
               async writeConfig(nextConfig) {
                 assertInstallationCurrent();

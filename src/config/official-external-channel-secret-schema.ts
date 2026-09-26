@@ -1,28 +1,20 @@
 /** Widens official external channel schemas for host-resolved SecretRef fields. */
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getOfficialExternalChannelHostSchemaAllOf,
   getOfficialExternalChannelSecretContract,
 } from "../plugins/official-external-plugin-catalog.js";
-import { cloneSchema } from "./schema.shared.js";
+import {
+  asSchemaObject,
+  cloneSchema,
+  type ConfigJsonSchemaObject as JsonSchemaObject,
+} from "./schema.shared.js";
 import { SecretRefSchema } from "./zod-schema.core.js";
-
-type JsonSchemaObject = Record<string, unknown> & {
-  properties?: Record<string, JsonSchemaObject>;
-  additionalProperties?: boolean | JsonSchemaObject;
-  anyOf?: JsonSchemaObject[];
-  allOf?: JsonSchemaObject[];
-};
 
 const SECRET_REF_SCHEMA = SecretRefSchema.toJSONSchema({
   io: "input",
   target: "draft-07",
   unrepresentable: "any",
 }) as JsonSchemaObject;
-
-function asSchemaObject(value: unknown): JsonSchemaObject | undefined {
-  return asOptionalRecord(value) as JsonSchemaObject | undefined;
-}
 
 function widenProperties(
   properties: Record<string, JsonSchemaObject> | undefined,
