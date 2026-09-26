@@ -1,0 +1,424 @@
+name: RunsOn on-demand pilot
+on:
+  pull_request:
+    types: [opened]
+permissions:
+  contents: read
+# One attempt per cell; later report pushes must not buy another benchmark.
+env:
+  CI: "true"
+  NODE_OPTIONS: --max-old-space-size=8192
+  OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+  OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0"
+  OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+jobs:
+  cold:
+    if: &pilot_guard >-
+      github.repository == 'openclaw/openclaw' &&
+      github.head_ref == 'ci-burden/r2-runson-pilot' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'steipete' &&
+      github.run_attempt == 1
+    name: pilot / ${{ matrix.name }} / ${{ matrix.phase }}
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - {
+              "name": "large-bm32",
+              "workload": "large",
+              "instance": "",
+              "storage": "cold",
+              "workers": 8,
+              "phase": "cold",
+              "label": "blacksmith-32vcpu-ubuntu-2404",
+            }
+          - {
+              "name": "large-c8i",
+              "workload": "large",
+              "instance": "c8i.4xlarge",
+              "storage": "cold",
+              "workers": 8,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8i.4xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "large-nvme",
+              "workload": "large",
+              "instance": "c8id.4xlarge",
+              "storage": "nvme",
+              "workers": 8,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8id.4xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "large-sticky",
+              "workload": "large",
+              "instance": "c8id.4xlarge",
+              "storage": "sticky",
+              "workers": 8,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8id.4xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb/sticky=r2-${{ github.run_id }}-large:30gb",
+            }
+          - {
+              "name": "small-bm32",
+              "workload": "small",
+              "instance": "",
+              "storage": "cold",
+              "workers": 8,
+              "phase": "cold",
+              "label": "blacksmith-32vcpu-ubuntu-2404",
+            }
+          - {
+              "name": "small-c8i",
+              "workload": "small",
+              "instance": "c8i.4xlarge",
+              "storage": "cold",
+              "workers": 8,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8i.4xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "small-nvme",
+              "workload": "small",
+              "instance": "c8id.4xlarge",
+              "storage": "nvme",
+              "workers": 8,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8id.4xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "small-sticky",
+              "workload": "small",
+              "instance": "c8id.4xlarge",
+              "storage": "sticky",
+              "workers": 8,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8id.4xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb/sticky=r2-${{ github.run_id }}-small:30gb",
+            }
+          - {
+              "name": "cron-c8i.8xlarge-w8",
+              "workload": "cron",
+              "instance": "c8i.8xlarge",
+              "storage": "cold",
+              "workers": 8,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8i.8xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "cron-c8i.8xlarge-w12",
+              "workload": "cron",
+              "instance": "c8i.8xlarge",
+              "storage": "cold",
+              "workers": 12,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8i.8xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "cron-c8i.8xlarge-w16",
+              "workload": "cron",
+              "instance": "c8i.8xlarge",
+              "storage": "cold",
+              "workers": 16,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8i.8xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "cron-c8a.8xlarge-w8",
+              "workload": "cron",
+              "instance": "c8a.8xlarge",
+              "storage": "cold",
+              "workers": 8,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8a.8xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "cron-c8a.8xlarge-w16",
+              "workload": "cron",
+              "instance": "c8a.8xlarge",
+              "storage": "cold",
+              "workers": 16,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8a.8xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "gateway-c8i.8xlarge-w8",
+              "workload": "gateway",
+              "instance": "c8i.8xlarge",
+              "storage": "cold",
+              "workers": 8,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8i.8xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "gateway-c8i.8xlarge-w12",
+              "workload": "gateway",
+              "instance": "c8i.8xlarge",
+              "storage": "cold",
+              "workers": 12,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8i.8xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "gateway-c8i.8xlarge-w16",
+              "workload": "gateway",
+              "instance": "c8i.8xlarge",
+              "storage": "cold",
+              "workers": 16,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8i.8xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "gateway-c8a.8xlarge-w8",
+              "workload": "gateway",
+              "instance": "c8a.8xlarge",
+              "storage": "cold",
+              "workers": 8,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8a.8xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+          - {
+              "name": "gateway-c8a.8xlarge-w16",
+              "workload": "gateway",
+              "instance": "c8a.8xlarge",
+              "storage": "cold",
+              "workers": 16,
+              "phase": "cold",
+              "label": "runs-on=${{ github.run_id }}/family=c8a.8xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb",
+            }
+    steps: &linux_steps
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: RunsOn and sticky store
+        id: sticky
+        if: matrix.instance != ''
+        uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2
+        with:
+          sticky_cache: ${{ matrix.storage == 'sticky' && 'custom,path=/home/runner/.pnpm-store' || '' }}
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          package-manager-cache: false
+      - name: Machine and storage facts
+        env:
+          EXPECTED_TYPE: ${{ matrix.instance }}
+          STORAGE: ${{ matrix.storage }}
+          PHASE: ${{ matrix.phase }}
+          CELL: ${{ matrix.workload }}
+          STICKY_HIT: ${{ steps.sticky.outputs.cache-hit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e 'const os=require("node:os"); console.log("BENCH_FACTS "+JSON.stringify({node:process.version,cpus:os.availableParallelism(),ram:os.totalmem(),model:os.cpus()[0].model}))'
+          node -e 'console.log("BENCH_LAUNCH "+JSON.stringify({launchedAt:process.env.RUNS_ON_INSTANCE_LAUNCHED_AT,region:process.env.RUNS_ON_AWS_REGION}))'
+          lscpu
+          cat /proc/cmdline
+          cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo "CPU quota counter unavailable"
+          if [[ -n "$EXPECTED_TYPE" ]]; then
+            imds_token=$(curl -fsS --connect-timeout 2 --max-time 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
+            for fact in instance-type instance-life-cycle placement/region; do
+              value=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: $imds_token" "http://169.254.169.254/latest/meta-data/$fact")
+              echo "BENCH_EC2 $fact=$value"
+              case "$fact" in
+                instance-type) test "$value" = "$EXPECTED_TYPE" ;;
+                instance-life-cycle) test "$value" = on-demand ;;
+                placement/region) test "$value" = us-east-1 ;;
+              esac
+            done
+          fi
+          store="$HOME/.pnpm-store/r2-$GITHUB_RUN_ID-$CELL"
+          mkdir -p "$store"
+          echo "PNPM_CONFIG_STORE_DIR=$store" >> "$GITHUB_ENV"
+          echo "PNPM_CONFIG_CACHE_DIR=$store/cache" >> "$GITHUB_ENV"
+          if [[ "$STORAGE" == nvme || "$STORAGE" == sticky ]]; then
+            lsblk -o NAME,MODEL,SIZE,MOUNTPOINTS
+            findmnt -T /tmp
+            findmnt -T "$store"
+            nvme_dev=$(stat -Lc '%d' /mnt/ephemeral)
+            assert_nvme_writes() {
+              local path="$1" writable="$1"
+              # RunsOn overlays image contents; new files live in the upper layer.
+              if [[ "$(findmnt -nr -o FSTYPE -T "$path")" == overlay ]]; then
+                writable=$(findmnt -nr -o OPTIONS -T "$path" | sed -n 's/.*upperdir=\([^,]*\).*/\1/p')
+                test -n "$writable"
+              fi
+              echo "BENCH_STORAGE path=$path writable=$writable"
+              test "$(stat -Lc '%d' "$writable")" = "$nvme_dev"
+            }
+            assert_nvme_writes /tmp
+            block=$(findmnt -nr -o MAJ:MIN -T "$(realpath /mnt/ephemeral)")
+            lsblk --inverse --json --output NAME,TYPE,MODEL "/dev/block/$block" | node -e '
+              const tree = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+              const flatten = nodes => nodes.flatMap(n => [n, ...flatten(n.children || [])]);
+              const disks = flatten(tree.blockdevices).filter(n => n.type === "disk");
+              console.log("BENCH_NVME " + JSON.stringify(disks));
+              if (!disks.length || disks.some(n => n.model?.trim() !== "Amazon EC2 NVMe Instance Storage")) process.exit(1);
+            '
+            if [[ "$STORAGE" == nvme ]]; then
+              assert_nvme_writes "$store"
+            else
+              mountpoint "$RUNS_ON_STICKYDISK_DIR"
+              sticky_dev=$(stat -Lc '%d' "$RUNS_ON_STICKYDISK_DIR")
+              test "$(stat -Lc '%d' "$store")" = "$sticky_dev"
+              test "$sticky_dev" != "$nvme_dev"
+            fi
+          fi
+          if [[ "$PHASE" == warm ]]; then
+            test "$STICKY_HIT" = true
+            test "$(cat "$store/r2-head")" = "$BENCH_HEAD_SHA"
+          elif [[ "$STORAGE" == sticky ]]; then
+            test "$STICKY_HIT" != true
+          fi
+          if [[ "$PHASE" == cold ]]; then
+            test -z "$(find "$store" -mindepth 1 -maxdepth 1 -print -quit)"
+          fi
+          echo "BENCH_CACHE phase=$PHASE sticky_hit=$STICKY_HIT"
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: 24.19.0
+          cache-mode: off
+      - name: Install dependencies
+        run: python3 scripts/ci-provider-bench-phase.py install pnpm install --frozen-lockfile --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true --prefer-offline
+      - name: Select preserved workload
+        env:
+          WORKLOAD: ${{ matrix.workload }}
+          WORKERS: ${{ matrix.workers }}
+          LARGE_GROUPS: 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
+          SMALL_GROUPS: H4sIAAAAAAAAA7VW0W7jOAz8l/S1tNttkcXtV9z7olgwEuNwI0s6kk4uOOy/HyTb7dZN0tzDvTRNMENTw+HI3/9ZuRS33Onq2/eVkVp74N8+Go5bwWbENKarl/sVRxcGT3+iGUmsRBXXVmSrpMopgktqMCh21KC4HR8I2FM0tlNTC5uu7s/w6EDR4Ih7arIQ9dk4xfOMvwIbAUejTthOcEyyJ7mGFUKfYjhBSA4/K6wRs+6SgRp2HLvGYXQUwqfEsQ/YSCofQjmcGhcI45BvoOUwdFz06zMK602PMpKeIwZA33PV8TzJ0Ah67qSeQRuHIZBAnzw1HIvySS6MZ0n1dGD32UyXpJ48I2QSZTWKjoqmKbIrrY8u0dsqpcE2aYgeslBGuTKTJXM2mhS6CV+YyZJ2E6iMQzM6gj4d6DdO3SgN6Pbw1jlJj7G4XegnuVIBQkp5g26/eBx2FE3bUt6ESFslKfI3u5T2y94msKUUtNU9h1BtoruUofzYCB142tGoJsjRFiVcwKO2PjlLy31ygdveZXCBm5+aImyRwyB0BlafrRU5N7BEpb7H6LUtDgza4mC7BaRqPJ4JPAWqMp3fpungtbuaV9APds4Z44ppy1ENQ3hnyCNK5NiBclxOYaYN2Ze5u7RLUgKy5M+5x1ycmtB2ObTxmClTLNrD6KxAqAQ7QrEN4XJIPZGVTjfJXtNThmjcL4dhglGdcDatDxq0yZIO7Gs8hYT+Q2nPxd5J6ExyVTO/La4ndRQ9xmtazGHadmxQHP5heoa61/oXhDpWkxNkSfNmlOi+ZvQxWjqKJEW6anSfYion1DSI+5AsE12HzfxfxmN8/Q71a1MsmeRjwulJjXqo0FbJhgwctyTFROCEai5i0CbwltzJheVQlNxQ6rY4eDbYcqCp5pGjT8dlu7P7yrhImmnSr1pdQPcYsaO+nmdy31tIfRL5764Y+pu12k3djno8ryX1G/Ke/ChLcWMkaWWI44JD1alRCuSMfL13wqVIGNMH/AY2IaE1Z2/3bUivQVUWJXzIj1mICeNSNEFnb7oVPSGj7XRp8Zm6IexhZ5Yv3XbTlT3u8O9fYFyhhWQv9yvdofgfEXtafVu5JDRvLlTtKw87mqrskha51qUx7jl2P/Z0uoF4NyqdBNYPT7B+etz67ebL09q7u2lRymZ9wWfn1utH9/BAdxnFYA1pC4/Pd9OLHjx/hfX68XFDz89/fN08rH7df/bWOE/xphfH5cjnMBsNeFG26jF2MNPhPV3ByWuRG1ru0OiIp7omJDc1PlEm23PstNpk4Y4ZNd5x1xAl/pE/QwhpTlHpaqksaUM1vK6E8gyejjw1WEiQxH9YtvPwiFZe7oWMpQbNTaxDYkflLR96VnedYhj2MM/jFqAOwWDHeibazjHOX5pvyMlOU8H3ql82ZTRJAXLASGN4jCf/v5fnuENTzBkmm/CBIqn+5y2a66x+vfwL9A3gRiQOAAA=
+        run: |
+          node --import tsx --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          import { gunzipSync } from 'node:zlib';
+          import { createHash } from 'node:crypto';
+          const { WORKLOAD, WORKERS } = process.env;
+          const groups = WORKLOAD === 'large' || WORKLOAD === 'small'
+            ? JSON.parse(gunzipSync(Buffer.from(process.env[WORKLOAD.toUpperCase()+'_GROUPS'], 'base64')))
+            : [{shard_name: WORKLOAD, configs: [`test/vitest/vitest.${WORKLOAD === 'gateway' ? 'gateway-core' : 'cron'}.config.ts`]}];
+          process.env.OPENCLAW_VITEST_MAX_WORKERS = WORKERS;
+          for (const config of new Set(groups.flatMap(group => group.configs))) {
+            const test = (await import('./'+config)).default.test;
+            console.log('BENCH_CONFIG '+JSON.stringify({config, workers:test.maxWorkers, fileParallelism:test.fileParallelism}));
+            if (!['large','small'].includes(WORKLOAD) && (test.maxWorkers !== Number(WORKERS) || test.fileParallelism === false)) throw Error('Worker ceiling not effective');
+          }
+          appendFileSync(process.env.GITHUB_ENV, `OPENCLAW_VITEST_MAX_WORKERS=${WORKERS}\nOPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}\n`);
+          console.log('BENCH_GROUP '+JSON.stringify({groups,digest:createHash('sha256').update(JSON.stringify(groups)).digest('hex')}));
+          JS
+      - name: Mark populated sticky store
+        if: matrix.storage == 'sticky'
+        run: echo "$BENCH_HEAD_SHA" > "$PNPM_CONFIG_STORE_DIR/r2-head"
+      - name: Test workload
+        run: python3 scripts/ci-provider-bench-phase.py test node --import tsx scripts/ci-run-node-test-shard.mts
+      - name: Final resources
+        if: always()
+        run: |
+          df -h / /tmp
+          free -b
+          cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo "Memory peak counter unavailable"
+    env:
+      BENCH_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  warm:
+    needs: cold
+    if: >-
+      always() && !cancelled() &&
+      github.repository == 'openclaw/openclaw' &&
+      github.head_ref == 'ci-burden/r2-runson-pilot' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'steipete' &&
+      github.run_attempt == 1
+    name: pilot / ${{ matrix.name }} / warm
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - {
+              "name": "large-sticky",
+              "workload": "large",
+              "instance": "c8id.4xlarge",
+              "storage": "sticky",
+              "workers": 8,
+              "phase": "warm",
+              "label": "runs-on=${{ github.run_id }}/family=c8id.4xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb/sticky=r2-${{ github.run_id }}-large:30gb",
+            }
+          - {
+              "name": "small-sticky",
+              "workload": "small",
+              "instance": "c8id.4xlarge",
+              "storage": "sticky",
+              "workers": 8,
+              "phase": "warm",
+              "label": "runs-on=${{ github.run_id }}/family=c8id.4xlarge/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb/sticky=r2-${{ github.run_id }}-small:30gb",
+            }
+    env:
+      BENCH_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps: *linux_steps
+  windows:
+    if: *pilot_guard
+    name: pilot / windows-part-1 / cold
+    runs-on: runs-on=${{ github.run_id }}/family=c8i.4xlarge/spot=false/retry=false/image=windows25-full-x64/volume=100gb
+    timeout-minutes: 25
+    env:
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+      OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
+      OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: "1"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: RunsOn
+        uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          package-manager-cache: false
+      - name: Match CI Defender exclusions
+        shell: pwsh
+        run: |
+          if (Get-Command Add-MpPreference -ErrorAction SilentlyContinue) {
+            try {
+              Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
+              Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
+            } catch {
+              Write-Warning "Defender exclusions unavailable; continuing as CI does."
+            }
+          }
+      - name: Machine facts
+        run: |
+          echo "PNPM_CONFIG_STORE_DIR=$(cygpath -w "$RUNNER_TEMP/r2-pnpm-store")" >> "$GITHUB_ENV"
+          node -e 'console.log("BENCH_LAUNCH "+JSON.stringify({launchedAt:process.env.RUNS_ON_INSTANCE_LAUNCHED_AT,region:process.env.RUNS_ON_AWS_REGION}))'
+          node -e 'const os=require("node:os"); console.log("BENCH_FACTS "+JSON.stringify({node:process.version,cpus:os.availableParallelism(),ram:os.totalmem(),model:os.cpus()[0].model}))'
+          imds_token=$(curl -fsS --connect-timeout 2 --max-time 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
+          for fact in instance-type instance-life-cycle placement/region; do
+            value=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: $imds_token" "http://169.254.169.254/latest/meta-data/$fact")
+            echo "BENCH_EC2 $fact=$value"
+            case "$fact" in
+              instance-type) test "$value" = c8i.4xlarge ;;
+              instance-life-cycle) test "$value" = on-demand ;;
+              placement/region) test "$value" = us-east-1 ;;
+            esac
+          done
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: 24.19.0
+          cache-mode: off
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+      - name: Test Windows part 1
+        run: pnpm test:windows:ci:1
