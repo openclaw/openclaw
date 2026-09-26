@@ -353,7 +353,7 @@ export function inspectProfileAvatarInDatabase(
   });
 }
 
-export function readProfileAvatarInDatabase(
+function readProfileAvatarInDatabase(
   db: DatabaseSync,
   profileId: string,
   expected: UserProfileAvatarRepresentation,
