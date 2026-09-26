@@ -152,11 +152,19 @@ the original package owner. Its normal runtime selection, service refresh,
 restart, and verification checks apply. Containers redeploy the target image
 with the same state/config mounts.
 
-`global-install-foreign-destination` means the selected prefix is foreign or its
-ownership could not be established. An inaccessible prefix, failed npm prefix
-probe, or unreadable layout stops the update before staging; an unknown
-destination is never treated as empty. Restore inspection access or make
-`npm prefix -g` succeed with the selected runtime. Ask the deployment owner to
+`global-install-foreign-destination` means the package transaction's destination
+is foreign or its ownership could not be established. The check uses the resolved
+installation target: an existing npm-global installation keeps its own prefix
+when nvm, fnm, Homebrew Node, or an operator's npm prefix change selects a different
+prefix in the shell. An unrelated installation at that shell prefix does not
+block an update to the original installation. pnpm global installations retain
+their pnpm owner and do not use this npm destination check.
+
+The actual destination must be empty, or its canonical package path must match
+the running installation or selected managed service, with any existing launcher
+pointing inside that package. An inaccessible or unreadable destination stops the
+update before staging; an unknown destination is never treated as empty. Restore
+inspection access or the selected package layout. Ask the deployment owner to
 verify unreadable layouts and explicitly select the intended installation.
 The saved outcome and public failure report name the destination prefix, package,
 launcher, running installation, and classified ownership cause. Public paths
@@ -339,6 +347,19 @@ cannot be restored; healthy plugins retain their available recovery snapshots.
 Older releases can reject enable, uninstall, and reinstall while trying to copy
 that same missing capture. Restart the Gateway through its service owner before
 retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
+### Database snapshots under continuous writes
+
+Older updaters can report that a database "did not stabilize after 10" attempts
+while the Gateway keeps writing. Current update schema inspection and rehearsal
+use a consistent SQLite online backup. Rehearsal progress records copied pages,
+bytes, and elapsed time in the update ledger.
+
+This cannot retrofit the installed 2026.9.5 driver. For that hop, stop the service
+through its service owner, run `openclaw update` from a separate terminal, then
+start the service. On a Linux user service, stop it with
+`systemctl --user stop openclaw-gateway.service`. If service shutdown itself
+hangs, treat that as a separate shutdown problem; do not start a second updater.
 
 ### Snapshot parse errors from 2026.9.5 and 2026.9.6
 

@@ -11,7 +11,6 @@ import {
   readCodexNotificationTurnId,
 } from "./notification-correlation.js";
 import { isJsonObject } from "./protocol.js";
-import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 
 type CodexNativeCompactionCompletion =
   | { completed: true; turnId?: string; itemId?: string; tokensAfter?: number }
@@ -24,6 +23,7 @@ export function watchCodexNativeCompactionCompletion(params: {
   timeoutMs: number;
   interruptGraceMs: number;
   retireUnconfirmed: () => Promise<void>;
+  onCompactionTurn?: (turnId: string) => void;
 }) {
   const runOutsideBindingLease = AsyncLocalStorage.snapshot();
   let settled = false;
@@ -35,6 +35,7 @@ export function watchCodexNativeCompactionCompletion(params: {
   let compactionItemId: string | undefined;
   let compactionItemCompleted = false;
   let tokensAfter: number | undefined;
+  let admissionFailure: string | undefined;
   const { promise: completion, resolve: resolveCompletion } =
     createDeferred<CodexNativeCompactionCompletion>();
   let removeNotificationHandler = () => {};
@@ -176,6 +177,15 @@ export function watchCodexNativeCompactionCompletion(params: {
     if (item?.type === "contextCompaction") {
       if (notification.method === "item/started") {
         compactionTurnId = compactionTurnId ?? notificationTurnId;
+        if (!compactionItemId && compactionTurnId) {
+          try {
+            params.onCompactionTurn?.(compactionTurnId);
+          } catch (error) {
+            admissionFailure = coerceErrorMessage(error);
+            abortRequested = true;
+            beginInterruptGrace();
+          }
+        }
         compactionItemId = item.id;
         requestInterrupt();
         return;
@@ -194,6 +204,10 @@ export function watchCodexNativeCompactionCompletion(params: {
     }
     const turn = isJsonObject(notification.params.turn) ? notification.params.turn : undefined;
     const status = typeof turn?.status === "string" ? turn.status : undefined;
+    if (admissionFailure) {
+      fail(admissionFailure);
+      return;
+    }
     if (status !== "completed") {
       fail(`codex app-server compaction turn ended with status ${status ?? "unknown"}`);
       return;
@@ -243,38 +257,4 @@ export function watchCodexNativeCompactionCompletion(params: {
       }
     },
   };
-}
-
-export async function runExclusiveCodexNativeCompaction<T>(
-  threadId: string,
-  signal: AbortSignal | undefined,
-  run: () => Promise<T>,
-): Promise<T> {
-  signal?.throwIfAborted();
-  let started = false;
-  const queued = withCodexAppServerThreadMutation(threadId, async () => {
-    started = true;
-    signal?.throwIfAborted();
-    return run();
-  });
-  if (!signal) {
-    return queued;
-  }
-  let removeAbortListener = () => {};
-  const aborted = new Promise<never>((_, reject) => {
-    const onAbort = () => {
-      if (!started) {
-        reject(signal.reason instanceof Error ? signal.reason : new Error("compaction aborted"));
-      }
-    };
-    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    // The canceled promise settles immediately, but its queued task remains
-    // behind its predecessor so later compactions cannot overtake active work.
-    return await Promise.race([queued, aborted]);
-  } finally {
-    removeAbortListener();
-  }
 }

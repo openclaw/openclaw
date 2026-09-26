@@ -295,6 +295,16 @@ and reads two task pages on the same Gateway connection. Complete task, delivery
 and flow records are checked again after Gateway shutdown. The taskflow cell covers
 terminal persisted state; it does not exercise active task recovery or provider work.
 
+The opt-in `channel-owner-policy` scenario uses the same pinned `openclaw@2026.9.4`
+published-driver and candidate-package checks. It seeds an existing
+`operator.channelPolicy` JSON specimen in the published database's machine-state
+table, then runs the installed updater. It requires state schema 19 content,
+preserved role/identity policy and configured owners, and a stable configured-owner
+reference across two candidate Gateway starts. The specimen is synthetic existing
+state, not a claim that the published baseline minted recovery references. This
+cell uses isolated state and manual restart; it does not prove updater-owned
+service restart or older-reader downgrade behavior.
+
 The `legacy-operator-state` scenario uses the published baseline's own CLI to
 create a second agent, allowlist exec approvals, and two command cron jobs: one
 without an explicit agent and one owned by `ops`. It leaves `systemAgent`

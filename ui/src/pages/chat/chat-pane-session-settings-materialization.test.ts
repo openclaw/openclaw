@@ -347,14 +347,15 @@ it.each(["unbound", "materialized"] as const)(
   },
 );
 
-it.each(
-  (["absent", "placeholder"] as const).flatMap((initialState) =>
+it.each([
+  ...(["absent", "placeholder"] as const).flatMap((initialState) =>
     (["success", "reasoning rejection", "rejection"] as const).map((outcome) => ({
       initialState,
       outcome,
     })),
   ),
-)(
+  { initialState: "published placeholder", outcome: "reasoning rejection" },
+])(
   "settles each queued preview when its ACK-adopted row stays unobserved ($initialState / $outcome)",
   async ({ initialState, outcome }) => {
     const key = "agent:main:settings-unobserved-adoption";
@@ -427,6 +428,13 @@ it.each(
         contextWindow: "128k",
       };
       expect(sessions.settingsPreview(key, "main")).toEqual(pendingPreview);
+
+      if (initialState === "published placeholder") {
+        rows.push(placeholder);
+        await sessions.refresh({ agentId: "main", force: true });
+        expect(selectedChatSessionRow(pane.state)).toMatchObject(placeholder);
+        expect(patch).toHaveBeenCalledOnce();
+      }
 
       firstReply.resolve(firstReceipt);
       await expect(first).resolves.toBe(true);

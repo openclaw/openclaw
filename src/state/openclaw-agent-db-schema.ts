@@ -467,7 +467,11 @@ function ensureAgentSchema(
         assertMigration,
       );
     };
-    runSqliteImmediateTransactionSync(db, () => withMutation(mutate), { withCommit: withMutation });
+    runSqliteImmediateTransactionSync(db, () => withMutation(mutate), {
+      databaseLabel: pathname,
+      operationLabel: "agent.schema.ensure",
+      withCommit: withMutation,
+    });
   } finally {
     if (db.isOpen) {
       db.exec("PRAGMA foreign_keys = ON;");
@@ -528,6 +532,8 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   const withIntegrityMutation: AgentSchemaMutationGuard = (run) =>
     deletionFence
       ? runSqliteImmediateTransactionSync(db, () => withRegistrationFence(run), {
+          databaseLabel: pathname,
+          operationLabel: "agent.schema.integrity",
           withCommit: withRegistrationFence,
         })
       : run();

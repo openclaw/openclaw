@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readProviderJsonObjectResponse } from "../agents/provider-http-errors.js";
 import type {
   ProviderUsageCostDaily,
@@ -41,16 +42,15 @@ export function decodeProviderUsageAdminToken(prefix: string, raw: string): stri
     return undefined;
   }
   try {
-    const token = asProviderUsageObject(JSON.parse(raw.slice(prefix.length)) as unknown)?.token;
-    return typeof token === "string" && token.trim() ? token.trim() : undefined;
+    return normalizeOptionalString(
+      asOptionalRecord(JSON.parse(raw.slice(prefix.length)) as unknown)?.token,
+    );
   } catch {
     return undefined;
   }
 }
 
-export function asProviderUsageObject(value: unknown): Record<string, unknown> | undefined {
-  return asOptionalRecord(value);
-}
+export { asOptionalRecord as asProviderUsageObject };
 
 export function parseProviderUsageNumber(value: unknown): number | undefined {
   const parsed =
@@ -73,7 +73,7 @@ export function parseProviderUsageNonNegativeInteger(value: unknown): number {
 }
 
 export function resolveProviderUsageDisplayName(value: unknown, fallback: string): string {
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+  return normalizeOptionalString(value) ?? fallback;
 }
 
 export function resolveProviderUsageDailyPeriod(params: {
@@ -143,10 +143,7 @@ export async function fetchProviderUsagePages(params: {
     if (payload.has_more !== true) {
       return { ok: true, data };
     }
-    const nextPage =
-      typeof payload.next_page === "string" && payload.next_page.trim()
-        ? payload.next_page.trim()
-        : undefined;
+    const nextPage = normalizeOptionalString(payload.next_page);
     if (!nextPage || seenPages.has(nextPage)) {
       return { ok: false };
     }

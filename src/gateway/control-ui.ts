@@ -9,6 +9,7 @@ import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { isControlUiFocusPath } from "@openclaw/session-url-contract";
 import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/svg-image.js";
 import {
   type AgentAvatarResolution,
@@ -16,11 +17,7 @@ import {
 } from "../agents/identity-avatar.js";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  matchRootFileOpenFailure,
-  openRootFileSync,
-  readFileDescriptorBounded,
-} from "../infra/boundary-file-read.js";
+import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
@@ -59,7 +56,6 @@ import {
   type AssistantMediaSession,
   type AssistantMediaReader,
 } from "./assistant-media-policy.js";
-import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   buildControlUiRootAssetPath,
@@ -81,26 +77,22 @@ import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "./control-ui-csp.js";
+import type { ControlUiRootAsset } from "./control-ui-file.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
-import {
-  classifyControlUiRequest,
-  isControlUiApprovalDocumentPath,
-  isControlUiFocusDocumentPath,
-} from "./control-ui-routing.js";
+import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 import { isControlUiSharePath, serveControlUiShareDocument } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
   isControlUiFileUnmodified,
   isControlUiPrecompressedAssetExtension,
   isControlUiStaticAssetExtension,
-  readAndCloseControlUiFile,
   resolveControlUiHtmlEncoding,
-  resolveOpenedControlUiRepresentation,
+  resolveControlUiRepresentation,
   respondControlUiNotAcceptable,
   respondControlUiNotModified,
   respondHeadForControlUiFile,
@@ -118,6 +110,7 @@ import {
 } from "./http-image-response.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
+import { readControlUiRootAsset, type ControlUiRootState } from "./server-control-ui-root.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
@@ -137,21 +130,6 @@ type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
   agentId?: string;
   root?: ControlUiRootState;
 };
-
-export type ControlUiRootState =
-  | {
-      kind: "bundled";
-      path: string;
-      realPath?: string;
-      retainedAssets?: ControlUiAssetRetention;
-      publicAssetBuildId?: string;
-    }
-  | { kind: "resolved"; path: string; realPath?: string }
-  | { kind: "invalid"; path: string }
-  | { kind: "preparing" }
-  // The document route is unauthenticated; build diagnostics stay in Gateway logs.
-  | { kind: "failed" }
-  | { kind: "missing" };
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 /** Anchors bundled assets before deep-linked documents begin preloading. */
@@ -209,22 +187,16 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-function respondControlUiAssetsUnavailable(
-  res: ServerResponse,
-  options?: {
-    configuredRootPath?: string;
-    failed?: boolean;
-    preparing?: boolean;
-  },
-) {
-  const message = options?.preparing
-    ? "Control UI assets are being prepared. Try again shortly."
-    : options?.failed
-      ? "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`."
-      : options?.configuredRootPath
-        ? `Control UI assets not found at ${options.configuredRootPath}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`
-        : CONTROL_UI_ASSETS_MISSING_MESSAGE;
-  if (options?.preparing) {
+function respondControlUiAssetsUnavailable(res: ServerResponse, root?: ControlUiRootState) {
+  const message =
+    root?.kind === "preparing"
+      ? "Control UI assets are being prepared. Try again shortly."
+      : root?.kind === "failed"
+        ? "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`."
+        : root?.kind === "invalid" && root.path
+          ? `Control UI assets not found at ${root.path}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`
+          : CONTROL_UI_ASSETS_MISSING_MESSAGE;
+  if (root?.kind === "preparing") {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Retry-After", "1");
   }
@@ -883,33 +855,6 @@ function isExpectedSafePathError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
 }
 
-function resolveSafeControlUiFile(
-  rootReal: string,
-  filePath: string,
-  rejectHardlinks: boolean,
-): { path: string; fd: number; size: number; mtimeMs: number } | null {
-  const opened = openRootFileSync({
-    absolutePath: filePath,
-    rootPath: rootReal,
-    rootRealPath: rootReal,
-    boundaryLabel: "control ui root",
-    skipLexicalRootCheck: true,
-    // Symlinked assets that resolve inside the root are served; fs-safe still
-    // rejects hops whose canonical target escapes the control-ui root.
-    rejectSymlinks: false,
-    rejectHardlinks,
-  });
-  if (!opened.ok) {
-    return matchRootFileOpenFailure(opened, {
-      io: (failure) => {
-        throw failure.error;
-      },
-      fallback: () => null,
-    });
-  }
-  return { path: opened.path, fd: opened.fd, size: opened.stat.size, mtimeMs: opened.stat.mtimeMs };
-}
-
 function isSafeRelativePath(relPath: string) {
   if (!relPath) {
     return false;
@@ -927,61 +872,23 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
-// Path served by the gateway under the default Control UI namespace when no
-// `gateway.controlUi.basePath` is configured. The SPA is mounted at
-// `/__openclaw__/`, so a browser that opens the default entry infers
-// `/__openclaw__` as its base path (see `inferBasePathFromPathname`) and fetches
-// `/__openclaw__/control-ui-config.json`. Accept that namespaced alias so the
-// default entry resolves its bootstrap config instead of 404ing.
+// The default SPA entry infers /__openclaw__ as its base path before bootstrap.
 const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPACE_PREFIX.replace(
   /\/$/,
   "",
 )}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
 
-// Single-underscore `/__openclaw` prefix used by the pre-base-path-relative
-// bootstrap endpoint. Before #66946 made the config path base-path-relative,
-// `CONTROL_UI_BOOTSTRAP_CONFIG_PATH` was hard-coded to
-// `/__openclaw/control-ui-config.json`, so current main and the v2026.6.1
-// release serve and document that exact path under an empty base path.
+// v2026.6.1 clients use this pre-#66946 bootstrap suffix, including under a base path.
 const LEGACY_CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw";
-
-// The old documented no-base-path bootstrap endpoint
-// (`/__openclaw/control-ui-config.json`, single underscore). It is derived from
-// the legacy `/__openclaw` namespace joined with the canonical config constant
-// so it tracks any rename of the config filename. Kept as an empty-base-path
-// compatibility alias so older bundles and clients that fetch the previously
-// documented endpoint keep receiving config after upgrading instead of 404ing.
 const LEGACY_BOOTSTRAP_CONFIG_PATH = `${LEGACY_CONTROL_UI_NAMESPACE_PREFIX}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
 
-/**
- * Whether `pathname` should be served the Control UI bootstrap config payload.
- *
- * The canonical endpoint is the configured base path joined with the shared
- * bootstrap constant (or the bare constant when no base path is configured).
- * For every base path (configured or empty) we additionally accept the legacy
- * single-underscore suffix `${basePath}/__openclaw/control-ui-config.json` that
- * current main and v2026.6.1 serve and document, so older bundles and clients
- * that still request the pre-#66946 endpoint keep receiving config after an
- * upgrade instead of 404ing. When no base path is configured we further accept
- * the default-namespace alias `/__openclaw__/control-ui-config.json`, which is
- * what the default `/__openclaw__/` entry requests after inferring its base path
- * from the URL. All compatibility endpoints are preserved; no path is removed.
- */
 function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
-  // Canonical and legacy suffixes apply under both an empty and a configured
-  // base path. `LEGACY_BOOTSTRAP_CONFIG_PATH` already starts with the legacy
-  // `/__openclaw` namespace, so joining it with the base path yields
-  // `${basePath}/__openclaw/control-ui-config.json` (or the bare legacy path
-  // when no base path is configured).
   if (
     pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}` ||
     pathname === `${basePath}${LEGACY_BOOTSTRAP_CONFIG_PATH}`
   ) {
     return true;
   }
-  // The default `/__openclaw__/` namespace alias only applies when no base path
-  // is configured; with a configured base path the canonical endpoint already
-  // lives under that base path and this inferred alias does not apply.
   return basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH;
 }
 
@@ -1098,36 +1005,18 @@ export async function handleControlUiHttpRequest(
   }
 
   const rootState = opts?.root;
-  if (rootState?.kind === "invalid") {
-    respondControlUiAssetsUnavailable(res, {
-      configuredRootPath: rootState.path,
-    });
-    return true;
-  }
-  if (rootState?.kind === "preparing") {
-    respondControlUiAssetsUnavailable(res, {
-      preparing: true,
-    });
-    return true;
-  }
-  if (rootState?.kind === "failed") {
-    respondControlUiAssetsUnavailable(res, {
-      failed: true,
-    });
-    return true;
-  }
-  if (!rootState || rootState.kind === "missing") {
-    respondControlUiAssetsUnavailable(res);
+  if (!rootState || (rootState.kind !== "bundled" && rootState.kind !== "resolved")) {
+    respondControlUiAssetsUnavailable(res, rootState);
     return true;
   }
 
   const root = rootState.path;
-  const rootReal = (() => {
+  const rootReal = await (async () => {
     if (rootState.realPath) {
       return rootState.realPath;
     }
     try {
-      return fs.realpathSync(root);
+      return await fs.promises.realpath(root);
     } catch (error) {
       if (isExpectedSafePathError(error)) {
         return null;
@@ -1144,7 +1033,7 @@ export async function handleControlUiHttpRequest(
     basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
   const standaloneDocument =
     isControlUiApprovalDocumentPath({ basePath, pathname }) ||
-    isControlUiFocusDocumentPath({ basePath, pathname });
+    isControlUiFocusPath(pathname, basePath);
   const rel = (() => {
     if (uiPath === "/share/card.png") {
       return "social-card.png";
@@ -1197,7 +1086,6 @@ export async function handleControlUiHttpRequest(
     respondControlUiNotFound(res);
     return true;
   }
-  const rejectHardlinks = !isBundledRoot;
   // Vite fingerprints every file emitted under the bundled assets directory.
   // Configured roots remain revalidated because their naming is not our contract.
   const fingerprintedAsset = isBundledRoot && fileRel.startsWith("assets/");
@@ -1209,69 +1097,12 @@ export async function handleControlUiHttpRequest(
       url.searchParams.get("v") === publicAssetBuildId &&
       isControlUiVersionedPublicAsset(fileRel),
     );
-  let servingRootReal = rootReal;
-  let rejectRepresentationHardlinks = rejectHardlinks;
-  let safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
-  if (!safeFile && fingerprintedAsset && rootState.kind === "bundled") {
-    const retained = rootState.retainedAssets?.resolveAsset(fileRel);
-    if (retained) {
-      servingRootReal = retained.rootRealPath;
-      rejectRepresentationHardlinks = true;
-      safeFile = resolveSafeControlUiFile(retained.rootRealPath, retained.filePath, true);
-    }
-  }
-  // An index alias still owns document preparation when its physical target has
-  // another name. Preserve existing aliases that resolve to a canonical index too.
-  if (
-    safeFile &&
-    path.basename(fileRel) !== "index.html" &&
-    path.basename(safeFile.path) !== "index.html"
-  ) {
-    // Future filesystem clocks must not make later replacements look unmodified;
-    // clamp to response origination as in resolveByteResponse.
-    const originatedAtMs = Date.now();
-    const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, originatedAtMs) / 1_000) * 1_000;
-    const representation = resolveOpenedControlUiRepresentation({
-      req,
-      sourceFile: safeFile,
-      contentPath: fileRel,
-      precompressed: fingerprintedAsset,
-      openPrecompressedFile: (compressedPath) =>
-        resolveSafeControlUiFile(servingRootReal, compressedPath, rejectRepresentationHardlinks),
-    });
-    if (!representation) {
-      respondControlUiNotAcceptable(res);
-      return true;
-    }
-    // Negotiation failures precede preconditions; release the selected representation on 304.
-    if (isControlUiFileUnmodified(req, lastModifiedMs, originatedAtMs)) {
-      fs.closeSync(representation.bodyFile.fd);
-      respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
-      return true;
-    }
-    if (req.method === "HEAD") {
-      try {
-        respondHeadForControlUiFile(res, fileRel, {
-          immutable: immutableAsset,
-          encoding: representation.encoding,
-          contentLength: representation.bodyFile.size,
-          lastModifiedMs,
-        });
-        return true;
-      } finally {
-        fs.closeSync(representation.bodyFile.fd);
-      }
-    }
-    const body = await readAndCloseControlUiFile(representation.bodyFile);
-    await serveControlUiAsset(res, fileRel, body, {
-      immutable: immutableAsset,
-      encoding: representation.encoding,
-      lastModifiedMs,
-    });
-    return true;
-  }
-
-  if (!safeFile) {
+  const readBody =
+    req.method !== "HEAD" &&
+    req.headers?.["if-none-match"] === undefined &&
+    req.headers?.["if-modified-since"] === undefined;
+  let asset = await readControlUiRootAsset(rootState, fileRel, readBody);
+  if (!asset) {
     // Missing assets stay 404; dotted routes can still use the SPA document.
     if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
       respondControlUiNotFound(res);
@@ -1282,41 +1113,80 @@ export async function handleControlUiHttpRequest(
     }
     const indexPath = path.resolve(root, "index.html");
     if (filePath !== indexPath) {
-      safeFile = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
+      fileRel = "index.html";
+      asset = await readControlUiRootAsset(rootState, fileRel, readBody);
     }
   }
 
-  // Direct documents and SPA fallbacks share rewriting, CSP, encoding and fd ownership.
-  if (safeFile) {
-    if (req.method === "HEAD") {
-      try {
+  const serve = async (prepared: ControlUiRootAsset | null): Promise<void> => {
+    if (!prepared) {
+      respondControlUiNotFound(res);
+      return;
+    }
+    // Both requested and physical index aliases retain document preparation.
+    if (
+      path.basename(fileRel) === "index.html" ||
+      path.basename(prepared.file.path) === "index.html"
+    ) {
+      if (req.method === "HEAD") {
         const encoding = resolveControlUiHtmlEncoding(req);
         if (encoding === "not-acceptable") {
           respondControlUiNotAcceptable(res);
-          return true;
+          return;
         }
         respondHeadForControlUiFile(res, "index.html", {
           encoding: encoding === "identity" ? undefined : encoding,
         });
-        return true;
-      } finally {
-        fs.closeSync(safeFile.fd);
+        return;
       }
+      if (!prepared.file.body) {
+        return await serve(await readControlUiRootAsset(rootState, fileRel, true));
+      }
+      await serveResolvedIndexHtml(
+        req,
+        res,
+        prepared.file.body.toString("utf8"),
+        basePath,
+        terminalEnabled,
+        opts?.config?.gateway?.controlUi?.environment,
+        publicAssetBuildId,
+      );
+      return;
     }
-    const body = (await readAndCloseControlUiFile(safeFile)).toString("utf8");
-    await serveResolvedIndexHtml(
+    const originatedAtMs = Date.now();
+    const lastModifiedMs =
+      Math.floor(Math.min(prepared.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
+    const representation = resolveControlUiRepresentation({
       req,
-      res,
-      body,
-      basePath,
-      terminalEnabled,
-      opts?.config?.gateway?.controlUi?.environment,
-      publicAssetBuildId,
-    );
-    return true;
-  }
-
-  respondControlUiNotFound(res);
+      asset: prepared,
+      contentPath: fileRel,
+      precompressed: fingerprintedAsset,
+    });
+    if (!representation) {
+      respondControlUiNotAcceptable(res);
+      return;
+    }
+    if (isControlUiFileUnmodified(req, lastModifiedMs, originatedAtMs)) {
+      respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
+      return;
+    }
+    const headers = {
+      immutable: immutableAsset,
+      encoding: representation.encoding,
+      lastModifiedMs,
+    };
+    if (req.method === "HEAD") {
+      respondHeadForControlUiFile(res, fileRel, {
+        ...headers,
+        contentLength: representation.file.size,
+      });
+    } else if (representation.file.body) {
+      serveControlUiAsset(res, fileRel, representation.file.body, headers);
+    } else {
+      await serve(await readControlUiRootAsset(rootState, fileRel, true));
+    }
+  };
+  await serve(asset);
   return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

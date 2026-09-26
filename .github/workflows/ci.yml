@@ -3629,6 +3629,7 @@ jobs:
             ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts \
+            ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts \
             ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts \
             ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
             ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts \
@@ -6304,6 +6305,7 @@ jobs:
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
       IOS_CI_PHASE: ${{ matrix.phase }}
+      IOS_MAIN_TIER: ${{ needs.preflight.outputs.validation_tier == 'main' }}
     steps:
       - *platform_checkout_step
 
@@ -6410,8 +6412,14 @@ jobs:
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(prepare_ios_test_simulator)"
+          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
+            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
+            ./scripts/install-simslim.sh "$simslim_dir"
+            OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim" \
+              ./scripts/ios-simulator-prepare.sh "$simulator_id"
+          fi
           echo "IOS_SIMULATOR_ID=$simulator_id" >> "$GITHUB_ENV"
-          if [[ "$IOS_CI_PHASE" == "smoke" ]]; then
+          if [[ "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ]]; then
             # Apply to the embedded Watch build and the later XCTest build too.
             smoke_settings="$RUNNER_TEMP/openclaw-ios-smoke.xcconfig"
             printf 'ARCHS = %s\nCOMPILER_INDEX_STORE_ENABLE = NO\n' "$(uname -m)" > "$smoke_settings"
@@ -6422,7 +6430,7 @@ jobs:
         if: matrix.phase == 'smoke' || matrix.phase == 'tests'
         run: |
           set -euo pipefail
-          if [[ "$IOS_CI_PHASE" == "smoke" && "$HISTORICAL_TARGET" != "true" ]]; then
+          if [[ ( "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ) && "$HISTORICAL_TARGET" != "true" ]]; then
             # Full manual validation retains the universal simulator build.
             export IOS_DEST="platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}"
           fi
@@ -6446,10 +6454,10 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      # Pairing/share UI proof runs in the test phase; fast regressions also join smoke below.
+      # Full validation owns attachment UI proof; its fast unit regressions also run below.
       - name: Prove native managed document download and export
         id: ios_attachment_tests
-        if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
+        if: matrix.phase == 'tests' && needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.compatibility_target != 'true'
         env:
           BASELINE_SHA: ${{ github.event.pull_request.base.sha }}
         run: /bin/bash scripts/test-ios-chat-attachments.sh "$BASELINE_SHA"
@@ -6462,7 +6470,7 @@ jobs:
           source .ci-harness/scripts/lib/swift-toolchain.sh
           mkdir -p apps/ios/build/LifecycleTestResults
           diagnostic_collection=on-failure
-          if [[ "$IOS_CI_PHASE" == "smoke" ]]; then
+          if [[ "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ]]; then
             # Xcode 27's verbose simulator diagnostics can stall for 600s after passing tests.
             # Keep xcresult/log evidence here and verbose diagnostics in full manual validation.
             diagnostic_collection=never
@@ -6485,7 +6493,8 @@ jobs:
             test
 
       # Compile-only smoke cannot verify native Access crypto or session ownership.
-      # Full validation also exercises the existing app and notification lifecycles.
+      # Hourly and full validation also exercise the app and notification lifecycles.
+      # Only full validation launches the Watch-delivery UI runner.
       - name: Run focused iOS lifecycle simulator tests
         id: ios_lifecycle_tests
         if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
@@ -6516,6 +6525,10 @@ jobs:
               -only-testing:OpenClawTests/TraceHeadingVisualProofTests
             )
           fi
+          diagnostic_collection=on-failure
+          if [[ "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ]]; then
+            diagnostic_collection=never
+          fi
           run_apple_command_logged "${result_bundle%.xcresult}.log" xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
@@ -6523,9 +6536,10 @@ jobs:
             -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}" \
             -resultBundlePath "$result_bundle" \
             -parallel-testing-enabled NO \
+            -collect-test-diagnostics "$diagnostic_collection" \
             "${test_args[@]}" \
             test
-          if [[ "$IOS_CI_PHASE" == "tests" ]]; then
+          if [[ "$IOS_CI_PHASE" == "tests" && "$IOS_MAIN_TIER" != "true" ]]; then
             run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.log xcodebuild \
               -project apps/ios/OpenClaw.xcodeproj \
               -scheme OpenClawUITests \
@@ -6538,7 +6552,7 @@ jobs:
           fi
 
       - name: Run focused Apple Watch operation simulator tests
-        if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
+        if: matrix.phase == 'tests' && needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
@@ -6625,6 +6639,16 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  ios-release-e2e:
+    permissions:
+      contents: read
+    needs: [preflight]
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.checkout_revision == github.sha && needs.preflight.outputs.compatibility_target != 'true' && needs.preflight.outputs.run_ios_build == 'true' }}
+    uses: ./.github/workflows/ios-release-e2e.yml
+    with:
+      target_sha: ${{ needs.preflight.outputs.checkout_revision }}
+      mode: stock
+
   ios-screenshot-shard:
     permissions:
       contents: read
@@ -6684,11 +6708,22 @@ jobs:
 
       - *install_watch_rust_toolchain
 
+      - name: Install iOS simulator tooling
+        id: ios_simslim
+        run: |
+          set -euo pipefail
+          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
+            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
+            ./scripts/install-simslim.sh "$simslim_dir"
+            echo "binary=$simslim_dir/simslim" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Capture iOS device screenshot shard
         id: device_screenshots
         env:
           OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ matrix.device_family }}
           OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}
+          OPENCLAW_CI_SIMSLIM_BINARY: ${{ steps.ios_simslim.outputs.binary }}
         run: pnpm ios:screenshots
 
       - name: Package iOS screenshot shard evidence
@@ -7350,6 +7385,7 @@ jobs:
       - macos-node
       - macos-swift
       - ios-build
+      - ios-release-e2e
       - ios-screenshot-shard
       - ios-screenshot-evidence
       - android
@@ -7358,7 +7394,7 @@ jobs:
       - pr-fail-fast
     # Failure cancellation must stay red, including an uncertain cancel response.
     # Superseded runs have no failure cause and release their slot without a gate.
-    if: ${{ (github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')) && ((github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && always() && (!cancelled() || (needs.pr-fail-fast.outputs.failure_run_attempt == format('{0}', github.run_attempt) && needs.pr-fail-fast.outputs.failure_job_id != '') || (github.run_attempt == 1 && needs.pr-fail-fast.result == 'failure')) && (github.event_name != 'pull_request' || !github.event.pull_request.draft)) }}
+    if: ${{ (github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')) && ((github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && always() && (github.event_name == 'schedule' || !cancelled() || (needs.pr-fail-fast.outputs.failure_run_attempt == format('{0}', github.run_attempt) && needs.pr-fail-fast.outputs.failure_job_id != '') || (github.run_attempt == 1 && needs.pr-fail-fast.result == 'failure')) && (github.event_name != 'pull_request' || !github.event.pull_request.draft)) }}
     # Keep critical-path routing; default Blacksmith PR failures also need
     # a runner inside the cancellation grace period.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') || (github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && github.event.pull_request.head.repo.full_name == github.repository && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && needs.preflight.outputs.runner_profile == 'blacksmith' && ((needs.pr-fail-fast.outputs.failure_run_attempt == '1' && needs.pr-fail-fast.outputs.failure_job_id != '') || needs.pr-fail-fast.result == 'failure'))) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') || (github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && github.event.pull_request.head.repo.full_name == github.repository && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && needs.preflight.outputs.runner_profile == 'blacksmith' && ((needs.pr-fail-fast.outputs.failure_run_attempt == '1' && needs.pr-fail-fast.outputs.failure_job_id != '') || needs.pr-fail-fast.result == 'failure'))) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
@@ -7382,6 +7418,7 @@ jobs:
         shell: bash
         env:
           RELEASE_FAST_LANE: ${{ needs.preflight.outputs.release_fast_lane }}
+          ALLOW_COALESCED_IOS: ${{ github.event_name == 'schedule' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' }}
           JOB_RESULTS: |
             preflight=${{ needs.preflight.result }}|true
             security-fast=${{ needs.security-fast.result }}|true
@@ -7411,6 +7448,7 @@ jobs:
             macos-node=${{ needs.macos-node.result }}|${{ needs.preflight.outputs.run_macos_node }}
             macos-swift=${{ needs.macos-swift.result }}|${{ needs.preflight.outputs.run_macos_swift }}
             ios-build=${{ needs.ios-build.result }}|${{ needs.preflight.outputs.run_ios_build }}
+            ios-release-e2e=${{ needs.ios-release-e2e.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.checkout_revision == github.sha && needs.preflight.outputs.compatibility_target != 'true' && needs.preflight.outputs.run_ios_build == 'true' }}
             ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
             ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
@@ -7431,6 +7469,12 @@ jobs:
             selected="${result#*|}"
             result="${result%%|*}"
             echo "${name}: ${result} (selected=${selected:-missing})"
+            # The scheduled iOS slot finishes its active job and replaces pending
+            # jobs. Only that cancellation delegates proof to the next hourly run.
+            if [[ "${ALLOW_COALESCED_IOS:-false}" == "true" && "$name:$selected:$result" == "ios-build:true:cancelled" ]]; then
+              echo "::notice title=Hourly iOS proof coalesced::A later scheduled iOS job owns simulator proof."
+              continue
+            fi
             case "$selected:$result" in
               true:success | false:success | false:skipped) ;;
               *)
@@ -7445,7 +7489,7 @@ jobs:
       # Downstream write-capable consumers inspect this step in the exact run
       # attempt. A green workflow with skipped full CI is not validation evidence.
       - name: Confirm validated workflow revision
-        if: success() && needs.preflight.outputs.checkout_revision == github.sha && (github.event_name != 'workflow_dispatch' || (!inputs.release_gate && inputs.target_ref == '' && inputs.release_scope == 'full' && inputs.include_android))
+        if: success() && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.checkout_revision == github.sha && (github.event_name != 'workflow_dispatch' || (!inputs.release_gate && inputs.target_ref == '' && inputs.release_scope == 'full' && inputs.include_android))
         run: echo "Full CI validated the immutable workflow revision."
   seal_release_child_evidence:
     name: Seal full release child evidence
@@ -7478,6 +7522,7 @@ jobs:
       - macos-node
       - macos-swift
       - ios-build
+      - ios-release-e2e
       - ios-screenshot-shard
       - ios-screenshot-evidence
       - android

@@ -57,10 +57,7 @@ import {
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  collectSubagentSessionReadKeys,
-  SubagentSessionReadLookup,
-} from "./subagent-session-read-scope.js";
+import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
@@ -434,6 +431,7 @@ export async function prepareSubagentRunsSnapshotForRunIds(
     inMemoryRuns,
     fullCache: persistedSubagentRunsReadCache,
     compactCache: persistedSubagentSessionListRunsReadCache,
+    requestedRunIds: requested,
     select: (snapshot) => ({
       runIds: [...snapshot.values()].filter(matches).map((entry) => entry.runId),
       sessionKeys: [],
@@ -518,30 +516,18 @@ function getSubagentSessionTreeSnapshot<T extends SubagentRunReadRecord>(
       // A tree covering every physical row may populate the existing full cache.
       if (snapshot.complete) {
         applySubagentRunChanges(snapshot.runs, cache.state.changes);
-        const loadedLookup =
-          cache === persistedSubagentSessionListRunsReadCache
-            ? new SubagentSessionReadLookup(snapshot.runs)
-            : undefined;
-        const loadedIndex = loadedLookup?.selectSessions(sessionKeys, inMemoryRuns.values());
-        snapshot.sessionKeys =
-          loadedIndex?.sessionKeys ??
-          collectSubagentSessionReadKeys(
-            sessionKeys,
-            snapshot.runs.values(),
-            inMemoryRuns.values(),
-          );
+        snapshot.sessionKeys = collectSubagentSessionReadKeys(
+          sessionKeys,
+          snapshot.runs.values(),
+          inMemoryRuns.values(),
+        );
         const admission = cache.captureAdmission?.();
         cache.state = {
           snapshot: snapshot.runs,
           changes: retainUnpublishedSubagentChanges(cache.state.changes),
           admission,
           sourceIdentity: admission?.identity.key,
-          ...(loadedLookup ? { lookup: loadedLookup } : {}),
         };
-        if (loadedIndex) {
-          selected = snapshot.sessionKeys;
-          return indexedSnapshotRows(snapshot.runs, loadedIndex.cacheKeys);
-        }
       }
       selected = snapshot.sessionKeys;
       return snapshot.runs.values();
@@ -571,7 +557,7 @@ export function getSubagentRunsSnapshotForSessions(
     inMemoryRuns,
     sessionKeys,
     persistedSubagentRunsReadCache,
-    () => loadSubagentRunsForSessionsFromSqlite(sessionKeys, inMemoryRuns.values(), "full"),
+    () => loadSubagentRunsForSessionsFromSqlite(sessionKeys, inMemoryRuns.values()),
   );
 }
 

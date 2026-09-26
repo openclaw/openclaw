@@ -28,7 +28,20 @@ export type FakeStep = {
   exit?: number;
   times?: number;
   verifyLock?: boolean;
-  request?: { phase: string; run?: { id: number; attempt: number } };
+  request?: {
+    phase: string;
+    run?: { id: number; attempt: number };
+    request?: {
+      targetSha: string;
+      targetContextRef: string;
+      workflowSha: string;
+      trustedWorkflowRef: string;
+      targetVersion: string;
+      repository: string;
+      inputs: { release_profile: string };
+      effectiveSoak: boolean;
+    };
+  };
 };
 type FakeCall = { bin: string; args: string[] };
 
@@ -67,7 +80,7 @@ export function phaseState(phase: ReleasePhase): ReleaseState {
       closeout: { status: "completed" },
     },
     cut: { cutSha: CUT_SHA, releaseSha: CUT_SHA },
-    validate: { continues: 0 },
+    validate: {},
     publish: { approvedGates: [] },
     syncBeta: {},
     flipGithub: {},
@@ -86,9 +99,6 @@ export function postState(phase: ReleasePhase): ReleaseState {
     toolingTag: "release-publish/bbbbbbbbbbbb-123",
     runId: "101",
     runAttempt: 1,
-    continues: 0,
-    stableSoakWaiver: "Operator-approved fixture's waiver; $no_shell `execution`",
-    laneWaiver: "Deferred fixture lanes",
   };
   state.publish = {
     approvedGates: [],
@@ -102,8 +112,7 @@ export function postState(phase: ReleasePhase): ReleaseState {
     probedAt: state.startedAt,
     parentSyncsBetaDistTag: false,
     parentSweepsStaleChildren: false,
-    parentApprovalReceipt: false,
-    closeoutResolvesWaivers: false,
+    childNpmPublishEnvironment: false,
   };
   return state;
 }
@@ -183,7 +192,6 @@ export function closeoutMain(version = RELEASE, notes = `## ${RELEASE}\n`): Fake
   ];
 }
 
-export const PUBLISH_WAIVER = "Operator's waiver; $NO_SHELL `no_shell`; approved=yes";
 export const CANDIDATE_COMMAND =
   String.raw`gh workflow run openclaw-release-publish.yml --repo openclaw/openclaw --ref release-publish/bbbbbbbbbbbb-123 \
   -f tag=v2026.9.6 \
@@ -191,8 +199,6 @@ export const CANDIDATE_COMMAND =
   -f full_release_validation_run_attempt=3 \
   -f npm_dist_tag=latest \
   -f plugin_publish_scope=all-publishable \
-  -f 'stable_soak_waiver=Operator'\''s waiver; $NO_SHELL \`no_shell\`; approved=yes' \
-  -f 'lane_waiver=Deferred fixture lanes' \
   -f publish_openclaw_npm=true \
   -f wait_for_clawhub=true`.replaceAll("\\`", "`");
 
@@ -222,13 +228,12 @@ export const publishChild = (
   display_title: name,
 });
 
-export function publishState(receipt = false): ReleaseState {
+export function publishState(npmPublishEnvironment = false): ReleaseState {
   const state = postState("publish");
   delete state.publish.publishRunId;
   delete state.publish.npmVisibleAt;
-  state.validate.stableSoakWaiver = PUBLISH_WAIVER;
   if (state.capabilities) {
-    state.capabilities.parentApprovalReceipt = receipt;
+    state.capabilities.childNpmPublishEnvironment = npmPublishEnvironment;
   }
   return state;
 }
@@ -324,6 +329,9 @@ if (expected.request) {
   const target = resolve(args[index + 1]);
   if (!target.startsWith(resolve(root) + sep)) throw new Error('Request escaped fixture');
   mkdirSync(dirname(target), { recursive: true });
+  if (expected.request.request) {
+    expected.request.request.trustedWorkflowRef = args[args.indexOf('--trusted-workflow-ref') + 1];
+  }
   writeFileSync(target, JSON.stringify(expected.request));
 }
 process.stdout.write(expected.stdout ?? '');

@@ -420,7 +420,7 @@ prepare_update_tarball() {
     UPDATE_TGZ_FILE="candidate.tgz"
   elif [[ -n "$UPDATE_PACKAGE_SPEC" ]]; then
     echo "==> Pack update tgz from spec: $UPDATE_PACKAGE_SPEC"
-    quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
+    quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --min-release-age=0 --pack-destination "$UPDATE_DIR" >"$pack_json_file"
     normalize_npm_pack_json_file "$pack_json_file"
   else
     echo "==> Build local release artifacts for update smoke"
@@ -478,7 +478,8 @@ process.stdout.write(last.version);
   fi
 
   echo "==> Pack baseline tgz: ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
-  quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --pack-destination "$UPDATE_DIR" >"$baseline_pack_json_file"
+  # The repo .npmrc dependency cooldown must not hide a days-old published baseline.
+  quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --min-release-age=0 --pack-destination "$UPDATE_DIR" >"$baseline_pack_json_file"
   normalize_npm_pack_json_file "$baseline_pack_json_file"
   BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"
   UPDATE_BASELINE_VERSION="$(

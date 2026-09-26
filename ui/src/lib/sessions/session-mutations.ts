@@ -222,6 +222,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
       pendingConversation,
       options.expectedSessionId,
     );
+    const managesThinkingClaim = Object.hasOwn(patchParams, "thinkingLevel");
+    let resumeThinkingClaim = managesThinkingClaim
+      ? host.suspendThink(normalizedKey, options.agentId)
+      : undefined;
     const settingsTargetWasReplaced = capturePendingRowReplacement(
       host,
       patchSnapshot,
@@ -325,6 +329,14 @@ export function createSessionMutations(host: SessionMutationsHost) {
     };
     const settleOptimisticPatch = (completed: boolean) => {
       settleModelOverride(completed);
+      if (managesThinkingClaim) {
+        if (completed) {
+          host.clearThink(normalizedKey, options.agentId);
+        } else {
+          resumeThinkingClaim?.();
+        }
+        resumeThinkingClaim = undefined;
+      }
       for (const [target, tokens] of [
         [
           pendingTarget,
@@ -433,9 +445,6 @@ export function createSessionMutations(host: SessionMutationsHost) {
             fields,
           });
         }
-      }
-      if (Object.hasOwn(patchParams, "thinkingLevel")) {
-        host.clearThink(normalizedKey, options.agentId);
       }
       if (permissionProjection) {
         const confirmation = permissionProjection.confirm({

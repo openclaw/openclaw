@@ -15,8 +15,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 
 `hooks.*` configures generic Gateway HTTP ingress. For setup and a verified first
 request, see [Webhooks](/automation/cron-jobs#webhooks). This is separate from
-[internal hooks](/automation/hooks) (`hooks.internal`, `HOOK.md`) and the
-[TaskFlow Webhooks plugin](/plugins/webhooks) (`plugins.entries.webhooks`).
+[internal hooks](/automation/hooks) (`hooks.internal`, `HOOK.md`).
 
 ```json5
 {

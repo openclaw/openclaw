@@ -151,6 +151,8 @@ export function normalizePluginDiscoveryResult(params: {
 export async function runProviderCatalog(params: {
   provider: ProviderPlugin;
   providerIds?: readonly string[];
+  /** Captured catalog identities; the hook still receives its original provider scope. */
+  normalizeProviderForScope?: (provider: string) => string;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -176,11 +178,12 @@ export async function runProviderCatalog(params: {
   if (params.isActive?.() === false) {
     return undefined;
   }
+  const normalizeProvider = params.normalizeProviderForScope ?? normalizeProviderId;
   for (const outcome of copyProviderCatalogOutcomes(result)) {
     if (
       params.providerIds !== undefined &&
       !params.providerIds.some(
-        (providerId) => normalizeProviderId(providerId) === normalizeProviderId(outcome.provider),
+        (providerId) => normalizeProvider(providerId) === normalizeProvider(outcome.provider),
       )
     ) {
       continue;

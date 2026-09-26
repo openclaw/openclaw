@@ -114,23 +114,20 @@ function extractTargetHeadingBodySnippet(
   return null;
 }
 
-function compareCandidateWindow(
-  targetSnippet: string,
-  windowSnippet: string,
-): { matched: boolean; quality: number } {
+function compareCandidateWindow(targetSnippet: string, windowSnippet: string): number {
   if (!targetSnippet || !windowSnippet) {
-    return { matched: false, quality: 0 };
+    return 0;
   }
   if (windowSnippet === targetSnippet) {
-    return { matched: true, quality: 3 };
+    return 3;
   }
   if (windowSnippet.includes(targetSnippet)) {
-    return { matched: true, quality: 2 };
+    return 2;
   }
   if (targetSnippet.includes(windowSnippet)) {
-    return { matched: true, quality: 1 };
+    return 1;
   }
-  return { matched: false, quality: 0 };
+  return 0;
 }
 
 function relocateCandidateRange(
@@ -178,11 +175,11 @@ function relocateCandidateRange(
       );
       const listMarkerFreeComparison =
         listMarkerFreeSnippet === snippet
-          ? { matched: false, quality: 0 }
+          ? 0
           : compareCandidateWindow(targetSnippet, listMarkerFreeSnippet);
       const listMarkerFreeContextComparison =
         listMarkerFreeMatchSnippet === listMarkerFreeSnippet
-          ? { matched: false, quality: 0 }
+          ? 0
           : compareCandidateWindow(targetSnippet, listMarkerFreeMatchSnippet);
       const targetHeadingBodySnippet = extractTargetHeadingBodySnippet(
         targetSnippet,
@@ -191,17 +188,16 @@ function relocateCandidateRange(
       const targetHeadingBodyComparison =
         targetHeadingBodySnippet && listMarkerFreeMatchSnippet !== listMarkerFreeSnippet
           ? compareCandidateWindow(targetHeadingBodySnippet, listMarkerFreeSnippet)
-          : { matched: false, quality: 0 };
+          : 0;
       const useTargetHeadingBodyContext =
-        targetHeadingBodyComparison.matched &&
-        targetHeadingBodyComparison.quality >= comparison.quality &&
-        targetHeadingBodyComparison.quality >= listMarkerFreeComparison.quality;
+        targetHeadingBodyComparison > 0 &&
+        targetHeadingBodyComparison >= comparison &&
+        targetHeadingBodyComparison >= listMarkerFreeComparison;
       const useListMarkerFreeContext =
         !useTargetHeadingBodyContext &&
-        listMarkerFreeContextComparison.quality > comparison.quality &&
-        listMarkerFreeContextComparison.quality >= listMarkerFreeComparison.quality;
-      const useListMarkerFree =
-        !useListMarkerFreeContext && listMarkerFreeComparison.quality > comparison.quality;
+        listMarkerFreeContextComparison > comparison &&
+        listMarkerFreeContextComparison >= listMarkerFreeComparison;
+      const useListMarkerFree = !useListMarkerFreeContext && listMarkerFreeComparison > comparison;
       const bestComparison = useTargetHeadingBodyContext
         ? targetHeadingBodyComparison
         : useListMarkerFreeContext
@@ -209,7 +205,7 @@ function relocateCandidateRange(
           : useListMarkerFree
             ? listMarkerFreeComparison
             : comparison;
-      if (!bestComparison.matched) {
+      if (bestComparison === 0) {
         continue;
       }
       const matchedSnippet =
@@ -223,9 +219,9 @@ function relocateCandidateRange(
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
-        bestComparison.quality > bestMatch.quality ||
-        (bestComparison.quality === bestMatch.quality && distance < bestMatch.distance) ||
-        (bestComparison.quality === bestMatch.quality &&
+        bestComparison > bestMatch.quality ||
+        (bestComparison === bestMatch.quality && distance < bestMatch.distance) ||
+        (bestComparison === bestMatch.quality &&
           distance === bestMatch.distance &&
           Math.abs(span - preferredSpan) <
             Math.abs(bestMatch.endLine - bestMatch.startLine + 1 - preferredSpan))
@@ -234,7 +230,7 @@ function relocateCandidateRange(
           startLine,
           endLine,
           snippet: matchedSnippet,
-          quality: bestComparison.quality,
+          quality: bestComparison,
           distance,
         };
       }

@@ -15,50 +15,33 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export const sessionMaintenanceHandlers: GatewayRequestHandlers = {
-  "sessions.storage.status": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(params, validateSessionsStorageParams, "sessions.storage.status", respond)
-    ) {
+function createSessionStorageHandler(
+  method: "sessions.storage.status" | "sessions.storage.run",
+): GatewayRequestHandlers[string] {
+  return async (options) => {
+    const {
+      params,
+      respond,
+      context,
+      sessionMutationAuthorization,
+      sessionMutationCommitGuard,
+      signal,
+      hasCurrentClientAuthority,
+    } = options;
+    if (!assertValidParams(params, validateSessionsStorageParams, method, respond)) {
       return;
     }
     try {
       const agents = await getSessionColdStorageStatus(context.getRuntimeConfig());
-      respond(
-        true,
-        {
-          agents,
-          maintenance: getSessionColdStorageMaintenanceStatus(context.getRuntimeConfig),
-        },
-        undefined,
-      );
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
-    }
-  },
-  "sessions.storage.run": async ({
-    params,
-    respond,
-    context,
-    sessionMutationAuthorization,
-    sessionMutationCommitGuard,
-    signal,
-    hasCurrentClientAuthority,
-  }) => {
-    if (
-      !assertValidParams(params, validateSessionsStorageParams, "sessions.storage.run", respond)
-    ) {
-      return;
-    }
-    try {
-      const agents = await getSessionColdStorageStatus(context.getRuntimeConfig());
-      signal?.throwIfAborted();
-      sessionMutationCommitGuard?.();
-      sessionMutationAuthorization?.assertCurrent();
-      if (hasCurrentClientAuthority?.() === false) {
-        throw new Error("Transcript maintenance requester is no longer authorized");
+      if (method === "sessions.storage.run") {
+        signal?.throwIfAborted();
+        sessionMutationCommitGuard?.();
+        sessionMutationAuthorization?.assertCurrent();
+        if (hasCurrentClientAuthority?.() === false) {
+          throw new Error("Transcript maintenance requester is no longer authorized");
+        }
+        requestGatewaySessionColdStorageMaintenance(context.getRuntimeConfig);
       }
-      requestGatewaySessionColdStorageMaintenance(context.getRuntimeConfig);
       respond(
         true,
         {
@@ -70,7 +53,12 @@ export const sessionMaintenanceHandlers: GatewayRequestHandlers = {
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
     }
-  },
+  };
+}
+
+export const sessionMaintenanceHandlers: GatewayRequestHandlers = {
+  "sessions.storage.status": createSessionStorageHandler("sessions.storage.status"),
+  "sessions.storage.run": createSessionStorageHandler("sessions.storage.run"),
   "sessions.cleanup": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {
       return;

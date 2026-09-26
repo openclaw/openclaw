@@ -6,7 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   reconcileSessionRunTerminal,
@@ -143,6 +143,7 @@ type ChatAbortRunState = ChatAbortTargetState & {
 type ChatAbortHost = ChatAbortRunState &
   ChatInputHistoryState & {
     pendingAbort?: PendingChatAbort | null;
+    chatReplyTarget?: ChatReplyTarget | null;
     sessions?: Partial<Pick<SessionCapability, "deletionState">>;
   };
 
@@ -377,6 +378,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
   if (!opts?.preserveDraft) {
     host.chatMessage = "";
     host.chatMentions = [];
+    host.chatReplyTarget = null;
     resetChatInputHistoryNavigation(host);
   }
   if (pendingAbort) {

@@ -1,4 +1,3 @@
-import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
 
@@ -7,16 +6,21 @@ const { runtimeFactoryMocks } = getWorkerPlacementStartupMocks();
 import { getRuntimeConfig } from "../config/config.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 
 describe("worker placement session events", () => {
   it("reports a failed reconciliation queued by a session change without leaking rejection", async () => {
-    vi.useFakeTimers();
+    const time = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(time.clock);
+    const databaseIdentity = Symbol("worker-placement-database");
     const releaseReconcile = createDeferredCore();
-    const reconcileActive = vi
-      .fn()
-      .mockImplementationOnce(() => releaseReconcile.promise)
-      .mockRejectedValue(new Error("Worker environment inventory has closed"));
+    const reconcileStarted = createDeferredCore();
+    const failureReported = createDeferredCore();
+    const reconcileActive = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),
       version: () => 0,
@@ -29,8 +33,9 @@ describe("worker placement session events", () => {
       reconcile: vi.fn().mockResolvedValue(undefined),
       reconcileActive,
     });
-    const warn = vi.fn();
+    const warn = vi.fn(() => failureReported.resolve());
     const runtime = createGatewayWorkerPlacementRuntime({
+      scheduler,
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
@@ -57,17 +62,27 @@ describe("worker placement session events", () => {
       registerSidecar: vi.fn(),
       unregisterSidecar: vi.fn(),
     });
+    let scheduledWake: void | Promise<void> = undefined;
     try {
-      await vi.advanceTimersByTimeAsync(60_000);
+      await time.advanceBy(60_000);
+      reconcileActive.mockClear();
+      reconcileActive
+        .mockImplementationOnce(() => {
+          reconcileStarted.resolve();
+          return releaseReconcile.promise;
+        })
+        .mockRejectedValue(new Error("Worker environment inventory has closed"));
+      scheduledWake = time.advanceBy(60_000);
+      await reconcileStarted.promise;
       expect(reconcileActive).toHaveBeenCalledOnce();
       emitSessionIdentityMutation({
         kind: "delete",
         agentId: "main",
+        databaseIdentity,
         previous: { sessionId: "retired-session", sessionKeys: ["agent:main:retired"] },
       });
       releaseReconcile.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      await setImmediate();
+      await failureReported.promise;
       expect(reconcileActive).toHaveBeenCalledTimes(2);
       expect(warn).toHaveBeenCalledWith(
         "Worker placement reconcile sweep failed: Worker environment inventory has closed",
@@ -75,7 +90,7 @@ describe("worker placement session events", () => {
     } finally {
       releaseReconcile.resolve();
       await sidecar?.stop();
-      vi.useRealTimers();
+      await scheduledWake;
     }
   });
 });

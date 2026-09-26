@@ -473,18 +473,33 @@ ${readFileSync(gitShim, "utf8")}
     f.configure({ moveAfterFirstFetch: true, moveAtGate: true });
     const result = f.run("prepare-run", "bash", f.worktree);
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(
-      f
-        .events()
-        .filter((e) => e.kind === "fetched")
-        .map((e) => e.sha),
-    ).toEqual([f.main, f.movedMain, f.gateMain]);
-    const decisions = f
-      .events()
+    const events = f.events();
+    expect(events.filter((e) => e.kind === "fetched").map((e) => e.sha)).toEqual([
+      f.main,
+      f.movedMain,
+      f.gateMain,
+    ]);
+    const gateCheckpoint = events.findIndex((e) => e.kind === "fetched" && e.sha === f.movedMain);
+    const hostedGate = events.findIndex((e) => e.kind === "hosted-gate");
+    expect(hostedGate).toBeGreaterThan(gateCheckpoint);
+    const gateDecisions = events
+      .slice(gateCheckpoint + 1, hostedGate)
       .filter((e) => e.kind === "git-decision")
-      .map((e) => e.args?.join(" "));
-    expect(decisions).toContain(`diff --name-only ${f.movedMain}...HEAD`);
-    expect(decisions).toContain(`merge-base ${f.head} ${f.gateMain}`);
+      .map((e) => e.args);
+    const gateBase = f.git(f.worktree, "merge-base", f.movedMain, f.head);
+    expect(gateBase).toBe(f.main);
+    expect(gateDecisions).toContainEqual(["merge-base", f.movedMain, f.head]);
+    expect(gateDecisions).toContainEqual(["diff", "--name-only", gateBase, f.head]);
+    const publicationCheckpoint = events.findIndex(
+      (e) => e.kind === "fetched" && e.sha === f.gateMain,
+    );
+    expect(publicationCheckpoint).toBeGreaterThan(hostedGate);
+    expect(
+      events
+        .slice(publicationCheckpoint + 1)
+        .filter((e) => e.kind === "git-decision")
+        .map((e) => e.args),
+    ).toContainEqual(["merge-base", f.head, f.gateMain]);
     expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.head);
   });
 

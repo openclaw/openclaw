@@ -2,9 +2,10 @@ import type {
   DesktopObserveResult,
   DesktopSource,
   EnvironmentSummary,
+  WorkerDesktopAppId,
 } from "@openclaw/gateway-protocol";
 import type { ControlUiFocusBuildTarget } from "@openclaw/session-url-contract";
-import { nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -17,12 +18,12 @@ import {
   type DesktopPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
 import { DesktopAppLauncher } from "./desktop-app-launcher.ts";
+import { DesktopAudio } from "./desktop-audio.ts";
 import * as desktopTransport from "./desktop-client.ts";
 import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import {
   DesktopConnectionHandoff,
   releaseDesktopObservation,
-  type DesktopAppId,
   type DesktopCredentials,
   type ObservedDesktopConnection,
   type PendingDesktopConnection,
@@ -30,9 +31,8 @@ import {
 import * as desktopAuth from "./desktop-panel-credentials.ts";
 import { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
 import { desktopPanelLayout } from "./desktop-panel-layout.ts";
-import { type DesktopPanelState, renderDesktopPanelRecovery } from "./desktop-panel-state.ts";
+import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopPanelElementStyles } from "./desktop-panel-styles.ts";
-import { renderDesktopCredentials, renderDesktopPicker } from "./desktop-panel-view.ts";
 import { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
 import { renderDesktopPresentation } from "./desktop-presentation.ts";
 import { DesktopSessionController } from "./desktop-session-controller.ts";
@@ -78,11 +78,16 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @state() private errorText: string | null = null;
   @state() private noticeText: string | null = null;
   @state() private disconnectedReason: string | null = null;
-  @state() private desktopApps: DesktopAppId[] = [];
+  @state() private desktopApps: WorkerDesktopAppId[] = [];
   @state() private sizingMode: desktopTransport.DesktopSizingMode = "fit";
   @state() private canResize = false;
 
   private readonly connection = new DesktopConnectionHandoff();
+  private readonly audio = new DesktopAudio(
+    this,
+    () => this.state === "connected",
+    () => void this.connectEnvironment(this.environmentId, this.controlling),
+  );
   private readonly launcher = new DesktopAppLauncher(this, () => ({
     client: this.client,
     source: this.source,
@@ -223,6 +228,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     ) {
       this.pictureInPicture.close();
       this.mobileKeyboard.reset();
+      if (!this.presented) {
+        this.audio.retire();
+      }
       if (
         this.connection.setPresented(this.presented, () => this.returnToPicker("pending")) &&
         this.refreshOnPresentation
@@ -320,6 +328,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   private disconnectConnection(retainViewer = false): void {
+    this.audio.close();
     this.pictureInPicture.close();
     this.operationId += 1;
     this.pendingConnection = null;
@@ -509,6 +518,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       if (!target) {
         throw new Error("Desktop render target is unavailable");
       }
+      this.audio.connect(pending.observed, client.gatewayUrl);
       const connection = await this.desktopClientFactory().connect({
         background: getComputedStyle(target).backgroundColor,
         isCurrent: () => pending.operationId === this.operationId,
@@ -637,74 +647,64 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
           : null),
       this.sessionSource.desktopAvailability,
     );
-    const picker = renderDesktopPicker({
-      automatic: this.usesAutomaticSource && this.embedded && this.sessionKey !== null,
-      environments: this.environments,
-      loading: this.loading,
-      onRefresh: () => void this.refreshEnvironments(),
-      onConnect: (environmentId) => {
-        this.sourceSelection = "explicit";
-        void this.connectEnvironment(environmentId, false);
-      },
-    });
-    const credentials = renderDesktopCredentials({
-      ardAccount: this.credentialAuth === "ard-account",
-      username: this.credentials?.username ?? "",
-      onSubmit: (event) => this.handleCredentialsSubmit(event),
-    });
-    const recovery = renderDesktopPanelRecovery({
-      inventoryError: this.state === "inventory-error",
-      reason: this.disconnectedReason,
-      onRetry: () => {
-        if ((this.state === "inventory-error" && this.documentMode) || !this.environmentId) {
-          if (this.sourceSelection !== "picker") {
-            this.sourceSelection = "pending";
-          }
-          this.state = "picker";
-          void this.refreshEnvironments();
-          return;
-        }
-        if (this.state === "inventory-error" && this.environmentId) {
-          void this.connectRequestedEnvironment(this.environmentId);
-          return;
-        }
-        void this.connectEnvironment(this.environmentId, this.controlling);
-      },
-    });
-    // Source lookup and RFB authentication share the same stage and loading indicator.
-    const content = {
-      state:
-        this.state === "picker" &&
-        this.loading &&
-        this.usesAutomaticSource &&
-        (this.sessionKey !== null || this.requestedSource !== null)
-          ? "connecting"
-          : this.state,
-      notice,
-      picker,
-      credentials,
-      recovery,
-    } as const;
-    const sizing = {
-      mode: this.sizingMode,
-      canResize: this.canResize && this.controlling && this.state === "connected",
-      onChange: (mode: desktopTransport.DesktopSizingMode) => {
-        this.sizingMode = mode;
-        this.connection.setSizingMode(mode);
-      },
-    };
     return renderDesktopPresentation({
       documentMode: this.documentMode,
       embedded: this.embedded,
       workspaceControls: this.workspaceControls,
-      content,
+      content: {
+        state: this.state,
+        loading: this.loading,
+        automaticSource: this.usesAutomaticSource,
+        hasTarget: this.sessionKey !== null || this.requestedSource !== null,
+        notice: html`${notice}${this.audio.renderNotice()}`,
+        picker: {
+          automatic: this.usesAutomaticSource && this.embedded && this.sessionKey !== null,
+          environments: this.environments,
+          onRefresh: () => void this.refreshEnvironments(),
+          onConnect: (environmentId: string) => {
+            this.sourceSelection = "explicit";
+            void this.connectEnvironment(environmentId, false);
+          },
+        },
+        credentials: {
+          ardAccount: this.credentialAuth === "ard-account",
+          username: this.credentials?.username ?? "",
+          onSubmit: (event: SubmitEvent) => this.handleCredentialsSubmit(event),
+        },
+        recovery: {
+          reason: this.disconnectedReason,
+          onRetry: () => {
+            if ((this.state === "inventory-error" && this.documentMode) || !this.environmentId) {
+              if (this.sourceSelection !== "picker") {
+                this.sourceSelection = "pending";
+              }
+              this.state = "picker";
+              void this.refreshEnvironments();
+              return;
+            }
+            if (this.state === "inventory-error" && this.environmentId) {
+              void this.connectRequestedEnvironment(this.environmentId);
+              return;
+            }
+            void this.connectEnvironment(this.environmentId, this.controlling);
+          },
+        },
+      },
       controlling: this.controlling,
       desktopApps: this.desktopApps,
       launchingApp: this.launcher.app,
       startup: this.sessionSource.startupEnvironment,
-      sizing,
+      sizing: {
+        mode: this.sizingMode,
+        canResize: this.canResize && this.controlling && this.state === "connected",
+        onChange: (mode: desktopTransport.DesktopSizingMode) => {
+          this.sizingMode = mode;
+          this.connection.setSizingMode(mode);
+        },
+      },
       mobileKeyboard: this.mobileKeyboard,
       pictureInPictureControl: this.pictureInPicture.renderButton(),
+      audioControl: this.audio.renderButton(),
       dockLayout: this.dockLayout,
       fullscreenMode: this.fullscreenMode,
       onControlToggle: () => void this.connectEnvironment(this.environmentId, !this.controlling),

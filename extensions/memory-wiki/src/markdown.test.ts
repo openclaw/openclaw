@@ -174,6 +174,34 @@ describe("human Notes blocks", () => {
 });
 
 describe("toWikiPageSummary", () => {
+  it("can omit link extraction without changing parsed content or other metadata", () => {
+    const params = {
+      absolutePath: "/tmp/wiki/sources/alpha.md",
+      relativePath: "sources/alpha.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          title: "Alpha",
+          sourceType: "memory-bridge",
+          bridgeAgentIds: ["main"],
+          privacyTier: "private",
+          claims: [{ text: "Cobalt lantern", evidence: [{ sourceId: "source.alpha" }] }],
+        },
+        body: "[[concepts/visible]]\n`[[concepts/inline]]`\n```\n[[concepts/fenced]]\n```\n",
+      }),
+    };
+    const full = scanWikiPageSummary(params);
+    expect(full.status).toBe("valid");
+    if (full.status !== "valid") {
+      throw new Error("Expected a valid page");
+    }
+    expect(full.page.linkTargets).toEqual(["concepts/visible"]);
+    expect(scanWikiPageSummary({ ...params, includeLinks: false })).toEqual({
+      ...full,
+      page: { ...full.page, linkTargets: [] },
+    });
+    expect(toWikiPageSummary(params)).toEqual(full.page);
+  });
+
   it("marks raw and generated source body metadata", () => {
     const rawSource = toWikiPageSummary({
       absolutePath: "/tmp/wiki/sources/raw-alpha.md",

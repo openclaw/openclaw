@@ -1,7 +1,9 @@
-// Qa Lab plugin module provides reusable fixture utilities.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 export type QaFixtureFetchJsonOptions = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
@@ -33,17 +35,10 @@ function bodyTooLargeErrorMessage(url: string, byteLimit: number) {
   return `HTTP response from ${url} exceeded ${byteLimit} bytes`;
 }
 
-function cancelReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>) {
-  void Promise.resolve()
-    .then(() => reader.cancel())
-    .catch(() => undefined);
-}
-
 async function readBoundedResponseText(params: {
   response: Response;
   url: string;
   maxBytes: number;
-  timeoutPromise: Promise<never>;
   signal: AbortSignal;
 }) {
   const tooLargeError = () =>
@@ -52,61 +47,18 @@ async function readBoundedResponseText(params: {
     });
   const contentLength = params.response.headers.get("content-length");
   if (contentLength && /^\d+$/u.test(contentLength) && Number(contentLength) > params.maxBytes) {
-    await params.response.body?.cancel().catch(() => undefined);
+    void params.response.body?.cancel().catch(() => undefined);
     throw tooLargeError();
   }
   if (!params.response.body) {
     return "";
   }
 
-  const reader = params.response.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let totalBytes = 0;
-  let canceled = false;
-  try {
-    for (;;) {
-      const readPromise = reader.read();
-      let removeAbortListener: (() => void) | undefined;
-      const abortPromise = new Promise<never>((_resolve, reject) => {
-        const onAbort = () => {
-          canceled = true;
-          cancelReaderSoon(reader);
-          reject(
-            params.signal.reason instanceof Error
-              ? params.signal.reason
-              : new Error(`HTTP request to ${params.url} aborted`),
-          );
-        };
-        params.signal.addEventListener("abort", onAbort, { once: true });
-        removeAbortListener = () => params.signal.removeEventListener("abort", onAbort);
-      });
-      const { done, value } = await Promise.race([
-        readPromise,
-        abortPromise,
-        params.timeoutPromise,
-      ]).finally(() => removeAbortListener?.());
-      if (done) {
-        const tail = decoder.decode();
-        if (tail) {
-          chunks.push(tail);
-        }
-        break;
-      }
-      totalBytes += value.byteLength;
-      if (totalBytes > params.maxBytes) {
-        canceled = true;
-        await reader.cancel().catch(() => undefined);
-        throw tooLargeError();
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-  } finally {
-    if (!canceled) {
-      reader.releaseLock();
-    }
-  }
-  return chunks.join("");
+  const bytes = await readResponseWithLimit(params.response, params.maxBytes, {
+    signal: params.signal,
+    onOverflow: tooLargeError,
+  });
+  return new TextDecoder().decode(bytes);
 }
 
 export async function fetchQaFixtureJson(
@@ -114,40 +66,32 @@ export async function fetchQaFixtureJson(
   init: RequestInit = {},
   options: QaFixtureFetchJsonOptions = {},
 ): Promise<unknown> {
-  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS);
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS);
   const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_FETCH_BODY_MAX_BYTES);
   const controller = new AbortController();
   const error = timeoutError(`HTTP request to ${url} timed out after ${timeoutMs}ms`);
-  let timeout: ReturnType<typeof setNodeTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setNodeTimeout(() => {
-      controller.abort(error);
-      reject(error);
-    }, timeoutMs);
-  });
-
-  let response: Response;
-  let text: string;
-  try {
-    response = await Promise.race([
-      (options.fetchImpl ?? fetch)(url, {
+  const { response, text } = await withTimeout(
+    Promise.resolve().then(async () => {
+      const fetchedResponse = await (options.fetchImpl ?? fetch)(url, {
         ...init,
         signal: controller.signal,
-      }),
-      timeoutPromise,
-    ]);
-    text = await readBoundedResponseText({
-      response,
-      url,
-      maxBytes: maxBodyBytes,
-      timeoutPromise,
-      signal: controller.signal,
-    });
-  } finally {
-    if (timeout) {
-      clearNodeTimeout(timeout);
-    }
-  }
+      });
+      const responseText = await readBoundedResponseText({
+        response: fetchedResponse,
+        url,
+        maxBytes: maxBodyBytes,
+        signal: controller.signal,
+      });
+      return { response: fetchedResponse, text: responseText };
+    }),
+    timeoutMs,
+    {
+      createError: () => {
+        controller.abort(error);
+        return error;
+      },
+    },
+  );
   let parsed: unknown;
   try {
     parsed = text ? JSON.parse(text) : {};
@@ -181,11 +125,8 @@ export function outputText(response: unknown): string {
         return [];
       }
       return item.content.flatMap((piece) => {
-        if (!piece || typeof piece !== "object") {
-          return [];
-        }
-        const record = piece as { text?: unknown };
-        return typeof record.text === "string" ? [record.text] : [];
+        const text = readStringField(asOptionalObjectRecord(piece), "text");
+        return text === undefined ? [] : [text];
       });
     })
     .join("\n");
@@ -199,13 +140,7 @@ function readContentText(content: unknown): string {
     return "";
   }
   return content
-    .map((item) => {
-      if (!item || typeof item !== "object") {
-        return "";
-      }
-      const record = item as { type?: unknown; text?: unknown };
-      return typeof record.text === "string" ? record.text : "";
-    })
+    .map((item) => readStringField(asOptionalObjectRecord(item), "text") ?? "")
     .join("\n");
 }
 
@@ -266,18 +201,11 @@ function createCounts(needles: Record<string, string>): Record<string, number> {
 }
 
 function recordRole(record: unknown): string | undefined {
-  if (!record || typeof record !== "object") {
-    return undefined;
-  }
-  const candidate = record as { message?: unknown; role?: unknown };
-  if (typeof candidate.role === "string") {
-    return candidate.role;
-  }
-  if (!candidate.message || typeof candidate.message !== "object") {
-    return undefined;
-  }
-  const message = candidate.message as { role?: unknown };
-  return typeof message.role === "string" ? message.role : undefined;
+  const candidate = asOptionalObjectRecord(record);
+  return (
+    readStringField(candidate, "role") ??
+    readStringField(asOptionalObjectRecord(candidate?.message), "role")
+  );
 }
 
 function collectStringLeaves(value: unknown, output: string[]) {
@@ -330,7 +258,7 @@ async function visitSessionLogEvents(
 ): Promise<void> {
   const files = await fs.readdir(sessionsDir, { recursive: true }).catch(() => []);
   for (const file of files) {
-    if (typeof file !== "string" || !file.endsWith(".jsonl")) {
+    if (!file.endsWith(".jsonl")) {
       continue;
     }
     const text = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");

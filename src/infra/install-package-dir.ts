@@ -125,19 +125,6 @@ async function restoreProjectNpmConfigAfterInstall(
   await fs.rm(hiddenConfig.hiddenDir, { recursive: true, force: true });
 }
 
-async function assertInstallBoundaryPaths(params: {
-  installBaseDir: string;
-  candidatePaths: string[];
-}): Promise<void> {
-  for (const candidatePath of params.candidatePaths) {
-    await assertCanonicalPathWithinBase({
-      baseDir: params.installBaseDir,
-      candidatePath,
-      boundaryLabel: "install directory",
-    });
-  }
-}
-
 function isRelativePathInsideBase(relativePath: string): boolean {
   return (
     Boolean(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${path.sep}`)
@@ -146,10 +133,6 @@ function isRelativePathInsideBase(relativePath: string): boolean {
 
 function isInstallBaseChangedError(error: unknown): boolean {
   return error instanceof Error && error.message === INSTALL_BASE_CHANGED_ERROR_MESSAGE;
-}
-
-function resolveMoveSourceHardlinks(policy: InstallSourceHardlinks): "allow" | "reject" {
-  return policy === "package-manager" ? "allow" : "reject";
 }
 
 async function assertInstallBaseStable(params: {
@@ -291,9 +274,10 @@ export async function installPackageDir<
   try {
     await fs.mkdir(installBaseDir, { recursive: true });
     initialInstallBaseRealPath = await fs.realpath(installBaseDir);
-    await assertInstallBoundaryPaths({
-      installBaseDir,
-      candidatePaths: [params.targetDir],
+    await assertCanonicalPathWithinBase({
+      baseDir: installBaseDir,
+      candidatePath: params.targetDir,
+      boundaryLabel: "install directory",
     });
   } catch (err) {
     return { ok: false, error: `${params.copyErrorPrefix}: ${String(err)}` };
@@ -341,9 +325,10 @@ export async function installPackageDir<
     install: MovePathPublicationReceipt | null;
     restore: MovePathPublicationReceipt | null;
   } = { backup: null, install: null, restore: null };
-  const sourceHardlinks = resolveMoveSourceHardlinks(
-    params.sourceHardlinks ?? DEFAULT_INSTALL_SOURCE_HARDLINKS,
-  );
+  const sourceHardlinks =
+    (params.sourceHardlinks ?? DEFAULT_INSTALL_SOURCE_HARDLINKS) === "package-manager"
+      ? "allow"
+      : "reject";
   let quarantine:
     | { directory: string; identity: Awaited<ReturnType<typeof readDirectoryIdentity>> }
     | undefined;
@@ -460,9 +445,10 @@ export async function installPackageDir<
   };
 
   try {
-    await assertInstallBoundaryPaths({
-      installBaseDir: installBaseRealPath,
-      candidatePaths: [canonicalTargetDir],
+    await assertCanonicalPathWithinBase({
+      baseDir: installBaseRealPath,
+      candidatePath: canonicalTargetDir,
+      boundaryLabel: "install directory",
     });
     stageDir = await fs.mkdtemp(path.join(installBaseRealPath, ".openclaw-install-stage-"));
     if (params.sourceDir !== undefined) {
@@ -568,9 +554,10 @@ export async function installPackageDir<
     );
     try {
       await fs.mkdir(backupRoot, { recursive: true });
-      await assertInstallBoundaryPaths({
-        installBaseDir: installBaseRealPath,
-        candidatePaths: [backupPath],
+      await assertCanonicalPathWithinBase({
+        baseDir: installBaseRealPath,
+        candidatePath: backupPath,
+        boundaryLabel: "install directory",
       });
       await assertInstallBaseStable({
         installBaseDir,
@@ -641,10 +628,6 @@ export async function installPackageDir<
     assertDirectoryIdentity(published.backup.path, published.backup);
     await fs.rm(published.backup.path, { recursive: true, force: true }).catch(() => undefined);
   }
-  if (stageDir) {
-    await cleanupInstallTempDir(stageDir);
-  }
-
   if (!deferCommit) {
     return { ok: true };
   }

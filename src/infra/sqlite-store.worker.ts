@@ -270,11 +270,12 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       }
     };
     const executeCommand = async (command: unknown) => {
-      const coordinator = await prepareLifecycle();
+      // Refuse before acquiring: a throw here would escape the release below.
       const backend = actors.get(request.actor);
       if (!backend) {
         throw new Error("SQLite worker actor is closed");
       }
+      const coordinator = await prepareLifecycle();
       preparedGatewayActor = undefined;
       const assertSettled = (failure?: { error: unknown }) => {
         try {

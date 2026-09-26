@@ -12,6 +12,7 @@ source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/e2e/lib/upgrade-survivor/plugin-dependency-fixtures.sh
 source scripts/e2e/lib/upgrade-survivor/backup-rollback.sh
+source scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.sh
 source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 source scripts/e2e/lib/upgrade-survivor/paths.sh
 
@@ -342,6 +343,9 @@ const summary = {
   restartInference: process.env.SUMMARY_RESTART_INFERENCE || null,
   backupRollback: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
     ? readJsonOrNull(process.env.SUMMARY_BACKUP_ROLLBACK)
+    : undefined,
+  pluginPolicy: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
+    ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "webhooks-only-policy", "result.json"))
     : undefined,
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
@@ -976,7 +980,7 @@ rm_rf_retry() {
 }
 
 reset_run_state() {
-  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT" "$RUNTIME_ROOT/backup-rollback"
+  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT" "$RUNTIME_ROOT/backup-rollback" "$RUNTIME_ROOT/webhooks-only-policy"
   rm -f "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_DAEMON_LOG"
   mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
 }
@@ -2223,6 +2227,34 @@ if [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
   echo "Dreaming cron survivor passed: published updater child repaired active and inactive partitions, retained a verified backup, repeated Doctor made no cron changes, and the installed Gateway converged despite an authored tagged row."
   exit 0
 fi
+if [ "$SCENARIO" = "channel-owner-policy" ]; then
+  if [ "$baseline_spec" != "openclaw@2026.9.4" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
+    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+    echo "$SCENARIO requires published openclaw@2026.9.4, a candidate tarball, isolated manual restart, and no live provider" >&2
+    exit 2
+  fi
+  phase policy-baseline-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
+  phase prepare-policy-database openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive
+  phase seed-channel-policy node scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs seed
+  phase validate-policy-config validate_baseline_config
+  phase resolve-policy-candidate resolve_candidate_version
+  phase policy-candidate-package prepare_worker_cell_package
+  phase update-channel-policy update_candidate
+  phase policy-installed-package assert_worker_cell_update
+  phase assert-upgraded-policy node scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs upgraded
+  for startup in first second; do
+    GATEWAY_LOG="$ARTIFACT_ROOT/policy-$startup-gateway.log"
+    HEALTHZ_JSON="$ARTIFACT_ROOT/policy-$startup-healthz.json"
+    READYZ_JSON="$ARTIFACT_ROOT/policy-$startup-readyz.json"
+    phase "$startup-policy-gateway-start" start_gateway
+    phase "$startup-policy-gateway-probes" check_gateway_probes
+    phase "$startup-policy-gateway-stop" stop_gateway
+    phase "assert-$startup-policy" node scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs "$startup"
+  done
+  run_completed="1"
+  echo "Channel owner policy survived the published updater and two candidate Gateway starts."
+  exit 0
+fi
 if [ "$WORKER_CELL" = "1" ]; then
   phase worker-baseline-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   if [ "$SCENARIO" = "projects-doctor" ]; then
@@ -2461,6 +2493,9 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   fi
   phase prepare-schema-expectation prepare_schema_expectation
   phase capture-backup-rollback capture_backup_rollback
+  if [ "$baseline_version" = "2026.9.2" ]; then
+    phase capture-sole-plugin-policy legacy_operator_plugin_policy capture
+  fi
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     phase prepare-baseline-update-manager install_update_restart_systemctl_shim
     phase prepare-baseline-update-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
@@ -2619,6 +2654,9 @@ if [ "$LIVE_ENABLED" = "1" ]; then
 fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase verify-backup-rollback verify_backup_rollback
+  if [ "$baseline_version" = "2026.9.2" ]; then
+    phase verify-sole-plugin-policy legacy_operator_plugin_policy verify
+  fi
   if [ "$baseline_version" = "2026.9.4" ] && [ "$UPDATE_RESTART_MODE" = "manual" ]; then
     phase assert-restored-index-rollback node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs rollback "$ARTIFACT_ROOT/backup-rollback.json"
   fi

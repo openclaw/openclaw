@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import {
   runTaskRecordTransitionOperation,
   type TaskRecordTransitionInput,
   type TaskRecordTransitionOperations,
   type TaskRecordTransitionReceipt,
 } from "./task-registry-transition.operation.js";
-import type { TaskPersistenceReceipt, TaskRecord } from "./task-registry.types.js";
+import type {
+  TaskPersistenceReceipt,
+  TaskRecord,
+  TaskRunStateTransitionParams,
+} from "./task-registry.types.js";
 
 const running: TaskRecord = {
   taskId: "task-a",
@@ -57,6 +62,55 @@ function createStore(task: TaskRecord = running) {
 }
 
 describe("task transition settlement", () => {
+  it.each(["ownerKey", "requesterSessionKey", "childSessionKey"] as const)(
+    "redacts Incognito %s progress, notification summaries, and delivery errors without changing cancellation reconciliation",
+    (identityKey) => {
+      const privateSessionKey = "agent:main:dashboard:incognito-synthetic-transition";
+      const store = createStore({
+        ...running,
+        task: "Incognito task",
+        [identityKey]:
+          identityKey === "childSessionKey" ? running.childSessionKey : privateSessionKey,
+      });
+      const content = "Synthetic private transition content";
+      const transition = (params: TaskRunStateTransitionParams) =>
+        runTaskRecordTransitionOperation(
+          { kind: "state", taskId: running.taskId, now: 300, params },
+          store.operations,
+        );
+      transition({
+        runId: "run-a",
+        ...(identityKey === "childSessionKey" ? { childSessionKey: privateSessionKey } : {}),
+        progressSummary: content,
+        eventSummary: content,
+      });
+      expect.soft(store.read().progressSummary).toBeUndefined();
+      expect.soft(store.committed[0]?.nextEvent).toBeUndefined();
+      runTaskRecordTransitionOperation(
+        {
+          kind: "delivery",
+          taskId: running.taskId,
+          now: 300,
+          params: { runId: "run-a", deliveryStatus: "failed", error: content },
+        },
+        store.operations,
+      );
+      expect.soft(store.read().error).toBe("Incognito task error.");
+      transition({
+        runId: "run-a",
+        status: "cancelled",
+        endedAt: 300,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      expect(store.read().error).toBe(SUBAGENT_KILL_TASK_ERROR);
+      transition({ runId: "run-a", status: "succeeded", endedAt: 400, terminalSummary: content });
+      expect(store.read().status).toBe("succeeded");
+      expect.soft(store.read().terminalSummary).toBeUndefined();
+      expect.soft(store.committed.at(-1)?.nextEvent?.summary).toBeUndefined();
+      expect.soft(JSON.stringify(store.committed)).not.toContain(content);
+    },
+  );
+
   it.each([
     { taskId: "successor" },
     { runtime: "acp" as const },

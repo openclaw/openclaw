@@ -36,7 +36,6 @@ import type { GatewayClient, GatewayContextResolver } from "./server-methods/sha
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
-import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
@@ -50,6 +49,10 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import { logGatewayReady, logGatewaySidecarsReady } from "./server-startup-readiness.js";
+import {
+  refreshLatestUpdateRestartSentinelIfPresent,
+  scheduleRestartSentinelWakeAfterReady,
+} from "./server-startup-restart-sentinel.js";
 import {
   scheduleGatewayGenerationTimer,
   schedulePostReadySidecarTask,
@@ -83,47 +86,8 @@ const loadAgentModelSelectionModule = createLazyRuntimeModule(
 
 const loadInternalHooksModule = createLazyRuntimeModule(() => import("../hooks/internal-hooks.js"));
 
-const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
-  () => import("./server-restart-sentinel.js"),
-);
-
 function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boolean {
   return !env.VITEST && env.NODE_ENV !== "test";
-}
-
-function scheduleRestartSentinelWakeAfterReady(params: {
-  deps: CliDeps;
-  context?: DeliveryQueueStateContext;
-  log: { warn: (msg: string) => void };
-  shouldRun?: () => boolean;
-}): GatewayPostReadySidecarHandle {
-  const context = params.context ?? captureDeliveryQueueStateContext();
-  return scheduleGatewayGenerationTimer({
-    delayMs: 750,
-    origin: "restart-sentinel:wake",
-    shouldRun: params.shouldRun,
-    run: async (isStopped) => {
-      const { scheduleRestartSentinelWake } = await loadGatewayRestartSentinelModule();
-      if (isStopped()) {
-        return;
-      }
-      await scheduleRestartSentinelWake({
-        deps: params.deps,
-        context,
-        shouldRun: () => !isStopped(),
-      });
-    },
-    onError: (err) => params.log.warn(`restart sentinel wake failed to schedule: ${String(err)}`),
-  });
-}
-
-async function refreshLatestUpdateRestartSentinelIfPresent(
-  env: NodeJS.ProcessEnv = captureDeliveryQueueStateContext().workerContext.environment,
-): Promise<Awaited<ReturnType<typeof refreshLatestUpdateRestartSentinel>> | null> {
-  if (!(await hasRestartSentinel(env))) {
-    return null;
-  }
-  return await (await loadGatewayRestartSentinelModule()).refreshLatestUpdateRestartSentinel(env);
 }
 
 function hasGatewayStartHooks(pluginRegistry: ReturnType<typeof loadOpenClawPlugins>): boolean {
@@ -498,10 +462,16 @@ export async function startGatewaySidecars(params: {
         if (!shouldCheckRestartSentinel() || isStopped()) {
           return;
         }
-        if (
-          !(await hasRestartSentinel(restartSentinelContext.workerContext.environment)) ||
-          isStopped()
-        ) {
+        if (!(await hasRestartSentinel(restartSentinelContext.workerContext.environment))) {
+          const { detectLegacyRestartSentinel } =
+            await import("../infra/state-migrations.restart-sentinel.js");
+          if (
+            !detectLegacyRestartSentinel({ stateDir: restartSentinelContext.stateDir }).hasLegacy
+          ) {
+            return;
+          }
+        }
+        if (isStopped()) {
           return;
         }
         restartSentinelWake = scheduleRestartSentinelWakeAfterReady({
@@ -1028,7 +998,6 @@ export async function startGatewayPostAttachRuntime(
           // work can create sessions that the recovery scan must leave alone.
           params.unlockStartupMethods();
           const newGatewayLifetimeSidecars = [
-            scheduleContextCachePrewarm(params),
             scheduleGatewayHandlerPrewarm(params),
             ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
           ];
@@ -1133,8 +1102,4 @@ export async function startGatewayPostAttachRuntime(
   };
 }
 
-export const testing = {
-  refreshLatestUpdateRestartSentinelIfPresent,
-  scheduleRestartSentinelWakeAfterReady,
-};
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

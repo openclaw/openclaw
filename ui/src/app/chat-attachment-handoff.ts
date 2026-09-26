@@ -1,12 +1,20 @@
+import { t } from "../i18n/index.ts";
 import type {
   ChatAttachment,
   ChatComposerMemoryFallback,
   ChatGoalDraftMode,
+  ChatReplyTarget,
   HumanMention,
 } from "../lib/chat/chat-types.ts";
+import { showToast } from "../lib/toast.ts";
 import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-lifecycle.ts";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ApplicationChatAttachmentHandoff } from "./context.ts";
+import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
+import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
+import type { ApplicationGateway } from "./gateway.ts";
+import { capturePlacementStartupConnection } from "./session-placement-startup.ts";
+import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
 const MAX_PENDING_CHAT_ATTACHMENT_ENTRIES = 32;
 // Hidden split panes can remain unmounted indefinitely, so wall-clock expiry
@@ -21,14 +29,37 @@ type PendingChatAttachmentHandoff = {
   message: string;
   draftRevision?: number;
   goalMode?: ChatGoalDraftMode | null;
+  replyTarget?: ChatReplyTarget | null;
   mentions?: readonly HumanMention[];
   newSessionDraft?: NewSessionDraftHandoff;
   preparedAt: number;
+  incognito?: boolean;
+  isConnectionCurrent: () => boolean;
+  reviewPrivateDraft: Parameters<
+    ApplicationChatAttachmentHandoff["prepare"]
+  >[0]["reviewPrivateDraft"];
 };
 
-export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff {
+const hasInput = (
+  draft: Pick<
+    PendingChatAttachmentHandoff,
+    "message" | "attachments" | "goalMode" | "mentions" | "replyTarget"
+  >,
+) =>
+  Boolean(
+    draft.message ||
+    draft.attachments.length ||
+    draft.goalMode ||
+    draft.replyTarget ||
+    draft.mentions?.length,
+  );
+
+export function createChatAttachmentHandoff(
+  gateway: ApplicationGateway,
+): ApplicationChatAttachmentHandoff {
   const pending = new Map<string, PendingChatAttachmentHandoff>();
   let disposed = false;
+  let activeReview: { key: string; controller: AbortController } | undefined;
 
   const handoffAttachments = (handoff: PendingChatAttachmentHandoff) => {
     const byId = new Map(handoff.attachments.map((attachment) => [attachment.id, attachment]));
@@ -55,9 +86,118 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
     const handoff = pending.get(key);
     if (handoff) {
       pending.delete(key);
+      if (activeReview?.key === key) {
+        activeReview.controller.abort();
+      }
     }
     return handoff;
   };
+
+  const privateDraft = (entry: PendingChatAttachmentHandoff) => {
+    if ((entry.incognito || entry.newSessionDraft?.incognito) && hasInput(entry)) {
+      return { draft: entry, fallbackKey: undefined };
+    }
+    for (const [fallbackKey, draft] of Object.entries(entry.fallbacks)) {
+      if (draft.incognito && hasInput(draft)) {
+        return { draft, fallbackKey };
+      }
+    }
+    return undefined;
+  };
+  const retainedPayloadIds = () =>
+    new Set([...pending.values()].flatMap(handoffAttachments).map((item) => item.id));
+  const retirePrivateOwners = () => {
+    for (const [key, entry] of pending) {
+      if (privateDraft(entry) && !entry.isConnectionCurrent()) {
+        releaseHandoff(take(key), retainedPayloadIds());
+      }
+    }
+  };
+  const stopGateway = gateway.subscribe(retirePrivateOwners);
+  const privateEntry = () => {
+    retirePrivateOwners();
+    for (const [key, entry] of pending) {
+      const selected = privateDraft(entry);
+      if (selected) {
+        return { key, entry, ...selected };
+      }
+    }
+    return undefined;
+  };
+  const review = async () => {
+    const selected = privateEntry();
+    if (!selected || activeReview) {
+      return;
+    }
+    const { key, entry, draft, fallbackKey } = selected;
+    const controller = new AbortController();
+    activeReview = { key, controller };
+    const connection = gateway.connection;
+    const client = gateway.snapshot.client;
+    const current = () =>
+      !disposed &&
+      !controller.signal.aborted &&
+      pending.get(key) === entry &&
+      entry.isConnectionCurrent() &&
+      gateway.snapshot.client === client &&
+      gateway.connection === connection;
+    const reloadOptions = createGatewayControlUiReloadOptions(gateway);
+    try {
+      if (!current()) {
+        return;
+      }
+      const discard = await entry.reviewPrivateDraft({
+        text: draft.message,
+        attachments: draft.attachments,
+        hasGoal: Boolean(draft.goalMode),
+        pendingReads: 0,
+        isCurrent: current,
+        signal: controller.signal,
+      });
+      if (!discard || !current()) {
+        return;
+      }
+      const attachments = [...draft.attachments];
+      if (fallbackKey !== undefined) {
+        delete entry.fallbacks[fallbackKey];
+      } else {
+        entry.message = "";
+        entry.attachments = [];
+        entry.goalMode = null;
+        entry.replyTarget = null;
+        entry.mentions = [];
+      }
+      if (
+        !entry.message &&
+        !entry.attachments.length &&
+        !entry.goalMode &&
+        !entry.replyTarget &&
+        !Object.keys(entry.fallbacks).length
+      ) {
+        take(key);
+      }
+      const retained = retainedPayloadIds();
+      releaseChatAttachmentPayloads(attachments.filter((item) => !retained.has(item.id)));
+      await retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...reloadOptions });
+    } catch {
+      if (current()) {
+        showToast({ message: t("chat.privateDraftReload.unavailable") });
+      }
+    } finally {
+      if (activeReview?.controller === controller) {
+        activeReview = undefined;
+      }
+    }
+  };
+  const unregister = registerControlUiReloadGuard(
+    () => !privateEntry(),
+    () =>
+      showToast({
+        message: t("chat.privateDraftReload.blocked"),
+        actionLabel: t("chat.privateDraftReload.review"),
+        onAction: () => void review(),
+      }),
+  );
 
   return {
     prepare: ({
@@ -69,13 +209,22 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
       message = "",
       draftRevision,
       goalMode,
+      replyTarget,
       mentions,
       newSessionDraft,
+      incognito,
+      reviewPrivateDraft,
     }) => {
       const key = entryKey(paneId, scopeKey);
       const previous = take(key);
       const fallbackEntries = Object.entries(fallbacks);
-      if (!message && !goalMode && attachments.length === 0 && fallbackEntries.length === 0) {
+      if (
+        !message &&
+        !goalMode &&
+        !replyTarget &&
+        attachments.length === 0 &&
+        fallbackEntries.length === 0
+      ) {
         releaseHandoff(previous);
         return;
       }
@@ -95,14 +244,21 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
       }
       pending.set(key, {
         owner,
+        reviewPrivateDraft,
+        isConnectionCurrent: capturePlacementStartupConnection(gateway, {
+          gatewayUrl: gateway.connection.gatewayUrl,
+          recoveryScope: owner.recoveryScope ?? "",
+        }),
         preparedAt: Date.now(),
         paneId,
         scopeKey,
         attachments: [...attachments],
         ...(newSessionDraft ? { newSessionDraft } : {}),
+        ...(incognito ? { incognito } : {}),
         message,
         ...(draftRevision !== undefined ? { draftRevision } : {}),
         ...(goalMode ? { goalMode } : {}),
+        ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),
         ...(mentions?.length ? { mentions: mentions.map((mention) => ({ ...mention })) } : {}),
         fallbacks: Object.fromEntries(
           fallbackEntries.map(([fallbackKey, fallback]) => [
@@ -132,6 +288,7 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
           ...(match.message ? { message: match.message } : {}),
           ...(match.draftRevision !== undefined ? { draftRevision: match.draftRevision } : {}),
           ...(match.goalMode ? { goalMode: match.goalMode } : {}),
+          ...(match.replyTarget ? { replyTarget: match.replyTarget } : {}),
           ...(match.mentions ? { mentions: match.mentions } : {}),
         };
       }
@@ -168,6 +325,9 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
     },
     dispose: () => {
       disposed = true;
+      unregister();
+      stopGateway();
+      activeReview?.controller.abort();
       for (const handoff of pending.values()) {
         releaseHandoff(handoff);
       }

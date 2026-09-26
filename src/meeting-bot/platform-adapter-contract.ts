@@ -1,4 +1,5 @@
 import type { MeetingBrowserAudioCaptureRequest } from "./browser-audio-capture-source.js";
+import type { MeetingBrowserParticipationAdapter } from "./participation-types.js";
 import type {
   MeetingBrowserCandidateTab,
   MeetingBrowserHealth,
@@ -88,6 +89,7 @@ export type MeetingBrowserAdapter<
   Health extends MeetingBrowserHealth,
   Transcript extends MeetingTranscriptSnapshot,
 > = {
+  participation?: MeetingBrowserParticipationAdapter;
   allowsMicrophone(mode: Mode): boolean;
   buildStatusJoinScript(params: MeetingBrowserStatusScriptParams<Mode>): string;
   buildAudioCaptureScript?(params: MeetingBrowserAudioCaptureRequest): string;

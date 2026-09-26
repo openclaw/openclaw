@@ -13,7 +13,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { withTimeout } from "../utils/with-timeout.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { DESKTOP_OBSERVE_PATH, mintDesktopObserverToken } from "./desktop/observe-bridge.js";
 import { PLUGIN_NODE_CAPABILITY_PATH_PREFIX } from "./plugin-node-capability.js";
@@ -350,7 +350,7 @@ async function withCanvasGatewayHarness(params: {
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
   listenHost?: string;
-  rateLimiter?: ReturnType<typeof createAuthRateLimiter>;
+  rateLimiter?: ReturnType<typeof createGatewayAuthRateLimiter>;
   handleHttpRequest: CanvasHostHandler["handleHttpRequest"];
   resolvePluginNodeCapabilityRoute?: Parameters<
     typeof attachGatewayUpgradeHandler
@@ -570,7 +570,7 @@ describe("gateway plugin node capability auth", () => {
 
   test("does not charge a stale bearer when a valid node capability succeeds", async () => {
     await withLoopbackTrustedProxy(async () => {
-      const rateLimiter = createAuthRateLimiter({
+      const rateLimiter = createGatewayAuthRateLimiter({
         maxAttempts: 1,
         windowMs: 60_000,
         lockoutMs: 60_000,
@@ -624,7 +624,7 @@ describe("gateway plugin node capability auth", () => {
 
   test("revalidates a node capability after awaited bearer auth", async () => {
     const capability = "active-node";
-    const rateLimiter = createAuthRateLimiter({
+    const rateLimiter = createGatewayAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,
       lockoutMs: 60_000,
@@ -844,7 +844,7 @@ describe("gateway plugin node capability auth", () => {
 
   test("returns 429 for repeated failed canvas auth attempts (HTTP + WS upgrade)", async () => {
     await withLoopbackTrustedProxy(async () => {
-      const rateLimiter = createAuthRateLimiter({
+      const rateLimiter = createGatewayAuthRateLimiter({
         maxAttempts: 1,
         windowMs: 60_000,
         lockoutMs: 60_000,
@@ -893,7 +893,7 @@ describe("gateway plugin node capability auth", () => {
         },
       },
       run: async () => {
-        const rateLimiter = createAuthRateLimiter({
+        const rateLimiter = createGatewayAuthRateLimiter({
           maxAttempts: 1,
           windowMs: 60_000,
           lockoutMs: 60_000,

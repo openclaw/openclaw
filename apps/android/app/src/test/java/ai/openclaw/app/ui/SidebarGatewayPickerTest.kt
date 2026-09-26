@@ -542,7 +542,7 @@ class SidebarGatewayPickerTest {
     try {
       composeRule.runOnIdle { model.switchToGateway(target.stableId) }
       composeRule.waitUntil {
-        ReflectionHelpers.getField<Any?>(runtime, "gatewayConnectionOperation") != null
+        composeRule.runOnIdle { model.gatewayConnectionHandoff.value.pending }
       }
       capture("queued-handoff")
       composeRule.onNodeWithText("Message OpenClaw").assertIsNotEnabled()

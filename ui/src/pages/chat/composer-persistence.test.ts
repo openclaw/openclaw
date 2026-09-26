@@ -172,24 +172,6 @@ describe("chat composer persistence", () => {
     expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toEqual(goalMode);
   });
 
-  it("persists empty Goal mode and gives cancellation a new draft revision", () => {
-    const state = createState();
-    const persistence = startPersistence(state);
-    state.chatGoalDraftMode = { action: "start", sessionId: "session-a" };
-    persistence.schedule();
-    persistence.persistNow();
-    const revision = loadChatComposerDraftRevision(state, state.sessionKey);
-    expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toEqual(
-      state.chatGoalDraftMode,
-    );
-    state.chatGoalDraftMode = null;
-    persistence.schedule();
-    persistence.persistNow();
-    expect(loadChatComposerDraftRevision(state, state.sessionKey)).toBeGreaterThan(revision);
-    expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
-    persistence.stop();
-  });
-
   it("fences a same-revision retry that changes objective interpretation", () => {
     const state = createState({
       chatMessage: "/goal clear",

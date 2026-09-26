@@ -28,10 +28,7 @@ import {
 } from "./plugin-thread-config.js";
 import type { CodexThread } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
-import {
-  captureCodexAppServerClientLifetime,
-  retainSharedCodexAppServerClientByInstanceId,
-} from "./shared-client.js";
+import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
@@ -145,17 +142,13 @@ export async function releaseCodexBoundLiveThread(
 ): Promise<boolean> {
   const changedClient = options.ownerClientId && options.ownerClientId !== options.clientId;
   const previous = changedClient
-    ? retainSharedCodexAppServerClientByInstanceId(options.ownerClientId!)
+    ? await retainSharedCodexAppServerClientByInstanceId(options.ownerClientId!)
     : undefined;
   if (changedClient && !previous) {
     return false;
   }
+  const client = previous?.client ?? options.client;
   try {
-    const client = previous?.client ?? options.client;
-    const assertPrevious =
-      previous && options.assertCurrent
-        ? captureCodexAppServerClientLifetime(client, "connection")
-        : undefined;
     if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
       throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
     }
@@ -166,12 +159,16 @@ export async function releaseCodexBoundLiveThread(
       assertCurrent: options.assertCurrent
         ? () => {
             options.assertCurrent?.();
-            assertPrevious?.();
+            const closed = previous?.client.getCloseError();
+            if (closed) {
+              throw closed;
+            }
           }
         : undefined,
     });
   } finally {
-    previous?.release();
+    // Rejection must free the lane so the claimed run can still be stopped.
+    await previous?.release(!isCodexAppServerLiveThreadClaimed(client, options.threadId));
   }
 }
 

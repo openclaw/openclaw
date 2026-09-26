@@ -286,35 +286,24 @@ function scoreSection(section: ParsedMarkdownSection, snippets: SectionSnippet[]
 }
 
 function scoreSnippet(text: string, title: string): number {
-  let score = 1;
-  if (REM_MEMORY_SIGNAL_RE.test(text)) {
-    score += 2.2;
-  }
-  if (REM_BUILD_SIGNAL_RE.test(text)) {
-    score += 1.2;
-  }
-  if (REM_INCIDENT_SIGNAL_RE.test(text)) {
-    score += 1.2;
-  }
-  if (REM_LOGISTICS_SIGNAL_RE.test(text)) {
-    score += 0.9;
-  }
-  if (REM_ROUTING_SIGNAL_RE.test(text)) {
-    score += 1.4;
-  }
-  if (REM_EXTERNALIZATION_SIGNAL_RE.test(text)) {
-    score += 1.1;
-  }
-  if (REM_RETRY_SIGNAL_RE.test(text)) {
-    score += 0.9;
-  }
-  if (REM_TASK_SIGNAL_RE.test(text) && !REM_BUILD_SIGNAL_RE.test(text)) {
-    score -= 0.8;
-  }
-  if (title && !REM_GENERIC_SECTION_RE.test(title)) {
-    score += 0.25;
-  }
-  return score;
+  return scoreSignals(
+    [
+      [REM_MEMORY_SIGNAL_RE.test(text), 2.2],
+      [REM_BUILD_SIGNAL_RE.test(text), 1.2],
+      [REM_INCIDENT_SIGNAL_RE.test(text), 1.2],
+      [REM_LOGISTICS_SIGNAL_RE.test(text), 0.9],
+      [REM_ROUTING_SIGNAL_RE.test(text), 1.4],
+      [REM_EXTERNALIZATION_SIGNAL_RE.test(text), 1.1],
+      [REM_RETRY_SIGNAL_RE.test(text), 0.9],
+      [REM_TASK_SIGNAL_RE.test(text) && !REM_BUILD_SIGNAL_RE.test(text), -0.8],
+      [Boolean(title) && !REM_GENERIC_SECTION_RE.test(title), 0.25],
+    ],
+    1,
+  );
+}
+
+function scoreSignals(signals: readonly (readonly [boolean, number])[], initial = 0): number {
+  return signals.reduce((score, [matches, weight]) => (matches ? score + weight : score), initial);
 }
 
 function chooseSummarySnippets(
@@ -406,74 +395,33 @@ function isDurableSignalSnippet(text: string, title: string): boolean {
 }
 
 function scoreCandidateSnippet(text: string, title: string): number {
-  let score = 0;
-  if (REM_PERSISTENCE_SIGNAL_RE.test(text)) {
-    score += 3.2;
-  }
-  if (REM_MEMORY_SIGNAL_RE.test(text)) {
-    score += 2.4;
-  }
-  if (REM_EXPLICIT_PREFERENCE_SIGNAL_RE.test(text)) {
-    score += 1.8;
-  }
-  if (REM_PERSON_PATTERN_SIGNAL_RE.test(text)) {
-    score += 2.3;
-  }
-  if (REM_OPERATOR_RULE_SIGNAL_RE.test(text)) {
-    score += 1.6;
-  }
-  if (REM_SECTION_PERSISTENCE_TITLE_RE.test(title)) {
-    score += 1.2;
-  }
-  if (REM_STABLE_PERSON_SIGNAL_RE.test(text)) {
-    score += 1.5;
-  }
-  if (REM_METADATA_HEAVY_SIGNAL_RE.test(text)) {
-    score -= 2.4;
-  }
-  if (REM_PROJECT_META_SIGNAL_RE.test(`${title} ${text}`)) {
-    score -= 2.2;
-  }
-  if (REM_PROCESS_FRAME_SIGNAL_RE.test(text)) {
-    score -= 2.4;
-  }
-  if (REM_TOOLING_META_SIGNAL_RE.test(text) && !REM_STABLE_PERSON_SIGNAL_RE.test(text)) {
-    score -= 2.1;
-  }
-  if (REM_MONITORING_SIGNAL_RE.test(`${title} ${text}`) && !REM_MEMORY_SIGNAL_RE.test(text)) {
-    score -= 4.2;
-  }
-  if (REM_TRAVEL_DECISION_SIGNAL_RE.test(text)) {
-    score -= 2.6;
-  }
-  if (REM_SPECIFICITY_BURDEN_RE.test(text) && !REM_STABLE_PERSON_SIGNAL_RE.test(text)) {
-    score -= 1.2;
-  }
-  if (REM_SITUATIONAL_SIGNAL_RE.test(text)) {
-    score -= 2.8;
-  }
-  if (REM_TRANSIENT_SIGNAL_RE.test(text)) {
-    score -= 2;
-  }
-  if (REM_INCIDENT_SIGNAL_RE.test(text)) {
-    score -= 1.6;
-  }
-  if (REM_TASK_SIGNAL_RE.test(text)) {
-    score -= 1.2;
-  }
-  if (REM_LOGISTICS_SIGNAL_RE.test(text) && !REM_MEMORY_SIGNAL_RE.test(text)) {
-    score -= 1.4;
-  }
-  if (REM_BUILD_SIGNAL_RE.test(text) && !REM_MEMORY_SIGNAL_RE.test(text)) {
-    score -= 0.8;
-  }
-  if (REM_SECTION_TRANSIENT_TITLE_RE.test(title) && !REM_SECTION_PERSISTENCE_TITLE_RE.test(title)) {
-    score -= 1.2;
-  }
-  if (/[`/]/.test(text) || /https?:\/\//i.test(text)) {
-    score -= 0.8;
-  }
-  return score;
+  const memory = REM_MEMORY_SIGNAL_RE.test(text);
+  const stablePerson = REM_STABLE_PERSON_SIGNAL_RE.test(text);
+  const persistentTitle = REM_SECTION_PERSISTENCE_TITLE_RE.test(title);
+  return scoreSignals([
+    [REM_PERSISTENCE_SIGNAL_RE.test(text), 3.2],
+    [memory, 2.4],
+    [REM_EXPLICIT_PREFERENCE_SIGNAL_RE.test(text), 1.8],
+    [REM_PERSON_PATTERN_SIGNAL_RE.test(text), 2.3],
+    [REM_OPERATOR_RULE_SIGNAL_RE.test(text), 1.6],
+    [persistentTitle, 1.2],
+    [stablePerson, 1.5],
+    [REM_METADATA_HEAVY_SIGNAL_RE.test(text), -2.4],
+    [REM_PROJECT_META_SIGNAL_RE.test(`${title} ${text}`), -2.2],
+    [REM_PROCESS_FRAME_SIGNAL_RE.test(text), -2.4],
+    [REM_TOOLING_META_SIGNAL_RE.test(text) && !stablePerson, -2.1],
+    [REM_MONITORING_SIGNAL_RE.test(`${title} ${text}`) && !memory, -4.2],
+    [REM_TRAVEL_DECISION_SIGNAL_RE.test(text), -2.6],
+    [REM_SPECIFICITY_BURDEN_RE.test(text) && !stablePerson, -1.2],
+    [REM_SITUATIONAL_SIGNAL_RE.test(text), -2.8],
+    [REM_TRANSIENT_SIGNAL_RE.test(text), -2],
+    [REM_INCIDENT_SIGNAL_RE.test(text), -1.6],
+    [REM_TASK_SIGNAL_RE.test(text), -1.2],
+    [REM_LOGISTICS_SIGNAL_RE.test(text) && !memory, -1.4],
+    [REM_BUILD_SIGNAL_RE.test(text) && !memory, -0.8],
+    [REM_SECTION_TRANSIENT_TITLE_RE.test(title) && !persistentTitle, -1.2],
+    [/[`/]/.test(text) || /https?:\/\//i.test(text), -0.8],
+  ]);
 }
 
 function chooseScoredSnippets(
@@ -746,23 +694,17 @@ export function previewGroundedRemForFile(params: {
     }),
   ).slice(0, 4);
 
-  const durableImplications = coalesceGroundedRemItems(
-    candidateSnippets.filter(
-      (candidate) => candidate.lean === "likely_durable" || candidate.score >= 4,
-    ),
-  )
-    .toSorted((left, right) => right.score - left.score)
-    .slice(0, REM_SUMMARY_MEMORY_LIMIT)
-    .map((candidate) => ({ text: candidate.text, refs: candidate.refs }));
-
-  const candidateDrivenImplications = coalesceGroundedRemItems(
-    candidateSnippets.filter(
-      (candidate) => candidate.lean !== "likely_situational" && candidate.score >= 2.2,
-    ),
-  )
-    .toSorted((left, right) => right.score - left.score)
-    .slice(0, REM_SUMMARY_MEMORY_LIMIT)
-    .map((candidate) => ({ text: candidate.text, refs: candidate.refs }));
+  const selectImplications = (eligible: (candidate: CandidateSnippetSummary) => boolean) =>
+    coalesceGroundedRemItems(candidateSnippets.filter(eligible))
+      .toSorted((left, right) => right.score - left.score)
+      .slice(0, REM_SUMMARY_MEMORY_LIMIT)
+      .map(({ text, refs }) => ({ text, refs }));
+  const durableImplications = selectImplications(
+    (candidate) => candidate.lean === "likely_durable" || candidate.score >= 4,
+  );
+  const candidateDrivenImplications = selectImplications(
+    (candidate) => candidate.lean !== "likely_situational" && candidate.score >= 2.2,
+  );
 
   const effectiveMemoryImplications =
     durableImplications.length > 0

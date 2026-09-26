@@ -8,6 +8,7 @@ import {
 } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
+import { isControlUiFocusPath } from "@openclaw/session-url-contract";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
@@ -33,12 +34,10 @@ import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js"
 import {
   classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
-  isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 import { isControlUiSharePath } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import type { ControlUiRootState } from "./control-ui.js";
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
@@ -54,6 +53,7 @@ import {
   setDefaultSecurityHeaders,
   isWebSocketUpgradeRequest,
 } from "./http-common.js";
+import { finishGatewayHttpAuthorityError } from "./http-request-authority.js";
 import {
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
@@ -65,6 +65,7 @@ import {
   handleProviderOAuthCallback,
   PROVIDER_OAUTH_CALLBACK_PATH,
 } from "./provider-browser-auth.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
 import {
   getControlUiModule,
   getControlUiPluginAssetsModule,
@@ -103,18 +104,13 @@ import {
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
-import {
-  handleNodeWorkerBundleTransferHttpRequest,
-  type NodeWorkerBundleTransferHttpCallback,
-} from "./worker-environments/node-worker-bundle-transfer-http.js";
+import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
+import { handleNodeWorkerBundleTransferHttpRequest } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import {
   handleNodeWorkspaceTransferHttpRequest,
   type NodeWorkspaceTransferHttpCallback,
 } from "./worker-environments/node-workspace-transfer-http.js";
-import {
-  handleWorkerBootstrapArtifactTransferHttpRequest,
-  type WorkerBootstrapArtifactTransferHttpCallback,
-} from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
+import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 
 type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -145,8 +141,8 @@ export function createGatewayHttpServer(opts: {
   /** Strict limiter for the public join-code exchange, including loopback. */
   joinRateLimiter?: AuthRateLimiter;
   /** Authenticator/dispatcher for the reserved node worker bundle namespace. */
-  handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
-  handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
+  handleNodeWorkerBundleTransferRequest?: ArtifactTransferHttpCallback;
+  handleWorkerBootstrapArtifactTransferRequest?: ArtifactTransferHttpCallback;
   /** Authenticator/dispatcher for the reserved node workspace transfer namespace. */
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   getReadiness?: ReadinessChecker;
@@ -545,10 +541,7 @@ export function createGatewayHttpServer(opts: {
         basePath: controlUiBasePath,
         pathname: scopedRequestPath,
       });
-      const focusDocument = isControlUiFocusDocumentPath({
-        basePath: controlUiBasePath,
-        pathname: scopedRequestPath,
-      });
+      const focusDocument = isControlUiFocusPath(scopedRequestPath, controlUiBasePath);
       const publicSessionPath = publicSessionRoute.matches(
         scopedRequestPath,
         controlUiRouteBasePath,
@@ -605,21 +598,17 @@ export function createGatewayHttpServer(opts: {
         handleControlUiRequest,
       );
       const mcpAppRoute = classifyMcpAppStandalonePath(scopedRequestPath);
-      if (
+      addAdmittedStage(
         configSnapshot.mcp?.apps?.enabled === true &&
-        (mcpAppRoute === "shell" || mcpAppRoute === "view")
-      ) {
-        requestStages.push(
-          async () =>
-            await runWithGatewayHttpWorkAdmission(res, async () => {
-              const standalone = await getMcpAppStandaloneModule();
-              return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
-                sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
-                sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
-              });
-            }),
-        );
-      }
+          (mcpAppRoute === "shell" || mcpAppRoute === "view"),
+        async () => {
+          const standalone = await getMcpAppStandaloneModule();
+          return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
+            sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
+            sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
+          });
+        },
+      );
       // Core and recovery routes run first, then plugin routes, then read-only Control UI
       // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
       if (handlePluginRequest) {
@@ -731,6 +720,9 @@ export function createGatewayHttpServer(opts: {
 
       respondNotFound(res);
     } catch (err) {
+      if (finishGatewayHttpAuthorityError(res, err)) {
+        return;
+      }
       console.error("[gateway-http] unhandled error in request handler:", err);
       finishFailedGatewayHttpResponse(res);
     }

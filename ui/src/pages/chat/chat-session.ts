@@ -170,7 +170,9 @@ function captureChatSettingsTarget(host: ChatModelSettingsHost, sessionKey: stri
       ? host.sessionsResult?.sessions.some(
           (row) => matchesOwner(row) && row.sessionId === sessionId,
         ) === true
-      : !host.sessionsResult?.sessions.some(matchesOwner));
+      : !host.sessionsResult?.sessions.some(
+          (row) => matchesOwner(row) && row.sessionId !== undefined,
+        ));
   return {
     sessionId,
     settings: { ...activeRow, ...sessions.settingsPreview(sessionKey, agentId) },

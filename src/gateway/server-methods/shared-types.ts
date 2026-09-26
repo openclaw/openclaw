@@ -108,6 +108,8 @@ export type PreparedSessionApprovalReplay = {
   replay: SessionApprovalReplay;
   /** Check in the response frame; a publication may race promise delivery. */
   isCurrent: () => boolean;
+  /** Retain publication fencing through the response, then release the replay scope. */
+  release: () => void;
 };
 
 /** Minimal hosted OpenClaw contract retained by the gateway request router. */
@@ -285,8 +287,7 @@ type GatewayKernelContext = {
   getHealthCache: () => HealthSummary | null;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
-  incrementPresenceVersion: () => number;
-  getHealthVersion: () => number;
+  publishPresence: () => void;
   /** Instance-local native approval subscribers; never derived from a network client. */
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;

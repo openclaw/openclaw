@@ -17,11 +17,9 @@ const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
 type EnsureConfigReadyOptions = {
   allowInvalid?: boolean;
-  beforeStateMigrations?: () => Promise<boolean>;
+  beforeStatePreparation?: () => Promise<boolean>;
   commandPath?: string[];
   requireConfig?: boolean;
-  skipPristineCoreStateMigrations?: boolean;
-  skipPristineStartupStateMigrations?: boolean;
 };
 const ensureConfigReadyMock = vi.fn<(_opts: EnsureConfigReadyOptions) => Promise<void>>(
   async () => {},
@@ -31,8 +29,6 @@ const routeLogsToStderrMock = vi.fn();
 const prepareGatewayRunBootstrapMock = vi.fn(async () => true);
 const recheckGatewayRunBootstrapMock = vi.fn(async () => true);
 const reloadTrustedGatewayRunEnvironmentMock = vi.fn(async () => true);
-const wasPreparedGatewayRunCoreStatePristineMock = vi.fn(() => true);
-const wasPreparedGatewayRunStatePristineMock = vi.fn(() => true);
 
 const runtimeMock = {
   log: vi.fn(),
@@ -74,8 +70,6 @@ vi.mock("../gateway-cli/pre-bootstrap.js", () => ({
   prepareGatewayRunBootstrap: prepareGatewayRunBootstrapMock,
   recheckGatewayRunBootstrap: recheckGatewayRunBootstrapMock,
   reloadTrustedGatewayRunEnvironment: reloadTrustedGatewayRunEnvironmentMock,
-  wasPreparedGatewayRunCoreStatePristine: wasPreparedGatewayRunCoreStatePristineMock,
-  wasPreparedGatewayRunStatePristine: wasPreparedGatewayRunStatePristineMock,
 }));
 
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
@@ -293,15 +287,13 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        beforeStateMigrations: expect.any(Function),
+        beforeStatePreparation: expect.any(Function),
         commandPath: ["gateway", "run"],
         measure: expect.any(Function),
-        skipPristineCoreStateMigrations: true,
-        skipPristineStartupStateMigrations: true,
       }),
     );
-    const beforeStateMigrations = ensureConfigReadyMock.mock.calls[0]?.[0]?.beforeStateMigrations;
-    await beforeStateMigrations?.();
+    const beforeStatePreparation = ensureConfigReadyMock.mock.calls[0]?.[0]?.beforeStatePreparation;
+    await beforeStatePreparation?.();
     expect(recheckGatewayRunBootstrapMock).toHaveBeenCalledWith({
       opts: expect.objectContaining({ force: false, reset: false }),
       runtime: runtimeMock,

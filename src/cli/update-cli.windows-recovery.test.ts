@@ -359,6 +359,8 @@ describe("update-cli", () => {
 
       try {
         await updateCommand({ yes: true, restart: false });
+      } catch (cause) {
+        throw new Error(`${getLogOutput()}\n${getErrorOutput()}`, { cause });
       } finally {
         homeSpy.mockRestore();
         platformSpy.mockRestore();

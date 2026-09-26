@@ -7,7 +7,7 @@ import type { SessionTranscriptInitializationPublication } from "../config/sessi
 import type {
   SessionEntryReplacementCommit,
   SessionEntryReplacementCommitted,
-} from "../config/sessions/session-accessor.sqlite-replacement-state.js";
+} from "../config/sessions/session-accessor.sqlite-replacement-types.js";
 import type {
   PublishedSessionTranscriptArchive,
   SessionLegacyArchiveRemovalResult,
@@ -95,6 +95,7 @@ export type AgentDatabaseRequestExecutionSource = {
   assertCurrent(): void;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   createAdmission(params: {
+    attachment: { kind: "agent-execution"; startupJournal: boolean };
     nativeLocations: readonly string[];
     authorize(request: SqliteWorkerAdmissionRequest): void;
     assertCurrent(): void;

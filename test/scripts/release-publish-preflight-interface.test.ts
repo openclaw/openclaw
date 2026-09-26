@@ -38,7 +38,7 @@ describe("release publish preflight operator interface", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "prints a shell-safe POSIX dispatch that preserves waiver and exact resume inputs",
+    "prints a shell-safe POSIX dispatch that preserves artifact and exact resume inputs",
     () => {
       const dir = mkdtempSync(join(tmpdir(), "publish-dispatch-"));
       try {
@@ -49,7 +49,7 @@ describe("release publish preflight operator interface", () => {
           `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify(process.argv.slice(2)));\n`,
         );
         chmodSync(executable, 0o755);
-        const waiver = "Owner's approved reason\n$(touch should-not-exist); `false`";
+        const installerDigests = "Owner's approved reason\n$(touch should-not-exist); `false`";
         const command = buildReleasePublishDispatchCommand(
           {
             repo: "openclaw/openclaw",
@@ -58,7 +58,7 @@ describe("release publish preflight operator interface", () => {
             fullReleaseValidationRunId: "123",
             npmDistTag: "latest",
             pluginPublishScope: "all-publishable",
-            stableSoakWaiver: waiver,
+            windowsNodeInstallerDigests: installerDigests,
           },
           "2",
           "release-publish/aaaaaaaaaaaa-123",
@@ -69,13 +69,29 @@ describe("release publish preflight operator interface", () => {
           env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
         });
         const args = JSON.parse(readFileSync(output, "utf8"));
-        expect(args).toContain(`stable_soak_waiver=${waiver}`);
+        expect(args).toContain(`windows_node_installer_digests=${installerDigests}`);
         expect(args).toContain("full_release_validation_run_attempt=2");
         expect(args).toContain("openclaw_npm_resume_run_id=456");
         expect(args).toContain("release-publish/aaaaaaaaaaaa-123");
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    },
+  );
+
+  it.each(["--stable-soak-waiver", "--lane-waiver"])(
+    "rejects removed publication bypass %s",
+    (flag) => {
+      expect(() =>
+        parsePublishPreflightArgs([
+          "--tag",
+          "v2026.9.5",
+          "--workflow-ref",
+          "main",
+          flag,
+          "2026.9.5 approved",
+        ]),
+      ).toThrow();
     },
   );
 
@@ -123,7 +139,7 @@ describe("release publish preflight operator interface", () => {
             id: "publisher.soak",
             status: "FAIL",
             message: "Missing soak | evidence",
-            remediation: "Run soak\nor supply the operator reason",
+            remediation: "Run soak\nand reseal validation",
           },
         ],
         command: "gh workflow run ...",
@@ -133,7 +149,7 @@ describe("release publish preflight operator interface", () => {
     );
     expect(text).toContain("| FAIL | publisher.soak |");
     expect(text).toContain("Missing soak \\| evidence");
-    expect(text).toContain("Run soak or supply the operator reason");
+    expect(text).toContain("Run soak and reseal validation");
     expect(text).toContain("Resolve FAIL rows");
     expect(text).not.toContain("gh workflow run");
   });

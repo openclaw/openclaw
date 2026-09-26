@@ -53,7 +53,6 @@ import type { InternalSessionEntry, SessionEntry } from "./types.js";
 export {
   assertSessionEntryCreationPublication,
   isPreparedSessionSharingChange,
-  projectSessionSharingEntry,
   publishSessionEntryPlaceholderInsertion,
   publishSessionSharingMemberChange,
   readCommittedIncognitoSessionSharing,
@@ -65,9 +64,10 @@ export {
   runWithSessionEntryCreationPublication,
   type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
-export type {
-  SessionEntryPlaceholder,
-  SessionTranscriptInitializationPublication,
+export {
+  projectSessionSharingEntry,
+  type SessionEntryPlaceholder,
+  type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 
 type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
