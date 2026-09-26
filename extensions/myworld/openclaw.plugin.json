@@ -1,0 +1,48 @@
+{
+  "id": "myworld",
+  "name": "myworld",
+  "description": "Safe multi-tool practice worlds for real agent work.",
+  "categories": ["integrations"],
+  "activation": {
+    "onStartup": false
+  },
+  "catalog": {
+    "featured": false
+  },
+  "mcpServers": {
+    "myworld": {
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["myworld==0.2.1", "world", "invoice-review"],
+      "connectionTimeoutMs": 30000,
+      "requestTimeoutMs": 60000,
+      "toolFilter": {
+        "include": [
+          "world_task",
+          "world_grade",
+          "world_submit",
+          "world_snapshot",
+          "world_restore",
+          "world_diff",
+          "world_calls",
+          "gmail__search_emails",
+          "gmail__read_email",
+          "gmail__send_email",
+          "slack__slack_list_channels",
+          "slack__slack_get_channel_history",
+          "slack__slack_get_thread_replies",
+          "drive__search_drive_files",
+          "drive__list_spreadsheets",
+          "drive__get_spreadsheet_info",
+          "drive__read_sheet_values",
+          "drive__modify_sheet_values"
+        ]
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
