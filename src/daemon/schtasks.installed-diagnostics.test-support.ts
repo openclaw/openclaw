@@ -6,6 +6,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { z } from "zod";
 import { hashFile, hashInstall } from "../../scripts/lib/gateway-bench-installed-package.ts";
 import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { sleep } from "../utils/sleep.js";
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
@@ -173,15 +174,23 @@ export async function runInstalledPublishedUpdate(params: {
   const stopObservation = new AbortController();
   const completed = new Set<string>();
   let observedRunId: string | undefined;
-  const terminalProcesses: ReturnType<typeof captureTerminalProcesses>[] = [];
-  function captureTerminalProcesses(runId: string) {
-    const capturedAtMs = Date.now();
+  const settlementProcesses: ReturnType<typeof captureSettlementProcesses>[] = [];
+  function captureSettlementProcesses(
+    progress: Pick<UpdateRunRecord, "runId" | "phase" | "status">,
+    reason: "terminal" | "elapsed-300s" | "follow-up",
+  ) {
+    const sample = {
+      runId: progress.runId,
+      phase: progress.phase,
+      status: progress.status,
+      reason,
+      capturedAtMs: Date.now(),
+    };
     const safeText = (value: string) => redactSupportString(value, task, { maxLength: 2_000 });
     try {
       const capture = readRelatedProcessDiagnostics([task.profile, packageRoot(task.installRoot)]);
       return {
-        runId,
-        capturedAtMs,
+        ...sample,
         ok: capture.ok,
         truncated: capture.truncated,
         ...(capture.error ? { unavailable: safeText(capture.error) } : {}),
@@ -197,7 +206,7 @@ export async function runInstalledPublishedUpdate(params: {
         })),
       };
     } catch {
-      return { runId, capturedAtMs, unavailable: "Process observation could not be read" };
+      return { ...sample, unavailable: "Process observation could not be read" };
     }
   }
   let observationFailure: Error | undefined;
@@ -222,14 +231,18 @@ export async function runInstalledPublishedUpdate(params: {
       if (progress.runId !== observedRunId) {
         continue;
       }
-      if (
-        progress.phase === "finished" &&
-        progress.status !== "running" &&
-        terminalProcesses.length < 2
-      ) {
-        terminalProcesses.push(captureTerminalProcesses(progress.runId));
+      const snapshotReason =
+        settlementProcesses.length > 0
+          ? "follow-up"
+          : progress.phase === "finished" && progress.status !== "running"
+            ? "terminal"
+            : Date.now() - startedAt >= 300_000
+              ? "elapsed-300s"
+              : undefined;
+      if (snapshotReason && settlementProcesses.length < 2) {
+        settlementProcesses.push(captureSettlementProcesses(progress, snapshotReason));
         // Diagnostics wait for an ordinary proof write; they are not durable update progress.
-        observations.updateTerminalProcesses = terminalProcesses;
+        observations.updateSettlementProcesses = settlementProcesses;
       }
       const newSteps = progress.steps.filter((step) => {
         if (step.status !== "completed" || step.endedAtMs === undefined) {

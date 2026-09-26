@@ -551,10 +551,13 @@ describe("published installed update progress", () => {
       installedPackage.packageRoot(installedTask().installRoot),
     ]);
     expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
-    expect(fixture.observations.updateTerminalProcesses).toEqual([
+    expect(fixture.observations.updateSettlementProcesses).toEqual([
       expect.objectContaining({
         runId: terminal.runId,
         capturedAtMs: invokedAt + 45_000,
+        phase: "finished",
+        status: "succeeded",
+        reason: "terminal",
         processes: [
           expect.objectContaining({
             pid: 1234,
@@ -563,11 +566,62 @@ describe("published installed update progress", () => {
           }),
         ],
       }),
-      expect.objectContaining({ runId: terminal.runId, capturedAtMs: invokedAt + 75_000 }),
+      expect.objectContaining({
+        runId: terminal.runId,
+        capturedAtMs: invokedAt + 75_000,
+        phase: "finished",
+        status: "succeeded",
+        reason: "follow-up",
+      }),
     ]);
-    const retained = JSON.stringify(fixture.observations.updateTerminalProcesses);
+    const retained = JSON.stringify(fixture.observations.updateSettlementProcesses);
     expect(retained).not.toContain("synthetic-hidden-credential");
     expect(retained.length).toBeLessThan(5000);
+    fixture.command.resolve(JSON.stringify(success));
+    await expect(fixture.pending).resolves.toEqual(success);
+    expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual([
+      "published-update:completed-step",
+      "command:update",
+    ]);
+  });
+
+  it("captures an unfinished current run at 300 and 315 seconds without reporting progress", async () => {
+    const active = { ...recordedRun([completedStep]), phase: "verifying" as const };
+    vi.spyOn(updateRunReader, "listUpdateRunsAsync").mockResolvedValue([active]);
+    const census = vi.spyOn(nativeObservation, "readRelatedProcessDiagnostics").mockReturnValue({
+      ok: true,
+      error: null,
+      truncated: false,
+      processes: [],
+    });
+    const fixture = startUpdate();
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(census).not.toHaveBeenCalled();
+    expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual([
+      "published-update:completed-step",
+    ]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(census).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(census).toHaveBeenCalledTimes(2);
+    expect(fixture.observations.updateSettlementProcesses).toEqual([
+      expect.objectContaining({
+        runId: active.runId,
+        capturedAtMs: invokedAt + 300_000,
+        phase: "verifying",
+        status: "running",
+        reason: "elapsed-300s",
+      }),
+      expect.objectContaining({
+        capturedAtMs: invokedAt + 315_000,
+        phase: "verifying",
+        status: "running",
+        reason: "follow-up",
+      }),
+    ]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(census).toHaveBeenCalledTimes(2);
+    expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
     fixture.command.resolve(JSON.stringify(success));
     await expect(fixture.pending).resolves.toEqual(success);
     expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual([
@@ -591,7 +645,7 @@ describe("published installed update progress", () => {
       });
       const fixture = startUpdate();
       await vi.advanceTimersByTimeAsync(45_000);
-      expect(fixture.observations.updateTerminalProcesses).toEqual([
+      expect(fixture.observations.updateSettlementProcesses).toEqual([
         expect.objectContaining({ unavailable: expect.any(String) }),
         expect.objectContaining({ unavailable: expect.any(String) }),
       ]);
