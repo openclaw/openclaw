@@ -8,7 +8,10 @@ import {
   setHeartbeatWakeHandler,
 } from "../../infra/heartbeat-wake.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -49,12 +52,13 @@ export function useTaskGatewayFixture() {
       } finally {
         disposeHeartbeatWakeHandler?.();
         disposeHeartbeatWakeHandler = undefined;
+        await closeOpenClawAgentDatabasesAsync();
+        closeOpenClawAgentDatabasesForTest();
         resetSystemEventsForTest();
         resetTaskRegistryForTests();
-        stateDirEnvSnapshot.restore();
-        closeOpenClawAgentDatabasesForTest();
         await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
+        stateDirEnvSnapshot.restore();
         cleanup();
       }
     }),
@@ -62,11 +66,11 @@ export function useTaskGatewayFixture() {
 
   beforeEach(async () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-gateway-tasks-"));
+    resetTaskRegistryForTests();
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: mainSessionTaskScope.requesterSessionKey },
       { sessionId: "session-main", updatedAt: 1 },
     );
-    resetTaskRegistryForTests();
     heartbeatWakeRequests = [];
     disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(async (request) => {
       heartbeatWakeRequests.push(request);
