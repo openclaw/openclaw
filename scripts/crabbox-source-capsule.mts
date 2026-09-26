@@ -294,8 +294,15 @@ export function prepareCrabboxSourceCapsule(options: {
   }
   mkdirSync(options.syncRoot, { recursive: true });
   const witness = captureSourceWitness(repoRoot, sourceSha);
-  let mirror =
-    options.reuseMirror && witness ? createMirrorStaging(options.syncRoot, repoRoot) : undefined;
+  function allocateMirror() {
+    const allocated = createMirrorStaging(options.syncRoot, repoRoot);
+    if (allocated && !allocated.staging.recorded) {
+      allocated.discard();
+      throw new Error("source mirror requires recorded staging; source was not uploaded");
+    }
+    return allocated;
+  }
+  let mirror = options.reuseMirror && witness ? allocateMirror() : undefined;
   let cache: ReturnType<typeof openSourceMirror> | undefined;
   try {
     if (mirror) {
@@ -316,7 +323,7 @@ export function prepareCrabboxSourceCapsule(options: {
         }
         console.error("[crabbox] source mirror failed verification; rebuilding a cold capsule");
         mirror.discard();
-        mirror = createMirrorStaging(options.syncRoot, repoRoot);
+        mirror = allocateMirror();
         if (mirror) {
           cache = openSourceMirror(
             mirror.staging.root,

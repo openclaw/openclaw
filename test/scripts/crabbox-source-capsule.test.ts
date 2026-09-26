@@ -18,12 +18,18 @@ import {
   prepareCrabboxSourceCapsule,
   type CrabboxSourceCapsule,
 } from "../../scripts/crabbox-source-capsule.mts";
+import { createMirrorStaging } from "../../scripts/crabbox-staging.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
   return { ...fs, lstatSync: vi.fn(fs.lstatSync) };
+});
+
+vi.mock("../../scripts/crabbox-staging.mts", async (importOriginal) => {
+  const staging = await importOriginal<typeof import("../../scripts/crabbox-staging.mts")>();
+  return { ...staging, createMirrorStaging: vi.fn(staging.createMirrorStaging) };
 });
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -132,6 +138,43 @@ function fileIdentity(path: string) {
 }
 
 describe.skipIf(process.platform === "win32")("persistent Crabbox source capsules", () => {
+  it.each(["initial allocation", "cold rebuild"])(
+    "rejects an unrecorded mirror before freezing during %s",
+    async (allocation) => {
+      const f = fixture();
+      if (allocation === "cold rebuild") {
+        const first = f.prepare();
+        first.cleanup();
+        writeFileSync(join(first.directory, "stable.txt"), "corrupted cached bytes\n");
+      }
+      const actual = await vi.importActual<typeof import("../../scripts/crabbox-staging.mts")>(
+        "../../scripts/crabbox-staging.mts",
+      );
+      let unrecordedRoot: string | undefined;
+      const rejectRecording = (...args: Parameters<typeof createMirrorStaging>) => {
+        const mirror = actual.createMirrorStaging(...args);
+        if (!mirror) {
+          throw new Error("fixture requires a mirror allocation");
+        }
+        mirror.staging.recorded = false;
+        unrecordedRoot = mirror.staging.root;
+        return mirror;
+      };
+      const allocate = vi.mocked(createMirrorStaging);
+      if (allocation === "cold rebuild") {
+        allocate.mockImplementationOnce(actual.createMirrorStaging);
+      }
+      allocate.mockImplementationOnce(rejectRecording);
+      const selected = join(f.root, "selected");
+      expect(() =>
+        f.prepare(true, `require("node:fs").writeFileSync(${JSON.stringify(selected)}, "ran");`),
+      ).toThrow("source mirror requires recorded staging");
+      expect(unrecordedRoot).toBeDefined();
+      expect(existsSync(unrecordedRoot!)).toBe(false);
+      expect(existsSync(selected)).toBe(false);
+    },
+  );
+
   it("keeps unchanged files and a warm index while updating eligibility and raw source bytes", () => {
     const f = fixture({ "rename.txt": "renamed source\n" });
     writeFileSync(join(f.repository, "future.txt"), "initial untracked bytes\n");
