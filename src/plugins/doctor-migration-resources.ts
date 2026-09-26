@@ -3,6 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { OpenClawConfig } from "../config/types.js";
+import {
+  isUpdateRehearsalReadOnlyPath,
+  resolveUpdateRehearsalRoot,
+} from "../infra/update-rehearsal-paths.js";
 import type {
   PluginDoctorMigrationBackupResource,
   PluginDoctorMigrationBackupWarning,
@@ -17,12 +21,14 @@ export type PluginDoctorMigrationResourceCollectionParams = {
   requireLocalResources?: boolean;
 };
 
-/** Validate and combine data footprints after registry discovery selects the migrations. */
-export async function collectPluginDoctorMigrationResources(
+/** Select one whole-plugin data scope for both rehearsal inventory and execution. */
+export async function preparePluginDoctorMigrationResources(
   entries: readonly { pluginId: string; migration: PluginDoctorStateMigration }[],
   params: PluginDoctorMigrationResourceCollectionParams,
-): Promise<PluginDoctorMigrationBackupResource[]> {
+) {
+  const rehearsalRoot = resolveUpdateRehearsalRoot(params.env);
   const resources = new Map<string, PluginDoctorMigrationBackupResource>();
+  const pluginResources = new Map<string, Set<string>>();
   for (const { pluginId, migration } of entries) {
     if (migration.collectBackupResources === undefined) {
       if (!params.warnings.some((warning) => warning.pluginId === pluginId)) {
@@ -57,9 +63,51 @@ export async function collectPluginDoctorMigrationResources(
         throw new Error(`Conflicting migration backup resource kinds for ${resourcePath}`);
       }
       resources.set(resourcePath, { path: resourcePath, kind: resource.kind });
+      const paths = pluginResources.get(pluginId) ?? new Set<string>();
+      paths.add(resourcePath);
+      pluginResources.set(pluginId, paths);
     }
   }
-  return [...resources.values()].toSorted((left, right) => left.path.localeCompare(right.path));
+  const deferredPluginIds = new Set(
+    rehearsalRoot
+      ? [...pluginResources].flatMap(([pluginId, paths]) =>
+          [...paths].some((file) => isUpdateRehearsalReadOnlyPath(file, params.env))
+            ? [pluginId]
+            : [],
+        )
+      : [],
+  );
+  const selectedPaths = new Set(
+    [...pluginResources].flatMap(([pluginId, paths]) =>
+      deferredPluginIds.has(pluginId) ? [] : [...paths],
+    ),
+  );
+  const selectedResources = [...resources.values()]
+    .filter((resource) => selectedPaths.has(resource.path))
+    .toSorted((left, right) => left.path.localeCompare(right.path));
+  const assertCurrent = () => {
+    if (!rehearsalRoot) {
+      return;
+    }
+    if (resolveUpdateRehearsalRoot(params.env) !== rehearsalRoot) {
+      throw new Error("Plugin migration rehearsal scope changed during preparation");
+    }
+    for (const resource of selectedResources) {
+      if (isUpdateRehearsalReadOnlyPath(resource.path, params.env)) {
+        throw new Error(`Plugin migration data escaped the rehearsal root: ${resource.path}`);
+      }
+    }
+  };
+  assertCurrent();
+  return {
+    resources: selectedResources,
+    deferredPluginIds,
+    notices: [...deferredPluginIds].map(
+      (pluginId) =>
+        `rehearsal: ${pluginId} state migrations deferred; declared data outside the rehearsal root left untouched`,
+    ),
+    assertCurrent,
+  };
 }
 
 function isMigrationBackupResource(value: unknown): value is PluginDoctorMigrationBackupResource {

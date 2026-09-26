@@ -1,9 +1,8 @@
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
-// Workboard plugin module implements shared gateway request helpers.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "../api.js";
-import { redactClaimToken } from "./card-redaction.js";
+import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
 import {
   dispatchAndStartWorkboardCards,
   type WorkboardDispatchStartOptions,
@@ -222,13 +221,7 @@ export function createWorkboardDispatchHandler(params: {
         respond(true, { ...started, card: params.redactCard(started.card) });
         return;
       }
-      respond(true, {
-        ...result,
-        promoted: result.promoted.map(params.redactCard),
-        reclaimed: result.reclaimed.map(params.redactCard),
-        blocked: result.blocked.map(params.redactCard),
-        orchestrated: result.orchestrated.map(params.redactCard),
-      });
+      respond(true, redactDispatchResult(result, params.redactCard));
     } catch (error) {
       respondError(respond, error);
     }

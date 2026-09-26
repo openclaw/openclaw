@@ -256,9 +256,18 @@ export async function inspectPreparedDoctorRehearsal(params: {
     // remote stores are never part of a disposable filesystem rehearsal.
     refuse("LanceDB migration requires an absolute copied path");
   }
-  const configuredMigrationRoots = [canvasRoot, voiceStore, lanceDbPath, reefPath]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .map((value) => path.resolve(resolveUserPath(value, env)));
+  const configuredMigrationRoots: Array<{ pluginId: string; path: string }> = (
+    [
+      ["canvas", canvasRoot],
+      ["voice-call", voiceStore],
+      ["memory-lancedb", lanceDbPath],
+      ["reef", reefPath],
+    ] as const
+  ).flatMap(([pluginId, value]) =>
+    typeof value === "string" && value.trim()
+      ? [{ pluginId, path: path.resolve(resolveUserPath(value, env)) }]
+      : [],
+  );
   // Match Wiki's own expandHomePath exactly: no whitespace trimming or ~\
   // expansion. Even an explicit empty path is a cwd locator, not its default.
   if (typeof wikiPath === "string") {
@@ -268,10 +277,10 @@ export async function inspectPreparedDoctorRehearsal(params: {
         : wikiPath.startsWith("~/")
           ? path.join(stateDir, wikiPath.slice(2))
           : wikiPath;
-    configuredMigrationRoots.push(path.resolve(expandedWikiPath));
-  }
-  for (const root of configuredMigrationRoots) {
-    inspectPath(root);
+    configuredMigrationRoots.push({
+      pluginId: "memory-wiki",
+      path: path.resolve(expandedWikiPath),
+    });
   }
   const [
     { createConfigIO },
@@ -294,7 +303,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
     import("../infra/sqlite-files.js"),
     import("../config/paths.js"),
   ]);
-  const { collectPluginDoctorMigrationBackupResources } =
+  const { preparePluginDoctorMigrationBackupResources } =
     await import("../plugins/doctor-contract-registry.js");
   const { collectDoctorSkillWorkshopBackupResources } =
     await import("./doctor-update-rehearsal-workshop.js");
@@ -348,7 +357,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
   ];
   const resourceWarnings: PluginDoctorMigrationBackupWarning[] = [];
   const inventories = await Promise.allSettled([
-    collectPluginDoctorMigrationBackupResources({
+    preparePluginDoctorMigrationBackupResources({
       config,
       env,
       stateDir,
@@ -358,20 +367,29 @@ export async function inspectPreparedDoctorRehearsal(params: {
     collectDoctorSkillWorkshopBackupResources({ config, env }),
   ]);
   // Every native reader must settle before the caller can remove a rejected copy.
-  const failures = inventories.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length === 1) {
-    throw failures[0];
+  const [pluginInventory, workshopInventory] = inventories;
+  if (pluginInventory.status === "rejected") {
+    if (workshopInventory.status === "rejected") {
+      throw new AggregateError(
+        [pluginInventory.reason, workshopInventory.reason],
+        "Migration resource inventories failed.",
+      );
+    }
+    throw pluginInventory.reason;
   }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Migration resource inventories failed.");
+  if (workshopInventory.status === "rejected") {
+    throw workshopInventory.reason;
   }
-  const resources = inventories.flatMap((result) =>
-    result.status === "fulfilled" ? result.value : [],
-  );
+  const pluginScope = pluginInventory.value;
+  const resources = [...pluginScope.resources, ...workshopInventory.value];
+  const selectedMigrationRoots = configuredMigrationRoots
+    .filter(({ pluginId }) => !pluginScope.deferredPluginIds.has(pluginId))
+    .map(({ path }) => path);
+  for (const root of selectedMigrationRoots) {
+    inspectPath(root);
+  }
   const pendingPaths = [
-    ...configuredMigrationRoots,
+    ...selectedMigrationRoots,
     configPath,
     configPaths.resolveOAuthDir(env, stateDir),
     ...sqliteFiles.resolveSqliteDatabaseFilePaths(shared),
@@ -468,7 +486,12 @@ export async function inspectPreparedDoctorRehearsal(params: {
   };
   assertPrepared();
   return {
-    fact: { kind: "doctor-schema-rehearsal" as const, stateDir, warnings: resourceWarnings },
+    fact: {
+      kind: "doctor-schema-rehearsal" as const,
+      stateDir,
+      warnings: resourceWarnings,
+      ...(pluginScope.notices.length > 0 ? { notices: pluginScope.notices } : {}),
+    },
     assertPrepared,
     assertCurrent,
   };

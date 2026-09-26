@@ -29,6 +29,7 @@ import type {
 import {
   asBlobContent,
   blobToBase64,
+  definedFields,
   jsonValue,
   loadCardChildRows,
   numberValue,
@@ -423,23 +424,19 @@ function readBoard(row: Row): PersistedWorkboardBoard {
     | undefined;
   return {
     version: 1,
-    board: {
+    board: definedFields({
       id: requiredString(row, "id"),
-      ...(stringValue(row, "name") ? { name: stringValue(row, "name") } : {}),
-      ...(stringValue(row, "description") ? { description: stringValue(row, "description") } : {}),
-      ...(stringValue(row, "icon") ? { icon: stringValue(row, "icon") } : {}),
-      ...(stringValue(row, "color") ? { color: stringValue(row, "color") } : {}),
-      ...(stringValue(row, "automation_job_id")
-        ? { automationJobId: stringValue(row, "automation_job_id") }
-        : {}),
+      name: stringValue(row, "name"),
+      description: stringValue(row, "description"),
+      icon: stringValue(row, "icon"),
+      color: stringValue(row, "color"),
+      automationJobId: stringValue(row, "automation_job_id"),
       ...(defaultWorkspace ? { defaultWorkspace } : {}),
       ...(orchestration ? { orchestration } : {}),
       createdAt: requiredNumber(row, "created_at"),
       updatedAt: requiredNumber(row, "updated_at"),
-      ...(numberValue(row, "archived_at") !== undefined
-        ? { archivedAt: numberValue(row, "archived_at") }
-        : {}),
-    },
+      archivedAt: numberValue(row, "archived_at"),
+    }),
   };
 }
 
@@ -524,27 +521,21 @@ function readSubscription(row: Row): PersistedWorkboardNotificationSubscription 
     | undefined;
   return {
     version: 1,
-    subscription: {
+    subscription: definedFields({
       id: requiredString(row, "id"),
       boardId: requiredString(row, "board_id"),
-      ...(stringValue(row, "card_id") ? { cardId: stringValue(row, "card_id") } : {}),
-      ...(stringValue(row, "session_key") ? { sessionKey: stringValue(row, "session_key") } : {}),
-      ...(stringValue(row, "run_id") ? { runId: stringValue(row, "run_id") } : {}),
-      ...(stringValue(row, "target") ? { target: stringValue(row, "target") } : {}),
+      cardId: stringValue(row, "card_id"),
+      sessionKey: stringValue(row, "session_key"),
+      runId: stringValue(row, "run_id"),
+      target: stringValue(row, "target"),
       ...(eventKinds ? { eventKinds } : {}),
-      ...(numberValue(row, "last_event_at") !== undefined
-        ? { lastEventAt: numberValue(row, "last_event_at") }
-        : {}),
-      ...(stringValue(row, "last_event_id")
-        ? { lastEventId: stringValue(row, "last_event_id") }
-        : {}),
-      ...(numberValue(row, "last_event_sequence") !== undefined
-        ? { lastEventSequence: numberValue(row, "last_event_sequence") }
-        : {}),
+      lastEventAt: numberValue(row, "last_event_at"),
+      lastEventId: stringValue(row, "last_event_id"),
+      lastEventSequence: numberValue(row, "last_event_sequence"),
       ...(deliveredEventIds ? { deliveredEventIds } : {}),
       createdAt: requiredNumber(row, "created_at"),
       updatedAt: requiredNumber(row, "updated_at"),
-    },
+    }),
   };
 }
 

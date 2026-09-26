@@ -4,6 +4,7 @@ import { request, type IncomingMessage } from "node:http";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
+import * as webhookRequestGuards from "openclaw/plugin-sdk/webhook-request-guards";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
@@ -906,12 +907,7 @@ describe("VoiceCallWebhookServer path matching", () => {
     const { manager } = createManager([]);
     const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
     const server = new VoiceCallWebhookServer(config, manager, strictProvider);
-    const readBodySpy = vi.spyOn(
-      server as unknown as {
-        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
-      },
-      "readBody",
-    );
+    const readBodySpy = vi.spyOn(webhookRequestGuards, "readRequestBodyWithLimit");
     readBodySpy.mockResolvedValue("CallSid=CA123&SpeechResult=hello");
     const runWebhookPipeline = (
       server as unknown as {
@@ -1919,12 +1915,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     const { manager } = createManager([]);
     const config = createConfig({ provider: "twilio" });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    const readBodySpy = vi.spyOn(
-      server as unknown as {
-        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
-      },
-      "readBody",
-    );
+    const readBodySpy = vi.spyOn(webhookRequestGuards, "readRequestBodyWithLimit");
 
     try {
       const baseUrl = await server.start();
@@ -1981,12 +1972,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     let enteredReads = 0;
     const enteredEightReads = createDeferred<void>();
     const unblockReads = createDeferred<void>();
-    const readBodySpy = vi.spyOn(
-      server as unknown as {
-        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
-      },
-      "readBody",
-    );
+    const readBodySpy = vi.spyOn(webhookRequestGuards, "readRequestBodyWithLimit");
     readBodySpy.mockImplementation(async () => {
       enteredReads += 1;
       if (enteredReads === 8) {
@@ -2009,6 +1995,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       const rejected = await postWebhookFormWithHeaders(server, baseUrl, "CallSid=CA999", headers);
       expect(rejected.status).toBe(429);
       expect(await rejected.text()).toBe("Too Many Requests");
+      expect(readBodySpy).toHaveBeenCalledTimes(8);
 
       unblockReads.resolve();
 
@@ -2042,12 +2029,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     let enteredReads = 0;
     const enteredEightReads = createDeferred<void>();
     const unblockReads = createDeferred<void>();
-    const readBodySpy = vi.spyOn(
-      server as unknown as {
-        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
-      },
-      "readBody",
-    );
+    const readBodySpy = vi.spyOn(webhookRequestGuards, "readRequestBodyWithLimit");
     readBodySpy.mockImplementation(async () => {
       enteredReads += 1;
       if (enteredReads === 8) {

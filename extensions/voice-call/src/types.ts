@@ -1,24 +1,11 @@
-// Voice Call type declarations define plugin contracts.
 import { z } from "zod";
 import type { CallMode } from "./config.js";
-
-// -----------------------------------------------------------------------------
-// Provider Identifiers
-// -----------------------------------------------------------------------------
 
 const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
-// -----------------------------------------------------------------------------
-// Core Call Identifiers
-// -----------------------------------------------------------------------------
-
 /** Internal call identifier (UUID) */
 export type CallId = string;
-
-// -----------------------------------------------------------------------------
-// Call Lifecycle States
-// -----------------------------------------------------------------------------
 
 const EndReasonSchema = z.enum([
   "completed",
@@ -45,10 +32,6 @@ const CallStateSchema = z.enum([
 export type CallState = z.infer<typeof CallStateSchema>;
 
 export const TerminalStates = new Set<CallState>(EndReasonSchema.options);
-
-// -----------------------------------------------------------------------------
-// Normalized Call Events
-// -----------------------------------------------------------------------------
 
 export type NormalizedEvent = {
   id: string;
@@ -82,15 +65,7 @@ export type NormalizedEvent = {
   | { type: "call.error"; error: string; retryable?: boolean | undefined }
 );
 
-// -----------------------------------------------------------------------------
-// Call Direction
-// -----------------------------------------------------------------------------
-
 const CallDirectionSchema = z.enum(["outbound", "inbound"]);
-
-// -----------------------------------------------------------------------------
-// Call Record
-// -----------------------------------------------------------------------------
 
 const TranscriptEntrySchema = z.object({
   timestamp: z.number(),
@@ -120,10 +95,6 @@ export const CallRecordSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type CallRecord = z.infer<typeof CallRecordSchema>;
-
-// -----------------------------------------------------------------------------
-// Webhook Types
-// -----------------------------------------------------------------------------
 
 export type WebhookVerificationResult = {
   ok: boolean;
@@ -156,10 +127,6 @@ export type ProviderWebhookParseResult = {
   providerResponseHeaders?: Record<string, string>;
   statusCode?: number;
 };
-
-// -----------------------------------------------------------------------------
-// Provider Method Types
-// -----------------------------------------------------------------------------
 
 export type InitiateCallInput = {
   callId: CallId;
@@ -228,10 +195,6 @@ export type StartListeningInput = CallControlInput & {
 
 export type StopListeningInput = CallControlInput;
 
-// -----------------------------------------------------------------------------
-// Call Status Verification (used on restart to verify persisted calls)
-// -----------------------------------------------------------------------------
-
 export type GetCallStatusInput = Pick<CallControlInput, "providerCallId">;
 
 export type GetCallStatusResult = {
@@ -242,10 +205,6 @@ export type GetCallStatusResult = {
   /** True when the status could not be determined (transient error) */
   isUnknown?: boolean;
 };
-
-// -----------------------------------------------------------------------------
-// Outbound Call Options
-// -----------------------------------------------------------------------------
 
 export type OutboundCallOptions = {
   /** Message to speak when call connects */

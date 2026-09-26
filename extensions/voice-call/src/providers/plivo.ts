@@ -172,10 +172,7 @@ export class PlivoProvider implements VoiceCallProvider {
   ): ProviderWebhookParseResult {
     const flow = normalizeOptionalString(ctx.query?.flow) ?? "";
 
-    const parsed = this.parseBody(ctx.rawBody);
-    if (!parsed) {
-      return { events: [], statusCode: 400 };
-    }
+    const parsed = new URLSearchParams(ctx.rawBody);
 
     // Keep providerCallId mapping for later call control.
     const callUuid = parsed.get("CallUUID") || undefined;
@@ -322,17 +319,10 @@ export class PlivoProvider implements VoiceCallProvider {
       callStatus === "no-answer" ||
       callStatus === "failed"
     ) {
-      const event = {
+      const event: NormalizedEvent = {
         ...baseEvent,
-        type: "call.ended" as const,
-        reason:
-          callStatus === "completed"
-            ? ("completed" as const)
-            : callStatus === "busy"
-              ? ("busy" as const)
-              : callStatus === "no-answer"
-                ? ("no-answer" as const)
-                : ("failed" as const),
+        type: "call.ended",
+        reason: callStatus,
       };
       this.releaseCallState({
         callId: baseEvent.callId || undefined,
@@ -637,14 +627,6 @@ export class PlivoProvider implements VoiceCallProvider {
         }),
       );
       return `${u.origin}${u.pathname}`;
-    } catch {
-      return null;
-    }
-  }
-
-  private parseBody(rawBody: string): URLSearchParams | null {
-    try {
-      return new URLSearchParams(rawBody);
     } catch {
       return null;
     }

@@ -3,7 +3,7 @@ import Foundation
 import Swabble
 
 @MainActor
-struct TailLogCommand: ParsableCommand {
+struct TailLogCommand: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "tail-log", abstract: "Tail recent transcripts")
     }

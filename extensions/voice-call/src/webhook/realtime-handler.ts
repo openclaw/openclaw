@@ -95,10 +95,6 @@ function readConsultArgText(args: unknown, key: string): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function readConsultQuestionText(args: unknown): string | undefined {
-  return readRealtimeVoiceConsultQuestion(args);
-}
-
 function normalizeTranscriptText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
@@ -198,7 +194,7 @@ function limitPartialUserTranscript(text: string): string {
 }
 
 function withFallbackConsultQuestion(args: unknown, fallback: string | undefined): unknown {
-  const providerQuestion = readConsultQuestionText(args);
+  const providerQuestion = readRealtimeVoiceConsultQuestion(args);
   const question = fallback?.trim();
   if (providerQuestion) {
     if (
@@ -240,15 +236,6 @@ function buildForcedConsultSpeechPrompt(result: string): string {
   ].join("\n");
 }
 
-type PendingStreamToken = {
-  expiry: number;
-  from?: string;
-  to?: string;
-  direction?: "inbound" | "outbound";
-  providerName?: "twilio" | "telnyx";
-  callId?: string;
-};
-
 type StreamSessionRequest = {
   providerName?: "twilio" | "telnyx";
   callId?: string;
@@ -256,6 +243,8 @@ type StreamSessionRequest = {
   to?: string;
   direction?: "inbound" | "outbound";
 };
+
+type PendingStreamToken = StreamSessionRequest & { expiry: number };
 
 export type StreamSession = {
   token: string;
@@ -2007,38 +1996,20 @@ export class RealtimeCallHandler {
       ...(callerMeta.to ? { to: callerMeta.to } : {}),
     };
 
-    const callRecord = await this.resolveRealtimeCall(callSid, callerMeta, baseFields);
-    if (!callRecord) {
-      return null;
-    }
-
-    return { callRecord, baseFields };
-  }
-
-  private async resolveRealtimeCall(
-    callSid: string,
-    callerMeta: Omit<PendingStreamToken, "expiry">,
-    baseFields: {
-      providerCallId: string;
-      timestamp: number;
-      direction: "inbound" | "outbound";
-      from?: string;
-      to?: string;
-    },
-  ): Promise<CallRecord | null> {
+    let callRecord: CallRecord | undefined;
     if (callerMeta.callId) {
       const call = await this.manager.getCallForStream(callerMeta.callId);
-      return call?.providerCallId === callSid ? call : null;
+      callRecord = call?.providerCallId === callSid ? call : undefined;
+    } else {
+      await this.manager.processEvent({
+        id: `realtime-initiated-${callSid}`,
+        callId: callSid,
+        type: "call.initiated",
+        ...baseFields,
+      });
+      callRecord = this.manager.getCallByProviderCallId(callSid);
     }
-
-    await this.manager.processEvent({
-      id: `realtime-initiated-${callSid}`,
-      callId: callSid,
-      type: "call.initiated",
-      ...baseFields,
-    });
-
-    return this.manager.getCallByProviderCallId(callSid) ?? null;
+    return callRecord ? { callRecord, baseFields } : null;
   }
 
   private async executeEndCallTool(params: {

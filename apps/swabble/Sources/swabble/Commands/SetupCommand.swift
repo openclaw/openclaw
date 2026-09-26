@@ -3,7 +3,7 @@ import Foundation
 import Swabble
 
 @MainActor
-struct SetupCommand: ParsableCommand {
+struct SetupCommand: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "setup", abstract: "Write default config")
     }

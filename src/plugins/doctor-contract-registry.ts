@@ -24,7 +24,6 @@ import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.
 import {
   coercePluginDoctorContractModule,
   type PluginDoctorContractModule,
-  type PluginDoctorMigrationBackupResource,
   type PluginDoctorStateMigration,
   type PluginDoctorStateMigrationEntry,
 } from "./doctor-contract-module.js";
@@ -760,12 +759,12 @@ export function applyPluginDoctorCompatibilityMigrations(
 }
 
 /** Inspect plugin-owned migration paths before the updater captures its recovery set. */
-export async function collectPluginDoctorMigrationBackupResources(
+export async function preparePluginDoctorMigrationBackupResources(
   params: PluginDoctorMigrationResourceCollectionParams,
-): Promise<PluginDoctorMigrationBackupResource[]> {
+) {
   const entries = loadPluginDoctorStateMigrationEntries(
     resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
   );
-  const { collectPluginDoctorMigrationResources } = await import("./doctor-migration-resources.js");
-  return await collectPluginDoctorMigrationResources(entries, params);
+  const { preparePluginDoctorMigrationResources } = await import("./doctor-migration-resources.js");
+  return await preparePluginDoctorMigrationResources(entries, params);
 }

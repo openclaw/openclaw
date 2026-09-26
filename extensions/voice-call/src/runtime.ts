@@ -83,24 +83,6 @@ const loadRealtimeVoiceRuntime = createLazyRuntimeModule(
 
 const loadRealtimeHandler = createLazyRuntimeModule(() => import("./webhook/realtime-handler.js"));
 
-function resolveVoiceCallConsultSessionKey(call: {
-  config: VoiceCallConfig;
-  coreSession?: OpenClawConfig["session"];
-  sessionKey?: string;
-  from?: string;
-  to?: string;
-  direction?: "inbound" | "outbound";
-  callId: string;
-}): string {
-  return resolveVoiceCallSessionKey({
-    config: call.config,
-    callId: call.callId,
-    phone: call.direction === "outbound" ? call.to : call.from,
-    explicitSessionKey: call.sessionKey,
-    coreSession: call.coreSession,
-  });
-}
-
 function mapVoiceCallConsultTranscript(
   call: {
     transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
@@ -305,7 +287,7 @@ export async function createVoiceCallRuntime(params: {
     debug: console.debug,
   };
 
-  const cfg = fullConfig ?? (coreConfig as OpenClawConfig);
+  const cfg = fullConfig ?? coreConfig;
   const unresolvedConfig = resolveVoiceCallConfig(rawConfig);
   const config = { ...unresolvedConfig, agentId: resolveVoiceCallAgentId(unresolvedConfig, cfg) };
 
@@ -335,7 +317,7 @@ export async function createVoiceCallRuntime(params: {
     manager,
     provider,
     coreConfig,
-    fullConfig ?? (coreConfig as OpenClawConfig),
+    cfg,
     agentRuntime,
     log,
   );
@@ -390,9 +372,11 @@ export async function createVoiceCallRuntime(params: {
           const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
           const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
           const agentId = resolveCallAgentId(call, effectiveConfig);
-          const sessionKey = resolveVoiceCallConsultSessionKey({
-            ...call,
+          const sessionKey = resolveVoiceCallSessionKey({
             config: { ...effectiveConfig, agentId },
+            callId: call.callId,
+            phone: call.direction === "outbound" ? call.to : call.from,
+            explicitSessionKey: call.sessionKey,
             coreSession: cfg.session,
           });
           const requesterSessionKey =

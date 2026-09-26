@@ -14,8 +14,3 @@ export function resolveVoiceCallSecondsTimerDelayMs(seconds: number, minMs = 1):
     minMs,
   );
 }
-
-/** Normalize a millisecond timeout delay with fallback behavior. */
-export function resolveVoiceCallTimerDelayMs(timeoutMs: number, fallbackMs = 1): number {
-  return resolveTimerTimeoutMs(timeoutMs, fallbackMs);
-}
