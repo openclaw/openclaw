@@ -52,7 +52,7 @@ it("recovers a removed captures directory without releasing a live instance", as
   const first = instance.createDirectory();
   const captures = path.dirname(first);
   const root = path.dirname(captures);
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   fs.rmSync(captures, { recursive: true });
   let worker: ReturnType<typeof createPluginSourceCaptureRoot> | undefined;
   try {
@@ -60,7 +60,7 @@ it("recovers a removed captures directory without releasing a live instance", as
     fs.writeFileSync(path.join(worker.directory, "source.js"), "recovered capture");
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 2 * hour);
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.readFileSync(path.join(worker.directory, "source.js"), "utf8")).toBe(
       "recovered capture",
     );
