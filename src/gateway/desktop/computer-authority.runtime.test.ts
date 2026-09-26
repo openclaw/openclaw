@@ -26,6 +26,7 @@ import { createGatewayAuxHandlers } from "../server-aux-handlers.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { computerHandlers } from "../server-methods/computer.js";
 import type { RespondFn } from "../server-methods/types.js";
+import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import { createTestRuntimeSecretsActivator } from "../server-startup-config.test-support.js";
 import { createGatewayComputerService } from "./computer-service.js";
 
@@ -247,7 +248,10 @@ module.exports = {
       log: {},
       getNativeApprovalRouteCoordinator: () => undefined,
       activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
-      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: null,
+      }),
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       clients: [],
       channelManager: {

@@ -9,6 +9,7 @@ import {
   type SkillsLibraryReceipt,
   type SkillsLibraryUploadResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { callGatewayFromCliWithTransport, type GatewayRpcOpts } from "./gateway-rpc.js";
 
 export async function readLibraryInput(input: string): Promise<{
@@ -22,20 +23,15 @@ export async function readLibraryInput(input: string): Promise<{
   const files: SkillLibraryFile[] = [];
   let content: string | undefined;
   const read = async (file: string, relative: string) => {
-    const stat = await fs.lstat(file);
-    if (!stat.isFile()) {
-      throw new Error(`Only regular files are supported: ${relative}`);
-    }
-    total += stat.size;
     count += 1;
-    if (
-      stat.size > SKILL_LIBRARY_MAX_FILE_BYTES ||
-      total > SKILL_LIBRARY_MAX_BUNDLE_BYTES ||
-      count > SKILL_LIBRARY_MAX_FILES
-    ) {
+    if (count > SKILL_LIBRARY_MAX_FILES) {
       throw new Error("Skill bundle exceeds the 1 MiB/file, 8 MiB/bundle, or 256-file limit.");
     }
-    const bytes = await fs.readFile(file);
+    const { buffer: bytes, stat } = await readRegularFile({
+      filePath: file,
+      maxBytes: Math.min(SKILL_LIBRARY_MAX_FILE_BYTES, SKILL_LIBRARY_MAX_BUNDLE_BYTES - total),
+    });
+    total += bytes.length;
     if (relative === "SKILL.md") {
       content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
       return;
@@ -76,11 +72,13 @@ export async function uploadLibraryZip(
   slug: string,
   opts: GatewayRpcOpts,
 ): Promise<SkillsLibraryReceipt> {
-  const info = await fs.lstat(input);
-  if (!info.isFile() || info.size < 1 || info.size > SKILL_LIBRARY_MAX_BUNDLE_BYTES) {
+  const { buffer: bytes } = await readRegularFile({
+    filePath: input,
+    maxBytes: SKILL_LIBRARY_MAX_BUNDLE_BYTES,
+  });
+  if (bytes.length === 0) {
     throw new Error("ZIP import requires a regular file between 1 byte and 8 MiB.");
   }
-  const bytes = await fs.readFile(input);
   const call = (params: unknown) =>
     callGatewayFromCliWithTransport<SkillsLibraryUploadResult>(
       "skills.library.upload",

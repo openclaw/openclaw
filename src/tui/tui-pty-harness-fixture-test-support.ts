@@ -11,7 +11,10 @@ import {
   waitForFixtureLogEntry,
   type FixtureLogEntry,
 } from "./tui-pty-harness-assertion-test-support.js";
-import { TUI_PTY_RECONNECT_FIXTURE } from "./tui-pty-reconnect-fixture-test-support.js";
+import {
+  createTuiReconnectRelease,
+  TUI_PTY_RECONNECT_FIXTURE,
+} from "./tui-pty-reconnect-fixture-test-support.js";
 import { TUI_PTY_RENDERING_FIXTURE_SCRIPT } from "./tui-pty-rendering-test-support.js";
 import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
 import { tuiPtyRuntimeEntrypoints } from "./tui-pty-runtime-test-support.js";
@@ -41,6 +44,7 @@ export async function startTuiFixture(
     execPath?: string;
     holdStartupHistory?: boolean;
     holdSessionDescription?: boolean;
+    holdReconnect?: boolean;
   } = {},
 ) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
@@ -49,6 +53,7 @@ export async function startTuiFixture(
   const scriptPath = await writeTuiPtyFixtureScript(tempDir);
   const logPath = path.join(tempDir, "fixture-log.jsonl");
   const startupRelease = createTuiStartupRelease(tempDir, opts);
+  const reconnectRelease = createTuiReconnectRelease(tempDir, opts.holdReconnect);
   const execPath = opts.execPath ?? process.execPath;
   const run = await startRuntimePty(
     execPath,
@@ -63,6 +68,7 @@ export async function startTuiFixture(
         NO_COLOR: undefined,
         ...opts.env,
         ...startupRelease.env,
+        ...reconnectRelease.env,
       },
       exitTimeoutMs: EXIT_TIMEOUT_MS,
       outputTimeoutMs: OUTPUT_TIMEOUT_MS,
@@ -70,11 +76,13 @@ export async function startTuiFixture(
   );
 
   startupRelease.wrapDispose(run);
+  reconnectRelease.wrapDispose(run);
 
   return {
     run,
     logPath,
     releaseStartup: startupRelease.releaseStartup,
+    releaseReconnect: reconnectRelease.releaseReconnect,
     waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
       await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
     cleanup: async () => {
@@ -97,7 +105,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
   await writeFile(
     scriptPath,
     `
-      import { appendFileSync, existsSync, watchFile, unwatchFile } from "node:fs";
+      import { appendFileSync, existsSync, watch, watchFile, unwatchFile } from "node:fs";
+      import { dirname } from "node:path";
       import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
       import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
       import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};

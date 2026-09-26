@@ -153,6 +153,16 @@ history explicitly deleted by the user. Diagnostic trajectory envelopes, deleted
 artifacts, unsupported files, conflicting identities, and ambiguous ownership are
 not converted into conversations. Deferred files remain available for recovery.
 
+Repeated imports can leave multiple archived copies of one primary transcript.
+Doctor treats copies of the same original path with the same verified size and
+SHA-256 as one historical claim. It keeps one verified original and retires identical duplicates through
+the existing recovery receipts, updating every retained
+manifest. `--session-sqlite recover` also settles these archives even when the
+latest failed run moved no files. Copies with different bytes stay protected and
+are named in the warning; retained historical conflicts do not block update's
+post-session plugin repair. Preserve the originals and migration manifests while
+resolving those conflicts, then rerun `openclaw doctor --fix`.
+
 ### Changed archived registry
 
 `historical_transcript_deferred` can report that an archived session registry no
@@ -291,7 +301,12 @@ record why issue creation was skipped.
 
 Recovery selects the latest failed migration manifest, restores only the
 manifest's archived artifacts, validates the affected targets, and prepares
-sanitized `.failure.md` and `.failure.json` reports. The GitHub issue body avoids
+sanitized `.failure.md` and `.failure.json` reports. Reports separate current
+recovery findings from recorded migration and recovery evidence. A successful
+recovery can have zero current issues while preserving earlier failures for
+diagnosis; a target not inspected by this recovery is labeled accordingly.
+The JSON report keeps the combined `issues` evidence and adds `recoveryIssues`
+for inspected targets. The GitHub issue body avoids
 transcript contents, raw environment, secrets, and unbounded config. Once an
 issue or browser handoff may have published a report, doctor preserves that
 private report artifact and its marker receipt. When no failed migration

@@ -3,6 +3,9 @@ import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import * as packageRoot from "../../infra/openclaw-root.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import * as requesterAuthority from "../../infra/update-requester-authority.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -76,6 +79,7 @@ vi.mock("./update-command-runtime.js", () => ({
 }));
 
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
+import * as executorOwner from "./update-command-executor.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import * as postCore from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
@@ -153,6 +157,66 @@ function firstRefusal() {
 }
 
 describe("unproved Doctor authority callers", () => {
+  it.each([false, true])(
+    "rechecks legacy requester authority after executor settlement (revoked=%s)",
+    async (revoked) => {
+      const requester = { channel: "test", senderId: "owner" };
+      const run = createUpdateRun({
+        trigger: "cli",
+        before: { version: "2026.9.2" },
+        origin: { requester },
+      });
+      recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
+      recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+      const resultPath = state.statePath("post-core-result.json");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+      vi.spyOn(packageRoot, "resolveOpenClawPackageRootSync").mockReturnValue(state.root);
+      const scratch = state.path("executor");
+      await fs.mkdir(scratch, { mode: 0o700 });
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
+      let current = true;
+      let settled = false;
+      vi.spyOn(requesterAuthority, "createManagedUpdateRequesterAuthority").mockResolvedValue({
+        requester,
+        isCurrent: () => current,
+      });
+      const withExecutor = executorOwner.withUpdateCommandExecutor;
+      vi.spyOn(executorOwner, "withUpdateCommandExecutor").mockImplementation(
+        async (runId, operation, options) => {
+          const result = await withExecutor(runId, operation, options);
+          settled = true;
+          current = !revoked;
+          return result;
+        },
+      );
+      const publication = vi.spyOn(postCore, "writePostCorePluginUpdateResultFile");
+      const result = resumePostCoreUpdate({
+        root: state.root,
+        channel: "stable",
+        opts: { json: true, yes: true },
+        timeoutMs: 5_000,
+      });
+      if (revoked) {
+        await expect(result).rejects.toMatchObject({ code: "requester-revoked" });
+        expect(publication).not.toHaveBeenCalled();
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+          status: "failed",
+          error: "requester-revoked",
+        });
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      } else {
+        await result;
+        expect(publication).toHaveBeenCalledOnce();
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({ status: "ok" });
+        expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+      }
+      expect(settled).toBe(true);
+      expect(getUpdateRun(run.runId)?.status).toBe("running");
+    },
+  );
+
   it.each(["2026.9.3", "2026.9.4"])(
     "keeps the shipped %s child-owned completion route outside the 9.2 bridge",
     async (version) => {

@@ -15,6 +15,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -99,11 +100,22 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
   sessionFile = SESSION_KEY;
 }
 
-export async function cleanupWorkerTurnLauncherTest(): Promise<void> {
+export function cleanupWorkerTurnLauncherTest(): Promise<void>;
+export function cleanupWorkerTurnLauncherTest(options: {
+  reuseReadWorkers: boolean;
+}): Promise<void>;
+export async function cleanupWorkerTurnLauncherTest(
+  options: { reuseReadWorkers?: boolean } = {},
+): Promise<void> {
   cleanupAdmissionSink?.();
   cleanupAdmissionSink = undefined;
   clearRuntimeConfigSnapshot();
-  await closeOpenClawStateDatabaseAsync();
+  if (options.reuseReadWorkers) {
+    // Retain reader execution only; this case's native handles and admission still close.
+    await closeOpenClawStateDatabaseByPathAsync(database.path);
+  } else {
+    await closeOpenClawStateDatabaseAsync();
+  }
   closeOpenClawStateDatabaseForTest();
   resetAgentEventsForTest();
   await testState.cleanup();

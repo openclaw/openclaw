@@ -155,7 +155,11 @@ it("lists off-page controller links and deleted-collector totals while a sibling
     { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     async () => {
       clearSubagentRunsReadCacheForTest();
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
+        // Session reads need the real embedded host, but no bundled plugin runtimes.
+        plugins: { enabled: false },
+      };
       setRuntimeConfigSnapshot(cfg);
       const controller = "agent:main:controller";
       const requester = "agent:main:requester";

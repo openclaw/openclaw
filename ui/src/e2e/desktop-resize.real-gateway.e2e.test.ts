@@ -16,7 +16,7 @@ import {
   readDesktopProofNodeStreamCloses,
 } from "../../../scripts/lib/desktop-resize-proof.mts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import { startSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
+import { prepareSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
 import { SkillLibraryWireClient } from "../../../test/e2e/qa-lab/runtime/skill-library-wire-fixture.ts";
 import {
   createOpenClawTestInstance,
@@ -231,7 +231,7 @@ suite.define(() => {
       const gatewayLogFile = path.join(state.root, "desktop-gateway.log");
       state.applyEnv();
       let guest: Awaited<ReturnType<typeof createDesktopResizeGuest>> | undefined;
-      let node: Awaited<ReturnType<typeof startSkillLibraryNodeProcess>> | undefined;
+      let node: Awaited<ReturnType<typeof prepareSkillLibraryNodeProcess>> | undefined;
       let admin: SkillLibraryWireClient | undefined;
       let nodeDeviceId: string | undefined;
       let packetProbe: Awaited<ReturnType<typeof observeDesktopEndpointPackets>> | undefined;
@@ -279,6 +279,8 @@ suite.define(() => {
             },
             gateway: {
               auth: { mode: "trusted-proxy", password: gatewayToken, trustedProxy },
+              // The Gateway approves the local device; the fixture approves its command surface.
+              nodes: { pairing: { autoApproveLocal: true } },
               controlUi: {
                 enabled: true,
                 root: path.resolve(fixture.controlUiRoot ?? "dist/control-ui"),
@@ -288,6 +290,12 @@ suite.define(() => {
               trustedProxies: ["127.0.0.1", "::1"],
             },
           });
+          if (fixture.carrier === "node") {
+            node = await prepareSkillLibraryNodeProcess(gateway);
+            nodeDeviceId = node.nodeId;
+          }
+          // The child hydrates its inventory at startup; test-process writes cannot publish to it.
+          await seedDesktopResizeSources(tappedFixture, nodeDeviceId);
           // The hosted owner verified these exact build stamps before invoking the test.
           expect(await gateway.entrypoint()).toEqual(["dist/index.js"]);
           context.signal.throwIfAborted();
@@ -312,10 +320,8 @@ suite.define(() => {
             phase("admin-connect");
             ({ client: admin } = await SkillLibraryWireClient.connect(endpoint));
             phase("node-admission");
-            node = await startSkillLibraryNodeProcess(endpoint, admin);
-            nodeDeviceId = node.nodeId;
+            await node!.start(admin);
           }
-          await seedDesktopResizeSources(tappedFixture, nodeDeviceId);
           phase("guest-ssh");
           guest = await createDesktopResizeGuest(fixture);
           phase("browser-context");

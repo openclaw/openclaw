@@ -40,7 +40,7 @@ import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import * as sessionMembers from "../config/sessions/session-sharing-store.native.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -107,6 +107,7 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   createCompactedSessionFixture,
@@ -1148,7 +1149,7 @@ test("sessions.create revalidates parent participation before committing a fork 
     storePath,
     messages: [{ role: "user", content: "private parent context" }],
   });
-  addSessionMember(
+  sessionMembers.addSessionMember(
     { agentId: "main", sessionKey: parentSessionKey, storePath },
     { identityId: "member", addedBy: "owner", expectedSessionId: parentSessionId },
   );
@@ -1221,7 +1222,7 @@ test("sessions.create revalidates parent participation before committing a fork 
 
   try {
     await firstGuard.promise;
-    removeSessionMember(
+    sessionMembers.removeSessionMember(
       { agentId: "main", sessionKey: parentSessionKey, storePath },
       "member",
       undefined,
@@ -2617,12 +2618,11 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     layout: "state-only",
     prefix: "openclaw-session-worktree-",
   });
-  const root = openClawState.root;
-  const workspace = await initializeGitWorkspace(root);
+  const workspace = await initializeGitWorkspace(openClawState.root);
   await execFileAsync("git", ["-C", workspace, "branch", "selected-base"]);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
+  const { dir, storePath } = await createSessionStoreDir();
   const originalCreate = managedWorktrees.createWithOutcome.bind(managedWorktrees);
   const createSpy = vi
     .spyOn(managedWorktrees, "createWithOutcome")
@@ -2714,6 +2714,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     });
     ws.close();
   } finally {
+    await releaseGatewaySessionStoreFixture(dir);
     createSpy.mockRestore();
     if (worktreeId) {
       await managedWorktrees.remove({
@@ -2722,7 +2723,6 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }

@@ -4,6 +4,27 @@ import Testing
 
 @Suite("Managed chat image attachments")
 struct ChatMessageMediaAttachmentTests {
+    @Test func `decodes managed document envelope through history and cache`() throws {
+        let message = try JSONDecoder().decode(OpenClawChatMessage.self, from: Data("""
+        {"role":"assistant","content":[{"type":"attachment","attachment":{
+          "kind":"document","label":"report.csv","mimeType":"text/csv","sizeBytes":12,
+          "artifactId":"artifact_managed_media_11111111-1111-4111-8111-111111111111",
+          "url":"/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full"
+        }}]}
+        """.utf8))
+        let attachment = try #require(message.content.first)
+        #expect(attachment.fileName == "report.csv")
+        #expect(attachment.mimeType == "text/csv")
+        #expect(attachment.sizeBytes == 12)
+        #expect(attachment.artifactId == "artifact_managed_media_11111111-1111-4111-8111-111111111111")
+        #expect(attachment.isInlineAttachment)
+        #expect(attachment.mediaKind == .file)
+        #expect(attachment.mediaKind?.acceptsManagedArtifactID(attachment.artifactId ?? "") == true)
+        let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        let reloaded = try JSONDecoder().decode(OpenClawChatMessage.self, from: JSONEncoder().encode(cached))
+        #expect(reloaded.content.first == attachment)
+    }
+
     @Test func `decodes canonical managed image fields`() throws {
         let message = try JSONDecoder().decode(
             OpenClawChatMessage.self,
@@ -64,6 +85,8 @@ struct ChatMessageMediaAttachmentTests {
     }
 
     @Test(arguments: [
+        (OpenClawChatMediaKind.file, "artifact_managed_media_11111111-1111-4111-8111-111111111111", true),
+        (OpenClawChatMediaKind.file, "/tmp/report.csv", false),
         (OpenClawChatMediaKind.image, "artifact_managed_image_11111111-1111-4111-8111-111111111111", true),
         (OpenClawChatMediaKind.image, "artifact_managed_media_11111111-1111-4111-8111-111111111111", false),
         (OpenClawChatMediaKind.audio, "artifact_managed_media_11111111-1111-4111-8111-111111111111", true),

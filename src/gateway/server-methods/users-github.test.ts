@@ -530,7 +530,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       ["tools.github.authorize.start", "operator.admin"],
       ["tools.github.configure", "operator.admin"],
       ["secrets.store.set", "operator.admin"],
-      ["sessions.github.publish", "operator.write"],
+      ["sessions.github.publish", "operator.sessions.write"],
     ] as const) {
       const denied = await rpc(alice, method, {
         sessionKey: "agent:main:main",
@@ -847,7 +847,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     expect(readSecretStoreExecEnvironment({ includeSecretSentinels: true })).toEqual({});
     expect(listGitHubOAuthRecords()).toEqual([]);
     expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);
-    purgeExpiredSecretStoreEntries();
+    await purgeExpiredSecretStoreEntries();
     await cleanupRetiredManagedGitHubProfiles({ config });
     expect(await fs.readFile(path.join(dir, "hosts.yml"), "utf8")).toContain(tokens.accessToken);
     const database = openOpenClawStateDatabase();

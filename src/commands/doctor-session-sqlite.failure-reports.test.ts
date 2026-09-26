@@ -10,6 +10,7 @@ import {
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
 import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
+import { createDoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   importLegacyStore,
@@ -25,6 +26,66 @@ import {
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
+  it.each(["clean", "pending", "unselected"] as const)(
+    "distinguishes recorded failures from current recovery findings (%s)",
+    (outcome) => {
+      const store = createLegacyStore();
+      writeFailedManifest(store, "old-settlement.json", "2030-01-01T00:00:00.000Z", {
+        agentId: "main",
+        storePath: store.storePath,
+      });
+      const manifestPath = path.join(
+        store.stateDir,
+        "session-sqlite-migration-runs",
+        "old-settlement.json",
+      );
+      const manifest = readMigrationManifest(manifestPath);
+      const target = manifest.targets[0]!;
+      target.issues = [
+        {
+          code: "retained_plugin_source_settlement_failed",
+          message: "Previous migration reported another agent's transcript",
+        },
+      ];
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      const recovery = createDoctorSessionSqliteTargetReport({
+        ...target,
+        agentId: outcome === "unselected" ? "other" : target.agentId,
+        issues:
+          outcome === "pending"
+            ? [
+                {
+                  code: "plugin_migration_source_retained",
+                  message: "Original inputs remain pending for an unavailable plugin",
+                },
+              ]
+            : [],
+      });
+      const paths = writeSessionSqliteMigrationFailureReports(manifestPath, {
+        reason: "Recovery inspected selected targets",
+        recoveryTargets: [recovery],
+      });
+      const markdown = fs.readFileSync(paths.markdownPath, "utf8");
+      const current = markdown.split("- Recorded migration and recovery evidence:")[0]!;
+      expect(current).toContain(
+        outcome === "unselected"
+          ? "- Current recovery: not assessed"
+          : `- Current recovery issues: ${recovery.issues.length}`,
+      );
+      expect(current).not.toContain("[retained_plugin_source_settlement_failed]");
+      if (outcome === "pending") {
+        expect(current).toContain("[plugin_migration_source_retained]");
+      }
+      expect(markdown).toContain("[retained_plugin_source_settlement_failed]");
+      const payload = JSON.parse(fs.readFileSync(paths.jsonPath, "utf8"));
+      expect(payload.targets[0].issues).toContainEqual(target.issues[0]);
+      expect(payload.targets[0].recoveryIssues).toEqual(
+        outcome === "unselected" ? undefined : recovery.issues,
+      );
+      expect(createSessionSqliteMigrationFailureIssue(manifestPath)?.body).toContain(markdown);
+    },
+  );
+
   it("recovers the latest failed migration run and prepares a sanitized GitHub issue", async () => {
     const store = createLegacyStore({ agentDirName: "token=supersecret" });
     const importReport = await importLegacyStore(store);
@@ -69,6 +130,86 @@ describe("runDoctorSessionSqlite", () => {
     }
     expect(recover.supportIssue).not.toHaveProperty("url");
   });
+
+  it("keeps a support report for a restore conflict without replacing the current source", async () => {
+    const store = createLegacyStore();
+    const imported = await importLegacyStore(store);
+    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const manifest = readMigrationManifest(manifestPath);
+    manifest.failedAt = "2030-01-01T00:00:00.000Z";
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+    const replacement = '{"type":"event","id":"newer-source"}\n';
+    fs.writeFileSync(store.transcriptPath, replacement, { mode: 0o600 });
+
+    const recover = await runDoctorSessionSqlite({ cfg: {}, env: store.env, mode: "recover" });
+
+    expect(recover.targets[0]?.restore?.conflicts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sourcePath: canonicalTestPaths([store.transcriptPath])[0] }),
+      ]),
+    );
+    expect(recover.targets[0]?.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "restore_conflict" })]),
+    );
+    expect(recover.supportIssue?.body).toContain("restore_conflict");
+    expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(replacement);
+  });
+
+  it.each([false, true])(
+    "does not prepare failure reports for clean recovery (existing reports=%s)",
+    async (existingReports) => {
+      const store = createLegacyStore();
+      for (const file of [
+        store.storePath,
+        store.transcriptPath,
+        store.trajectoryPath,
+        store.unreferencedJsonlPath,
+      ]) {
+        fs.rmSync(file);
+      }
+      const runsDir = path.join(store.stateDir, "session-sqlite-migration-runs");
+      fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
+      const manifestPath = path.join(runsDir, "clean-recovery.json");
+      const manifest: SessionSqliteMigrationManifest = {
+        failedAt: "2030-01-01T00:00:00.000Z",
+        manifestVersion: 3,
+        openClawVersion: "test",
+        runId: "clean-recovery",
+        startedAt: "2030-01-01T00:00:00.000Z",
+        targets: [
+          {
+            ...trustedMigrationTarget(store),
+            completedMoves: [],
+            issues: [],
+            plannedMoves: [],
+            validationBeforeArchive: "not_run",
+          },
+        ],
+      };
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+      const previousReports = existingReports
+        ? writeSessionSqliteMigrationFailureReports(manifestPath, { reason: "Earlier recovery" })
+        : undefined;
+      const previousBytes = previousReports
+        ? [previousReports.jsonPath, previousReports.markdownPath].map((file) =>
+            fs.readFileSync(file),
+          )
+        : undefined;
+
+      const recover = await runDoctorSessionSqlite({ cfg: {}, env: store.env, mode: "recover" });
+
+      expect(recover.totals.issues).toBe(0);
+      expect(recover.migrationRun).toEqual({ manifestPath, runId: "clean-recovery" });
+      expect(recover.supportIssue).toBeUndefined();
+      if (previousReports && previousBytes) {
+        expect(fs.readFileSync(previousReports.jsonPath)).toEqual(previousBytes[0]);
+        expect(fs.readFileSync(previousReports.markdownPath)).toEqual(previousBytes[1]);
+      } else {
+        expect(fs.existsSync(manifestPath.replace(/\.json$/u, ".failure.json"))).toBe(false);
+        expect(fs.existsSync(manifestPath.replace(/\.json$/u, ".failure.md"))).toBe(false);
+      }
+    },
+  );
 
   it.each(["replaced", "missing"] as const)(
     "refuses a support claim when the saved report is %s during consent",

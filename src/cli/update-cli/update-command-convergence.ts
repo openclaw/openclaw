@@ -156,18 +156,6 @@ export async function convergeUpdatePlugins(params: {
         doctorWarnings.push(...warnings);
       };
       let targetRuntimeConverged = false;
-      const runtimeStartedAt = Date.now();
-      const runtime = await withPluginLifecycleLease({ assertCurrent }, (lease) =>
-        completeSourceUpdateRuntime({
-          root: postUpdateRoot,
-          timeoutMs: params.updateStepTimeoutMs,
-          lease,
-          beforePersistentEffect: assertCurrent,
-          beforePublication: params.beforeRuntimePublication,
-        }),
-      );
-      const runtimeDurationMs = Math.max(0, Date.now() - runtimeStartedAt);
-      assertCurrent?.();
       if (shouldResumePostCoreInFreshProcess) {
         if (retainedDifferentRuntime && params.opts.run?.completionOwner === "gateway-restart") {
           await params.beforeDoctor?.();
@@ -222,6 +210,20 @@ export async function convergeUpdatePlugins(params: {
         };
       }
 
+      const runtimeStartedAt = Date.now();
+      const runtime = targetRuntimeConverged
+        ? { changed: false }
+        : await withPluginLifecycleLease({ assertCurrent }, (lease) =>
+            completeSourceUpdateRuntime({
+              root: postUpdateRoot,
+              timeoutMs: params.updateStepTimeoutMs,
+              lease,
+              beforePersistentEffect: assertCurrent,
+              beforePublication: params.beforeRuntimePublication,
+            }),
+          );
+      const runtimeDurationMs = Math.max(0, Date.now() - runtimeStartedAt);
+      assertCurrent?.();
       if (!targetRuntimeConverged) {
         // Both current-runtime and migrated finalization use the same producer.
         // This caller owns completion; a candidate never delegates again.

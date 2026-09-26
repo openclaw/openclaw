@@ -15,6 +15,7 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
 import type { UpdateRecovery } from "./update-recovery.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
 export async function resolveNpmUpdateLifecyclePolicy(params: {
@@ -79,7 +80,7 @@ export async function runPackageUpdateLifecycle(params: {
           timeoutMs: params.timeoutMs,
         });
         params.steps.push(step);
-        if (step.exitCode !== 0) {
+        if (isFailedUpdateStep(step)) {
           failedScript = step;
           throw new Error(step.stderrTail ?? `${step.name} failed`);
         }

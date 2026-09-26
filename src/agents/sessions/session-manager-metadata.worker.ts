@@ -40,14 +40,14 @@ import {
   type OpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
 import type {
-  PreparedSessionTranscriptReload,
-  SessionManagerBoundedContextLimits,
-} from "./session-manager-core.js";
-import type {
   ModelChangeEntry,
   SessionHeader,
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
+import type {
+  PreparedSessionTranscriptReload,
+  SessionManagerBoundedContextLimits,
+} from "./session-manager-view-types.js";
 
 type MetadataTarget = Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
 

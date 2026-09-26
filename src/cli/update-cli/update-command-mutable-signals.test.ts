@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { resolveVitestNodeArgs } from "../../../scripts/lib/vitest-process-env.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -31,6 +32,7 @@ it.skipIf(process.platform === "win32").each([
   { signal: "SIGINT", mode: "handoff" },
   { signal: "SIGINT", mode: "pending" },
   { signal: "SIGINT", mode: "activating" },
+  { signal: "SIGINT", mode: "migrated" },
   { signal: "SIGINT", mode: "lost" },
   { signal: "SIGINT", mode: "missing" },
   { signal: "SIGINT", mode: "completed" },
@@ -47,7 +49,7 @@ it.skipIf(process.platform === "win32").each([
     import { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } from ${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)};
     import { createRetainedUpdateRecovery } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.retainedRecovery).href)};
     import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase).href)};
-    import { admitUpdateCommandRun, withUpdatePreviewSignals } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)};
+    import { admitUpdateCommandRun, createUpdateRunProgress, withUpdatePreviewSignals } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)};
     import { withUpdateCommandExecutor } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
     const root = ${JSON.stringify(root)};
     const mode = ${JSON.stringify(mode)};
@@ -66,6 +68,14 @@ it.skipIf(process.platform === "win32").each([
           createRetainedUpdateRecovery({runId:run.runId,from,to:{...from,version:'2.0.0'}},{env:run.env});
         }
         const expected = getUpdateRun(run.runId);
+        if (mode === 'migrated') {
+          createUpdateRunProgress(run, {}).deferLedgerWrites();
+          closeOpenClawStateDatabaseForTest();
+          const { DatabaseSync } = await import('node:sqlite');
+          const db = new DatabaseSync(root + '/state/openclaw.sqlite');
+          db.exec('PRAGMA user_version = ' + (db.prepare('PRAGMA user_version').get().user_version + 1));
+          db.close();
+        }
         if (mode === 'missing') {
           closeOpenClawStateDatabaseForTest();
           fs.mkdirSync(root + '/state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0');
@@ -126,6 +136,26 @@ it.skipIf(process.platform === "win32").each([
       expect(child.kill(signal)).toBe(true);
       const [code, exitSignal] = await closed;
       expect(code ?? (exitSignal === "SIGINT" ? 130 : 143)).toBe(signal === "SIGINT" ? 130 : 143);
+      if (mode === "migrated") {
+        expect(stderr).not.toContain("Update interruption could not be recorded");
+        const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
+          readOnly: true,
+        });
+        try {
+          expect(
+            db
+              .prepare("SELECT status, phase, updated_at_ms FROM update_runs WHERE run_id = ?")
+              .get(message.runId),
+          ).toEqual({
+            status: message.expected?.status,
+            phase: message.expected?.phase,
+            updated_at_ms: message.expected?.updatedAtMs,
+          });
+        } finally {
+          db.close();
+        }
+        return;
+      }
       const options =
         mode === "missing"
           ? {

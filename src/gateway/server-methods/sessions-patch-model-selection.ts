@@ -162,9 +162,9 @@ export function resolveSessionPatchModelSelection(params: {
   };
 }
 
-/** Model selection and send admission expose the same per-chat recovery contract. */
+/** Native selection and session operations expose the same per-chat recovery contract. */
 export function resolveSessionNativeRuntimeRestriction(params: {
-  operation: "selection" | "send";
+  operation: "fork" | "selection" | "send";
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
@@ -237,49 +237,65 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     grantingConsent
   ) {
     const model = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
-    const choice = await prepareModelSelectionRuntime({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      workspaceDir: params.entry.spawnedWorkspaceDir,
-      ...model,
-      catalog: params.catalog ?? [],
-      rawRuntime:
-        typeof params.patch.agentRuntime === "string" ? params.patch.agentRuntime : undefined,
-      sessionEntry: {
-        ...params.entry,
-        authProfileOverrideSource: resolveCollapsedSessionAuthPinSource(params.entry),
-      },
-    });
-    if (choice.status === "rejected") {
-      return invalid(choice.message);
-    }
-    applyModelRuntimeDirective(params.entry, choice.runtime);
-    validateRuntime = choice.validateRuntimeSelection;
-    const harness = choice.harness;
-    if (grantingConsent) {
-      if (
-        !harness ||
-        harness.executionEnvironment !== "host-only" ||
-        harness.id !== params.patch.nativeRuntimeConsent
-      ) {
-        return invalid("Native runtime consent does not match the selected external runtime.");
+    const previousModel = params.expectedEntry
+      ? resolveSessionModelRef(params.cfg, params.expectedEntry, params.agentId)
+      : undefined;
+    const requestedProfile =
+      typeof params.patch.model === "string"
+        ? splitTrailingAuthProfile(params.patch.model).profile
+        : undefined;
+    const preservesRuntimeSelection =
+      params.patch.agentRuntime === undefined &&
+      !grantingConsent &&
+      requestedProfile !== undefined &&
+      previousModel?.provider === model.provider &&
+      previousModel.model === model.model &&
+      params.expectedEntry?.authProfileOverride === params.entry.authProfileOverride;
+    if (!preservesRuntimeSelection) {
+      const choice = await prepareModelSelectionRuntime({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        workspaceDir: params.entry.spawnedWorkspaceDir,
+        ...model,
+        catalog: params.catalog ?? [],
+        rawRuntime:
+          typeof params.patch.agentRuntime === "string" ? params.patch.agentRuntime : undefined,
+        sessionEntry: {
+          ...params.entry,
+          authProfileOverrideSource: resolveCollapsedSessionAuthPinSource(params.entry),
+        },
+      });
+      if (choice.status === "rejected") {
+        return invalid(choice.message);
       }
-      params.entry.nativeRuntimeConsent = harness.id;
-    }
-    if (harness) {
-      validateEnvironment = () =>
-        resolveSessionNativeRuntimeRestriction({
-          operation: "selection",
-          cfg: params.cfg,
-          agentId: params.agentId,
-          sessionKey: params.placement?.sessionKey ?? params.patch.key,
-          entry: params.entry,
-          persistedEntry: params.expectedEntry,
-          harness,
-          provider: model.provider,
-          modelId: model.model,
-          callerCanConsent: params.callerCanConsent === true,
-        });
+      applyModelRuntimeDirective(params.entry, choice.runtime);
+      validateRuntime = choice.validateRuntimeSelection;
+      const harness = choice.harness;
+      if (grantingConsent) {
+        if (
+          !harness ||
+          harness.executionEnvironment !== "host-only" ||
+          harness.id !== params.patch.nativeRuntimeConsent
+        ) {
+          return invalid("Native runtime consent does not match the selected external runtime.");
+        }
+        params.entry.nativeRuntimeConsent = harness.id;
+      }
+      if (harness) {
+        validateEnvironment = () =>
+          resolveSessionNativeRuntimeRestriction({
+            operation: "selection",
+            cfg: params.cfg,
+            agentId: params.agentId,
+            sessionKey: params.placement?.sessionKey ?? params.patch.key,
+            entry: params.entry,
+            persistedEntry: params.expectedEntry,
+            harness,
+            provider: model.provider,
+            modelId: model.model,
+            callerCanConsent: params.callerCanConsent === true,
+          });
+      }
     }
   }
   const validate = () => {

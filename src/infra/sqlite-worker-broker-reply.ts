@@ -324,24 +324,26 @@ function decodeSqliteWorkerCleanupError(job: Job, payload: OpenClawStateWorkerEr
   );
 }
 
+export type SqliteWorkerReplyOwner = {
+  fail(
+    reason: unknown,
+    currentError?: Error,
+    completed?: CompletedSqliteWorkerOutcome,
+    openOutcome?: "refused-before-agent-open",
+  ): void;
+  finish(
+    job: Job,
+    error?: unknown,
+    value?: unknown,
+    settlement?: SqliteWorkerOperationSettlement,
+  ): void;
+  dispatch(): void;
+};
+
 export function receiveSqliteWorkerReply(
   slot: Pick<Slot, "current" | "failed"> & { worker: Pick<Slot["worker"], "postMessage"> },
   reply: SqliteWorkerReply,
-  owner: {
-    fail(
-      reason: unknown,
-      currentError?: Error,
-      completed?: CompletedSqliteWorkerOutcome,
-      openOutcome?: "refused-before-agent-open",
-    ): void;
-    finish(
-      job: Job,
-      error?: unknown,
-      value?: unknown,
-      settlement?: SqliteWorkerOperationSettlement,
-    ): void;
-    dispatch(): void;
-  },
+  owner: SqliteWorkerReplyOwner,
   pumping = false,
 ): void {
   const job = slot.current;
@@ -498,18 +500,20 @@ export function settleFailedSqliteWorkerJobs({
         { kind: "completed" },
       );
     } else if (current) {
+      const failure =
+        currentError ??
+        new SqliteWorkerError(
+          `SQLite worker stopped before its result was received: ${error.message}`,
+          current.request.type === "execute" && current.nativeDispatched
+            ? "outcome-unknown"
+            : "unavailable",
+        );
+      if (!currentError) {
+        failure.cause = error;
+      }
       finish(
         current,
-        withSqliteWorkerCleanupFailure(
-          currentError ??
-            new SqliteWorkerError(
-              `SQLite worker stopped before its result was received: ${error.message}`,
-              current.request.type === "execute" && current.nativeDispatched
-                ? "outcome-unknown"
-                : "unavailable",
-            ),
-          cleanupError,
-        ),
+        withSqliteWorkerCleanupFailure(failure, cleanupError),
         undefined,
         current.nativeDispatched
           ? retired && openOutcome === "refused-before-agent-open"

@@ -97,6 +97,7 @@ const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/system-agent-setup-control-ui.test.ts",
   "server-methods/transcripts.test.ts",
   "server-methods/users-preferences.test.ts",
+  "server-methods/users-role.worker.test.ts",
   "server-methods/usage.test.ts",
   "server-methods/usage.sessions-usage.test.ts",
 ];

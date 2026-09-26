@@ -526,18 +526,18 @@ describe("DraftPlaceState repository selection", () => {
       });
       state.adoptAgentDefaults();
       await vi.waitFor(() => expect(state.placementPreferenceReady).toBe(true));
-      expect(state.worktree).toBe(false);
+      expect(state.worktree).toBe(unavailable);
 
       state.adoptGroupDefaults();
 
       expect(state.placementPreferenceReady).toBe(true);
-      expect(state.worktree).toBe(false);
+      expect(state.worktree).toBe(unavailable);
       expect(state.worktreeAvailable()).toBe(false);
     },
   );
 
   it.each([false, true])(
-    "does not offer worktrees for an unverified workspace (project selected: %s)",
+    "preserves saved isolation for an unverified workspace until explicitly cleared (project selected: %s)",
     async (projectSelected) => {
       const { state, browser } = createRepositoryFixture({ workspaceGit: true, unavailable: true });
       if (projectSelected) {
@@ -556,10 +556,41 @@ describe("DraftPlaceState repository selection", () => {
       expect(state.worktreeAvailable()).toBe(false);
       await vi.waitFor(() => expect(state.repository.kind).toBe("unavailable"));
       expect(state.worktreeAvailable()).toBe(false);
-      expect(state.worktree).toBe(false);
+      expect(state.worktree).toBe(true);
       expect(state.placementPreferenceReady).toBe(true);
+      expect(state.preferenceSelection().worktree).toBe(true);
+      state.selectWorktree(false);
+      expect(state.worktree).toBe(false);
+      expect(state.preferenceSelection().worktree).toBe(false);
     },
   );
+
+  it("ignores a failed saved-worktree probe after the user chooses another folder", async () => {
+    const { state, request, requestUpdate } = createRepositoryFixture({ workspaceGit: true });
+    const previous = createDeferred<WorktreesBranchesResult>();
+    const current = Promise.resolve({ repositoryStatus: "git", branches: [] });
+    const currentPublished = createDeferred();
+    requestUpdate.mockImplementation(() => {
+      if (state.repository.kind === "git") {
+        currentPublished.resolve();
+      }
+    });
+    let probes = 0;
+    request.mockImplementation((method) =>
+      method === "worktrees.branches" && ++probes === 1 ? previous.promise : current,
+    );
+    state.adoptAgentDefaults();
+    state.applyFolder("/new-repo");
+    await currentPublished.promise;
+    state.selectWorktree(true);
+
+    previous.reject(new Error("old repository unavailable"));
+    await previous.promise.catch(() => undefined);
+
+    expect(state.repository).toMatchObject({ kind: "git", repoRoot: "/new-repo" });
+    expect(state.worktree).toBe(true);
+    expect(state.preferenceSelection()).toMatchObject({ folder: "/new-repo", worktree: true });
+  });
 
   it("selects a checkout explicitly without resetting the typed base branch", () => {
     const { state, persistPreference, requestUpdate, request } = createRepositoryFixture();

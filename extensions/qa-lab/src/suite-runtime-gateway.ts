@@ -309,7 +309,8 @@ async function runConfigMutation(params: {
             env: params.env.gateway.runtimeEnv,
             targetPid: restartTargetPid,
             reason: "config.patch",
-            intent: { force: true },
+            // QA checkpoints must be interrupted, not allowed to finish a graceful drain.
+            intent: { force: true, waitMs: 0 },
           })
         ) {
           throw new Error("qa gateway could not persist a forced restart intent");

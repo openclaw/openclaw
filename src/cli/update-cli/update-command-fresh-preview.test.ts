@@ -12,6 +12,7 @@ import { createManagedHandoffLeaseStore } from "../../infra/update-managed-servi
 import { finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -981,7 +982,7 @@ it("requires confirmation for an inspected older artifact without a TTY", async 
   expect(fs.existsSync(fixture.databasePath)).toBe(false);
 });
 
-it.each([17, 18])(
+it.each([OPENCLAW_STATE_SCHEMA_VERSION, OPENCLAW_STATE_SCHEMA_VERSION + 1])(
   "admits compatible parent history before artifact schema %s migration",
   async (schema) => {
     const candidate = dirs.make("artifact-forward-");
@@ -1020,7 +1021,9 @@ it.each([17, 18])(
         assert(run);
         const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
         try {
-          expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
+          expect(db.prepare("PRAGMA user_version").get()).toEqual({
+            user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          });
         } finally {
           db.close();
         }

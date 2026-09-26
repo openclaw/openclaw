@@ -756,6 +756,26 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
   });
 
+  it("does not replay a final source range assembled from multiple streamed chunks", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: { minChars: 1, maxChars: 4 },
+    });
+    const text = "aaaaaaaaaaaa";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: text });
+    emit({ type: "message_end", message: textAssistant(text) as AssistantMessage });
+
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["aaaa", "aaaa", "aaaa"]);
+
+    emitAssistantTextEnd({ emit, content: text });
+    await Promise.resolve();
+
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["aaaa", "aaaa", "aaaa"]);
+  });
+
   it("emits legacy structured partials on text_end without waiting for message_end", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });

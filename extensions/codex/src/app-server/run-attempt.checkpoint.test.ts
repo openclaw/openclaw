@@ -1,6 +1,8 @@
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { itemNotification, rawItemCompleted } from "./protocol.test-helpers.js";
+import * as attemptActiveTurn from "./run-attempt-active-turn.js";
 import {
   createParams,
   createStartedThreadHarness,
@@ -17,6 +19,30 @@ import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 setupRunAttemptTestHooks();
 
+async function startCheckpointAttempt(params: ReturnType<typeof createParams>) {
+  // Keep the attempt budget controlled while the real SQLite workers progress.
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const activate = attemptActiveTurn.activateCodexAttemptTurn;
+  const activated = createDeferred<ReturnType<typeof activate>>();
+  vi.spyOn(attemptActiveTurn, "activateCodexAttemptTurn").mockImplementation((...args) => {
+    const turn = activate(...args);
+    activated.resolve(turn);
+    return turn;
+  });
+  const harness = createStartedThreadHarness();
+  const run = runCodexAppServerAttempt(params);
+  const turn = await Promise.race([
+    activated.promise,
+    run.then(() => {
+      throw new Error("Codex attempt ended before projection activation");
+    }),
+  ]);
+  // A turn/start request precedes the prompt mirror and notification binding.
+  // Once ready, awaited notifications include their canonical checkpoint work.
+  await turn.ready;
+  return { harness, run };
+}
+
 describe("runCodexAppServerAttempt", () => {
   it("checkpoints the complete native response, not the earlier execution preview", async () => {
     const params = createParams(
@@ -30,9 +56,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     // Prepare the history reader before the attempt budget starts.
     await readCodexMirroredSessionHistoryMessages(params);
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    const { harness, run } = await startCheckpointAttempt(params);
     await harness.notify(
       rawItemCompleted({
         type: "function_call",
@@ -51,11 +75,9 @@ describe("runCodexAppServerAttempt", () => {
         exitCode: 0,
       }),
     );
-    await vi.waitFor(async () => {
-      expect(
-        (await readTranscriptMessagesByIdentity(params)).map((message) => message.role),
-      ).toEqual(["user", "assistant"]);
-    });
+    expect((await readTranscriptMessagesByIdentity(params)).map((message) => message.role)).toEqual(
+      ["user", "assistant"],
+    );
     const output = " \r\n" + "transcript 😀\n".repeat(12_000) + "END OF RESPONSE\r\n ";
     await harness.notify(
       rawItemCompleted({ type: "function_call_output", call_id: "long-command", output }),
@@ -129,9 +151,7 @@ describe("runCodexAppServerAttempt", () => {
         ...params.config,
         ui: { prefs: { chatPersistCommentary: persistCommentary } },
       };
-      const harness = createStartedThreadHarness();
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      const { harness, run } = await startCheckpointAttempt(params);
       const patchId = "patch-1";
       await harness.notify(
         rawItemCompleted({
@@ -149,12 +169,8 @@ describe("runCodexAppServerAttempt", () => {
           changes: [{ path: "example.txt", kind: { type: "add" } }],
         }),
       );
-      // Startup notifications can be buffered until the prompt mirror finishes.
-      const beforeRawOutput = await vi.waitFor(async () => {
-        const messages = await readTranscriptMessagesByIdentity(params);
-        expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
-        return messages;
-      });
+      const beforeRawOutput = await readTranscriptMessagesByIdentity(params);
+      expect(beforeRawOutput.map((message) => message.role)).toEqual(["user", "assistant"]);
       await harness.notify(
         itemNotification("item/completed", {
           type: "webSearch",

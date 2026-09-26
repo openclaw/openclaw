@@ -561,7 +561,7 @@ describe("agentCommand", () => {
         ];
         await replaceTranscriptEvents(priorScope, transcript);
         const priorEntry = loadSessionEntry(priorScope);
-        const { member } = addSessionMember(priorScope, {
+        const { member } = await addSessionMember(priorScope, {
           identityId: "boot-history-reader",
           addedBy: "operator",
         });

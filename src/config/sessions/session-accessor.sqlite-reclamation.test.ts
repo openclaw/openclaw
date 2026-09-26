@@ -635,7 +635,7 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
   expect(Number(reopened.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(0);
 });
 
-test("queued and different-store reclamations retain only their own worker identity", async () => {
+test("queued reclamations reuse their database Worker without borrowing another store's identity", async () => {
   const first = createFixture();
   const other = createFixture();
   const diagnostics: SqliteSessionReclamationDiagnostics[] = [{}, {}, {}];
@@ -658,7 +658,8 @@ test("queued and different-store reclamations retain only their own worker ident
     ]);
     const ids = diagnostics.map((record) => record.workerThreadId);
     expect(ids.every((id) => typeof id === "number" && id > 0)).toBe(true);
-    expect(new Set(ids).size).toBe(3);
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).not.toBe(ids[0]);
   } finally {
     await Promise.allSettled(operations);
   }

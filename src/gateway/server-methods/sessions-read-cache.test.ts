@@ -14,6 +14,7 @@ import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
@@ -22,6 +23,7 @@ import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
 } from "../../config/sessions/session-transcript-reconcile.js";
+import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -739,9 +741,9 @@ describe("resident sessions.list", () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const parentSessionKey = "agent:main:active";
       const childSessionKey = "agent:main:child";
-      await upsertSessionEntryCore(
+      replaceSessionEntrySync(
         { agentId: "main", sessionKey: childSessionKey },
-        {
+        mergeSessionEntry(undefined, {
           sessionId: "completed-child",
           endedAt: 400,
           parentSessionKey,
@@ -749,7 +751,7 @@ describe("resident sessions.list", () => {
           status: "done",
           updatedAt: 400,
           visibility: "shared",
-        },
+        }),
       );
       const context = requestContext(config);
       const client = identifiedClient("owner@example.com");

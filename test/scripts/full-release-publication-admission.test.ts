@@ -14,7 +14,7 @@ import {
 import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -34,7 +34,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
-let toolingTemplate: string | undefined;
+let toolingTemplate: { loose: string; packed: string } | undefined;
 const repo = resolve(".");
 const nodeExecutable = realpathSync(requireNodeTool("node"));
 const workflowPath = ".github/workflows/full-release-validation.yml";
@@ -538,10 +538,18 @@ function fixture(
       cpSync(join(repo, directory), join(prepared, directory), { recursive: true });
     }
     commit(prepared);
-    toolingTemplate = prepared;
+    const packed = templateDirs.make("frv-publication-packed-tooling-template-");
+    cpSync(prepared, packed, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+    git(packed, "repack", "-ad");
+    toolingTemplate = { loose: prepared, packed };
   }
-  // Corruption cases remove loose objects, so each copy owns its Git object store.
-  cpSync(toolingTemplate, tooling, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+  // These faults delete individual loose blobs; other cases copy compact packed history.
+  const template = ["tooling-object", "platform-helper-object", "worker-object"].includes(
+    options.fault ?? "",
+  )
+    ? toolingTemplate.loose
+    : toolingTemplate.packed;
+  cpSync(template, tooling, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   const registryCalls = join(root, "registry-calls.jsonl");
   {
     // This is committed trusted fixture code, not a candidate preload or a

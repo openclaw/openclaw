@@ -237,18 +237,28 @@ reads to finish. OpenClaw coordinates its own lifecycle operations for each
 native thread and preserves that thread's identity across ordinary resumes.
 A closed, replaced, or retired client still cannot complete a stale handoff.
 
-Managed local connections share a bounded inference relay. It admits 16 active
-requests and queues one additional batch of up to 16 requests in arrival order.
-Idle WebSockets do not consume request capacity. A new WebSocket waits before
-opening its upstream connection; queueing and its handshake share a 10-second
-deadline. HTTP admission and queued WebSocket requests wait at most 30 seconds.
-Cancelled or superseded work leaves the queue without reaching the provider.
+Managed local connections share a bounded inference relay. Up to 16 request
+preparations and uploads run at once, with another 16 waiting in arrival order.
+Responses keep streaming after their upload capacity is released, so a long
+response does not block a seventeenth chat or native child from starting.
 
-These limits apply to requests across chats and native child agents, not to the
-number of saved conversations. Queue capacity or deadline exhaustion returns a
-retryable busy response. Sustained overload can still fail a turn after Codex
-exhausts its retries; this queue absorbs short bursts rather than increasing
-the relay's active request limit.
+The relay allows up to 80 combined HTTP operations and WebSocket connections,
+with room for 16 pending or closing admissions. It retains up to 64 usable
+WebSockets and reclaims the oldest completed idle connection when either
+transport needs room. Active responses and newly opened connections awaiting
+their first request are not evicted. HTTP connections close after each response;
+native WebSocket reuse remains intact. The separate limit of 64 admitted root
+contexts is unchanged; transport capacity is not a count of saved conversations.
+
+A new WebSocket waits before opening its upstream connection; admission and its
+handshake share a 10-second deadline. HTTP admission and queued WebSocket
+uploads wait at most 30 seconds. Cancelled or superseded queued work does not
+reach the provider. Already-started preparation and transport cleanup keep their
+capacity until their owning operation settles.
+
+These limits apply across chats and native child agents sharing the relay.
+Queue capacity or deadline exhaustion returns a retryable busy response.
+Sustained overload can still fail a turn after Codex exhausts its retries.
 
 After a completed provider failure, you can continue in the same chat with its
 existing configuration. OpenClaw retains the configured native thread, including

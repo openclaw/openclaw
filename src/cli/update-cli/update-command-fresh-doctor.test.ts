@@ -28,10 +28,12 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { createConfigValidationFailure } from "./update-cli-config.test-support.js";
+import {
+  createChangedPostCoreUpdateOptions,
+  createConfigValidationFailure,
+} from "./update-cli-config.test-support.js";
 import { registerFreshDoctorDiagnosticTests } from "./update-command-fresh-doctor-diagnostics.test-support.js";
 import { registerFreshDoctorOutcomeTests } from "./update-command-fresh-doctor-outcomes.test-support.js";
-import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
@@ -79,29 +81,12 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
 
-const pluginUpdate: PostCorePluginUpdateResult = {
-  status: "ok",
-  changed: true,
-  sync: {
-    changed: false,
-    switchedToBundled: [],
-    switchedToNpm: [],
-    warnings: [],
-    errors: [],
-  },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
-  warnings: [],
-};
-
-const updateOptions = {
+const updateOptions = createChangedPostCoreUpdateOptions({
   root: "/opt/openclaw",
-  pluginUpdate,
-  freshDoctorRequired: true,
-  yes: true,
-  json: true,
   timeoutMs: 5_000,
-};
+});
+const pluginUpdate = updateOptions.pluginUpdate;
+pluginUpdate.npm = { changed: false, outcomes: [] };
 
 const validConfigSnapshot = {
   exists: true,
@@ -772,9 +757,7 @@ describe("post-plugin update readiness", () => {
       })}\n`,
     });
 
-    const result = await completePostCorePluginUpdate({
-      ...updateOptions,
-    });
+    const result = await completePostCorePluginUpdate(updateOptions);
 
     expect(result.pluginUpdate).toMatchObject({
       status: "error",
@@ -849,9 +832,7 @@ describe("post-plugin update readiness", () => {
   ])("fails closed on $label from the updated readiness child", async ({ stdout }) => {
     mocks.runUtf8.mockResolvedValue({ ...readinessExit, stdout });
 
-    const result = await completePostCorePluginUpdate({
-      ...updateOptions,
-    });
+    const result = await completePostCorePluginUpdate(updateOptions);
 
     expect(result.pluginUpdate).toMatchObject({
       status: "error",
@@ -934,6 +915,37 @@ describe("post-plugin update readiness", () => {
       warnings: [expect.objectContaining({ reason: "Error: Readiness executable unavailable" })],
     });
   });
+
+  it.each(["", "{unfinished"])(
+    "preserves a failed readiness child's diagnostic when stdout is %j",
+    async (stdout) => {
+      mocks.runUtf8.mockResolvedValue({
+        ...readinessExit,
+        code: 2,
+        stdout,
+        stderr:
+          "Earlier diagnostic line\n".repeat(100) +
+          "Could not load readiness plugin https://example.test/diagnostic?token=fixture-secret",
+      });
+
+      const result = await completePostCorePluginUpdate(updateOptions);
+
+      expect(result.pluginUpdate).toMatchObject({
+        status: "error",
+        reason: "post-plugin-update-readiness-execution-failed",
+      });
+      const reason = result.pluginUpdate.warnings?.[0]?.reason;
+      expect(reason).toContain("code=2");
+      expect(reason).toContain("stderr:");
+      expect(reason).toContain("Could not load readiness plugin");
+      expect(reason).toContain("token=<redacted>");
+      expect(reason).not.toContain("fixture-secret");
+      expect(reason).not.toContain("/opt/openclaw/dist/index.js");
+      expect(reason?.length).toBeLessThan(600);
+      expect(result.pluginUpdate.doctorLint?.stderrTail).toContain("token=<redacted>");
+      expect(result.pluginUpdate.doctorLint?.stderrTail).not.toContain("fixture-secret");
+    },
+  );
 
   it("returns readiness facts without publishing update history, output, or reports", async () => {
     await withTempHome(async (home) => {

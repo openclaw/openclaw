@@ -249,7 +249,7 @@ struct AgentWorkspaceFilePreview: View {
             }
         }
         .sheet(item: self.$shareItem) { item in
-            ChatTranscriptShareSheet(fileURL: item.fileURL)
+            OpenClawChatFileShareSheet(fileURL: item.fileURL)
         }
         .alert("Could not share this file.", isPresented: self.$showsShareError) {
             Button {

@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
+import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
@@ -12,23 +13,17 @@ import {
 } from "../../../sessions/input-provenance.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import { isIncognitoSessionKey } from "../../../shared/incognito-session-key.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { sessionDeliveryChannel } from "../../../utils/delivery-context.read.js";
 import {
-  INTERNAL_MESSAGE_CHANNEL,
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
-import { normalizeAgentRunTerminalDeliverySnapshot } from "../../agent-run-terminal-delivery.js";
 import {
-  getAgentCommandDeliveryFailure,
-  getGatewayAgentResult,
-  hasCommittedOutboundDeliveryEvidence,
-  getAutomaticDeliveryEvidence,
-} from "../../embedded-agent-runner/delivery-evidence.js";
-import {
-  hasIntentionalSilentAgentPayload,
-  hasVisibleAgentPayload,
-} from "../../embedded-agent-runner/message-visibility.js";
+  buildAgentRunTerminalOutcomeFromWaitResult,
+  classifyAgentRunTerminalOutcome,
+} from "../../agent-run-terminal-outcome.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
@@ -43,12 +38,8 @@ import {
   resolveRequesterSessionActivity,
 } from "./subagent-announce-active-wake.js";
 import {
-  buildRequesterCompletionDeliveryResult,
   deliverCompletionDirect,
-  hasMessagingToolDeliveryToSource,
   isDirectMessageDeliveryTarget,
-  isGatewayAgentRunPending,
-  resolvePrivateCompletionDeliveryResult,
   resolveRequesterRecoveryDelivery,
   runAnnounceAgentCall,
 } from "./subagent-announce-completion-delivery.js";
@@ -69,6 +60,7 @@ import {
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
 } from "./subagent-announce-delivery.runtime.js";
+import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
   resolveCompletionDeliveryOrigins,
@@ -123,10 +115,16 @@ export async function sendSubagentAnnounceDirectly(params: {
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
-    const requesterEntry = loadRequesterSessionEntry(
+    const requester = loadRequesterSessionEntry(
       params.targetRequesterSessionKey,
       params.requesterAgentId,
-    ).entry;
+    );
+    const requesterEntry = requester.entry;
+    const requesterCanonicalKey = requester.canonicalKey;
+    const requesterAgentId = requester.agentId;
+    const requesterStorePath = requester.storePath;
+    const requesterSessionId = requesterEntry?.sessionId;
+    const requesterLifecycleRevision = requesterEntry?.lifecycleRevision;
     const deliveryTarget =
       !parentOnly && !params.requesterIsSubagent
         ? resolveExternalBestEffortDeliveryTarget({
@@ -390,7 +388,23 @@ export async function sendSubagentAnnounceDirectly(params: {
         : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
+    const classifyResponse = createDirectAnnounceResponseClassifier({
+      params,
+      parentOnly,
+      deliveryTarget,
+      shouldDeliverAgentFinal,
+      requiresMessageToolDelivery,
+      isSubagentCompletion,
+      hasSuccessfulTrustedSubagentNoOutputCompletion,
+      hasRequiredSubagentNoOutputCompletion,
+      subagentDirectMessageCompletionRequiresMessageTool,
+      effectiveDirectOrigin,
+      requesterSessionOrigin,
+      textCompletionDirectDeliveryKind,
+      tryTextCompletionDirectDelivery,
+    });
     let directAnnounceResponse: unknown;
+    let directFailure: SubagentAnnounceDeliveryResult | undefined;
     try {
       directAnnounceResponse = recoveredResult
         ? { status: "ok", result: recoveredResult }
@@ -465,247 +479,96 @@ export async function sendSubagentAnnounceDirectly(params: {
           return textDelivery;
         }
       }
-      // The requester-agent handoff is the delivery contract for background
-      // completions. A failed handoff should retry/fail visibly instead
-      // of sending the child result directly to the external channel.
-      throw err;
+      directFailure = {
+        delivered: false,
+        path: "direct",
+        error: summarizeDeliveryError(err),
+        disposition: isPermanentAnnounceDeliveryError(err) ? "permanent_failure" : "retryable",
+      };
     }
 
-    if (isGatewayAgentRunPending(directAnnounceResponse)) {
-      return parentOnly || params.sourceTool === "subagent_settle"
-        ? {
-            delivered: false,
-            path: "direct",
-            reason: "requester_turn_pending",
-            disposition: "retryable",
-          }
-        : { delivered: true, path: "direct" };
+    const classified = directFailure ?? classifyResponse(directAnnounceResponse);
+    const delivery = classified instanceof Promise ? await classified : classified;
+    const originalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(
+      asOptionalRecord(directAnnounceResponse),
+    );
+    if (
+      parentOnly ||
+      sourceToolId !== "subagent_settle" ||
+      recoveredResult !== undefined ||
+      requesterCanonicalKey !== canonicalRequesterSessionKey ||
+      !requesterAgentId ||
+      !requesterStorePath ||
+      !requesterSessionId ||
+      !params.isSourceSessionEffectsAllowed ||
+      isIncognitoSessionKey(canonicalRequesterSessionKey) ||
+      isIncognitoOpenClawAgentSqlitePath(requesterStorePath, { agentId: requesterAgentId }) ||
+      (originalOutcome &&
+        classifyAgentRunTerminalOutcome(originalOutcome) === "cancellation" &&
+        originalOutcome.stopReason !== "restart") ||
+      delivery.delivered ||
+      delivery.terminal ||
+      (delivery.disposition !== undefined && delivery.disposition !== "retryable")
+    ) {
+      return delivery;
     }
-
-    const directAnnounceResult = getGatewayAgentResult(directAnnounceResponse);
-    const directAnnounceRecord = asOptionalRecord(directAnnounceResponse);
-    if (parentOnly) {
-      return resolvePrivateCompletionDeliveryResult(
-        directAnnounceRecord,
-        params.requesterIsSubagent ? undefined : effectiveDirectOrigin,
+    if (params.signal?.aborted) {
+      return { delivered: false, path: "none" };
+    }
+    if (!isCompletionDeliveryAllowed()) {
+      return sourceOwnerChangedResult();
+    }
+    // Recovery may settle this exact input while its original dispatch awaits.
+    // Borrow the existing worker reader only now; the wake caller retains the
+    // live requester/store/batch authority and owns any later retry decision.
+    let current: Awaited<ReturnType<typeof readSessionEntriesFromStoreInWorker>>;
+    try {
+      current = await readSessionEntriesFromStoreInWorker({
+        agentId: requesterAgentId,
+        storePath: requesterStorePath,
+        sessionKeys: [canonicalRequesterSessionKey],
+      });
+    } catch (error) {
+      if (params.signal?.aborted) {
+        return { delivered: false, path: "none" };
+      }
+      if (!isCompletionDeliveryAllowed()) {
+        return sourceOwnerChangedResult();
+      }
+      // A failed observation cannot turn an existing pending or uncertain
+      // outcome into permission to start a fresh requester turn.
+      defaultRuntime.log(
+        `[warn] Requester recovery receipt could not be read: ${summarizeDeliveryError(error)}`,
       );
+      return delivery;
     }
-    const hasFinalMessagingToolDelivery = Boolean(
-      directAnnounceResult &&
-      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
-        requireFinalReply: true,
-      }),
-    );
-    const hasMessagingToolDelivery = Boolean(
-      directAnnounceResult &&
-      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
-    );
-    const requiresAutomaticFinalReceipt =
-      shouldDeliverAgentFinal && (params.expectsCompletionMessage || params.requireVisibleReply);
-    const automaticEvidence = getAutomaticDeliveryEvidence(directAnnounceResult ?? {});
-    const directDeliveryFailure =
-      (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
-        ? getAgentCommandDeliveryFailure(directAnnounceResult)
-        : undefined;
-    // Automatic-delivery diagnostics and a committed source message are independent facts.
-    // Once the message tool delivered the owed final, the task must settle as delivered.
+    if (params.signal?.aborted) {
+      return { delivered: false, path: "none" };
+    }
+    if (!isCompletionDeliveryAllowed()) {
+      return sourceOwnerChangedResult();
+    }
+    const currentEntry = current.entries.find(
+      ({ sessionKey }) => sessionKey === canonicalRequesterSessionKey,
+    )?.entry;
     if (
-      directDeliveryFailure &&
-      !(requiresAutomaticFinalReceipt ? hasFinalMessagingToolDelivery : hasMessagingToolDelivery)
+      currentEntry?.sessionId !== requesterSessionId ||
+      currentEntry?.lifecycleRevision !== requesterLifecycleRevision
     ) {
-      return {
-        delivered: false,
-        path: "direct",
-        error: directDeliveryFailure,
-        ...(automaticEvidence.mayHaveSent ? { disposition: "ambiguous" as const } : {}),
-      };
+      return delivery;
     }
-    const hasVisibleNonSilentGatewayPayload = Boolean(
-      directAnnounceResult &&
-      hasVisibleAgentPayload(directAnnounceResult, {
-        includeErrorPayloads: false,
-        includeReasoningPayloads: false,
-        requireTerminalContent: true,
-        includeSilentReplyPayloads: false,
-      }),
+    const settledRecovery = resolveRequesterRecoveryDelivery(
+      currentEntry,
+      params.directIdempotencyKey,
     );
-    const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
-      directAnnounceResult?.deliveryStatus,
-    );
-    const automaticFinalDelivered =
-      terminalDelivery?.status === "sent" && terminalDelivery.resultCount > 0;
-    if (
-      requiresAutomaticFinalReceipt &&
-      !hasFinalMessagingToolDelivery &&
-      terminalDelivery?.status === "suppressed" &&
-      // Only genuinely empty output can fall back; another payload may have
-      // been sent or intentionally cancelled by policy.
-      (automaticEvidence.mayHaveSent ||
-        automaticEvidence.suppressionReason !== "no_visible_payload")
-    ) {
-      return {
-        delivered: false,
-        path: "direct",
-        reason: automaticEvidence.mayHaveSent ? undefined : "delivery_suppressed",
-        error: automaticEvidence.mayHaveSent
-          ? "automatic completion delivery could not be confirmed"
-          : (automaticEvidence.suppressionReason ?? "automatic completion delivery suppressed"),
-        disposition: automaticEvidence.mayHaveSent ? "ambiguous" : "intentional_non_delivery",
-        terminal: automaticEvidence.mayHaveSent ? undefined : true,
-      };
+    if (!settledRecovery) {
+      return delivery;
     }
-    if (
-      directAnnounceRecord?.status === "ok" &&
-      directAnnounceResult?.meta?.yielded === true &&
-      !directAnnounceResult.meta.error &&
-      !directAnnounceResult.meta.aborted &&
-      !automaticFinalDelivered
-    ) {
-      if (
-        directAnnounceResult.requesterContinuationSettled === true &&
-        !hasFinalMessagingToolDelivery &&
-        !hasVisibleNonSilentGatewayPayload
-      ) {
-        // Core owns the next wave or observed it complete. Real final evidence
-        // still follows its normal path below.
-        return { delivered: true, path: "direct" };
-      }
-      if (
-        isSubagentCompletion &&
-        params.expectsCompletionMessage &&
-        requiresMessageToolDelivery &&
-        !hasMessagingToolDelivery
-      ) {
-        // A yielded requester still owns pending work, not a tool-running fallback.
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "completion_handoff_pending",
-          disposition: "session_queued",
-        };
-      }
-    }
-    const hasIntentionalSilentCompletionReply = Boolean(
-      directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
-    );
-    const hasCompletionSideEffect = Boolean(
-      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
-    );
-    const hasVisibleRequiredCompletionReply =
-      hasMessagingToolDelivery ||
-      (!requiresMessageToolDelivery && hasVisibleNonSilentGatewayPayload);
-    if (
-      params.expectsCompletionMessage &&
-      shouldDeliverAgentFinal &&
-      isSubagentCompletion &&
-      !hasVisibleNonSilentGatewayPayload &&
-      !hasMessagingToolDelivery
-    ) {
-      const textDelivery = await tryTextCompletionDirectDelivery(textCompletionDirectDeliveryKind);
-      if (textDelivery) {
-        return textDelivery;
-      }
-      if (hasSuccessfulTrustedSubagentNoOutputCompletion && !hasCompletionSideEffect) {
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "visible_reply_missing",
-          error: "completion agent did not produce a visible reply",
-        };
-      }
-    }
-    if (
-      hasSuccessfulTrustedSubagentNoOutputCompletion &&
-      !hasVisibleRequiredCompletionReply &&
-      hasCompletionSideEffect
-    ) {
-      return {
-        delivered: false,
-        path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
-        disposition: "permanent_failure",
-      };
-    }
-    if (
-      params.expectsCompletionMessage &&
-      requiresMessageToolDelivery &&
-      !hasMessagingToolDelivery &&
-      (!hasIntentionalSilentCompletionReply ||
-        subagentDirectMessageCompletionRequiresMessageTool ||
-        hasRequiredSubagentNoOutputCompletion)
-    ) {
-      if (hasSuccessfulTrustedSubagentNoOutputCompletion) {
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "visible_reply_missing",
-          error: "completion agent did not produce a visible reply",
-        };
-      }
-      if (subagentDirectMessageCompletionRequiresMessageTool) {
-        const textDelivery = await tryTextCompletionDirectDelivery(
-          textCompletionDirectDeliveryKind,
-        );
-        if (textDelivery) {
-          return textDelivery;
-        }
-      }
-      return {
-        delivered: false,
-        path: "direct",
-        reason: "message_tool_delivery_missing",
-        error: "completion agent did not use the message tool for message-tool-only delivery",
-        // The requester execution finished; another agent turn can repeat its
-        // effects. Retain the completion for explicit recovery instead.
-        disposition: "permanent_failure",
-      };
-    }
-    const hasRequesterVisibleFinalDelivery =
-      hasFinalMessagingToolDelivery || (shouldDeliverAgentFinal && automaticFinalDelivered);
-    const hasVisibleCompletionReply =
-      hasRequesterVisibleFinalDelivery ||
-      (!shouldDeliverAgentFinal && !params.requireVisibleReply && hasMessagingToolDelivery) ||
-      // Nested requesters and internal sessions observe the final in their transcript.
-      // Unresolved external origins still require delivery evidence.
-      (!requiresMessageToolDelivery &&
-        hasVisibleNonSilentGatewayPayload &&
-        directAnnounceResult?.deliveryStatus?.status !== "suppressed" &&
-        (params.requesterIsSubagent ||
-          [effectiveDirectOrigin, requesterSessionOrigin].every((origin) =>
-            origin?.channel
-              ? normalizeMessageChannel(origin.channel) === INTERNAL_MESSAGE_CHANNEL
-              : !origin?.to,
-          )));
-    const acceptsIntentionalSilentCompletion =
-      hasIntentionalSilentCompletionReply && !isSubagentCompletion;
-    if (
-      !hasVisibleCompletionReply &&
-      (params.requireVisibleReply ||
-        (params.expectsCompletionMessage &&
-          (shouldDeliverAgentFinal ||
-            (!requiresMessageToolDelivery &&
-              !hasCompletionSideEffect &&
-              !acceptsIntentionalSilentCompletion))))
-    ) {
-      return {
-        delivered: false,
-        path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
-      };
-    }
-    const requesterVisibleFinalCommitted =
-      !params.requesterIsSubagent &&
-      (hasRequesterVisibleFinalDelivery ||
-        (!params.expectsCompletionMessage &&
-          directAnnounceRecord?.status === "ok" &&
-          hasVisibleNonSilentGatewayPayload &&
-          hasVisibleCompletionReply));
-    return buildRequesterCompletionDeliveryResult(
-      requesterVisibleFinalCommitted,
-      directAnnounceResult?.meta?.finalAssistantVisibleText,
-    );
+    // Settle responses cannot take the subagent text-send fallback. Reusing
+    // their normal receipt classifier never dispatches or sends the input again.
+    return settledRecovery.kind === "delivery"
+      ? settledRecovery.delivery
+      : classifyResponse({ status: "ok", result: settledRecovery.result });
   } catch (err) {
     const disposition = hasAnnounceSendEvidence(err)
       ? "ambiguous"

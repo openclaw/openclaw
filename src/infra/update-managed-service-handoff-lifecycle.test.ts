@@ -16,13 +16,16 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
-import { pathExists } from "./update-managed-service-handoff-boundary.test-support.js";
 import { registerManagedCampaignFailureTests } from "./update-managed-service-handoff-campaign.test-support.js";
 import {
   cleanupStaleManagedServiceUpdateHandoffs,
   MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX,
 } from "./update-managed-service-handoff-cleanup.js";
-import { registerManagedHandoffOwnerTests } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import {
+  isManagedServiceInspectionCommand,
+  registerManagedHandoffOwnerTests,
+} from "./update-managed-service-handoff-lifecycle.test-support.js";
+import { pathExists } from "./update-managed-service-native.test-support.js";
 import { recordUpdateRunStep } from "./update-run-ledger.js";
 
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-lifecycle-${process.pid}`);
@@ -143,20 +146,54 @@ describe("managed service update handoff", () => {
   itUnix.each(["acknowledged", "stalled", "rejected"] as const)(
     "parks after the transferred pre-park notice is %s, within its bounded attempt",
     async (beforeParkNotice) => {
-      const { commands, log, state } = await runManagedServiceManagerBoundary("systemd", {
-        controlDisconnect: "transferred",
-        beforeParkNotice,
-        updaterExitCode: 0,
-        updaterResult: { status: "ok", mode: "npm" },
-      });
+      const { commands, log, state, parkAdmitted } = await runManagedServiceManagerBoundary(
+        "systemd",
+        {
+          controlDisconnect: "transferred",
+          beforeParkNotice,
+          updaterExitCode: 0,
+          updaterResult: { status: "ok", mode: "npm" },
+        },
+      );
       expect(commands.some((command) => command.includes("stop openclaw-gateway.service"))).toBe(
         true,
       );
       expect(state).toMatchObject({ parked: true, stopCompleted: true });
+      expect(parkAdmitted).toBe(false);
       expect(log.includes("pre-park notice timed out after 10 seconds")).toBe(
         beforeParkNotice === "stalled",
       );
       expect(log.includes("pre-park notice failed")).toBe(beforeParkNotice === "rejected");
+    },
+  );
+
+  itUnix.each([
+    { kind: "systemd", reply: "acknowledged" },
+    { kind: "systemd", reply: "rejected" },
+    { kind: "systemd", reply: "stalled" },
+    { kind: "systemd", reply: "disconnected" },
+    { kind: "launchd", reply: "acknowledged" },
+    { kind: "launchd", reply: "rejected" },
+  ] as const)(
+    "requires the original profile park acknowledgement: $kind/$reply",
+    async ({ kind, reply }) => {
+      const accepted = reply === "acknowledged";
+      const result = await runManagedServiceManagerBoundary(kind, {
+        ledger: true,
+        profileRequester: true,
+        controlDisconnect: "transferred",
+        beforeParkNotice: reply,
+        updaterExitCode: 0,
+        helperExitCode: accepted ? 0 : 1,
+        updaterResult: { status: "ok", mode: "npm" },
+      });
+      expect(result.parkAdmitted, result.log).toBe(accepted);
+      expect(result.state.parked === true, result.log).toBe(accepted);
+      if (!accepted) {
+        expect(result.commands.every(isManagedServiceInspectionCommand), result.log).toBe(true);
+        expect(result.parentSignal, result.log).toBeNull();
+        expect(result.log).toContain("owner_required");
+      }
     },
   );
 
@@ -344,7 +381,7 @@ describe("managed service update handoff", () => {
           helperExitCode: 1,
         },
       );
-      expect(commands).toEqual([]);
+      expect(commands.filter((command) => !isManagedServiceInspectionCommand(command))).toEqual([]);
       expect(parentSignal).toBeNull();
       expect(sentinel).toMatchObject({
         payload: { status: "error", stats: { reason: "owner_required" } },

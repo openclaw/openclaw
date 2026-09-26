@@ -99,8 +99,11 @@ with `Goal error: goal already exists` until the current one is cleared.
 ## Statuses
 
 - `active`: the session is pursuing the goal.
-- `paused`: the operator paused the goal. `/goal resume` makes it active
-  again.
+- `paused`: the operator paused the goal, or its run ended with an error or
+  timeout. `/goal resume` makes it active again. A failed run preserves the
+  objective and records the error as a status note; sending an ordinary message
+  does not automatically resume the goal. Errors that recover through a retry
+  do not pause it.
 - `blocked`: the agent or operator reported a real blocker. `/goal resume`
   makes it active again when new information or state is available.
 - `budget_limited`: the configured token budget was reached. `/goal resume`
@@ -200,6 +203,13 @@ an inactive Goal.
 The web Control UI shows the goal as a compact pill above the chat composer:
 a status icon, the status label (for example `Pursuing goal`), the truncated
 objective, and a live elapsed timer.
+
+Active goals use a green target icon. Paused goals use a yellow pause icon and
+a frozen elapsed timer. Blocked or limited goals use a yellow warning icon;
+completed goals use a green check. Status labels identify each state without
+relying on color. Hover or focus a paused or blocked goal's status label to read
+its status note, including the reason for an error pause. The expanded details
+also show the full note.
 
 The pill carries inline controls:
 

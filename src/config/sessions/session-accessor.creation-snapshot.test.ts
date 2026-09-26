@@ -9,13 +9,13 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import {
   createSessionEntryWithTranscript,
   assignSessionOwner,
-  recordSessionParticipant,
   listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntrySync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 
 const tempDirs: string[] = [];

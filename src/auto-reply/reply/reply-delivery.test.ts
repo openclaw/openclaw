@@ -5,6 +5,7 @@ import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
   createBlockReplyDeliveryHandler,
   type DirectBlockDelivery,
@@ -531,6 +532,67 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+  it.each([false, true])(
+    "falls back to payload identity when normalization invalidates source text (coalescing=%s)",
+    async (coalescing) => {
+      const sent: ReplyPayload[] = [];
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply: async (payload) => {
+          sent.push(payload);
+        },
+        timeoutMs: 5000,
+        ...(coalescing
+          ? { coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: "" } }
+          : {}),
+      });
+      const handler = createBlockReplyDeliveryHandler({
+        onBlockReply: vi.fn(async () => {}),
+        normalizeStreamingText: (payload) => ({
+          text: payload.text?.replace(/^HEARTBEAT_OK /, ""),
+          skip: false,
+        }),
+        applyReplyToMode: (payload) => payload,
+        typingSignals: {
+          signalTextDelta: vi.fn(async () => {}),
+        } as unknown as TypingSignaler,
+        blockStreamingEnabled: true,
+        blockReplyPipeline: pipeline,
+        directBlockDeliveries: [],
+      });
+      const sourcePayload = (text: string) =>
+        setReplyPayloadMetadata(
+          { text },
+          {
+            assistantMessageIndex: 7,
+            blockSourceText: text,
+            blockSourceRange: [0, text.length] as const,
+          },
+        );
+
+      try {
+        await handler(sourcePayload("HEARTBEAT_OK First"));
+        await handler(sourcePayload("HEARTBEAT_OK Other"));
+        await pipeline.flush({ force: true });
+
+        expect(sent.map((payload) => payload.text)).toEqual(
+          coalescing ? ["FirstOther"] : ["First", "Other"],
+        );
+        expect(sent.map((payload) => getReplyPayloadMetadata(payload)?.blockSourceText)).toEqual(
+          coalescing ? [undefined] : [undefined, undefined],
+        );
+        expect(sent.map((payload) => getReplyPayloadMetadata(payload)?.blockSourceRange)).toEqual(
+          coalescing ? [undefined] : [undefined, undefined],
+        );
+      } finally {
+        try {
+          await pipeline.flush({ force: true });
+        } finally {
+          pipeline.stop();
+        }
+      }
+    },
+  );
+
   it("records concurrent direct block deliveries in emission order", async () => {
     const resolvers: Array<() => void> = [];
     const directBlockDeliveries: DirectBlockDelivery[] = [];
@@ -551,12 +613,24 @@ describe("createBlockReplyDeliveryHandler", () => {
 
     const first = handler({ text: "first" });
     const second = handler({ text: "second" });
-    resolvers[1]?.();
-    await second;
-    resolvers[0]?.();
-    await first;
+    const settled = Promise.allSettled([first, second]);
+    try {
+      expect(resolvers).toHaveLength(2);
+      resolvers[1]!();
+      await second;
+      expect(directBlockDeliveries[0]?.pending).toBe(true);
+      expect(directBlockDeliveries[1]?.pending).toBe(false);
+      resolvers[0]!();
+      await first;
 
-    expect(directBlockDeliveries.map(({ payload }) => payload.text)).toEqual(["first", "second"]);
+      expect(directBlockDeliveries.map(({ payload }) => payload.text)).toEqual(["first", "second"]);
+    } finally {
+      for (const resolve of resolvers) {
+        resolve();
+      }
+      // Both sends are awaited above; drain on assertion failure without replacing it.
+      await settled;
+    }
   });
 });
 
@@ -601,7 +675,6 @@ it.each([true, false])(
 );
 
 it("keeps completed CLI segments distinct through coalescing and final dedupe", async () => {
-  const { createBlockReplyPipeline } = await import("./block-reply-pipeline.js");
   const { prepareCliReplyPayload } = await import("./cli-reply-payload.js");
   const sent: ReplyPayload[] = [];
   const pipeline = createBlockReplyPipeline({
@@ -641,7 +714,11 @@ it("keeps completed CLI segments distinct through coalescing and final dedupe", 
     expect(sent.map((payload) => payload.text)).toEqual(["Checking.", "Alpha", "Beta"]);
     expect(replyPayloads).toEqual([]);
   } finally {
-    pipeline.stop();
+    try {
+      await pipeline.flush({ force: true });
+    } finally {
+      pipeline.stop();
+    }
   }
 });
 

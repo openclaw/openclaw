@@ -194,11 +194,15 @@ If no explicit order is configured, OpenClaw uses a round-robin order:
 
 ### Session stickiness (cache-friendly)
 
+Clearing or rotating an auth pin affects only the selected agent’s session, including custom session stores and the reserved `global` and `unknown` session keys.
+
 OpenClaw **pins the automatically chosen auth profile per session** to keep provider caches warm. It does **not** rotate on every request. An automatic pin may rotate or clear when:
 
 - the session is reset (`/new` / `/reset`)
-- a compaction completes (compaction count increments)
 - the profile is in cooldown/disabled
+
+Context compaction does not change the selected auth profile. A healthy profile remains pinned
+across compaction; auth failures and unavailable profiles still use the normal fallback order.
 
 Manual selection via `/model …@<profileId> -s` sets a **user override**. A valid user pin survives `/new`, `/reset`, session rollover, compaction, and cooldown windows. It remains the first preference when eligible. While that exact profile is in cooldown or disabled, OpenClaw tries the next eligible same-provider profile without replacing the stored pin. OpenClaw clears the pin when the profile disappears, no longer matches the selected provider, or the user selects another explicit profile. `/model default -s` clears the model override while retaining a compatible auth pin and clearing an incompatible one.
 

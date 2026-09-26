@@ -34,6 +34,7 @@ import {
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { isConfiguredCommandOwner } from "../command-auth.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -578,6 +579,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     },
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
+  const channelOwnerAuthority = getCommandOwnerAuthority(sessionCtx);
+  if (command.senderIsOwner && channelOwnerAuthority) {
+    bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);
+  }
   if (sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin) {
     const sourceReplyDeliveryRuntime = createSourceReplyDeliveryRuntime({
       origin: sourceReplyDeliveryRuntimeOptions.sourceReplyDeliveryModeOrigin,
@@ -613,7 +618,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     accountId: replyRoute.accountId,
     senderId: normalizeOptionalString(command.senderId),
   };
-  const isCurrentChannelOwner = () => isConfiguredCommandOwner(getRuntimeConfig(), cronOwner);
+  const isCurrentChannelOwner = () =>
+    channelOwnerAuthority?.isCurrent() ?? isConfiguredCommandOwner(getRuntimeConfig(), cronOwner);
   // Only fresh owner ingress mints this identity. Management-only admissions do not imply it.
   const createdCronCreatorAuthorityCapability =
     !inheritedCronCreatorAuthorityCapability && authorityRunId && messageProvider

@@ -648,6 +648,12 @@ openclaw-pending-session-create {
   content-visibility: auto;
 }
 
+.chat-virtual-row:focus-within {
+  /* Footer controls use a -4px block margin. Paint containment must clear
+     that overhang plus the 2px focus outline and its 3px offset. */
+  overflow-clip-margin: 10px;
+}
+
 /* Message jumps need real mounted-row sizes before their target settles.
    Native reader takeover restores ordinary overscan layout skipping. */
 .chat-thread-inner[data-measuring-rows] .chat-virtual-row {

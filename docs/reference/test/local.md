@@ -85,6 +85,25 @@ actual Vitest process and workers while retaining Node for orchestration and
 compiler preparation. It does not use Bun's native test runner. `bun run` alone
 does not select Bun for tests. Node remains the local default.
 
+For the CI Control UI comparison, run the full Node selection followed by its
+compatible Bun partition:
+
+```sh
+OPENCLAW_NODE_TEST_CONFIGS_JSON='["ui/vitest.config.ts"]' \
+OPENCLAW_NODE_TEST_VITEST_ARGS_JSON='["--maxWorkers", "3"]' \
+OPENCLAW_CI_TEST_RUNTIME_POLICY=dual \
+node --import tsx scripts/ci-run-node-test-shard.mts
+```
+
+The pinned fork can loop in CSS tokenization after particular UI file orders.
+The nonbrowser UI setup prevents inlining the native tokenizer's `endOfFile`
+predicate on Bun while retaining baseline, DFG, and FTL JIT. It does nothing on Node, and
+Chromium keeps its existing setup. See the
+[CI runtime policy](/ci/pipeline#test-runtime-selection) for the removal proof.
+The Bun partition deliberately excludes two whole GC-sensitive files, which
+remain covered by Node. Running the complete UI config directly with
+`OPENCLAW_VITEST_RUNTIME=bun` also runs those currently incompatible assertions.
+
 Test processes and their CLI fixtures keep Sparkplug baseline compilation enabled
 but run it synchronously. This avoids a Node 24 shutdown deadlock where a
 background compiler waits for main-thread garbage collection while `process.exit`
@@ -128,9 +147,15 @@ These launchers retain tsx's in-process transform cache and Node's module cache.
 They skip tsx's shared disk cache before the loader starts, and child tooling
 inherits that policy. This cache policy does not clean
 existing temporary directories, Node or Vitest caches, or other global caches. Standalone
-`pnpm ui:build` keeps native startup and applies the same preload to its post-build
-validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
-external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
+`pnpm ui:build` starts natively and runs its post-build validators directly with Node.
+Those validators do not load tsx or require `TSX_DISABLE_CACHE` in the invoking shell.
+Raw external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
+
+Node Vitest workers also preload `scripts/tsx.mjs` once per worker. Vitest still
+owns test module mocks, while native plugin SDK imports use Node's source module
+graph with TypeScript syntax and `.js`-to-`.ts` resolution. Bun uses its native
+TypeScript loader. This keeps source-host tests from relying on Jiti to evaluate
+another copy of the host SDK.
 
 Scheduler-owned project runs on macOS and Linux reuse filesystem transforms within
 exclusive slots, including serial runs that mix configurations. Each Vitest

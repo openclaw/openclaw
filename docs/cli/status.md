@@ -77,10 +77,15 @@ existing read-only SQLite path.
 
 JSON `collection.notCollected` names fields that were not inspected and explains
 why. Online status leaves workspace and bootstrap checks unknown, including
-`agents.bootstrapPendingCount: null`. It also skips local config validation,
-channel and memory credential inspection, and the local plugin inspections
-normally requested by `--all` or `--deep`. Requested security audit and plugin
-compatibility sections report `collected: false`; memory remains `null`. Use
+`agents.bootstrapPendingCount: null`. It returns `channelSummary: []` without
+loading channel plugins and records `channelSummary` in `collection.notCollected`.
+An empty list there means the field was not collected, not that no channels are
+configured. Use `openclaw channels status` for the configured inventory, or
+`openclaw channels status --probe` for live account checks. Online status skips
+local config validation, channel and memory credential inspection, and the local
+plugin inspections normally requested by `--all` or `--deep`. Requested security
+audit and plugin compatibility sections report `collected: false`; memory remains
+`null`. Use
 `openclaw security audit`, `openclaw plugins inspect --all`, or
 `openclaw memory status --deep` for those local inspections. `--deep` still requests
 Gateway health, and `--usage --agent <id>` retains its credential scope.

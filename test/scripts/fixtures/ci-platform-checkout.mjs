@@ -322,13 +322,43 @@ async function until(predicate, label, deadline) {
 async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lease)) {
   // Readiness belongs to the owned child's lifetime. The supervisor's existing
   // watchdog bounds startup; an independent short timer can preempt legal Git work.
-  while (!stopped() && child.exitCode === null && child.signalCode === null) {
-    if (predicate()) {
-      return true;
+  return new Promise((resolve, reject) => {
+    const watchers = [];
+    let finished = false;
+    const finish = (ready, error) => {
+      if (finished) return;
+      finished = true;
+      for (const watcher of watchers) watcher.close();
+      child.off("exit", check);
+      child.off("error", fail);
+      if (error) reject(error);
+      else resolve(ready);
+    };
+    const fail = (error) => finish(false, error);
+    const check = () => {
+      if (finished) return;
+      try {
+        if (stopped() || child.exitCode !== null || child.signalCode !== null) finish(false);
+        else if (predicate()) finish(true);
+      } catch (error) {
+        fail(error);
+      }
+    };
+    try {
+      // Install before the first read: registration and atomic readiness renames
+      // can otherwise happen between observing absence and starting the watcher.
+      for (const directory of [root, recordsDir]) {
+        const watcher = fs.watch(directory, check);
+        watchers.push(watcher);
+        watcher.on("error", fail);
+      }
+      child.once("exit", check);
+      child.once("error", fail);
+      check();
+    } catch (error) {
+      fail(error);
     }
-    await delay(10);
-  }
-  return false;
+  });
 }
 
 function launch(role, attempt) {

@@ -7,8 +7,23 @@ import {
   sessionCatalogPaging,
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionShareCatalog } from "./session-catalog.js";
+
+const diagnostics = vi.hoisted(() => ({ enabled: false, warnEnabled: true, warn: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/diagnostic-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/diagnostic-runtime")>();
+  return {
+    ...actual,
+    areDiagnosticsEnabledForProcess: () => diagnostics.enabled,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/session-catalog"
+        ? { ...logger, isEnabled: () => diagnostics.warnEnabled, warn: diagnostics.warn }
+        : logger;
+    },
+  };
+});
 
 const commands = ["openclaw.sessions.list.v1", "openclaw.sessions.read.v1"];
 const nativeSession: SessionCatalogSession = {
@@ -58,6 +73,96 @@ function catalogFixture() {
 }
 
 describe("session-share receiver catalog", () => {
+  describe("slow phase diagnostics", () => {
+    beforeEach(() => {
+      diagnostics.enabled = true;
+      diagnostics.warnEnabled = true;
+      diagnostics.warn.mockReset();
+    });
+    afterEach(() => {
+      diagnostics.enabled = false;
+      vi.restoreAllMocks();
+    });
+
+    it.each([true, false, undefined])(
+      "preserves timeout dispatch attribution (%s) without private error data",
+      async (nodeCommandDispatched) => {
+        let clock = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => clock);
+        const fixture = catalogFixture();
+        const list = fixture.list.getMockImplementation()!;
+        fixture.list.mockImplementation(async (params) => {
+          clock += 1_200;
+          return list(params);
+        });
+        fixture.invoke.mockImplementation(async () => {
+          clock += 30_000;
+          throw Object.assign(new Error("PRIVATE_MESSAGE"), {
+            name: "GatewayClientRequestError",
+            gatewayCode: nodeCommandDispatched === undefined ? "PRIVATE_CODE" : "UNAVAILABLE",
+            retryable: false,
+            details: {
+              nodeCommandDispatched,
+              nodeError: {
+                code: nodeCommandDispatched === undefined ? "PRIVATE_CODE" : "TIMEOUT",
+                message: "PRIVATE_MESSAGE",
+              },
+              nodeId: "PRIVATE_NODE",
+              params: { searchTerm: "PRIVATE_SEARCH" },
+            },
+          });
+        });
+
+        const hosts = await fixture.catalog.list({});
+        expect(hosts[0]).toMatchObject({ sessions: [], error: { code: "NODE_INVOKE_FAILED" } });
+        expect(diagnostics.warn.mock.calls).toEqual([
+          [
+            "slow Session Share catalog phase",
+            { phase: "discovery", elapsedMs: 1_200, outcome: "resolved" },
+          ],
+          [
+            "slow Session Share catalog phase",
+            {
+              phase: "invoke",
+              elapsedMs: 30_000,
+              outcome: "rejected",
+              nodeErrorCode: nodeCommandDispatched === undefined ? "unknown" : "TIMEOUT",
+              ...(nodeCommandDispatched !== undefined ? { nodeCommandDispatched } : {}),
+            },
+          ],
+        ]);
+      },
+    );
+
+    it.each(["disabled", "level disabled", "disabled before settlement", "sink throws", "fast"])(
+      "preserves successful listings when diagnostics are %s",
+      async (mode) => {
+        diagnostics.enabled = mode !== "disabled";
+        diagnostics.warnEnabled = mode !== "level disabled";
+        if (mode === "sink throws") {
+          diagnostics.warn.mockImplementation(() => {
+            throw new Error("diagnostic sink failed");
+          });
+        }
+        let clock = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => clock);
+        const fixture = catalogFixture();
+        const invoke = fixture.invoke.getMockImplementation()!;
+        fixture.invoke.mockImplementation(async (params) => {
+          clock += mode === "fast" ? 999 : 1_200;
+          if (mode === "disabled before settlement") {
+            diagnostics.enabled = false;
+          }
+          return invoke(params);
+        });
+
+        const hosts = await fixture.catalog.list({});
+        expect(hosts[0]?.sessions).toEqual([nativeSession]);
+        expect(diagnostics.warn).toHaveBeenCalledTimes(mode === "sink throws" ? 1 : 0);
+      },
+    );
+  });
+
   it("does not invoke nodes when the owner retires during discovery", async () => {
     const fixture = catalogFixture();
     const entered = createDeferred<void>();

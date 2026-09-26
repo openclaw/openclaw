@@ -46,7 +46,7 @@ let sendMessageIMessage: SendModule["sendMessageIMessage"];
 
 async function loadFreshSendModule(): Promise<void> {
   ({ findLatestIMessageEntryForChat, rememberIMessageReplyCache } =
-    await loadFreshIMessageReplyCacheForTest());
+    await loadFreshIMessageReplyCacheForTest({ reuseDatabase: true }));
   ({ IMessageRpcRequestError } = await import("./client.js"));
   ({ PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime"));
   ({
@@ -849,6 +849,63 @@ describe("sendMessageIMessage receipts", () => {
       createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
     const { deliverThroughChannel } = createChannelDelivery();
     const { imessageActionsRuntime } = await import("./actions.runtime.js");
+    function createRawTextActions(source: string, replacementText: string) {
+      return [
+        [
+          "edit",
+          () =>
+            imessageActionsRuntime.editMessage({
+              chatGuid: actionOptions.chatGuid,
+              messageId: "edit-message-guid",
+              text: source,
+              backwardsCompatMessage: "visible fallback",
+              options: actionOptions,
+            }),
+        ],
+        [
+          "edit-fallback",
+          () =>
+            imessageActionsRuntime.editMessage({
+              chatGuid: actionOptions.chatGuid,
+              messageId: "edit-message-guid",
+              text: replacementText,
+              backwardsCompatMessage: source,
+              options: actionOptions,
+            }),
+        ],
+        [
+          "poll-question",
+          () =>
+            imessageActionsRuntime.sendPoll({
+              chatGuid: actionOptions.chatGuid,
+              question: source,
+              choices: ["first", "second"],
+              options: actionOptions,
+            }),
+        ],
+        [
+          "poll-first-option",
+          () =>
+            imessageActionsRuntime.sendPoll({
+              chatGuid: actionOptions.chatGuid,
+              question: "visible question",
+              choices: [source, "second"],
+              options: actionOptions,
+            }),
+        ],
+        [
+          "poll-second-option",
+          () =>
+            imessageActionsRuntime.sendPoll({
+              chatGuid: actionOptions.chatGuid,
+              question: "visible question",
+              choices: ["first", source],
+              options: actionOptions,
+            }),
+        ],
+      ] as const;
+    }
+
     const forgedTokenEntity = "&#xE000;".repeat("user".length);
     const roleTokenSwap = [
       "```xml",
@@ -897,58 +954,7 @@ describe("sendMessageIMessage receipts", () => {
                 options: actionOptions,
               }),
           ],
-          [
-            "edit",
-            () =>
-              imessageActionsRuntime.editMessage({
-                chatGuid: actionOptions.chatGuid,
-                messageId: "edit-message-guid",
-                text: source,
-                backwardsCompatMessage: "visible fallback",
-                options: actionOptions,
-              }),
-          ],
-          [
-            "edit-fallback",
-            () =>
-              imessageActionsRuntime.editMessage({
-                chatGuid: actionOptions.chatGuid,
-                messageId: "edit-message-guid",
-                text: "visible edit",
-                backwardsCompatMessage: source,
-                options: actionOptions,
-              }),
-          ],
-          [
-            "poll-question",
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: source,
-                choices: ["first", "second"],
-                options: actionOptions,
-              }),
-          ],
-          [
-            "poll-first-option",
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: "visible question",
-                choices: [source, "second"],
-                options: actionOptions,
-              }),
-          ],
-          [
-            "poll-second-option",
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: "visible question",
-                choices: ["first", source],
-                options: actionOptions,
-              }),
-          ],
+          ...createRawTextActions(source, "visible edit"),
         ] as const) {
           await expect(
             sendMalformed(),
@@ -1110,45 +1116,7 @@ describe("sendMessageIMessage receipts", () => {
       }),
     ).rejects.toThrow("iMessage poll options must remain distinct after sanitization");
 
-    for (const sendSwappedRole of [
-      () =>
-        imessageActionsRuntime.editMessage({
-          chatGuid: actionOptions.chatGuid,
-          messageId: "edit-message-guid",
-          text: roleTokenSwap,
-          backwardsCompatMessage: "visible fallback",
-          options: actionOptions,
-        }),
-      () =>
-        imessageActionsRuntime.editMessage({
-          chatGuid: actionOptions.chatGuid,
-          messageId: "edit-message-guid",
-          text: "visible replacement",
-          backwardsCompatMessage: roleTokenSwap,
-          options: actionOptions,
-        }),
-      () =>
-        imessageActionsRuntime.sendPoll({
-          chatGuid: actionOptions.chatGuid,
-          question: roleTokenSwap,
-          choices: ["first", "second"],
-          options: actionOptions,
-        }),
-      () =>
-        imessageActionsRuntime.sendPoll({
-          chatGuid: actionOptions.chatGuid,
-          question: "visible question",
-          choices: [roleTokenSwap, "second"],
-          options: actionOptions,
-        }),
-      () =>
-        imessageActionsRuntime.sendPoll({
-          chatGuid: actionOptions.chatGuid,
-          question: "visible question",
-          choices: ["first", roleTokenSwap],
-          options: actionOptions,
-        }),
-    ]) {
+    for (const [, sendSwappedRole] of createRawTextActions(roleTokenSwap, "visible replacement")) {
       await expect(sendSwappedRole()).rejects.toThrow("iMessage outbound role protection failed");
     }
 
@@ -1163,46 +1131,8 @@ describe("sendMessageIMessage receipts", () => {
           `\`${hidden}\``,
           nestMarkdownFences(hidden, 3),
         ]) {
-          const actionsWithHiddenCode = [
-            () =>
-              imessageActionsRuntime.editMessage({
-                chatGuid: actionOptions.chatGuid,
-                messageId: "edit-message-guid",
-                text: wrapped,
-                backwardsCompatMessage: "visible fallback",
-                options: actionOptions,
-              }),
-            () =>
-              imessageActionsRuntime.editMessage({
-                chatGuid: actionOptions.chatGuid,
-                messageId: "edit-message-guid",
-                text: "visible replacement",
-                backwardsCompatMessage: wrapped,
-                options: actionOptions,
-              }),
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: wrapped,
-                choices: ["first", "second"],
-                options: actionOptions,
-              }),
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: "visible question",
-                choices: [wrapped, "second"],
-                options: actionOptions,
-              }),
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: "visible question",
-                choices: ["first", wrapped],
-                options: actionOptions,
-              }),
-          ];
-          for (const sendHiddenCode of actionsWithHiddenCode) {
+          const actionsWithHiddenCode = createRawTextActions(wrapped, "visible replacement");
+          for (const [, sendHiddenCode] of actionsWithHiddenCode) {
             await expect(sendHiddenCode()).rejects.toThrow(
               "iMessage outbound hidden assistant content is not allowed",
             );

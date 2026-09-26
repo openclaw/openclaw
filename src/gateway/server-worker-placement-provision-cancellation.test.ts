@@ -12,6 +12,7 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
   preflightWorkerWorkspace: workspace.preflight,
 }));
 
+import { getRuntimeConfig } from "../config/config.js";
 import {
   GatewayDrainingError,
   markGatewayRestartDraining,
@@ -154,6 +155,7 @@ describe("dispatch Stop before provider allocation", () => {
         ...harness.environments,
       };
       const runtime = createGatewayWorkerPlacementRuntime({
+        getCommittedRuntimeConfig: getRuntimeConfig,
         placements,
         environments,
         gatewayNamespace: "gateway-test",
@@ -282,6 +284,7 @@ describe("dispatch Stop before provider allocation", () => {
     const environments = support.createService(support.createProvider({ provision }));
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       placements,
       environments,
       gatewayNamespace: "gateway-test",
@@ -368,6 +371,7 @@ describe("dispatch Stop before provider allocation", () => {
       });
       const create = vi.spyOn(environments, "createWithRequest");
       const runtime = createGatewayWorkerPlacementRuntime({
+        getCommittedRuntimeConfig: getRuntimeConfig,
         placements,
         environments,
         gatewayNamespace: "gateway-test",
@@ -411,6 +415,7 @@ describe("dispatch Stop before provider allocation", () => {
       onInterrupt: interrupted,
     });
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       placements,
       environments,
       gatewayNamespace: "gateway-test",
@@ -509,6 +514,7 @@ describe("dispatch Stop before provider allocation", () => {
         ...harness.environments,
       };
       const runtime = createGatewayWorkerPlacementRuntime({
+        getCommittedRuntimeConfig: getRuntimeConfig,
         placements,
         environments,
         gatewayNamespace: "gateway-test",
@@ -643,6 +649,7 @@ describe("dispatch Stop before provider allocation", () => {
         );
       }
       const runtime = createGatewayWorkerPlacementRuntime({
+        getCommittedRuntimeConfig: getRuntimeConfig,
         placements,
         environments,
         gatewayNamespace: "gateway-test",
@@ -759,6 +766,10 @@ describe("dispatch Stop before provider allocation", () => {
   it.each(["targeted", "sweep", "idle", "late-sweep", "timeout"] as const)(
     "Stop owns steady-state provisioning through %s recovery ordering",
     async (mode) => {
+      if (mode === "timeout") {
+        // Seed the durable provisioning state before expiring the held provider replay.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
       const replayEntered = createDeferredCore();
       const childClosed = createDeferredCore();
       const stopPrepared = createDeferredCore();
@@ -827,6 +838,7 @@ describe("dispatch Stop before provider allocation", () => {
         });
       }
       const runtime = createGatewayWorkerPlacementRuntime({
+        getCommittedRuntimeConfig: getRuntimeConfig,
         placements,
         environments,
         gatewayNamespace: "gateway-test",
@@ -862,6 +874,7 @@ describe("dispatch Stop before provider allocation", () => {
       if (mode === "timeout") {
         // Startup and sweep completion use the caller result, but Stop must still
         // reach the actual provider that outlives that timeout.
+        await vi.advanceTimersByTimeAsync(20);
         await recovery;
         expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
         expect(events).toEqual(["replay"]);

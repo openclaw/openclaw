@@ -475,6 +475,8 @@ export function createQaStateBackedTransportAdapter(
     buildAgentDelivery = params.buildAgentDelivery;
     handleAction = params.handleAction;
     createReportNotes = params.createReportNotes;
+    whenUnhealthy = params.whenUnhealthy;
+    captureBeforeGatewayCleanup = params.captureBeforeGatewayCleanup;
 
     override sendInbound = params.sendInbound;
 

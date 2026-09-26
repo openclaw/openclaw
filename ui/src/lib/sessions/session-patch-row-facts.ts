@@ -55,6 +55,9 @@ export function projectSessionPatchRowFields(
   if (patch.boardPresentation !== undefined) {
     fields.push({ boardPresentation: entry.boardPresentation });
   }
+  if (patch.boardFace !== undefined) {
+    fields.push({ boardFace: entry.boardFace });
+  }
   if (patch.pinned !== undefined || patch.unread === false) {
     const pin = { pinned: entry.pinnedAt !== undefined, pinnedAt: entry.pinnedAt };
     const read = {

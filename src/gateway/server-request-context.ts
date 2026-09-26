@@ -107,6 +107,7 @@ type GatewayRequestContextRuntime = Pick<
   > & {
     sessionObserver: NonNullable<GatewayRequestContext["sessionObserver"]>;
     sessionActivitySummaries?: GatewayRequestContext["sessionActivitySummaries"];
+    channelAdmissionAudit?: GatewayRequestContext["channelAdmissionAudit"];
     sessionCompanion: NonNullable<GatewayRequestContext["sessionCompanion"]>;
     isConnectionActive: NonNullable<GatewayRequestContext["isConnectionActive"]>;
     clients: GatewayClientRegistry;
@@ -272,6 +273,7 @@ export function createGatewayRequestContext(
     sessionCompanion: runtime.sessionCompanion,
     sessionObserver,
     sessionActivitySummaries,
+    channelAdmissionAudit: runtime.channelAdmissionAudit,
     mentionInbox: runtime.mentionInbox,
     applyPluginLifecycleChange: runtime.kernel.applyPluginLifecycleChange,
     getMcpAppSandboxPort: runtime.transportBridge.getMcpAppSandboxPort,

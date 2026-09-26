@@ -77,7 +77,7 @@ runtime when they only need plugin-owned static descriptors.
 - Cancellation receipts prepare rows inside the existing kill hold, revalidate the run and captured session generation, then publish synchronously before releasing ownership. Ordinary events retain coalesced publication.
 - Agent event ingestion never waits for row enrichment: tool/progress consumers must capture reply content before completion. Optional tool-row metadata can be absent while rows are dirty; full lifecycle row publications await readiness.
 - Carry physical store ownership into transcript/title/usage readers independently of the logical agent used for model and visibility policy. Reuse the prepared fallback model instead of reading it twice.
-- Prepared event authorization belongs to `sessions.changed` and `session.message`, whose producers await row readiness. Synchronous board/progress events retain the sharing owner's committed reader so a dirty row cannot suppress an authorized delivery.
+- Event authorization consumes committed sharing metadata and the membership snapshot independently of full-row materialization. `sessions.changed` and `session.message` producers still await display-row readiness. Synchronous board/progress/suggestion events must neither query SQLite nor lose authorized delivery while display rows are dirty; member revocations publish before those events.
 
 ## Verification
 

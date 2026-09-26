@@ -8,7 +8,7 @@ import { MODEL_CONTEXT_PRIVATE_METADATA_KEYS } from "../../shared/model-context-
 
 /** Exclude storage-only fields in SQLite, before a row's JSON crosses into JavaScript. */
 export function projectModelContextEventSql(
-  event: Expression<string>,
+  event: Expression<string | Uint8Array>,
   omitCheckpoint: Expression<number>,
   toolResultOmission?: Expression<string | null>,
 ): RawBuilder<string> {
@@ -36,7 +36,7 @@ function pickJsonObject(value: Expression<unknown>, keys: readonly string[]): Ra
 }
 
 function contentPropertySql(
-  event: Expression<string>,
+  event: Expression<string | Uint8Array>,
   property: "type" | "id" | "name" | "text",
 ): RawBuilder<unknown> {
   // Root lookups rescan array prefixes, so keep them bounded. Later elements and
@@ -91,7 +91,7 @@ function jsonMemberValue(alias: "root_member" | "message_member"): RawBuilder<un
 
 /** Stored navigation serves SQL's first-key lookup and JavaScript's last-key parse. */
 export function projectTranscriptPayloadNavigationSql(
-  event: Expression<string>,
+  event: Expression<string | Uint8Array>,
 ): RawBuilder<string> {
   const memberValue =
     /* kysely-allow-raw: fixed JSON member cursor declared in the message projection below. */ sql.ref(
@@ -134,7 +134,9 @@ export function projectResetBoundaryNavigationSql(event: Expression<string>): Ra
 }
 
 /** Lightweight tree/state records; these never serve as persisted transcript evidence. */
-export function projectModelContextNavigationSql(event: Expression<string>): RawBuilder<string> {
+export function projectModelContextNavigationSql(
+  event: Expression<string | Uint8Array>,
+): RawBuilder<string> {
   const entry = pickJsonObject(event, MODEL_CONTEXT_NAVIGATION_KEYS);
   // Binary intermediates avoid serializing and reparsing the entire message.
   const message = supportsNodeSqliteJsonb()

@@ -118,14 +118,14 @@ async function withPersistentTranscriptFixture(
   }) => Promise<void>,
 ) {
   const { SessionManager } = await import("../sessions/index.js");
-  const open = vi.spyOn(SessionManager, "open");
-  const originalOpen = open.getMockImplementation();
-  if (!originalOpen) {
+  const openAsync = vi.spyOn(SessionManager, "openAsync");
+  const originalOpenAsync = openAsync.getMockImplementation();
+  if (!originalOpenAsync) {
     throw new Error("expected the queued fixture's session-manager bridge");
   }
   const hooks: { beforeBranchRead?: () => void } = {};
-  open.mockImplementation((...args) => {
-    const manager = PersistentSessionManager.open(...args);
+  openAsync.mockImplementation(async (...args) => {
+    const manager = await PersistentSessionManager.openAsync(...args);
     const getBranch = manager.getBranch.bind(manager);
     vi.spyOn(manager, "getBranch").mockImplementation((...branchArgs) => {
       hooks.beforeBranchRead?.();
@@ -149,7 +149,7 @@ async function withPersistentTranscriptFixture(
       hooks,
     });
   } finally {
-    open.mockImplementation(originalOpen);
+    openAsync.mockImplementation(originalOpenAsync);
   }
 }
 

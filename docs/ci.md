@@ -37,7 +37,7 @@ Control UI CI installs the Chromium revision pinned by Playwright even when the 
 
 Browser extension CI launches the installed, patched Chrome MCP dependency directly.
 
-Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports; ordinary CI remains restore-only.
+Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports, including the same seven Control UI seed files on Node and the pinned Bun fork in both Linux cache backends; ordinary CI remains restore-only.
 
 In-process Gateway test configs use [exclusive plan admission within existing packed jobs](/ci/capacity#measured-shard-weights).
 
@@ -53,7 +53,12 @@ Source-only Linux Node shards can reuse content-validated compiled workers from 
 
 Vitest transform-cache fingerprints exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
 
-Linux PR tests use Bun for the measured compatible lanes. Full Release Validation
+Transform keys also include each project's dependency optimizer directory. This
+prevents cached UI imports from mixing separate projects' Lit instances when a
+focused run and a full run share the persistent cache.
+
+Linux PR tests use Bun for the measured compatible unit lanes and Control UI
+Vitest job, with a targeted CSS-tokenizer optimizer workaround. Full Release Validation
 keeps their Node coverage and runs them on Bun too; see [test runtime selection](/ci/pipeline#test-runtime-selection).
 
 Auto-reply reply tests run files in parallel with two workers per compact group. Their planner uses separate parallel timing identities; until those have measurements, serial group costs are divided by the effective worker count, with single-file groups retaining their full cost.
@@ -66,7 +71,7 @@ Commands tests share the existing worker budget across independent files. The
 Doctor session SQLite cases are split by operation while preserving the complete
 repair and recovery coverage; see [shard weights](/ci/capacity#measured-shard-weights).
 
-The complete [startup corpus](/ci/pipeline) uses eight state test files so existing workers can share its release/config matrix. Its explicit fallback prepares the runtime once and uses up to four workers, capped by available CPU parallelism; historical frozen targets retain their legacy process layout.
+The complete [startup corpus](/ci/pipeline) uses eight state test files so existing workers can share its release/config matrix. Its explicit fallback prepares the runtime once and uses up to four workers, capped by available CPU parallelism; historical frozen targets retain their legacy process layout with CPU-bounded admission.
 
 | Page                                                           | Read it when                                                                                                        |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |

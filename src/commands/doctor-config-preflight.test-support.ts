@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, vi } from "vitest";
+import { afterAll, expect, vi } from "vitest";
 import { withTempHome } from "../config/test-helpers.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
@@ -33,6 +34,9 @@ export async function withDoctorConfigPreflightHome<T>(
       ]),
     );
     try {
+      expect(resolveManagedUpdateLeaseDatabasePath()).toBe(
+        path.join(control, "managed-update-handoffs.sqlite"),
+      );
       // Fixture-owned coordinator handles must close before Windows removes the home.
       return await withStateDatabaseCoordinatorRuntimeDirectory(
         path.join(home, "coordinator-runtime"),

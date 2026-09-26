@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { addSessionMember } from "../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -587,6 +587,45 @@ describe("session sharing policy", () => {
       });
     });
   });
+
+  it.each(["read-only", "suggest"] as const)(
+    "preserves visibility-authorized owner assignment for %s sessions at commit",
+    async (visibility) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = `agent:main:assignment-${visibility}`;
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: `session-assignment-${visibility}`,
+            updatedAt: 1,
+            visibility,
+            createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+          },
+        );
+        const authorization = resolveSessionMutationAuthorization({
+          client: client({ user: "viewer@example.com" }),
+          method: "sessions.assignOwner",
+          requestParams: { key: sessionKey, owner: { type: "agent", id: "main" } },
+          context: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
+        });
+
+        expect(authorization.error).toBeNull();
+        expect(() => authorization.authorization?.assertCurrent()).not.toThrow();
+
+        const capped = resolveSessionMutationAuthorization({
+          client: roleClient("view", `assignment-${visibility}`),
+          method: "sessions.assignOwner",
+          requestParams: { key: sessionKey, owner: { type: "agent", id: "main" } },
+          context: {
+            getRuntimeConfig: () => rolePolicyConfig(),
+          } as GatewayRequestContext,
+        });
+        expect(capped.error).toMatchObject({
+          details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+        });
+      });
+    },
+  );
 
   it("extracts every message-cut lifecycle target from sessionKey", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

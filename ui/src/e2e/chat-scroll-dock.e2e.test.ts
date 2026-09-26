@@ -322,6 +322,7 @@ suite.define(() => {
       report.afterCard = await dockGeometry(page);
       if ((await card.getAttribute("open")) === null) {
         await card.locator("summary").click();
+        await waitForChatScrollIdle(page);
       }
       await expect.poll(() => card.getAttribute("open")).toBe("");
       if (proofDir) {

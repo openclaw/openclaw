@@ -5,6 +5,11 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  holdTelegramMediaTimeouts,
+  resolveFlushTimerForDelay,
+  flushChannelPostMediaGroup,
+} from "./bot-media-timers.test-support.js";
+import {
   createChannelPostContext,
   createTelegramPrivateMediaContext,
   queueChannelPostAlbum,
@@ -106,22 +111,6 @@ function getChannelPostHandler(
   return getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
 }
 
-function resolveFlushTimerForDelay(setTimeoutSpy: ReturnType<typeof vi.spyOn>, delayMs: number) {
-  const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
-    (call: Parameters<typeof setTimeout>) => call[1] === delayMs,
-  );
-  const flushTimer =
-    flushTimerCallIndex >= 0
-      ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
-      : undefined;
-  if (flushTimerCallIndex >= 0) {
-    clearTimeout(
-      setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
-    );
-  }
-  return flushTimer;
-}
-
 function createImageFetchSpy(params?: { body?: Uint8Array; contentType?: string }) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(
     async () =>
@@ -130,32 +119,6 @@ function createImageFetchSpy(params?: { body?: Uint8Array; contentType?: string 
         headers: { "content-type": params?.contentType ?? "image/png" },
       }),
   );
-}
-
-async function flushChannelPostMediaGroup(
-  setTimeoutSpy: ReturnType<typeof vi.spyOn>,
-  completionTimeoutMs = 75,
-  delayMs: number = TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
-) {
-  const flushTimer = resolveFlushTimerForDelay(setTimeoutSpy, delayMs);
-  expect(flushTimer).toBeTypeOf("function");
-  const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
-  let completion: Promise<unknown> | undefined;
-  try {
-    // These timers synchronously admit work, then discard the real queue promise.
-    flushTimer?.();
-    expect(enqueueSpy).toHaveBeenCalledTimes(1);
-    const queued = enqueueSpy.mock.results[0];
-    if (queued?.type === "return") {
-      completion = queued.value;
-    }
-  } finally {
-    enqueueSpy.mockRestore();
-  }
-  expect(completion).toBeDefined();
-  await withTimeout(Promise.resolve(completion), completionTimeoutMs, {
-    message: `Telegram buffered flush for the ${delayMs} ms timer did not complete`,
-  });
 }
 
 function replyPayload(): Record<string, unknown> {
@@ -909,7 +872,7 @@ describe("createTelegramBot channel_post media", () => {
       throw new MediaFetchError("http_error", "rate limited", { status: 429 });
     });
 
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
     try {
       createTelegramBot({
         token: "tok",
@@ -963,7 +926,7 @@ describe("createTelegramBot channel_post media", () => {
         contentType: "image/jpeg",
       } satisfies SavedRemoteMedia)
       .mockImplementationOnce(() => rejectTelegramAlbumDownload(shutdown, false));
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
     try {
       createTelegramBot({
         token: "tok",
@@ -1005,7 +968,7 @@ describe("createTelegramBot channel_post media", () => {
     } satisfies SavedRemoteMedia);
 
     const runtimeError = vi.fn();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
     try {
       createTelegramBot({
         token: "tok",

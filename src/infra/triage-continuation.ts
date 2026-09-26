@@ -49,6 +49,7 @@ const continuationSchema = z.strictObject({
       channel: z.string().max(4096).optional(),
       accountId: z.string().max(4096).optional(),
       senderId: z.string().max(4096).optional(),
+      authorizationSource: z.string().max(4096).optional(),
     })
     .optional(),
 });

@@ -46,7 +46,10 @@ import {
 } from "./io.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
-import { defaultedDemoPluginRegistry } from "./io.write-config.test-support.js";
+import {
+  createConfigWriteHomeFixture,
+  defaultedDemoPluginRegistry,
+} from "./io.write-config.test-support.js";
 import { registerConfigWritePreflightTests } from "./io.write-preflight.test-support.js";
 import { replaceConfigFile, transformConfigFile, transformConfigFileWithRetry } from "./mutate.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
@@ -117,7 +120,7 @@ type ConfigIoOptions = Parameters<typeof createObservedConfigIO>[0];
 function createConfigIO(options: ConfigIoOptions = {}) {
   const env = options.env ?? ({} as NodeJS.ProcessEnv);
   if (!("NODE_ENV" in env)) {
-    // Route real SQLite state through Vitest's worker DB without adding a key to config env snapshots.
+    // Mark injected environments as tests without adding a key to config env snapshots.
     Object.defineProperty(env, "NODE_ENV", { configurable: true, value: "test" });
   }
   return createObservedConfigIO({
@@ -134,17 +137,7 @@ describe("config io write", () => {
     warn: () => {},
     error: () => {},
   };
-  async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-    const home = await suiteRootTracker.make("case");
-    return withEnvAsync(
-      {
-        OPENCLAW_DEFER_SHELL_ENV_FALLBACK: undefined,
-        OPENCLAW_LOAD_SHELL_ENV: undefined,
-        OPENCLAW_SHELL_ENV_TIMEOUT_MS: undefined,
-      },
-      () => fn(home),
-    );
-  }
+  const withSuiteHome = createConfigWriteHomeFixture(suiteRootTracker.make);
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
