@@ -966,11 +966,10 @@ async function startInitializedCodexAppServerClient(
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
   for (const [index, startOptions] of startOptionsCandidates.entries()) {
     params.assertCurrent?.();
+    const desktopCommand = isManagedCodexDesktopCommand(startOptions.command);
     const desktopGeneration =
       params.desktopGeneration ??
-      (isManagedCodexDesktopCommand(startOptions.command)
-        ? await waitForStartup(waitForCodexDesktopGeneration)
-        : undefined);
+      (desktopCommand ? await waitForStartup(waitForCodexDesktopGeneration) : undefined);
     const assertStartupCurrent = () => {
       params.assertCurrent?.();
       if (abandonSignal.aborted) {
@@ -1158,10 +1157,14 @@ async function startInitializedCodexAppServerClient(
       const ownsInference =
         startOptions.transport === "stdio" &&
         nativeCommandAtStart &&
-        !desktopGeneration &&
-        !isManagedCodexDesktopCommand(startOptions.command) &&
         !isCodexAppServerProxyLaunch(startOptions.args);
-      if (isCodexResponsesOAuth(params.preparedAuth) && !ownsInference) {
+      // Desktop binaries launched as our direct stdio child share the same
+      // request-local carrier; attachments and proxy launches are not owned.
+      // Subscription sharing retains its separate managed-package restriction.
+      if (
+        isCodexResponsesOAuth(params.preparedAuth) &&
+        (!ownsInference || desktopGeneration || desktopCommand)
+      ) {
         throw new Error("ChatGPT subscription sharing requires a managed local Codex process.");
       }
       if (ownsInference) {

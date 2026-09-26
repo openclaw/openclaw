@@ -143,7 +143,12 @@ describe("Codex app-server attempt context", () => {
           effectiveWorkspace: sandboxWorkspaceDir,
           sessionKey: "agent:main:session-1",
           sessionAgentId: "main",
-          memoryToolNames: ["memory_search", "memory_get"],
+          tools: ["memory_search", "memory_get"].map((name) => ({
+            type: "function",
+            name,
+            description: name,
+            inputSchema: { type: "object" },
+          })),
           ringZeroActive: false,
         });
 
@@ -186,7 +191,12 @@ describe("Codex app-server attempt context", () => {
         effectiveWorkspace: workspaceDir,
         sessionKey: "agent:marketing-agent:session-1",
         sessionAgentId: "marketing-agent",
-        memoryToolNames: ["memory_search", "memory_get"],
+        tools: ["memory_search", "memory_get"].map((name) => ({
+          type: "function",
+          name,
+          description: name,
+          inputSchema: { type: "object" },
+        })),
         ringZeroActive: false,
         sandboxed: true,
       });
@@ -204,6 +214,71 @@ describe("Codex app-server attempt context", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    { name: "deferred native tools", enabled: true, lightweight: false },
+    { name: "filtered native tools", enabled: false, lightweight: false },
+    { name: "lightweight cron", enabled: true, lightweight: true },
+  ])(
+    "filters provider guidance independently of workspace routing: $name",
+    async ({ enabled, lightweight }) => {
+      const workspaceDir = tempDirs.make("codex-provider-prompt-");
+      const promptBuilder = vi.fn(({ availableTools }: { availableTools: Set<string> }) =>
+        availableTools.has("knowledge_lookup") ? ["Recall using knowledge_lookup."] : [],
+      );
+      registerMemoryCapability("knowledge", { promptBuilder });
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+          ...(lightweight
+            ? { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "cron" }
+            : {}),
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        effectiveWorkspace: path.join(workspaceDir, "sandbox"),
+        sessionKey: "agent:main:session-1",
+        sessionAgentId: "main",
+        tools: [
+          {
+            type: "namespace",
+            name: "openclaw",
+            description: "",
+            tools: enabled
+              ? [
+                  {
+                    type: "function",
+                    name: "knowledge_lookup",
+                    description: "Look up memory",
+                    inputSchema: { type: "object" },
+                    deferLoading: true,
+                  },
+                ]
+              : [],
+          },
+        ],
+        ringZeroActive: false,
+        sandboxed: true,
+      });
+      expect(context.memoryToolRouted).toBe(false);
+      expect(context.memoryToolNames).toEqual([]);
+      expect(context.memoryCollaborationInstructions).toBe(
+        enabled && !lightweight ? "Recall using knowledge_lookup." : undefined,
+      );
+      if (lightweight) {
+        expect(promptBuilder).not.toHaveBeenCalled();
+      } else {
+        expect(promptBuilder).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentId: "main",
+            agentSessionKey: "agent:main:session-1",
+            sandboxed: true,
+            availableTools: new Set(enabled ? ["knowledge_lookup"] : []),
+          }),
+        );
+      }
+    },
+  );
 
   it("inherits agent workspace instructions when Codex executes in another folder", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-workspace-"));
@@ -225,7 +300,12 @@ describe("Codex app-server attempt context", () => {
         effectiveWorkspace: executionDir,
         sessionKey: "agent:main:session-1",
         sessionAgentId: "main",
-        memoryToolNames: ["memory_search", "memory_get"],
+        tools: ["memory_search", "memory_get"].map((name) => ({
+          type: "function",
+          name,
+          description: name,
+          inputSchema: { type: "object" },
+        })),
         ringZeroActive: false,
       });
 
@@ -269,7 +349,7 @@ describe("Codex app-server attempt context", () => {
         effectiveWorkspace: executionDir,
         sessionKey: "agent:openclaw:session-1",
         sessionAgentId: "openclaw",
-        memoryToolNames: [],
+        tools: [],
         ringZeroActive: true,
       });
 
@@ -337,7 +417,7 @@ describe("Codex app-server attempt context", () => {
         effectiveWorkspace: executionDir,
         sessionKey: "agent:main:session-1",
         sessionAgentId: "main",
-        memoryToolNames: [],
+        tools: [],
         ringZeroActive: entry.ringZeroActive,
       });
 
@@ -368,7 +448,7 @@ describe("Codex app-server attempt context", () => {
         effectiveWorkspace: effectiveDir,
         sessionKey: "agent:main:shared-user",
         sessionAgentId: "main",
-        memoryToolNames: [],
+        tools: [],
         ringZeroActive: false,
       });
 
@@ -424,7 +504,7 @@ describe("Codex app-server attempt context", () => {
           effectiveWorkspace: taskDir,
           sessionKey: "agent:main:shared",
           sessionAgentId: "main",
-          memoryToolNames: [],
+          tools: [],
           ringZeroActive: false,
         });
         const turn = context.turnScopedDeveloperInstructions ?? "";

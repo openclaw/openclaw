@@ -88,10 +88,18 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   effectiveWorkspace: string;
   sessionKey: string;
   sessionAgentId: string;
-  memoryToolNames: readonly string[];
+  tools: readonly CodexDynamicToolSpec[];
   ringZeroActive: boolean;
   sandboxed?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
+  const availableToolNames = new Set(
+    flattenCodexDynamicToolFunctions(params.tools).map((tool) =>
+      normalizeCodexDynamicToolName(tool.name),
+    ),
+  );
+  const memoryToolNames = Array.from(CODEX_MEMORY_TOOL_NAMES).filter((name) =>
+    availableToolNames.has(name),
+  );
   const executionWorkspace = params.executionWorkspace ?? params.resolvedWorkspace;
   const inheritsAgentWorkspace = executionWorkspace !== params.resolvedWorkspace;
   const injectOpenClawContext = shouldInjectCodexOpenClawPromptContext(params.params);
@@ -109,7 +117,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       ? params.resolvedWorkspace
       : params.effectiveWorkspace;
     const memoryToolsAvailable =
-      params.memoryToolNames.length > 0 &&
+      memoryToolNames.length > 0 &&
       canRouteCodexWorkspaceMemoryThroughTools({
         config: params.params.config,
         agentId: params.params.agentId ?? params.sessionAgentId,
@@ -186,7 +194,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       turnScopedDeveloperInstructionFiles,
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
-      memoryToolNames: [...params.memoryToolNames],
+      memoryToolNames,
       memoryToolRouted: memoryToolsAvailable,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
       // Empty is a captured snapshot too; a missing value still permits first capture.
@@ -205,8 +213,8 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryCollaborationInstructions: injectOpenClawContext
         ? await renderCodexWorkspaceMemoryCollaborationInstructions({
             files: memoryReferenceFiles,
-            toolNames: params.memoryToolNames,
-            memoryToolRouted: memoryToolsAvailable,
+            toolNames: memoryToolNames,
+            availableTools: availableToolNames,
             citationsMode: params.params.config?.memory?.citations,
             agentId: params.params.agentId ?? params.sessionAgentId,
             agentSessionKey: params.sessionKey,
@@ -392,15 +400,15 @@ function renderCodexWorkspaceMemoryReference(params: {
 async function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   files: EmbeddedContextFile[];
   toolNames: readonly string[];
-  memoryToolRouted: boolean;
+  availableTools: ReadonlySet<string>;
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
 }): Promise<string | undefined> {
-  const memoryRecallInstructions = params.memoryToolRouted
-    ? await renderCodexMemoryRecallInstructions(params)
-    : undefined;
+  // Provider guidance is independent of workspace-file routing. Each provider
+  // filters its own instructions against the complete policy-admitted tool set.
+  const memoryRecallInstructions = await renderCodexMemoryRecallInstructions(params);
   const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
     files: params.files,
     toolNames: params.toolNames,
@@ -411,14 +419,14 @@ async function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
 
 async function renderCodexMemoryRecallInstructions(params: {
   toolNames: readonly string[];
+  availableTools: ReadonlySet<string>;
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
 }): Promise<string | undefined> {
-  const availableTools = new Set(params.toolNames);
   const memoryPrompt = await prepareMemorySystemPromptAddition({
-    availableTools,
+    availableTools: new Set(params.availableTools),
     citationsMode: params.citationsMode,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
@@ -445,14 +453,6 @@ function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string
     return undefined;
   }
   return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. When the memory guidance above calls for memory recall, use an already-loaded memory tool directly. If the needed memory tool is deferred and not currently callable, use \`tool_search\` to load it, then call that memory tool.`;
-}
-
-/** Lists available memory tool names understood by Codex workspace memory routing. */
-export function getCodexWorkspaceMemoryToolNames(tools: readonly CodexDynamicToolSpec[]): string[] {
-  const availableToolNames = new Set(
-    flattenCodexDynamicToolFunctions(tools).map((tool) => normalizeCodexDynamicToolName(tool.name)),
-  );
-  return Array.from(CODEX_MEMORY_TOOL_NAMES).filter((name) => availableToolNames.has(name));
 }
 
 function canRouteCodexWorkspaceMemoryThroughTools(params: {
