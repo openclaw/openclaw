@@ -353,6 +353,9 @@ struct AppStateRemoteConfigTests {
             let state = AppState(preview: true)
             state._testEnableGatewayConfigSync()
             let nextURL = try #require(URL(string: "wss://gateway-b.example.test:443"))
+            let expectedURL = try #require(URL(string: promoteProfile
+                    ? "wss://gateway-b.example.test:443"
+                    : "wss://gateway-b.example.test"))
             let adapter = DashboardPrimaryGatewayAdapter(
                 state: state,
                 endpoint: { _ in
@@ -375,7 +378,7 @@ struct AppStateRemoteConfigTests {
             await state._testAwaitGatewayConfigSync()
 
             let persisted = OpenClawConfigFile.loadDict()
-            #expect(GatewayRemoteConfig.resolveGatewayUrl(root: persisted) == nextURL)
+            #expect(GatewayRemoteConfig.resolveGatewayUrl(root: persisted) == expectedURL)
             #expect(GatewayRemoteConfig.resolveTokenString(root: persisted) ==
                 (promoteProfile ? "gateway-b-token" : nil))
             if !promoteProfile {
@@ -390,7 +393,7 @@ struct AppStateRemoteConfigTests {
             #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: persisted) == nil)
             #expect(state.connectionMode == .remote)
             #expect(state.remoteTransport == .direct)
-            #expect(state.remoteUrl == nextURL.absoluteString)
+            #expect(state.remoteUrl == expectedURL.absoluteString)
             #expect(state.remoteToken == (promoteProfile ? "gateway-b-token" : ""))
             #expect(!state.remoteTokenUnsupported)
             #expect(state._testGatewayConfigIsCurrentForRouting)
