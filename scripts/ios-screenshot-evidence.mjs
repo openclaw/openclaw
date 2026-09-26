@@ -508,12 +508,6 @@ function verifyManifestFamily(manifestPath, manifest) {
   if (!spec.devicePattern.test(deviceName)) {
     fail(`${manifest.family} has unexpected device name: ${deviceName}`);
   }
-  requireString(manifest.runId, `${manifest.family} workflow run id`);
-  requirePositiveInteger(manifest.runAttempt, `${manifest.family} workflow run attempt`);
-  requireString(manifest.tooling?.xcode, `${manifest.family} Xcode version`);
-  requireString(manifest.tooling?.fastlane, `${manifest.family} Fastlane version`);
-  requireString(manifest.tooling?.node, `${manifest.family} Node version`);
-
   const screenshotNames = manifest.screenshots?.map((entry) => entry.name).toSorted();
   if (
     screenshotNames?.join("\n") !==
@@ -607,7 +601,8 @@ export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, expect
     );
   }
   const canonicalEntries = [];
-  for (const { manifestPath, manifest } of manifests) {
+  const shardAttempts = new Map();
+  for (const { containerName, manifestPath, manifest } of manifests) {
     if (manifest.schemaVersion !== 1) {
       fail(`unsupported screenshot manifest schema in ${manifestPath}`);
     }
@@ -622,9 +617,22 @@ export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, expect
     if (manifest.runId !== expected.runId) {
       fail(`${manifest.family} workflow run id does not match the reducer context`);
     }
-    if (manifest.runAttempt !== expected.runAttempt) {
+    // Rerunning failed jobs carries successful shards and their artifacts into the
+    // new attempt without executing them again. This job runs only after each
+    // shard's latest attempt succeeded, so evidence may predate the reducer
+    // attempt; one shard job's families must still share one execution.
+    if (
+      !Number.isInteger(manifest.runAttempt) ||
+      manifest.runAttempt < 1 ||
+      manifest.runAttempt > expected.runAttempt
+    ) {
       fail(`${manifest.family} workflow run attempt does not match the reducer context`);
     }
+    const shardAttempt = shardAttempts.get(containerName) ?? manifest.runAttempt;
+    if (manifest.runAttempt !== shardAttempt) {
+      fail(`${containerName} mixes evidence from different workflow run attempts`);
+    }
+    shardAttempts.set(containerName, shardAttempt);
     for (const tool of ["xcode", "fastlane", "node"]) {
       if (manifest.tooling?.[tool] !== expected.tooling[tool]) {
         fail(`${manifest.family} ${tool} version does not match the reducer context`);
