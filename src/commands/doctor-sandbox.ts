@@ -40,9 +40,8 @@ type SandboxScriptInfo = {
 function resolveSandboxScript(scriptRel: string): SandboxScriptInfo | null {
   // Scan every openclaw package root the shared resolver finds (symlinked launcher via realpath,
   // then cwd) and return the first that actually holds the script. The resolver follows npm/pnpm
-  // global bins and version-manager links, but a published package root can resolve first and ship
-  // without scripts/sandbox-setup.sh (the npm files allowlist drops scripts/); stopping at the
-  // first root would then skip a valid source-checkout cwd that still has it.
+  // global bins and version-manager links. Older or incomplete packages can still resolve first
+  // without the requested script, so keep searching for a valid source-checkout cwd fallback.
   const roots = resolveOpenClawPackageRootsSync({
     cwd: process.cwd(),
     argv1: process.argv[1],
@@ -325,12 +324,16 @@ export async function maybeRepairSandboxImages(
   );
 
   if (sandbox.browser?.enabled && containerEngine.id === "docker") {
+    const browserImage = resolveSandboxBrowserImage(cfg);
     await handleMissingSandboxImage(
       {
         engineCommand: containerEngine.command,
         kind: "browser",
-        image: resolveSandboxBrowserImage(cfg),
-        buildScript: "scripts/sandbox-browser-setup.sh",
+        image: browserImage,
+        buildScript:
+          browserImage === DEFAULT_SANDBOX_BROWSER_IMAGE
+            ? "scripts/sandbox-browser-setup.sh"
+            : undefined,
       },
       runtime,
       prompter,
