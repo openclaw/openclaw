@@ -740,13 +740,11 @@ extensions/msteams/src/user-agent.ts	1
 extensions/mxc/src/fs-bridge.ts	1
 extensions/nextcloud-talk/src/approval-auth.ts	1
 extensions/nextcloud-talk/src/channel.ts	2
-extensions/nextcloud-talk/src/doctor.ts	2
 extensions/nextcloud-talk/src/gateway.ts	2
 extensions/nextcloud-talk/src/inbound.ts	9
 extensions/nextcloud-talk/src/message-actions.ts	3
 extensions/nextcloud-talk/src/message-adapter.ts	1
 extensions/nextcloud-talk/src/monitor-runtime.ts	1
-extensions/nextcloud-talk/src/monitor.ts	1
 extensions/nextcloud-talk/src/policy.ts	2
 extensions/nextcloud-talk/src/send.ts	1
 extensions/nextcloud-talk/src/setup-core.ts	8
