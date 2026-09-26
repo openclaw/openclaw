@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { summarizeToolValidationError } from "../../tool-error-summary.js";
 import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-provenance.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import type { ToolSummaryTrace } from "../types.js";
@@ -84,6 +85,9 @@ export function buildTraceToolSummary(params: {
     tools.push(toolName);
   }
   const failedToolCalls = params.toolMetas.filter((entry) => entry.isError === true).length;
+  const validationErrorSummary = params.lastToolError
+    ? summarizeToolValidationError(params.lastToolError)
+    : undefined;
   return {
     calls: params.toolMetas.length,
     tools,
@@ -91,7 +95,12 @@ export function buildTraceToolSummary(params: {
     // Keep the prior any-failure signal for external harnesses that do not emit it yet.
     failures: failedToolCalls || Number(Boolean(params.lastToolError)),
     ...(params.lastToolError
-      ? { unresolvedError: { toolName: params.lastToolError.toolName } }
+      ? {
+          unresolvedError: {
+            toolName: params.lastToolError.toolName,
+            ...(validationErrorSummary ? { validationErrorSummary } : {}),
+          },
+        }
       : {}),
   };
 }
