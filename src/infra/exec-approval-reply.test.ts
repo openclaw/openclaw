@@ -1,38 +1,17 @@
 // Tests execution approval reply text and decision formatting.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 
-vi.mock("./exec-approval-surface.js", () => ({
-  describeNativeExecApprovalClientSetup: vi.fn(
-    (params: {
-      channel?: string | null;
-      channelLabel?: string | null;
-      accountId?: string | null;
-    }) => {
-      const channel = (params.channel ?? "").trim().toLowerCase();
-      const label = params.channelLabel ?? channel;
-      const accountId = params.accountId?.trim();
-      const accountPrefix =
-        accountId && accountId !== "default"
-          ? `channels.${channel}.accounts.${accountId}`
-          : `channels.${channel}`;
-      if (channel === "matrix") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`${accountPrefix}.dm.allowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
-      }
-      if (channel === "discord" || channel === "slack") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; set \`${accountPrefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`;
-      }
-      if (channel === "telegram") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
-      }
-      return null;
-    },
-  ),
-  listNativeExecApprovalClientLabels: vi.fn(() => ["Discord", "Matrix", "Slack", "Telegram"]),
-  supportsNativeExecApprovalClient: vi.fn((channel?: string | null) =>
-    ["discord", "matrix", "slack", "telegram"].includes((channel ?? "").trim().toLowerCase()),
-  ),
+const surface = vi.hoisted(() => ({
+  describeNativeExecApprovalClientSetup:
+    vi.fn<typeof import("./exec-approval-surface.js").describeNativeExecApprovalClientSetup>(),
+  listNativeExecApprovalClientLabels:
+    vi.fn<typeof import("./exec-approval-surface.js").listNativeExecApprovalClientLabels>(),
+  supportsNativeExecApprovalClient:
+    vi.fn<typeof import("./exec-approval-surface.js").supportsNativeExecApprovalClient>(),
 }));
+
+vi.mock("./exec-approval-surface.js", () => surface);
 
 import {
   buildApprovalButtonPresentation,
@@ -50,6 +29,14 @@ import {
 } from "./exec-approval-reply.js";
 
 describe("exec approval reply helpers", () => {
+  beforeEach(() => {
+    surface.describeNativeExecApprovalClientSetup.mockReset().mockReturnValue(null);
+    surface.listNativeExecApprovalClientLabels
+      .mockReset()
+      .mockReturnValue(["Discord", "Matrix", "Slack", "Telegram"]);
+    surface.supportsNativeExecApprovalClient.mockReset().mockReturnValue(false);
+  });
+
   const invalidReplyMetadataCases = [
     { name: "empty object", payload: {} },
     { name: "null channelData", payload: { channelData: null } },
@@ -93,7 +80,7 @@ describe("exec approval reply helpers", () => {
     );
   });
 
-  it("mentions Matrix in the fallback native approval guidance", () => {
+  it("includes the available native client labels in fallback guidance", () => {
     const text = buildExecApprovalUnavailableReplyPayload({
       reason: "no-approval-route",
     }).text;
@@ -102,6 +89,9 @@ describe("exec approval reply helpers", () => {
     expect(text).toContain("Matrix");
     expect(text).toContain("Slack");
     expect(text).toContain("Telegram");
+    expect(surface.listNativeExecApprovalClientLabels).toHaveBeenCalledExactlyOnceWith({
+      excludeChannel: undefined,
+    });
   });
 
   it("avoids repeating allowFrom guidance in the no-route fallback", () => {
@@ -135,95 +125,100 @@ describe("exec approval reply helpers", () => {
     expect(text).not.toContain("exec-approvals list");
   });
 
-  it("explains how to enable Matrix native approvals when Matrix is the initiating platform", () => {
+  it.each([undefined, " work "])(
+    "includes delegated setup guidance for account %j without rewriting its label or account",
+    (accountId) => {
+      surface.supportsNativeExecApprovalClient.mockReturnValue(true);
+      surface.describeNativeExecApprovalClientSetup.mockReturnValue("Native setup instructions.");
+
+      const text = buildExecApprovalUnavailableReplyPayload({
+        reason: "initiating-platform-disabled",
+        channel: " SuPPorted ",
+        channelLabel: " Custom label ",
+        ...(accountId === undefined ? {} : { accountId }),
+      }).text;
+
+      expect(surface.supportsNativeExecApprovalClient).toHaveBeenCalledExactlyOnceWith("supported");
+      expect(surface.describeNativeExecApprovalClientSetup).toHaveBeenCalledExactlyOnceWith({
+        channel: "supported",
+        channelLabel: " Custom label ",
+        accountId,
+      });
+      expect(text).toBe(
+        "Exec approval is required, but native chat exec approvals are not configured on  Custom label .\n\nNative setup instructions.",
+      );
+      expect(surface.listNativeExecApprovalClientLabels).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([true, false])(
+    "uses generic guidance when native support is %s and setup is unavailable",
+    (supported) => {
+      surface.supportsNativeExecApprovalClient.mockReturnValue(supported);
+
+      const text = buildExecApprovalUnavailableReplyPayload({
+        reason: "initiating-platform-disabled",
+        channel: " SuPPorted ",
+        channelLabel: "Custom",
+      }).text;
+
+      expect(surface.supportsNativeExecApprovalClient).toHaveBeenCalledExactlyOnceWith("supported");
+      if (supported) {
+        expect(surface.describeNativeExecApprovalClientSetup).toHaveBeenCalledExactlyOnceWith({
+          channel: "supported",
+          channelLabel: "Custom",
+          accountId: undefined,
+        });
+      } else {
+        expect(surface.describeNativeExecApprovalClientSetup).not.toHaveBeenCalled();
+      }
+      expect(surface.listNativeExecApprovalClientLabels).toHaveBeenCalledExactlyOnceWith({
+        excludeChannel: undefined,
+      });
+      expect(text).toContain(
+        "native chat approval client such as Discord, Matrix, Slack, or Telegram",
+      );
+    },
+  );
+
+  it.each([
+    { channel: undefined, channelLabel: "Custom" },
+    { channel: "supported", channelLabel: undefined },
+  ])("bypasses native setup when its channel or label is missing: %j", (params) => {
+    surface.supportsNativeExecApprovalClient.mockReturnValue(true);
+
     const text = buildExecApprovalUnavailableReplyPayload({
       reason: "initiating-platform-disabled",
-      channel: "matrix",
-      channelLabel: "Matrix",
+      ...params,
     }).text;
 
-    expect(text).toContain("native chat exec approvals are not configured on Matrix");
-    expect(text).toContain("Matrix supports native exec approvals for this account");
-    expect(text).toContain("`channels.matrix.execApprovals.approvers`");
-    expect(text).toContain("`channels.matrix.dm.allowFrom`");
+    expect(surface.supportsNativeExecApprovalClient).not.toHaveBeenCalled();
+    expect(surface.describeNativeExecApprovalClientSetup).not.toHaveBeenCalled();
+    expect(surface.listNativeExecApprovalClientLabels).toHaveBeenCalledExactlyOnceWith({
+      excludeChannel: undefined,
+    });
+    expect(text).toContain(
+      "native chat approval client such as Discord, Matrix, Slack, or Telegram",
+    );
   });
 
-  it.each([
-    {
-      channel: "discord",
-      channelLabel: "Discord",
-      expected: "`commands.ownerAllowFrom`",
-      unexpected: "`channels.discord.dm.allowFrom`",
-    },
-    {
-      channel: "slack",
-      channelLabel: "Slack",
-      expected: "`commands.ownerAllowFrom`",
-      unexpected: "`channels.slack.dm.allowFrom`",
-    },
-    {
-      channel: "telegram",
-      channelLabel: "Telegram",
-      expected: "`commands.ownerAllowFrom`",
-      unexpected: "`channels.telegram.allowFrom`",
-    },
-  ])(
-    "uses channel-specific disabled setup guidance for $channelLabel",
-    ({ channel, channelLabel, expected, unexpected }) => {
-      const text = buildExecApprovalUnavailableReplyPayload({
-        reason: "initiating-platform-disabled",
-        channel,
-        channelLabel,
-      }).text;
+  it("forwards the raw unsupported channel to the fallback client exclusion", () => {
+    const text = buildExecApprovalUnavailableReplyPayload({
+      reason: "initiating-platform-unsupported",
+      channel: " Other-Channel ",
+      channelLabel: "Other",
+    }).text;
 
-      expect(text).toContain(expected);
-      expect(text).not.toContain(unexpected);
-    },
-  );
-
-  it.each([
-    {
-      channel: "discord",
-      channelLabel: "Discord",
-      accountId: "work",
-      expected: "`channels.discord.accounts.work.execApprovals.approvers`",
-      unexpected: "`channels.discord.execApprovals.approvers`",
-    },
-    {
-      channel: "slack",
-      channelLabel: "Slack",
-      accountId: "work",
-      expected: "`channels.slack.accounts.work.execApprovals.approvers`",
-      unexpected: "`channels.slack.execApprovals.approvers`",
-    },
-    {
-      channel: "telegram",
-      channelLabel: "Telegram",
-      accountId: "work",
-      expected: "`channels.telegram.accounts.work.execApprovals.approvers`",
-      unexpected: "`channels.telegram.execApprovals.approvers`",
-    },
-    {
-      channel: "matrix",
-      channelLabel: "Matrix",
-      accountId: "work",
-      expected: "`channels.matrix.accounts.work.dm.allowFrom`",
-      unexpected: "`channels.matrix.dm.allowFrom`",
-    },
-  ])(
-    "uses account-scoped disabled setup guidance for $channelLabel named account",
-    ({ channel, channelLabel, accountId, expected, unexpected }) => {
-      const text = buildExecApprovalUnavailableReplyPayload({
-        reason: "initiating-platform-disabled",
-        channel,
-        channelLabel,
-        accountId,
-      }).text;
-
-      expect(text).toContain(expected);
-      expect(text).not.toContain(unexpected);
-    },
-  );
+    expect(surface.listNativeExecApprovalClientLabels).toHaveBeenCalledExactlyOnceWith({
+      excludeChannel: " Other-Channel ",
+    });
+    expect(surface.supportsNativeExecApprovalClient).not.toHaveBeenCalled();
+    expect(surface.describeNativeExecApprovalClientSetup).not.toHaveBeenCalled();
+    expect(text).toContain("Other does not support chat exec approvals.");
+    expect(text).toContain(
+      "native chat approval client such as Discord, Matrix, Slack, or Telegram",
+    );
+  });
 
   it.each(invalidReplyMetadataCases)(
     "returns null for invalid reply metadata payload: $name",
@@ -680,22 +675,28 @@ describe("exec approval reply helpers", () => {
     expect(parseExecApprovalCommandText("/approve req-1 maybe")).toBeNull();
   });
 
-  it("builds unavailable payloads for approver DMs", () => {
-    expect(
-      buildExecApprovalUnavailableReplyPayload({
-        warningText: "  Careful.  ",
-        reason: "no-approval-route",
-        sentApproverDms: true,
-      }),
-    ).toEqual({
-      text: "Careful.\n\nApproval required. I sent approval DMs to the approvers for this account.",
-      channelData: {
-        execApprovalUnavailable: {
-          reason: "no-approval-route",
-        },
-      },
-    });
-  });
+  it.each(["no-approval-route", "initiating-platform-disabled"] as const)(
+    "returns the approver DM notice before querying collaborators for %s",
+    (reason) => {
+      surface.supportsNativeExecApprovalClient.mockReturnValue(true);
+
+      expect(
+        buildExecApprovalUnavailableReplyPayload({
+          warningText: "  Careful.  ",
+          reason,
+          channel: "supported",
+          channelLabel: "Custom",
+          sentApproverDms: true,
+        }),
+      ).toEqual({
+        text: "Careful.\n\nApproval required. I sent approval DMs to the approvers for this account.",
+        channelData: { execApprovalUnavailable: { reason } },
+      });
+      expect(surface.supportsNativeExecApprovalClient).not.toHaveBeenCalled();
+      expect(surface.describeNativeExecApprovalClientSetup).not.toHaveBeenCalled();
+      expect(surface.listNativeExecApprovalClientLabels).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(unavailableReasonCases)(
     "builds unavailable payload for reason $reason",

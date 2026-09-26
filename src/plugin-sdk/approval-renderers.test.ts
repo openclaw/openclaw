@@ -323,10 +323,8 @@ describe("plugin-sdk/approval-renderers", () => {
       throw new Error("expected rendered approval text");
     }
     textExpected(payload.text);
-    if (presentationExpected) {
-      expect(payload.presentation).toEqual(presentationExpected);
-      expect(payload.interactive).toBeUndefined();
-    }
+    expect(payload.presentation).toEqual(presentationExpected);
+    expect(payload.interactive).toBeUndefined();
     if (channelDataExpected) {
       expect(payload.channelData).toEqual(channelDataExpected);
     }

@@ -203,63 +203,60 @@ describe("prepared channel turn lifecycle", () => {
     expect(onAdopted).toHaveBeenCalledOnce();
   });
 
-  it.each(["draft lane", "typing indicator", "delivery correlation"])(
-    "settles a prepared %s when observe-only suppresses dispatch",
-    async () => {
-      const events: string[] = [];
-      const onFinalize = vi.fn();
-      let resourceOpen = true;
-      const onDispatchSkipped = vi.fn(async () => {
-        resourceOpen = false;
-        events.push("cleanup");
-      });
-      const runDispatch = vi.fn(async () => {
-        events.push("custom-dispatch");
-        return {
-          queuedFinal: true,
-          counts: { tool: 0, block: 0, final: 1 },
-        };
-      });
-      const result = await runChannelTurn({
-        channel: "test",
-        raw: { id: "msg-1", text: "hello" },
-        adapter: {
-          ingest: () => ({ id: "msg-1", rawText: "hello" }),
-          preflight: () => ({ kind: "observeOnly", reason: "broadcast-observer" }),
-          resolveTurn: () => ({
-            channel: "test",
-            routeSessionKey: "agent:observer:test:peer",
-            storePath,
-            ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
-            recordInboundSession: createRecordInboundSession(events),
-            runDispatch,
-            runDispatchLifecycle: {
-              turnAdoptionLifecycle: undefined,
-              onDispatchSkipped,
-            },
-          }),
-          onFinalize,
-        },
-      });
+  it("settles a prepared resource when observe-only suppresses dispatch", async () => {
+    const events: string[] = [];
+    const onFinalize = vi.fn();
+    let resourceOpen = true;
+    const onDispatchSkipped = vi.fn(async () => {
+      resourceOpen = false;
+      events.push("cleanup");
+    });
+    const runDispatch = vi.fn(async () => {
+      events.push("custom-dispatch");
+      return {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    });
+    const result = await runChannelTurn({
+      channel: "test",
+      raw: { id: "msg-1", text: "hello" },
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        preflight: () => ({ kind: "observeOnly", reason: "broadcast-observer" }),
+        resolveTurn: () => ({
+          channel: "test",
+          routeSessionKey: "agent:observer:test:peer",
+          storePath,
+          ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
+          recordInboundSession: createRecordInboundSession(events),
+          runDispatch,
+          runDispatchLifecycle: {
+            turnAdoptionLifecycle: undefined,
+            onDispatchSkipped,
+          },
+        }),
+        onFinalize,
+      },
+    });
 
-      expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
-      expect(result.dispatched).toBe(true);
-      expect(events).toEqual(["record", "cleanup"]);
-      expect(runDispatch).not.toHaveBeenCalled();
-      expect(onDispatchSkipped).toHaveBeenCalledWith("observeOnly");
-      expect(resourceOpen).toBe(false);
-      if (!result.dispatched) {
-        throw new Error("expected dispatch");
-      }
-      expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
-      expect(onFinalize).toHaveBeenCalledTimes(1);
-      const [finalized] = requireFirstMockCall(onFinalize, "finalize");
-      const finalizedResult = finalizeResult(finalized);
-      expect(finalizedResult.admission).toEqual({
-        kind: "observeOnly",
-        reason: "broadcast-observer",
-      });
-      expect(finalizedResult.dispatched).toBe(true);
-    },
-  );
+    expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
+    expect(result.dispatched).toBe(true);
+    expect(events).toEqual(["record", "cleanup"]);
+    expect(runDispatch).not.toHaveBeenCalled();
+    expect(onDispatchSkipped).toHaveBeenCalledWith("observeOnly");
+    expect(resourceOpen).toBe(false);
+    if (!result.dispatched) {
+      throw new Error("expected dispatch");
+    }
+    expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
+    expect(onFinalize).toHaveBeenCalledTimes(1);
+    const [finalized] = requireFirstMockCall(onFinalize, "finalize");
+    const finalizedResult = finalizeResult(finalized);
+    expect(finalizedResult.admission).toEqual({
+      kind: "observeOnly",
+      reason: "broadcast-observer",
+    });
+    expect(finalizedResult.dispatched).toBe(true);
+  });
 });

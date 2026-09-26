@@ -4,6 +4,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveImplicitMessageActionTarget } from "../infra/outbound/message-action-normalization.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
   createDirectDmPreCryptoGuardPolicy,
   createPreCryptoDirectDmAuthorizer,
@@ -17,64 +18,31 @@ const baseCfg = {
 } as unknown as OpenClawConfig;
 
 function createDirectDmRuntime() {
-  const recordInboundSessionMock = vi.fn(async (_params: unknown) => {});
-  const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
-    await dispatcherOptions.deliver({ text: "reply text" });
-  });
-  const runInbound = vi.fn(async ({ adapter, raw }) => {
-    const input = await adapter.ingest(raw);
-    const turn = await adapter.resolveTurn(input, {
-      kind: "message",
-      canStartAgentTurn: true,
-    });
-    await recordInboundSessionMock({
-      storePath: "/tmp/direct-dm-session-store",
-      sessionKey: turn.route.sessionKey,
-      ctx: turn.ctxPayload,
-      onRecordError: turn.record?.onRecordError ?? (() => undefined),
-    });
-    return {
-      admission: { kind: "dispatch" },
-      dispatched: true,
-      dispatchResult: await dispatchReplyWithBufferedBlockDispatcher({
-        ctx: turn.ctxPayload,
-        cfg: turn.cfg,
-        dispatcherOptions: {
-          ...turn.dispatcherOptions,
-          deliver: turn.delivery.deliver,
-          onError: turn.delivery.onError,
-        },
-        replyOptions: turn.replyOptions,
+  const channel = {
+    routing: {
+      resolveAgentRoute: vi.fn().mockReturnValue({
+        agentId: "agent-main",
+        accountId: "default",
+        sessionKey: "dm:clawstudio",
       }),
-    };
-  });
-  return {
-    recordInboundSession: recordInboundSessionMock,
-    dispatchReplyWithBufferedBlockDispatcher,
-    runtime: {
-      channel: {
-        routing: {
-          resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
-            agentId: "agent-main",
-            accountId,
-            sessionKey: `dm:${peer.id}`,
-          })),
-        },
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/direct-dm-session-store"),
-          readSessionUpdatedAt: vi.fn(() => 1234),
-          recordInboundSession: recordInboundSessionMock,
-        },
-        reply: {
-          resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
-          formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
-          finalizeInboundContext: vi.fn((ctx) => ctx),
-          dispatchReplyWithBufferedBlockDispatcher,
-        },
-        inbound: { run: runInbound },
-      },
-    } as never,
+    },
+    session: {
+      resolveStorePath: vi.fn().mockReturnValue("/tmp/direct-dm-session-store"),
+      readSessionUpdatedAt: vi.fn().mockReturnValue(1234),
+    },
+    reply: {
+      resolveEnvelopeFormatOptions: vi.fn().mockReturnValue({ mode: "agent" }),
+      formatAgentEnvelope: vi.fn().mockReturnValue("env:hello world"),
+      finalizeInboundContext: vi.fn((ctx: Record<string, unknown>) => ctx),
+    },
+    inbound: {
+      run: vi.fn<PluginRuntime["channel"]["inbound"]["run"]>().mockResolvedValue({
+        admission: { kind: "handled", reason: "captured adapter" },
+        dispatched: false,
+      }),
+    },
   };
+  return { channel, runtime: { channel } as unknown as PluginRuntime };
 }
 
 describe("channel-inbound direct-message helpers", () => {
@@ -244,9 +212,13 @@ describe("channel-inbound direct-message helpers", () => {
   });
 
   it("routes a targetless contextual reply to the inbound Reef peer", async () => {
-    const { recordInboundSession, dispatchReplyWithBufferedBlockDispatcher, runtime } =
-      createDirectDmRuntime();
-    const deliver = vi.fn(async () => {});
+    const { channel, runtime } = createDirectDmRuntime();
+    const cfg = { session: { store: "/tmp/direct-dm-session-store" } } satisfies OpenClawConfig;
+    const deliver = vi
+      .fn<Parameters<typeof dispatchInboundDirectDmWithRuntime>[0]["deliver"]>()
+      .mockResolvedValue(undefined);
+    const onRecordError = vi.fn();
+    const onDispatchError = vi.fn();
     const channelIngress = await resolveStableChannelMessageIngress({
       channelId: "reef",
       accountId: "default",
@@ -257,9 +229,7 @@ describe("channel-inbound direct-message helpers", () => {
 
     const result = await dispatchInboundDirectDmWithRuntime({
       channelIngress,
-      cfg: {
-        session: { store: { type: "jsonl" } },
-      } as never,
+      cfg,
       runtime,
       channel: "reef",
       channelLabel: "Reef",
@@ -279,31 +249,139 @@ describe("channel-inbound direct-message helpers", () => {
       timestamp: 1_710_000_000_000,
       commandAuthorized: true,
       deliver,
-      onRecordError: () => {},
-      onDispatchError: () => {},
+      onRecordError,
+      onDispatchError,
     });
 
-    expect(result.route.agentId).toBe("agent-main");
-    expect(result.route.accountId).toBe("default");
-    expect(result.route.sessionKey).toBe("dm:clawstudio");
-    expect(result.storePath).toBe("/tmp/direct-dm-session-store");
-    expect(result.ctxPayload.Body).toBe("env:hello world");
-    expect(result.ctxPayload.BodyForAgent).toBe("hello world");
-    expect(result.ctxPayload.From).toBe("reef:clawstudio");
-    expect(result.ctxPayload.To).toBe("reef:roboclaw");
-    expect(result.ctxPayload.SenderId).toBe("clawstudio");
-    expect(result.ctxPayload.MessageSid).toBe("event-123");
-    expect(result.ctxPayload.ReplyToId).toBe("event-parent");
-    expect(result.ctxPayload.MessageThreadId).toBe("thread-7");
-    expect(result.ctxPayload.NativeDirectUserId).toBe("clawstudio");
-    expect(result.ctxPayload.OriginatingTo).toBe("reef:clawstudio");
-    expect(result.ctxPayload.CommandAuthorized).toBe(true);
+    const expectedContext = {
+      Body: "env:hello world",
+      BodyForAgent: "hello world",
+      RawBody: "hello world",
+      CommandBody: "hello world",
+      From: "reef:clawstudio",
+      To: "reef:roboclaw",
+      SessionKey: "dm:clawstudio",
+      AccountId: "default",
+      ChatType: "direct",
+      ConversationLabel: "@clawstudio's agent",
+      SenderId: "clawstudio",
+      Provider: "reef",
+      Surface: "reef",
+      MessageSid: "event-123",
+      MessageSidFull: "event-123",
+      Timestamp: 1_710_000_000_000,
+      CommandAuthorized: true,
+      ConversationRoutePeerId: "clawstudio",
+      OriginatingChannel: "reef",
+      OriginatingTo: "reef:clawstudio",
+      NativeDirectUserId: "clawstudio",
+      ReplyToId: "event-parent",
+      ReplyToIdFull: "event-parent",
+      MessageThreadId: "thread-7",
+    };
+    expect(result).toEqual({
+      route: { agentId: "agent-main", accountId: "default", sessionKey: "dm:clawstudio" },
+      storePath: "/tmp/direct-dm-session-store",
+      ctxPayload: expectedContext,
+    });
+    expect(channel.routing.resolveAgentRoute).toHaveBeenCalledExactlyOnceWith({
+      cfg,
+      channel: "reef",
+      accountId: "default",
+      peer: { kind: "direct", id: "clawstudio" },
+    });
+    expect(channel.session.resolveStorePath).toHaveBeenCalledExactlyOnceWith(
+      "/tmp/direct-dm-session-store",
+      { agentId: "agent-main" },
+    );
+    expect(channel.session.readSessionUpdatedAt).toHaveBeenCalledExactlyOnceWith({
+      storePath: "/tmp/direct-dm-session-store",
+      sessionKey: "dm:clawstudio",
+    });
+    expect(channel.reply.resolveEnvelopeFormatOptions).toHaveBeenCalledExactlyOnceWith(cfg);
+    expect(channel.reply.formatAgentEnvelope).toHaveBeenCalledExactlyOnceWith({
+      channel: "Reef",
+      from: "@clawstudio's agent",
+      body: "hello world",
+      timestamp: 1_710_000_000_000,
+      previousTimestamp: 1234,
+      envelope: { mode: "agent" },
+    });
+    expect(channel.reply.finalizeInboundContext).toHaveBeenCalledExactlyOnceWith(expectedContext);
     const currentChannelId = result.ctxPayload.OriginatingTo ?? result.ctxPayload.To;
     expect(
       resolveImplicitMessageActionTarget({ currentChannelId, currentChannelProvider: "reef" }),
     ).toBe("reef:clawstudio");
-    expect(recordInboundSession).toHaveBeenCalledTimes(1);
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    expect(deliver).toHaveBeenCalledWith({ text: "reply text" });
+    expect(channel.inbound.run).toHaveBeenCalledOnce();
+    const inbound = channel.inbound.run.mock.calls[0]?.[0];
+    if (!inbound) {
+      throw new Error("expected captured inbound adapter");
+    }
+    expect(inbound).toEqual({
+      channel: "reef",
+      accountId: "default",
+      raw: expectedContext,
+      adapter: { ingest: expect.any(Function), resolveTurn: expect.any(Function) },
+    });
+    const input = await inbound.adapter.ingest(inbound.raw);
+    expect(input).toStrictEqual({
+      id: "event-123",
+      timestamp: 1_710_000_000_000,
+      rawText: "hello world",
+      textForAgent: undefined,
+      textForCommands: undefined,
+      raw: expectedContext,
+    });
+    if (!input) {
+      throw new Error("expected normalized input");
+    }
+    const plan = await inbound.adapter.resolveTurn(
+      input,
+      { kind: "message", canStartAgentTurn: true },
+      {},
+    );
+    if (!("delivery" in plan)) {
+      throw new Error("expected delivery plan");
+    }
+    expect(plan).toMatchObject({
+      cfg,
+      channel: "reef",
+      accountId: "default",
+      route: { agentId: "agent-main", sessionKey: "dm:clawstudio" },
+      ctxPayload: expectedContext,
+      record: { onRecordError },
+      delivery: { deliver: expect.any(Function), onError: onDispatchError },
+      replyOptions: { onModelSelected: expect.any(Function) },
+    });
+    expect(plan.cfg).toBe(cfg);
+    expect(plan.ctxPayload).toBe(result.ctxPayload);
+    await plan.delivery.deliver(
+      {
+        text: "reply text",
+        mediaUrls: ["media://reply", ""],
+        replyToId: "event-parent",
+        isError: true,
+      },
+      { kind: "final" },
+    );
+    expect(deliver.mock.calls).toStrictEqual([
+      [
+        {
+          text: "reply text",
+          mediaUrls: ["media://reply"],
+          mediaUrl: undefined,
+          presentation: undefined,
+          interactive: undefined,
+          channelData: undefined,
+          sensitiveMedia: undefined,
+          replyToId: "event-parent",
+        },
+      ],
+    ]);
+    const error = new Error("delivery failed");
+    plan.record?.onRecordError?.(error);
+    plan.delivery.onError?.(error, { kind: "final" });
+    expect(onRecordError).toHaveBeenCalledExactlyOnceWith(error);
+    expect(onDispatchError).toHaveBeenCalledExactlyOnceWith(error, { kind: "final" });
   });
 });

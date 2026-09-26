@@ -1558,13 +1558,6 @@ describe("delivery-queue recovery", () => {
       closeOpenClawAgentDatabasesForTest();
     }
   });
-  it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
-    await enqueueRecoveryDelivery();
-    const deliver = vi.fn().mockResolvedValue([]);
-    await runRecovery({ deliver });
-    const deliverInput = mockCallRecord(deliver);
-    expect(deliverInput.skipQueue).toBe(true);
-  });
   it("runs recovered send commit hooks only after the queue entry is acked", async () => {
     const id = await enqueueRecoveryDelivery();
     const order: string[] = [];

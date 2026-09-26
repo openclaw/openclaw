@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { markdownToIR } from "./ir.js";
 
-describe("Nested Lists - 2 Level Nesting", () => {
+describe("nested list structure and spacing", () => {
   it("records parser-owned item spans and list ancestry", () => {
     const result = markdownToIR("- parent\n  - child\n- next\n# Heading");
     const items = [...(result.listItems ?? [])].toSorted(
@@ -22,169 +22,6 @@ describe("Nested Lists - 2 Level Nesting", () => {
     expect(result.text.slice(first?.start, first?.end)).toContain("continuation");
   });
 
-  it.each([
-    [
-      "renders bullet items nested inside bullet items with proper indentation",
-      `- Item 1
-  - Nested 1.1
-  - Nested 1.2
-- Item 2`,
-      `• Item 1
-  • Nested 1.1
-  • Nested 1.2
-• Item 2`,
-    ],
-    [
-      "renders ordered items nested inside bullet items",
-      `- Bullet item
-  1. Ordered sub-item 1
-  2. Ordered sub-item 2
-- Another bullet`,
-      `• Bullet item
-  1. Ordered sub-item 1
-  2. Ordered sub-item 2
-• Another bullet`,
-    ],
-    [
-      "renders bullet items nested inside ordered items",
-      `1. Ordered 1
-   - Bullet sub 1
-   - Bullet sub 2
-2. Ordered 2`,
-      `1. Ordered 1
-  • Bullet sub 1
-  • Bullet sub 2
-2. Ordered 2`,
-    ],
-    [
-      "renders ordered items nested inside ordered items",
-      `1. First
-   1. Sub-first
-   2. Sub-second
-2. Second`,
-      `1. First
-  1. Sub-first
-  2. Sub-second
-2. Second`,
-    ],
-    [
-      "renders 4 levels of bullet nesting",
-      `- L1
-  - L2
-    - L3
-      - L4
-- Back`,
-      `• L1
-  • L2
-    • L3
-      • L4
-• Back`,
-    ],
-    [
-      "renders 3 levels with multiple items at each level",
-      `- A1
-  - B1
-    - C1
-    - C2
-  - B2
-- A2`,
-      `• A1
-  • B1
-    • C1
-    • C2
-  • B2
-• A2`,
-    ],
-    [
-      "renders complex mixed nesting (bullet > ordered > bullet)",
-      `- Bullet 1
-  1. Ordered 1.1
-     - Deep bullet
-  2. Ordered 1.2
-- Bullet 2`,
-      `• Bullet 1
-  1. Ordered 1.1
-    • Deep bullet
-  2. Ordered 1.2
-• Bullet 2`,
-    ],
-    [
-      "renders ordered > bullet > ordered nesting",
-      `1. First
-   - Sub bullet
-     1. Deep ordered
-   - Another bullet
-2. Second`,
-      `1. First
-  • Sub bullet
-    1. Deep ordered
-  • Another bullet
-2. Second`,
-    ],
-    [
-      "handles sibling nested lists at same level",
-      `- A
-  - A1
-- B
-  - B1`,
-      `• A
-  • A1
-• B
-  • B1`,
-    ],
-  ])("%s", (_title, markdown, expected) => {
-    const input = markdown;
-
-    const result = markdownToIR(input);
-
-    expect(result.text).toBe(expected);
-  });
-});
-
-describe("Nested Lists - 3+ Level Deep Nesting", () => {
-  it("renders 3 levels of bullet nesting", () => {
-    const input = `- Level 1
-  - Level 2
-    - Level 3
-- Back to 1`;
-
-    const result = markdownToIR(input);
-
-    const expected = `• Level 1
-  • Level 2
-    • Level 3
-• Back to 1`;
-
-    expect(result.text).toBe(expected);
-  });
-});
-
-describe("Nested Lists - Newline Handling", () => {
-  it("does not produce double newlines between nested items", () => {
-    const input = `- A
-  - B
-  - C
-- D`;
-
-    const result = markdownToIR(input);
-
-    // Between B and C there should be exactly one newline
-    expect(result.text).toContain("  • B\n  • C");
-    expect(result.text).not.toContain("  • B\n\n  • C");
-  });
-
-  it("properly terminates top-level list (trimmed output)", () => {
-    const input = `- Item 1
-  - Nested
-- Item 2`;
-
-    const result = markdownToIR(input);
-
-    expect(result.text).toBe("• Item 1\n  • Nested\n• Item 2");
-  });
-});
-
-describe("Nested Lists - Edge Cases", () => {
   it("handles empty parent with nested items", () => {
     // This is a bit of an edge case - a list item that's just a marker followed by nested content
     const input = `-
@@ -197,15 +34,88 @@ describe("Nested Lists - Edge Cases", () => {
     expect(result.text).toContain("  • Nested only");
   });
 
-  it("handles nested list as first child of parent item", () => {
-    const input = `- Parent text
-  - Child
-- Another parent`;
-
-    const result = markdownToIR(input);
-
-    // The child should appear indented under the parent
-    expect(result.text).toContain("• Parent text\n  • Child");
+  it.each([
+    [
+      "renders bullet items nested inside bullet items",
+      "- Item 1\n  - Nested 1.1\n  - Nested 1.2\n- Item 2",
+      "• Item 1\n  • Nested 1.1\n  • Nested 1.2\n• Item 2",
+    ],
+    [
+      "renders ordered items nested inside bullet items",
+      "- Bullet item\n  1. Ordered sub-item 1\n  2. Ordered sub-item 2\n- Another bullet",
+      "• Bullet item\n  1. Ordered sub-item 1\n  2. Ordered sub-item 2\n• Another bullet",
+    ],
+    [
+      "renders bullet items nested inside ordered items",
+      "1. Ordered 1\n   - Bullet sub 1\n   - Bullet sub 2\n2. Ordered 2",
+      "1. Ordered 1\n  • Bullet sub 1\n  • Bullet sub 2\n2. Ordered 2",
+    ],
+    [
+      "renders ordered items nested inside ordered items",
+      "1. First\n   1. Sub-first\n   2. Sub-second\n2. Second",
+      "1. First\n  1. Sub-first\n  2. Sub-second\n2. Second",
+    ],
+    [
+      "renders four levels of bullet nesting",
+      "- L1\n  - L2\n    - L3\n      - L4\n- Back",
+      "• L1\n  • L2\n    • L3\n      • L4\n• Back",
+    ],
+    [
+      "renders three levels with multiple items at each level",
+      "- A1\n  - B1\n    - C1\n    - C2\n  - B2\n- A2",
+      "• A1\n  • B1\n    • C1\n    • C2\n  • B2\n• A2",
+    ],
+    [
+      "renders bullet then ordered then bullet nesting",
+      "- Bullet 1\n  1. Ordered 1.1\n     - Deep bullet\n  2. Ordered 1.2\n- Bullet 2",
+      "• Bullet 1\n  1. Ordered 1.1\n    • Deep bullet\n  2. Ordered 1.2\n• Bullet 2",
+    ],
+    [
+      "renders ordered then bullet then ordered nesting",
+      "1. First\n   - Sub bullet\n     1. Deep ordered\n   - Another bullet\n2. Second",
+      "1. First\n  • Sub bullet\n    1. Deep ordered\n  • Another bullet\n2. Second",
+    ],
+    ["handles sibling nested lists", "- A\n  - A1\n- B\n  - B1", "• A\n  • A1\n• B\n  • B1"],
+    [
+      "renders three levels of bullet nesting",
+      "- Level 1\n  - Level 2\n    - Level 3\n- Back to 1",
+      "• Level 1\n  • Level 2\n    • Level 3\n• Back to 1",
+    ],
+    ["keeps nested siblings single-spaced", "- A\n  - B\n  - C\n- D", "• A\n  • B\n  • C\n• D"],
+    [
+      "trims the top-level list ending",
+      "- Item 1\n  - Nested\n- Item 2",
+      "• Item 1\n  • Nested\n• Item 2",
+    ],
+    [
+      "indents a nested list after the parent text",
+      "- Parent text\n  - Child\n- Another parent",
+      "• Parent text\n  • Child\n• Another parent",
+    ],
+    [
+      "avoids triple newlines before loose nested bullet lists",
+      "- parent\n\n  - child\n\n- next",
+      "• parent\n\n  • child\n• next",
+    ],
+    [
+      "avoids triple newlines before loose nested ordered lists",
+      "1. parent\n\n   1. child\n\n2. next",
+      "1. parent\n\n  1. child\n2. next",
+    ],
+    [
+      "separates a bullet list from the following paragraph",
+      "- item 1\n- item 2\n\nParagraph after",
+      "• item 1\n• item 2\n\nParagraph after",
+    ],
+    [
+      "separates an ordered list from the following paragraph",
+      "1. item 1\n2. item 2\n\nParagraph after",
+      "1. item 1\n2. item 2\n\nParagraph after",
+    ],
+  ])("%s", (_title, markdown, expected) => {
+    const result = markdownToIR(markdown);
+    expect(result.text).toBe(expected);
+    expect(result.text).not.toContain("\n\n\n");
   });
 });
 
@@ -282,60 +192,7 @@ second paragraph
 • next`,
     },
   ])("$title", ({ markdown, expected }) => {
-    const input = markdown;
-
-    const result = markdownToIR(input);
-
+    const result = markdownToIR(markdown);
     expect(result.text).toBe(expected);
-  });
-
-  it("does not add triple newlines before loose nested bullet lists", () => {
-    const input = `- parent
-
-  - child
-
-- next`;
-
-    const result = markdownToIR(input);
-
-    expect(result.text).toBe(`• parent
-
-  • child
-• next`);
-    expect(result.text).not.toContain("\n\n\n");
-  });
-
-  it("does not add triple newlines before loose nested ordered lists", () => {
-    const input = `1. parent
-
-   1. child
-
-2. next`;
-
-    const result = markdownToIR(input);
-
-    expect(result.text).toBe(`1. parent
-
-  1. child
-2. next`);
-    expect(result.text).not.toContain("\n\n\n");
-  });
-
-  it("adds blank line between bullet list and following paragraph", () => {
-    const input = `- item 1
-- item 2
-
-Paragraph after`;
-    const result = markdownToIR(input);
-    expect(result.text).toBe("• item 1\n• item 2\n\nParagraph after");
-  });
-
-  it("adds blank line between ordered list and following paragraph", () => {
-    const input = `1. item 1
-2. item 2
-
-Paragraph after`;
-    const result = markdownToIR(input);
-    expect(result.text).toContain("item 2\n\nParagraph");
   });
 });

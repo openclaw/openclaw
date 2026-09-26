@@ -1,4 +1,5 @@
 import { expect, vi } from "vitest";
+import { withReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatchSettledCounts } from "../../auto-reply/reply/reply-dispatch-outcome.js";
@@ -7,6 +8,7 @@ import type {
   ReplyDispatchKind,
   ReplyDispatchReceipt,
   ReplyDispatchSettledCounts,
+  ReplyDispatcher,
 } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { RecordInboundSession } from "../session.types.js";
@@ -77,26 +79,34 @@ export function expectDispatched<TDispatchResult>(
 
 export function createDispatch(
   events: string[] = [],
-  deliverPayload: { text: string } = { text: "reply" },
+  deliverPayload: ReplyPayload = { text: "reply" },
   onDelivery?: (result: unknown) => void,
 ): DispatchReplyWithBufferedBlockDispatcher {
-  return vi.fn(async (params) => {
+  const dispatch = createDispatcherBackedDispatch(undefined, (dispatcher) =>
+    dispatcher.sendFinalReply(deliverPayload),
+  );
+  return vi.fn<DispatchReplyWithBufferedBlockDispatcher>(async (params) => {
     events.push("dispatch");
-    const delivery = await params.dispatcherOptions.deliver(deliverPayload, { kind: "final" });
-    onDelivery?.(delivery);
-    const deliveredNotVisible =
-      typeof delivery === "object" &&
-      delivery !== null &&
-      "visibleReplySent" in delivery &&
-      delivery.visibleReplySent === false;
-    return {
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-      settledReceipt: createReplyDispatchReceipt({
-        final: deliveredNotVisible ? { deliveredNotVisible: 1 } : { delivered: 1 },
-      }),
-    };
-  }) as DispatchReplyWithBufferedBlockDispatcher;
+    return await dispatch({
+      ...params,
+      dispatcherOptions: {
+        ...params.dispatcherOptions,
+        deliver: async (payload, info) => {
+          const delivery = await params.dispatcherOptions.deliver(payload, info);
+          onDelivery?.(delivery);
+          return delivery;
+        },
+      },
+    });
+  });
+}
+
+// These caller probes propagate rejection; the canonical dispatcher instead records a receipt.
+export function createDirectDeliveryDispatch(): DispatchReplyWithBufferedBlockDispatcher {
+  return vi.fn<DispatchReplyWithBufferedBlockDispatcher>(async (params) => {
+    await params.dispatcherOptions.deliver({ text: "reply" }, { kind: "final" });
+    return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+  });
 }
 
 export function createDeliveryResultCapture() {
@@ -110,20 +120,26 @@ export function createDeliveryResultCapture() {
 }
 
 export function createDispatcherBackedDispatch(
-  onReceipt: (receipt: ReplyDispatchReceipt | undefined) => void,
+  onReceipt?: (receipt: ReplyDispatchReceipt | undefined) => void,
+  enqueue: (dispatcher: ReplyDispatcher) => boolean = (dispatcher) =>
+    dispatcher.sendFinalReply({ text: "reply" }),
 ): DispatchReplyWithBufferedBlockDispatcher {
-  return vi.fn(async (params) => {
+  return vi.fn<DispatchReplyWithBufferedBlockDispatcher>(async (params) => {
     const dispatcher = createReplyDispatcher(params.dispatcherOptions);
-    dispatcher.sendFinalReply({ text: "reply" });
-    dispatcher.markComplete();
-    const settledReceipt = (await dispatcher.waitForIdle()) || undefined;
-    onReceipt(settledReceipt);
-    return {
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-      settledReceipt,
-    };
-  }) as DispatchReplyWithBufferedBlockDispatcher;
+    let settledReceipt: ReplyDispatchReceipt | undefined;
+    const result = await withReplyDispatcher({
+      dispatcher,
+      run: async () => ({
+        queuedFinal: enqueue(dispatcher),
+        counts: dispatcher.getQueuedCounts(),
+      }),
+      onSettledReceipt: (receipt) => {
+        settledReceipt = receipt;
+        onReceipt?.(receipt);
+      },
+    });
+    return { ...result, settledReceipt };
+  });
 }
 
 export function createReplyDispatchReceipt(

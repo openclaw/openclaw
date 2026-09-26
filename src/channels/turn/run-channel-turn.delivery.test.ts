@@ -24,11 +24,11 @@ import { hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispat
 import { dispatchAssembledChannelTurn, dispatchRoutedChannelTurn } from "./lifecycle.js";
 import {
   createCtx,
+  createDirectDeliveryDispatch,
   createDispatch,
   createDispatcherBackedDispatch,
   createDurableSendResult,
   createRecordInboundSession,
-  createReplyDispatchReceipt,
   createDeliveryResultCapture,
   type DurableSendRequest,
   type DurableSupportRequest,
@@ -478,10 +478,9 @@ describe("channel turn delivery", () => {
       runMessageSending,
     });
     const deliver = vi.fn();
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) => {
-      await params.dispatcherOptions.deliver({ mediaUrls: ["media://only"] }, { kind: "final" });
-      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-    });
+    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
+      createDispatch([], { mediaUrls: ["media://only"] }),
+    );
 
     await dispatchTestRoutedTurn({ deliver }, { OriginatingTo: "chat-1" });
 
@@ -504,21 +503,13 @@ describe("channel turn delivery", () => {
       runMessageSending,
     });
     const deliver = vi.fn(async () => ({ visibleReplySent: true }));
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) => {
-      await params.dispatcherOptions.deliver({ text: "deliver me" }, { kind: "block" });
-      await params.dispatcherOptions.deliver({ text: "cancel me" }, { kind: "final" });
-      return recordAgentRunTerminalOutcome(
-        {
-          queuedFinal: true,
-          counts: { tool: 0, block: 1, final: 1 },
-          settledReceipt: createReplyDispatchReceipt({
-            block: { delivered: 1 },
-            final: { deliveredNotVisible: 1 },
-          }),
-        },
-        "failed",
-      );
+    const dispatch = createDispatcherBackedDispatch(undefined, (dispatcher) => {
+      dispatcher.sendBlockReply({ text: "deliver me" });
+      return dispatcher.sendFinalReply({ text: "cancel me" });
     });
+    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) =>
+      recordAgentRunTerminalOutcome(await dispatch(params), "failed"),
+    );
 
     const result = await dispatchTestRoutedTurn({ deliver });
 
@@ -625,10 +616,18 @@ describe("channel turn delivery", () => {
       deliver: async () => ({ visibleReplySent: false, finalization }),
       onDelivered,
     });
-    await vi.advanceTimersByTimeAsync(10);
-    const receiptBeforeFinalization = sealedReceipt;
-    await vi.advanceTimersByTimeAsync(40);
-    const result = await turn;
+    void turn.catch(() => undefined);
+    let receiptBeforeFinalization: ReplyDispatchReceipt | undefined;
+    let result: Awaited<typeof turn>;
+    try {
+      await vi.advanceTimersByTimeAsync(10);
+      receiptBeforeFinalization = sealedReceipt;
+      await vi.advanceTimersByTimeAsync(40);
+      result = await turn;
+    } finally {
+      await vi.advanceTimersByTimeAsync(50);
+      await turn.catch(() => undefined);
+    }
 
     expect(receiptBeforeFinalization).toBeUndefined();
     expect(sealedReceipt).toMatchObject({
@@ -667,11 +666,17 @@ describe("channel turn delivery", () => {
       deliver: async () => ({ visibleReplySent: false, finalization }),
     });
     const rejection = expect(turn).rejects.toBe(finalizationError);
-    await vi.advanceTimersByTimeAsync(10);
-    const receiptBeforeFinalization = sealedReceipt;
-    await vi.advanceTimersByTimeAsync(40);
-
-    await rejection;
+    void rejection.catch(() => undefined);
+    let receiptBeforeFinalization: ReplyDispatchReceipt | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(10);
+      receiptBeforeFinalization = sealedReceipt;
+      await vi.advanceTimersByTimeAsync(40);
+      await rejection;
+    } finally {
+      await vi.advanceTimersByTimeAsync(50);
+      await turn.catch(() => undefined);
+    }
     expect(receiptBeforeFinalization).toBeUndefined();
     expect(sealedReceipt).toMatchObject({
       anyVisibleDelivered: true,
@@ -804,9 +809,7 @@ describe("channel turn delivery", () => {
   });
 
   it("keeps no-identity durable sends pending through lifecycle settlement", async () => {
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
-      createDispatcherBackedDispatch(() => {}),
-    );
+    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(createDispatch());
     sendDurableMessageBatch.mockResolvedValueOnce({
       status: "suppressed",
       results: [],
@@ -909,7 +912,6 @@ describe("channel turn delivery", () => {
   it("treats durable outbound support preflight failures as terminal", async () => {
     resolveOutboundDurableFinalDeliverySupport.mockRejectedValueOnce(new Error("preflight failed"));
     const deliver = vi.fn(async () => ({ messageIds: ["legacy-1"], visibleReplySent: true }));
-    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
 
     await expect(
       dispatchTestAssembledTurn({
@@ -917,7 +919,7 @@ describe("channel turn delivery", () => {
         accountId: "acct",
         routeSessionKey: "agent:main:telegram:peer",
         ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
-        dispatchReplyWithBufferedBlockDispatcher,
+        dispatchReplyWithBufferedBlockDispatcher: createDirectDeliveryDispatch(),
         delivery: { deliver, durable: { replyToMode: "first" } },
       }),
     ).rejects.toThrow("preflight failed");
@@ -941,7 +943,6 @@ describe("channel turn delivery", () => {
       sentBeforeError: true,
     });
     const deliver = vi.fn(async () => ({ messageIds: ["legacy-1"], visibleReplySent: true }));
-    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
 
     await expect(
       dispatchTestAssembledTurn({
@@ -949,7 +950,7 @@ describe("channel turn delivery", () => {
         accountId: "acct",
         routeSessionKey: "agent:main:telegram:peer",
         ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
-        dispatchReplyWithBufferedBlockDispatcher,
+        dispatchReplyWithBufferedBlockDispatcher: createDirectDeliveryDispatch(),
         delivery: { deliver, durable: { replyToMode: "first" } },
       }),
     ).rejects.toMatchObject({
@@ -963,7 +964,6 @@ describe("channel turn delivery", () => {
   it("preserves visible delivery when post-delivery observers throw", async () => {
     const error = new Error("observer failed");
     const deliver = vi.fn(async () => ({ messageIds: ["local-1"], visibleReplySent: true }));
-    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
 
     await expect(
       dispatchTestAssembledTurn({
@@ -971,7 +971,7 @@ describe("channel turn delivery", () => {
         accountId: "acct",
         routeSessionKey: "agent:main:telegram:peer",
         ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
-        dispatchReplyWithBufferedBlockDispatcher,
+        dispatchReplyWithBufferedBlockDispatcher: createDirectDeliveryDispatch(),
         delivery: {
           deliver,
           durable: false,
@@ -1034,19 +1034,21 @@ describe("channel turn delivery", () => {
       events.push("deliver");
       return { visibleReplySent: false, finalization };
     });
-    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
-      expect(params.replyOptions?.onAgentRunStart?.("run-finalized", undefined, dispatchRun)).toBe(
-        "reply-dispatch",
-      );
-      await params.dispatcherOptions.deliver({ text: "pre-final text" }, { kind: "final" });
+    const dispatch = createDispatch([], { text: "pre-final text" }, () => {
       events.push("provider-finalized");
       resolveFinalization({
         content: "provider final text",
         messageIds: ["om-final"],
         visibleReplySent: true,
       });
-      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-    }) as DispatchReplyWithBufferedBlockDispatcher;
+    });
+    const dispatchReplyWithBufferedBlockDispatcher =
+      vi.fn<DispatchReplyWithBufferedBlockDispatcher>(async (params) => {
+        expect(
+          params.replyOptions?.onAgentRunStart?.("run-finalized", undefined, dispatchRun),
+        ).toBe("reply-dispatch");
+        return await dispatch(params);
+      });
 
     await dispatchTestAssembledTurn({
       channel: "feishu",

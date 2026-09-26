@@ -5282,105 +5282,54 @@ describe("server-channels auto restart", () => {
     expect(manager.resolveRuntimeAccountId("line", "ops-team")).toBeUndefined();
   });
 
-  it("reuses plugin account resolution for health monitor overrides", () => {
-    installTestRegistry(
-      createTestPlugin({
-        resolveAccount: (cfg, accountId) => {
-          const accounts = (
-            cfg as {
-              channels?: {
-                discord?: {
-                  accounts?: Record<
-                    string,
-                    TestAccount & { healthMonitor?: { enabled?: boolean } }
-                  >;
-                };
-              };
-            }
-          ).channels?.discord?.accounts;
-          if (!accounts) {
-            return { enabled: true, configured: true };
-          }
-          const direct = accounts[accountId ?? DEFAULT_ACCOUNT_ID];
-          if (direct) {
-            return direct;
-          }
-          const normalized = (accountId ?? DEFAULT_ACCOUNT_ID).toLowerCase().replaceAll(" ", "-");
-          const matchKey = Object.keys(accounts).find(
-            (key) => key.toLowerCase().replaceAll(" ", "-") === normalized,
-          );
-          return matchKey ? (accounts[matchKey] ?? { enabled: true, configured: true }) : {};
-        },
-      }),
-    );
-
-    const manager = createManager({
-      getRuntimeConfig: () => ({
-        channels: {
-          discord: {
-            accounts: {
-              "Router D": {
-                enabled: true,
-                configured: true,
-                healthMonitor: { enabled: false },
-              },
-            },
-          },
-        },
-      }),
-    });
-
-    expect(manager.isHealthMonitorEnabled("discord", "router-d")).toBe(false);
-  });
-
-  it("falls back to channel-level health monitor overrides when account resolution omits them", () => {
-    installTestRegistry(
-      createTestPlugin({
-        resolveAccount: () => ({
-          enabled: true,
-          configured: true,
-        }),
-      }),
-    );
-
-    const manager = createManager({
-      getRuntimeConfig: () => ({
-        channels: {
-          discord: {
+  it.each([
+    {
+      name: "matches a normalized account id to its raw account override",
+      accountId: "router-d",
+      channelConfig: {
+        accounts: {
+          "Router D": {
+            enabled: true,
+            configured: true,
             healthMonitor: { enabled: false },
           },
         },
-      }),
+      },
+      expected: false,
+    },
+    {
+      name: "uses a channel-level override",
+      accountId: DEFAULT_ACCOUNT_ID,
+      channelConfig: { healthMonitor: { enabled: false } },
+      expected: false,
+    },
+    {
+      name: "uses a raw default-account override",
+      accountId: DEFAULT_ACCOUNT_ID,
+      channelConfig: {
+        accounts: { [DEFAULT_ACCOUNT_ID]: { healthMonitor: { enabled: false } } },
+      },
+      expected: false,
+    },
+    {
+      name: "does not match an empty id to the default account",
+      accountId: "",
+      channelConfig: {
+        accounts: { default: { healthMonitor: { enabled: false } } },
+      },
+      expected: true,
+    },
+  ])("$name without resolving credentials", ({ accountId, channelConfig, expected }) => {
+    const resolveAccount = vi.fn(() => {
+      throw new Error("health monitor configuration must not resolve credentials");
     });
-
-    expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
-  });
-
-  it("uses raw account config overrides when resolvers omit health monitor fields", () => {
-    installTestRegistry(
-      createTestPlugin({
-        resolveAccount: () => ({
-          enabled: true,
-          configured: true,
-        }),
-      }),
-    );
-
+    installTestRegistry(createTestPlugin({ resolveAccount }));
     const manager = createManager({
-      getRuntimeConfig: () => ({
-        channels: {
-          discord: {
-            accounts: {
-              [DEFAULT_ACCOUNT_ID]: {
-                healthMonitor: { enabled: false },
-              },
-            },
-          },
-        },
-      }),
+      getRuntimeConfig: () => ({ channels: { discord: channelConfig } }),
     });
 
-    expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+    expect(manager.isHealthMonitorEnabled("discord", accountId)).toBe(expected);
+    expect(resolveAccount).not.toHaveBeenCalled();
   });
 
   it("monitors a healthy sibling without resolving disabled or blocked credentials", async () => {
@@ -5448,33 +5397,6 @@ describe("server-channels auto restart", () => {
     } finally {
       monitor.shutdown();
     }
-  });
-
-  it("does not treat an empty account id as the default account when matching raw overrides", () => {
-    installTestRegistry(
-      createTestPlugin({
-        resolveAccount: () => ({
-          enabled: true,
-          configured: true,
-        }),
-      }),
-    );
-
-    const manager = createManager({
-      getRuntimeConfig: () => ({
-        channels: {
-          discord: {
-            accounts: {
-              default: {
-                healthMonitor: { enabled: false },
-              },
-            },
-          },
-        },
-      }),
-    });
-
-    expect(manager.isHealthMonitorEnabled("discord", "")).toBe(true);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

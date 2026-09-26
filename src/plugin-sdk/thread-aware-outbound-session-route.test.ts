@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
   recoverCurrentThreadSessionId,
   type ChannelOutboundSessionRoute,
@@ -21,6 +22,138 @@ function baseRoute(
     ...overrides,
   };
 }
+
+describe("buildChannelOutboundSessionRoute", () => {
+  it("honors groupScope main while retaining the native group address", () => {
+    const route = buildChannelOutboundSessionRoute({
+      cfg: { session: { groupScope: "main" } },
+      agentId: "main",
+      channel: "route-fixture",
+      peer: { kind: "group", id: "NativeRoom" },
+      chatType: "group",
+      from: "route-fixture:NativeRoom",
+      to: "room:NativeRoom",
+    });
+
+    expect(route).toEqual({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+      peer: { kind: "group", id: "NativeRoom" },
+      chatType: "group",
+      from: "route-fixture:NativeRoom",
+      to: "room:NativeRoom",
+    });
+  });
+
+  it("uses identity links for per-peer keys without rewriting the native peer", () => {
+    const route = buildChannelOutboundSessionRoute({
+      cfg: {
+        session: {
+          dmScope: "per-peer",
+          identityLinks: { alice: ["route-fixture:123"] },
+        },
+      },
+      agentId: "worker",
+      channel: "route-fixture",
+      peer: { kind: "direct", id: "123" },
+      chatType: "direct",
+      from: "route-fixture:123",
+      to: "user:123",
+    });
+
+    expect(route).toEqual({
+      sessionKey: "agent:worker:direct:alice",
+      baseSessionKey: "agent:worker:direct:alice",
+      peer: { kind: "direct", id: "123" },
+      chatType: "direct",
+      from: "route-fixture:123",
+      to: "user:123",
+    });
+  });
+
+  it.each([
+    { accountId: "blue", expectedKey: "agent:worker:route-fixture:blue:direct:alice" },
+    { accountId: "green", expectedKey: "agent:worker:route-fixture:green:direct:alice" },
+  ])("partitions the same direct peer by account $accountId", ({ accountId, expectedKey }) => {
+    const route = buildChannelOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-account-channel-peer" } },
+      agentId: "worker",
+      channel: "route-fixture",
+      accountId,
+      peer: { kind: "direct", id: "alice" },
+      chatType: "direct",
+      from: "route-fixture:alice",
+      to: "user:alice",
+    });
+
+    expect(route).toEqual({
+      sessionKey: expectedKey,
+      baseSessionKey: expectedKey,
+      peer: { kind: "direct", id: "alice" },
+      chatType: "direct",
+      from: "route-fixture:alice",
+      to: "user:alice",
+    });
+  });
+
+  it.each([
+    {
+      name: "omitted metadata",
+      recipientSessionExact: undefined,
+      threadId: undefined,
+      expected: {},
+    },
+    {
+      name: "inexact route with a zero delivery thread",
+      recipientSessionExact: false,
+      threadId: 0,
+      expected: { recipientSessionExact: false, threadId: 0 },
+    },
+    {
+      name: "exact route with a numeric delivery thread",
+      recipientSessionExact: true,
+      threadId: 99,
+      expected: { recipientSessionExact: true, threadId: 99 },
+    },
+    {
+      name: "direct alias with an opaque delivery thread",
+      recipientSessionExact: "direct-alias",
+      threadId: "$Root:Example.Org",
+      expected: { recipientSessionExact: "direct-alias", threadId: "$Root:Example.Org" },
+    },
+    {
+      name: "delivery identity with a case-sensitive delivery thread",
+      recipientSessionExact: "delivery-identity",
+      threadId: "PluginThread",
+      expected: { recipientSessionExact: "delivery-identity", threadId: "PluginThread" },
+    },
+  ] as const)(
+    "preserves $name without adding a session suffix",
+    ({ recipientSessionExact, threadId, expected }) => {
+      const route = buildChannelOutboundSessionRoute({
+        cfg: {},
+        agentId: "worker",
+        channel: "route-fixture",
+        recipientSessionExact,
+        threadId,
+        peer: { kind: "channel", id: "room" },
+        chatType: "channel",
+        from: "route-fixture:room",
+        to: "channel:room",
+      });
+
+      expect(route).toStrictEqual({
+        sessionKey: "agent:worker:route-fixture:channel:room",
+        baseSessionKey: "agent:worker:route-fixture:channel:room",
+        peer: { kind: "channel", id: "room" },
+        chatType: "channel",
+        from: "route-fixture:room",
+        to: "channel:room",
+        ...expected,
+      });
+    },
+  );
+});
 
 describe("buildThreadAwareOutboundSessionRoute", () => {
   it("uses replyToId before threadId and recovered current-session thread by default", () => {
