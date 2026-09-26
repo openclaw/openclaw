@@ -19,6 +19,11 @@ const LIST_ITEM_OPEN_RE = /^[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/u;
 const LINK_REFERENCE_CANDIDATE_RE = /^[ \t]*\[/u;
 const DISCLOSURE_LINE_CANDIDATE_RE = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/iu;
 const STREAMING_CACHE_LIMIT = 8;
+const STREAMING_CONTAINER_TYPES = new Set([
+  "bullet_list_open",
+  "ordered_list_open",
+  "blockquote_open",
+]);
 
 type FenceMarker = { length: number; marker: "`" | "~"; container: boolean };
 type StrippedMarkdownLine = { content: string; offset: number };
@@ -81,7 +86,7 @@ function updateDetailsStack(
 }
 
 type StreamingMarkdownSplit = {
-  /** Offset just past the last blank line outside a fence/details block; the prefix is stable. */
+  /** End of the stable prefix, outside unfinished block containers. */
   boundary: number;
   /** Absolute offset where remend may start, or null while a fence remains open. */
   tailRepairStart: number | null;
@@ -89,7 +94,7 @@ type StreamingMarkdownSplit = {
 
 type StreamingMarkdownCursor = {
   boundary: number;
-  firstListOffset: number | null;
+  containerOffset: number | null;
   hasLinkReferenceDefinition: boolean;
   index: number;
   lastLiteralOffset: number;
@@ -136,26 +141,33 @@ function findStreamingCodeSpans(markdown: string, start: number): Array<[number,
 
 let streamingBlockParser: ReturnType<typeof createMarkdownParser> | undefined;
 
-function findCompletedStreamingListBoundary(
+function findCompletedStreamingContainerBoundary(
   markdown: string,
   start: number,
-): { boundary: number; firstListOffset: number | null } | undefined {
+): { boundary: number; containerOffset: number | null } | undefined {
   // An unfinished line can still become another item or an indented continuation.
   const source = markdown.slice(start, markdown.lastIndexOf("\n") + 1);
+  // Progress rendering can remove HTML separators and join their surrounding lists.
+  if (source.includes("<")) {
+    return undefined;
+  }
   const parser = (streamingBlockParser ??= createMarkdownParser());
   const tokens: Token[] = [];
   parser.block.parse(source, parser, {}, tokens);
   const blocks = tokens.filter((token) => token.level === 0 && token.map);
   const first = blocks[0];
   const last = blocks.at(-1);
-  if (!first?.type.endsWith("list_open") || !last?.map || first === last) {
+  if (!first || !STREAMING_CONTAINER_TYPES.has(first.type) || !last?.map || first === last) {
     return undefined;
   }
   let offset = start;
   for (let line = 0; line < last.map[0]; line++) {
     offset = markdown.indexOf("\n", offset) + 1;
   }
-  return { boundary: offset, firstListOffset: last.type.endsWith("list_open") ? offset : null };
+  return {
+    boundary: offset,
+    containerOffset: STREAMING_CONTAINER_TYPES.has(last.type) ? offset : null,
+  };
 }
 
 function createStreamingRawHtmlScanner(
@@ -195,7 +207,7 @@ function scanStableStreamingMarkdown(
   markdownLocal: string,
   cursor: StreamingMarkdownCursor = {
     boundary: 0,
-    firstListOffset: null,
+    containerOffset: null,
     hasLinkReferenceDefinition: false,
     index: 0,
     lastLiteralOffset: 0,
@@ -203,15 +215,15 @@ function scanStableStreamingMarkdown(
     openFence: null,
   },
 ): { cursor: StreamingMarkdownCursor; rawTail: boolean; result: StreamingMarkdownSplit } {
-  let { boundary, firstListOffset, hasLinkReferenceDefinition, index, lastLiteralOffset } = cursor;
+  let { boundary, containerOffset, hasLinkReferenceDefinition, index, lastLiteralOffset } = cursor;
   let lineMode = cursor.lineMode;
   let openFence = cursor.openFence;
   const detailsStack: MarkdownDetailsFrame[] = [];
   // Completed literal blocks cannot gain indentation ownership from later prose. Keep
-  // list containers and unfinished fences intact when parsing the retained suffix.
+  // open containers and unfinished fences intact when parsing the retained suffix.
   const codeStart = cursor.openFence
     ? 0
-    : Math.min(cursor.lastLiteralOffset, cursor.firstListOffset ?? cursor.lastLiteralOffset);
+    : Math.min(cursor.lastLiteralOffset, cursor.containerOffset ?? cursor.lastLiteralOffset);
   const codeInput = markdownLocal.slice(codeStart);
   const codeRegions = / {4}|\t/u.test(codeInput)
     ? findMarkdownCodeRegions(codeInput).map((region) => ({
@@ -225,8 +237,8 @@ function scanStableStreamingMarkdown(
     : undefined;
   const findRawHtmlRange = createStreamingRawHtmlScanner(
     markdownLocal,
-    Math.min(cursor.boundary, cursor.firstListOffset ?? cursor.boundary),
-    () => (codeSpans ??= findStreamingCodeSpans(markdownLocal, firstListOffset ?? boundary)),
+    Math.min(cursor.boundary, cursor.containerOffset ?? cursor.boundary),
+    () => (codeSpans ??= findStreamingCodeSpans(markdownLocal, containerOffset ?? boundary)),
   );
   let resumeCursor = cursor;
   let rawTail = false;
@@ -239,7 +251,7 @@ function scanStableStreamingMarkdown(
       lineMode = nextLineBreak === -1 ? lineMode : null;
       resumeCursor = {
         boundary,
-        firstListOffset,
+        containerOffset,
         hasLinkReferenceDefinition,
         index,
         lastLiteralOffset,
@@ -265,12 +277,12 @@ function scanStableStreamingMarkdown(
       const rawHtmlRange = findRawHtmlRange(line, index);
       rawHtmlLine = rawHtmlRange !== undefined;
       if (
-        firstListOffset === null &&
+        containerOffset === null &&
         LIST_ITEM_OPEN_RE.test(line) &&
         (!rawHtmlRange || rawHtmlRange[0] === index)
       ) {
         // A list-looking line can belong to preceding prose or a disclosure.
-        firstListOffset = boundary;
+        containerOffset = boundary;
       }
       if (rawHtmlLine) {
         lastLiteralOffset = lineEnd;
@@ -287,7 +299,7 @@ function scanStableStreamingMarkdown(
               line,
               detailsStack,
               false,
-              (codeSpans ??= findStreamingCodeSpans(markdownLocal, firstListOffset ?? boundary)),
+              (codeSpans ??= findStreamingCodeSpans(markdownLocal, containerOffset ?? boundary)),
               index,
             );
           }
@@ -312,7 +324,7 @@ function scanStableStreamingMarkdown(
       lineMode = nextLineBreak === -1 ? (lineFence ? "fence" : "plain") : null;
       resumeCursor = {
         boundary,
-        firstListOffset,
+        containerOffset,
         hasLinkReferenceDefinition,
         index,
         lastLiteralOffset,
@@ -322,14 +334,14 @@ function scanStableStreamingMarkdown(
     }
   }
 
-  if (firstListOffset !== null && !hasLinkReferenceDefinition) {
-    const retired = findCompletedStreamingListBoundary(markdownLocal, firstListOffset);
+  if (containerOffset !== null && !hasLinkReferenceDefinition) {
+    const retired = findCompletedStreamingContainerBoundary(markdownLocal, containerOffset);
     if (retired) {
-      firstListOffset = retired.firstListOffset;
+      containerOffset = retired.containerOffset;
       boundary = Math.max(boundary, retired.boundary);
       resumeCursor = {
         ...resumeCursor,
-        firstListOffset,
+        containerOffset,
         boundary: Math.max(resumeCursor.boundary, retired.boundary),
       };
     }
@@ -339,10 +351,9 @@ function scanStableStreamingMarkdown(
   // Keep its complete document together rather than guessing label boundaries.
   if (hasLinkReferenceDefinition) {
     boundary = 0;
-  } else if (firstListOffset !== null) {
-    // Blank lines cannot prove a list has ended: loose items, continuation
-    // indentation, and nested blocks all share the original list container.
-    boundary = Math.min(boundary, firstListOffset);
+  } else if (containerOffset !== null) {
+    // Loose list items and quoted blocks can continue across blank lines.
+    boundary = Math.min(boundary, containerOffset);
   }
 
   // Blank lines inside indented code do not retire the block, and prose repair

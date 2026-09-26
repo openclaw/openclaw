@@ -104,6 +104,7 @@ export function sample${index}(value: number): number {
   });
 
   it.each([
+    "- one\n\n",
     "- one\n\n  continuation\n",
     "1. one\n\n   continuation\n",
     "- one\n\n  - nested\n\n    continuation\n",
@@ -113,11 +114,14 @@ export function sample${index}(value: number): number {
       "# Heading\n",
       "---\n",
       "> quote\n",
+      "> ~~~\n> code\n> ~~~\n> after\n",
+      "> ~~~\n> code\n> ~~~\n> after\n\nFollowing\n",
       "```\ncode\n```\n",
       "<details><summary>More</summary>body</details>\n",
       "+ next\n",
       "2. next\n",
       "\nParagraph\n",
+      "▀▀▀▀\n▄▄▄▄\n",
     ]) {
       const source = prefix + suffix;
       const expected = toSanitizedMarkdownHtml(source);
@@ -283,6 +287,19 @@ export function sample${index}(value: number): number {
     expect(
       toStreamingMarkdownParts(`${source}more</script>\n\n`, { progressBars: true }, key).join(""),
     ).toBe("<p>before</p>\n");
+  });
+
+  it("keeps lists joined when progress rendering removes their HTML separator", () => {
+    const source = "- one\n\n<script>hidden</script>\n\n- two\n";
+    for (const chunkSize of [1, 7, 24]) {
+      const key = `progress-list-separator-${chunkSize}`;
+      for (let end = chunkSize; end < source.length; end += chunkSize) {
+        toStreamingMarkdownParts(source.slice(0, end), { progressBars: true }, key);
+      }
+      expect(toStreamingMarkdownParts(source, { progressBars: true }, key).join("")).toBe(
+        "<ul>\n<li>\n<p>one</p>\n</li>\n<li>\n<p>two</p>\n</li>\n</ul>\n",
+      );
+    }
   });
 
   it("keeps reference resolution consistent while an independent tail grows", () => {
