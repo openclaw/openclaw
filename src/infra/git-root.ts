@@ -64,15 +64,58 @@ function resolveGitHeadPath(startDir: string, opts: { maxDepth?: number } = {}):
   });
 }
 
-/** Read at most `limit` bytes from Git or build metadata. */
+/** Bounds a Git metadata read; matches the limit used for build metadata probes. */
+const HEAD_METADATA_LIMIT = 1024;
+
+/**
+ * Hard ceiling for growing a single HEAD line. Well above any real branch name, and
+ * low enough that a newline-free file cannot be read indefinitely.
+ */
+const HEAD_METADATA_MAX_BYTES = 1024 * 1024;
+
+/** Read at most `limit` bytes from Git or build metadata, decoding the actual byte window. */
 export function readGitMetadataPrefix(filePath: string, limit = 256): string {
+  return readGitMetadataBytes(filePath, limit).text;
+}
+
+/**
+ * Read at most `limit` bytes and return both the decoded text and the number of
+ * bytes actually read, so callers can detect EOF without confusing UTF-8 byte
+ * counts with decoded string lengths.
+ */
+function readGitMetadataBytes(
+  filePath: string,
+  limit: number,
+): { text: string; bytesRead: number } {
   const fd = fs.openSync(filePath, "r");
   try {
     const buf = Buffer.alloc(limit);
     const bytesRead = readFileWindowFullySync(fd, buf, 0);
-    return buf.subarray(0, bytesRead).toString("utf-8");
+    return { text: buf.subarray(0, bytesRead).toString("utf-8"), bytesRead };
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+/** Complete first line of a bounded Git metadata window, or null when truncated. */
+function firstLineWithinWindow(filePath: string, initialLimit: number): string | null {
+  for (let limit = initialLimit; ; limit *= 2) {
+    const { text, bytesRead } = readGitMetadataBytes(filePath, limit);
+    const newline = text.indexOf("\n");
+    if (newline >= 0) {
+      return text.slice(0, newline).trim();
+    }
+    // A short byte read proves end of file (measured in bytes, before decoding),
+    // so this really is one unterminated line.
+    if (bytesRead < limit) {
+      return text.trim();
+    }
+    // The window is exactly full with no newline: the line likely continues. Past
+    // the ceiling we cannot tell a complete line from a truncated one, so refuse
+    // rather than hand back a value that may name a different ref.
+    if (limit >= HEAD_METADATA_MAX_BYTES) {
+      return null;
+    }
   }
 }
 
@@ -84,7 +127,14 @@ export function readGitHead(
   if (!headPath) {
     return undefined;
   }
-  const head = fs.readFileSync(headPath, "utf-8").trim();
+  // HEAD is one line, but git does not length-cap branch names, so the window grows
+  // until it reaches a newline or proves end of file. A file that never terminates
+  // within the cap is treated as unparseable rather than silently truncated: a
+  // shortened ref could resolve to a *different* existing branch.
+  const head = firstLineWithinWindow(headPath, HEAD_METADATA_LIMIT);
+  if (head === null) {
+    return { headPath, ref: null, value: null };
+  }
   if (!head.startsWith("ref:")) {
     return { headPath, ref: null, value: head || null };
   }
