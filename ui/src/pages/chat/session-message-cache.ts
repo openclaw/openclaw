@@ -122,8 +122,7 @@ export function applyChatCacheSnapshot(
   state.chatHistoryPagination = snapshot.pagination;
   state.currentSessionId = snapshot.sessionId;
   state.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
-  // Older split races could persist an empty transcript with a sibling's cursor.
-  setChatHistoryCursor(state, snapshot.messages.length === 0 ? undefined : snapshot.deltaCursor);
+  setChatHistoryCursor(state, snapshot.deltaCursor);
 }
 
 export function appendChatMessageToCache(

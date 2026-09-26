@@ -139,44 +139,6 @@ afterEach(() => {
 });
 
 describe("first chat startup snapshot ordering", () => {
-  it.each([
-    { name: "empty", messages: [] },
-    { name: "recovered", messages: liveMessages },
-  ])(
-    "rechecks an empty stored snapshot before accepting $name network history",
-    async ({ messages }) => {
-      const h = mountPane();
-      connectSessionOwner(h);
-      h.request.mockImplementation(async (_method, params) =>
-        asOptionalRecord(params)?.cursor
-          ? {
-              kind: "delta",
-              messages: [],
-              deltaCursor: "live-cursor",
-              sessionInfo: h.liveResult.sessionInfo,
-            }
-          : { ...h.liveResult, messages },
-      );
-      const loading = h.start();
-      h.read.resolve({ ...stored, messages: [] });
-      await loading;
-      expect(h.request).toHaveBeenCalledExactlyOnceWith(
-        "chat.startup",
-        expect.not.objectContaining({ cursor: expect.anything() }),
-        { signal: expect.any(AbortSignal) },
-      );
-      expect(h.state.chatMessages).toEqual(messages);
-
-      await h.start();
-      expect(h.request).toHaveBeenLastCalledWith(
-        "chat.startup",
-        expect.objectContaining({ cursor: "live-cursor" }),
-        { signal: expect.any(AbortSignal) },
-      );
-      expect(h.state.chatMessages).toEqual(messages);
-    },
-  );
-
   it.each(["unchanged", "refreshed", "deadline", "ordinary-refresh"] as const)(
     "hydrates both splits when the sibling is %s",
     async (ordering) => {
@@ -412,6 +374,7 @@ describe("first chat startup snapshot ordering", () => {
     const loading = h.start();
     expect(h.request).not.toHaveBeenCalled();
     record.resolve({
+      cursorMatchesSnapshot: true,
       savedAt: Date.now(),
       sessionKey,
       sessionId: stored.sessionId,
@@ -446,6 +409,7 @@ describe("first chat startup snapshot ordering", () => {
     );
     await loading;
     record.resolve({
+      cursorMatchesSnapshot: true,
       savedAt: Date.now(),
       sessionKey,
       sessionId: stored.sessionId,
