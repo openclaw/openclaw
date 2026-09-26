@@ -133,6 +133,7 @@ describe("initial user message handoff", () => {
           {
             type: "image",
             url: imageDataUrl,
+            fileName: "image.png",
             source: { type: "url", url: imageDataUrl },
           },
         ],
