@@ -1,9 +1,8 @@
 import { createHash, type Hash } from "node:crypto";
 import fs from "node:fs";
-import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
-import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { copyFileDescriptorSync, FsSafeError } from "../infra/fs-safe-advanced.js";
 
 // Capture and native module hooks are synchronous; no read retains this scratch buffer.
 const scratch = Buffer.allocUnsafe(64 * 1024);
