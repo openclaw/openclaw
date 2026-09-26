@@ -24,6 +24,7 @@ export {
   readResponseTextLimited,
   truncateErrorDetail,
 } from "../agents/provider-http-errors.js";
+export { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 export {
   readProviderResponseErrorText,
   redactProviderResponseErrorText,

@@ -74,7 +74,10 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
+  isModelNotFoundErrorMessage: (
+    await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()
+  ).isModelNotFoundErrorMessage,
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
   postMultipartRequest: postMultipartRequestMock,
@@ -1050,6 +1053,62 @@ describe("openai image generation provider", () => {
           toolUsage: { image_gen: { total_tokens: 30 } },
         },
       ],
+    });
+  });
+
+  describe("when OpenAI chat models are configured", () => {
+    const configuredOpenAIFallback: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4-6",
+            fallbacks: ["openai/gpt-6-luna"],
+          },
+        },
+      },
+    };
+
+    it("keeps the default Codex OAuth image model while the account accepts it", async () => {
+      mockCodexAuthOnly();
+      mockCodexImageStream({ imageData: "codex-default-model-image" });
+
+      const result = await generateOpenAIImage("Draw with the default model", {
+        authStore: { version: 1, profiles: {} },
+        cfg: configuredOpenAIFallback,
+      });
+
+      expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+      expect((jsonRequestCall().body as Record<string, unknown>).model).toBe("gpt-6-astra");
+      expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-default-model-image"));
+    });
+
+    it("retries Codex OAuth image generation with a configured model the plan supports", async () => {
+      mockCodexAuthOnly();
+      mockCodexImageStream({ imageData: "codex-configured-model-image" });
+      assertOkOrThrowHttpErrorMock.mockRejectedValueOnce(
+        new Error(
+          "OpenAI Codex image generation failed (HTTP 400): The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.",
+        ),
+      );
+
+      const result = await generateOpenAIImage("Draw with the configured ChatGPT model", {
+        authStore: { version: 1, profiles: {} },
+        cfg: configuredOpenAIFallback,
+        count: 2,
+      });
+
+      expect(
+        postJsonRequestMock.mock.calls.map(
+          ([call]) => ((call as RequestCall).body as Record<string, unknown>).model,
+        ),
+      ).toEqual(["gpt-6-astra", "gpt-6-luna", "gpt-6-luna"]);
+      expect(logInfoMock).toHaveBeenCalledWith(
+        "codex image responses model unavailable: responsesModel=gpt-6-astra retryResponsesModel=gpt-6-luna",
+      );
+      expect(result.images.map((image) => image.buffer)).toEqual([
+        Buffer.from("codex-configured-model-image"),
+        Buffer.from("codex-configured-model-image"),
+      ]);
     });
   });
 
