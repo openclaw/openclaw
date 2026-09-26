@@ -318,7 +318,18 @@ describe("fal video generation provider", () => {
     ).rejects.toThrow("fal video generation response malformed");
   });
 
-  it("rejects missing fal queue statuses without waiting for timeout", async () => {
+  it.each([
+    {
+      name: "rejects missing fal queue statuses without waiting for timeout",
+      response: {},
+      prompt: "missing status",
+    },
+    {
+      name: "rejects unknown fal queue statuses without waiting for timeout",
+      response: { status: "ALMOST_DONE" },
+      prompt: "bad status",
+    },
+  ])("$name", async ({ response, prompt }) => {
     mockFalProviderRuntime();
     fetchGuardMock
       .mockResolvedValueOnce(
@@ -328,38 +339,14 @@ describe("fal video generation provider", () => {
           response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
         }),
       )
-      .mockResolvedValueOnce(releasedJson({}));
+      .mockResolvedValueOnce(releasedJson(response));
 
     const provider = buildFalVideoGenerationProvider();
     await expect(
       provider.generateVideo({
         provider: "fal",
         model: "fal-ai/minimax/video-01-live",
-        prompt: "missing status",
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal video generation response malformed");
-    expect(fetchGuardMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("rejects unknown fal queue statuses without waiting for timeout", async () => {
-    mockFalProviderRuntime();
-    fetchGuardMock
-      .mockResolvedValueOnce(
-        releasedJson({
-          request_id: "req-123",
-          status_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
-          response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
-        }),
-      )
-      .mockResolvedValueOnce(releasedJson({ status: "ALMOST_DONE" }));
-
-    const provider = buildFalVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model: "fal-ai/minimax/video-01-live",
-        prompt: "bad status",
+        prompt,
         cfg: {},
       }),
     ).rejects.toThrow("fal video generation response malformed");

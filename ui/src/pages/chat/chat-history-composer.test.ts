@@ -128,6 +128,7 @@ describe("rewind composer ownership", () => {
     "restores ordinary message semantics from existing Goal %s mode",
     async (action) => {
       const state = createRewindHost(Promise.resolve({ editorText: "original prompt" }));
+      state.chatReplyTarget = { messageId: "unrelated", text: "Old selection" };
       state.chatGoalDraftMode =
         action === "start"
           ? { action }
@@ -137,6 +138,8 @@ describe("rewind composer ownership", () => {
 
       expect(state.chatMessage).toBe("original prompt");
       expect(state.chatGoalDraftMode).toBeNull();
+      expect(state.chatReplyTarget).toBeNull();
+      expect(loadChatComposerSnapshot(state, state.sessionKey)?.replyTarget).toBeUndefined();
       expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toBeUndefined();
     },
   );
@@ -212,7 +215,7 @@ describe("rewind composer ownership", () => {
 
   it.each(
     ["rewind", "history"].flatMap((stage) =>
-      ["text", "mentions", "attachments", "goal mode"].map((edit) => ({ stage, edit })),
+      ["text", "mentions", "attachments", "goal mode", "reply"].map((edit) => ({ stage, edit })),
     ),
   )("preserves newer composer $edit while awaiting $stage", async ({ stage, edit }) => {
     const response = createDeferred<{ editorText: string }>();
@@ -260,6 +263,8 @@ describe("rewind composer ownership", () => {
       state.chatAttachments = [
         { id: "new-image", mimeType: "image/png", dataUrl: "data:image/png;base64,aW1hZ2U=" },
       ];
+    } else if (edit === "reply") {
+      state.chatReplyTarget = { messageId: "newer", text: "Newer quote" };
     } else {
       state.chatGoalDraftMode = { action: "start" };
     }
@@ -268,6 +273,7 @@ describe("rewind composer ownership", () => {
       mentions: state.chatMentions,
       attachments: state.chatAttachments,
       goalMode: state.chatGoalDraftMode,
+      replyTarget: state.chatReplyTarget,
     };
     response.resolve({ editorText: "original prompt" });
     history.resolve({ messages: [canonical] });
@@ -279,6 +285,7 @@ describe("rewind composer ownership", () => {
     expect(state.chatMentions).toEqual(composer.mentions);
     expect(state.chatAttachments).toBe(composer.attachments);
     expect(state.chatGoalDraftMode).toEqual(composer.goalMode);
+    expect(state.chatReplyTarget).toEqual(composer.replyTarget);
     expect(state.request).toHaveBeenCalledOnce();
   });
 

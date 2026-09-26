@@ -16,6 +16,7 @@ import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
+import "../../plugins/control-ui-contributions.ts";
 import { renderPluginReadme } from "./catalog-detail.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";
@@ -23,6 +24,7 @@ import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
+  renderPluginDeclaredCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
   renderPluginAskAction,
@@ -262,7 +264,8 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
           </label>
           <div class="settings-group oc-settings-group">${renderInstalledInventory(props)}</div>
         `
-      : html`<div id="plugin-settings-advanced">
+      : html`<div id="plugin-settings-advanced" class="settings-stack">
+          <openclaw-plugin-manager></openclaw-plugin-manager>
           ${renderSettingsSection(
             {
               title: t("pluginsPage.advanced"),
@@ -395,7 +398,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
     name,
     description: catalog?.detail.skills.find((skill) => skill.name === name)?.description,
   }));
-  const tools: Array<{ name: string; description?: string }> =
+  const tools: PluginToolPreview[] =
     props.tools ?? names(props.inspection?.declared.tools ?? catalog?.detail.contracts?.tools);
   return renderSettingsPage(
     renderPluginDetailShell({
@@ -451,14 +454,17 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
           : undefined,
       panel: html`${notices}
       ${!props.inspection && !catalog && !props.inspectionError ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : nothing}
+      ${renderPluginDeclaredCapabilities(props.inspection?.overview?.capabilities?.contracts, props.inspection?.overview?.capabilities?.ui)}
       ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills, icons.bookOpenText)}
       ${renderPluginCapabilitySection(
         t("pluginsPage.detailTools"),
-        tools.map(({ name, description }) => ({
+        tools.map(({ name, description, parameters }) => ({
           name,
           description,
           onOpen:
-            description?.trim() && props.onOpenTool ? () => props.onOpenTool?.(name) : undefined,
+            (description?.trim() || parameters?.length) && props.onOpenTool
+              ? () => props.onOpenTool?.(name)
+              : undefined,
         })),
         icons.wrench,
       )}

@@ -9,7 +9,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { build } from "vite";
-import { controlUiBootManifestKey, controlUiCodeSplitting } from "../config/control-ui-chunking.ts";
+import {
+  controlUiBootManifestKey,
+  createControlUiCodeSplitting,
+} from "../config/control-ui-chunking.ts";
 import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -134,17 +137,11 @@ async function main(): Promise<void> {
         {
           name: "control-ui-measure-boot-dependencies",
           outputOptions(options) {
-            // The old boot group would keep stale modules in fetched chunks,
+            // Old JavaScript and CSS boot groups would keep stale modules in fetched chunks,
             // feeding them back into every regenerated manifest.
             return {
               ...options,
-              codeSplitting: {
-                ...controlUiCodeSplitting,
-                groups: controlUiCodeSplitting.groups.filter(
-                  (group) =>
-                    typeof group.name !== "string" || !group.name.startsWith("control-ui-boot"),
-                ),
-              },
+              codeSplitting: createControlUiCodeSplitting({ includeBootGroups: false }),
             };
           },
         },

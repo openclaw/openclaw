@@ -870,9 +870,11 @@ h3.settings-row__title {
 
 /* ---------- plugin settings ---------- */
 
-/* The inventory header is already inside the padded settings page. Remove the
-   shared outer-header inset so its title aligns with this page's rows. */
-.settings-page.oc-app-surface:has(> .plugins-settings-content) > .content-header--settings {
+/* The inventory header is already inside the padded settings page. Its page
+   owner must override the outer-header inset regardless of lazy stylesheet order. */
+openclaw-plugins-page
+  .settings-page.oc-app-surface:has(> .plugins-settings-content)
+  > .content-header--settings {
   width: 100%;
   max-width: none;
   margin-inline: 0;
@@ -1359,13 +1361,46 @@ h3.settings-row__title {
   margin: 0;
   font-size: var(--control-ui-text-lg);
 }
-.plugin-tool-preview p {
+.plugin-tool-preview__body {
   overflow: auto;
   min-height: 0;
+}
+.plugin-tool-preview p {
   margin: 20px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.6;
+}
+.plugin-tool-preview__parameters {
+  margin-top: 20px;
+}
+.plugin-tool-preview__parameters h3 {
+  margin: 0 0 12px;
+  font-size: var(--control-ui-text-base);
+}
+.plugin-tool-preview__parameters dl {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+.plugin-tool-preview__parameters dl > div {
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.plugin-tool-preview__parameters dt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.plugin-tool-preview__parameters dt span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+.plugin-tool-preview__parameters dd {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
 }
 @container (max-width: 768px) {
   .plugin-catalog-detail__content {

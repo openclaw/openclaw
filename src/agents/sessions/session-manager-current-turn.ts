@@ -16,6 +16,11 @@ export const sessionManagerPrepareCurrentTurnReplay: unique symbol = Symbol.for(
   "openclaw.session-manager.prepare-current-turn-replay",
 );
 
+/** @internal Runtime model history is not the raw persistence/navigation window. */
+export const sessionManagerReadInitialContext: unique symbol = Symbol.for(
+  "openclaw.session-manager.read-initial-context",
+);
+
 export type CurrentTurnReplayWitness = {
   anchor: TranscriptEntryAnchor;
   version: SessionTranscriptContextVersion;
@@ -114,8 +119,9 @@ export async function prepareCurrentTurnReplayWitness(
   const reader = prepareSessionTranscriptHydration(view.target, undefined, signal);
   const walk = walkSessionCurrentTurn(view.parentId, view.remainingAncestors);
   let next = walk.next();
+  let entry: SessionEntry | undefined;
   while (!next.done) {
-    let entry = view.entries.get(next.value);
+    entry = view.entries.get(next.value);
     if (!entry) {
       const result = await reader.readCurrentTurnEntry({
         entryId: next.value,
@@ -124,12 +130,15 @@ export async function prepareCurrentTurnReplayWitness(
       });
       reader.assertCurrent();
       assertCurrent();
-      entry = omittedCustomMessage(result.event, result.anchor);
+      entry =
+        isIndexedSessionEntry(result.event) && result.event.id === next.value
+          ? result.event
+          : undefined;
     }
     next = walk.next(traversalEntry(entry, next.value, view.isInterruptedTail));
   }
   const userId = next.value;
-  if (!userId || !matchesUser(view.entries.get(userId))) {
+  if (!userId || entry?.id !== userId || !matchesUser(entry)) {
     return undefined;
   }
   const result = await reader.readCurrentTurnEntry({

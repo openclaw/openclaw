@@ -36,7 +36,13 @@ export async function runTaskRegistryWorkerOperation<Key extends keyof Operation
           if (
             (command.type === "tasks.applyRetention"
               ? request.stage !== retentionStage
-              : request.stage !== "transaction") ||
+              : request.stage !== "transaction" &&
+                !(
+                  request.stage === "commit" &&
+                  (command.type === "tasks.bindRunOwner" ||
+                    command.type === "tasks.finalizeActive" ||
+                    command.type === "tasks.settleUnstarted")
+                )) ||
             !isRecord(facts) ||
             facts.kind !== "task-registry-mutation" ||
             facts.operation !== command.type ||
