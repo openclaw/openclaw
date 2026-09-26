@@ -184,6 +184,7 @@ export async function executeVideoGenerationJob(params: {
     videoGenerationTaskLifecycle.recordTaskProgress({
       handle: params.taskHandle,
       progressSummary: "Saving generated video",
+      generation: { provider: result.provider, model: result.model },
     });
   }
 

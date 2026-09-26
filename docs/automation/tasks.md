@@ -114,6 +114,16 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
   </Accordion>
   <Accordion title="Concurrent media-generation guardrail">
     While a session-backed media-generation task is still active, `image_generate`, `music_generate`, and `video_generate` guard against accidental retries: repeating the call for the same prompt/request returns the matching active task status instead of starting a duplicate, while a distinct prompt can start its own task. Use `action: "status"` when you want an explicit progress/status lookup from the agent side.
+
+    Media tool status labels the submission-time choice as the initial provider
+    (`selectedProvider` in tool details). Once generation succeeds, status reports
+    the provider and model that produced the media, including after fallback and
+    while completion delivery is pending. The task's `sourceId` stays fixed at
+    admission; its provider suffix records the initial choice, not proof of
+    execution. The successful provider and model are stored in the task record's
+    `detail.mediaGeneration`. Older tasks without recorded generation results
+    show only the initial choice.
+
   </Accordion>
   <Accordion title="What does not create tasks">
     - Heartbeat turns - main-session; see [Heartbeat](/gateway/heartbeat)

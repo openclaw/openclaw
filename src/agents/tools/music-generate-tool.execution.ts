@@ -118,6 +118,7 @@ export async function executeMusicGenerationJob(params: {
     musicGenerationTaskLifecycle.recordTaskProgress({
       handle: params.taskHandle,
       progressSummary: "Saving generated music",
+      generation: { provider: result.provider, model: result.model },
     });
   }
   const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "audio");

@@ -90,6 +90,7 @@ export async function executeImageGenerationJob(params: {
     imageGenerationTaskLifecycle.recordTaskProgress({
       handle: params.taskHandle,
       progressSummary: "Saving generated image",
+      generation: { provider: result.provider, model: result.model },
     });
   }
   const { displayProvider, displayModel, warning } = describeMediaGenerationResult(result);

@@ -386,17 +386,40 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   ] = { resetRecentMediaGenerationDuplicateGuardsForTests };
 }
 
-/** Extracts a provider id from a media task source id with the given prefix. */
-function getMediaGenerationTaskProviderId(
+/** Source identity retains the initial selection; only a result proves generation. */
+function getMediaGenerationTaskProviders(
   task: TaskRecord,
   sourcePrefix: string,
-): string | undefined {
+): { selectedProvider?: string; provider?: string; model?: string } {
   const sourceId = task.sourceId?.trim() ?? "";
-  if (!sourceId.startsWith(`${sourcePrefix}:`)) {
-    return undefined;
-  }
-  const providerId = sourceId.slice(`${sourcePrefix}:`.length).trim();
-  return providerId || undefined;
+  const selectedProvider = sourceId.startsWith(`${sourcePrefix}:`)
+    ? normalizeOptionalString(sourceId.slice(`${sourcePrefix}:`.length))
+    : undefined;
+  const detail = task.detail;
+  const generation =
+    detail && typeof detail === "object" && !Array.isArray(detail)
+      ? detail.mediaGeneration
+      : undefined;
+  const result =
+    generation && typeof generation === "object" && !Array.isArray(generation)
+      ? generation
+      : undefined;
+  const provider = normalizeOptionalString(result?.provider);
+  const model = provider ? normalizeOptionalString(result?.model) : undefined;
+  return {
+    ...(selectedProvider ? { selectedProvider } : {}),
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+  };
+}
+
+function formatMediaGenerationTaskProvider(task: TaskRecord, sourcePrefix: string): string {
+  const { provider, selectedProvider } = getMediaGenerationTaskProviders(task, sourcePrefix);
+  return provider
+    ? ` with ${provider}`
+    : selectedProvider
+      ? ` (initial provider: ${selectedProvider})`
+      : "";
 }
 
 /** Finds the highest-priority active media generation task for a session. */
@@ -507,11 +530,10 @@ function buildMediaGenerationTaskStatusDetails(params: {
   task: TaskRecord;
   sourcePrefix: string;
 }): Record<string, unknown> {
-  const provider = getMediaGenerationTaskProviderId(params.task, params.sourcePrefix);
   return {
     ...buildSessionAsyncTaskStatusDetails(params.task),
     active: isTaskStillBlockingDuplicateGuard(params.task),
-    ...(provider ? { provider } : {}),
+    ...getMediaGenerationTaskProviders(params.task, params.sourcePrefix),
   };
 }
 
@@ -543,15 +565,15 @@ function buildMediaGenerationTaskStatusText(params: {
   completionLabel: string;
   duplicateGuard?: boolean;
 }): string {
-  const provider = getMediaGenerationTaskProviderId(params.task, params.sourcePrefix);
+  const providerText = formatMediaGenerationTaskProvider(params.task, params.sourcePrefix);
   const active =
     params.task.status === "queued" ||
     params.task.status === "running" ||
     params.task.terminalOutcome === "blocked";
   const lines = [
     active
-      ? `${params.nounLabel} task ${params.task.taskId} is already ${params.task.status}${provider ? ` with ${provider}` : ""}.`
-      : `${params.nounLabel} task ${params.task.taskId} recently ${params.task.status}${provider ? ` with ${provider}` : ""}.`,
+      ? `${params.nounLabel} task ${params.task.taskId} is already ${params.task.status}${providerText}.`
+      : `${params.nounLabel} task ${params.task.taskId} recently ${params.task.status}${providerText}.`,
     params.task.progressSummary ? `Progress: ${params.task.progressSummary}.` : null,
     params.duplicateGuard
       ? active
@@ -574,10 +596,10 @@ function buildMediaGenerationTaskStatusListText(params: {
   const lines = [
     `${params.tasks.length} active ${nounLabel} tasks are queued or running for this session.`,
     ...params.tasks.map((task) => {
-      const provider = getMediaGenerationTaskProviderId(task, params.sourcePrefix);
+      const providerText = formatMediaGenerationTaskProvider(task, params.sourcePrefix);
       const runId = task.runId ? ` (run ${task.runId})` : "";
       const progress = task.progressSummary ? ` Progress: ${task.progressSummary}.` : "";
-      return `- Task ${task.taskId}${runId} is ${task.status}${provider ? ` with ${provider}` : ""}.${progress}`;
+      return `- Task ${task.taskId}${runId} is ${task.status}${providerText}.${progress}`;
     }),
     `Wait for the completion events; the completion agent will send the finished ${params.completionLabel} here when each is ready.`,
     `Only start a new ${params.toolName} call if the user clearly asks for different/new ${params.completionLabel}.`,
@@ -607,12 +629,19 @@ export function buildActiveMediaGenerationTaskPromptContext(params: {
     .toSorted((a, b) => (a.taskId < b.taskId ? -1 : a.taskId > b.taskId ? 1 : 0))
     .slice(0, 8)
     .map((task) => {
-      const provider = getMediaGenerationTaskProviderId(task, params.sourcePrefix);
+      const { selectedProvider, provider, model } = getMediaGenerationTaskProviders(
+        task,
+        params.sourcePrefix,
+      );
       return [
         `- tool=${params.sourcePrefix}`,
         `task=${boundedLiteral(task.taskId, 128)}`,
         `status=${task.status}`,
+        ...(selectedProvider
+          ? [`selected_provider_json=${JSON.stringify(boundedLiteral(selectedProvider, 128))}`]
+          : []),
         ...(provider ? [`provider_json=${JSON.stringify(boundedLiteral(provider, 128))}`] : []),
+        ...(model ? [`model_json=${JSON.stringify(boundedLiteral(model, 128))}`] : []),
         ...(task.progressSummary
           ? [`progress_json=${JSON.stringify(boundedLiteral(task.progressSummary, 320))}`]
           : []),

@@ -101,6 +101,64 @@ beforeEach(() => {
   ownerMocks.assertCurrent.mockReset();
 });
 
+describe("media generation provider attribution", () => {
+  it.each([
+    {
+      name: "successful generation metadata",
+      detail: { mediaGeneration: { provider: "fallback", model: "fallback-v1" } },
+      attribution: { selectedProvider: "byteplus", provider: "fallback", model: "fallback-v1" },
+      statusSuffix: " with fallback",
+      promptSuffix: '; provider_json="fallback"; model_json="fallback-v1"',
+    },
+    {
+      name: "a legacy task without generation metadata",
+      detail: undefined,
+      attribution: { selectedProvider: "byteplus" },
+      statusSuffix: " (initial provider: byteplus)",
+      promptSuffix: "",
+    },
+    {
+      name: "malformed generation metadata",
+      detail: { mediaGeneration: { provider: 42, model: "fallback-v1" } },
+      attribution: { selectedProvider: "byteplus" },
+      statusSuffix: " (initial provider: byteplus)",
+      promptSuffix: "",
+    },
+  ])("presents $name consistently", ({ detail, attribution, statusSuffix, promptSuffix }) => {
+    const task = makeTask({ detail });
+    const expectedDetails = {
+      async: true,
+      active: true,
+      existingTask: true,
+      status: "running",
+      task: { taskId: "task-1", runId: "run-1" },
+      taskKind: "video_generation",
+      sourceId: "video_generate:byteplus",
+      ...attribution,
+    };
+
+    expect(videoTaskStatusOwner.buildTaskStatusDetails(task)).toEqual(expectedDetails);
+    expect(videoTaskStatusOwner.buildTaskStatusListDetails([task])).toMatchObject({
+      tasks: [expectedDetails],
+    });
+    expect(videoTaskStatusOwner.buildTaskStatusText(task)).toContain(
+      `video task task-1 is already running${statusSuffix}.`,
+    );
+    expect(videoTaskStatusOwner.buildTaskStatusListText([task])).toContain(
+      `- Task task-1 (run run-1) is running${statusSuffix}.`,
+    );
+    expect(
+      buildActiveMediaGenerationTaskPromptContext({
+        tasks: [task],
+        taskKind: "video_generation",
+        sourcePrefix: "video_generate",
+      }),
+    ).toBe(
+      `- tool=video_generate; task=task-1; status=running; selected_provider_json="byteplus"${promptSuffix}`,
+    );
+  });
+});
+
 describe("media generation delivery-phase prompt guard", () => {
   it("does not warn about a task waiting only for completion delivery", () => {
     const tasks = [makeTask({ progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS })];
@@ -119,6 +177,12 @@ describe("media generation delivery-phase prompt guard", () => {
       makeTask({
         taskId: `task-${"t".repeat(150)}`,
         sourceId: `video_generate:${"p".repeat(150)}`,
+        detail: {
+          mediaGeneration: {
+            provider: `actual\n${"a".repeat(150)}`,
+            model: `model\u2028${"m".repeat(150)}`,
+          },
+        },
         progressSummary: `Generating\nvideo\u2028${"x".repeat(400)}`,
       }),
     ];
@@ -130,7 +194,7 @@ describe("media generation delivery-phase prompt guard", () => {
         sourcePrefix: "video_generate",
       }),
     ).toBe(
-      `- tool=video_generate; task=task-${"t".repeat(123)}; status=running; provider_json="${"p".repeat(128)}"; progress_json="Generatingvideo${"x".repeat(305)}"`,
+      `- tool=video_generate; task=task-${"t".repeat(123)}; status=running; selected_provider_json="${"p".repeat(128)}"; provider_json="actual${"a".repeat(122)}"; model_json="model${"m".repeat(123)}"; progress_json="Generatingvideo${"x".repeat(305)}"`,
     );
   });
 
@@ -251,7 +315,7 @@ describe("media generation delivery-phase prompt guard", () => {
       sessionKey: "global",
     };
     expect(await buildMediaTaskRuntimeContext({ ...params, agentId: "ops" })).toBe(
-      '## Media Generation Tasks\n- tool=music_generate; task=music-1; status=running\n- tool=video_generate; task=task-1; status=running; provider_json="byteplus"',
+      '## Media Generation Tasks\n- tool=music_generate; task=music-1; status=running\n- tool=video_generate; task=task-1; status=running; selected_provider_json="byteplus"',
     );
     expect(configMocks.readConfig).toHaveBeenCalledTimes(1);
     expect(await buildMediaTaskRuntimeContext({ ...params, agentId: "research" })).toBe(

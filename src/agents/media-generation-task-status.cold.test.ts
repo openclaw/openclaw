@@ -78,7 +78,7 @@ describe("cold media generation task status", () => {
         agentId: "ops",
       }),
     ).toBe(
-      '## Media Generation Tasks\n- tool=image_generate; task=legacy-media; status=running; provider_json="synthetic"',
+      '## Media Generation Tasks\n- tool=image_generate; task=legacy-media; status=running; selected_provider_json="synthetic"',
     );
     await withPluginCache(createPluginCache(), async () => {
       expect((await createImageGenerateStatusActionResult("global", "ops")).details).toMatchObject({

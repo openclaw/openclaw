@@ -1,16 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { listFreshTasksForOwnerKey } from "../../tasks/runtime-internal.js";
+import { withTaskRegistryTempDir } from "../../tasks/task-registry.test-support.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resolveVideoGenerationModeCapabilities } from "../../video-generation/capabilities.js";
+import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "../../video-generation/types.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
+import { videoGenerationTaskLifecycle } from "./media-generate-background.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 
 function createMp4Fixture(): Buffer {
@@ -56,6 +61,126 @@ function requireDetails(result: { details?: unknown }): Record<string, unknown> 
 
 describe("video generation invocation QA", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("distinguishes the initial provider from the provider that succeeds after failover", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      const sessionKey = "agent:main:media-attribution";
+      const fallbackStarted = createDeferredCore();
+      const finishGeneration = createDeferredCore();
+      const deliveryStarted = createDeferredCore();
+      const finishDelivery = createDeferredCore();
+      const attempts: string[] = [];
+      const providers: VideoGenerationProvider[] = [
+        {
+          id: "qa-a-primary",
+          defaultModel: "primary-v1",
+          isConfigured: () => true,
+          capabilities: {},
+          generateVideo: async () => {
+            attempts.push("qa-a-primary");
+            throw new Error("primary endpoint unavailable");
+          },
+        },
+        {
+          id: "qa-b-fallback",
+          defaultModel: "fallback-v1",
+          isConfigured: () => true,
+          capabilities: {},
+          generateVideo: async () => {
+            attempts.push("qa-b-fallback");
+            fallbackStarted.resolve();
+            await finishGeneration.promise;
+            return {
+              model: "fallback-v1",
+              videos: [{ url: "https://media.example/fallback.mp4", mimeType: "video/mp4" }],
+            };
+          },
+        },
+      ];
+      const wake = vi
+        .spyOn(videoGenerationTaskLifecycle, "wakeTaskCompletion")
+        .mockImplementation(async () => {
+          deliveryStarted.resolve();
+          await finishDelivery.promise;
+          return { status: "delivered" };
+        });
+      const providerRegistry = vi
+        .spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders")
+        .mockReturnValue(providers);
+      let scheduledWork: (() => Promise<void>) | undefined;
+      const tool = requireVideoTool(
+        createVideoGenerateTool({
+          config: {},
+          agentDir: path.join(root, "agent"),
+          workspaceDir: root,
+          agentSessionKey: sessionKey,
+          requesterAgentId: "main",
+          preparedModelRuntime: createPreparedRuntime(providers),
+          scheduleBackgroundWork: (work) => {
+            scheduledWork = work;
+          },
+        }),
+      );
+      let work: Promise<void> | undefined;
+      try {
+        await tool.execute("qa-video-failover", { prompt: "Generate a failover QA clip." });
+        if (!scheduledWork) {
+          throw new Error("expected scheduled video generation work");
+        }
+        work = scheduledWork();
+        await fallbackStarted.promise;
+        const running = await tool.execute("qa-video-status", { action: "status" });
+        finishGeneration.resolve();
+        await deliveryStarted.promise;
+        const delivering = await tool.execute("qa-video-delivery-status", { action: "status" });
+        finishDelivery.resolve();
+        await work;
+        const [task] = await listFreshTasksForOwnerKey(sessionKey);
+        const duplicate = await tool.execute("qa-video-duplicate", {
+          prompt: "Generate a failover QA clip.",
+        });
+
+        expect(requireDetails(running)).toMatchObject({ selectedProvider: "qa-a-primary" });
+        expect(requireDetails(running).provider).toBeUndefined();
+        expect(running.content).toEqual([
+          expect.objectContaining({
+            text: expect.stringContaining("initial provider: qa-a-primary"),
+          }),
+        ]);
+        expect(requireDetails(delivering)).toMatchObject({
+          selectedProvider: "qa-a-primary",
+          provider: "qa-b-fallback",
+          model: "fallback-v1",
+        });
+        expect(task).toMatchObject({
+          sourceId: "video_generate:qa-a-primary",
+          status: "succeeded",
+          detail: { mediaGeneration: { provider: "qa-b-fallback", model: "fallback-v1" } },
+          terminalSummary: "Generated 1 video with qa-b-fallback/fallback-v1.",
+        });
+        expect(wake.mock.calls[0]?.[0].result).toContain(
+          "Generated 1 video with qa-b-fallback/fallback-v1.",
+        );
+        expect(requireDetails(duplicate)).toMatchObject({
+          provider: "qa-b-fallback",
+          selectedProvider: "qa-a-primary",
+          active: false,
+        });
+        expect(duplicate.content).toEqual([
+          expect.objectContaining({
+            text: expect.stringContaining("recently succeeded with qa-b-fallback"),
+          }),
+        ]);
+        expect(attempts).toEqual(["qa-a-primary", "qa-b-fallback"]);
+      } finally {
+        finishGeneration.resolve();
+        finishDelivery.resolve();
+        await work;
+        wake.mockRestore();
+        providerRegistry.mockRestore();
+      }
+    });
+  });
 
   it("selects image-to-video fallback, forwards declared options, and persists video bytes", async () => {
     const root = tempDirs.make("openclaw-qa-video-invocation-");

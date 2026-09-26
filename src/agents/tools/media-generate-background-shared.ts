@@ -113,6 +113,7 @@ type RecordMediaGenerationTaskProgressParams = {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
   eventSummary?: string;
+  generation?: Pick<MediaGenerationExecutionResult, "provider" | "model">;
 };
 
 type CompleteMediaGenerationTaskRunParams = {
@@ -266,6 +267,7 @@ function recordMediaGenerationTaskProgress(params: RecordMediaGenerationTaskProg
     lastEventAt: Date.now(),
     progressSummary: params.progressSummary,
     eventSummary: params.eventSummary,
+    ...(params.generation ? { detail: { mediaGeneration: params.generation } } : {}),
   });
 }
 
@@ -331,6 +333,7 @@ function completeMediaGenerationTaskRun(
         params.terminalResult?.terminalSummary ??
         `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}.`,
       terminalOutcome: params.terminalResult?.terminalOutcome,
+      detail: { mediaGeneration: { provider: params.provider, model: params.model } },
     });
   } finally {
     clearMediaGenerationTaskRunContext(params.handle);
@@ -498,6 +501,7 @@ export function scheduleMediaGenerationTaskCompletion<
         params.lifecycle.recordTaskProgress({
           handle: params.handle,
           progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
+          generation: { provider: executed.provider, model: executed.model },
         });
       } catch (error) {
         params.onWakeFailure(`${params.toolName} completion progress update failed`, {

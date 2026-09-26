@@ -111,7 +111,8 @@ describe("image generation task status", () => {
     expect(details.existingTask).toBe(true);
     expect(details.status).toBe("running");
     expect(details.taskKind).toBe(IMAGE_GENERATION_TASK_KIND);
-    expect(details.provider).toBe("openai");
+    expect(details.selectedProvider).toBe("openai");
+    expect(details.provider).toBeUndefined();
     expect(details.progressSummary).toBe("Generating image");
   });
 
@@ -172,7 +173,7 @@ describe("image generation task status", () => {
     expect(task?.taskId).toBe("task-completed");
     const statusText = buildImageGenerationTaskStatusText(task!, { duplicateGuard: true });
     expect(statusText).toContain(
-      "Image generation task task-completed recently succeeded with xai.",
+      "Image generation task task-completed recently succeeded (initial provider: xai).",
     );
     expect(statusText).toContain(
       "Do not call image_generate again for the same request; this recent image generation already completed.",
@@ -424,7 +425,7 @@ describe("image generation task status", () => {
 
     expect(task?.status).toBe("succeeded");
     expect(buildImageGenerationTaskStatusText(task!, { duplicateGuard: true })).toContain(
-      "Image generation task task-completed recently succeeded with xai.",
+      "Image generation task task-completed recently succeeded (initial provider: xai).",
     );
   });
 
@@ -467,7 +468,7 @@ describe("image generation task status", () => {
     });
 
     expect(context).toBe(
-      '## Media Generation Tasks\n- tool=image_generate; task=task-running; status=running; provider_json="openai"; progress_json="Generating image"',
+      '## Media Generation Tasks\n- tool=image_generate; task=task-running; status=running; selected_provider_json="openai"; progress_json="Generating image"',
     );
   });
 });
@@ -532,7 +533,8 @@ describe("video generation task status", () => {
     expect(details.existingTask).toBe(true);
     expect(details.status).toBe("running");
     expect(details.taskKind).toBe(VIDEO_GENERATION_TASK_KIND);
-    expect(details.provider).toBe("openai");
+    expect(details.selectedProvider).toBe("openai");
+    expect(details.provider).toBeUndefined();
     expect(details.progressSummary).toBe("Generating video");
   });
 
@@ -553,7 +555,7 @@ describe("video generation task status", () => {
     });
 
     expect(context).toBe(
-      '## Media Generation Tasks\n- tool=video_generate; task=task-running; status=running; provider_json="openai"; progress_json="Generating video"',
+      '## Media Generation Tasks\n- tool=video_generate; task=task-running; status=running; selected_provider_json="openai"; progress_json="Generating video"',
     );
   });
 });

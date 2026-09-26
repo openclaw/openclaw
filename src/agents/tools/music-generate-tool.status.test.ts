@@ -72,11 +72,13 @@ describe("createMusicGenerateTool status actions", () => {
     expect(result?.content).toStrictEqual([
       {
         type: "text",
-        text: "Music generation task task-active is already running with google.\nProgress: Generating music.\nDo not call music_generate again for this request. Wait for the completion event; the completion agent will send the finished music here.",
+        text: "Music generation task task-active is already running (initial provider: google).\nProgress: Generating music.\nDo not call music_generate again for this request. Wait for the completion event; the completion agent will send the finished music here.",
       },
     ]);
     const text = content?.text ?? "";
-    expect(text).toContain("Music generation task task-active is already running with google.");
+    expect(text).toContain(
+      "Music generation task task-active is already running (initial provider: google).",
+    );
     expect(text).toContain("Do not call music_generate again for this request.");
     const details = result?.details as
       | {
@@ -86,6 +88,7 @@ describe("createMusicGenerateTool status actions", () => {
           existingTask?: unknown;
           status?: unknown;
           taskKind?: unknown;
+          selectedProvider?: unknown;
           provider?: unknown;
           task?: { taskId?: unknown; runId?: unknown };
           progressSummary?: unknown;
@@ -97,7 +100,8 @@ describe("createMusicGenerateTool status actions", () => {
     expect(details?.existingTask).toBe(true);
     expect(details?.status).toBe("running");
     expect(details?.taskKind).toBe(MUSIC_GENERATION_TASK_KIND);
-    expect(details?.provider).toBe("google");
+    expect(details?.selectedProvider).toBe("google");
+    expect(details?.provider).toBeUndefined();
     expect(details?.task?.taskId).toBe("task-active");
     expect(details?.task?.runId).toBe("tool:music_generate:active");
     expect(details?.progressSummary).toBe("Generating music");
@@ -126,13 +130,16 @@ describe("createMusicGenerateTool status actions", () => {
     const result = await createMusicGenerateStatusActionResult("agent:main:discord:direct:123");
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
-    expect(text).toContain("Music generation task task-active is already queued with minimax.");
+    expect(text).toContain(
+      "Music generation task task-active is already queued (initial provider: minimax).",
+    );
     const details = result.details as {
       action?: unknown;
       active?: unknown;
       existingTask?: unknown;
       status?: unknown;
       taskKind?: unknown;
+      selectedProvider?: unknown;
       provider?: unknown;
       task?: { taskId?: unknown };
       progressSummary?: unknown;
@@ -142,7 +149,8 @@ describe("createMusicGenerateTool status actions", () => {
     expect(details.existingTask).toBe(true);
     expect(details.status).toBe("queued");
     expect(details.taskKind).toBe(MUSIC_GENERATION_TASK_KIND);
-    expect(details.provider).toBe("minimax");
+    expect(details.selectedProvider).toBe("minimax");
+    expect(details.provider).toBeUndefined();
     expect(details.task?.taskId).toBe("task-active");
     expect(details.progressSummary).toBe("Queued music generation");
   });

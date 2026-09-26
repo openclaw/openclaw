@@ -70,11 +70,13 @@ describe("createVideoGenerateTool status actions", () => {
     expect(result?.content).toStrictEqual([
       {
         type: "text",
-        text: "Video generation task task-active is already running with openai.\nProgress: Generating video.\nDo not call video_generate again for this request. Wait for the completion event; the completion agent will send the finished video here.",
+        text: "Video generation task task-active is already running (initial provider: openai).\nProgress: Generating video.\nDo not call video_generate again for this request. Wait for the completion event; the completion agent will send the finished video here.",
       },
     ]);
     const text = content?.text ?? "";
-    expect(text).toContain("Video generation task task-active is already running with openai.");
+    expect(text).toContain(
+      "Video generation task task-active is already running (initial provider: openai).",
+    );
     expect(text).toContain("Do not call video_generate again for this request.");
     const details = result?.details as
       | {
@@ -84,6 +86,7 @@ describe("createVideoGenerateTool status actions", () => {
           existingTask?: unknown;
           status?: unknown;
           taskKind?: unknown;
+          selectedProvider?: unknown;
           provider?: unknown;
           task?: { taskId?: unknown; runId?: unknown };
           progressSummary?: unknown;
@@ -95,7 +98,8 @@ describe("createVideoGenerateTool status actions", () => {
     expect(details?.existingTask).toBe(true);
     expect(details?.status).toBe("running");
     expect(details?.taskKind).toBe(VIDEO_GENERATION_TASK_KIND);
-    expect(details?.provider).toBe("openai");
+    expect(details?.selectedProvider).toBe("openai");
+    expect(details?.provider).toBeUndefined();
     expect(details?.task?.taskId).toBe("task-active");
     expect(details?.task?.runId).toBe("tool:video_generate:active");
     expect(details?.progressSummary).toBe("Generating video");
@@ -124,13 +128,16 @@ describe("createVideoGenerateTool status actions", () => {
     const result = await createVideoGenerateStatusActionResult("agent:main:discord:direct:123");
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
-    expect(text).toContain("Video generation task task-active is already queued with google.");
+    expect(text).toContain(
+      "Video generation task task-active is already queued (initial provider: google).",
+    );
     const details = result.details as {
       action?: unknown;
       active?: unknown;
       existingTask?: unknown;
       status?: unknown;
       taskKind?: unknown;
+      selectedProvider?: unknown;
       provider?: unknown;
       task?: { taskId?: unknown };
       progressSummary?: unknown;
@@ -140,7 +147,8 @@ describe("createVideoGenerateTool status actions", () => {
     expect(details.existingTask).toBe(true);
     expect(details.status).toBe("queued");
     expect(details.taskKind).toBe(VIDEO_GENERATION_TASK_KIND);
-    expect(details.provider).toBe("google");
+    expect(details.selectedProvider).toBe("google");
+    expect(details.provider).toBeUndefined();
     expect(details.task?.taskId).toBe("task-active");
     expect(details.progressSummary).toBe("Queued video generation");
   });
