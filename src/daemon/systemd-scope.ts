@@ -57,11 +57,20 @@ export async function isSystemdServiceAbsent(
   if (opts?.strictCommandAbsent) {
     // The caller just proved user-unit absence without loading it. System
     // ownership needs its own live manager and complete unit-path inspection.
-    await assertNoSystemSystemdOwnership(
-      `${resolveSystemdServiceName(env)}.service`,
-      opts.timeoutMs,
-      { requireLoaded: true },
-    );
+    try {
+      await assertNoSystemSystemdOwnership(
+        `${resolveSystemdServiceName(env)}.service`,
+        opts.timeoutMs,
+        { requireLoaded: true },
+      );
+    } catch (error) {
+      // A present or unverifiable system owner prevents absence proof; it is
+      // not a refusal of this read-only inspection's admitted manager binding.
+      if (isSystemSystemdOwnershipError(error)) {
+        return false;
+      }
+      throw error;
+    }
     return (
       (await findInstalledSystemdGatewayScope(env, {
         requireLoaded: true,

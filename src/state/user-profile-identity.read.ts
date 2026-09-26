@@ -13,6 +13,8 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
+  projectUserProfileDisplay,
+  selectProfileDisplayEntries,
   selectResolvedUserProfile,
   selectResolvedUserProfileMetadataById,
   userProfilesDb,
@@ -131,6 +133,36 @@ export function listUserProfilesSync(options: OpenClawStateDatabaseOptions = {})
     },
     { databaseLabel: database.path, operationLabel: "user-profiles.list" },
   );
+}
+
+/** Resolve current authority and display together on the caller's admitted connection. */
+export function readUserProfileAuthorityInDatabase(db: DatabaseSync, profileId: string) {
+  return runSqliteDeferredTransactionSync(db, () => {
+    const current = tableExists(db, "user_profiles")
+      ? selectResolvedUserProfileMetadataById(db, profileId)
+      : undefined;
+    if (!current) {
+      return undefined;
+    }
+    const display = selectProfileDisplayEntries(db, [current.id])[0]?.[1];
+    if (!display) {
+      return undefined;
+    }
+    const aliases = executeSqliteQuerySync(
+      db,
+      userProfilesDb(db)
+        .selectFrom("user_profiles")
+        .select("id")
+        .where("merged_into", "=", current.id)
+        .orderBy("id", "asc"),
+    ).rows;
+    return {
+      profileId: current.id,
+      role: current.role ?? null,
+      aliases: [current.id, ...aliases.map((alias) => alias.id)],
+      display: projectUserProfileDisplay(display),
+    };
+  });
 }
 
 /** Disclosure scopes need current aliases, never the resident display catalog. */

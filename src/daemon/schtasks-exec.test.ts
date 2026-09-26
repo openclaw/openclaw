@@ -41,6 +41,46 @@ describe("execSchtasks", () => {
     );
   });
 
+  it.each([
+    { allowance: 700, enforced: 700 },
+    { allowance: 699.5, enforced: 699 },
+    { allowance: 1, enforced: 1 },
+    { allowance: 20_000, enforced: 15_000 },
+  ])(
+    "bounds explicit inspection allowance $allowance without raising the native cap",
+    async ({ allowance, enforced }) => {
+      runCommandWithTimeout.mockResolvedValue({
+        stdout: "",
+        stderr: "",
+        code: null,
+        signal: "SIGTERM",
+        killed: true,
+        termination: "timeout",
+      });
+
+      await expect(execSchtasks(["/Query"], allowance)).resolves.toEqual({
+        stdout: "",
+        stderr: `schtasks timed out after ${enforced}ms`,
+        code: 124,
+      });
+      expect(runCommandWithTimeout).toHaveBeenCalledWith(["schtasks", "/Query"], {
+        baseEnv: expect.any(Object),
+        timeoutMs: enforced,
+        noOutputTimeoutMs: enforced,
+      });
+    },
+  );
+
+  it.each([0, -1, 0.75, Number.NaN, Number.POSITIVE_INFINITY])(
+    "does not replace unavailable allowance %s with the control default or a longer timer",
+    async (allowance) => {
+      await expect(execSchtasks(["/Query"], allowance)).rejects.toThrow(
+        "inspection deadline expired",
+      );
+      expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    },
+  );
+
   it("maps a timeout into a non-zero schtasks result", async () => {
     runCommandWithTimeout.mockResolvedValue({
       stdout: "",

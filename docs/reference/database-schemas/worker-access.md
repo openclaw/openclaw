@@ -112,6 +112,14 @@ result or native worker exit before releasing writer admission, publishing facts
 or releasing request custody. The parent does not open SQLite or synchronously
 wait for the worker's commit. This changes no schema, retention, or update behavior.
 
+Ordinary lifecycle upserts read their selected rows and pending-archive fact in
+one read-worker snapshot. A matching physical database with no pending archives
+skips recovery; archive-producing mutations, native scopes, and Doctor transfers
+retain publication. Later foreign archive commits are visible to the next snapshot.
+Standalone recovery probes reuse the read worker without archive or writer admission.
+Maintenance finalization takes writer admission only when its worker requests native
+access, then rechecks current entries and retains admission through commit publication.
+
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each
 connection starts with eight-page units and adjusts toward a 25 ms hold target,
@@ -198,6 +206,15 @@ transcript-session keys, and SSE inline subagent visibility reads remain migrati
 debt. Process-held incognito databases and the existing
 CLI-import history path still need their owner/lifetime migration; they are not
 new synchronous exceptions or fallbacks for a failed durable worker read.
+
+Artifact lists, image pages, and exact transcript-image selection use that same
+history worker. The worker scans and decodes transcript payloads and returns
+selected artifacts; connection-owned cursors and current access checks stay on
+the Gateway. General transcript pages, anchored visibility reads, and public
+share pages also use the worker facade. Read-only image discovery does not
+restore cold history, while ordinary reads retain their existing restoration
+owner. Process-held incognito data and native callback visitors retain their
+current owners. Schemas, stored bytes, retention, and update behavior are unchanged.
 
 Exact message membership reads for managed attachments also use the history
 worker. The worker validates the entire visible JSON range on every lookup,

@@ -30,7 +30,22 @@ export type SessionSharingEntry = Pick<
   | "incognito"
   | "createdActor"
   | "sandbox"
+  | "spawnedBy"
 >;
+
+export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingEntry {
+  return {
+    sessionId: entry.sessionId,
+    updatedAt: entry.updatedAt,
+    lifecycleRevision: entry.lifecycleRevision,
+    archivedAt: entry.archivedAt,
+    visibility: entry.visibility,
+    incognito: entry.incognito,
+    createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
+    sandbox: entry.sandbox,
+    spawnedBy: entry.spawnedBy,
+  };
+}
 
 export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 

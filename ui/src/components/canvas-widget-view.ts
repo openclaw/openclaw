@@ -225,13 +225,6 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       }
       const report = {
         message: data.message.slice(0, 500),
-        source:
-          typeof data.source === "string"
-            ? data.source
-                .replace(/[?#].*$/, "")
-                .replace(/^.*[\\/]/, "")
-                .slice(0, 200)
-            : undefined,
         line: typeof data.line === "number" && Number.isInteger(data.line) ? data.line : undefined,
         column:
           typeof data.column === "number" && Number.isInteger(data.column)

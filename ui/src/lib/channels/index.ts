@@ -516,18 +516,24 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       listener(state);
     }
   };
-  const run = async (task: () => Promise<void>): Promise<void> => {
+  const run = async <T>(task: () => Promise<T>): Promise<T | undefined> => {
     if (disposed) {
-      return;
+      return undefined;
     }
     const result = task();
     publish();
     try {
-      await result;
+      return await result;
     } finally {
       publish();
     }
   };
+  const runWhatsApp = (task: () => Promise<boolean>) =>
+    run(async () => {
+      if (await task()) {
+        await loadChannels(state, true);
+      }
+    });
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connected = snapshot.phase === "connected";
@@ -584,43 +590,25 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     refresh: (probe) => run(() => loadChannels(state, probe ?? false)),
     refreshPairing: () => run(() => loadChannelPairing(state)),
     approvePairing: async (params) => {
-      let result: ChannelsPairingApproveResult | null = null;
-      await run(async () => {
-        const mutation = await mutateChannelPairing(state, params, (client) =>
+      const mutation = await run(() =>
+        mutateChannelPairing(state, params, (client) =>
           client.request<ChannelsPairingApproveResult>("channels.pairing.approve", params),
-        );
-        result = mutation ? mutation.result : null;
-      });
-      return result;
+        ),
+      );
+      return mutation ? mutation.result : null;
     },
-    dismissPairing: async (params) => {
-      let dismissed = false;
-      await run(async () => {
-        dismissed =
-          (await mutateChannelPairing(state, params, (client) =>
+    dismissPairing: async (params) =>
+      Boolean(
+        await run(() =>
+          mutateChannelPairing(state, params, (client) =>
             client.request("channels.pairing.dismiss", params),
-          )) !== null;
-      });
-      return dismissed;
-    },
+          ),
+        ),
+      ),
     startWhatsApp: (force, accountId) =>
-      run(async () => {
-        if (await startWhatsAppLogin(state, force, accountId)) {
-          await loadChannels(state, true);
-        }
-      }),
-    waitWhatsApp: (accountId) =>
-      run(async () => {
-        if (await waitWhatsAppLogin(state, accountId)) {
-          await loadChannels(state, true);
-        }
-      }),
-    logoutWhatsApp: (accountId) =>
-      run(async () => {
-        if (await logoutWhatsApp(state, accountId)) {
-          await loadChannels(state, true);
-        }
-      }),
+      runWhatsApp(() => startWhatsAppLogin(state, force, accountId)),
+    waitWhatsApp: (accountId) => runWhatsApp(() => waitWhatsAppLogin(state, accountId)),
+    logoutWhatsApp: (accountId) => runWhatsApp(() => logoutWhatsApp(state, accountId)),
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

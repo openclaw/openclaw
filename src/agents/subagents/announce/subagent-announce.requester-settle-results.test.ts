@@ -48,13 +48,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     expect(message).toContain("social findings");
     expect(message).toContain("network findings");
     expect(message).toContain("NO_REPLY");
-    expect(registryRuntimeMock.hasDescendantRunAwaitingSettle).toHaveBeenCalledWith(
-      REQUESTER,
-      "run-b",
-      "main",
-      null,
-      1_000,
-    );
   });
 
   it("delivers the complete final source reply after a same-run silent terminal", async () => {

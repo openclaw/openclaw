@@ -7,7 +7,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
-const getUserProfileListItem = vi.hoisted(() => vi.fn());
+const profileFixture = vi.hoisted(() => vi.fn());
 const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../infra/host-account-avatar.js", () => ({ resolveHostAccountAvatar: async () => null }));
@@ -15,10 +15,17 @@ vi.mock("./http-auth-utils.js", () => ({
   authorizeControlUiReadRequestOrReply,
 }));
 vi.mock("../state/user-profiles.js", () => ({
-  getProfileAvatar: () => undefined,
-  getUserProfileListItem,
   formatUserProfileAvatarEtag: () => "unused-upload-etag",
   UserProfileNotFoundError: class extends Error {},
+}));
+
+vi.mock("../state/user-profiles-avatar.js", () => ({
+  createProfileAvatarReader: (id: string) => ({
+    async inspect() {
+      const profile = profileFixture(id);
+      return { profile, emails: profile.emails, isCurrent: () => true };
+    },
+  }),
 }));
 
 describe("Gravatar HTTP waiter lifetimes", () => {
@@ -58,7 +65,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
 
   beforeEach(() => {
     fetchImpl.mockReset();
-    getUserProfileListItem.mockReset();
+    profileFixture.mockReset();
     authorizeControlUiReadRequestOrReply
       .mockReset()
       .mockImplementation(({ res }: { res: ServerResponse }) =>
@@ -130,7 +137,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
       totalDeadlines.push(controller);
       return controller.signal;
     });
-    getUserProfileListItem.mockImplementation((id: string) => ({
+    profileFixture.mockImplementation((id: string) => ({
       id,
       emails:
         id === "deadline-older"
@@ -156,7 +163,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
   });
 
   it("settles a disconnected HTTP waiter without cancelling shared work or writing a response", async () => {
-    getUserProfileListItem.mockImplementation((id: string) => ({
+    profileFixture.mockImplementation((id: string) => ({
       id,
       emails: ["disconnect-shared@example.test"],
     }));
@@ -189,7 +196,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
   it("does not start a Gravatar fetch for a client already disconnected during authorization", async () => {
     const authorized = createDeferred<ReturnType<typeof bindHttpResponseAuthority> | null>();
     authorizeControlUiReadRequestOrReply.mockReturnValue(authorized.promise);
-    getUserProfileListItem.mockReturnValue({
+    profileFixture.mockReturnValue({
       id: "disconnected-before-lookup",
       emails: ["disconnected-before-lookup@example.test"],
     });

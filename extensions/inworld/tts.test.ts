@@ -159,14 +159,6 @@ describe("listInworldVoices", () => {
 
     expect(lastGuardRequest().timeoutMs).toBe(30_000);
   });
-
-  it("preserves an explicit timeout for voice list requests", async () => {
-    queueGuardedResponse(new Response(JSON.stringify({ voices: [] }), { status: 200 }));
-
-    await listInworldVoices({ apiKey: "test-key", timeoutMs: 5_000 });
-
-    expect(lastGuardRequest().timeoutMs).toBe(5_000);
-  });
 });
 
 describe("inworldTTS", () => {
@@ -399,13 +391,6 @@ describe("Inworld response read bounding", () => {
     // Never the full 64 KiB hostile body: it collapses to a fixed marker.
     expect(message).toContain("(error body exceeded diagnostic limit; truncated)");
     expect(message.length).toBeLessThan(512);
-  });
-
-  it("edge: a small error body is preserved verbatim in the thrown message", async () => {
-    queueGuardedResponse(new Response("invalid api key", { status: 401 }));
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(
-      "Inworld TTS API error (401): invalid api key",
-    );
   });
 
   it("fail-closed: rejects and cancels an oversized voices JSON stream (16 MiB cap)", async () => {

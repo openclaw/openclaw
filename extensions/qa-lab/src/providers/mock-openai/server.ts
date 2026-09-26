@@ -2089,7 +2089,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     const subagentTurn = resolveMockSubagentTurn(input);
     const prompt = extractLastUserText(input);
     const allInputText = extractAllRequestTexts(input, body);
-    const sessionId = sessionIdentity.resolve(request);
+    const sessionId = sessionIdentity.resolve(request, normalized);
     const scenarioState = scenarioStateFor(sessionId);
     const compactionSummaryFaultMode = resolveCompactionSummaryFaultMode({
       allInputText,
