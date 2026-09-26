@@ -123,7 +123,7 @@ export async function openaiTTS(params: {
     readProviderBinaryResponse,
     resolveProviderRequestHeaders,
   } = await import("openclaw/plugin-sdk/provider-http");
-  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
+  const { captureHttpExchangeAsync, isDebugProxyGlobalFetchPatchInstalled } =
     await import("openclaw/plugin-sdk/proxy-capture");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
@@ -167,7 +167,8 @@ export async function openaiTTS(params: {
   });
   try {
     if (!debugProxyFetchPatchInstalled) {
-      captureHttpExchange({
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void captureHttpExchangeAsync({
         url: requestUrl,
         method: "POST",
         requestHeaders,
@@ -178,7 +179,7 @@ export async function openaiTTS(params: {
           provider: "openai",
           capability: "tts",
         },
-      });
+      }).catch(() => {});
     }
 
     await assertOkOrThrowProviderError(response, "OpenAI TTS API error");

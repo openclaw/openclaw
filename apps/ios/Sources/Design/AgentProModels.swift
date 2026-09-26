@@ -1,17 +1,6 @@
 import Foundation
 import OpenClawProtocol
 
-enum AgentProValueReader {
-    static func doubleValue(_ value: AnyCodable?) -> Double? {
-        switch value?.value {
-        case let double as Double where double.isFinite: double
-        case let int as Int: Double(int)
-        case let string as String: Double(string)
-        default: nil
-        }
-    }
-}
-
 struct CronJobsListLite: Decodable {
     let jobs: [CronJob]
     let snapshotRevision: String?
@@ -131,7 +120,12 @@ struct CostUsageSummaryLite: Decodable {
     let totals: [String: AnyCodable]?
 
     var totalCost: Double? {
-        AgentProValueReader.doubleValue(self.totals?["totalCost"])
+        switch self.totals?["totalCost"]?.value {
+        case let double as Double where double.isFinite: double
+        case let int as Int: Double(int)
+        case let string as String: Double(string)
+        default: nil
+        }
     }
 }
 

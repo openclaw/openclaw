@@ -8,13 +8,13 @@ import {
   machoFixture,
   nativeObjectFixture,
   universalArchiveFixture,
-  writeFat64Fixture,
 } from "../helpers/mac-native.js";
 import {
   installFakeCodesign,
   installTransientFakeCodesign,
   installElevationFakeCodesign,
   makeSigningFixture,
+  writeFat64Fixture,
 } from "../helpers/mac-signing.js";
 import { createMacScriptTest, type MacScriptFixture } from "./mac-script-fixture.test-support.js";
 

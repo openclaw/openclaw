@@ -28,10 +28,8 @@ final class CalendarService: CalendarServicing {
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
         let events = store.events(matching: predicate)
         let limit = max(1, min(params.limit ?? 50, 500))
-        let selected = Array(events.prefix(limit))
-
         let formatter = ISO8601DateFormatter()
-        let payload = selected.map { event in
+        let payload = events.prefix(limit).map { event in
             OpenClawCalendarEventPayload(
                 identifier: event.eventIdentifier ?? UUID().uuidString,
                 title: event.title ?? "(untitled)",

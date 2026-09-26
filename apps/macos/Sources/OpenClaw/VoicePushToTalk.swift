@@ -223,8 +223,8 @@ actor VoicePushToTalk {
                 userInfo: [NSLocalizedDescriptionKey: "Recognizer unavailable"])
         }
 
-        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let request = self.recognitionRequest else { return }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        self.recognitionRequest = request
         SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
 
         // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.

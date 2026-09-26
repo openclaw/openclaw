@@ -198,6 +198,7 @@ async function fixture(runSetupScript = false, preparedNode = false) {
     repository,
     base,
     baseCommit,
+    assertCurrent,
     start,
     syncWorkspace,
     quiesceWorkspace,
@@ -250,6 +251,7 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     assertCurrent: expect.any(Function),
   });
   expect(f.syncWorkspace).toHaveBeenCalledWith({
+    authorize: f.assertCurrent,
     sessionId: session.sessionId,
     sessionKey: session.sessionKey,
     generation: session.generation,

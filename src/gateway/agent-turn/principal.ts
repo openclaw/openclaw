@@ -3,6 +3,7 @@ import {
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { transferGatewayLocalUserIngress } from "../local-user-ingress.js";
+import { transferGatewayOperatorSourceIdentity } from "../operator-run-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "../server-methods/shared-types.js";
 import type { AgentTurnPrincipal } from "./types.js";
 
@@ -20,6 +21,7 @@ export function captureAgentTurnPrincipal(client: GatewayClient | null): AgentTu
     isDeviceTokenAuth: client.isDeviceTokenAuth,
   };
   transferGatewayLocalUserIngress(client, principal);
+  transferGatewayOperatorSourceIdentity(client, principal);
   return principal;
 }
 

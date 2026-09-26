@@ -35,9 +35,11 @@ describe("workspace upload cancellation", () => {
     { boundary: "before handler", cancellation: "none" },
     { boundary: "before handler", cancellation: "owner" },
     { boundary: "before handler", cancellation: "discard" },
+    { boundary: "before handler", cancellation: "revoke" },
     { boundary: "after body", cancellation: "none" },
     { boundary: "after body", cancellation: "owner" },
     { boundary: "after body", cancellation: "discard" },
+    { boundary: "after body", cancellation: "revoke" },
     { boundary: "after body", cancellation: "discard-and-close" },
     { boundary: "after body", cancellation: "discard-and-fail" },
   ] as const)("settles $boundary with $cancellation", async ({ boundary, cancellation }) => {
@@ -85,6 +87,12 @@ describe("workspace upload cancellation", () => {
       });
     }
     let incoming: IncomingMessage | undefined;
+    let activeAuthorization: ReturnType<typeof service.authorize>;
+    const authorize = service.authorize.bind(service);
+    vi.spyOn(service, "authorize").mockImplementation((request) => {
+      activeAuthorization = authorize(request);
+      return activeAuthorization;
+    });
     const callback = createNodeWorkspaceTransferHttpCallback(service);
     const server = createServer((req, res) => {
       incoming = req;
@@ -139,15 +147,21 @@ describe("workspace upload cancellation", () => {
       if (cancellation === "owner") {
         owner.abort(new Error("Workspace transfer owner closed"));
       }
-      if (cancellation.startsWith("discard")) {
+      if (cancellation.startsWith("discard") || cancellation === "revoke") {
+        const discard =
+          cancellation === "revoke"
+            ? service.revoke.bind(service)
+            : service.discardUpload.bind(service);
         cleanup = Promise.all([
-          service.discardUpload("environment", token),
-          service.discardUpload("environment", token),
+          discard("environment", token),
+          discard("environment", token),
           ...(cancellation === "discard-and-close" ? [service.close("environment")] : []),
         ]).then(() => {
           cleanupSettled = true;
         });
         void cleanup.catch(() => undefined);
+        expect(activeAuthorization).toBeDefined();
+        expect(service.isAuthorizationCurrent(activeAuthorization!)).toBe(false);
         if (boundary === "before handler") {
           await withTestTimeout(cleanup, 2_000, "discard waited for an unstarted handler");
         } else {
@@ -182,7 +196,11 @@ describe("workspace upload cancellation", () => {
           snapshot.manifestRef,
         );
       }
-      if (cancellation === "discard" || cancellation === "discard-and-fail") {
+      if (
+        cancellation === "discard" ||
+        cancellation === "discard-and-fail" ||
+        cancellation === "revoke"
+      ) {
         const replacement = service.prepareUpload("environment", snapshot.manifestRef);
         await service.discardUpload("environment", token);
         expect(() => service.prepareUpload("environment", snapshot.manifestRef)).toThrow(

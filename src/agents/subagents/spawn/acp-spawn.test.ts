@@ -168,17 +168,9 @@ vi.mock("../../../config/sessions/session-entry-read-runtime.js", async () => {
   return createAcpSpawnStoreMocks(hoisted).readRuntime;
 });
 
-vi.mock("../../../config/sessions.js", async () => {
-  const { isConfiguredSessionStoreAgentId, isPerAgentSessionStoreConfig } =
-    await import("../../../config/sessions/targets.js");
-  return {
-    ...(await import("../../../config/sessions/main-session.js")),
-    isConfiguredSessionStoreAgentId,
-    isPerAgentSessionStoreConfig,
-    resolveExistingAgentSessionStoreTargetsSync: () => [],
-    loadSessionStore: hoisted.loadSessionStoreMock,
-    resolveSessionStorePathCore: hoisted.resolveStorePathMock,
-  };
+vi.mock("../../../gateway/session-utils-store-worker.js", async () => {
+  const { createAcpSpawnStoreMocks } = await import("./acp-spawn-store.test-support.js");
+  return createAcpSpawnStoreMocks(hoisted).workerLookup;
 });
 
 vi.mock("../../../config/config.js", () => ({

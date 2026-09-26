@@ -10,15 +10,24 @@ import type {
 export function createLegacyWebhookListenerDoctorContract(params: {
   channelKey: string;
   defaultPort: number;
+  portKey?: string;
+  hostKey?: string | null;
+  webhookKey?: string;
   defaultHost?: string;
 }): {
   legacyConfigRules: ChannelDoctorLegacyConfigRule[];
   normalizeCompatibilityConfig: (params: { cfg: OpenClawConfig }) => ChannelDoctorConfigMutation;
 } {
+  const portKey = params.portKey ?? "webhookPort";
+  const hostKey = params.hostKey === undefined ? "webhookHost" : params.hostKey;
+  const source = (entry: Record<string, unknown>) =>
+    params.webhookKey ? asObjectRecord(entry[params.webhookKey]) : entry;
   const hasLegacy = (value: unknown): boolean => {
     const entry = asObjectRecord(value);
+    const listener = entry && source(entry);
     return Boolean(
-      entry && (Object.hasOwn(entry, "webhookPort") || Object.hasOwn(entry, "webhookHost")),
+      listener &&
+      (Object.hasOwn(listener, portKey) || (hostKey && Object.hasOwn(listener, hostKey))),
     );
   };
   const prefix = `channels.${params.channelKey}`;
@@ -35,41 +44,54 @@ export function createLegacyWebhookListenerDoctorContract(params: {
     ],
     normalizeCompatibilityConfig: ({ cfg }) => {
       const root = asObjectRecord(asObjectRecord(cfg.channels)?.[params.channelKey]);
+      const inherited = root && source(root);
       const canonicalRoot = asObjectRecord(root?.legacyWebhook);
       return normalizeChannelConfigEntries({
         cfg,
         channelId: params.channelKey,
         normalizeEntry: ({ entry, accountId, pathPrefix, changes }) => {
-          if (!hasLegacy(entry)) {
+          const listener = source(entry);
+          if (!listener || !hasLegacy(entry)) {
             return { entry, changed: false };
           }
           const next = { ...entry };
-          const port = Object.hasOwn(entry, "webhookPort")
-            ? entry.webhookPort
-            : ((accountId ? (canonicalRoot?.port ?? root?.webhookPort) : undefined) ??
+          const port = Object.hasOwn(listener, portKey)
+            ? listener[portKey]
+            : ((accountId ? (canonicalRoot?.port ?? inherited?.[portKey]) : undefined) ??
               params.defaultPort);
           const inheritedHost = accountId
             ? canonicalRoot
               ? canonicalRoot.host
-              : (root?.webhookHost ?? params.defaultHost)
+              : ((hostKey ? inherited?.[hostKey] : undefined) ?? params.defaultHost)
             : params.defaultHost;
-          const host = entry.webhookHost ?? inheritedHost;
+          const host = hostKey ? (listener[hostKey] ?? inheritedHost) : inheritedHost;
+          const legacyPath = [pathPrefix, params.webhookKey].filter(Boolean).join(".");
           if (Object.hasOwn(entry, "legacyWebhook")) {
             changes.push(
-              `Removed ${pathPrefix} legacy listener keys; ${pathPrefix}.legacyWebhook is already configured.`,
+              `Removed ${legacyPath} legacy listener keys; ${pathPrefix}.legacyWebhook is already configured.`,
             );
           } else if (accountId && root?.legacyWebhook === false) {
             changes.push(
-              `Removed ${pathPrefix} legacy listener keys; ${prefix}.legacyWebhook: false keeps this account's inherited listener disabled.`,
+              `Removed ${legacyPath} legacy listener keys; ${prefix}.legacyWebhook: false keeps this account's inherited listener disabled.`,
             );
           } else {
             next.legacyWebhook = { port, ...(host !== undefined ? { host } : {}) };
             changes.push(
-              `Moved ${pathPrefix} listener settings to ${pathPrefix}.legacyWebhook. Point the external callback or reverse proxy at the Gateway port and webhook path, verify delivery, then set legacyWebhook: false to disable legacy forwarding.`,
+              `Moved ${legacyPath} listener settings to ${pathPrefix}.legacyWebhook. Point the external callback or reverse proxy at the Gateway port and webhook path, verify delivery, then set legacyWebhook: false to disable legacy forwarding.`,
             );
           }
-          delete next.webhookPort;
-          delete next.webhookHost;
+          const updated = params.webhookKey ? { ...listener } : next;
+          delete updated[portKey];
+          if (hostKey) {
+            delete updated[hostKey];
+          }
+          if (params.webhookKey) {
+            if (Object.keys(updated).length) {
+              next[params.webhookKey] = updated;
+            } else {
+              delete next[params.webhookKey];
+            }
+          }
           return { entry: next, changed: true };
         },
       });

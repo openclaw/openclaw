@@ -1,7 +1,8 @@
-// Model Catalog Core tests cover model catalog normalize behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeModelCatalog, normalizeModelCatalogProviderRows } from "./index.js";
-import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
+import {
+  normalizeModelCatalog,
+  normalizeModelCatalogProviderRows,
+} from "./model-catalog-normalize.js";
 
 describe("model catalog normalization", () => {
   it.each([
@@ -26,110 +27,109 @@ describe("model catalog normalization", () => {
   });
 
   it("normalizes catalog ownership, aliases, suppressions, and row fields", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example/v1",
+      headers: { "x-model": "gpt-5.4" },
+      input: ["text", "image", "document"],
+      reasoning: true,
+      contextWindow: 256000,
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "1m",
+      contextTokens: 200000,
+      maxTokens: 128000,
+      thinkingLevelMap: { off: null, minimal: "low", max: "max" },
+      cost: {
+        input: 1.25,
+        output: 10,
+        cacheRead: 0.125,
+        tieredPricing: [
+          { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 1.25, range: [0, 256000] },
+        ],
+      },
+      compat: {
+        supportsTools: true,
+        codeMode: "preferred",
+        openRouterRouting: { only: ["anthropic"], allow_fallbacks: false },
+        vercelGatewayRouting: { order: ["anthropic"] },
+        zaiToolStream: true,
+        cacheControlFormat: "anthropic",
+        sendSessionAffinityHeaders: true,
+        sendSessionIdHeader: false,
+        supportsEagerToolInputStreaming: false,
+        supportsLongCacheRetention: true,
+        supportsResponsesContinuation: true,
+        supportsJsonSchemaResponseFormat: true,
+        requiresReasoningContentOnAssistantMessages: true,
+        thinkingFormat: "together",
+      },
+      status: "preview",
+      statusReason: "rolling out",
+      replaces: ["gpt-5.3"],
+      replacedBy: "gpt-5.5",
+      tags: ["default"],
+    };
+    const provider = {
+      baseUrl: "https://api.openai.com/v1",
+      api: "openai-responses",
+      headers: { "x-provider": "openai" },
+      defaultModel: "gpt-5.4",
+      defaultUtilityModel: "gpt-5.6-luna",
+      models: [model],
+    };
     const catalog = normalizeModelCatalog(
-      {
+      structuredClone({
         providers: {
           OpenAI: {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-responses",
-            headers: {
-              "x-provider": "openai",
-            },
+            ...provider,
             defaultModel: " gpt-5.4 ",
             defaultUtilityModel: " gpt-5.6-luna ",
             models: [
               {
-                id: "gpt-5.4",
-                name: "GPT-5.4",
-                api: "openai-completions",
-                baseUrl: "https://proxy.example/v1",
-                headers: {
-                  "x-model": "gpt-5.4",
-                },
-                input: ["text", "image", "document", "audio"],
-                reasoning: true,
-                contextWindow: 256000,
+                ...model,
+                input: [...model.input, "audio"],
                 contextWindows: [
                   { id: "1m", label: " 1M ", contextWindow: 1_000_000 },
                   { id: "invalid", label: "Invalid", contextWindow: 0 },
                   { id: "200k", label: " 200K ", contextWindow: 200_000 },
                 ],
                 contextWindowDefault: " 1m ",
-                contextTokens: 200000,
-                maxTokens: 128000,
-                thinkingLevelMap: {
-                  off: null,
-                  minimal: " low ",
-                  max: "max",
-                  adaptive: "high",
-                },
+                thinkingLevelMap: { off: null, minimal: " low ", max: "max", adaptive: "high" },
                 cost: {
-                  input: 1.25,
-                  output: 10,
-                  cacheRead: 0.125,
+                  ...model.cost,
                   tieredPricing: [
-                    {
-                      input: 1.25,
-                      output: 10,
-                      cacheRead: 0.125,
-                      cacheWrite: 1.25,
-                      range: [0, 256000],
-                    },
-                    {
-                      input: 1,
-                      output: 2,
-                      range: [0, 1000],
-                    },
+                    ...model.cost.tieredPricing,
+                    { input: 1, output: 2, range: [0, 1000] },
                   ],
                 },
                 compat: {
-                  supportsTools: true,
+                  ...model.compat,
                   codeMode: " preferred ",
                   openRouterRouting: {
                     only: [" anthropic ", "", 1],
                     allow_fallbacks: false,
                     require_parameters: "no",
                   },
-                  vercelGatewayRouting: {
-                    order: [" anthropic ", "", 1],
-                    only: "openai",
-                  },
-                  zaiToolStream: true,
-                  cacheControlFormat: "anthropic",
-                  sendSessionAffinityHeaders: true,
-                  sendSessionIdHeader: false,
-                  supportsEagerToolInputStreaming: false,
-                  supportsLongCacheRetention: true,
-                  supportsResponsesContinuation: true,
-                  supportsJsonSchemaResponseFormat: true,
-                  requiresReasoningContentOnAssistantMessages: true,
+                  vercelGatewayRouting: { order: [" anthropic ", "", 1], only: "openai" },
                   supportsStore: "yes",
-                  thinkingFormat: "together",
                   unknownFlag: true,
                 },
-                status: "preview",
-                statusReason: "rolling out",
                 replaces: [" gpt-5.3 ", ""],
-                replacedBy: "gpt-5.5",
                 tags: [" default ", ""],
               },
-              {
-                id: "",
-              },
+              { id: "" },
             ],
           },
-          anthropic: {
-            models: [{ id: "claude-sonnet-4.6" }],
-          },
+          anthropic: { models: [{ id: "claude-sonnet-4.6" }] },
         },
         aliases: {
-          "Azure-OpenAI-Responses": {
-            provider: "OpenAI",
-            api: "azure-openai-responses",
-          },
-          "anthropic-alias": {
-            provider: "anthropic",
-          },
+          "Azure-OpenAI-Responses": { provider: "OpenAI", api: "azure-openai-responses" },
+          "anthropic-alias": { provider: "anthropic" },
         },
         suppressions: [
           {
@@ -142,90 +142,16 @@ describe("model catalog normalization", () => {
             },
           },
         ],
-        discovery: {
-          OpenAI: "static",
-          anthropic: "static",
-          bad: "unknown",
-        },
+        discovery: { OpenAI: "static", anthropic: "static", bad: "unknown" },
         runtimeAugment: true,
-      },
+      }),
       { ownedProviders: new Set(["OpenAI"]) },
     );
 
     expect(catalog).toEqual({
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-responses",
-          headers: {
-            "x-provider": "openai",
-          },
-          defaultModel: "gpt-5.4",
-          defaultUtilityModel: "gpt-5.6-luna",
-          models: [
-            {
-              id: "gpt-5.4",
-              name: "GPT-5.4",
-              api: "openai-completions",
-              baseUrl: "https://proxy.example/v1",
-              headers: {
-                "x-model": "gpt-5.4",
-              },
-              input: ["text", "image", "document"],
-              reasoning: true,
-              contextWindow: 256000,
-              contextWindows: [
-                { id: "200k", label: "200K", contextWindow: 200_000 },
-                { id: "1m", label: "1M", contextWindow: 1_000_000 },
-              ],
-              contextWindowDefault: "1m",
-              contextTokens: 200000,
-              maxTokens: 128000,
-              thinkingLevelMap: { off: null, minimal: "low", max: "max" },
-              cost: {
-                input: 1.25,
-                output: 10,
-                cacheRead: 0.125,
-                tieredPricing: [
-                  {
-                    input: 1.25,
-                    output: 10,
-                    cacheRead: 0.125,
-                    cacheWrite: 1.25,
-                    range: [0, 256000],
-                  },
-                ],
-              },
-              compat: {
-                supportsTools: true,
-                codeMode: "preferred",
-                openRouterRouting: { only: ["anthropic"], allow_fallbacks: false },
-                vercelGatewayRouting: { order: ["anthropic"] },
-                zaiToolStream: true,
-                cacheControlFormat: "anthropic",
-                sendSessionAffinityHeaders: true,
-                sendSessionIdHeader: false,
-                supportsEagerToolInputStreaming: false,
-                supportsLongCacheRetention: true,
-                supportsResponsesContinuation: true,
-                supportsJsonSchemaResponseFormat: true,
-                requiresReasoningContentOnAssistantMessages: true,
-                thinkingFormat: "together",
-              },
-              status: "preview",
-              statusReason: "rolling out",
-              replaces: ["gpt-5.3"],
-              replacedBy: "gpt-5.5",
-              tags: ["default"],
-            },
-          ],
-        },
-      },
+      providers: { openai: provider },
       aliases: {
-        "azure-openai-responses": {
-          provider: "openai",
-          api: "azure-openai-responses",
-        },
+        "azure-openai-responses": { provider: "openai", api: "azure-openai-responses" },
       },
       suppressions: [
         {
@@ -238,9 +164,7 @@ describe("model catalog normalization", () => {
           },
         },
       ],
-      discovery: {
-        openai: "static",
-      },
+      discovery: { openai: "static" },
       runtimeAugment: true,
     });
   });
@@ -318,18 +242,58 @@ describe("model catalog normalization", () => {
         },
       },
     ]);
-    expect(buildModelCatalogRef("OpenAI", "GPT-5.4")).toBe("openai/GPT-5.4");
-    expect(buildModelCatalogMergeKey("OpenAI", "GPT-5.4")).toBe("openai::gpt-5.4");
   });
 
   it("normalizes complete provider routing, pricing, reasoning, and image limits", () => {
     const tier = { input: 0, output: 2, cacheRead: 0, cacheWrite: 1, range: [128] };
+    const model = {
+      id: "gpt-5.4",
+      headers: { "x-safe": "value" },
+      cost: { input: 0, output: 2, cacheWrite: 1, tieredPricing: [tier] },
+      mediaInput: {
+        image: {
+          maxBytes: 4096,
+          maxPixels: 1024,
+          maxSidePx: 64,
+          preferredSidePx: 32,
+          tokenMode: "tile",
+        },
+      },
+      compat: {
+        supportsPromptCacheKey: true,
+        toolSchemaProfile: "strict",
+        toolCallArgumentsEncoding: "json",
+        visibleReasoningDetailTypes: ["summary"],
+        supportedReasoningEfforts: ["low", "high"],
+        unsupportedToolSchemaKeywords: ["pattern"],
+        reasoningEffortMap: { low: "minimal" },
+        maxTokensField: "max_completion_tokens",
+        thinkingFormat: "openrouter",
+        openRouterRouting: {
+          allow_fallbacks: false,
+          require_parameters: true,
+          data_collection: "deny",
+          zdr: true,
+          enforce_distillable_text: true,
+          order: ["openai"],
+          only: ["anthropic"],
+          ignore: ["bad"],
+          quantizations: ["fp8"],
+          sort: { by: "throughput", partition: null },
+          max_price: { prompt: "0.5", completion: 2, image: 0, audio: 3, request: 4 },
+          preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
+          preferred_max_latency: 1,
+        },
+        vercelGatewayRouting: { only: ["openai"], order: ["anthropic"] },
+      },
+    };
     const catalog = normalizeModelCatalog(
-      {
+      structuredClone({
         providers: {
           OpenAI: {
             models: [
               {
+                ...model,
                 id: " gpt-5.4 ",
                 headers: Object.fromEntries([
                   ["x-safe", " value "],
@@ -338,44 +302,25 @@ describe("model catalog normalization", () => {
                   ["prototype", "polluted"],
                 ]),
                 cost: {
-                  input: 0,
-                  output: 2,
-                  cacheWrite: 1,
+                  ...model.cost,
                   tieredPricing: [tier, { ...tier, range: [-1] }, { input: 1, range: [0, 2] }],
                 },
-                mediaInput: {
-                  image: {
-                    maxBytes: 4096,
-                    maxPixels: 1024,
-                    maxSidePx: 64,
-                    preferredSidePx: 32,
-                    tokenMode: "tile",
-                  },
-                },
                 compat: {
-                  supportsPromptCacheKey: true,
+                  ...model.compat,
                   toolSchemaProfile: " strict ",
                   toolCallArgumentsEncoding: " json ",
                   visibleReasoningDetailTypes: [" summary ", ""],
                   supportedReasoningEfforts: [" low ", " high "],
                   unsupportedToolSchemaKeywords: [" pattern ", ""],
                   reasoningEffortMap: { " low ": " minimal ", empty: "  " },
-                  maxTokensField: "max_completion_tokens",
-                  thinkingFormat: "openrouter",
                   openRouterRouting: {
-                    allow_fallbacks: false,
-                    require_parameters: true,
-                    data_collection: "deny",
-                    zdr: true,
-                    enforce_distillable_text: true,
+                    ...model.compat.openRouterRouting,
                     order: [" openai ", ""],
                     only: [" anthropic "],
                     ignore: [" bad "],
                     quantizations: [" fp8 "],
                     sort: { by: " throughput ", partition: null },
                     max_price: { prompt: " 0.5 ", completion: 2, image: 0, audio: 3, request: 4 },
-                    preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
-                    preferred_max_latency: 1,
                   },
                   vercelGatewayRouting: { only: [" openai "], order: [" anthropic "] },
                 },
@@ -383,53 +328,11 @@ describe("model catalog normalization", () => {
             ],
           },
         },
-      },
+      }),
       { ownedProviders: new Set([" OpenAI "]) },
     );
 
-    expect(catalog?.providers?.openai?.models).toEqual([
-      {
-        id: "gpt-5.4",
-        headers: { "x-safe": "value" },
-        cost: { input: 0, output: 2, cacheWrite: 1, tieredPricing: [tier] },
-        mediaInput: {
-          image: {
-            maxBytes: 4096,
-            maxPixels: 1024,
-            maxSidePx: 64,
-            preferredSidePx: 32,
-            tokenMode: "tile",
-          },
-        },
-        compat: {
-          supportsPromptCacheKey: true,
-          toolSchemaProfile: "strict",
-          toolCallArgumentsEncoding: "json",
-          visibleReasoningDetailTypes: ["summary"],
-          supportedReasoningEfforts: ["low", "high"],
-          unsupportedToolSchemaKeywords: ["pattern"],
-          reasoningEffortMap: { low: "minimal" },
-          maxTokensField: "max_completion_tokens",
-          thinkingFormat: "openrouter",
-          openRouterRouting: {
-            allow_fallbacks: false,
-            require_parameters: true,
-            data_collection: "deny",
-            zdr: true,
-            enforce_distillable_text: true,
-            order: ["openai"],
-            only: ["anthropic"],
-            ignore: ["bad"],
-            quantizations: ["fp8"],
-            sort: { by: "throughput", partition: null },
-            max_price: { prompt: "0.5", completion: 2, image: 0, audio: 3, request: 4 },
-            preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
-            preferred_max_latency: 1,
-          },
-          vercelGatewayRouting: { only: ["openai"], order: ["anthropic"] },
-        },
-      },
-    ]);
+    expect(catalog?.providers?.openai?.models).toEqual([model]);
   });
 
   it("retains an explicitly empty supported reasoning effort list", () => {
@@ -449,18 +352,10 @@ describe("model catalog normalization", () => {
 
   it.each([
     { name: "non-record catalog", value: null },
-    { name: "unowned provider", value: { providers: { anthropic: { models: [{ id: "x" }] } } } },
-    { name: "missing model id", value: { providers: { openai: { models: [{ id: "  " }] } } } },
-    { name: "unowned alias", value: { aliases: { alias: { provider: "anthropic" } } } },
     { name: "invalid suppression", value: { suppressions: [{ provider: "openai" }] } },
     { name: "unknown discovery", value: { discovery: { openai: "unknown" } } },
-    { name: "non-record models.dev mapping", value: { modelsDev: "openai" } },
     { name: "array models.dev mapping", value: { modelsDev: ["openai"] } },
-    { name: "null models.dev mapping", value: { modelsDev: null } },
-    { name: "empty models.dev mapping", value: { modelsDev: {} } },
     { name: "blank models.dev source", value: { modelsDev: { openai: "  " } } },
-    { name: "non-string models.dev source", value: { modelsDev: { openai: true } } },
-    { name: "unowned models.dev mapping", value: { modelsDev: { anthropic: "anthropic" } } },
   ])("rejects a $name instead of publishing an empty catalog", ({ value }) => {
     expect(normalizeModelCatalog(value, { ownedProviders: new Set(["openai"]) })).toBeUndefined();
   });

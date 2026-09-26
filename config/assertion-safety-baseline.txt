@@ -727,8 +727,8 @@ extensions/msteams/src/msteams-ingress.ts	1
 extensions/msteams/src/outbound.ts	1
 extensions/msteams/src/polls.ts	1
 extensions/msteams/src/probe.ts	1
-extensions/msteams/src/qa/adapter.runtime.ts	2
-extensions/msteams/src/qa/bot-framework-server.ts	3
+extensions/msteams/src/qa/adapter.runtime.ts	1
+extensions/msteams/src/qa/bot-framework-server.ts	2
 extensions/msteams/src/qa/private-runtime.ts	1
 extensions/msteams/src/reply-stream-controller.ts	1
 extensions/msteams/src/sdk-proactive.ts	3
@@ -2234,7 +2234,6 @@ src/config/context-visibility.ts	1
 src/config/defaults.ts	6
 src/config/doc-baseline.ts	6
 src/config/docs-config-examples.ts	1
-src/config/future-version-guard.ts	2
 src/config/gateway-dispatch-config.ts	2
 src/config/group-policy.ts	1
 src/config/implicit-mentions.ts	1
@@ -2264,7 +2263,6 @@ src/config/model-input.ts	1
 src/config/mutate.ts	2
 src/config/official-external-channel-secret-schema.ts	3
 src/config/plugin-auto-enable.apply.ts	1
-src/config/plugin-auto-enable.detect.ts	1
 src/config/plugin-auto-enable.shared.ts	1
 src/config/plugin-install-record-map.ts	3
 src/config/plugins-allowlist.ts	1
@@ -2278,12 +2276,10 @@ src/config/sessions/conversation-delivery-store.ts	2
 src/config/sessions/group.ts	1
 src/config/sessions/legacy-main-session-migration.ts	4
 src/config/sessions/metadata.ts	1
-src/config/sessions/restart-recovery-state.ts	5
 src/config/sessions/session-accessor.entry-mutation.ts	2
 src/config/sessions/session-accessor.entry.ts	1
 src/config/sessions/session-accessor.sqlite-active-events.ts	1
 src/config/sessions/session-accessor.sqlite-archive-store.ts	1
-src/config/sessions/session-accessor.sqlite-archive.worker.ts	7
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry.ts	1
@@ -2299,9 +2295,8 @@ src/config/sessions/session-accessor.sqlite-transcript-write.ts	4
 src/config/sessions/session-accessor.sqlite-visible-cursor.ts	1
 src/config/sessions/session-accessor.transcript-range.ts	3
 src/config/sessions/session-accessor.transcript-turn.ts	1
-src/config/sessions/session-entry-json.ts	1
 src/config/sessions/session-reset-boundary-event.ts	5
-src/config/sessions/session-snapshot-merge.ts	26
+src/config/sessions/session-snapshot-merge.ts	9
 src/config/sessions/session-sqlite-target.ts	2
 src/config/sessions/session-store-config.ts	1
 src/config/sessions/session-transcript-reconcile.worker.ts	1
@@ -2320,7 +2315,7 @@ src/config/validation-core.ts	3
 src/config/validation-issues.ts	1
 src/config/validation-plugin-config.ts	2
 src/config/validation.ts	1
-src/config/zod-schema.channel-messaging-common.ts	12
+src/config/zod-schema.channel-messaging-common.ts	11
 src/config/zod-schema.channels-config.ts	3
 src/config/zod-schema.ts	1
 src/context-engine/delegate.ts	1
@@ -3046,7 +3041,6 @@ src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
 src/provider-runtime/operation-retry.ts	3
 src/proxy-capture/env.ts	1
-src/proxy-capture/runtime.ts	5
 src/proxy-capture/store.sqlite.ts	2
 src/realtime-transcription/websocket-session.ts	2
 src/routing/binding-scope.ts	1

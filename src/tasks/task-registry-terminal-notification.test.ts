@@ -25,6 +25,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { createAcpTaskBackingDetail } from "./task-backing-records.js";
 import { resetTaskFlowRegistryForTests } from "./task-flow-registry.test-support.js";
 import * as deliveryRuntime from "./task-registry-delivery-runtime.js";
 import {
@@ -84,6 +85,7 @@ function seedTerminal(
     childSessionKey?: string;
     terminalOutcome?: TaskRecord["terminalOutcome"];
     status?: "succeeded" | "cancelled";
+    detail?: TaskRecord["detail"];
   } = {},
 ): TaskRecord {
   const { runtime = "cli", terminalOutcome, status = "succeeded", ...overrides } = options;
@@ -521,31 +523,40 @@ describe("terminal task notification persistence", () => {
     },
   );
 
-  it("suppresses a retained duplicate peer without host task or delivery writes", async () => {
-    const preferred = seedTerminal({ runtime: "acp" });
-    // Current create/reuse coalesces these registrations; retain a historical peer explicitly.
-    const duplicate: TaskRecord = {
-      ...preferred,
-      taskId: `${preferred.taskId}-duplicate`,
-      createdAt: preferred.createdAt + 1,
-      startedAt: preferred.createdAt + 1,
-      endedAt: preferred.createdAt + 2,
-      lastEventAt: preferred.createdAt + 2,
-    };
-    installRetainedTask(duplicate);
-    const tracker = trackHostTaskWrites();
-    try {
-      const result = await maybeDeliverTaskTerminalUpdate(duplicate.taskId);
-      expect(stored(duplicate.taskId)?.deliveryStatus).toBe("not_applicable");
-      expect(result).toEqual(stored(duplicate.taskId));
-      expect(stored(preferred.taskId)).toEqual(preferred);
-      expect(drainSystemEvents(ownerKey)).toEqual([]);
-      expect(sendMessage).not.toHaveBeenCalled();
-      expect(tracker.counts).toEqual({ task: 0, delivery: 0 });
-    } finally {
-      tracker.restore();
-    }
-  });
+  it.each(["legacy", "instance-backed"] as const)(
+    "suppresses a retained %s duplicate peer without host task or delivery writes",
+    async (backing) => {
+      const preferred = seedTerminal({
+        runtime: "acp",
+        detail:
+          backing === "instance-backed"
+            ? createAcpTaskBackingDetail("retained-instance")
+            : undefined,
+      });
+      // Current create/reuse coalesces these registrations; retain a historical peer explicitly.
+      const duplicate: TaskRecord = {
+        ...preferred,
+        taskId: `${preferred.taskId}-duplicate`,
+        createdAt: preferred.createdAt + 1,
+        startedAt: preferred.createdAt + 1,
+        endedAt: preferred.createdAt + 2,
+        lastEventAt: preferred.createdAt + 2,
+      };
+      installRetainedTask(duplicate);
+      const tracker = trackHostTaskWrites();
+      try {
+        const result = await maybeDeliverTaskTerminalUpdate(duplicate.taskId);
+        expect(stored(duplicate.taskId)?.deliveryStatus).toBe("not_applicable");
+        expect(result).toEqual(stored(duplicate.taskId));
+        expect(stored(preferred.taskId)).toEqual(preferred);
+        expect(drainSystemEvents(ownerKey)).toEqual([]);
+        expect(sendMessage).not.toHaveBeenCalled();
+        expect(tracker.counts).toEqual({ task: 0, delivery: 0 });
+      } finally {
+        tracker.restore();
+      }
+    },
+  );
 
   it("does not apply a sent result to a replacement task identity", async () => {
     const task = seedTerminal();

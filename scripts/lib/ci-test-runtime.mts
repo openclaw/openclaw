@@ -105,7 +105,7 @@ const runtimePartitions = new Map<
     "test/vitest/vitest.unit-fast-isolated.config.ts",
     {
       files: () => getUnitFastIsolatedTestFiles(),
-      nodeRequired: new Set([...nativeCompilerTestFiles, "src/proxy-capture/proxy-server.test.ts"]),
+      nodeRequired: new Set(nativeCompilerTestFiles),
     },
   ],
   [
