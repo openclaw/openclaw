@@ -532,6 +532,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts",
   "src/agents/tools/swarm-tools.integration.test.ts",
   "src/tasks/task-registry-session-index.test.ts",
+  "src/tasks/task-registry.store.atomicity.test.ts",
   "src/tasks/task-registry.store.test.ts",
   "src/tasks/task-flow-registry.store.test.ts",
   "src/acp/control-plane/manager.background-task.test.ts",
