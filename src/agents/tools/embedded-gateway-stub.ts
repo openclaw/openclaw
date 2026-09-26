@@ -162,6 +162,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   nextOffset?: number;
   hasMore?: boolean;
   totalMessages?: number;
+  windowReset?: boolean;
   thinkingLevel?: string;
   fastMode?: FastMode;
   verboseLevel?: string;
@@ -250,7 +251,8 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
         messageCost: (message) => jsonUtf8Bytes(message) + 1,
       }) ?? rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items)
     : rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-  const pagination = params.offset === undefined ? undefined : page.pagination;
+  const responseOffset = page.responseOffset ?? (params.offset === undefined ? undefined : offset);
+  const pagination = responseOffset === undefined ? undefined : page.pagination;
   const nextOffset =
     pagination !== undefined
       ? rt.resolveChatHistoryNextOffset({
@@ -270,8 +272,13 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     sessionKey,
     sessionId,
     messages: capped,
-    ...(params.offset !== undefined
-      ? { offset, hasMore, totalMessages: pagination?.totalMessages ?? page.messages.length }
+    ...(page.windowReset ? { windowReset: true } : {}),
+    ...(responseOffset !== undefined
+      ? {
+          offset: responseOffset,
+          hasMore,
+          totalMessages: pagination?.totalMessages ?? page.messages.length,
+        }
       : {}),
     ...(hasMore ? { nextOffset } : {}),
     thinkingLevel: entry?.thinkingLevel,

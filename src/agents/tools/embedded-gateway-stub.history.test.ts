@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -8,6 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as serverConstants from "../../gateway/server-constants.js";
+import * as historyPages from "../../gateway/server-methods/chat-history-pages.js";
 import { readChatHistoryMessageId } from "../../gateway/session-history-tail.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -145,6 +147,32 @@ describe("embedded session history anchors", () => {
     expect(await history({ ...selector, messageId: "missing", limit: 1 })).toMatchObject({
       messages: [],
     });
+  });
+
+  it("returns the recovered tail offset and reset marker through the embedded history tool", async () => {
+    const messages = [{ role: "assistant", content: "current tail", __openclaw: { seq: 3 } }];
+    vi.spyOn(historyPages, "readChatHistoryPage").mockResolvedValueOnce({
+      messages,
+      responseOffset: 0,
+      windowReset: true,
+      pagination: { offset: 0, totalMessages: 3, rawPageMessages: 1 },
+    });
+    const tool = toolsFor().history;
+    const result = await tool.execute("recovered-tail", {
+      sessionKey: scope.sessionKey,
+      limit: 1,
+      offset: 2,
+    });
+
+    expect(result.details).toMatchObject({
+      messages,
+      offset: 0,
+      nextOffset: 1,
+      hasMore: true,
+      totalMessages: 3,
+      windowReset: true,
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
   });
 
   it("reopens a search hit after a reset of the same physical session", async () => {
