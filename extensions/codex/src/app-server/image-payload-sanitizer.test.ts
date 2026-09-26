@@ -94,4 +94,36 @@ describe("Codex app-server image payload sanitizer", () => {
     expect(history).toEqual(before);
     expect(sanitizeCodexHistoryImagePayloads(sanitized, "history")).toBe(sanitized);
   });
+
+  it("sanitizes pathologically nested history instead of overflowing the stack", () => {
+    const depth = 4000;
+    let value: unknown = { type: "input_image", image_url: "data:image/png;base64,invalid!" };
+    for (let index = 0; index < depth; index += 1) {
+      value = { x: value };
+    }
+
+    const sanitized = sanitizeCodexHistoryImagePayloads(value, "history");
+
+    let cursor: unknown = sanitized;
+    for (let index = 0; index < depth; index += 1) {
+      cursor = (cursor as { x: unknown }).x;
+    }
+    expect(cursor).toEqual({ type: "input_text", text: invalidInlineImageText("history") });
+  });
+  it("terminates on cyclic history without mutating it", () => {
+    const cyclic: Record<string, unknown> = { role: "user" };
+    cyclic.content = [{ type: "input_image", image_url: "data:image/png;base64,invalid!" }];
+    cyclic.self = cyclic;
+
+    const sanitized = sanitizeCodexHistoryImagePayloads({ turn: cyclic }, "history") as {
+      turn: Record<string, unknown>;
+    };
+
+    expect((sanitized.turn.content as Array<Record<string, unknown>>)[0]).toEqual({
+      type: "input_text",
+      text: invalidInlineImageText("history"),
+    });
+    expect(sanitized.turn.self).toBe(cyclic);
+    expect((cyclic.content as Array<Record<string, unknown>>)[0]!.type).toBe("input_image");
+  });
 });
