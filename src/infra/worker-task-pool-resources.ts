@@ -27,7 +27,7 @@ export async function closeWorkerPoolResources<Input, Output>(
       closure.pending += 1;
       resourceClosures.set(worker, closure);
       worker.ref();
-      return closeWorkerTaskResources(worker, closure, key).finally(() => {
+      return closeWorkerTaskResources(worker, closure, () => slot.retiring, key).finally(() => {
         closure.pending -= 1;
         if (!closure.pending && !slot.task && !slot.retiring) {
           worker.unref();
@@ -77,6 +77,7 @@ function observeResourceWorkerExit(
 function closeWorkerTaskResources(
   worker: Worker,
   closures: WorkerResourceClosures,
+  readRetirement: () => Promise<void> | undefined,
   key?: string,
 ): Promise<void> {
   const { port1, port2 } = new MessageChannel();
@@ -112,9 +113,23 @@ function closeWorkerTaskResources(
     port1.once("messageerror", (error) =>
       finish(toErrorObject(error, "Worker resource cleanup receipt could not be decoded")),
     );
-    port1.once("close", () =>
-      finish(new Error("Worker resource cleanup closed without a receipt")),
-    );
+    port1.once("close", () => {
+      if (settled) {
+        return;
+      }
+      // Termination can close the transferred port before Worker.exit arrives.
+      // Only this slot's existing retirement can replace its missing receipt.
+      const retirement = readRetirement();
+      if (retirement) {
+        void retirement.then(
+          () => finish(),
+          (error: unknown) =>
+            finish(toErrorObject(error, "Worker resource cleanup retirement failed")),
+        );
+      } else {
+        finish(new Error("Worker resource cleanup closed without a receipt"));
+      }
+    });
     try {
       worker.postMessage({ closeResource: true, key, resourcePort: port2 }, [port2]);
     } catch (error) {

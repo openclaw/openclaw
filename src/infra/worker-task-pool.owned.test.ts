@@ -19,12 +19,19 @@ type FakeWorker = EventEmitter & {
   terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
 };
 const workers = vi.hoisted(() => [] as FakeWorker[]);
+const messageChannelReceivers = vi.hoisted(() => new WeakMap<MessagePort, MessagePort>());
 
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   const { EventEmitter } = await import("node:events");
   return {
     ...actual,
+    MessageChannel: class extends actual.MessageChannel {
+      constructor() {
+        super();
+        messageChannelReceivers.set(this.port2, this.port1);
+      }
+    },
     Worker: class extends EventEmitter {
       constructor() {
         super();
@@ -146,6 +153,71 @@ it("rejects a lost cleanup receipt and permits the retained worker's cleanup ret
   receipt.close();
   await retry;
 });
+
+it.each([false, true])(
+  "joins an existing retirement when the cleanup port closes before native exit (retirement fails=%s)",
+  async (fails) => {
+    const pool = createPool();
+    const task = pool.runTask("read", {});
+    await nextTurn();
+    const worker = workerFor("read");
+    reply(worker, "read");
+    await task.result;
+    await task.close();
+    const listeners = worker.listenerCount("exit");
+    const cleanup = pool.closeResources("source");
+    let cleanupSettled = false;
+    void cleanup.then(
+      () => {
+        cleanupSettled = true;
+      },
+      () => {
+        cleanupSettled = true;
+      },
+    );
+    const receipt = expectDefined(
+      worker.postMessage.mock.calls.at(-1)?.[0].resourcePort,
+      "cleanup receipt",
+    );
+    const receiver = expectDefined(messageChannelReceivers.get(receipt), "cleanup receiver");
+    const portClosed = createDeferredCore();
+    receiver.once("close", portClosed.resolve);
+    const terminationEntered = createDeferredCore();
+    const nativeExit = createDeferredCore();
+    worker.terminate.mockImplementationOnce(async () => {
+      terminationEntered.resolve();
+      await nativeExit.promise;
+      worker.emit("exit", 0);
+      return 0;
+    });
+    const rotation = pool.rotate();
+    void rotation.catch(() => {});
+    try {
+      await terminationEntered.promise;
+      receipt.close();
+      await portClosed.promise;
+      await nextTurn();
+      expect(cleanupSettled).toBe(false);
+      expect(worker.listenerCount("exit")).toBe(listeners + 1);
+      expect(worker.terminate).toHaveBeenCalledOnce();
+      if (fails) {
+        const failure = new Error("native retirement did not settle");
+        const cleanupFailed = expect(cleanup).rejects.toMatchObject({ errors: [failure] });
+        const retirementFailed = expect(rotation).rejects.toBe(failure);
+        nativeExit.reject(failure);
+        await Promise.all([cleanupFailed, retirementFailed]);
+        expect(worker.listenerCount("exit")).toBe(listeners);
+      } else {
+        nativeExit.resolve();
+        await Promise.all([cleanup, rotation]);
+        expect(worker.listenerCount("exit")).toBe(0);
+      }
+    } finally {
+      nativeExit.resolve();
+      await Promise.allSettled([cleanup, rotation]);
+    }
+  },
+);
 
 it.each(["receipts", "exit"] as const)(
   "bounds concurrent cleanup listeners until every receipt or native exit settles (%s)",
