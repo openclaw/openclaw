@@ -96,13 +96,9 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
       assertCurrent() {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic/state" },
-    coordinatorRuntime: { directory: "/synthetic/coordinator", keepAlive: false },
   }),
 }));
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  hasStateDatabaseSourceExclusion: () => false,
-  acquireStateDatabaseHandleLease: mocks.forbidden,
-}));
+
 vi.mock("../infra/sqlite-snapshot-source.js", () => ({
   prepareSqliteReadOnlyLocation: mocks.prepare,
   prepareSqliteReadOnlyLocationAsync: mocks.prepare,

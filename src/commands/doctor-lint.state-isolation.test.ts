@@ -73,7 +73,8 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
     ...actual,
     openNodeSqliteDatabase(...args: Parameters<typeof actual.openNodeSqliteDatabase>) {
       const database = actual.openNodeSqliteDatabase(...args);
-      mocks.sqliteOpen(args[0], args[1]?.readOnly === true, database);
+      const location = path.toNamespacedPath(database.location() ?? args[0]);
+      mocks.sqliteOpen(location, args[1]?.readOnly === true, database);
       return database;
     },
   };
@@ -182,7 +183,11 @@ describe("doctor lint state isolation", () => {
             expect(report.findings).toEqual([]);
           }
           expect(mocks.sqliteOpen).toHaveBeenCalled();
-          expect(mocks.sqliteOpen.mock.calls.every(([file]) => file !== databasePath)).toBe(true);
+          expect(
+            mocks.sqliteOpen.mock.calls.every(
+              ([file]) => file !== path.toNamespacedPath(databasePath),
+            ),
+          ).toBe(true);
           expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
           expect(
             fs
@@ -295,7 +300,11 @@ describe("doctor lint state isolation", () => {
               ]),
             );
             expect(mocks.sqliteOpen).toHaveBeenCalled();
-            expect(mocks.sqliteOpen.mock.calls.every(([file]) => file !== databasePath)).toBe(true);
+            expect(
+              mocks.sqliteOpen.mock.calls.every(
+                ([file]) => file !== path.toNamespacedPath(databasePath),
+              ),
+            ).toBe(true);
             expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
             expect(fs.readFileSync(backup, "utf8")).toBe(backupBefore);
             expect(fs.readFileSync(record.target.skillFile, "utf8")).toBe("# Saved procedure\n");
@@ -395,9 +404,11 @@ describe("doctor lint state isolation", () => {
             if (entry.isolated) {
               expect(inspectedState).not.toBe(state.stateDir);
               expect(mocks.sqliteOpen).toHaveBeenCalled();
-              expect(mocks.sqliteOpen.mock.calls.every(([file]) => file !== databasePath)).toBe(
-                true,
-              );
+              expect(
+                mocks.sqliteOpen.mock.calls.every(
+                  ([file]) => file !== path.toNamespacedPath(databasePath),
+                ),
+              ).toBe(true);
             } else {
               expect(inspectedState).toBe(state.stateDir);
             }
@@ -419,7 +430,7 @@ describe("doctor lint state isolation", () => {
             }
             expect(
               mocks.sqliteOpen.mock.calls.every(
-                ([file, readOnly]) => file !== databasePath || readOnly,
+                ([file, readOnly]) => file !== path.toNamespacedPath(databasePath) || readOnly,
               ),
             ).toBe(true);
           }

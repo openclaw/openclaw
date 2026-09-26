@@ -3,8 +3,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
-import { releaseSqliteWorkerActorCoordinators } from "./sqlite-worker-broker-admission.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   receiveSqliteWorkerReply,
   type SqliteWorkerReplyOwner,
@@ -61,7 +60,7 @@ export function createSqliteWorkerLifecycle({
       runtimeGeneration: options.runtimeGeneration,
       ...(borrowedGenerationSlot ? { borrowedGenerationSlot: true as const } : {}),
       worker,
-      receiveReply: (reply, pumping) => receiveSqliteWorkerReply(slot, reply, replyOwner, pumping),
+      receiveReply: (reply) => receiveSqliteWorkerReply(slot, reply, replyOwner),
       actors: new Set(),
       queue: [],
       exit: exited.promise,
@@ -200,8 +199,6 @@ export function createSqliteWorkerLifecycle({
         ) {
           // Bun retains native statements after close; keep pathname ownership until VM exit.
           await retire(actor.slot);
-        } else {
-          releaseSqliteWorkerActorCoordinators(actor);
         }
       } catch (error) {
         errors.push(error);
@@ -223,10 +220,6 @@ export function createSqliteWorkerLifecycle({
   }
 
   function forget(actor: Actor): void {
-    if (actor.gatewaySchemaFence || actor.pendingStateLifecycles.size) {
-      actor.cleanupState = "pending";
-      return;
-    }
     if (actors.get(actor.key) === actor) {
       actors.delete(actor.key);
     }
@@ -251,13 +244,6 @@ export function createSqliteWorkerLifecycle({
         }
       }
       await slot.exit;
-      for (const actor of slot.actors) {
-        try {
-          releaseSqliteWorkerActorCoordinators(actor);
-        } catch (error) {
-          errors.push(error);
-        }
-      }
       if (errors.length === 1) {
         throw errors[0];
       }

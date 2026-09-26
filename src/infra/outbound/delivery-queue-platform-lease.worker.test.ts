@@ -130,7 +130,7 @@ describe("outbound producer claim worker", () => {
     );
     await closeOpenClawStateDatabaseAsync();
     const context = captureDeliveryQueueStateContext(stateDir);
-    const sql = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
+    const sql = observeHostDataSql();
     let claimId: string | undefined;
     let expiresAt: number | undefined;
     try {

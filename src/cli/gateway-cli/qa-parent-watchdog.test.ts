@@ -1,10 +1,15 @@
 // Gateway QA parent watchdog tests cover parent-process watchdog shutdown behavior.
-import { describe, expect, it, vi } from "vitest";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 
 const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
 const QA_TEMP_ROOT_ENV = "OPENCLAW_QA_TEMP_ROOT";
 const QA_STAGED_RUNTIME_ROOT_ENV = "OPENCLAW_QA_STAGED_RUNTIME_ROOT";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("installQaParentWatchdog", () => {
   it("does not install without a QA parent pid", () => {
@@ -19,15 +24,22 @@ describe("installQaParentWatchdog", () => {
     expect(installQaParentWatchdog({ env: { [QA_PARENT_PID_ENV]: "1e3" }, ownPid: 10 })).toBeNull();
   });
 
-  it("exits when the QA parent process disappears", async () => {
+  it("exits after parent death without deleting roots that descendants may still use", async () => {
+    const fixtureRoot = tempDirs.make("qa-parent-watchdog-");
+    const roots = ["openclaw-qa-suite-runtime", "openclaw-qa-suite-staged"].map((name) =>
+      path.join(fixtureRoot, name),
+    );
+    for (const root of roots) {
+      mkdirSync(root);
+      writeFileSync(path.join(root, "sentinel"), "owned by the process tree");
+    }
     let tick: () => void = () => {
       throw new Error("watchdog interval was not installed");
     };
     const timer = { unref: vi.fn() };
-    const chdir = vi.fn();
     const clearIntervalMock = vi.fn();
-    const exit = vi.fn();
-    const rm = vi.fn(async () => {});
+    const exited = createDeferredCore();
+    const exit = vi.fn(() => exited.resolve());
     const logger = { warn: vi.fn() };
     const kill = vi.fn(() => {
       const error = new Error("missing") as NodeJS.ErrnoException;
@@ -36,19 +48,16 @@ describe("installQaParentWatchdog", () => {
     });
 
     const handle = installQaParentWatchdog({
-      chdir,
       clearInterval: clearIntervalMock,
-      cwd: () => "/tmp/openclaw-qa-suite-test",
       env: {
         [QA_PARENT_PID_ENV]: "12345",
-        [QA_STAGED_RUNTIME_ROOT_ENV]: "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
-        [QA_TEMP_ROOT_ENV]: "/tmp/openclaw-qa-suite-test",
+        [QA_STAGED_RUNTIME_ROOT_ENV]: roots[1],
+        [QA_TEMP_ROOT_ENV]: roots[0],
       },
       exit,
       kill,
       logger,
       ownPid: 10,
-      rm,
       setInterval: (callback) => {
         tick = callback;
         return timer;
@@ -63,46 +72,14 @@ describe("installQaParentWatchdog", () => {
       "QA gateway parent pid 12345 exited; shutting down orphaned QA gateway",
     );
     expect(clearIntervalMock).toHaveBeenCalledWith(timer);
-    await vi.waitFor(() => {
-      expect(chdir).toHaveBeenCalledWith("/tmp");
-      expect(rm).toHaveBeenCalledWith("/tmp/openclaw-qa-suite-test");
-      expect(rm).toHaveBeenCalledWith("/repo/.artifacts/qa-runtime/openclaw-qa-suite-test");
-      expect(exit).toHaveBeenCalledWith(0);
-    });
-  });
-
-  it("ignores unsafe QA temp root cleanup paths", async () => {
-    let tick: () => void = () => {
-      throw new Error("watchdog interval was not installed");
-    };
-    const exit = vi.fn();
-    const rm = vi.fn(async () => {});
-    const kill = vi.fn(() => {
-      const error = new Error("missing") as NodeJS.ErrnoException;
-      error.code = "ESRCH";
-      throw error;
-    });
-
-    installQaParentWatchdog({
-      env: {
-        [QA_PARENT_PID_ENV]: "12345",
-        [QA_STAGED_RUNTIME_ROOT_ENV]: "/repo/.artifacts/qa-runtime/not-qa-suite",
-        [QA_TEMP_ROOT_ENV]: "/tmp/not-qa-suite",
-      },
-      exit,
-      kill,
-      logger: { warn: vi.fn() },
-      ownPid: 10,
-      rm,
-      setInterval: (callback) => {
-        tick = callback;
-        return { unref: vi.fn() };
-      },
-    });
-
+    await exited.promise;
+    expect(exit).toHaveBeenCalledWith(0);
+    for (const root of roots) {
+      expect(readFileSync(path.join(root, "sentinel"), "utf8")).toBe("owned by the process tree");
+    }
+    handle?.stop();
     tick();
-
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
-    expect(rm).not.toHaveBeenCalled();
+    expect(clearIntervalMock).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledTimes(1);
   });
 });

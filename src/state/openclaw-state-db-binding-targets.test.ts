@@ -128,24 +128,20 @@ async function holdGatewayLifecycle(databasePath: string): Promise<{
   child: ChildProcess;
   release: () => Promise<void>;
 }> {
-  const coordinatorUrl = resolveRuntimeWorkerUrl(
-    stateNativeProcessEntrypoints.stateDatabaseCoordinator,
-  );
+  const ownerUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.gatewayStateOwner);
   const source = `
-    import { acquireGatewayLifecycleCoordinator } from ${JSON.stringify(coordinatorUrl.href)};
-    const coordinator = acquireGatewayLifecycleCoordinator({ databasePath: ${JSON.stringify(databasePath)}, busyTimeoutMs: 0 });
+    import { acquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
+    const owner = acquireGatewayStateOwner({
+      databasePath: ${JSON.stringify(databasePath)},
+      payload: { pid: process.pid, createdAt: new Date().toISOString(), configPath: "/fixture/config.json", role: "gateway" },
+    });
     process.stdout.write("ready\\n");
     process.stdin.resume();
-    process.stdin.once("end", () => coordinator.release());
+    process.stdin.once("end", () => owner.release());
   `;
   const child = spawn(
     process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(coordinatorUrl).slice(0, -1),
-      "--input-type=module",
-      "--eval",
-      source,
-    ],
+    [...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1), "--input-type=module", "--eval", source],
     { stdio: ["pipe", "pipe", "pipe"] },
   );
   try {

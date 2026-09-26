@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as pidAlive from "../shared/pid-alive.js";
@@ -18,13 +19,9 @@ import {
   readGatewayOwnerLease,
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
+import * as stateOwners from "./gateway-state-owner.js";
+import { acquireGatewayStateOwner, tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
-import * as lifecycleCoordinators from "./state-database-coordinator.js";
-import {
-  acquireGatewayLifecycleCoordinator,
-  acquireStateDatabaseHandleExclusion,
-} from "./state-database-coordinator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -36,7 +33,15 @@ afterEach(() => {
 function fixture() {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-gateway-owner-") };
   const databasePath = resolveOpenClawStateSqlitePath(env);
-  const coordinator = acquireGatewayLifecycleCoordinator({ databasePath });
+  const coordinator = acquireGatewayStateOwner({
+    databasePath,
+    payload: {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"),
+      role: "gateway",
+    },
+  });
   return { env, databasePath, coordinator };
 }
 
@@ -173,14 +178,12 @@ describe("Gateway owner lease", () => {
 
   it("retains physical custody when heartbeat startup and cleanup both fail", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-gateway-owner-startup-failure-") };
-    const acquire = lifecycleCoordinators.acquireGatewayLifecycleCoordinator;
+    const acquire = stateOwners.acquireGatewayStateOwner;
     let coordinator: ReturnType<typeof acquire> | undefined;
-    vi.spyOn(lifecycleCoordinators, "acquireGatewayLifecycleCoordinator").mockImplementation(
-      (params) => {
-        coordinator = acquire(params);
-        return coordinator;
-      },
-    );
+    vi.spyOn(stateOwners, "acquireGatewayStateOwner").mockImplementation((params) => {
+      coordinator = acquire(params);
+      return coordinator;
+    });
     vi.spyOn(leaseHeartbeat, "startOpenClawStateLeaseHeartbeat").mockImplementation(() => ({
       ready: Promise.reject(new Error("heartbeat startup failed")),
       assertRunning() {
@@ -208,9 +211,9 @@ describe("Gateway owner lease", () => {
         }),
       ).rejects.toThrow("heartbeat cleanup retained native custody");
       if (!coordinator) {
-        throw new Error("Gateway did not acquire its lifecycle coordinator");
+        throw new Error("Gateway did not acquire its process owner");
       }
-      const contender = tryAcquireExclusiveSqliteCoordinator(coordinator.path);
+      const contender = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(env));
       contender?.release();
       expect(contender).toBeNull();
     } finally {
@@ -224,8 +227,8 @@ describe("Gateway owner lease", () => {
     expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
   });
 
-  it("publishes a readable owner while holding the physical coordinator and releases both pins", async () => {
-    const { env, databasePath, coordinator } = fixture();
+  it("publishes a readable owner while holding the physical process owner and releases its publication", async () => {
+    const { env, coordinator } = fixture();
     let lease: GatewayOwnerLease | undefined;
     try {
       lease = acquireGatewayOwnerLease({
@@ -236,7 +239,7 @@ describe("Gateway owner lease", () => {
         owner: "gateway-generation",
       });
       await lease.ready;
-      expect(tryAcquireExclusiveSqliteCoordinator(coordinator.path)).toBeNull();
+      expect(tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(env))).toBeNull();
       expect(readGatewayOwnerLease({ env })).toEqual({
         owner: "gateway-generation",
         pid: process.pid,
@@ -266,8 +269,7 @@ describe("Gateway owner lease", () => {
 
       await lease.release();
       expect(readGatewayOwnerLease({ env })).toBeUndefined();
-      const exclusion = acquireStateDatabaseHandleExclusion({ databasePath, busyTimeoutMs: 0 });
-      exclusion.release();
+      await closeOpenClawStateDatabaseAsync();
     } finally {
       await lease?.release();
       coordinator.release();

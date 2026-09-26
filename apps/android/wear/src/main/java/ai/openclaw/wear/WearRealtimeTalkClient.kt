@@ -367,11 +367,15 @@ internal class WearRealtimeTalkClient(
       scope.launch {
         try {
           for (level in frames) {
-            _mouthLevel.value = level
+            synchronized(audioLock) {
+              if (mouthFrames === frames) _mouthLevel.value = level
+            }
             delay(MOUTH_FRAME_MILLIS.toLong())
           }
         } finally {
-          if (mouthFrames === frames) _mouthLevel.value = 0f
+          synchronized(audioLock) {
+            if (mouthFrames === frames) _mouthLevel.value = 0f
+          }
         }
       }
     return frames

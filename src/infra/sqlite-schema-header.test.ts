@@ -7,7 +7,6 @@ import { createAgentSchemaInspectionWorker } from "../state/openclaw-agent-schem
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-readonly-location.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
-import { acquireStateDatabaseHandleExclusion } from "./state-database-coordinator.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -16,17 +15,6 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
-
-function expectSourceExcluded(pathname: string) {
-  let exclusion: ReturnType<typeof acquireStateDatabaseHandleExclusion> | undefined;
-  try {
-    expect(() => {
-      exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 });
-    }).toThrow(/state-handles/);
-  } finally {
-    exclusion?.release();
-  }
-}
 
 describe("schema-header native reader lifetime", () => {
   it("preserves the parent's rollback writer lock and excludes its uncommitted metadata", async () => {
@@ -181,7 +169,7 @@ describe("schema-header native reader lifetime", () => {
       })),
     ),
   )(
-    "keeps a consistent $reader read and its child lease through native close: $outcome",
+    "keeps a consistent $reader read and joins failed native cleanup: $outcome",
     async ({ reader, outcome }) => {
       const root = dirs.make("sqlite-header-lifetime-");
       const pathname = path.join(root, "source.sqlite");
@@ -224,6 +212,7 @@ describe("schema-header native reader lifetime", () => {
             const get = statement.get;
             statement.get = function(...args) {
               const row = get.apply(this, args);
+              fs.writeFileSync(path.join(root, 'reader-pid'), String(process.pid));
               pause('read');
               if (outcome === 'read-failure') throw new Error('native read failure');
               return row;
@@ -233,7 +222,8 @@ describe("schema-header native reader lifetime", () => {
         };
         const close = DatabaseSync.prototype.close;
         DatabaseSync.prototype.close = function() {
-          if (isSource(this)) {
+          const sourceDatabase = isSource(this);
+          if (sourceDatabase) {
             pause('close');
             if (outcome === 'close-failure') {
               const keepAlive = setInterval(() => {
@@ -243,7 +233,9 @@ describe("schema-header native reader lifetime", () => {
               throw new Error('native close failure');
             }
           }
-          return close.call(this);
+          const result = close.call(this);
+          if (sourceDatabase) mark('closed');
+          return result;
         };
       `,
       );
@@ -275,7 +267,7 @@ describe("schema-header native reader lifetime", () => {
         await vi.waitFor(() => expect(fs.existsSync(marker("read"))).toBe(true), {
           timeout: 10_000,
         });
-        expectSourceExcluded(pathname);
+        const readerPid = Number(fs.readFileSync(marker("reader-pid"), "utf8"));
         // New version and ownership facts commit between the child's metadata queries.
         writer.exec(
           "BEGIN IMMEDIATE; PRAGMA user_version=8; UPDATE schema_meta SET app_version='writer-8', agent_id='owner-8', schema_version=8; COMMIT;",
@@ -285,7 +277,6 @@ describe("schema-header native reader lifetime", () => {
           timeout: 10_000,
         });
         expect(settled).toBe(false);
-        expectSourceExcluded(pathname);
         if (outcome === "cancel") {
           controller.abort(cancellation);
           await expect(operation).rejects.toBe(cancellation);
@@ -294,7 +285,6 @@ describe("schema-header native reader lifetime", () => {
           if (outcome === "close-failure") {
             await vi.waitFor(() => expect(fs.existsSync(marker("failed-close"))).toBe(true));
             expect(settled).toBe(false);
-            expectSourceExcluded(pathname);
             fs.writeFileSync(marker("exit-release"), "resume");
             await expect(operation).rejects.toThrow("native close failure");
           } else if (outcome === "read-failure") {
@@ -307,7 +297,13 @@ describe("schema-header native reader lifetime", () => {
             });
           }
         }
-        acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
+        if (outcome === "success") {
+          expect(fs.existsSync(marker("closed"))).toBe(true);
+        } else {
+          expect(() => process.kill(readerPid, 0)).toThrow(
+            expect.objectContaining({ code: "ESRCH" }),
+          );
+        }
         expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       } finally {
         controller.abort(cancellation);

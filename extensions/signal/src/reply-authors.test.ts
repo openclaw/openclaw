@@ -276,7 +276,7 @@ it("persists and reloads merged reply context with zero parent-thread SQL", asyn
     },
   });
   vi.spyOn(runtimeModule, "getOptionalSignalRuntime").mockReturnValue(runtime);
-  const observation = observeHostDataSql(env);
+  const observation = observeHostDataSql();
   const counters = observation.calls;
   const calibration = new DatabaseSync(":memory:");
   try {

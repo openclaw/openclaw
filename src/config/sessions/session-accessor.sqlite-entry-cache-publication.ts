@@ -689,10 +689,9 @@ export function retainSessionEntryWorkerPublication(params: {
         };
         if (receipt) {
           // A COMMIT receipt can survive unknown settlement without retaining creation custody.
-          const ownedPlaceholder = !unknown && placeholder && ownsCreation;
           preparedSharingChanges.changes.set(
             change,
-            ownedPlaceholder
+            !unknown && placeholder && ownsCreation
               ? {
                   creation,
                   databaseIdentity: params.databaseIdentity,

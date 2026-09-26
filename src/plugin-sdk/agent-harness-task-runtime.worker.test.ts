@@ -1,7 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { markPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -20,7 +19,7 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import {
   captureAgentHarnessTaskAssignment,
   createAgentHarnessTaskRuntime,
@@ -47,83 +46,76 @@ it.each(["terminal", "delivery", "read"] as const)(
   "keeps the event loop progressing through contended harness %s persistence",
   async (operation) => {
     await withOpenClawTestState({ layout: "split" }, async (state) => {
-      await withStateDatabaseCoordinatorRuntimeDirectory(
-        { directory: state.path("coordinators"), keepAlive: false },
-        async () => {
-          expect(process.env.HOME).toBe(state.home);
-          expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-          const runtime = createRuntime();
-          const task = runtime.createRunningTaskRun({
+      expect(process.env.HOME).toBe(state.home);
+      expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+      const runtime = createRuntime();
+      const task = runtime.createRunningTaskRun({
+        runId,
+        task: "Private completion",
+        notifyPolicy: "silent",
+      });
+      const expectedTask = captureAgentHarnessTaskAssignment(task);
+      const terminal = {
+        runId,
+        expectedTask,
+        status: "succeeded" as const,
+        endedAt: task.createdAt + 1,
+        suppressDelivery: true,
+      };
+      if (operation === "delivery") {
+        await runtime.finalizeTaskRunByRunIdAsync!(terminal);
+      }
+      await runtime.prepareTaskRunRead!(runId);
+      const context = captureOpenClawStateWorkerContext();
+      expect(context.admission.databasePath.startsWith(state.stateDir)).toBe(true);
+      const holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 1000);
+      let settled: Promise<PromiseSettledResult<unknown>[]> | undefined;
+      try {
+        await holder.ready;
+        const heartbeat = nextTurn().then(() => Atomics.load(holder.released, 0));
+        let pending: Promise<unknown>;
+        if (operation === "read") {
+          emitAgentEvent({
             runId,
-            task: "Private completion",
-            notifyPolicy: "silent",
+            stream: "lifecycle",
+            data: { phase: "end", endedAt: terminal.endedAt },
           });
-          const expectedTask = captureAgentHarnessTaskAssignment(task);
-          const terminal = {
+          pending = runtime.prepareTaskRunRead!(runId).then((read) => read());
+        } else if (operation === "terminal") {
+          pending = runtime.finalizeTaskRunByRunIdAsync!(terminal);
+        } else {
+          pending = runtime.setDetachedTaskDeliveryStatusByRunIdAsync!({
             runId,
             expectedTask,
-            status: "succeeded" as const,
-            endedAt: task.createdAt + 1,
-            suppressDelivery: true,
-          };
-          if (operation === "delivery") {
-            await runtime.finalizeTaskRunByRunIdAsync!(terminal);
-          }
-          await runtime.prepareTaskRunRead!(runId);
-          const context = captureOpenClawStateWorkerContext();
-          expect(context.admission.databasePath.startsWith(state.stateDir)).toBe(true);
-          expect(context.coordinatorRuntime.directory.startsWith(state.root)).toBe(true);
-          const holder = holdStateDatabaseCoordinator(
-            context.admission.databasePath,
-            context.coordinatorRuntime,
-            1000,
-          );
-          let settled: Promise<PromiseSettledResult<unknown>[]> | undefined;
-          try {
-            await holder.ready;
-            const heartbeat = nextTurn().then(() => Atomics.load(holder.released, 0));
-            let pending: Promise<unknown>;
-            if (operation === "read") {
-              emitAgentEvent({
-                runId,
-                stream: "lifecycle",
-                data: { phase: "end", endedAt: terminal.endedAt },
-              });
-              pending = runtime.prepareTaskRunRead!(runId).then((read) => read());
-            } else if (operation === "terminal") {
-              pending = runtime.finalizeTaskRunByRunIdAsync!(terminal);
-            } else {
-              pending = runtime.setDetachedTaskDeliveryStatusByRunIdAsync!({
-                runId,
-                expectedTask,
-                deliveryStatus: "delivered",
-              });
-            }
-            settled = Promise.allSettled([pending]);
-            expect(await heartbeat, "heartbeat must run before the holder releases").toBe(0);
-            holder.release();
-            expect(await pending).toMatchObject([
-              {
-                taskId: task.taskId,
-                status: "succeeded",
-                ...(operation === "delivery" ? { deliveryStatus: "delivered" } : {}),
-              },
-            ]);
-            const snapshot = await getTaskRegistryStore().loadMutationSnapshotAsync(context, {
-              taskId: task.taskId,
-            });
-            expect(snapshot.tasks.get(task.taskId)).toMatchObject({
-              status: "succeeded",
-              ...(operation === "delivery" ? { deliveryStatus: "delivered" } : {}),
-            });
-          } finally {
-            holder.release();
-            await holder.joined;
-            await settled;
-            await closeOpenClawStateDatabaseAsync();
-          }
-        },
-      );
+            deliveryStatus: "delivered",
+          });
+        }
+        settled = Promise.allSettled([pending]);
+        expect(await heartbeat, "heartbeat must run before the holder releases").toBe(0);
+        holder.release();
+        expect(await pending).toMatchObject([
+          {
+            taskId: task.taskId,
+            status: "succeeded",
+            ...(operation === "delivery" ? { deliveryStatus: "delivered" } : {}),
+          },
+        ]);
+        const snapshot = await getTaskRegistryStore().loadMutationSnapshotAsync(context, {
+          taskId: task.taskId,
+        });
+        expect(snapshot.tasks.get(task.taskId)).toMatchObject({
+          status: "succeeded",
+          ...(operation === "delivery" ? { deliveryStatus: "delivered" } : {}),
+        });
+      } finally {
+        holder.release();
+        try {
+          await holder.joined;
+        } finally {
+          await settled;
+          await closeOpenClawStateDatabaseAsync();
+        }
+      }
     });
   },
 );

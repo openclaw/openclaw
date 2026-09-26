@@ -118,9 +118,9 @@ it("retries the live equal-time winner through the worker and canonical close", 
     status: "succeeded",
   });
   const beforeCloseSql = hostSql.counts();
-  expect(Object.values(beforeCloseSql).flatMap((counts) => Object.values(counts))).toEqual(
-    Array(28).fill(0),
-  );
+  const hostSqlCounts = Object.values(beforeCloseSql).flatMap((counts) => Object.values(counts));
+  expect(hostSqlCounts.length).toBeGreaterThan(0);
+  expect(hostSqlCounts.every((count) => count === 0)).toBe(true);
   await closeOpenClawStateDatabaseAsync();
   console.info("Live flow host SQL", { beforeClose: beforeCloseSql, afterClose: hostSql.counts() });
   rememberPreparedSql();

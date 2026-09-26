@@ -1,6 +1,5 @@
 // Install fixture mocks before importing the real maintenance owners.
 import "./doctor-health.test-support.js";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -15,10 +14,7 @@ import {
   writeExecApprovalsConfigRow,
 } from "../infra/exec-approvals-sqlite.js";
 import { loadExecApprovalsReadOnly } from "../infra/exec-approvals-store.js";
-import {
-  resolveStateDatabaseCoordinatorPath,
-  resolveStateLifecycleRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
+import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
@@ -254,21 +250,13 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        const expectCoordinatorReleased = () => {
-          const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-            databasePath: resolveOpenClawStateSqlitePath(state.env),
-            runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-            uid: process.getuid?.(),
-          });
-          const peer = spawnSync(process.execPath, [
-            "-e",
-            "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('BEGIN EXCLUSIVE');db.close();",
-            coordinatorPath,
-          ]);
-          expect(peer.status).toBe(0);
+        const expectProcessOwnerReleased = () => {
+          const owner = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(state.env));
+          expect(owner).not.toBeNull();
+          owner?.release();
         };
         if (outcome === "config-refused") {
-          runtime.exit.mockImplementation(expectCoordinatorReleased);
+          runtime.exit.mockImplementation(expectProcessOwnerReleased);
         }
         try {
           const modernUpdate = outcome.startsWith("update-") && outcome !== "update-legacy";
@@ -332,12 +320,12 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(runtime.exit).toHaveBeenCalledWith(1);
           } else if (outcome === "store-close-failed") {
             await expect(run).rejects.toThrow("synthetic database close failure");
-            expectCoordinatorReleased();
+            expectProcessOwnerReleased();
           } else if (outcome === "workspace-cleanup-failed") {
             await expect(run).rejects.toThrow(/workspace.*requires migration/);
           } else if (approvalsBlocked) {
             await expect(run).rejects.toThrow(ExecApprovalsMigrationRequiredError);
-            expectCoordinatorReleased();
+            expectProcessOwnerReleased();
           } else if (outcome === "restart-unhealthy") {
             await expect(run).rejects.toThrow("managed Gateway did not become ready");
           } else {

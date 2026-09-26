@@ -1,10 +1,12 @@
 import { err } from "@openclaw/normalization-core/result";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { MessageSendResult } from "../infra/outbound/message.js";
-import * as stateCoordinator from "../infra/state-database-coordinator.js";
 import * as systemEvents from "../infra/system-events.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -237,7 +239,7 @@ describe("task state notification acknowledgements", () => {
   });
 
   it.each([false, true])(
-    "delivers and acknowledges with parent flow=%s without entering the host state coordinator",
+    "delivers and acknowledges with parent flow=%s without host SQLite",
     async (linked) => {
       const flow = linked
         ? createManagedTaskFlow({
@@ -248,16 +250,16 @@ describe("task state notification acknowledgements", () => {
           })
         : undefined;
       const task = createTask(flow?.flowId);
-      const acquire = vi
-        .spyOn(stateCoordinator, "acquireStateDatabaseCoordinator")
-        .mockImplementation(() => {
-          throw new Error("Synthetic held host coordinator must not block notification delivery");
-        });
-      const notification = startNotification(task, progress(task.createdAt + 10));
-      expect(await notification.dispatched).toMatchObject(linked ? nextOrigin : origin);
-      notification.complete();
-      expect(await notification.result).toMatchObject({ taskId: task.taskId });
-      expect(acquire).not.toHaveBeenCalled();
+      const sql = observeHostDataSql();
+      try {
+        const notification = startNotification(task, progress(task.createdAt + 10));
+        expect(await notification.dispatched).toMatchObject(linked ? nextOrigin : origin);
+        notification.complete();
+        expect(await notification.result).toMatchObject({ taskId: task.taskId });
+        sql.calls.forEach((call) => expect(call).not.toHaveBeenCalled());
+      } finally {
+        sql.restore();
+      }
     },
   );
 

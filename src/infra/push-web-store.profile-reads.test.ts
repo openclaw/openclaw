@@ -14,7 +14,6 @@ import {
 } from "./push-web-store.js";
 import { executeWebPushCommand } from "./push-web-store.worker.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
-import { captureStateDatabaseCoordinatorRuntime } from "./state-database-coordinator.js";
 
 const admission = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => ({
@@ -57,7 +56,6 @@ it("resolves repeated Web Push profile references once per mutation and rereads 
     runWithSqliteWorkerStateContext(
       {
         environment: { OPENCLAW_STATE_DIR: stateDir },
-        coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
       },
       () =>
         executeWebPushCommand(

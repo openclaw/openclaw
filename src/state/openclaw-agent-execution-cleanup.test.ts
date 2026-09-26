@@ -82,7 +82,6 @@ it("retains installed-schema repair ownership through retired agent lease cleanu
   const databasePath = "/synthetic/state/openclaw.sqlite";
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: true },
     existingSchemaPath: databasePath,
     admission: {
       databasePath,

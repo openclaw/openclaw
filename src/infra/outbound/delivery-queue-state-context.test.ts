@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { OpenClawStateExternalOwnershipError } from "../../state/openclaw-state-ownership.js";
 import {
   deleteTestEnvValue,
   setTestEnvValue,
@@ -15,6 +14,7 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import { OpenClawStateExternalOwnershipError } from "../sqlite-lifecycle-errors.js";
 import { ackDelivery, retireUnsentDelivery } from "./delivery-queue-ack.js";
 import {
   createDeliveryQueueMediaRetention,

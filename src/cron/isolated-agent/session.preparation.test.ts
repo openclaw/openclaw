@@ -56,7 +56,7 @@ it("prepares a missing start timestamp from the bounded transcript header withou
       timestamp: new Date(now - 60_000).toISOString(),
     },
   ]);
-  const observer = observeHostDataSql(state.env);
+  const observer = observeHostDataSql();
   try {
     const prepared = await prepareCronSession({
       cfg: { session: { reset: { mode: "none" } } },
@@ -92,7 +92,7 @@ it.each([
       subagentRecovery: { wedgedAt: 1, wedgedReason: "Synthetic recovery tombstone" },
     };
     replaceSessionEntrySync({ agentId: "main", env: state.env, storePath, sessionKey }, entry);
-    const observer = observeHostDataSql(state.env);
+    const observer = observeHostDataSql();
     try {
       const result = await readSessionEntriesFromStoreInWorker({
         agentId: "main",

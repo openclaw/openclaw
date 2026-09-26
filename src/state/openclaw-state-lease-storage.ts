@@ -1,11 +1,11 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+import { setTimeout as sleep } from "node:timers/promises";
+import { computeBackoff } from "../infra/backoff.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
-import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -55,7 +55,7 @@ export function resolveLeaseDatabasePath(database: OpenClawStateLeaseDatabase): 
     ? path.resolve(database.options?.path ?? resolveOpenClawStateSqlitePath(database.options?.env))
     : openOpenClawStateDatabase(database.options).path;
 }
-export function readLeaseDatabase<T>(
+function readLeaseDatabase<T>(
   database: OpenClawStateLeaseDatabase,
   operation: (db: DatabaseSync) => T,
 ): T {
@@ -146,15 +146,6 @@ export const STATE_LEASE_WRITE_BACKOFF = {
 } as const;
 const RELEASE_RETRY_TIMEOUT_MS = 2_000;
 
-// A competing lifecycle writer has not admitted the transaction. Retry within
-// the existing async budget, but never retry schema, handle, or release failures.
-export function isOpenClawStateLeaseWriteContention(error: unknown): boolean {
-  return (
-    isSqliteLockError(error) ||
-    (error instanceof StateDatabaseCoordinatorContentionError && error.family === "state-lifecycle")
-  );
-}
-
 export type OpenClawStateLeaseOwnerIdentity = OpenClawStateLeaseIdentity & { leaseLabel: string };
 
 export function renewOpenClawStateLease(
@@ -178,7 +169,7 @@ export function renewOpenClawStateLease(
   });
 }
 
-export function assertOpenClawStateLeaseOwnedInDatabase(
+function assertOpenClawStateLeaseOwnedInDatabase(
   database: DatabaseSync,
   params: OpenClawStateLeaseOwnerIdentity,
 ): number {
@@ -242,7 +233,7 @@ export async function releaseOpenClawStateLeaseBestEffort(
       return;
     } catch (error) {
       const now = performance.now();
-      if (!isOpenClawStateLeaseWriteContention(error) || now >= deadline) {
+      if (!isSqliteLockError(error) || now >= deadline) {
         if (execute) {
           // The async resource owner retains failed cleanup for exact-owner retry.
           throw error;
@@ -250,10 +241,8 @@ export async function releaseOpenClawStateLeaseBestEffort(
         return;
       }
       attempt += 1;
-      // Cleanup gives competing writers a bounded async window to finish.
-      await sleepWithAbort(
-        Math.min(deadline - now, computeBackoff(STATE_LEASE_WRITE_BACKOFF, attempt)),
-      );
+      // Cleanup outlives caller scheduling; native timers let competing writers settle.
+      await sleep(Math.min(deadline - now, computeBackoff(STATE_LEASE_WRITE_BACKOFF, attempt)));
     }
   }
 }

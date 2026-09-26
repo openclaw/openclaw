@@ -367,7 +367,7 @@ async function withOfflineGatewayLock<T>(
   const lock = await acquireGatewayLock({
     allowInTests: true,
     port: resolveGatewayPort(config, process.env),
-    role: "skill-workshop-apply",
+    role: "sqlite-maintenance",
     timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
   }).catch(() => undefined);
   if (!lock) {
@@ -375,7 +375,7 @@ async function withOfflineGatewayLock<T>(
   }
   // Missing credentials cannot prove a Gateway is absent; only its ownership lock can.
   try {
-    return await action();
+    return await lock.run(action);
   } finally {
     await lock.release();
   }

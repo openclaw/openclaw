@@ -8,6 +8,7 @@ import * as bundledHealthChecks from "../flows/bundled-health-checks.js";
 import { CORE_HEALTH_CHECKS } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
@@ -529,7 +530,7 @@ describe("runDoctorLintCli", () => {
     mocks.openNodeSqliteDatabase.mockClear();
     const sourceOpenStacks: string[] = [];
     mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) => {
-      if (args[0] === databasePath) {
+      if (args[0] === databasePath || args[0] === resolveExistingSqliteFileUri(databasePath)) {
         sourceOpenStacks.push(new Error("source database opened").stack ?? "");
       }
       return mocks.actualOpenNodeSqliteDatabase(...args);
@@ -682,7 +683,7 @@ describe("runDoctorLintCli", () => {
     mocks.openNodeSqliteDatabase.mockClear();
     const sourceOpenStacks: string[] = [];
     mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) => {
-      if (args[0] === databasePath) {
+      if (args[0] === databasePath || args[0] === resolveExistingSqliteFileUri(databasePath)) {
         sourceOpenStacks.push(new Error("source database opened").stack ?? "");
       }
       return mocks.actualOpenNodeSqliteDatabase(...args);

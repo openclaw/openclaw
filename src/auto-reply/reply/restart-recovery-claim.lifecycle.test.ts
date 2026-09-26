@@ -5,7 +5,7 @@ import * as entryReads from "../../config/sessions/session-entry-read-runtime.js
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { clearOpenClawAgentDatabaseValidationCache } from "../../state/openclaw-agent-db-validation-cache.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";

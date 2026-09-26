@@ -17,7 +17,6 @@ const { read, update, context, lease } = vi.hoisted(() => ({
       assertCurrent() {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic/mcp" },
-    coordinatorRuntime: { directory: "/synthetic/mcp/coordinator", keepAlive: false },
   },
 }));
 

@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   createAcpTaskBackingDetail,
   createManagedTaskBackingDetail,

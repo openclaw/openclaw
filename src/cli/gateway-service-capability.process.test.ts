@@ -10,11 +10,8 @@ import {
   runBuiltRuntime,
   runSourceRuntime,
 } from "../commands/doctor-config-preflight.process.test-support.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import {
-  acquireGatewayLifecycleCoordinator,
-  acquireStateDatabaseCoordinator,
-} from "../infra/state-database-coordinator.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -60,6 +57,7 @@ function createFixture() {
   return {
     databasePath,
     stateDir,
+    configPath,
     run: (args: string[]) =>
       source
         ? tempDirs.track(
@@ -94,7 +92,15 @@ describe("candidate service capability startup", () => {
     "answers capability and version probes without state writes or locks while a Gateway owns an older schema",
     async () => {
       const fixture = createFixture();
-      const gateway = acquireGatewayLifecycleCoordinator({ databasePath: fixture.databasePath });
+      const gateway = acquireGatewayStateOwner({
+        databasePath: fixture.databasePath,
+        payload: {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: fixture.configPath,
+          role: "gateway",
+        },
+      });
       const before = snapshotState(fixture.stateDir);
       try {
         const result = await fixture.run([
@@ -113,19 +119,14 @@ describe("candidate service capability startup", () => {
           originalDefinitionBinding: true,
           originalRuntimePinBinding: true,
         });
-        const state = acquireStateDatabaseCoordinator({ databasePath: fixture.databasePath });
-        try {
-          const locked = await fixture.run([
-            "gateway",
-            "install",
-            "--update-executor=check",
-            "--json",
-          ]);
-          expect(locked.code, locked.stderr).toBe(0);
-          expect(JSON.parse(locked.stdout)).toEqual(JSON.parse(result.stdout));
-        } finally {
-          state.release();
-        }
+        const locked = await fixture.run([
+          "gateway",
+          "install",
+          "--update-executor=check",
+          "--json",
+        ]);
+        expect(locked.code, locked.stderr).toBe(0);
+        expect(JSON.parse(locked.stdout)).toEqual(JSON.parse(result.stdout));
         const version = await fixture.run(["--version"]);
         expect(version.code, version.stderr).toBe(0);
         expect(version.stdout).toMatch(/^OpenClaw /u);
@@ -147,7 +148,15 @@ describe("candidate service capability startup", () => {
 
   it("keeps ordinary service commands behind the live Gateway schema fence", async () => {
     const fixture = createFixture();
-    const gateway = acquireGatewayLifecycleCoordinator({ databasePath: fixture.databasePath });
+    const gateway = acquireGatewayStateOwner({
+      databasePath: fixture.databasePath,
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: fixture.configPath,
+        role: "gateway",
+      },
+    });
     const before = fs.readFileSync(fixture.databasePath);
     try {
       const result = await fixture.run(["gateway", "install", "--json"]);

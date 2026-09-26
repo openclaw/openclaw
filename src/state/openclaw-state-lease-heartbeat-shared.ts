@@ -1,4 +1,3 @@
-import type { StateDatabaseCoordinatorRuntime } from "../infra/state-database-coordinator.js";
 import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
@@ -38,15 +37,9 @@ export type LeaseHeartbeatRenewalFailure = {
 
 export type LeaseHeartbeatWorkerData = {
   path: string;
-  existingOnly?: boolean;
-  /** Private parent retains the actual lifecycle coordinator until native worker exit. */
-  parentCoordinatorRetained?: true;
+  expectedIdentity: string;
   /** The actor's startup operations settle before this worker begins renewal. */
   deferActivation?: true;
-  retainedStartup?: {
-    expectedIdentity: string;
-    coordinatorRuntime: StateDatabaseCoordinatorRuntime;
-  };
   identity: OpenClawStateLeaseIdentity;
   leaseMs: number;
   acquiredAt: number;

@@ -90,7 +90,6 @@ function request(): OpenClawStateReadRequest {
   return {
     context: {
       environment: { OPENCLAW_STATE_DIR: root },
-      coordinatorRuntime: { directory: path.join(root, "coordinator"), keepAlive: false },
     },
     databasePath,
     location: databasePath,

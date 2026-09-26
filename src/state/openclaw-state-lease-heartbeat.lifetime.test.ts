@@ -1,6 +1,5 @@
 import type { EventEmitter } from "node:events";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
-import type { StateDatabaseCoordinatorRuntime } from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   leaseHeartbeatState as state,
@@ -25,34 +24,15 @@ type ControlledWorker = EventEmitter & {
 
 const controls = vi.hoisted(() => {
   const events: string[] = [];
-  const handleRelease = vi.fn(() => {
-    events.push("handle-release");
-  });
-  const coordinator = {
-    closed: false,
-    release: vi.fn(() => {
-      coordinator.closed = true;
-      events.push("coordinator-release");
-    }),
-  };
   return {
     events,
     workers: [] as ControlledWorker[],
     constructorError: undefined as Error | undefined,
-    handleRelease,
-    coordinator,
-    acquireHandle: vi.fn(() => ({ release: handleRelease })),
-    retainCoordinator: vi.fn(() => coordinator),
-    withRuntime: vi.fn((_runtime: StateDatabaseCoordinatorRuntime, operation: () => unknown) =>
-      operation(),
-    ),
   };
 });
 
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  acquireStateDatabaseHandleLease: controls.acquireHandle,
-  retainHeldStateDatabaseCoordinator: controls.retainCoordinator,
-  withStateDatabaseCoordinatorRuntimeDirectory: controls.withRuntime,
+vi.mock("../infra/sqlite-worker-identity.js", () => ({
+  readDatabasePathIdentitySync: (canonicalPath: string) => ({ key: "file:12:34", canonicalPath }),
 }));
 
 vi.mock("../infra/node-sqlite.js", () => ({
@@ -126,7 +106,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   controls.events.length = 0;
   controls.workers.length = 0;
-  controls.coordinator.closed = false;
   controls.constructorError = undefined;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
 });
@@ -147,7 +126,6 @@ function options() {
       },
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: false },
   };
   return {
     path: databasePath,
@@ -249,7 +227,7 @@ describe("state lease heartbeat lifetime", () => {
     },
   );
 
-  it("joins pending startup renewal before releasing the heartbeat coordinator", async () => {
+  it("joins pending startup renewal before settling heartbeat cleanup", async () => {
     const renewal = createDeferredCore<number>();
     let cleanup: LeaseHeartbeatCleanup | undefined;
     const heartbeat = startOpenClawStateLeaseHeartbeat({
@@ -274,10 +252,8 @@ describe("state lease heartbeat lifetime", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(settled).toBe(false);
       expect(cleanup?.pending).toBe(true);
-      expect(controls.coordinator.release).not.toHaveBeenCalled();
       renewal.resolve(Date.now() + 1_000);
       await stopped;
-      expect(controls.coordinator.release).toHaveBeenCalledOnce();
       expect(cleanup?.pending).toBe(false);
     } finally {
       renewal.resolve(Date.now() + 1_000);
@@ -289,86 +265,23 @@ describe("state lease heartbeat lifetime", () => {
     }
   });
 
-  it("finishes release-only handle custody without replaying a successful release", async () => {
-    let cleanup: LeaseHeartbeatCleanup | undefined;
-    const heartbeat = startOpenClawStateLeaseHeartbeat({
-      ...options(),
-      startupContext: undefined,
-      retainCleanup(value) {
-        cleanup = value;
-      },
-    });
-    const worker = await constructedWorker();
-    await heartbeat.ready;
-    assert(cleanup);
-    expect(cleanup.pending).toBe(true);
-    await finish(heartbeat, worker);
-    expect(cleanup.pending).toBe(false);
-    await cleanup.close();
-    expect(controls.handleRelease).toHaveBeenCalledOnce();
-    expect(controls.coordinator.release).toHaveBeenCalledOnce();
-  });
-
-  it("retries only failed disposal after preserving a constructor error", async () => {
+  it("closes startup custody after a constructor failure without replay", async () => {
     const startupError = new Error("controlled constructor failure");
-    const releaseError = new Error("controlled release failure");
     controls.constructorError = startupError;
-    controls.handleRelease.mockImplementationOnce(() => {
-      throw releaseError;
-    });
     let cleanup: LeaseHeartbeatCleanup | undefined;
-    let observed: unknown;
-    try {
+    expect(() =>
       startOpenClawStateLeaseHeartbeat({
         ...options(),
-        startupContext: undefined,
         retainCleanup(value) {
           cleanup = value;
         },
-      });
-    } catch (error) {
-      observed = error;
-    }
-    expect(observed).toMatchObject({ cause: startupError, errors: [startupError, releaseError] });
+      }),
+    ).toThrow(startupError);
     expect(vi.getTimerCount()).toBe(0);
     assert(cleanup);
-    expect(cleanup.pending).toBe(true);
-    expect(controls.coordinator.release).not.toHaveBeenCalled();
+    expect(cleanup.pending).toBe(false);
     await cleanup.close();
-    expect(cleanup.pending).toBe(false);
-    expect(controls.handleRelease).toHaveBeenCalledTimes(2);
-    expect(controls.coordinator.release).toHaveBeenCalledOnce();
     expect(controls.events.filter((event) => event === "construct")).toHaveLength(1);
-  });
-
-  it("reports an unexpected exit cleanup error once and retains unfinished disposal", async () => {
-    const params = options();
-    let cleanup: LeaseHeartbeatCleanup | undefined;
-    const heartbeat = startOpenClawStateLeaseHeartbeat({
-      ...params,
-      retainCleanup(value) {
-        cleanup = value;
-      },
-    });
-    const worker = await constructedWorker();
-    await heartbeat.ready;
-    const releaseError = new Error("controlled exit release failure");
-    controls.coordinator.release.mockImplementationOnce(() => {
-      throw releaseError;
-    });
-    worker.finishExit();
-    try {
-      expect(params.onLost).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ cause: releaseError }),
-      );
-      assert(cleanup);
-      expect(cleanup.pending).toBe(true);
-    } finally {
-      await heartbeat.stop();
-    }
-    expect(cleanup.pending).toBe(false);
-    expect(controls.coordinator.release).toHaveBeenCalledTimes(2);
-    expect(controls.events).not.toContain("terminate");
   });
 
   it("cancels an idle async lease at its worker-observed durable expiry", async () => {

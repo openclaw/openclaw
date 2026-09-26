@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
-import * as nodeSqlite from "./node-sqlite.js";
+import { resolveGatewayStateOwnerPath } from "./gateway-state-owner.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 
 describe("legacy state migration ownership", () => {
@@ -48,46 +48,44 @@ describe("legacy state migration ownership", () => {
     { code: "ENOSYS", message: "function not implemented", guidance: "filesystem" },
     { code: "ENOSPC", message: "no space left on device", guidance: "space" },
     {
-      code: "ERR_SQLITE_ERROR",
-      errcode: 3850,
-      message: "disk I/O error",
-      guidance: "SQLite locking",
+      code: "ENOTSUP",
+      message: "operation not supported",
+      guidance: "exclusive file creation",
     },
   ])(
     "reports $code acquisition failure on empty state without inventing an owner",
     async (failure) => {
       const options = migrationOptions();
       expect(fs.readdirSync(options.stateDir)).toEqual([]);
-      const open = nodeSqlite.openNodeSqliteDatabase;
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce((...args) => {
-        const database = open(...args);
-        const exec = database.exec.bind(database);
-        vi.spyOn(database, "exec").mockImplementation((sql) => {
-          if (sql.includes("BEGIN EXCLUSIVE")) {
-            throw Object.assign(new Error(failure.message), {
-              code: failure.code,
-              ...("errcode" in failure ? { errcode: failure.errcode } : {}),
-            });
-          }
-          exec(sql);
-        });
-        return database;
+      const databasePath = path.join(options.stateDir, "state", "openclaw.sqlite");
+      const ownerPath = resolveGatewayStateOwnerPath(databasePath);
+      const open = fs.openSync;
+      let injected = false;
+      vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+        if (
+          file === ownerPath &&
+          typeof flags === "number" &&
+          (flags & fs.constants.O_CREAT) !== 0
+        ) {
+          injected = true;
+          throw Object.assign(new Error(failure.message), { code: failure.code });
+        }
+        return open(file, flags, mode);
       });
       const run = vi.fn(async () => ({ changes: ["imported"], warnings: [] }));
 
       const result = await withLegacyMigrationStateLock({ ...options, run });
 
+      expect(injected).toBe(true);
       expect(result.changes).toEqual([]);
       expect(run).not.toHaveBeenCalled();
       const warning = result.warnings.join("\n");
       expect(warning).toContain(failure.message);
       expect(warning).toContain(failure.code);
       expect(warning).toContain(failure.guidance);
-      if ("errcode" in failure) {
-        expect(warning).toContain("3850");
-      }
       expect(warning).not.toContain("owns this state directory");
-      expect(fs.readdirSync(options.stateDir)).toEqual([]);
+      expect(fs.readdirSync(path.dirname(ownerPath))).toEqual([]);
+      expect(fs.existsSync(databasePath)).toBe(false);
     },
   );
 
@@ -185,7 +183,7 @@ describe("legacy state migration ownership", () => {
         run,
       });
 
-      expect(result.warnings).toEqual([expect.stringContaining("gateway already running")]);
+      expect(result.warnings).toEqual([expect.stringContaining("OpenClaw state database is busy")]);
       expect(result.warnings[0]).toContain("Stop the Gateway and node host, then retry.");
       expect(run).not.toHaveBeenCalled();
     } finally {

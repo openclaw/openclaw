@@ -179,14 +179,24 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
-    func `durable identity creation verifies persisted key material`() throws {
+    func `concurrent identity creation converges on persisted key material`() async throws {
         let fixture = DeviceIdentityMigrationFixture()
-        let identity = try fixture.load()
+        let databaseURL = fixture.databaseURL
+        let stateDirectory = fixture.destination
+        let identities = try await withThrowingTaskGroup(of: DeviceIdentity.self) { group in
+            for _ in 0..<4 {
+                group.addTask {
+                    try DeviceIdentitySQLiteStore.loadOrCreate(
+                        databaseURL: databaseURL,
+                        destinationStateDirURL: stateDirectory,
+                        profile: .primary)
+                }
+            }
+            return try await group.reduce(into: [DeviceIdentity]()) { $0.append($1) }
+        }
         let reloaded = try fixture.load()
-
-        #expect(reloaded.deviceId == identity.deviceId)
-        #expect(reloaded.publicKey == identity.publicKey)
-        #expect(reloaded.privateKey == identity.privateKey)
+        #expect(identities.count == 4)
+        #expect(identities.allSatisfy { $0 == reloaded })
     }
 
     @Test(.stateDirectoryIsolated)
@@ -468,20 +478,7 @@ struct DeviceIdentityStoreTests {
         #expect(directoryMode.intValue & 0o777 == 0o700)
         #expect(databaseMode.intValue & 0o777 == 0o600)
 
-        let coordinatorURLs = DeviceIdentitySQLiteStore.resolveDeviceIdentityCoordinatorURLs(
-            databaseURL: fixture.databaseURL,
-            destinationStateDirURL: fixture.destination,
-            uid: getuid())
-        #expect(coordinatorURLs.count == 1)
-        for coordinatorURL in coordinatorURLs {
-            let coordinatorDirectoryMode = try #require(
-                FileManager.default.attributesOfItem(
-                    atPath: coordinatorURL.deletingLastPathComponent().path)[.posixPermissions] as? NSNumber)
-            let coordinatorFileMode = try #require(
-                FileManager.default.attributesOfItem(atPath: coordinatorURL.path)[.posixPermissions] as? NSNumber)
-            #expect(coordinatorDirectoryMode.intValue & 0o777 == 0o700)
-            #expect(coordinatorFileMode.intValue & 0o777 == 0o600)
-        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.destination.path) == ["openclaw.sqlite"])
     }
 
     @Test

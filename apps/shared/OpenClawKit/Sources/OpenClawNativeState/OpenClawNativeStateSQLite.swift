@@ -203,7 +203,8 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     ]
 
     private let databaseURL: URL
-    private let handleLease: OpenClawNativeStateHandleLease
+    private let admission: OpenClawNativeStateAdmission
+    private let databaseIdentity: OpenClawNativeStateAdmission.DatabaseIdentity
     fileprivate let database: OpaquePointer
     fileprivate let connectionLock = NSRecursiveLock()
 
@@ -213,7 +214,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         createIfMissing: Bool = true) throws
     {
         self.databaseURL = databaseURL
-        self.handleLease = try OpenClawNativeStateHandleLease(databaseURL: databaseURL)
+        self.admission = try OpenClawNativeStateAdmission(databaseURL: databaseURL)
         if createIfMissing {
             try Self.secureDirectory(databaseURL.deletingLastPathComponent())
         }
@@ -231,21 +232,34 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             if !initializationSucceeded { sqlite3_close(database) }
         }
         self.database = database
+        try OpenClawNativeStateAdmission.assertDatabaseHasNotMoved(database)
+        self.databaseIdentity = try OpenClawNativeStateAdmission.databaseIdentity(at: databaseURL)
+        try self.admission.assertAvailable()
         let timeout = busyTimeoutMilliseconds > 0
             ? busyTimeoutMilliseconds
             : Self.defaultBusyTimeoutMilliseconds
         guard sqlite3_busy_timeout(database, timeout) == SQLITE_OK else {
             throw self.databaseError(operation: "configure SQLite busy timeout")
         }
+        try self.admission.assertAvailable()
+        try self.assertCurrentDatabase()
         try Self.secureDatabaseFiles(databaseURL)
         initializationSucceeded = true
     }
 
     deinit {
-        // Statements retain this owner. Its handle lease is released only after
-        // SQLite closes and final metadata maintenance has completed.
+        let sourceIsCurrent = (try? self.assertCurrentDatabase()) != nil
         sqlite3_close(self.database)
-        try? Self.secureDatabaseFiles(self.databaseURL)
+        if sourceIsCurrent,
+           (try? self.admission.assertAvailable()) != nil,
+           (try? OpenClawNativeStateAdmission.databaseIdentity(at: self.databaseURL)) == self.databaseIdentity
+        {
+            try? Self.secureDatabaseFiles(self.databaseURL)
+        }
+    }
+
+    public static func assertNoOfflineMaintenance(databaseURL: URL) throws {
+        _ = try OpenClawNativeStateAdmission(databaseURL: databaseURL)
     }
 
     public var changes: Int32 {
@@ -257,12 +271,15 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             try self.execute("BEGIN IMMEDIATE")
             var committed = false
             defer {
-                if !committed { try? self.execute("ROLLBACK") }
+                if !committed { sqlite3_exec(self.database, "ROLLBACK", nil, nil, nil) }
             }
             let value = try body()
+            // Protect journal/WAL files while the write transaction still excludes removal.
+            try self.withCurrentDatabase {
+                try Self.secureDatabaseFiles(self.databaseURL)
+            }
             try self.execute("COMMIT")
             committed = true
-            try Self.secureDatabaseFiles(self.databaseURL)
             return value
         }
     }
@@ -310,7 +327,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     }
 
     public func prepare(_ sql: String) throws -> OpenClawNativeStateSQLiteStatement {
-        try self.withConnectionLock {
+        try self.withCurrentDatabase {
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(self.database, sql, -1, &statement, nil) == SQLITE_OK,
                   let statement
@@ -322,7 +339,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     }
 
     public func execute(_ sql: String) throws {
-        try self.withConnectionLock {
+        try self.withCurrentDatabase {
             var errorMessage: UnsafeMutablePointer<CChar>?
             let result = sqlite3_exec(self.database, sql, nil, nil, &errorMessage)
             guard result == SQLITE_OK else {
@@ -387,6 +404,21 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         self.connectionLock.lock()
         defer { self.connectionLock.unlock() }
         return try body()
+    }
+
+    fileprivate func withCurrentDatabase<T>(_ body: () throws -> T) throws -> T {
+        try self.withConnectionLock {
+            try self.admission.assertAvailable()
+            try self.assertCurrentDatabase()
+            return try body()
+        }
+    }
+
+    fileprivate func assertCurrentDatabase() throws {
+        try OpenClawNativeStateAdmission.assertDatabaseHasNotMoved(self.database)
+        guard try OpenClawNativeStateAdmission.databaseIdentity(at: self.databaseURL) == self.databaseIdentity else {
+            throw OpenClawNativeStateError("Native state database was replaced; reopen it before use")
+        }
     }
 
     private static func descriptor(_ table: OpenClawNativeStateCanonicalTable) -> CanonicalTable {
@@ -630,10 +662,14 @@ public final class OpenClawNativeStateSQLiteStatement {
     }
 
     public func step() throws -> OpenClawNativeStateSQLiteStep {
-        try self.connection.withConnectionLock {
+        try self.connection.withCurrentDatabase {
             switch sqlite3_step(self.statement) {
-            case SQLITE_ROW: .row
-            case SQLITE_DONE: .done
+            case SQLITE_ROW:
+                try self.connection.assertCurrentDatabase()
+                return .row
+            // SQLITE_DONE may have committed and released the last file lock.
+            // Later removal must not turn that durable receipt into a failed write.
+            case SQLITE_DONE: return .done
             default: throw self.connection.databaseError(operation: "step SQLite statement")
             }
         }

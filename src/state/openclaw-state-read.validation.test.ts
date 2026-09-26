@@ -29,7 +29,6 @@ it.each([
       checkFreshAdmission: true,
       context: {
         environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-        coordinatorRuntime: { directory: "/synthetic/coordinator", keepAlive: false },
       },
       command: { type: "tasks.mutationSnapshot", input },
     }),

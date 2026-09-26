@@ -56,12 +56,12 @@ describe("legacy media persistence doctor migration", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     createLegacyDatabaseFixture({ env, eventsBySession: {} });
     closeOpenClawStateDatabaseForTest();
-    const sharedPath = resolveOpenClawStateSqlitePath(env);
+    const location = nodeSqlite.resolveExistingSqliteFileUri(resolveOpenClawStateSqlitePath(env));
     const openDatabase = nodeSqlite.openNodeSqliteDatabase;
     const spy = vi
       .spyOn(nodeSqlite, "openNodeSqliteDatabase")
       .mockImplementation((file, options) => {
-        if (file === sharedPath && !options?.readOnly) {
+        if (file === location && !options?.readOnly) {
           throw Object.assign(new Error("fixture lease storage failure"), { code: "SQLITE_IOERR" });
         }
         return openDatabase(file, options);

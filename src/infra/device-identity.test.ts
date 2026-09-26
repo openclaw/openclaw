@@ -7,10 +7,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { resolveDeviceIdentityCoordinatorPaths } from "./device-identity-coordinator-paths.js";
-import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
-import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
+import {
+  generateStoredDeviceIdentity,
+  insertStoredDeviceIdentityIfAbsent,
+  readStoredDeviceIdentityReadOnly,
+  type DeviceIdentityStoreOptions,
+} from "./device-identity-store.js";
 import {
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,
@@ -160,49 +163,37 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
   const readyPath = path.join(rootDir, "bootstrap-ready");
   const committedPath = path.join(rootDir, "bootstrap-committed");
   const continuePath = path.join(rootDir, "bootstrap-continue");
-  const coordinatorModuleUrl = resolveRuntimeWorkerUrl(
-    storageProcessTestEntrypoints.deviceIdentityCoordinator,
-  );
   const storeModuleUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.deviceIdentityStore);
   const workerSource = `
     import fs from "node:fs";
     import path from "node:path";
     import { DatabaseSync } from "node:sqlite";
-    const { acquireDeviceIdentityCoordinator } = await import(process.env.OPENCLAW_COORDINATOR_MODULE);
     const { generateStoredDeviceIdentity, insertStoredDeviceIdentityIfAbsent } =
       await import(process.env.OPENCLAW_IDENTITY_STORE_MODULE);
     const options = {
       env: { ...process.env, OPENCLAW_STATE_DIR: process.env.OPENCLAW_IDENTITY_STATE_DIR },
       path: process.env.OPENCLAW_IDENTITY_DATABASE_PATH,
     };
-    const coordinator = acquireDeviceIdentityCoordinator({
-      databasePath: options.path,
-      stateDir: process.env.OPENCLAW_IDENTITY_STATE_DIR,
-    });
-    try {
-      fs.mkdirSync(path.dirname(options.path), { recursive: true });
-      new DatabaseSync(options.path).close();
-      fs.writeFileSync(process.env.OPENCLAW_IDENTITY_READY_PATH, "ready");
-      const deadline = Date.now() + 15_000;
-      while (!fs.existsSync(process.env.OPENCLAW_IDENTITY_CONTINUE_PATH)) {
-        if (Date.now() >= deadline) throw new Error("timed out waiting to continue bootstrap");
-        await new Promise((resolve) => setTimeout(resolve, 2));
-      }
-      const stored = insertStoredDeviceIdentityIfAbsent(generateStoredDeviceIdentity(), options);
-      fs.writeFileSync(process.env.OPENCLAW_IDENTITY_COMMITTED_PATH, "committed");
-      console.log(JSON.stringify({
-        deviceId: stored.deviceId,
-        publicKeyPem: stored.publicKeyPem,
-        privateKeyPem: stored.privateKeyPem,
-      }));
-    } finally {
-      coordinator.release();
+    fs.mkdirSync(path.dirname(options.path), { recursive: true });
+    new DatabaseSync(options.path).close();
+    fs.writeFileSync(process.env.OPENCLAW_IDENTITY_READY_PATH, "ready");
+    const deadline = Date.now() + 15_000;
+    while (!fs.existsSync(process.env.OPENCLAW_IDENTITY_CONTINUE_PATH)) {
+      if (Date.now() >= deadline) throw new Error("timed out waiting to continue bootstrap");
+      await new Promise((resolve) => setTimeout(resolve, 2));
     }
+    const stored = insertStoredDeviceIdentityIfAbsent(generateStoredDeviceIdentity(), options);
+    fs.writeFileSync(process.env.OPENCLAW_IDENTITY_COMMITTED_PATH, "committed");
+    console.log(JSON.stringify({
+      deviceId: stored.deviceId,
+      publicKeyPem: stored.publicKeyPem,
+      privateKeyPem: stored.privateKeyPem,
+    }));
   `;
   const child = spawn(
     process.execPath,
     [
-      ...resolveRuntimeWorkerArgv(coordinatorModuleUrl).slice(0, -1),
+      ...resolveRuntimeWorkerArgv(storeModuleUrl).slice(0, -1),
       "--input-type=module",
       "-e",
       workerSource,
@@ -211,7 +202,6 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
       env: {
         ...process.env,
         OPENCLAW_IDENTITY_COMMITTED_PATH: committedPath,
-        OPENCLAW_COORDINATOR_MODULE: coordinatorModuleUrl.href,
         OPENCLAW_IDENTITY_CONTINUE_PATH: continuePath,
         OPENCLAW_IDENTITY_DATABASE_PATH: databasePath,
         OPENCLAW_IDENTITY_READY_PATH: readyPath,
@@ -250,58 +240,15 @@ function waitForFileSync(filePath: string): void {
 }
 
 describe("device identity SQLite store", () => {
-  it("serializes identity ownership with the shared SQLite coordinator", async () => {
-    await withTempDir("openclaw-device-identity-coordinator-", async (rootDir) => {
-      const databasePath = path.join(rootDir, "state", "openclaw.sqlite");
-      const lockDir = path.join(rootDir, "locks");
-      const first = acquireDeviceIdentityCoordinator({ databasePath, lockDir, busyTimeoutMs: 0 });
-      try {
-        expect(() =>
-          acquireDeviceIdentityCoordinator({ databasePath, lockDir, busyTimeoutMs: 0 }),
-        ).toThrow(/migration or creation already owns this state database/);
-      } finally {
-        first.release();
-      }
-
-      const next = acquireDeviceIdentityCoordinator({ databasePath, lockDir, busyTimeoutMs: 0 });
-      next.release();
-
-      fs.chmodSync(lockDir, 0o755);
-      const secured = acquireDeviceIdentityCoordinator({ databasePath, lockDir, busyTimeoutMs: 0 });
-      try {
-        expect(fs.statSync(lockDir).mode & 0o077).toBe(0);
-      } finally {
-        secured.release();
-      }
-
-      const symlinkLockDir = path.join(rootDir, "symlink-locks");
-      fs.symlinkSync(lockDir, symlinkLockDir);
-      expect(() =>
-        acquireDeviceIdentityCoordinator({
-          databasePath,
-          lockDir: symlinkLockDir,
-          busyTimeoutMs: 0,
-        }),
-      ).toThrow(/real directory/);
-    });
-  });
-
   it("reads a missing database without creating identity state or coordinator locks", async () => {
     await withTempDir("openclaw-device-identity-readonly-", async (rootDir) => {
       const options = storeOptions(rootDir);
-      const coordinatorPaths = resolveDeviceIdentityCoordinatorPaths({
-        databasePath: options.path!,
-        stateDir: rootDir,
-        uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-      });
+      const entries = fs.readdirSync(rootDir);
 
       expect(loadDeviceIdentityIfPresent(options)).toBeNull();
       expect(fs.existsSync(options.path!)).toBe(false);
       expect(fs.existsSync(path.dirname(options.path!))).toBe(false);
-      expect(coordinatorPaths.every((coordinatorPath) => !fs.existsSync(coordinatorPath))).toBe(
-        true,
-      );
-      expect(fs.existsSync(path.join(rootDir, "locks"))).toBe(false);
+      expect(fs.readdirSync(rootDir)).toEqual(entries);
     });
   });
 
@@ -489,6 +436,21 @@ describe("device identity SQLite store", () => {
       expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toEqual(first);
     });
   }, 30_000);
+
+  it("rechecks pending native import before publishing a generated identity", async () => {
+    await withTempDir("openclaw-device-identity-pending-import-", async (rootDir) => {
+      const options = storeOptions(rootDir);
+      expect(loadDeviceIdentityIfPresent(options)).toBeNull();
+      const candidate = generateStoredDeviceIdentity();
+      const claimPath = path.join(rootDir, "identity", "device.json.native-importing");
+      writeRetiredIdentity(claimPath);
+      const claim = fs.readFileSync(claimPath);
+
+      expect(() => insertStoredDeviceIdentityIfAbsent(candidate, options)).toThrow("doctor --fix");
+      expect(readStoredDeviceIdentityReadOnly(options)).toBeNull();
+      expect(fs.readFileSync(claimPath)).toEqual(claim);
+    });
+  });
 
   it("fails closed for a corrupt persisted row", async () => {
     await withTempDir("openclaw-device-identity-corrupt-", async (rootDir) => {

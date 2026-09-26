@@ -1,6 +1,5 @@
 import { toUSVString } from "node:util";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { StateDatabaseCoordinatorRuntime } from "./state-database-coordinator.js";
 
 // Keep the one-shot execFile output limit when inspections use IPC.
 export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
@@ -43,7 +42,6 @@ export type SqliteAuthProfileReadOptions = {
   source: "canonical" | "snapshot";
   expectedIdentity: string;
   env: NodeJS.ProcessEnv;
-  coordinatorRuntime: StateDatabaseCoordinatorRuntime;
   signal?: AbortSignal;
   stagingRoot?: never;
 };

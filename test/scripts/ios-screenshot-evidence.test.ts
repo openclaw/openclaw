@@ -116,7 +116,11 @@ function manifestPath(input: string, family: Family, targetSha = TARGET_SHA) {
   return path.join(familyDirectory(input, family, targetSha), "manifest.json");
 }
 
-function collectAll(root: string, targetSha = TARGET_SHA) {
+function collectAll(
+  root: string,
+  targetSha = TARGET_SHA,
+  runAttempts: Partial<Record<Family, number>> = {},
+) {
   const output = path.join(root, "collected");
   for (const family of ["iphone", "ipad-13", "watch"] as const) {
     const source = writeFamilySource(root, family);
@@ -125,7 +129,7 @@ function collectAll(root: string, targetSha = TARGET_SHA) {
       screenshotDirectory: source.screenshots,
       xcresultDirectory: source.xcresults,
       outputDirectory: path.join(output, containerName(family, targetSha)),
-      provenance: provenance(targetSha),
+      provenance: { ...provenance(targetSha), runAttempt: runAttempts[family] ?? 2 },
       readXcresultSummary: (resultPath) => {
         const result = fs.readFileSync(path.join(resultPath, "summary.txt"), "utf8");
         return result === "pass"
@@ -163,30 +167,53 @@ function updateAllManifests(input: string, mutate: (manifest: Record<string, any
 }
 
 describe("iOS screenshot evidence", () => {
-  it("reduces the exact device union with one successful capture per screenshot", () => {
-    const root = tempDirs.make("ios-screenshot-evidence-");
-    const input = collectAll(root);
-    const output = path.join(root, "reduced");
+  it.each([
+    { reducerAttempt: 2, iphoneAttempt: 2 },
+    { reducerAttempt: 3, iphoneAttempt: 3 },
+    { reducerAttempt: 4, iphoneAttempt: 3 },
+  ])(
+    "reduces successful device captures across workflow retries: %j",
+    ({ reducerAttempt, iphoneAttempt }) => {
+      const root = tempDirs.make("ios-screenshot-evidence-");
+      const input = collectAll(root, TARGET_SHA, { iphone: iphoneAttempt });
+      const output = path.join(root, "reduced");
 
-    const manifest = reduceAll(input, output);
-    const iphoneManifest = JSON.parse(fs.readFileSync(manifestPath(input, "iphone"), "utf8"));
+      reduceAll(input, output, { ...provenance(), runAttempt: reducerAttempt });
+      const manifest = JSON.parse(
+        fs.readFileSync(
+          path.join(output, "apps/ios/build/ScreenshotEvidence/manifest.json"),
+          "utf8",
+        ),
+      );
+      const iphoneManifest = JSON.parse(fs.readFileSync(manifestPath(input, "iphone"), "utf8"));
 
-    expect(manifest.targetSha).toBe(TARGET_SHA);
-    expect(manifest.attemptModel).toEqual(ATTEMPT_MODEL);
-    expect(iphoneManifest.captureAttempts).toHaveLength(4);
-    for (const capture of iphoneManifest.captureAttempts) {
-      expect(capture).toMatchObject({
-        attempt: 1,
-        captureOutcome: "succeeded",
-        testResult: "Passed",
-        failedTests: 0,
+      expect(manifest.targetSha).toBe(TARGET_SHA);
+      expect(manifest.attemptModel).toEqual(ATTEMPT_MODEL);
+      expect(manifest).toMatchObject({
+        runAttempt: reducerAttempt,
+        families: [
+          { family: "ipad-13", runAttempt: 2 },
+          { family: "iphone", runAttempt: iphoneAttempt },
+          { family: "watch", runAttempt: 2 },
+        ],
       });
-    }
-    expect(fs.readdirSync(path.join(output, "apps/ios/fastlane/screenshots/en-US"))).toHaveLength(
-      9,
-    );
-    expect(fs.readdirSync(path.join(output, "apps/ios/build/SnapshotTestResults"))).toHaveLength(8);
-  });
+      expect(iphoneManifest.captureAttempts).toHaveLength(4);
+      for (const capture of iphoneManifest.captureAttempts) {
+        expect(capture).toMatchObject({
+          attempt: 1,
+          captureOutcome: "succeeded",
+          testResult: "Passed",
+          failedTests: 0,
+        });
+      }
+      expect(fs.readdirSync(path.join(output, "apps/ios/fastlane/screenshots/en-US"))).toHaveLength(
+        9,
+      );
+      expect(fs.readdirSync(path.join(output, "apps/ios/build/SnapshotTestResults"))).toHaveLength(
+        8,
+      );
+    },
+  );
 
   it.each([
     { retryTestResult: "fail" as const, retryWithoutXcresult: false },
@@ -309,12 +336,19 @@ describe("iOS screenshot evidence", () => {
       error: "workflow run id",
     },
     {
-      label: "run attempt",
+      label: "future run attempt",
       mutate: (manifest: Record<string, any>) => {
         manifest.runAttempt = 3;
       },
       error: "workflow run attempt",
     },
+    ...[0, 1.5, "1", true].map((runAttempt) => ({
+      label: `invalid run attempt ${JSON.stringify(runAttempt)}`,
+      mutate: (manifest: Record<string, unknown>) => {
+        manifest.runAttempt = runAttempt;
+      },
+      error: "workflow run attempt",
+    })),
     {
       label: "Xcode version",
       mutate: (manifest: Record<string, any>) => {

@@ -155,7 +155,9 @@ export async function createUpdateUtf8CommandTransportFixture(
         ((argv.includes("--eval") && typeof input.directory === "string") ||
           (stateWorker &&
             typeof input.stateDir === "string" &&
-            ["discover", "versions", "database-backup"].includes(String(input.mode))));
+            ["discover", "versions", "database-backup", "database-generations"].includes(
+              String(input.mode),
+            )));
       if (metadataRequest || foreignPlatformSqlite) {
         // SQLite workers use the real host executable/VFS even when service tests simulate Windows.
         const metadata = spawnMetadata(

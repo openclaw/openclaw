@@ -121,6 +121,10 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  // Child scratch and default compiler caches share the Gateway's joined cleanup lifetime.
+  normalizedEnv.TMPDIR = params.tempRoot;
+  normalizedEnv.TMP = params.tempRoot;
+  normalizedEnv.TEMP = params.tempRoot;
   // Path isolation alone still lets CLI bootstrap discover the operator's service.
   normalizedEnv.OPENCLAW_PROFILE = `qa-${createHash("sha256")
     .update(params.tempRoot)

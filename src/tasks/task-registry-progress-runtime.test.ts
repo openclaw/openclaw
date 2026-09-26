@@ -28,7 +28,6 @@ import {
   updateSessionLastRoute,
 } from "../config/sessions/session-accessor.js";
 import { sendMessage } from "../infra/outbound/message.js";
-import { captureStateDatabaseCoordinatorRuntime } from "../infra/state-database-coordinator.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -44,7 +43,7 @@ import {
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import {
   createSubagentTaskBackingDetail,
   resolveManagedTaskBackingDetail,
@@ -444,7 +443,7 @@ describe("detached progress at the registered channel boundary", () => {
           expectsCompletionMessage: true,
         };
         subagentRuns.set(entry.runId, entry);
-        let holder: ReturnType<typeof holdStateDatabaseCoordinator> | undefined;
+        let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
         let publication: Promise<void> | undefined;
         const failures: unknown[] = [];
         try {
@@ -493,11 +492,7 @@ describe("detached progress at the registered channel boundary", () => {
           if (stateMode === "reopened") {
             await closeOpenClawStateDatabaseByPathAsync(sharedState.path);
           }
-          holder = holdStateDatabaseCoordinator(
-            sharedState.path,
-            captureStateDatabaseCoordinatorRuntime(),
-            300,
-          );
+          holder = holdStateDatabaseWriteTransaction(sharedState.path, 300);
           await holder.ready;
           const released = holder.released;
           const timer = sleep(10).then(() => Atomics.load(released, 0));

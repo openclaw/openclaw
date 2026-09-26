@@ -229,8 +229,7 @@ async function startReconcileWorkerTask(
       ? 2 *
         (owner.actorId.length +
           owner.context.admission.databasePath.length +
-          owner.context.environment.OPENCLAW_STATE_DIR.length +
-          owner.context.coordinatorRuntime.directory.length)
+          owner.context.environment.OPENCLAW_STATE_DIR.length)
       : 0) +
     (input.mode === "memory"
       ? input.sessionIds.reduce((bytes, id) => bytes + 2 * id.length, 0)
@@ -249,9 +248,8 @@ async function startReconcileWorkerTask(
         inputBytes,
         transferList: (task) => [
           task.port,
-          ...(task.coordination?.stateLifecycle ? [task.coordination.stateLifecycle] : []),
           ...(task.coordination?.reconciliation
-            ? [task.coordination.reconciliation.open, task.coordination.reconciliation.close]
+            ? [task.coordination.reconciliation.admission]
             : []),
         ],
         signal: controller.signal,

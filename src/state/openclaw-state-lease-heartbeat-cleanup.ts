@@ -1,8 +1,4 @@
 import type { Worker } from "node:worker_threads";
-import {
-  createSqliteLifecycleAggregateError,
-  type SqliteCoordinatorLease,
-} from "../infra/sqlite-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
 export type LeaseHeartbeatCleanup = {
@@ -10,12 +6,7 @@ export type LeaseHeartbeatCleanup = {
   close(): Promise<void>;
 };
 
-export function createLeaseHeartbeatCleanup(params: {
-  cancel: () => void;
-  onReleaseFailed: (error: unknown) => void;
-}) {
-  let coordinator: SqliteCoordinatorLease | undefined;
-  let handle: { release(): void } | undefined;
+export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
   let worker: Worker | undefined;
   let exitCode: number | undefined;
   const exited = createDeferredCore<number>();
@@ -23,18 +14,6 @@ export function createLeaseHeartbeatCleanup(params: {
   let closed = false;
   let stopping: Promise<number> | undefined;
 
-  const release = () => {
-    // Retain lifecycle custody if releasing the parent handle fails.
-    handle?.release();
-    handle = undefined;
-    try {
-      coordinator?.release();
-    } finally {
-      if (coordinator?.closed) {
-        coordinator = undefined;
-      }
-    }
-  };
   const cancel = () => {
     closed = true;
     params.cancel();
@@ -49,7 +28,6 @@ export function createLeaseHeartbeatCleanup(params: {
           await exited.promise;
         }
         await Promise.allSettled(startupRenewals);
-        release();
         return exitCode ?? 0;
       });
       void stopping.catch(() => {
@@ -64,9 +42,7 @@ export function createLeaseHeartbeatCleanup(params: {
       return (
         (!closed && worker === undefined) ||
         (worker !== undefined && exitCode === undefined) ||
-        startupRenewals.size !== 0 ||
-        handle !== undefined ||
-        (coordinator !== undefined && !coordinator.closed)
+        startupRenewals.size !== 0
       );
     },
     async close() {
@@ -90,55 +66,17 @@ export function createLeaseHeartbeatCleanup(params: {
       const settled = () => startupRenewals.delete(operation);
       void operation.then(settled, settled);
     },
-    retainCoordinator(acquire: () => SqliteCoordinatorLease | undefined) {
-      assertOpen();
-      coordinator = acquire();
-      return coordinator !== undefined;
-    },
-    retainHandle(acquire: () => { release(): void }) {
-      assertOpen();
-      handle = acquire();
-    },
     start(createWorker: () => Worker) {
       assertOpen();
       worker = createWorker();
       worker.once("exit", (code) => {
         exitCode = code;
         exited.resolve(code);
-        if (!stopping) {
-          const finish = () => {
-            if (stopping) {
-              return;
-            }
-            try {
-              release();
-            } catch (error) {
-              params.onReleaseFailed(error);
-            }
-          };
-          if (startupRenewals.size) {
-            void Promise.allSettled(startupRenewals).then(finish);
-          } else {
-            finish();
-          }
-        }
       });
       return worker;
     },
     failStartup(error: unknown): never {
       cancel();
-      if (worker && exitCode === undefined) {
-        throw error;
-      }
-      try {
-        release();
-      } catch (releaseError) {
-        throw createSqliteLifecycleAggregateError(
-          [error, releaseError],
-          "state lease heartbeat startup and cleanup failed",
-          error,
-        );
-      }
       throw error;
     },
   };

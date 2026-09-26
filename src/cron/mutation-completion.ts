@@ -83,7 +83,7 @@ export function captureCronMutationCommit(method: string): (() => undefined) | u
   };
 }
 
-/** Record the SQL commit before fallible coordinator cleanup, preserving existing hooks. */
+/** Record the SQL commit before fallible reporting, preserving existing hooks. */
 export function withCronMutationCommitHook(
   method: string,
   hooks?: CronStoreTransactionHooks,

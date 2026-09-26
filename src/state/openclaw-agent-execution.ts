@@ -32,6 +32,7 @@ import {
 import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
+  runOutsideOpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -421,7 +422,7 @@ function createAgentDatabaseExecution(
         throw new Error("Agent creation cannot capture another pending native opener");
       }
       retainAlias(borrowedPath);
-      observeOpenClawDatabaseMaintenanceResource(unregisterAgent);
+      observeOpenClawDatabaseMaintenanceResource(aliases.get(pathname));
       borrowers += 1;
       clearIdleTimer();
       if (executionState.idle === owner && !nativeClosing && !cleanupFailure) {
@@ -579,15 +580,19 @@ function createAgentDatabaseExecution(
       return;
     }
     // Cleanup keeps captured locators even if a symlink is later removed or retargeted.
-    const unregister = registerOpenClawAgentDatabaseAsyncResource({
-      agentId,
-      path: alias,
-      revoke() {
-        retired = true;
-        clearIdleTimer();
-      },
-      close: () => owner.close(),
-    });
+    const register = () =>
+      registerOpenClawAgentDatabaseAsyncResource({
+        agentId,
+        path: alias,
+        revoke() {
+          retired = true;
+          clearIdleTimer();
+        },
+        close: () => owner.close(),
+      });
+    // One claim owns the executor; later aliases only select that owner for cleanup.
+    const unregister =
+      aliases.size === 0 ? register() : runOutsideOpenClawDatabaseMaintenanceScope(register);
     aliases.set(alias, unregister);
     executions.set(alias, owner);
   };

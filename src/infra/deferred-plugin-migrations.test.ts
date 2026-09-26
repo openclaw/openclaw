@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -5,6 +6,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
+import * as stateDatabaseHandles from "../state/openclaw-state-db-handle.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
@@ -21,12 +24,10 @@ import {
   formatDeferredPluginMigration,
   withDeferredPluginMigrationsCurrent,
 } from "./deferred-plugin-migrations.js";
+import * as stateOwners from "./gateway-state-owner.js";
+import * as kyselyCache from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
-import {
-  resolveStateDatabaseCoordinatorPath,
-  resolveStateLifecycleRuntimeDirectory,
-} from "./state-database-coordinator.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { recordLegacyMigrationRun } from "./state-migrations.receipts.js";
 
 const log = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
@@ -59,6 +60,13 @@ describe("deferred configured-plugin migrations", () => {
     return { stateDir, env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
   }
 
+  function prepareHistoricalState(env: NodeJS.ProcessEnv) {
+    openOpenClawStateDatabase({ env });
+    closeOpenClawStateDatabaseForTest();
+    using database = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+    database.exec("PRAGMA user_version = 7");
+  }
+
   it("reads absent migration state without creating a database", () => {
     const { env, stateDir } = fixture();
     expect(readDeferredPluginMigrations({ env })).toEqual([]);
@@ -72,36 +80,121 @@ describe("deferred configured-plugin migrations", () => {
       const { env, stateDir } = fixture();
       const databasePath = resolveOpenClawStateSqlitePath(env);
       if (state === "historical") {
-        openOpenClawStateDatabase({ env });
-        closeOpenClawStateDatabaseForTest();
-        using database = new DatabaseSync(databasePath);
         // Match the rollback rehearsal: publication does not own schema repair.
-        database.exec("PRAGMA user_version = 7");
+        prepareHistoricalState(env);
       }
       const before = state === "historical" ? fs.readFileSync(databasePath) : undefined;
-      const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-        databasePath,
-        runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-        uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-      });
       const outputPath = path.join(path.dirname(stateDir), "published.txt");
+      const probeForeignOwner = () => {
+        const ownerUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.gatewayStateOwner);
+        const result = spawnSync(
+          process.execPath,
+          [
+            ...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1),
+            "--input-type=module",
+            "--eval",
+            `
+              import { tryAcquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
+              const owner = tryAcquireGatewayStateOwner(process.argv[1]);
+              owner?.release();
+              process.stdout.write(owner ? 'acquired' : 'refused');
+            `,
+            databasePath,
+          ],
+          { encoding: "utf8", timeout: 5_000 },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        return result.stdout;
+      };
       withDeferredPluginMigrationsCurrent({ env, expectedPending: [] }, () => {
-        const contender = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, {
-          busyTimeoutMs: 0,
-        });
-        try {
-          expect(contender).toBeNull();
-          fs.writeFileSync(outputPath, "published");
-        } finally {
-          contender?.release();
+        if (state === "historical") {
+          using contender = new DatabaseSync(databasePath);
+          contender.exec("PRAGMA busy_timeout = 0");
+          expect(() => contender.exec("BEGIN IMMEDIATE")).toThrow(/locked/i);
+        } else {
+          expect(probeForeignOwner()).toBe("refused");
         }
+        fs.writeFileSync(outputPath, "published");
       });
       expect(fs.readFileSync(outputPath, "utf8")).toBe("published");
       if (before) {
         expect(fs.readFileSync(databasePath)).toEqual(before);
       } else {
         expect(fs.existsSync(stateDir)).toBe(false);
+        expect(probeForeignOwner()).toBe("acquired");
       }
+    },
+  );
+
+  it("rechecks obligations created before missing-state publication acquires ownership", () => {
+    const { env } = fixture();
+    const pending = {
+      pluginId: "fixture-plugin",
+      reason: "The configured plugin is not installed.",
+      command: "openclaw doctor --fix",
+    };
+    const acquire = stateOwners.acquireStateDatabaseSchemaLease;
+    const acquisition = vi
+      .spyOn(stateOwners, "acquireStateDatabaseSchemaLease")
+      .mockImplementationOnce((databasePath) => {
+        recordDeferredPluginMigrations({ env, pending: [pending] });
+        closeOpenClawStateDatabaseForTest();
+        return acquire(databasePath);
+      });
+    const publish = vi.fn();
+    try {
+      expect(() =>
+        withDeferredPluginMigrationsCurrent({ env, expectedPending: [] }, publish),
+      ).toThrow("Plugin migration obligations changed");
+      expect(publish).not.toHaveBeenCalled();
+      expect(readDeferredPluginMigrations({ env })).toEqual([pending]);
+    } finally {
+      acquisition.mockRestore();
+    }
+  });
+
+  it("closes historical publication state when statement-cache cleanup fails", () => {
+    const { env } = fixture();
+    prepareHistoricalState(env);
+    const open = stateDatabaseHandles.openTrackedStateDatabase;
+    let opened: DatabaseSync | undefined;
+    const openedSpy = vi
+      .spyOn(stateDatabaseHandles, "openTrackedStateDatabase")
+      .mockImplementation((...args) => (opened = open(...args)));
+    const clear = vi.spyOn(kyselyCache, "clearNodeSqliteKyselyCacheForDatabase");
+    const publish = vi.fn(() => {
+      clear.mockImplementationOnce(() => {
+        throw new Error("Synthetic statement-cache cleanup failure");
+      });
+      return "published";
+    });
+    try {
+      expect(() =>
+        withDeferredPluginMigrationsCurrent({ env, expectedPending: [] }, publish),
+      ).toThrow();
+      expect(publish).toHaveBeenCalledOnce();
+      expect(opened?.isOpen).toBe(false);
+    } finally {
+      clear.mockRestore();
+      openedSpy.mockRestore();
+      if (opened?.isOpen) {
+        opened.close();
+      }
+    }
+  });
+
+  it.each(["absent", "historical"])(
+    "rejects asynchronous publication inside %s state admission",
+    (state) => {
+      const { env } = fixture();
+      if (state === "historical") {
+        prepareHistoricalState(env);
+      }
+      const publish = vi.fn(async () => "published");
+      expect(() =>
+        withDeferredPluginMigrationsCurrent({ env, expectedPending: [] }, publish),
+      ).toThrow(/synchronous|Promise/u);
+      expect(publish).toHaveBeenCalledOnce();
     },
   );
 

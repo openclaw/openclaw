@@ -4,7 +4,6 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
-import { resolveStateLifecycleRuntimeDirectory } from "../../infra/state-database-coordinator.js";
 import { createRetainedCheckpointFixture } from "../../infra/update-retained-checkpoint.test-support.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
@@ -50,22 +49,26 @@ function freshEnvironment() {
 function runIndependentSchemaWriter(env: ReturnType<typeof freshEnvironment>, value: string) {
   const params = {
     databasePath: resolveOpenClawStateSqlitePath(env),
-    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
   };
   return execNodeEvalSync(
     `import {
       StateSchemaMutationConflictError,
-      withStateSchemaFence,
-    } from ${JSON.stringify(new URL("../../infra/state-database-coordinator.ts", import.meta.url).href)};
+      withStateDatabaseSchemaMaintenance,
+    } from ${JSON.stringify(new URL("../../infra/state-database-maintenance.ts", import.meta.url).href)};
     try {
-      console.log(withStateSchemaFence(${JSON.stringify(params)}, () => ${JSON.stringify(value)}));
+      console.log(withStateDatabaseSchemaMaintenance(${JSON.stringify(params)}, () => ${JSON.stringify(value)}));
     } catch (error) {
       if (!(error instanceof StateSchemaMutationConflictError)) throw error;
       console.log(error.message);
     }`,
     {
       imports: ["tsx"],
-      env: { ...env, PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
+      env: {
+        ...env,
+        USERPROFILE: process.env.USERPROFILE,
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+      },
       timeout: 20_000,
     },
   ).trim();
@@ -302,7 +305,7 @@ describe("selected-target state initialization", () => {
 });
 
 describe("initialization schema coordination", () => {
-  it("fences modern schema writers while the legacy target creates its database", () => {
+  it("retains parent read authority while the legacy target creates its database", async () => {
     const env = freshEnvironment();
     const databasePath = resolveOpenClawStateSqlitePath(env);
     const fence = acquireLegacyUpdateInitializationFence({
@@ -310,20 +313,35 @@ describe("initialization schema coordination", () => {
       targetVersion: "2026.7.1",
       targetSchemas: { state: 1, agent: 1 },
     });
-    expect(fence).toBeDefined();
+    if (!fence) {
+      throw new Error("Legacy target requires an initialization fence");
+    }
     try {
       expect(runIndependentSchemaWriter(env, "Unexpected modern schema writer")).toContain(
         "another Gateway owns that state directory",
       );
-      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-      const legacy = new DatabaseSync(databasePath);
-      try {
-        legacy.exec(
-          "PRAGMA user_version=1; CREATE TABLE legacy_state(value TEXT); INSERT INTO legacy_state VALUES('target-owned')",
-        );
-      } finally {
-        legacy.close();
-      }
+      mocks.doctor.mockImplementation(async () => {
+        fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+        const legacy = new DatabaseSync(databasePath);
+        try {
+          legacy.exec(
+            "PRAGMA user_version=1; CREATE TABLE legacy_state(value TEXT); INSERT INTO legacy_state VALUES('target-owned')",
+          );
+        } finally {
+          legacy.close();
+        }
+        return doctorSuccess;
+      });
+      await fence.run(async () => {
+        await Promise.resolve();
+        await initializeUpdateStateFromTarget({
+          ...initializationOptions(env),
+          assertCurrent: fence.assertCurrent,
+          checkSchemas: async () => undefined,
+        });
+      });
+      expect(mocks.doctor).toHaveBeenCalledOnce();
+      await expect(updateStateNeedsInitialization(env)).rejects.toThrow(/offline maintenance/);
       const reader = new DatabaseSync(databasePath, { readOnly: true });
       try {
         expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
@@ -334,12 +352,12 @@ describe("initialization schema coordination", () => {
         reader.close();
       }
     } finally {
-      fence?.release();
+      await fence.release();
     }
     expect(runIndependentSchemaWriter(env, "released")).toBe("released");
   });
 
-  it("leaves the modern target free to acquire its own schema fence", () => {
+  it("leaves the modern target free to acquire its own schema fence", async () => {
     const env = freshEnvironment();
     const fence = acquireLegacyUpdateInitializationFence({
       env,
@@ -349,7 +367,7 @@ describe("initialization schema coordination", () => {
     try {
       expect(runIndependentSchemaWriter(env, "target-owned")).toBe("target-owned");
     } finally {
-      fence?.release();
+      await fence?.release();
     }
   });
 });

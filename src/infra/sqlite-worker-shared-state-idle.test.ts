@@ -3,8 +3,7 @@ import { once } from "node:events";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { deserialize } from "node:v8";
-import { MessagePort, Worker, type Transferable } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Worker, type Transferable } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -286,22 +285,22 @@ it("ignores an inspection result and old expiry when real work resumes", async (
 
 it("replaces a failed idle actor after an enclosing callback settles", async () => {
   const f = await fixture("unsettled-inspection");
-  const nativePost = vi.spyOn(MessagePort.prototype, "postMessage");
-  nativePost.mockRestore();
+  const nativePost = f.worker.postMessage.bind(f.worker);
   let resume: (() => void) | undefined;
-  const send = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
-    this: MessagePort,
-    message,
-    transfers,
-  ) {
-    if (isRecord(message) && message.type === "accepted" && Object.hasOwn(message, "admission")) {
-      // Hold the acquired-custody grant, after live authority has accepted this inspection.
-      send.mockRestore();
-      resume = () => nativePost.call(this, message, transfers);
-      return;
-    }
-    return nativePost.call(this, message, transfers);
-  });
+  const send = vi
+    .spyOn(f.worker, "postMessage")
+    .mockImplementation((request: SqliteWorkerRequest, transfers?: readonly Transferable[]) => {
+      if (
+        request.type === "execute" &&
+        deserialize(request.input).type === "database.inspectIdle"
+      ) {
+        // Hold the admitted dispatch before the native inspection executes.
+        send.mockRestore();
+        resume = () => nativePost(request, transfers);
+        return;
+      }
+      return nativePost(request, transfers);
+    });
   f.advance(minute);
   f.scheduled(minute)();
   const entered = createDeferredCore();

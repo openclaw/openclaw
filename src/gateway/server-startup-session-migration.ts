@@ -14,7 +14,7 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
-import { hasGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
+import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import {
   isSubagentSessionKey,
   isIncognitoSessionKey,
@@ -65,7 +65,7 @@ async function reconcileStartupOrphans(
 ) {
   const env = database.env ?? process.env;
   const statePath = resolveOpenClawStateSqlitePath(env);
-  if (!hasGatewayLifecycleCoordinator({ databasePath: statePath })) {
+  if (!hasActiveGatewayStateOwner(statePath)) {
     return undefined;
   }
   try {
@@ -87,7 +87,7 @@ async function reconcileStartupOrphans(
     assertCurrent?.();
     const lease = readGatewayOwnerLease({ env, current: true });
     if (
-      !hasGatewayLifecycleCoordinator({ databasePath: statePath }) ||
+      !hasActiveGatewayStateOwner(statePath) ||
       lease?.state !== "live" ||
       lease.pid !== process.pid ||
       lease.owner !== lock.ownerId

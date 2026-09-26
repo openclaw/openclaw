@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
@@ -34,10 +34,6 @@ import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/stor
 import { summarizeTranscripts } from "../transcripts/summary.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
-import {
-  resolveStateDatabaseCoordinatorPath,
-  resolveStateLifecycleRuntimeDirectory,
-} from "./state-database-coordinator.js";
 
 const dirs = useStateDatabaseTempDirs();
 
@@ -59,7 +55,7 @@ async function withoutParentSql<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-async function withoutParentTranscriptSql(databasePath: string, operation: () => Promise<void>) {
+async function withoutParentTranscriptSql(operation: () => Promise<void>) {
   type ObservedSql = { databasePath: string | null; sql?: string };
   const observed: ObservedSql[] = [];
   const prepared = new WeakMap<object, ObservedSql>();
@@ -125,36 +121,14 @@ async function withoutParentTranscriptSql(databasePath: string, operation: () =>
         }
       }
     }
-    const physicalDatabase = realpathSync(databasePath);
-    expect(
-      observed.filter(
-        (entry) => entry.databasePath && realpathSync(entry.databasePath) === physicalDatabase,
-      ),
-      "caller-thread transcript database activity",
-    ).toEqual([]);
-    const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-      databasePath,
-      runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-      uid: process.getuid?.(),
-    });
     const probes = [
       "SELECT sqlite_version() AS version",
       "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
     ];
-    const control = [
-      "PRAGMA busy_timeout = 0; PRAGMA journal_mode = MEMORY; BEGIN EXCLUSIVE;",
-      "ROLLBACK",
-    ];
     for (const entry of observed) {
-      if (entry.databasePath === null) {
-        if (entry.sql !== undefined) {
-          expect(probes).toContain(entry.sql);
-        }
-      } else {
-        expect(realpathSync(entry.databasePath)).toBe(realpathSync(coordinatorPath));
-        if (entry.sql !== undefined) {
-          expect(control).toContain(entry.sql);
-        }
+      expect(entry.databasePath, "caller-thread file-backed SQLite activity").toBeNull();
+      if (entry.sql !== undefined) {
+        expect(probes).toContain(entry.sql);
       }
     }
   } finally {
@@ -186,7 +160,7 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
 });
 
 it("appends immutable speech on the canonical worker with exact-id deduplication and sequence order", async () => {
-  const { env, store } = fixture();
+  const { store } = fixture();
   const session: TranscriptSessionDescriptor = {
     sessionId: "append-worker",
     startedAt: "2026-09-18T12:00:00.000Z",
@@ -204,7 +178,7 @@ it("appends immutable speech on the canonical worker with exact-id deduplication
     metadata: { toJSON },
     final: true,
   };
-  await withoutParentTranscriptSql(resolveOpenClawStateSqlitePath(env), async () => {
+  await withoutParentTranscriptSql(async () => {
     const writing = store.appendUtteranceForSession(session, utterance);
     utterance.text = "Caller changed speech";
     utterance.speaker!.label = "Caller changed speaker";
@@ -241,14 +215,14 @@ it("appends immutable speech on the canonical worker with exact-id deduplication
 });
 
 it("persists session metadata off thread with typed conflicts and durable ID origin", async () => {
-  const { env, store } = fixture();
+  const { store } = fixture();
   const session: TranscriptSessionDescriptor = {
     sessionId: "session-worker",
     startedAt: "2026-09-21T12:00:00.000Z",
     source: { providerId: "manual-transcript" },
     metadata: { sessionIdOrigin: "generated", ignored: () => "host-only", label: "雪" },
   };
-  await withoutParentTranscriptSql(resolveOpenClawStateSqlitePath(env), async () => {
+  await withoutParentTranscriptSql(async () => {
     await store.writeSession(session);
     const revision = await store.readSummaryInputRevision(session);
     await store.writeSession({ ...session, title: "Updated", metadata: { label: "é" } });
@@ -362,7 +336,7 @@ it.each(["transaction", "commit"] as const)(
 );
 
 it("publishes captured summary notes without caller-thread transcript SQL", async () => {
-  const { env, store } = fixture();
+  const { store } = fixture();
   const session: TranscriptSessionDescriptor = {
     sessionId: "summary-worker",
     startedAt: "2026-09-20T12:00:00.000Z",
@@ -372,7 +346,7 @@ it("publishes captured summary notes without caller-thread transcript SQL", asyn
   await store.appendUtteranceForSession(session, { text: "We agreed to simplify setup." });
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-  await withoutParentTranscriptSql(resolveOpenClawStateSqlitePath(env), async () => {
+  await withoutParentTranscriptSql(async () => {
     const result = await persistTranscriptSummary({
       config: resolveTranscriptsConfig(undefined),
       store,

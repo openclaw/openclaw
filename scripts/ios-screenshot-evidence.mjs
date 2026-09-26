@@ -622,8 +622,13 @@ export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, expect
     if (manifest.runId !== expected.runId) {
       fail(`${manifest.family} workflow run id does not match the reducer context`);
     }
-    if (manifest.runAttempt !== expected.runAttempt) {
-      fail(`${manifest.family} workflow run attempt does not match the reducer context`);
+    // GitHub preserves successful producer jobs when only failed jobs are rerun.
+    if (
+      !Number.isInteger(manifest.runAttempt) ||
+      manifest.runAttempt < 1 ||
+      manifest.runAttempt > expected.runAttempt
+    ) {
+      fail(`${manifest.family} workflow run attempt is invalid for the reducer context`);
     }
     for (const tool of ["xcode", "fastlane", "node"]) {
       if (manifest.tooling?.[tool] !== expected.tooling[tool]) {

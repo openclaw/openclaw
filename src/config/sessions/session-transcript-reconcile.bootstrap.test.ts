@@ -2,11 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import {
-  acquireStateDatabaseCoordinator,
-  resolveStateDatabaseCoordinatorPath,
-} from "../../infra/state-database-coordinator.js";
 import { readAgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.read.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../../state/openclaw-agent-db.test-support.js";
@@ -60,20 +57,13 @@ function runDiskTask(context: OpenClawStateWorkerContext, pathname: string) {
 
 function observe(context: OpenClawStateWorkerContext, agentPath: string) {
   return observeReconcileHostSqlite({
-    control: [
-      resolveStateDatabaseCoordinatorPath({
-        databasePath: context.admission.databasePath,
-        runtimeDirectory: context.coordinatorRuntime.directory,
-        uid: process.getuid?.(),
-      }),
-    ],
     data: [context.admission.databasePath, agentPath],
   });
 }
 
 it.each([false, true])(
-  "initializes runtime without inventing deletion history for a custom agent, borrowed=%s",
-  async (borrowed) => {
+  "initializes runtime without inventing deletion history for a custom agent, serving Gateway owner=%s",
+  async (owned) => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "reconcile-first-creation" },
       async (state) => {
@@ -85,8 +75,17 @@ it.each([false, true])(
         const context = captureOpenClawStateWorkerContext();
         expect(context.admission.identity.key).toMatch(/^path:/u);
         expect(fs.existsSync(context.admission.databasePath)).toBe(false);
-        const parent = borrowed
-          ? acquireStateDatabaseCoordinator({ databasePath: context.admission.databasePath })
+        const parent = owned
+          ? acquireGatewayStateOwner({
+              databasePath: context.admission.databasePath,
+              payload: {
+                pid: process.pid,
+                createdAt: new Date().toISOString(),
+                configPath: state.configPath,
+                stateDir: state.stateDir,
+                role: "gateway",
+              },
+            })
           : undefined;
         const observation = observe(context, agentPath);
         try {

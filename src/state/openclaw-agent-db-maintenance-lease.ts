@@ -59,11 +59,6 @@ async function runMaintenanceScope<T>(
       throw new Error("Agent database maintenance admission is closed");
     }
   };
-  const track = <R>(operation: Promise<R>): Promise<R> => {
-    scope.pending.push(operation);
-    void operation.catch(() => undefined);
-    return operation;
-  };
   const lease: OpenClawStateLeaseContext = {
     signal: owner.signal,
     assertOwned: assertCurrent,
@@ -76,17 +71,6 @@ async function runMaintenanceScope<T>(
           renew() {
             assertAdmission();
             owner.renew!();
-          },
-        }
-      : {}),
-    ...(owner.withDatabaseFileExclusion
-      ? {
-          withDatabaseFileExclusion<R>(
-            operation: (assertCurrent: () => void) => Promise<R>,
-            bind?: (result: R, assertCurrent: () => void) => undefined,
-          ) {
-            assertAdmission();
-            return track(owner.withDatabaseFileExclusion!(operation, bind));
           },
         }
       : {}),

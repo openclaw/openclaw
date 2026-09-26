@@ -6,12 +6,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
+import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
 import * as sqlite from "../../infra/kysely-sync.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
-import {
-  resolveStateLifecycleRuntimeDirectory,
-  StateDatabaseCoordinatorContentionError,
-} from "../../infra/state-database-coordinator.js";
+import { OpenClawStateExternalOwnershipError } from "../../infra/sqlite-lifecycle-errors.js";
 import { createStateSchemaMigrationStep } from "../../infra/state-migrations.state-schema.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -31,10 +29,6 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import {
-  isOpenClawStateWriteContentionError,
-  OpenClawStateExternalOwnershipError,
-} from "../../state/openclaw-state-ownership.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 import { createWorkerEnvironmentStore } from "./store.js";
@@ -648,7 +642,7 @@ it("rejects queued cleanup before it can revoke a successor owner's credential",
 
 // A transient native-open refusal must not retire an independently admitted inventory.
 it.each([
-  new StateDatabaseCoordinatorContentionError("state-lifecycle"),
+  new GatewayStateOwnerContentionError("state-lifecycle"),
   Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 }),
 ])("keeps worker inventory usable after a transient database open failure: %s", async (error) => {
   const database = openOpenClawStateDatabase({
@@ -669,7 +663,7 @@ it.each([
   expect(() => store.get(intent.environmentId)).toThrow("inventory has closed");
 });
 
-it("keeps the same inventory writable after a real interprocess open lock clears", async () => {
+it("keeps the same inventory writable after a foreign maintenance owner releases state", async () => {
   const stateDir = tempDirs.make("worker-inventory-contention-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const database = openOpenClawStateDatabase();
@@ -688,7 +682,9 @@ it("keeps the same inventory writable after a real interprocess open lock clears
   const events: string[] = [];
   const unsubscribe = registerOpenClawStateDatabaseLifecycleListener((event) => {
     if (event.kind === "open-error" && event.path === pathname) {
-      expect(isOpenClawStateWriteContentionError(event.error)).toBe(true);
+      expect(event.error).toEqual(
+        expect.objectContaining({ message: expect.stringContaining("offline maintenance") }),
+      );
       events.push(event.kind);
     }
   });
@@ -700,15 +696,14 @@ it("keeps the same inventory writable after a real interprocess open lock clears
       "--input-type=module",
       "--eval",
       `
-    import { acquireStateDatabaseCoordinator } from "./src/infra/state-database-coordinator.ts";
-    const lease = acquireStateDatabaseCoordinator({ databasePath: process.argv[1], runtimeDirectory: process.argv[2], busyTimeoutMs: 0 });
+    import { acquireGatewayStateOwner } from "./src/infra/gateway-state-owner.ts";
+    const lease = acquireGatewayStateOwner({ databasePath: process.argv[1] });
     process.once("message", () => {
       lease.release(); process.disconnect();
     });
     process.send({ locked: true });
   `,
       pathname,
-      resolveStateLifecycleRuntimeDirectory(),
     ],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
@@ -722,7 +717,7 @@ it("keeps the same inventory writable after a real interprocess open lock clears
   try {
     const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
     expect(ready).toEqual({ locked: true });
-    expect(() => openOpenClawStateDatabase()).toThrow(StateDatabaseCoordinatorContentionError);
+    expect(() => openOpenClawStateDatabase()).toThrow("offline maintenance");
     expect(child.exitCode).toBeNull();
     expect(events).toEqual(["open-error"]);
     child.send({ release: true });

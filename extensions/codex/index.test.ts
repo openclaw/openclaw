@@ -164,7 +164,7 @@ describe("codex plugin", () => {
     vi.spyOn(runtime.state, "openKeyedStore");
     vi.spyOn(runtime.state, "openSyncKeyedStore");
     const registerAgentHarness = vi.fn();
-    const observation = observeHostDataSql(env);
+    const observation = observeHostDataSql();
     const sql = observation.calls;
     try {
       const calibration = new DatabaseSync(":memory:");

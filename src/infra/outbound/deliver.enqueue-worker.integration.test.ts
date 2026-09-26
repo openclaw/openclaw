@@ -14,10 +14,6 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { sqliteWorkerPreloadEnv } from "../sqlite-worker-preload.test-support.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  resolveStateDatabaseCoordinatorPath,
-} from "../state-database-coordinator.js";
 import * as queueAdmission from "./deliver-queue-admission.js";
 import {
   drainMatrixReconnect,
@@ -303,90 +299,6 @@ if (!isMainThread) {
       }
     },
   );
-
-  it("preserves a committed enqueue result when native coordinator cleanup then fails", async () => {
-    const { stateDir, mediaUrl } = await source();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const databasePath = openOpenClawStateDatabase().path;
-    const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-      databasePath,
-      runtimeDirectory: captureStateDatabaseCoordinatorRuntime().directory,
-      uid: process.getuid?.(),
-    });
-    const armPath = path.join(stateDir, "arm-cleanup");
-    const failedPath = path.join(stateDir, "cleanup-failed");
-    const preloadPath = path.join(stateDir, "enqueue-cleanup.cjs");
-    await fs.writeFile(
-      preloadPath,
-      `
-const { isMainThread, parentPort } = require("node:worker_threads");
-if (!isMainThread) {
-  const fs = require("node:fs");
-  const { deserialize } = require("node:v8");
-  const { DatabaseSync } = require("node:sqlite");
-  const exec = DatabaseSync.prototype.exec;
-  const close = DatabaseSync.prototype.close;
-  let enqueueRequest = false;
-  let committed = false;
-  let injected = false;
-  let failedDatabase;
-  parentPort.on("message", (request) => {
-    enqueueRequest = request?.type === "execute" &&
-      request.input instanceof Uint8Array &&
-      deserialize(request.input)?.type === "deliveryQueue.enqueue";
-    committed = false;
-  });
-  DatabaseSync.prototype.exec = function(sql) {
-    if (enqueueRequest && committed && !injected && sql === "ROLLBACK" && fs.realpathSync(this.location()) === fs.realpathSync(${JSON.stringify(coordinatorPath)})) {
-      injected = true;
-      failedDatabase = this;
-      fs.writeFileSync(${JSON.stringify(failedPath)}, "after commit");
-      throw new Error("Synthetic enqueue coordinator rollback failure");
-    }
-    const result = Reflect.apply(exec, this, [sql]);
-    if (enqueueRequest && sql === "COMMIT" && fs.existsSync(${JSON.stringify(armPath)}) && fs.realpathSync(this.location()) === fs.realpathSync(${JSON.stringify(databasePath)})) {
-      fs.unlinkSync(${JSON.stringify(armPath)});
-      committed = true;
-    }
-    return result;
-  };
-  DatabaseSync.prototype.close = function(...args) {
-    if (this === failedDatabase) {
-      failedDatabase = undefined;
-      throw new Error("Synthetic enqueue coordinator close failure");
-    }
-    return Reflect.apply(close, this, args);
-  };
-}
-`,
-    );
-    for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preloadPath))) {
-      vi.stubEnv(key, value);
-    }
-    const warmId = await enqueueDelivery(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "warm" }] },
-      stateDir,
-    );
-    await ackDelivery(warmId, stateDir);
-    await fs.writeFile(armPath, "armed");
-    const warnings = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    const send = installSender();
-    const queued = vi.fn();
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
-      to: "!synthetic:example",
-      payloads: [{ mediaUrl }],
-      mediaAccess: { localRoots: [stateDir] },
-      queuePolicy: "best_effort",
-      onDeliveryIntent: queued,
-    });
-    expect(await fs.readFile(failedPath, "utf8")).toBe("after commit");
-    expect(warnings).toHaveBeenCalled();
-    expect(queued).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledOnce();
-    expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-  });
 
   it.each(["raw", "prepared"] as const)(
     "does not resume a lost preparation when independent cleanup errors wrap it (%s)",

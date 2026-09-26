@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { formatProvisionError } from "../../scripts/pr-lib/worktree-provision-error.mjs";
+import { GatewayStateOwnerContentionError } from "../../src/infra/gateway-state-owner.js";
 import { markSqliteNativeOpenFailure } from "../../src/infra/sqlite-error-diagnostics.js";
-import { StateDatabaseCoordinatorContentionError } from "../../src/infra/state-database-coordinator.js";
 import { markOpenClawStateDatabaseFailure } from "../../src/state/openclaw-state-db-failure.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../src/state/openclaw-state-lease-error.js";
 import {
@@ -58,12 +58,12 @@ describe("native PR provisioning diagnostics", () => {
     expect(busy.outcome.reason).toBe("sqlite-busy");
     expect(busy.error.nodes[1]).toMatchObject({ code: "SQLITE_BUSY", errcode: 5 });
     const lifecycle = render(
-      storage(new StateDatabaseCoordinatorContentionError("state-handles"), "lifecycle-busy"),
+      storage(new GatewayStateOwnerContentionError("/fixture/state.sqlite"), "lifecycle-busy"),
     );
     expect(lifecycle.outcome.reason).toBe("lifecycle-busy");
     expect(lifecycle.error.nodes[1]).toMatchObject({
-      type: "coordinator-contention",
-      family: "state-handles",
+      type: "state-owner-contention",
+      databasePath: "/fixture/state.sqlite",
     });
     const worker = render(
       storage(Object.assign(new Error("synthetic worker unavailable"), { code: "unavailable" })),

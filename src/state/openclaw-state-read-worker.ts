@@ -1,8 +1,8 @@
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -117,8 +117,11 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   if (command.type === "userProfiles.channelIdentity.resolve") {
     return { type: command.type, identity: structuredClone(command.identity) };
   }
-  if (command.type === "userProfiles.githubAttribution.resolve") {
-    return { type: command.type, profileIds: [...command.profileIds] };
+  if (
+    command.type === "userProfiles.githubAttribution.resolve" ||
+    command.type === "userPreferences.values"
+  ) {
+    return { ...command, profileIds: [...command.profileIds] };
   }
   if (command.type === "subagents.runs") {
     return {
@@ -450,10 +453,13 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "userProfiles.githubIdentity.cached") {
     return bytes + Buffer.byteLength(command.email, "utf8") + 8;
   }
-  if (command.type === "userProfiles.githubAttribution.resolve") {
+  if (
+    command.type === "userProfiles.githubAttribution.resolve" ||
+    command.type === "userPreferences.values"
+  ) {
     return command.profileIds.reduce(
       (total, profileId) => total + Buffer.byteLength(profileId, "utf8"),
-      bytes,
+      bytes + (command.type === "userPreferences.values" ? Buffer.byteLength(command.key) : 0),
     );
   }
   if (command.type === "userProfiles.channelIdentity.resolve") {
@@ -504,7 +510,6 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
 function requestBytes(request: OpenClawStateReadRequest): number {
   return [
     ...Object.entries(request.context.environment).flatMap(([key, value]) => [key, value]),
-    request.context.coordinatorRuntime.directory,
     request.context.existingSchemaPath,
     request.databasePath,
     request.location,
@@ -569,7 +574,6 @@ export function createOpenClawStateReadTransport(command: OpenClawStateReadComma
     const request: OpenClawStateReadRequest = {
       context: {
         environment: { ...context.environment },
-        coordinatorRuntime: { ...context.coordinatorRuntime },
         existingSchemaPath: context.existingSchemaPath,
       },
       databasePath: context.admission.databasePath,

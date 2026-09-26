@@ -6,17 +6,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import {
-  openNodeSqliteDatabase,
-  requireNodeSqlite,
-  resolveNodeSqliteLocation,
-} from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  resolveStateDatabaseCoordinatorPath,
-} from "../../infra/state-database-coordinator.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -25,7 +18,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -91,9 +83,14 @@ it.each([false, true])(
     };
     const database = openOpenClawAgentDatabase(options);
     const nativeReclaim = vi.spyOn(database.walMaintenance, "reclaimFreePages");
-    const maintenance = incognito
-      ? undefined
-      : createOpenClawDatabaseMaintenanceScope(() => undefined);
+    const schemaLease = incognito ? undefined : acquireStateDatabaseSchemaLease(database.path);
+    const maintenance = schemaLease
+      ? createOpenClawDatabaseMaintenanceScope({
+          schemaMaintenance: true,
+          assertOwnerCurrent: () => schemaLease.assertCurrent(),
+          assertDatabaseAccess: schemaLease.assertDatabaseAccess,
+        })
+      : undefined;
     const entered = createDeferred();
     const release = createDeferred();
     releases.push(release.resolve);
@@ -140,7 +137,11 @@ it.each([false, true])(
     } finally {
       release.resolve();
       await Promise.allSettled([blocker, work]);
-      await maintenance?.close();
+      try {
+        await maintenance?.close();
+      } finally {
+        schemaLease?.release();
+      }
     }
   },
 );
@@ -274,13 +275,6 @@ it("enforces a physical archive budget without ordinary host SQLite calls", asyn
   expect(
     Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count),
   ).toBeGreaterThan(1024);
-  const coordinatorPath = resolveNodeSqliteLocation(
-    resolveStateDatabaseCoordinatorPath({
-      databasePath: resolveOpenClawStateSqlitePath(state.env),
-      runtimeDirectory: captureStateDatabaseCoordinatorRuntime().directory,
-      uid: process.getuid?.(),
-    }),
-  );
   const sqlite = requireNodeSqlite();
   const prepare = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare");
   // oxlint-disable-next-line typescript/unbound-method -- Forward native exec with its original database receiver.
@@ -300,7 +294,6 @@ it("enforces a physical archive budget without ordinary host SQLite calls", asyn
   let result: Awaited<ReturnType<typeof enforceSqliteSessionHistoryDiskBudget>>;
   let hostQueries: string[];
   let hostStatementCalls: number;
-  let ordinaryExec: typeof executions;
   try {
     const calibration = new sqlite.DatabaseSync(":memory:");
     try {
@@ -329,14 +322,6 @@ it("enforces a physical archive budget without ordinary host SQLite calls", asyn
       (count, statement) => count + statement.mock.calls.length,
       0,
     );
-    ordinaryExec = executions.filter(
-      ({ location, sql }) =>
-        !(
-          resolveNodeSqliteLocation(location ?? "") === coordinatorPath &&
-          (sql === "PRAGMA busy_timeout = 0; PRAGMA journal_mode = MEMORY; BEGIN EXCLUSIVE;" ||
-            sql === "ROLLBACK")
-        ),
-    );
     probes.forEach((probe) => probe.mockRestore());
   }
   expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
@@ -346,7 +331,7 @@ it("enforces a physical archive budget without ordinary host SQLite calls", asyn
   expect(loadSessionEntryReadOnly(retained)?.sessionId).toBe("guard-retained");
   expect(hostQueries).toEqual([]);
   expect(hostStatementCalls).toBe(0);
-  expect(ordinaryExec).toEqual([]);
+  expect(executions).toEqual([]);
 });
 
 it("rejects another agent's archive without changing its canonical row or file", async () => {

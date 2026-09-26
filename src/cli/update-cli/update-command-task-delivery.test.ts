@@ -1,10 +1,12 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "../../infra/sqlite-coordinator.js";
-import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
+import { acquireFileLockSync } from "../../infra/file-lock-manager.js";
+import { parseGatewayLockPayload } from "../../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -206,13 +208,24 @@ it.each(["read-only", "foreign-gateway"] as const)(
   "reports repairable orphans and Doctor next action for %s admission",
   (blocker) => {
     const f = seededOrphans();
-    const anchor = acquireGatewayLifecycleCoordinator({ databasePath: f.filename });
+    const anchor = acquireGatewayStateOwner({ databasePath: f.filename });
     anchor.release();
+    // Register no local root: recovery must not borrow the foreign Gateway's schema authority.
     const owner =
-      blocker === "foreign-gateway" ? tryAcquireExclusiveSqliteCoordinator(anchor.path) : undefined;
-    if (blocker === "foreign-gateway" && !owner) {
-      throw new Error("Fixture Gateway lease unavailable");
-    }
+      blocker === "foreign-gateway"
+        ? acquireFileLockSync(anchor.path, {
+            lockPath: anchor.path,
+            retry: { retries: 0 },
+            payload: () => ({
+              pid: process.pid,
+              ownerId: randomUUID(),
+              createdAt: new Date().toISOString(),
+              configPath: path.join(f.root, "openclaw.json"),
+              role: "gateway",
+            }),
+            parsePayload: parseGatewayLockPayload,
+          })
+        : undefined;
     try {
       expect(() =>
         createUpdateRun({ trigger: "cli" }, { env: f.env, readOnly: blocker === "read-only" }),

@@ -40,7 +40,7 @@ async function execute<T>(
         dispatched = true;
         return await (preparation ? preparation.handoff(() => dispatch(scope)) : dispatch(scope));
       },
-      { requireStateLifecycle: true, assertCurrent: preparation?.assertCurrent },
+      { assertCurrent: preparation?.assertCurrent },
     );
   } catch (error) {
     throw wrapPluginBlobError(

@@ -38,7 +38,7 @@ class ManagedTaskCreationRefused extends Error {
   }
 }
 
-/** The caller holds shared writer custody; write retains the owner's separate transactions. */
+/** Each write owns a native transaction, preserving committed origin before metadata admission. */
 export function runManagedTaskInFlowInDatabase(
   db: DatabaseSync,
   input: ManagedTaskInFlowInput,
@@ -74,7 +74,7 @@ export function runManagedTaskInFlowInDatabase(
     return flow;
   };
   try {
-    const flow = readManagedFlow();
+    let flow = readManagedFlow();
     const childSessionKey = params.childSessionKey?.trim();
     const runId = params.runId?.trim();
     const readBacking = () => {
@@ -146,7 +146,7 @@ export function runManagedTaskInFlowInDatabase(
     const created = createTaskRecordInDatabase(db, { ...input, params: createParams }, write, {
       retainTaskCommit: admission?.retainTaskCommit,
       assertCurrent: (existing) => {
-        readManagedFlow();
+        flow = readManagedFlow();
         const currentBacking = readBacking();
         if (
           backing &&

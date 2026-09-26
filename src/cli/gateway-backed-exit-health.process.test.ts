@@ -1,5 +1,7 @@
 // Process coverage for health failures and unreachable Gateway commands.
+import { createHash } from "node:crypto";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -16,7 +18,7 @@ import {
 import type { GatewayEventLoopHealth } from "../gateway/server/event-loop-health.js";
 import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -83,7 +85,7 @@ describe("gateway-backed CLI process exit", () => {
         JSON.stringify({ probe: true, timeoutMs: CHANNEL_PROBE_TIMEOUT_MS }),
       ],
     },
-  ])("reads $label while another process owns state lifecycle", async ({ method, args }) => {
+  ])("reads $label while another process owns state maintenance", async ({ method, args }) => {
     const startedAt = performance.now();
     const phases: Array<{ phase: string; elapsedMs: number }> = [];
     const recordPhase = (phase: string) => {
@@ -91,7 +93,7 @@ describe("gateway-backed CLI process exit", () => {
     };
     const root = tempDirs.make("openclaw-status-state-custody-");
     const gateway = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    let coordinator: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
+    let stateOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
     try {
       await once(gateway, "listening");
       const address = gateway.address();
@@ -116,6 +118,8 @@ describe("gateway-backed CLI process exit", () => {
       });
       closeOpenClawStateDatabaseForTest();
       const before = await snapshotDirectoryContents(stateDir);
+      const expectedAfter = { ...before };
+      const canonicalStateDir = await fs.realpath(stateDir);
       const eventLoop = {
         degraded: false,
         degradedSinceMs: null,
@@ -163,10 +167,25 @@ describe("gateway-backed CLI process exit", () => {
             });
             recordPhase("auth-checked");
             // Auth loading has finished; hold native custody before the hello can trigger storage.
-            coordinator ??= acquireStateDatabaseCoordinator({
+            stateOwner ??= acquireGatewayStateOwner({
               databasePath: resolveOpenClawStateSqlitePath(env),
-              keepAlive: false,
             });
+            const ownerPath = path.relative(canonicalStateDir, stateOwner.path);
+            if (
+              ownerPath &&
+              ownerPath !== ".." &&
+              !ownerPath.startsWith(`..${path.sep}`) &&
+              !path.isAbsolute(ownerPath)
+            ) {
+              // Preserve the pre-CLI snapshot; add only the parent's actual custody artifacts.
+              expectedAfter[ownerPath] = `file:${createHash("sha256")
+                .update(readFileSync(stateOwner.path))
+                .digest("hex")}`;
+              for (let directory = path.dirname(ownerPath); directory !== ".";) {
+                expectedAfter[directory] ??= "directory";
+                directory = path.dirname(directory);
+              }
+            }
             recordPhase("custody-acquired");
             sendMinimalGatewayResponse(
               ws,
@@ -183,7 +202,8 @@ describe("gateway-backed CLI process exit", () => {
             recordPhase("hello-sent");
             return;
           }
-          expect(coordinator?.closed).toBe(false);
+          expect(stateOwner).toBeDefined();
+          stateOwner!.assertCurrent();
           expect(frame.method).toBe(method);
           if (method === "channels.status") {
             const timeoutMs = frame.params?.timeoutMs;
@@ -212,8 +232,9 @@ describe("gateway-backed CLI process exit", () => {
         result,
         calls,
         phases,
-        coordinatorHeld: coordinator?.closed === false,
+        stateOwnerPath: stateOwner?.path,
         stateBefore: before,
+        stateExpected: expectedAfter,
         stateAfter: after,
       });
       expect(JSON.parse(result.stdout), evidence).toEqual(payload);
@@ -233,11 +254,12 @@ describe("gateway-backed CLI process exit", () => {
         `message:${method}`,
         "child-exited",
       ]);
-      expect(coordinator?.closed, evidence).toBe(false);
-      expect(after).toEqual(before);
+      expect(stateOwner, evidence).toBeDefined();
+      stateOwner!.assertCurrent();
+      expect(after).toEqual(expectedAfter);
     } finally {
       try {
-        coordinator?.release();
+        stateOwner?.release();
       } finally {
         await closeMinimalGatewayServer(gateway);
       }

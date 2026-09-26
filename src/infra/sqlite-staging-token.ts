@@ -70,13 +70,14 @@ export function acquireSqliteStagingToken(
   let retired = false;
   const assertIdentity = () => {
     const currentDirectory = readIdentity(directory, "directory");
-    const currentToken = readIdentity(location, "file");
     if (
       directoryIdentity.dev !== currentDirectory.dev ||
-      directoryIdentity.ino !== currentDirectory.ino ||
-      tokenIdentity.dev !== currentToken.dev ||
-      tokenIdentity.ino !== currentToken.ino
+      directoryIdentity.ino !== currentDirectory.ino
     ) {
+      throw new Error("SQLite staging ownership changed before retirement");
+    }
+    const currentToken = readIdentity(location, "file");
+    if (tokenIdentity.dev !== currentToken.dev || tokenIdentity.ino !== currentToken.ino) {
       throw new Error("SQLite staging ownership changed before retirement");
     }
   };

@@ -164,12 +164,12 @@ export function setupDoctorAdmissionFixture() {
       expect(guardedWorkers).toBeGreaterThan(0);
       binding.assertPath(resolveManagedUpdateLeaseDatabasePath());
     };
-    const admission = resolveDoctorUpdateAdmission(env);
+    const admitted = resolveDoctorUpdateAdmission(env);
     return {
       env,
       database,
       family,
-      admission,
+      admission: admitted.assertCurrent,
       assertIsolation,
       createStateDir: () => directories.make("doctor-admission-replacement-"),
     };

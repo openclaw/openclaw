@@ -2,7 +2,6 @@
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
-import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator-errors.js";
 import * as sessionUtils from "../session-utils.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import {
@@ -15,7 +14,10 @@ useChatAbortRegistryFixture();
 afterEach(() => vi.restoreAllMocks());
 
 it("reports typed contention without replaying or denying an already applied Stop", async () => {
-  const failure = new StateDatabaseCoordinatorContentionError("state-lifecycle");
+  const failure = Object.assign(new Error("database is locked"), {
+    code: "ERR_SQLITE_ERROR",
+    errcode: 5,
+  });
   vi.spyOn(sessionUtils, "loadSessionEntry").mockImplementation(() => {
     throw failure;
   });
@@ -36,16 +38,16 @@ it("reports typed contention without replaying or denying an already applied Sto
     expect.objectContaining({
       code: "UNAVAILABLE",
       message:
-        "The server is busy. Check this turn's status before trying Stop again.\n\nStateDatabaseCoordinatorContentionError: state-lifecycle acquisition remained busy. Stopping may already have taken effect.",
+        "The server is busy. Check this turn's status before trying Stop again.\n\nSQLite transaction admission remained busy. Stopping may already have taken effect.",
       details: { errorKind: "state_contention" },
     }),
   );
 });
 
 it.each([
-  new Error("StateDatabaseCoordinatorContentionError: private detail"),
+  new Error("database is locked: private detail"),
   new AggregateError(
-    [new StateDatabaseCoordinatorContentionError("state-lifecycle")],
+    [Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 })],
     "cleanup failed",
   ),
 ])("does not certify strings or uncertain cleanup aggregates", async (error) => {

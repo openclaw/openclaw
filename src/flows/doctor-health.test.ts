@@ -10,10 +10,7 @@ import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcri
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import {
-  resolveStateDatabaseCoordinatorPath,
-  resolveStateLifecycleRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
+import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import {
   detectLegacyWorkspaceState,
@@ -90,13 +87,9 @@ describe("runDoctorHealthFlow", () => {
         const sourceBefore = fs.readFileSync(sourcePath);
         const configBefore = fs.readFileSync(state.configPath);
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
-        const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-          databasePath,
-          runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-          uid: process.getuid?.(),
-        });
+        const ownerPath = resolveGatewayStateOwnerPath(databasePath);
         expect(fs.existsSync(databasePath)).toBe(false);
-        expect(fs.existsSync(coordinatorPath)).toBe(false);
+        expect(fs.existsSync(ownerPath)).toBe(false);
 
         const foreign = kind.startsWith("foreign") || windows;
         const foreignRoot = state.path("foreign-install");
@@ -226,7 +219,7 @@ describe("runDoctorHealthFlow", () => {
           expect(fs.readFileSync(sourcePath)).toEqual(sourceBefore);
           expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
           expect(fs.existsSync(databasePath)).toBe(false);
-          expect(fs.existsSync(coordinatorPath)).toBe(false);
+          expect(fs.existsSync(ownerPath)).toBe(false);
           expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
         }
         if (kind === "absent" || kind === "absent-busy-port" || kind === "absent-unknown-port") {
@@ -448,7 +441,7 @@ describe("runDoctorHealthFlow", () => {
     },
   );
 
-  it("fails public repair after the Gateway lock skips session import", async () => {
+  it("refuses public repair before session import while the Gateway owns state", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = await state.writeText(
         "agents/main/sessions/sessions.json",
@@ -484,8 +477,9 @@ describe("runDoctorHealthFlow", () => {
 
       expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
       expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Legacy session store requires migration"),
+        expect.stringContaining("Doctor could not enter maintenance"),
       );
+      expect(mocks.runContributions).not.toHaveBeenCalled();
       expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
       expect(fs.readFileSync(storePath)).toEqual(before);
     });

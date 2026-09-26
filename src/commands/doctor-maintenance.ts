@@ -15,10 +15,7 @@ import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
-import {
-  acquireStateDatabaseCoordinator,
-  StateDatabaseCoordinatorContentionError,
-} from "../infra/state-database-coordinator.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import {
@@ -41,7 +38,7 @@ import {
 } from "./doctor-agent-lease-refusal.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
 import { holdDoctorMaintenanceExit } from "./doctor-maintenance-exit.js";
-import { acquireDoctorGatewayMaintenanceCoordinator } from "./doctor-maintenance-foreground.js";
+import { acquireDoctorGatewayMaintenanceOwner } from "./doctor-maintenance-foreground.js";
 import {
   assertDoctorMaintenanceInspection,
   classifyDoctorMaintenanceRefusal,
@@ -90,7 +87,7 @@ export async function beginDoctorMaintenance(
   let serviceMaintenance:
     | typeof import("../cli/update-cli/update-command-service-maintenance.js")
     | undefined;
-  const coordinators: Array<{ release(): void }> = [];
+  let gatewayOwner: Awaited<ReturnType<typeof acquireDoctorGatewayMaintenanceOwner>> | undefined;
   const warnings: string[] = [];
   const warn = (message: string) => {
     warnings.push(message);
@@ -103,6 +100,7 @@ export async function beginDoctorMaintenance(
   let resources: OpenClawDatabaseMaintenanceScope | undefined;
   let inspectingActivation = false;
   let staleReplacement: DoctorStaleGateway | undefined;
+  let assertUpdateAdmissionReadCurrent: (() => void) | undefined;
   let assertUpdateAdmissionCurrent: (() => void) | undefined;
   let authorityRefused = false;
   const assertAuthority = (assertion: () => void) => {
@@ -138,34 +136,41 @@ export async function beginDoctorMaintenance(
       return;
     }
     assertCallerCurrent?.();
-    const owner = await acquireDoctorGatewayMaintenanceCoordinator(databasePath, env, {
+    const owner = await acquireDoctorGatewayMaintenanceOwner(databasePath, env, {
       ...params,
       assertCurrent: assertCallerCurrent,
       // The inner foreground/ownerless wait cannot renew a stopped service's budget.
       deadlineMs: stopDeadline,
     });
-    let stateOwner;
     try {
       assertCallerCurrent?.();
-      stateOwner = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 250 });
+      owner.assertCurrent();
+      resources = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertDatabaseAccess: owner.assertDatabaseAccess,
+        assertOwnerCurrent: () => {
+          // Policy checks read SQLite; their storage access comes from the raw process owner.
+          owner.run(() => {
+            assertCallerCurrent?.();
+            assertUpdateAdmissionReadCurrent?.();
+            owner.assertCurrent();
+          });
+        },
+      });
+      gatewayOwner = owner;
     } catch (error) {
-      owner.release();
+      await owner.release();
       throw error;
     }
-    coordinators.push(owner, stateOwner);
-    await databaseCapture?.admit();
-    resources = createOpenClawDatabaseMaintenanceScope(
-      owner.createSchemaFenceDelegate,
-      assertCallerCurrent,
-    );
+    if (databaseCapture) {
+      await settle(() => resources!.run(() => databaseCapture.admit()));
+    }
   };
   const acquireStoppedMaintenanceResources = () =>
     acquireWithWait({
       acquire: acquireMaintenanceResources,
       shouldRetry: (error) =>
-        stopped?.stopped === true &&
-        error instanceof StateDatabaseCoordinatorContentionError &&
-        error.family === "gateway-lifecycle",
+        stopped?.stopped === true && error instanceof GatewayStateOwnerContentionError,
       deadlineMs: stopDeadline ?? performance.now(),
       pollIntervalMs: 250,
       maxPollIntervalMs: 2_000,
@@ -174,19 +179,14 @@ export async function beginDoctorMaintenance(
     if (cleanupFailure) {
       throw cleanupFailure.error;
     }
-    if (repairStoresMayBeOpen) {
-      await resources?.close();
-      repairStoresMayBeOpen = false;
+    await resources?.close();
+    repairStoresMayBeOpen = false;
+    if (gatewayOwner && databaseCapture) {
+      // Receipt workers must settle before another process can acquire state custody.
+      await settle(() => databaseCapture.settle());
     }
-    try {
-      if (coordinators.length > 0) {
-        await databaseCapture?.settle();
-      }
-    } finally {
-      for (const coordinator of coordinators.splice(0).toReversed()) {
-        coordinator.release();
-      }
-    }
+    await gatewayOwner?.release();
+    gatewayOwner = undefined;
   };
   const release = async (assertCustody?: () => void) => {
     await settle(async () => {
@@ -204,9 +204,7 @@ export async function beginDoctorMaintenance(
         }
       } finally {
         if (!cleanupFailure) {
-          await settle(async () => {
-            await recovery?.complete(!retainStoppedInstallation);
-          });
+          await settle(async () => recovery?.complete(!retainStoppedInstallation));
         }
       }
     });
@@ -379,9 +377,7 @@ export async function beginDoctorMaintenance(
   const admitRepair = async () => {
     inspectingActivation = false;
     await assertLegacyGatewayStoppedForMaintenance(env);
-    // Hold the reentrant lifecycle coordinators, not an in-tree Gateway lock:
-    // individual migrations acquire their own in-tree locks under this scope.
-    // Gateway ownership lasts until that process stops, not for a short transaction.
+    // Retain one process owner across every migration and its resource drainage.
     await acquireStoppedMaintenanceResources();
     assertUpdateAdmissionCurrent?.();
     await assertDoctorAgentLeaseAdmission(env);
@@ -402,9 +398,8 @@ export async function beginDoctorMaintenance(
           await acquireStoppedMaintenanceResources();
         } catch (ownershipError) {
           const warning =
-            ownershipError instanceof StateDatabaseCoordinatorContentionError &&
-            ownershipError.family === "gateway-lifecycle"
-              ? `Warning: The stopped Gateway still owns gateway-lifecycle after the service stop deadline. Shared-state repair is unsafe while that writer remains active. Restoring its service; run ${formatCliCommand("openclaw gateway status --deep", env)}, then retry ${formatCliCommand("openclaw doctor --fix", env)} after shutdown completes.`
+            ownershipError instanceof GatewayStateOwnerContentionError
+              ? `Warning: The stopped Gateway still holds state ownership after the service stop deadline. Shared-state repair is unsafe while that writer remains active. Restoring its service; run ${formatCliCommand("openclaw gateway status --deep", env)}, then retry ${formatCliCommand("openclaw doctor --fix", env)} after shutdown completes.`
               : `Warning: Doctor could not reacquire maintenance ownership: ${String(ownershipError)} Restoring its service without repairing shared state.`;
           warn(warning);
         }
@@ -454,7 +449,7 @@ export async function beginDoctorMaintenance(
     env,
     root: params.root ?? undefined,
     signal: exit.signal,
-    assertCurrent: assertCallerCurrent,
+    assertCurrent: () => gatewayOwner!.run(() => assertCallerCurrent?.()),
     warn,
   });
   try {
@@ -484,7 +479,11 @@ export async function beginDoctorMaintenance(
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
           assertAuthority(() => {
             const admitted = resolveDoctorUpdateAdmission(env);
-            assertUpdateAdmissionCurrent = () => assertAuthority(admitted);
+            // Storage guards can run inside a transaction; receipts belong to service admission.
+            assertUpdateAdmissionReadCurrent = () => assertAuthority(admitted.assertCurrent);
+            const checkAndRecord = () => assertAuthority(admitted.recordContinuation);
+            assertUpdateAdmissionCurrent = () =>
+              gatewayOwner ? gatewayOwner.run(checkAndRecord) : checkAndRecord();
           });
         }
         if (inspection.serviceUpdateVerdict?.kind === "owned" && inspection.serviceEnv) {
@@ -510,14 +509,17 @@ export async function beginDoctorMaintenance(
         try {
           await acquireMaintenanceResources();
         } catch (error) {
-          // A running managed Gateway legitimately owns this coordinator until its
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          // A running managed Gateway legitimately owns this state until its
           // service is stopped. Any other holder is knowable before that mutation.
-          const gatewayOwner = readGatewayOwnerLease({
+          const servingOwner = readGatewayOwnerLease({
             env,
             current: true,
             openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
           });
-          const legacyGatewayLock = gatewayOwner
+          const legacyGatewayLock = servingOwner
             ? undefined
             : await readActiveGatewayLockIdentity({
                 env: inspection.serviceEnv ?? env,
@@ -526,7 +528,7 @@ export async function beginDoctorMaintenance(
           if (
             !inspection.running ||
             !(
-              (gatewayOwner?.state === "live" && gatewayOwner.mode === "supervised") ||
+              (servingOwner?.state === "live" && servingOwner.mode === "supervised") ||
               (inspection.servicePid !== undefined &&
                 legacyGatewayLock?.pid === inspection.servicePid)
             )
@@ -554,19 +556,22 @@ export async function beginDoctorMaintenance(
                   await settle(async () => {
                     try {
                       stopDeadline = performance.now() + GATEWAY_SERVICE_STOP_TIMEOUT_MS;
-                      stopped = await maybeStopManagedServiceBeforeMutableUpdate({
-                        updateInstallKind: "package",
-                        root,
-                        shouldRestart: true,
-                        jsonMode: true,
-                        expectedService: inspection,
-                        retainNativeIdentity: true,
-                        assertCurrent: () => assertServiceCurrent?.(),
-                        warn,
-                        onStopped: (before) => {
-                          stopped = before;
-                        },
-                      });
+                      const stopService = () =>
+                        maybeStopManagedServiceBeforeMutableUpdate({
+                          updateInstallKind: "package",
+                          root,
+                          shouldRestart: true,
+                          jsonMode: true,
+                          expectedService: inspection,
+                          retainNativeIdentity: true,
+                          assertCurrent: () => assertServiceCurrent?.(),
+                          warn,
+                          onStopped: (before) => {
+                            stopped = before;
+                          },
+                        });
+                      // The drain's auth probe borrows state custody acquired before stopping.
+                      stopped = await (resources ? resources.run(stopService) : stopService());
                       assertDoctorMaintenanceInspection(stopped, env);
                       if (stopped.serviceUpdateVerdict?.kind === "unavailable") {
                         warn(stopped.serviceUpdateVerdict.message);
@@ -638,7 +643,7 @@ export async function beginDoctorMaintenance(
     warnings,
     failureFacts,
     get databaseWrites() {
-      return databaseCapture?.receipt;
+      return gatewayOwner ? undefined : databaseCapture?.receipt;
     },
     run: <T>(operation: () => T) => resources!.run(operation),
     releaseState: () => settle(releaseState),

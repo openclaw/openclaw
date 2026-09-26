@@ -246,10 +246,12 @@ describe("managed update requester authority", () => {
         },
         { env },
       );
-      const maintenance = createOpenClawDatabaseMaintenanceScope(undefined, () => {
-        if (!identity.isCurrentIdentity()) {
-          throw new UpdateRequesterRevokedError();
-        }
+      const maintenance = createOpenClawDatabaseMaintenanceScope({
+        assertOwnerCurrent: () => {
+          if (!identity.isCurrentIdentity()) {
+            throw new UpdateRequesterRevokedError();
+          }
+        },
       });
       try {
         expect(maintenance.run(() => getUpdateRun(current.runId, { env }))).toMatchObject({

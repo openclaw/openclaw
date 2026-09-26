@@ -21,7 +21,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
   if (!isRecord(input) || !isRecord(input.context) || !isRecord(input.command)) {
     return false;
   }
-  const { environment, coordinatorRuntime } = input.context;
+  const { environment } = input.context;
   return (
     typeof input.databasePath === "string" &&
     typeof input.location === "string" &&
@@ -34,9 +34,6 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     typeof environment.OPENCLAW_STATE_DIR === "string" &&
     (environment.OPENCLAW_SUPERVISOR_MODE === undefined ||
       environment.OPENCLAW_SUPERVISOR_MODE === "external") &&
-    isRecord(coordinatorRuntime) &&
-    typeof coordinatorRuntime.directory === "string" &&
-    typeof coordinatorRuntime.keepAlive === "boolean" &&
     ((input.command.type === "deliveryQueue.outbound" &&
       (input.command.id === undefined || typeof input.command.id === "string") &&
       (input.command.mode === "pending" || input.command.mode === "unfinished")) ||

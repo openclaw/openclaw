@@ -73,12 +73,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  captureStateDatabaseCoordinatorRuntime: () => ({
-    directory: "/synthetic-coordinator",
-    keepAlive: false,
-  }),
-}));
 vi.mock("./project-checkout.js", () => ({
   ProjectCheckoutError: class extends Error {},
   withProjectCheckoutLifecycle: mocks.checkout,

@@ -11,9 +11,9 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { OpenClawStateExternalOwnershipError } from "../../state/openclaw-state-ownership.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
+import { OpenClawStateExternalOwnershipError } from "../sqlite-lifecycle-errors.js";
 import { deliverOutboundPayloads } from "./deliver.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
 import type { DeliverFn } from "./delivery-queue-recovery.js";

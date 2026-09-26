@@ -1,8 +1,36 @@
 import fs from "node:fs/promises";
-import path from "node:path";
+import { tmpdir } from "node:os";
 import { resolveStateDir } from "../config/state-dir.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import {
+  resolvePluginSourceCaptureFallbackPrefix,
+  resolvePluginSourceCapturesDirectory,
+} from "../plugins/plugin-source-capture-path.js";
 import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+
+async function hasCaptureDirectories(stateDir: string, directory: string): Promise<boolean> {
+  try {
+    await fs.access(directory);
+    return true;
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+  }
+  const prefix = resolvePluginSourceCaptureFallbackPrefix(stateDir);
+  try {
+    for await (const entry of await fs.opendir(tmpdir())) {
+      if (entry.isDirectory() && entry.name.startsWith(prefix)) {
+        return true;
+      }
+    }
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+  }
+  return false;
+}
 
 /** Reclaim retired payloads before runtime loading, using the same receipt owner as Doctor. */
 export async function cleanupStartupPluginSourceCaptures(env = process.env): Promise<void> {
@@ -10,15 +38,10 @@ export async function cleanupStartupPluginSourceCaptures(env = process.env): Pro
     return;
   }
   const stateDir = resolveStateDir(env);
-  const directory = path.join(stateDir, "tmp", "plugin-captures");
+  const directory = resolvePluginSourceCapturesDirectory(stateDir);
   try {
-    try {
-      await fs.access(directory);
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return;
-      }
-      throw error;
+    if (!(await hasCaptureDirectories(stateDir, directory))) {
+      return;
     }
     const [{ withDoctorSqliteMaintenanceLock }, { pruneUnreferencedPluginNativeCaptures }] =
       await Promise.all([

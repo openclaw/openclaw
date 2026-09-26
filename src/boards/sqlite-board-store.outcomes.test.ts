@@ -133,7 +133,7 @@ async function receiveExecutedFailure(retire: boolean) {
       },
     },
     {
-      fail(reason, currentError, completed, openOutcome) {
+      fail(reason, currentError, openOutcome) {
         if (!(reason instanceof Error)) {
           throw new Error("Expected a decoded worker error");
         }
@@ -146,7 +146,6 @@ async function receiveExecutedFailure(retire: boolean) {
           queued: [],
           error: reason,
           currentError,
-          completed,
           openOutcome,
           retire: async () => {
             events.push("retired");

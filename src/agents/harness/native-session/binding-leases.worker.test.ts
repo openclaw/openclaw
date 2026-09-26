@@ -5,9 +5,9 @@ import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
 } from "../../../plugin-state/plugin-state-store.js";
-import { holdStateCoordinator } from "../../../state/openclaw-state-coordinator.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
 import { createNativeSessionBindingLeases } from "./binding-leases.js";
 import {
   bindingTestOptions,
@@ -38,28 +38,33 @@ describe("native binding worker admission", () => {
     await withOpenClawTestState({ label: "binding-worker-contention" }, async (fixture) => {
       const { owner, asyncState } = bindingStores(fixture.env);
       await asyncState.register("binding", { value: "before" });
-      const release = await holdStateCoordinator(resolveOpenClawStateSqlitePath(fixture.env));
+      const holder = holdStateDatabaseWriteTransaction(
+        resolveOpenClawStateSqlitePath(fixture.env),
+        1_000,
+      );
       let settled = false;
-      const mutation = owner
-        .transact("binding", (current) => ({
-          next: { ...current, value: "after" },
-          result: "stored",
-        }))
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        )
-        .finally(() => {
-          settled = true;
-        });
+      let mutation: Promise<{ value: string } | { error: unknown }> | undefined;
       let progressedBeforeSettlement = false;
       try {
+        await holder.ready;
+        mutation = owner
+          .transact("binding", (current) => ({
+            next: { ...current, value: "after" },
+            result: "stored",
+          }))
+          .then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          )
+          .finally(() => {
+            settled = true;
+          });
         await immediate();
-        await release.observe();
-        progressedBeforeSettlement = !settled;
+        progressedBeforeSettlement = !settled && Atomics.load(holder.released, 0) === 0;
       } finally {
-        await release();
+        holder.release();
         await mutation;
+        await holder.joined;
       }
       const result = await mutation;
       expect(progressedBeforeSettlement).toBe(true);

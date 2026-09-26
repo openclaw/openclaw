@@ -1,9 +1,9 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
+import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { assertStateReadSchema } from "./openclaw-state-db-read-connection.js";
-import { isCoordinatedStateTransaction } from "./openclaw-state-db-write-coordination.js";
+import { isManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
 export type ReusedOpenClawStateReadOnlyDatabase<T> = { reused: false } | { reused: true; value: T };
@@ -20,7 +20,7 @@ export function withCachedOpenClawStateDatabaseReadOnly<T>(
   if (!opened?.db.isOpen) {
     return { reused: false };
   }
-  const ownedTransaction = currentAuthority && isCoordinatedStateTransaction(opened.db);
+  const ownedTransaction = currentAuthority && isManagedStateTransaction(opened.db);
   if (opened.db.isTransaction && !ownedTransaction) {
     return { reused: false };
   }

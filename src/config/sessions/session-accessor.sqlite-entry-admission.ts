@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   createOpenClawAgentDatabaseClaim,
@@ -14,7 +13,6 @@ import {
   resolveOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
 } from "../../state/openclaw-agent-db.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../paths.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
@@ -27,9 +25,7 @@ export async function loadSessionEntryForAdmission(
   scope: SessionAccessScope,
   preparation: {
     signal?: AbortSignal;
-    deadlineMs?: number;
     assertCurrent?: () => void;
-    onWait?: () => void;
   } = {},
 ): Promise<{ entry: SessionEntry | undefined; databaseClaim: OpenClawAgentDatabaseClaim }> {
   const resolved = resolveSqliteScope(scope);
@@ -57,8 +53,7 @@ export async function loadSessionEntryForAdmission(
   if (getOpenClawAgentDatabaseIfOpen(options) || incognito) {
     captured = capture();
   } else {
-    // Native bootstrap claims a shared-state lease before opening the agent file.
-    // Only its custody acquisition repeats; the open and physical claim run once.
+    // Shared bootstrap opens once; each waiter retains its own cancellation and claim.
     const identity = readDatabasePathIdentitySync(databasePath);
     const assertOpening = () => {
       // Shared bootstrap owns only this physical file; each caller guards its own result.
@@ -71,11 +66,12 @@ export async function loadSessionEntryForAdmission(
         throw new Error("Session database changed while waiting for admission");
       }
     };
-    captured = await withOpenClawAgentDatabaseAsync(options, capture, assertOpening, {
-      deadlineMs: preparation.deadlineMs ?? performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-      signal: preparation.signal,
-      onWait: preparation.onWait,
-    });
+    captured = await withOpenClawAgentDatabaseAsync(
+      options,
+      capture,
+      assertOpening,
+      preparation.signal,
+    );
   }
   const { database, databaseClaim } = captured;
   try {

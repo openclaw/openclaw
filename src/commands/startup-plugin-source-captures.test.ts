@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSnapshot } from "../config/mutate.test-support.js";
+import { resolvePluginSourceCaptureFallbackPrefix } from "../plugins/plugin-source-capture-path.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 import { cleanupStartupPluginSourceCaptures } from "./startup-plugin-source-captures.js";
 
@@ -158,3 +159,24 @@ it("does not acquire maintenance or create state for a profile without captures"
   expect(mocks.maintenance).not.toHaveBeenCalled();
   await expect(fs.stat(absent)).rejects.toMatchObject({ code: "ENOENT" });
 });
+
+it.each(["selected", "other"])(
+  "checks %s-profile fallback captures when the managed capture directory is absent",
+  async (profile) => {
+    await fs.rm(path.join(stateDir, "tmp"), { recursive: true });
+    const systemTmp = temp.make("startup-fallback-system-tmp-");
+    for (const key of ["TMPDIR", "TMP", "TEMP"]) {
+      vi.stubEnv(key, systemTmp);
+    }
+    const owner = profile === "selected" ? stateDir : path.join(stateDir, "other-profile");
+    await fs.mkdir(
+      path.join(systemTmp, `${resolvePluginSourceCaptureFallbackPrefix(owner)}fixture`),
+    );
+
+    await cleanupStartupPluginSourceCaptures({ OPENCLAW_STATE_DIR: stateDir });
+
+    expect(mocks.maintenance).toHaveBeenCalledTimes(profile === "selected" ? 1 : 0);
+    expect(mocks.prune).toHaveBeenCalledTimes(profile === "selected" ? 1 : 0);
+    expect(mocks.warning).not.toHaveBeenCalled();
+  },
+);

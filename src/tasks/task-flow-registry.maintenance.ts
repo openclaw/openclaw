@@ -139,7 +139,6 @@ export async function runTaskFlowRegistryMaintenance(): Promise<TaskFlowRegistry
                   input: { flowId, expectedRevision: current.revision, action: action.kind, now },
                 }),
               {
-                requireStateLifecycle: true,
                 assertCurrent: assertOwnerCurrent,
                 createAdmission: createSqliteWorkerWriteAdmission(assertMutationAllowed, [
                   context.admission.databasePath,

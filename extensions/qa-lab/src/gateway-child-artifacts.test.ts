@@ -15,6 +15,8 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { qaGatewayCleanupRuntimeEntrypoint } from "./gateway-child-artifacts-runtime.test-support.js";
 import { cleanupQaGatewayTempRoots } from "./gateway-child-artifacts.js";
+import { buildQaRuntimeEnv } from "./gateway-child-env.js";
+import { resolveQaNodeExecPath } from "./node-exec.js";
 import { readQaAuthProfiles, writeQaAuthProfiles } from "./providers/shared/auth-store.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
@@ -30,6 +32,63 @@ afterEach(async () => {
 });
 
 describe("cleanupQaGatewayTempRoots", () => {
+  it("removes child scratch and compiler caches without touching the parent temp directory", async () => {
+    const tempRoot = await fs.realpath(await dirs.makeTempDir("qa-child-temp-"));
+    const parentTemp = await fs.realpath(await dirs.makeTempDir("qa-parent-temp-"));
+    const inheritedTemp = { TMPDIR: parentTemp, TMP: parentTemp, TEMP: parentTemp };
+    const result = await runQaScenarioCommandLifecycle({
+      command: await resolveQaNodeExecPath(),
+      args: [
+        "--input-type=module",
+        "-e",
+        `
+import fs from "node:fs";
+import { enableCompileCache, flushCompileCache } from "node:module";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+// openclaw-temp-dir: allow verifies child scratch containment and cleanup
+const scratch = fs.mkdtempSync(path.join(tmpdir(), "qa-child-"));
+const source = path.join(scratch, "fixture.mjs");
+fs.writeFileSync(source, "export const value = 42;\\n");
+const cache = enableCompileCache(path.join(tmpdir(), "node-compile-cache"));
+await import(pathToFileURL(source).href);
+flushCompileCache();
+console.log(JSON.stringify({ scratch, cache }));
+`,
+      ],
+      cwd: tempRoot,
+      env: buildQaRuntimeEnv({
+        baseEnv: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...inheritedTemp },
+        runtimeEnvPatch: inheritedTemp,
+        configPath: path.join(tempRoot, "openclaw.json"),
+        gatewayToken: "qa-token",
+        homeDir: path.join(tempRoot, "home"),
+        stateDir: path.join(tempRoot, "state"),
+        tempRoot,
+        xdgConfigHome: path.join(tempRoot, "xdg-config"),
+        xdgDataHome: path.join(tempRoot, "xdg-data"),
+        xdgCacheHome: path.join(tempRoot, "xdg-cache"),
+        developmentSourceRoot: null,
+      }),
+    });
+    expect(result, result.failureMessage).toMatchObject({ exitCode: 0, stderr: "" });
+    const { scratch, cache } = JSON.parse(result.stdout) as {
+      scratch: string;
+      cache: { directory: string };
+    };
+    expect(await fs.realpath(path.dirname(scratch))).toBe(tempRoot);
+    expect(path.relative(tempRoot, await fs.realpath(cache.directory))).not.toMatch(/^\.\./u);
+    const cacheEntries = await fs.readdir(cache.directory, {
+      recursive: true,
+      withFileTypes: true,
+    });
+    expect(cacheEntries.some((entry) => entry.isFile())).toBe(true);
+    await cleanupQaGatewayTempRoots({ tempRoot });
+    await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readdir(parentTemp)).toEqual([]);
+  });
+
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "does not inspect child-private state before startup or boundary cleanup",
     async () => {

@@ -1,10 +1,6 @@
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
-import {
-  acquireStateDatabaseHandleLease,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
@@ -46,11 +42,6 @@ export async function withOpenClawStateSettlementRead<T>(
   const pathname = context.admission.databasePath;
   const identity = { ...context.admission.identity };
   let borrowed = retainOpenClawStateDatabaseForIndependentRead(pathname);
-  let pin = borrowed
-    ? undefined
-    : withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
-        acquireStateDatabaseHandleLease({ databasePath: pathname }),
-      );
   const producer = createDeferredCore();
   const controller = new AbortController();
   let active = true;
@@ -142,8 +133,6 @@ export async function withOpenClawStateSettlementRead<T>(
       }
       borrowed?.release();
       borrowed = undefined;
-      pin?.release();
-      pin = undefined;
       selected?.release();
       active = false;
       unregister();

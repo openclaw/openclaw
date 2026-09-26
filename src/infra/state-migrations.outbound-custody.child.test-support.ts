@@ -7,8 +7,7 @@ import { migrateDoctorDeliveryQueues } from "../commands/doctor-outbound-deliver
 import { PluginLoadFailureError } from "../plugins/loader-shared.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
-import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
+import { tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 
 const modes = ["success", "callback-failure", "retained-release", "retained-acquire"] as const;
 type Mode = (typeof modes)[number];
@@ -83,11 +82,7 @@ async function runMode(stateDir: string, mode: Mode) {
     payloads: [{ text: "synthetic" }],
   };
   seedDeliveryQueueEntry({ queueName: "outbound", entry, stateDir });
-  const coordinator = acquireGatewayLifecycleCoordinator({
-    databasePath: path.join(stateDir, "state/openclaw.sqlite"),
-  });
-  const coordinatorPath = coordinator.path;
-  coordinator.release();
+  const databasePath = path.join(stateDir, "state/openclaw.sqlite");
   const maintenance = await beginDoctorMaintenance({
     options: { repair: true, nonInteractive: true },
     root: null,
@@ -108,8 +103,8 @@ async function runMode(stateDir: string, mode: Mode) {
   if (nativeState.native?.isOpen) {
     nativeState.native.exec("INSERT INTO effects VALUES ('after failed cleanup')");
   }
-  // A fresh native connection bypasses the reentrant coordinator map, like another process.
-  const competitor = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, { busyTimeoutMs: 0 });
+  // A fresh process-owner acquisition cannot borrow retained maintenance authority.
+  const competitor = tryAcquireGatewayStateOwner(databasePath);
   const blocked = competitor === null;
   competitor?.release();
   if (nativeState.native?.isOpen) {

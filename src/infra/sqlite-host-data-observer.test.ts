@@ -5,31 +5,10 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
-import { acquireStateDatabaseCoordinator } from "./state-database-coordinator.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("host data SQL observation", () => {
-  it("excludes only the captured lifecycle database, not another state's coordinator", async () => {
-    await withOpenClawTestState({ label: "sql-observer-control" }, async (state) => {
-      const observer = observeHostDataSql(state.env);
-      try {
-        const own = acquireStateDatabaseCoordinator({
-          databasePath: resolveOpenClawStateSqlitePath(state.env),
-        });
-        own.release();
-        expect(observer.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-        const other = acquireStateDatabaseCoordinator({
-          databasePath: path.join(state.stateDir, "other.sqlite"),
-        });
-        other.release();
-        expect(observer.calls[1]).toHaveBeenCalled();
-      } finally {
-        observer.restore();
-      }
-    });
-  });
-
   it.each(["state", "agent", "memory", "unknown", "raw"] as const)(
     "detects every host SQL operation on %s data, including statements prepared before observation",
     async (kind) => {
@@ -51,7 +30,7 @@ describe("host data SQL observation", () => {
         if (kind === "unknown") {
           vi.spyOn(db, "location").mockReturnValue(null);
         }
-        const observer = observeHostDataSql(state.env);
+        const observer = observeHostDataSql();
         try {
           retained.get();
           expect(observer.calls[2]).toHaveBeenCalledExactlyOnceWith();

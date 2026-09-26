@@ -47,19 +47,14 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
   isOpenClawStateLeaseWriteContention: mocks.isWriteContention,
   releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) =>
     execute?.(),
-  readLeaseDatabase: mocks.forbidden,
   resolveLeaseDatabasePath: mocks.forbidden,
   acquireLease: mocks.forbidden,
   renewOpenClawStateLease: mocks.forbidden,
-  assertOpenClawStateLeaseOwnedInDatabase: mocks.forbidden,
   verifyOpenClawStateLeaseOwnership: mocks.forbidden,
   releaseOpenClawStateLease: mocks.forbidden,
 }));
 vi.mock("./openclaw-state-db-readonly.js", () => ({
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: mocks.forbidden,
-}));
-vi.mock("./openclaw-state-lease-exclusion.js", () => ({
-  createOpenClawStateLeaseExclusion: mocks.forbidden,
 }));
 vi.mock("../infra/sqlite-worker-operation-admission.js", () => ({
   createSqliteWorkerOperationAdmission: mocks.forbidden,
@@ -68,11 +63,11 @@ vi.mock("../infra/sqlite-worker-identity.js", () => ({
   inspectDatabasePathIdentitySync: mocks.forbidden,
   readDatabasePathIdentitySync: mocks.forbidden,
 }));
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  StateDatabaseCoordinatorContentionError: class extends Error {
-    readonly family = "state-lifecycle";
-  },
+vi.mock("../infra/sqlite-lifecycle-errors.js", () => ({
+  createSqliteLifecycleAggregateError: (errors: unknown[], message: string, cause: unknown) =>
+    new AggregateError(errors, message, { cause }),
 }));
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.isWriteContention.mockReturnValue(false);
@@ -101,7 +96,7 @@ function fixture(
     firstReleaseError?: Error;
   } = {},
 ) {
-  const maintenance = createOpenClawDatabaseMaintenanceScope(mocks.forbidden);
+  const maintenance = createOpenClawDatabaseMaintenanceScope();
   const events: string[] = [];
   const registered = new Set<OpenClawStateDatabaseAsyncResource>();
   const acquiring = createDeferredCore();
@@ -120,7 +115,6 @@ function fixture(
   let cleanupAttempt: Promise<void> | undefined;
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: "/synthetic-state" },
-    coordinatorRuntime: { directory: "/synthetic-coordinator", keepAlive: false },
     maintenanceScope: maintenance,
     admission: {
       databasePath: "/synthetic-state/lease.sqlite",
@@ -268,7 +262,10 @@ describe("async lease maintenance ownership", () => {
         throw new Error("Lease fixture did not install its owners");
       }
       let expiresAt = 0;
-      const busy = new Error("Synthetic startup write contention");
+      const busy = Object.assign(new Error("Synthetic startup write contention"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 5,
+      });
       mocks.isWriteContention.mockImplementation((error) => error === busy);
       mocks.createStorage.mockImplementation((context) => {
         const storage = createStorage(context);
@@ -340,7 +337,7 @@ describe("async lease maintenance ownership", () => {
 
   it("keeps the complete lease with its original scope when another scope invokes it", async () => {
     const f = fixture();
-    const other = createOpenClawDatabaseMaintenanceScope(mocks.forbidden);
+    const other = createOpenClawDatabaseMaintenanceScope();
     const entered = createDeferredCore();
     const finishCallback = createDeferredCore();
     const callback = vi.fn(async () => {

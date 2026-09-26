@@ -1,5 +1,6 @@
 // Install the native service fixtures before loading the maintenance owner.
 import "./update-command-service-maintenance.test-support.js";
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -50,10 +51,10 @@ it.each(["direct", "authority-lost", "ordinary"] as const)(
       vi.spyOn(doctorServicePolicy, "shouldManageGatewayService").mockResolvedValue(true);
       let current = true;
       const lost = new Error("Doctor update admission changed during drain cleanup");
-      vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockReturnValue(() => {
-        if (!current) {
-          throw lost;
-        }
+      const assertAdmission = () => assert.ok(current, lost);
+      vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockReturnValue({
+        assertCurrent: assertAdmission,
+        recordContinuation: assertAdmission,
       });
       const service = createMockGatewayService({
         readCommand: async () => ({
@@ -90,8 +91,7 @@ it.each(["direct", "authority-lost", "ordinary"] as const)(
         expect(collectNestedErrorCandidates(error)).toContain(lost);
         expect(
           collectNestedErrorCandidates(error).some(
-            (candidate) =>
-              candidate instanceof AggregateError && candidate.errors.includes(refusal),
+            (cause) => cause instanceof AggregateError && cause.errors.includes(refusal),
           ),
         ).toBe(true);
       }

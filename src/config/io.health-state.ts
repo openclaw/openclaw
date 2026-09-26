@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { resolveGlobalSet } from "../shared/global-singleton.js";
@@ -8,7 +9,6 @@ import {
 } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {

@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -218,17 +217,9 @@ it.each(["read", "retirement", "both"] as const)(
       }
       await expect(closing).rejects.toThrow();
       expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(false);
-      expect(() =>
-        acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }),
-      ).toThrow();
       delivery.readFailure = undefined;
       delivery.closeFailure = undefined;
       await closeOpenClawStateDatabaseByPathAsync(pathname);
-      const exclusion = acquireStateDatabaseHandleExclusion({
-        databasePath: pathname,
-        busyTimeoutMs: 0,
-      });
-      exclusion.release();
       expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(true);
       expect(getProfileAvatar(profile.id)?.bytes).toEqual(Uint8Array.from(bytes));
     } finally {

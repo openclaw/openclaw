@@ -13,7 +13,6 @@ import type { SqliteSchemaIssue } from "../infra/sqlite-schema-contract.js";
 import { readSqliteWriterAppVersion as readWriterAppVersion } from "../infra/sqlite-schema-header.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { hasStateDatabaseSourceExclusion } from "../infra/state-database-coordinator.js";
 import {
   AgentDatabaseAdmissionError,
   canIsolateAgentDatabase,
@@ -517,7 +516,7 @@ export async function preflightOpenClawDatabaseSchemas(
             : undefined,
         };
         // Unprepared agents use the slot's reader, including header-only Doctor checks.
-        if (!schemaInspection && !hasStateDatabaseSourceExclusion(realAgentPath)) {
+        if (!schemaInspection) {
           schemaInspection = await inspectSchema(schemaInput, options.signal);
         }
         if (!schemaInspection) {

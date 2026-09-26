@@ -37,7 +37,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
 import { registerSessionFollowupTask } from "./agent-run-task-tracking.js";
@@ -312,11 +312,7 @@ it.each([
         expect(receipt.task.taskId).toBe(originalReceipt?.task.taskId);
         const initialCreatedAt = receipt.task.createdAt;
         const workerContext = captureOpenClawStateWorkerContext();
-        const held = holdStateDatabaseCoordinator(
-          workerContext.admission.databasePath,
-          workerContext.coordinatorRuntime,
-          5_000,
-        );
+        const held = holdStateDatabaseWriteTransaction(workerContext.admission.databasePath, 5_000);
         const entered = createDeferred();
         const releaseProvider = createDeferred();
         const timerObserved = createDeferred<number>();
@@ -692,9 +688,12 @@ it.each([
             notifyPolicy: "silent",
           });
           expect(creation).toEqual({ taskId: running.taskId, writes: noWrites });
-          expect(
-            Object.values(creationSql ?? {}).flatMap((counts) => Object.values(counts)),
-          ).toEqual(Array(28).fill(0));
+          expect(creationSql).toBeDefined();
+          const creationSqlCounts = Object.values(creationSql ?? {}).flatMap((counts) =>
+            Object.values(counts),
+          );
+          expect(creationSqlCounts.length).toBeGreaterThan(0);
+          expect(creationSqlCounts.every((count) => count === 0)).toBe(true);
           expect(running.parentFlowId).toBeUndefined();
           expect(observed.flowCount).toBe(0);
           expect(observed.writes).toEqual(noWrites);

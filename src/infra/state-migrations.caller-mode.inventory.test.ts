@@ -302,11 +302,11 @@ it.each([
     const pluginRoot = path.join(root, pluginId);
     const mutationPath = path.join(root, "migrated");
     const cacheRoot = path.join(root, "cache");
+    const unavailableCacheRoot = path.join(root, "unavailable-cache");
     fs.mkdirSync(pluginRoot);
+    fs.mkdirSync(cacheRoot);
     if (inventory === "staging-unavailable") {
-      fs.writeFileSync(cacheRoot, "not a directory");
-    } else {
-      fs.mkdirSync(cacheRoot);
+      fs.writeFileSync(unavailableCacheRoot, "not a directory");
     }
     vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
     const action = { id: "session-action", phase: "after-session-repair", doctorOnly: true };
@@ -362,6 +362,7 @@ module.exports = { stateMigrations: [{
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      XDG_CACHE_HOME: cacheRoot,
     };
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
     openOpenClawStateDatabase({ env });
@@ -374,16 +375,31 @@ module.exports = { stateMigrations: [{
       clearPluginDoctorContractRegistryCache();
     }
 
-    const params = {
+    let stagingFaultArmed = false;
+    const params: Parameters<typeof autoMigrateLegacyState>[0] = {
       cfg,
       env,
       homedir: () => root,
       doctorOnlyStateMigrations: inventory !== "automatic-cache",
       legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      onStepReceipt(receipt) {
+        if (
+          inventory === "staging-unavailable" &&
+          receipt.id === "config-machine-state" &&
+          receipt.outcome !== "refused"
+        ) {
+          // Schema preparation also needs snapshots. Fail the following inventory
+          // discovery only after the prerequisite state preparation has settled.
+          vi.stubEnv("XDG_CACHE_HOME", unavailableCacheRoot);
+          env.XDG_CACHE_HOME = unavailableCacheRoot;
+          stagingFaultArmed = true;
+        }
+      },
     };
     const result = await autoMigrateLegacyState(params);
 
     expect(fs.existsSync(mutationPath)).toBe(false);
+    expect(stagingFaultArmed).toBe(inventory === "staging-unavailable");
     if (inventory === "automatic-cache") {
       expect(result.stepReceipts.length).toBeGreaterThan(0);
       await expect(autoMigrateLegacyState(params)).resolves.toMatchObject({

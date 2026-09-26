@@ -8,7 +8,7 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-cont
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
-import { runWithSqliteCoordinator } from "./sqlite-coordinator.js";
+import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
@@ -67,7 +67,7 @@ function readSqliteSchemaHeaderSnapshot(
 ): SqliteSchemaHeader {
   signal?.throwIfAborted();
   const database = openNodeSqliteDatabase(location, { readOnly: true });
-  return runWithSqliteCoordinator(
+  return runWithSqliteCleanup(
     { release: () => database.close() },
     "SQLite schema header read",
     () => {
@@ -83,7 +83,7 @@ export function readSqliteSchemaHeaderFromSnapshot(
   signal?: AbortSignal,
   agentSchemaVersionForOwnership?: number,
 ): SqliteSchemaHeader {
-  return runWithSqliteCoordinator(
+  return runWithSqliteCleanup(
     {
       release: () => {
         if (!prepared.cleanup()) {

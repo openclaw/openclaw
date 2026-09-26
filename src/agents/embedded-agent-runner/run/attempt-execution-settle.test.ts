@@ -634,7 +634,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
               stateContext?: Parameters<typeof runOperation>[2],
               assertCurrent?: Parameters<typeof runOperation>[3],
               admission?: Parameters<typeof runOperation>[4],
-              requireStateLifecycle?: Parameters<typeof runOperation>[5],
             ) =>
               runOperation(
                 store,
@@ -672,7 +671,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
                 stateContext,
                 assertCurrent,
                 admission,
-                requireStateLifecycle,
               ),
           );
         const outcome = runEmbeddedAttemptSettledPhase(fixture.input).then(

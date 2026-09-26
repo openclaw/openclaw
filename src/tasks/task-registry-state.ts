@@ -118,9 +118,7 @@ export function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObs
 
 export function clearTaskActivity(taskId: string): void {
   const activity = taskActivityByTaskId.get(taskId);
-  if (activity?.flushTimer) {
-    clearTimeout(activity.flushTimer);
-  }
+  clearTimeout(activity?.flushTimer);
   activity?.preparedItems.clear();
   taskActivityByTaskId.delete(taskId);
 }
@@ -268,7 +266,7 @@ function restoreTaskRegistryOnce() {
   let installing = false;
   let restoreResult: ReturnType<typeof restoreTaskExecutionSnapshot> | undefined;
   try {
-    restoreResult = restoreTaskExecutionSnapshot(store, reader.loadSnapshot);
+    restoreResult = restoreTaskExecutionSnapshot(store, reader.loadSnapshot, reader.assertCurrent);
     reader.assertCurrent();
     const { snapshot: restored, settledTasks } = restoreResult;
     installing = true;
@@ -623,7 +621,7 @@ function refreshUnderCustody(): void {
   }
 }
 
-/** Keep canonical peer selection and all synchronous writes in one coordinator admission. */
+/** Keep canonical peer selection and synchronous writes in the store's mutation transaction. */
 export function withTaskRegistryMutation<T>(
   operation: () => T,
   onAdmissionFailure?: (error: unknown) => T,

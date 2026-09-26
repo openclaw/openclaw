@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { SqliteWorkerStateLifecycle } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import {
   runSqliteWorkerStoreOperation,
@@ -30,7 +29,6 @@ export function runWithOpenClawStateWorkerStore<T>(
   operation: (scope: Pick<Store, "execute">) => Promise<T>,
   assertCurrent?: (commandType?: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
-  requireStateLifecycle: SqliteWorkerStateLifecycle = false,
 ): Promise<T> {
   const { admission } = context;
   return runSqliteWorkerStoreOperation<StoreOperations, T>(
@@ -42,7 +40,6 @@ export function runWithOpenClawStateWorkerStore<T>(
       assertCurrent?.(commandType);
     },
     createAdmission,
-    requireStateLifecycle,
   );
 }
 

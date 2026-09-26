@@ -244,6 +244,10 @@ with a bounded rehash. Legacy reload receipts keep their framed raw-byte value,
 so a changed receipt still requires streaming its native payloads.
 Identity reuse cannot detect an edit that preserves every recorded identity field.
 Source code outside an admitted native namespace is captured and verified separately.
+Published native captures survive ordinary scratch cleanup. Doctor maintenance
+removes unreferenced captures while preserving installed-index references, warm
+generations, and live owners. System-temp fallback captures are scoped to their
+state directory; captures with unknown ownership are preserved.
 
 Each captured generation links the selected host `openclaw` package so Workers
 and child processes started from its modules can resolve the host SDK. This link
@@ -287,33 +291,33 @@ inspection and failed capture still clean up before returning.
 
 Default source captures live under
 `<stateDir>/tmp/plugin-captures/<instanceId>/captures/`, with a random instance ID
-and an empty SQLite coordinator held for that instance's lifetime. Gateway
+and one `owner.sqlite` token holding its native lifetime lease. Gateway
 metadata and its source captures retain the same process-local instance; a
 concurrent CLI process owns a separate instance. Releasing one capture cannot
 retire another capture or a still-running metadata owner.
-The shared cleanup timer does not retain the first command's invocation context.
+Gateway metadata supplies its scheduler for hourly cleanup; executable CLI
+commands own maintenance through their invocation scope. Capturing source alone
+does not create a timer. Cleanup does not retain the first command's invocation context.
 The managed `tmp/plugin-captures` subtree is excluded from source snapshots when
 the state directory is inside a plugin's source directory. Recovery can still
 load a preserved source package from within that subtree.
 
-This follows the native lifetime-token pattern used for
-[interrupted SQLite snapshots](/reference/database-schemas/integrity-and-recovery).
 Executable CLI commands retire their plugin inventory through the existing invocation
 resource scope on success and failure. Inventory adopted by Gateway publication
 remains with Gateway metadata retirement. At process exit, the capture owner
-synchronously retires any remaining instance that holds this process's native
+synchronously retires any remaining instance that holds this process's
 custody, including explicit exits and CLI-handled signals. Forced termination
-still relies on startup reclamation. Snapshot
-cleanup owns SQLite staging files, while plugin cleanup owns this capture subtree.
-Reclamation removes captured
-payload before its coordinator so a partial deletion remains retryable. A native
-library mapped in the current process retains its capture and coordinator through
-process exit, even after its JavaScript module cache entry is removed. Cleanup
-records `retained-by-loaded-module` once for that capture lifetime instead of
-trying to unlink a loaded Windows image. Unchanged native package identities
-continue to share the retained payload across reloads.
-Native-load attempts also retain their capture when initialization throws:
-the native image can remain mapped after the initialization error.
+still relies on startup reclamation. Plugin cleanup owns this capture subtree;
+reclamation removes captured payload before retiring the token so a partial deletion
+remains retryable. The token closes before its directory is removed, including on Windows.
+
+A native library mapped in the current process retains its capture and token
+through process exit, even after its JavaScript module cache entry is removed.
+Cleanup records `retained-by-loaded-module` once for that capture lifetime instead
+of trying to unlink a loaded Windows image. Unchanged native package identities
+continue to share the retained payload across reloads. Native-load attempts also
+retain their capture when initialization throws: the native image can remain
+mapped after the initialization error.
 
 Before runtime plugin loading, startup attempts receipt-aware cleanup under
 exclusive maintenance ownership. It can reclaim a retired, unlocked instance
@@ -322,16 +326,18 @@ process exited. Published native payloads still referenced by the installed inde
 remain available. Busy maintenance or cleanup failures produce a warning and
 startup continues; observational reads leave captures untouched.
 
-Hourly cleanup also inspects this owned subtree. An instance becomes
-eligible after one hour, but age alone never authorizes removal: cleanup must
-also acquire its native coordinator, proving that no producer retains custody.
-Process exit releases the native lock even after a forced termination. PID
-names, process probes, and PID-reuse guesses are not used; a numeric PID cannot
-identify a producer across containers sharing a temporary directory. Contention,
-unreadable entries, and symlinks preserve files. An aged instance left without a
-coordinator by interrupted allocation or older partial cleanup is reclaimed after
-a successful rename probe. Allocation acquires the coordinator before creating
-payload, and disposal removes payload before its coordinator.
+Hourly cleanup also inspects this owned subtree. An instance becomes eligible
+after one hour. Age alone never authorizes removal: for token-bearing instances, cleanup must
+also acquire the existing token's exclusive native lease to prove released custody.
+This works after process termination or reboot without PID or boot-namespace records
+and preserves the same cleanup contract for shipped `owner.sqlite` markers.
+Cleanup rechecks directory and token identity before removal. Live leases,
+unreadable entries, symlinks, and invalid tokens preserve files. An aged instance
+left without a token by interrupted allocation or older partial cleanup is
+reclaimed after a successful rename probe. Allocation creates the token before
+creating payload, and disposal removes payload before its token.
+The token belongs to its capture instance; captures do not create a global
+coordination database.
 Removal remains asynchronous and advisory. This subtree is excluded from state
 backups because its captured package bytes are reconstructible.
 
@@ -343,19 +349,19 @@ There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
 If its payload directory is removed while the instance still holds custody, the
 next capture recreates that directory under the same lease. This does not restore
-previously deleted captured files or recreate a missing coordinator directory.
+previously deleted captured files or recreate a missing ownership directory.
 
 Startup and hourly cleanup also reclaim tokenless `openclaw-plugin-build-*` and
 `openclaw-model-catalog-*` roots in the selected state's temporary directory and
 the current system temporary directory. Roots must be older than one hour and
-have no coordinator. A complete process census that finds another OpenClaw
+have no custody token. A complete process census that finds another OpenClaw
 producer preserves legacy roots. When the census is unavailable, including on
 Windows, cleanup uses age and a rename probe instead; sharing violations leave
 locked roots for a later cycle. This is best-effort cleanup of reconstructible
 legacy scratch, not proof that an older producer has stopped using it.
 
 Older `openclaw-plugin-build-*` directories in the system temporary directory
-have no coordinator proving whether their producer is still alive. Doctor reports
+have no owner record proving whether their producer is still alive. Doctor reports
 tokenless `openclaw-plugin-build-*` and `openclaw-model-catalog-*` roots under the
 state temporary directory, `~/.openclaw/tmp` even when another state directory is
 selected, the current system temporary directory, `/tmp` on
@@ -426,7 +432,9 @@ The parent removes any remaining captures after that worker exits,
 including cancellation and crashes. Files remain available while the worker is
 running, and retiring one worker does not remove another generation's captures.
 If the whole Gateway is killed, the existing hourly cleanup reclaims the abandoned
-instance only after acquiring its released SQLite coordinator.
+instance only when it can acquire the existing token's exclusive native lease.
+The same rule covers shipped SQLite markers and works after a reboot.
+Age alone never releases captures.
 Cancellation releases compute capacity after the worker exits; terminal shutdown
 also waits for file cleanup. Failed file removal is reported as a cleanup warning.
 

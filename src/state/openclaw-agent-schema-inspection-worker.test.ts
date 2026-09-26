@@ -5,11 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
-import { resolveLifecycleCoordinatorPath } from "../infra/state-database-coordinator-paths.js";
-import {
-  acquireStateDatabaseHandleExclusion,
-  resolveStateLifecycleRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 
@@ -31,12 +26,6 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     fs.copyFileSync(pathname, snapshot);
     const before = fs.readFileSync(pathname);
     const identity = fs.statSync(snapshot, { bigint: true });
-    const coordinator = resolveLifecycleCoordinatorPath("state-handles", {
-      databasePath: snapshot,
-      runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-      uid: process.getuid?.(),
-    });
-    expect(fs.existsSync(coordinator)).toBe(false);
     try {
       await using reader = createAgentSchemaInspectionWorker();
       fs.chmodSync(snapshot, 0);
@@ -62,12 +51,10 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       fs.chmodSync(snapshot, 0o600);
       expect(fs.readFileSync(snapshot)).toEqual(before);
       for (let request = 0; request < 2; request += 1) {
-        acquireStateDatabaseHandleExclusion({ databasePath: snapshot, busyTimeoutMs: 0 }).release();
         await expect(
           reader.inspect({ pathname, supportedVersion: 21 }, undefined, snapshot),
         ).resolves.toMatchObject({ version: 0, failure: undefined });
       }
-      acquireStateDatabaseHandleExclusion({ databasePath: snapshot, busyTimeoutMs: 0 }).release();
       expect(reader.processCount).toBe(2);
       expect(reader.inspectionCount).toBe(2);
       expect(reader.snapshotCount).toBe(2);
@@ -87,71 +74,9 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       );
     } finally {
       fs.chmodSync(snapshot, 0o600);
-      for (const suffix of ["", "-wal", "-shm"]) {
-        fs.rmSync(coordinator + suffix, { force: true });
-      }
     }
   },
 );
-
-it("agentSchemaInspection child names coordinator refusal and recovers without changing source data", async () => {
-  const pathname = path.join(tempDirs.make("agent-schema-coordinator-"), "source.sqlite");
-  const database = sqlite.openNodeSqliteDatabase(pathname);
-  database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES ('unchanged');");
-  database.close();
-  const before = fs.readFileSync(pathname);
-  const coordinator = resolveLifecycleCoordinatorPath("state-handles", {
-    databasePath: pathname,
-    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-    uid: process.getuid?.(),
-  });
-  expect(fs.existsSync(coordinator)).toBe(false);
-  fs.mkdirSync(coordinator, { recursive: true });
-  try {
-    await using reader = createAgentSchemaInspectionWorker();
-    const inspection = reader.inspect({ pathname, supportedVersion: 21 });
-    const refusedChild = vi.mocked(fork).mock.results.at(-1)?.value;
-    let refusedChildClosed = false;
-    refusedChild.once("close", () => {
-      refusedChildClosed = true;
-    });
-    await expect(inspection).rejects.toMatchObject({
-      name: "Error",
-      code: "ERR_SQLITE_ERROR",
-      errcode: 14,
-      message:
-        "failed while acquiring its state-handles coordinator: unable to open database file (code=ERR_SQLITE_ERROR, errcode=14)",
-    });
-    expect(refusedChildClosed).toBe(true);
-    expect(fs.readFileSync(pathname)).toEqual(before);
-    fs.rmdirSync(coordinator);
-    for (let request = 0; request < 2; request += 1) {
-      await expect(reader.inspect({ pathname, supportedVersion: 21 })).resolves.toMatchObject({
-        version: 0,
-        failure: undefined,
-      });
-      acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
-    }
-    expect(reader.processCount).toBe(2);
-    expect(reader.inspectionCount).toBe(2);
-    expect(reader.snapshotCount).toBe(0);
-    const source = sqlite.openNodeSqliteDatabase(pathname, { readOnly: true });
-    try {
-      expect(source.prepare("SELECT value FROM probe").get()).toEqual({ value: "unchanged" });
-      expect(source.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    } finally {
-      source.close();
-    }
-    expect(fs.readFileSync(pathname)).toEqual(before);
-  } finally {
-    if (fs.existsSync(coordinator) && fs.statSync(coordinator).isDirectory()) {
-      fs.rmdirSync(coordinator);
-    }
-    for (const suffix of ["", "-wal", "-shm"]) {
-      fs.rmSync(coordinator + suffix, { force: true });
-    }
-  }
-});
 
 it("agentSchemaInspection child retains returned migration failures and their hydrated class", async () => {
   const pathname = path.join(tempDirs.make("agent-schema-migration-"), "source.sqlite");
@@ -159,33 +84,21 @@ it("agentSchemaInspection child retains returned migration failures and their hy
   database.exec("CREATE TABLE probe(value TEXT); PRAGMA user_version = 1;");
   database.close();
   const before = fs.readFileSync(pathname);
-  const coordinator = resolveLifecycleCoordinatorPath("state-handles", {
-    databasePath: pathname,
-    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-    uid: process.getuid?.(),
+  await using reader = createAgentSchemaInspectionWorker();
+  const inspection = await reader.inspect({
+    pathname,
+    supportedVersion: 21,
+    requireStartupMigrationReadiness: true,
   });
-  expect(fs.existsSync(coordinator)).toBe(false);
-  try {
-    await using reader = createAgentSchemaInspectionWorker();
-    const inspection = await reader.inspect({
-      pathname,
-      supportedVersion: 21,
-      requireStartupMigrationReadiness: true,
-    });
-    expect(inspection?.version).toBe(1);
-    expect(inspection?.failure).toBeInstanceOf(OpenClawAgentDatabaseMediaMigrationRequiredError);
-    expect(inspection?.failure).toMatchObject({
-      kind: "agent-media",
-      pathname,
-      schemaVersion: 1,
-      message: new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, 1).message,
-    });
-    expect(fs.readFileSync(pathname)).toEqual(before);
-  } finally {
-    for (const suffix of ["", "-wal", "-shm"]) {
-      fs.rmSync(coordinator + suffix, { force: true });
-    }
-  }
+  expect(inspection?.version).toBe(1);
+  expect(inspection?.failure).toBeInstanceOf(OpenClawAgentDatabaseMediaMigrationRequiredError);
+  expect(inspection?.failure).toMatchObject({
+    kind: "agent-media",
+    pathname,
+    schemaVersion: 1,
+    message: new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, 1).message,
+  });
+  expect(fs.readFileSync(pathname)).toEqual(before);
 });
 
 it.each(["before launch", "during read"])(
@@ -219,7 +132,7 @@ it.each(["before launch", "during read"])(
   },
 );
 
-it("reuses a process while rereading changed data and releasing each source lease", async () => {
+it("reuses a process while rereading changed data", async () => {
   const pathname = path.join(tempDirs.make("agent-schema-reuse-"), "source.sqlite");
   vi.mocked(fork).mockClear();
   await using reader = createAgentSchemaInspectionWorker();
@@ -230,7 +143,6 @@ it("reuses a process while rereading changed data and releasing each source leas
     await expect(reader.inspect({ pathname, supportedVersion: 2 })).resolves.toMatchObject({
       version,
     });
-    acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
   }
   expect(fork).toHaveBeenCalledOnce();
 });

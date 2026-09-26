@@ -79,11 +79,15 @@ export function readUpdateDatabaseGenerations(paths: readonly string[]): UpdateD
       ) {
         throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
       }
+      // Native exclusion may create an empty WAL without a write. It contains
+      // no commit; retain every other physical fingerprint and publication header.
+      const writeGeneration =
+        generation.wal?.size === 0n ? { ...generation, wal: undefined } : generation;
       return [
         pathname,
         sha256Hex(
           JSON.stringify([
-            serializeSqliteFileGeneration(generation),
+            serializeSqliteFileGeneration(writeGeneration),
             after?.toString("hex") ?? null,
           ]),
         ),

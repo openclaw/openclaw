@@ -172,8 +172,8 @@ describe("update command admission with fresh state", () => {
     });
     if (cleanup.includes("coordinator")) {
       vi.spyOn(initialization, "acquireLegacyUpdateInitializationFence").mockReturnValue({
-        path: path.join(fixture.root, "fixture-coordinator"),
-        closed: false,
+        assertCurrent() {},
+        run: (operation) => operation(),
         release: legacyRelease,
       });
     }
@@ -257,8 +257,8 @@ describe("update command admission with fresh state", () => {
       throw releaseError;
     });
     vi.spyOn(initialization, "acquireLegacyUpdateInitializationFence").mockReturnValue({
-      path: path.join(fixture.root, "fixture-coordinator"),
-      closed: false,
+      assertCurrent() {},
+      run: (operation) => operation(),
       release,
     });
     await expect(updateCommand({ yes: true, json: true, restart: false })).rejects.toBe(

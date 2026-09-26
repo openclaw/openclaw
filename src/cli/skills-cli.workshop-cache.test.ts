@@ -52,9 +52,23 @@ vi.mock("../gateway/call.js", () => ({
   isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
     !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
-vi.mock("../infra/gateway-lock.js", () => ({
-  acquireGatewayLock: mocks.acquireGatewayLock,
-}));
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/gateway-lock.js")>();
+  mocks.acquireGatewayLock.mockImplementation(async (options) => {
+    const lock = await actual.acquireGatewayLock(options);
+    if (!lock) {
+      return lock;
+    }
+    return {
+      ...lock,
+      release: async () => {
+        mocks.releaseGatewayLock();
+        await lock.release();
+      },
+    };
+  });
+  return { ...actual, acquireGatewayLock: mocks.acquireGatewayLock };
+});
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
   resetConfigRuntimeState: () => undefined,
@@ -101,7 +115,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     delete mocks.config.gateway;
     mocks.gatewayApply = undefined;
     mocks.releaseGatewayLock.mockReset();
-    mocks.acquireGatewayLock.mockReset().mockResolvedValue({ release: mocks.releaseGatewayLock });
+    mocks.acquireGatewayLock.mockClear();
     mocks.defaultRuntime.error.mockClear();
     mocks.defaultRuntime.exit.mockClear();
     mocks.callGateway.mockReset().mockImplementation(async (request) => {
@@ -258,7 +272,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     expect(mocks.acquireGatewayLock).toHaveBeenCalledWith({
       allowInTests: true,
       port: 18789,
-      role: "skill-workshop-apply",
+      role: "sqlite-maintenance",
       timeoutMs: 250,
     });
     expect(mocks.releaseGatewayLock).toHaveBeenCalledTimes(1);

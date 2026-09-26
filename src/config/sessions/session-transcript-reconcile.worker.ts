@@ -2,10 +2,6 @@
 import { MessagePort } from "node:worker_threads";
 import { readSqliteSchemaCookie } from "../../infra/sqlite-schema-contract.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import {
-  attachStateLifecycleDelegate,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../../infra/state-database-coordinator.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
   claimOpenClawAgentDatabaseLease,
@@ -433,7 +429,7 @@ async function run(
           resolve();
         });
       });
-      // Port callbacks do not inherit the delegate's runtime and live custody.
+      // Reentry obtains a fresh host grant before touching the retained native handles.
       await phase("close", () => {
         assertSource();
         assertAdmittedSchemas?.();
@@ -465,33 +461,16 @@ serveWorkerTasks(async (value) => {
     if (input.mode === "memory") {
       await run(input, port);
     } else {
-      // SAFETY: The pool owns this private task and transfers its live delegate.
+      // SAFETY: The pool owns this private task and its retained phase admission.
       const { coordination, sourceIdentity } = value as SessionTranscriptReconcileWorkerTask;
       if (
-        (!coordination?.stateLifecycle && !coordination?.reconciliation) ||
+        !coordination?.reconciliation ||
         coordination.actorId !== `transcript:${input.mode}:${input.leaseId}` ||
         coordination.databasePath !== resolveOpenClawStateSqlitePath(resolveLeaseEnvironment(input))
       ) {
         throw new Error("Transcript worker shared-state owner changed");
       }
-      const delegate = coordination.stateLifecycle
-        ? await attachStateLifecycleDelegate(coordination.stateLifecycle, {
-            actorId: coordination.actorId,
-            databasePath: coordination.databasePath,
-            runtimeDirectory: coordination.stateContext.coordinatorRuntime.directory,
-          })
-        : undefined;
-      try {
-        await withStateDatabaseCoordinatorRuntimeDirectory(
-          coordination.stateContext.coordinatorRuntime,
-          () => {
-            const operation = () => run(input, port, coordination, sourceIdentity);
-            return delegate ? delegate.run(operation) : operation();
-          },
-        );
-      } finally {
-        delegate?.close();
-      }
+      await run(input, port, coordination, sourceIdentity);
     }
   } catch {
     // An uncertain native close must end this isolate before lease recovery or slot reuse.

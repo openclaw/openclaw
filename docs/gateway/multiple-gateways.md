@@ -95,8 +95,8 @@ Keep these unique per Gateway instance:
 | Derived browser/CDP ports    | See below                            |
 
 Sharing any of these causes config, state, or port conflicts. Gateway startup
-enforces unique state-directory ownership even when
-`OPENCLAW_ALLOW_MULTI_GATEWAY=1` skips the per-config singleton.
+enforces unique state-directory ownership, including when
+`OPENCLAW_ALLOW_MULTI_GATEWAY=1` is set.
 
 <Warning>
 `OPENCLAW_STATE_DIR` alone does not isolate a managed Gateway service. Service names follow the profile, not the state directory. For onboarding or service-install tests, use a dedicated named profile and unique ports, or an isolated machine. Do not install or restart the default service against a temporary state directory.

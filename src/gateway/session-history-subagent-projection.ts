@@ -32,7 +32,6 @@ export function prepareSessionHistorySubagentSources(
     stateDatabase: {
       path: context.admission.databasePath,
       environment: context.environment,
-      coordinatorRuntime: context.coordinatorRuntime,
     },
     get sourceDatabases() {
       return sourceReads.sources;

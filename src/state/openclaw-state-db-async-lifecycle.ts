@@ -1,13 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   inspectDatabasePathIdentitySync,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
-import type { tryCreateGatewaySchemaFenceDelegate } from "../infra/state-database-coordinator.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const STATE_DATABASE_READ_ADMISSION_INVALIDATED = "STATE_DATABASE_READ_ADMISSION_INVALIDATED";
@@ -55,10 +55,6 @@ type MaintenanceResource = {
     | "shared-handles";
   close: () => void | Promise<void>;
 };
-type SchemaDelegateFactory = (
-  params: Parameters<typeof tryCreateGatewaySchemaFenceDelegate>[0],
-) => ReturnType<typeof tryCreateGatewaySchemaFenceDelegate>;
-
 type AgentSchemaMigration = {
   agentId: string;
   path: string;
@@ -69,6 +65,7 @@ type AgentSchemaMigration = {
 export type OpenClawDatabaseMaintenanceScope = {
   readonly ownsSchemaMaintenance: boolean;
   assertOwnerCurrent(this: void, access?: "read"): void;
+  assertDatabaseAccess(this: void, databasePath: string): void;
   assertAdmission(this: void): void;
   assertReadAdmission(this: void): void;
   addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
@@ -81,7 +78,6 @@ export type OpenClawDatabaseMaintenanceScope = {
     close: MaintenanceResource["close"],
   ): void;
   close(): Promise<void>;
-  createSchemaFenceDelegate: SchemaDelegateFactory;
 };
 
 const maintenanceResources = resolveGlobalSingleton(
@@ -114,6 +110,12 @@ export function isOpenClawDatabaseMaintenanceResourceOwned(
   return maintenanceResources.claims.get(resource)?.scope === scope;
 }
 
+export function getOpenClawDatabaseMaintenanceResourceScope(
+  resource: object,
+): OpenClawDatabaseMaintenanceScope | undefined {
+  return maintenanceResources.claims.get(resource)?.scope;
+}
+
 /** A cached handle used by an independent caller remains with the ordinary cache owner. */
 export function observeOpenClawDatabaseMaintenanceResource(resource: object | undefined): void {
   if (!resource) {
@@ -128,6 +130,7 @@ export function observeOpenClawDatabaseMaintenanceResource(resource: object | un
   if (owner === claim.scope) {
     return;
   }
+  claim.scope.assertAdmission();
   claim.release();
   maintenanceResources.claims.delete(resource);
   if (owner) {
@@ -157,13 +160,21 @@ function commonMaintenanceAncestor(
 
 /** Associate lexical database work with exact resources, never all files beneath a root. */
 export function createOpenClawDatabaseMaintenanceScope(
-  createSchemaFenceDelegate?: SchemaDelegateFactory,
-  assertOwnerCurrent?: () => void,
+  options?:
+    | {
+        schemaMaintenance?: false;
+        assertOwnerCurrent?: () => void;
+        assertDatabaseAccess?: (databasePath: string) => void;
+      }
+    | {
+        schemaMaintenance: true;
+        assertOwnerCurrent: () => void;
+        assertDatabaseAccess?: (databasePath: string) => void;
+      },
 ): OpenClawDatabaseMaintenanceScope {
   const parent = getOpenClawDatabaseMaintenanceScope();
-  const schemaDelegateFactory =
-    createSchemaFenceDelegate ??
-    (parent?.ownsSchemaMaintenance ? parent.createSchemaFenceDelegate : undefined);
+  const assertOwnerCurrent = options?.assertOwnerCurrent;
+  const assertDatabaseAccess = options?.assertDatabaseAccess;
   const pending = new Set<Promise<unknown>>();
   const schemaMigrationChecks = new Set<(migration: AgentSchemaMigration) => void>();
   const resources = new Map<object, MaintenanceResource>();
@@ -183,8 +194,10 @@ export function createOpenClawDatabaseMaintenanceScope(
     }
   };
   const scope: OpenClawDatabaseMaintenanceScope = {
-    ownsSchemaMaintenance: schemaDelegateFactory !== undefined,
+    ownsSchemaMaintenance:
+      options?.schemaMaintenance === true || parent?.ownsSchemaMaintenance === true,
     assertOwnerCurrent(access) {
+      assertOpen();
       if (checkingOwner) {
         if (access === "read") {
           return;
@@ -210,6 +223,16 @@ export function createOpenClawDatabaseMaintenanceScope(
       // custody, but do not recurse into a check already evaluating those rows.
       scope.assertOwnerCurrent("read");
       assertAdmissionLifecycle();
+    },
+    assertDatabaseAccess(databasePath) {
+      scope.assertAdmission();
+      if (assertDatabaseAccess) {
+        assertDatabaseAccess(databasePath);
+      } else if (parent) {
+        parent.assertDatabaseAccess(databasePath);
+      } else {
+        throw new Error("Database maintenance scope does not own this database");
+      }
     },
     addAgentSchemaMigrationCheck(check) {
       scope.assertAdmission();
@@ -260,12 +283,14 @@ export function createOpenClawDatabaseMaintenanceScope(
         release: () => resources.delete(resource),
       });
     },
-    createSchemaFenceDelegate(params) {
-      assertOpen();
-      return schemaDelegateFactory?.(params);
-    },
     close() {
-      return (closing ??= maintenanceResources.current
+      if (closing) {
+        return closing;
+      }
+      // A disposer can reenter admission before its first awaited cleanup.
+      const completion = createDeferredCore();
+      closing = completion.promise;
+      void maintenanceResources.current
         .run({ scope, active: true }, async () => {
           while (pending.size || resources.size) {
             while (pending.size) {
@@ -288,11 +313,21 @@ export function createOpenClawDatabaseMaintenanceScope(
                 const batch = [...resources].filter(([, resource]) => resource.phase === phase);
                 const results = await Promise.allSettled(
                   batch.map(async ([key, resource]) => {
+                    const claim = maintenanceResources.claims.get(key);
                     await resource.close();
-                    resources.delete(key);
-                    maintenanceResources.claims.delete(key);
+                    if (resources.get(key) === resource) {
+                      resources.delete(key);
+                    }
+                    if (maintenanceResources.claims.get(key) === claim) {
+                      maintenanceResources.claims.delete(key);
+                    }
                   }),
                 );
+                // A disposer can admit tracked cleanup before rejecting. Settle
+                // that work before reporting failure to its process owner.
+                while (pending.size) {
+                  await Promise.allSettled(pending);
+                }
                 const errors = results.flatMap((result) =>
                   result.status === "rejected" ? [result.reason] : [],
                 );
@@ -312,10 +347,11 @@ export function createOpenClawDatabaseMaintenanceScope(
           schemaMigrationChecks.clear();
           closed = true;
         })
-        .catch((error: unknown) => {
+        .then(completion.resolve, (error: unknown) => {
           closing = undefined;
-          throw error;
-        }));
+          completion.reject(error);
+        });
+      return completion.promise;
     },
   };
   if (parent) {

@@ -3,9 +3,9 @@ import { hostname } from "node:os";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
+import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortListener } from "../infra/ports-types.js";
-import { tryAcquireGatewayLifecycleCleanupCoordinator } from "../infra/state-database-coordinator.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
@@ -241,16 +241,14 @@ async function resolveScheduledTaskGatewayOwnership(
         );
       }
       // Both legacy discovery paths require exact installed argv. Older releases
-      // hold the coordinator without publishing a row and remain terminable.
+      // hold process ownership without publishing a row and remain terminable.
       if (pids.length > 0) {
         return null;
       }
       if (owner) {
         return null;
       }
-      const exclusion = tryAcquireGatewayLifecycleCleanupCoordinator({
-        databasePath: resolveOpenClawStateSqlitePath(ownerEnv),
-      });
+      const exclusion = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(ownerEnv));
       if (!exclusion) {
         throw new Error(
           "Gateway lifecycle ownership is held without a published identity; leave it running and retry after startup finishes.",

@@ -47,7 +47,7 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
       indexing: false,
       truncated: true,
     });
-    const hostSql = observeHostDataSql(state.env);
+    const hostSql = observeHostDataSql();
     try {
       const actual = await searchSessionTranscripts(request, database);
       expect(JSON.stringify(actual)).toBe(JSON.stringify(golden));

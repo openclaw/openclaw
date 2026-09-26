@@ -130,7 +130,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("loads, persists, deletes and closes the sync cache without host SQLite", async () => {
     const storageRoot = createStorageRoot();
-    const observation = observeHostDataSql(openMatrixSyncCacheStoreOptions(storageRoot).env);
+    const observation = observeHostDataSql();
     const sql = observation.calls;
     const timings: Record<string, number> = {};
     try {

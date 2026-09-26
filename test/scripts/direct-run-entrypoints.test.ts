@@ -578,13 +578,25 @@ record("stdout-write-returned");
         ["--version"],
       ]);
       for (const invocation of invocations) {
+        if (process.platform === "win32") {
+          expect(
+            Number.isSafeInteger(invocation.startTimeMs) && (invocation.startTimeMs ?? 0) > 0,
+            `${JSON.stringify(invocation)}\n${details}`,
+          ).toBe(true);
+        }
+        // Windows may reuse an exited probe's PID before the remaining probes finish.
+        // An unreadable identity for a live PID still cannot prove child cleanup.
+        const observedStartTimeMs = readWindowsProcessStartTimeSync(invocation.pid, 0);
         const alive = isProcessAlive(invocation.pid);
         expect(
-          alive,
+          alive &&
+            (process.platform !== "win32" ||
+              observedStartTimeMs === null ||
+              observedStartTimeMs === invocation.startTimeMs),
           alive
             ? `${JSON.stringify({
                 invocation,
-                observedStartTimeMs: readWindowsProcessStartTimeSync(invocation.pid, 0),
+                observedStartTimeMs,
                 invocations,
               })}\n${formatShimResult(result)}`
             : undefined,

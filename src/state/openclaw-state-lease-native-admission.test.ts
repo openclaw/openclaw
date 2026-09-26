@@ -31,14 +31,6 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
   releaseOpenClawStateLeaseBestEffort: async () => {},
   releaseOpenClawStateLease: () => {},
 }));
-vi.mock("./openclaw-state-lease-exclusion.js", () => ({
-  createOpenClawStateLeaseExclusion: () => ({
-    canRelease: () => true,
-    assertIfExcluded: () => false,
-    runWithOwnerScope: (run: () => Promise<unknown>) => run(),
-    drain: async () => {},
-  }),
-}));
 vi.mock("./openclaw-state-lease-heartbeat.js", () => ({
   startOpenClawStateLeaseHeartbeat: () => {
     throw new Error("Native timer controls must not start a heartbeat worker");

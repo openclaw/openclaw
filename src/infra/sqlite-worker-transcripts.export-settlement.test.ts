@@ -39,7 +39,6 @@ it("retains the export lease while accepted bookkeeping has an unknown settlemen
         stateContext?: Parameters<typeof original>[2],
         assertCurrent?: Parameters<typeof original>[3],
         createAdmission?: Parameters<typeof original>[4],
-        requireStateLifecycle?: Parameters<typeof original>[5],
       ) => {
         let exporting = false;
         return original(
@@ -68,7 +67,6 @@ it("retains the export lease while accepted bookkeeping has an unknown settlemen
                     }
                   : retained,
               )),
-          requireStateLifecycle,
         );
       },
     );

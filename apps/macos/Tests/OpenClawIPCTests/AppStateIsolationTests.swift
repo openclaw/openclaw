@@ -3,7 +3,6 @@ import Foundation
 import OpenClawChatUI
 import Security
 import Testing
-import XCTest
 @testable import OpenClaw
 
 @MainActor
@@ -320,9 +319,9 @@ struct AppStateIsolationTests {
 }
 
 @MainActor
-final class ProfileChatPreferencesTests: XCTestCase {
-    func testFullChatPreferencesBelongToNamedProfile() async throws {
-        let profile = try XCTUnwrap(AppProfile.current.name)
+struct ProfileChatPreferencesTests {
+    @Test func `full chat preferences belong to named profile`() async throws {
+        let profile = try #require(AppProfile.current.name)
         try #require(profile.hasPrefix("test-"))
         let favoritesKey = "openclaw.chat.modelFavorites"
         let recentsKey = "openclaw.chat.modelRecents"
@@ -355,8 +354,8 @@ final class ProfileChatPreferencesTests: XCTestCase {
             defaultDefaults.set(true, forKey: reasoningKey)
             defaultDefaults.set(true, forKey: toolActivityKey)
 
-            _ = AppKitTestSupport.application
-            XCTAssertTrue(AppKitTestSupport.didSetActivationPolicy)
+            try await AppKitTestSupport.startApplication()
+            #expect(AppKitTestSupport.didSetActivationPolicy)
             let transport = ProfileModelPickerTransport()
             let controller = WebChatSwiftUIWindowController(
                 sessionKey: ProfileModelPickerTransport.sessionKey,
@@ -365,7 +364,7 @@ final class ProfileChatPreferencesTests: XCTestCase {
                 windowAutosaveName: autosaveName)
             defer { controller.close() }
             controller.show()
-            let window = try XCTUnwrap(controller._testWindow)
+            let window = try #require(controller._testWindow)
             for (title, key, otherTitle, otherKey, otherEnabled) in [
                 ("Show Reasoning", reasoningKey, "Show Tool Activity", toolActivityKey, true),
                 ("Show Tool Activity", toolActivityKey, "Show Reasoning", reasoningKey, false),
@@ -373,21 +372,21 @@ final class ProfileChatPreferencesTests: XCTestCase {
                 let threadButton = try await self.threadMenuButton(in: window)
                 var previousStates: [NSControl.StateValue] = []
                 try await AppKitTestSupport.openMenu(threadButton, in: window) { menu in
-                    let index = try XCTUnwrap(menu.items.firstIndex { $0.title == title })
-                    let other = try XCTUnwrap(menu.items.first { $0.title == otherTitle })
+                    let index = try #require(menu.items.firstIndex { $0.title == title })
+                    let other = try #require(menu.items.first { $0.title == otherTitle })
                     try #require(menu.items[index].isEnabled)
                     previousStates = [menu.items[index].state, other.state]
                     menu.performActionForItem(at: index)
                 }
-                XCTAssertEqual(previousStates, [.on, otherEnabled ? .on : .off])
-                XCTAssertEqual(AppDefaults.standard.object(forKey: key) as? Bool, false)
-                XCTAssertEqual(AppDefaults.standard.object(forKey: otherKey) as? Bool, otherEnabled)
-                XCTAssertEqual(defaultDefaults.object(forKey: reasoningKey) as? Bool, true)
-                XCTAssertEqual(defaultDefaults.object(forKey: toolActivityKey) as? Bool, true)
+                #expect(previousStates == [.on, otherEnabled ? .on : .off])
+                #expect(AppDefaults.standard.object(forKey: key) as? Bool == false)
+                #expect(AppDefaults.standard.object(forKey: otherKey) as? Bool == otherEnabled)
+                #expect(defaultDefaults.object(forKey: reasoningKey) as? Bool == true)
+                #expect(defaultDefaults.object(forKey: toolActivityKey) as? Bool == true)
                 let reopenedStates = try await self.threadPreferenceStates(
                     in: window,
                     captureName: key == reasoningKey ? "thread-reasoning" : "thread-tool-activity")
-                XCTAssertEqual(reopenedStates, [.off, key == reasoningKey ? .on : .off])
+                #expect(reopenedStates == [.off, key == reasoningKey ? .on : .off])
             }
 
             let button = try await self.loadedModelMenuButton(in: window, selection: "profile")
@@ -395,7 +394,7 @@ final class ProfileChatPreferencesTests: XCTestCase {
             var modelCaptureError: Error?
             try await AppKitTestSupport.openMenu(button, in: window) { menu in
                 initiallyPinned = menu.items.contains { $0.title == "Unpin model" }
-                let index = try XCTUnwrap(menu.items.firstIndex { $0.title == "fixture/fresh" })
+                let index = try #require(menu.items.firstIndex { $0.title == "fixture/fresh" })
                 try #require(menu.items[index].isEnabled)
                 // Capture errors must not skip the preference actions and assertions.
                 do {
@@ -406,8 +405,8 @@ final class ProfileChatPreferencesTests: XCTestCase {
                 }
                 menu.performActionForItem(at: index)
             }
-            XCTAssertNil(modelCaptureError)
-            XCTAssertTrue(initiallyPinned)
+            #expect(modelCaptureError == nil)
+            #expect(initiallyPinned)
 
             // Wait for the accepted selection in either domain so the baseline reaches the ownership assertions.
             let selectedButton = try await self.loadedModelMenuButton(in: window, selection: "fresh") {
@@ -416,16 +415,16 @@ final class ProfileChatPreferencesTests: XCTestCase {
                 }
             }
             let selectedModels = await transport.selectedModels
-            XCTAssertEqual(selectedModels, ["fixture/fresh"])
-            XCTAssertEqual(AppDefaults.standard.stringArray(forKey: recentsKey), ["fixture/fresh"])
-            XCTAssertEqual(defaultDefaults.stringArray(forKey: recentsKey), ["fixture/default"])
+            #expect(selectedModels == ["fixture/fresh"])
+            #expect(AppDefaults.standard.stringArray(forKey: recentsKey) == ["fixture/fresh"])
+            #expect(defaultDefaults.stringArray(forKey: recentsKey) == ["fixture/default"])
             try await AppKitTestSupport.openMenu(selectedButton, in: window) { menu in
-                let index = try XCTUnwrap(menu.items.firstIndex { $0.title == "Pin model" })
+                let index = try #require(menu.items.firstIndex { $0.title == "Pin model" })
                 try #require(menu.items[index].isEnabled)
                 menu.performActionForItem(at: index)
             }
-            XCTAssertEqual(AppDefaults.standard.stringArray(forKey: favoritesKey), ["fixture/profile", "fixture/fresh"])
-            XCTAssertEqual(defaultDefaults.stringArray(forKey: favoritesKey), ["fixture/default"])
+            #expect(AppDefaults.standard.stringArray(forKey: favoritesKey) == ["fixture/profile", "fixture/fresh"])
+            #expect(defaultDefaults.stringArray(forKey: favoritesKey) == ["fixture/default"])
 
             controller.close()
             let reopened = WebChatSwiftUIWindowController(
@@ -435,20 +434,20 @@ final class ProfileChatPreferencesTests: XCTestCase {
                 windowAutosaveName: autosaveName)
             defer { reopened.close() }
             reopened.show()
-            let reopenedWindow = try XCTUnwrap(reopened._testWindow)
+            let reopenedWindow = try #require(reopened._testWindow)
             let reopenedButton = try await self.loadedModelMenuButton(in: reopenedWindow, selection: "fresh")
             var restoredPin = false
             try await AppKitTestSupport.openMenu(reopenedButton, in: reopenedWindow) { menu in
                 restoredPin = menu.items.contains { $0.title == "Unpin model" }
             }
-            XCTAssertTrue(restoredPin)
-            XCTAssertEqual(AppDefaults.standard.stringArray(forKey: recentsKey), ["fixture/fresh"])
-            XCTAssertEqual(defaultDefaults.stringArray(forKey: recentsKey), ["fixture/default"])
+            #expect(restoredPin)
+            #expect(AppDefaults.standard.stringArray(forKey: recentsKey) == ["fixture/fresh"])
+            #expect(defaultDefaults.stringArray(forKey: recentsKey) == ["fixture/default"])
             let restoredThreadStates = try await self.threadPreferenceStates(
                 in: reopenedWindow, captureName: "thread-restored")
-            XCTAssertEqual(restoredThreadStates, [.off, .off])
-            XCTAssertEqual(defaultDefaults.object(forKey: reasoningKey) as? Bool, true)
-            XCTAssertEqual(defaultDefaults.object(forKey: toolActivityKey) as? Bool, true)
+            #expect(restoredThreadStates == [.off, .off])
+            #expect(defaultDefaults.object(forKey: reasoningKey) as? Bool == true)
+            #expect(defaultDefaults.object(forKey: toolActivityKey) as? Bool == true)
         }
     }
 
@@ -471,7 +470,7 @@ final class ProfileChatPreferencesTests: XCTestCase {
         var states: [NSControl.StateValue] = []
         try await AppKitTestSupport.openMenu(button, in: window) { menu in
             states = try ["Show Reasoning", "Show Tool Activity"].map { title in
-                let item = try XCTUnwrap(menu.items.first { $0.title == title })
+                let item = try #require(menu.items.first { $0.title == title })
                 return item.state
             }
             try AppKitTestSupport.record(menu: menu, content: window.contentView, name: captureName)

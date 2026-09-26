@@ -1,8 +1,7 @@
 import path from "node:path";
-import { afterAll, aroundAll } from "vitest";
+import { afterAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withIsolatedTestHome } from "../../../../test/test-env.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../../../infra/state-database-coordinator.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
 
 const DEFAULT_RESOLVED_AT = "2026-05-01T00:00:00.000Z";
@@ -12,13 +11,6 @@ export function setupPluginInstallTestState(): {
   tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker>;
 } {
   const testHome = withIsolatedTestHome({ mode: "hermetic" });
-  // Keep coordinator files outside the per-case homes removed during cleanup.
-  aroundAll((runSuite) =>
-    withStateDatabaseCoordinatorRuntimeDirectory(
-      path.join(testHome.tempHome, "coordinator-runtime"),
-      runSuite,
-    ),
-  );
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {
       // Reuse lease storage between cases and drain it before removing its files.

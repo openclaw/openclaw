@@ -15,7 +15,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { buildStatusText } from "../status/status-text.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import { prepareTaskRegistryRead } from "./task-registry-read.js";
 import {
   loadTaskRegistryStateFromSqliteReadOnly,
@@ -117,11 +117,7 @@ it.each(["tasks", "status"] as const)(
         expect(await renderTaskStatus(surface)).toContain("Accepted task completion");
         await prepareTaskRegistryRead();
         const context = captureOpenClawStateWorkerContext();
-        const holder = holdStateDatabaseCoordinator(
-          context.admission.databasePath,
-          context.coordinatorRuntime,
-          300,
-        );
+        const holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 300);
         let pending: Promise<string | undefined> | undefined;
         try {
           await holder.ready;

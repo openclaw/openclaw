@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -140,7 +139,7 @@ it.each(
     (["false", "reject"] as const).map((cleanupFailure) => ({ mode, cleanupFailure })),
   ),
 )(
-  "finishes sibling inspections after excluded-source cleanup $cleanupFailure ($mode)",
+  "finishes sibling inspections after private snapshot cleanup $cleanupFailure ($mode)",
   async ({ mode, cleanupFailure }) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-owned-snapshot-") };
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
@@ -151,7 +150,6 @@ it.each(
     closeOpenClawStateDatabaseForTest();
     const snapshotPath = path.join(tempDirs.make("schema-owned-copy-"), "snapshot.sqlite");
     fs.copyFileSync(agentPath, snapshotPath);
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: agentPath });
     const cleanup = vi.fn(() => true);
     const controller = new AbortController();
     const onAgentInspection = vi.fn();
@@ -162,75 +160,68 @@ it.each(
         if (path.resolve(pathname) !== agentPath) {
           return prepare(pathname, options);
         }
-        exclusion.assertCurrent();
         return { location: snapshotPath, cleanup, cleanupAsync: async () => cleanup() };
       },
     );
-    try {
-      await exclusion.runWithSourceReads(async () => {
-        const inspect = () => {
-          const run = () =>
-            preflightOpenClawDatabaseSchemas({
-              env,
-              verifyCurrentSchemaShape: mode !== "header",
-              requireStartupMigrationReadiness: mode === "startup",
-              signal: controller.signal,
-              onAgentInspection,
-              supportedVersions: {
-                state: OPENCLAW_STATE_SCHEMA_VERSION,
-                agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-              },
-            });
-          return mode === "startup" ? withAgentDatabaseStartupAdmission(run) : run();
-        };
-        expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
-        if (cleanupFailure === "false") {
-          cleanup.mockReturnValue(false);
-        } else {
-          cleanup.mockImplementation(() => {
-            throw rejectedCleanup;
-          });
-        }
-        onAgentInspection.mockClear();
-        expect(await inspect()).toEqual({
-          incompatible: [],
-          indeterminate:
-            mode === "startup"
-              ? []
-              : [
-                  {
-                    kind: "agent",
-                    path: agentPath,
-                    reason: expect.stringContaining("snapshot cleanup failed"),
-                  },
-                ],
-          ...(mode === "startup"
-            ? {
-                agentRefusals: [
-                  expect.objectContaining({
-                    agentId: "worker",
-                    paths: [agentPath],
-                    code: "agent-database-inspection-failed",
-                    reason: expect.stringContaining("snapshot cleanup failed"),
-                  }),
-                ],
-              }
-            : {}),
+    const inspect = () => {
+      const run = () =>
+        preflightOpenClawDatabaseSchemas({
+          env,
+          verifyCurrentSchemaShape: mode !== "header",
+          requireStartupMigrationReadiness: mode === "startup",
+          signal: controller.signal,
+          onAgentInspection,
+          supportedVersions: {
+            state: OPENCLAW_STATE_SCHEMA_VERSION,
+            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+          },
         });
-        expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ schemaInspectionCount: 3 }),
-        );
-        if (cleanupFailure === "reject") {
-          const cancelled = new Error("caller stopped during cleanup");
-          cleanup.mockImplementation(() => {
-            controller.abort(cancelled);
-            throw rejectedCleanup;
-          });
-          await expect(inspect()).rejects.toBe(cancelled);
-        }
+      return mode === "startup" ? withAgentDatabaseStartupAdmission(run) : run();
+    };
+    expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+    if (cleanupFailure === "false") {
+      cleanup.mockReturnValue(false);
+    } else {
+      cleanup.mockImplementation(() => {
+        throw rejectedCleanup;
       });
-    } finally {
-      exclusion.release();
+    }
+    onAgentInspection.mockClear();
+    expect(await inspect()).toEqual({
+      incompatible: [],
+      indeterminate:
+        mode === "startup"
+          ? []
+          : [
+              {
+                kind: "agent",
+                path: agentPath,
+                reason: expect.stringContaining("snapshot cleanup failed"),
+              },
+            ],
+      ...(mode === "startup"
+        ? {
+            agentRefusals: [
+              expect.objectContaining({
+                agentId: "worker",
+                paths: [agentPath],
+                code: "agent-database-inspection-failed",
+                reason: expect.stringContaining("snapshot cleanup failed"),
+              }),
+            ],
+          }
+        : {}),
+    });
+    expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ schemaInspectionCount: 3 }),
+    );
+    if (cleanupFailure === "reject") {
+      const cancelled = new Error("caller stopped during cleanup");
+      cleanup.mockImplementation(() => {
+        controller.abort(cancelled);
+        throw rejectedCleanup;
+      });
+      await expect(inspect()).rejects.toBe(cancelled);
     }
     expect(cleanup).toHaveBeenCalledTimes(cleanupFailure === "reject" ? 3 : 2);
   },

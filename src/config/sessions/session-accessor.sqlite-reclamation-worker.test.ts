@@ -148,7 +148,7 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
     const publishAdmission = stateCache.publishOpenClawStateDatabaseWorkerAdmission;
     vi.spyOn(stateCache, "publishOpenClawStateDatabaseWorkerAdmission").mockImplementation(
       (admission) => {
-        const sql = observeHostDataSql(databaseOptions.env);
+        const sql = observeHostDataSql();
         try {
           publishAdmission(admission);
           expect(sql.queries).toEqual([]);

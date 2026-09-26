@@ -1,5 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import { isSameSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker-session.js";
 import {
   captureSqliteReadOnlyWorkerLaunch,

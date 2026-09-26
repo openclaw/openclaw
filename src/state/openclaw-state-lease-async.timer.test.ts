@@ -59,29 +59,24 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
   isOpenClawStateLeaseWriteContention: () => false,
   releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) =>
     execute?.(),
-  readLeaseDatabase: mocks.forbidden,
   resolveLeaseDatabasePath: mocks.forbidden,
   acquireLease: mocks.forbidden,
   renewOpenClawStateLease: mocks.forbidden,
-  assertOpenClawStateLeaseOwnedInDatabase: mocks.forbidden,
   verifyOpenClawStateLeaseOwnership: mocks.forbidden,
   releaseOpenClawStateLease: mocks.forbidden,
 }));
 vi.mock("./openclaw-state-db-readonly.js", () => ({
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: mocks.forbidden,
 }));
-vi.mock("./openclaw-state-lease-exclusion.js", () => ({
-  createOpenClawStateLeaseExclusion: mocks.forbidden,
-}));
 vi.mock("../infra/sqlite-worker-identity.js", () => ({
   inspectDatabasePathIdentitySync: mocks.forbidden,
   readDatabasePathIdentitySync: mocks.forbidden,
 }));
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  acquireStateDatabaseHandleLease: mocks.forbidden,
-  retainHeldStateDatabaseCoordinator: mocks.forbidden,
-  withStateDatabaseCoordinatorRuntimeDirectory: mocks.forbidden,
+vi.mock("../infra/sqlite-lifecycle-errors.js", () => ({
+  createSqliteLifecycleAggregateError: (errors: unknown[], message: string, cause: unknown) =>
+    new AggregateError(errors, message, { cause }),
 }));
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers({
@@ -110,7 +105,7 @@ function observe<T>(promise: Promise<T>) {
 }
 
 function fixture() {
-  const maintenance = createOpenClawDatabaseMaintenanceScope(mocks.forbidden);
+  const maintenance = createOpenClawDatabaseMaintenanceScope();
   const resources = new Set<OpenClawStateDatabaseAsyncResource>();
   const leaseMs = 3_000;
   let committedExpiry = Date.now() + leaseMs;
@@ -122,7 +117,6 @@ function fixture() {
   const events: string[] = [];
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: "/synthetic-state" },
-    coordinatorRuntime: { directory: "/synthetic-coordinator", keepAlive: false },
     maintenanceScope: maintenance,
     admission: {
       databasePath: "/synthetic-state/lease.sqlite",

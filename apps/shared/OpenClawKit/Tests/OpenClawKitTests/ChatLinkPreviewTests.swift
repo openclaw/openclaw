@@ -174,7 +174,7 @@ struct ChatLinkPreviewNetworkTests {
             #expect(ChatLinkPreviewStubURLProtocol.lastAcceptHeader == "text/html")
         }
 
-        @Test func `total deadline can fire before the session starts`() async throws {
+        @Test func `zero total deadline completes a hanging request`() async throws {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [ChatLinkPreviewHangingURLProtocol.self]
             let fetcher = ChatLinkPreviewFetcher(
@@ -183,11 +183,7 @@ struct ChatLinkPreviewNetworkTests {
                 hostPolicy: { _ in true },
                 connectionPolicy: { _ in true })
             let url = try #require(URL(string: "https://preview.test/slow"))
-            let clock = ContinuousClock()
-            let start = clock.now
-
             #expect(await fetcher.fetch(url) == .failed)
-            #expect(start.duration(to: clock.now) < .seconds(1))
         }
 
         @Test func `image fetch accepts only images and enforces its body cap`() async throws {

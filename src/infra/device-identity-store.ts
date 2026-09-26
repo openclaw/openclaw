@@ -10,7 +10,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  resolveOpenClawStateDirForDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "../state/openclaw-state-db.paths.js";
 import {
   deriveCanonicalEd25519PrivateKeyRaw,
   deriveCanonicalEd25519PublicKeyRaw,
@@ -21,8 +24,9 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { pathMayExistSync } from "./path-existence.js";
 
-export const PRIMARY_DEVICE_IDENTITY_KEY = "primary";
+const PRIMARY_DEVICE_IDENTITY_KEY = "primary";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -279,6 +283,28 @@ export function resolveDeviceIdentityStore(options: DeviceIdentityStoreOptions =
   };
 }
 
+export function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): void {
+  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
+  if (identityKey !== PRIMARY_DEVICE_IDENTITY_KEY) {
+    return;
+  }
+  const legacyPath = path.join(
+    resolveOpenClawStateDirForDatabasePath(databasePath),
+    "identity",
+    "device.json",
+  );
+  if (
+    // Claims first, source last: both migration owners restore claim -> source atomically.
+    pathMayExistSync(`${legacyPath}.doctor-importing`) ||
+    pathMayExistSync(`${legacyPath}.native-importing`) ||
+    pathMayExistSync(legacyPath)
+  ) {
+    throw new Error(
+      `Legacy device identity exists at ${legacyPath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
+    );
+  }
+}
+
 /** Read through the writable shared-state lifecycle, validating any existing row. */
 export function readStoredDeviceIdentity(
   options: DeviceIdentityStoreOptions = {},
@@ -337,6 +363,12 @@ export function insertStoredDeviceIdentityIfAbsent(
       if (existing) {
         validateStoredDeviceIdentity(existing, resolved.identityKey);
       } else {
+        // A native importer can claim retired key material while generation runs.
+        assertNoPendingLegacyIdentity({
+          ...options,
+          path: resolved.databasePath,
+          identityKey: resolved.identityKey,
+        });
         const kysely = getNodeSqliteKysely<DeviceIdentityDatabase>(db);
         executeSqliteQuerySync(
           db,

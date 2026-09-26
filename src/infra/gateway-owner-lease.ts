@@ -212,7 +212,6 @@ export function acquireGatewayOwnerLease(params: {
       // Start outside the write transaction so the worker never retains its lifecycle gate.
       heartbeat = startOpenClawStateLeaseHeartbeat({
         path: databasePath,
-        existingOnly: true,
         identity,
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
         acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,

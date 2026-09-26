@@ -68,7 +68,6 @@ function context(): OpenClawStateWorkerContext {
       assertCurrent: vi.fn(),
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinator", keepAlive: false },
   };
 }
 

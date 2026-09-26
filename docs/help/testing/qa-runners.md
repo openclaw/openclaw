@@ -53,6 +53,14 @@ inside every shard.
     and config paths, so its CLI bootstrap cannot select the operator's installed
     Gateway service. Parent profiles and runtime environment patches do not
     override that worker identity.
+    Child temporary files and default compiler caches stay in the worker's
+    temporary root and are removed after its processes stop. Parent temporary
+    paths and runtime environment patches do not redirect this scratch storage.
+    `OPENCLAW_QA_KEEP_TEMP=1` retains that root for debugging.
+    If the controller dies, the current Gateway's parent watchdog exits without
+    deleting runtime files that descendants may still use. A surviving owner or
+    host maintenance must confirm that those writers stopped before removing the
+    retained roots.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
     artifacts without a failing exit code.
   - Supports provider modes `live-frontier`, `mock-openai`, and `aimock`.

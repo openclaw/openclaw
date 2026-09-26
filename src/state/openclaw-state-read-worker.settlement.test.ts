@@ -3,7 +3,6 @@
 import { emptyReply, mock, queueTask, tempDirs } from "./openclaw-state-read-worker.test-harness.js";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
@@ -75,10 +74,10 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
     expect(publish.mock.invocationCallOrder[0]).toBeLessThan(
       mock.closePool.mock.invocationCallOrder[0]!,
     );
+    expect(() => captureOpenClawStateWorkerContext(options)).toThrow(/admission is closed/);
     poolStopped.resolve();
     await closing;
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname });
-    exclusion.release();
+    expect(captureOpenClawStateWorkerContext(options).admission.assertCurrent).not.toThrow();
   } finally {
     mutationSettled.resolve();
     poolStopped.resolve();
@@ -131,13 +130,11 @@ it.each([false, true])(
     });
     expect(publish).not.toHaveBeenCalled();
     expect(release).not.toHaveBeenCalled();
-    expect(() =>
-      acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }),
-    ).toThrow();
     if (retryFails) {
       await expect(closeOpenClawStateDatabaseByPathAsync(pathname)).rejects.toBe(retryFailure);
       expect(publish).not.toHaveBeenCalled();
       expect(release).not.toHaveBeenCalled();
+      expect(() => captureOpenClawStateWorkerContext(options)).toThrow(/admission is closed/);
     }
     const retry = queueTask();
     const retryCloseStarted = createDeferredCore();
@@ -162,6 +159,7 @@ it.each([false, true])(
       await retryCloseStarted.promise;
       expect(publish).not.toHaveBeenCalled();
       expect(release).not.toHaveBeenCalled();
+      expect(() => captureOpenClawStateWorkerContext(options)).toThrow(/admission is closed/);
     } finally {
       retry.result.resolve(reply);
       stopped.resolve();
@@ -172,7 +170,6 @@ it.each([false, true])(
     expect(mutation).toHaveBeenCalledOnce();
     expect(task.close).toHaveBeenCalledTimes(retryFails ? 3 : 2);
     expect(retry.close).toHaveBeenCalledOnce();
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname });
-    exclusion.release();
+    expect(captureOpenClawStateWorkerContext(options).admission.assertCurrent).not.toThrow();
   },
 );

@@ -6,7 +6,7 @@ import {
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
-import { withStateSchemaFence } from "../infra/state-database-coordinator.js";
+import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
@@ -85,7 +85,7 @@ export function ensureOpenClawStateRuntimeSchema(
     // Preserve transactional schema convergence and its diagnostics after a clean rollback.
   }
 
-  return withStateSchemaFence({ databasePath: pathname }, () => {
+  return withStateDatabaseSchemaMaintenance({ databasePath: pathname, busyTimeoutMs }, () => {
     const now = Date.now();
     const retiredTableChanges: string[] = [];
     const applied = runStateSchemaMigrationTransaction(

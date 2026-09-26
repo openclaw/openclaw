@@ -75,17 +75,11 @@ if (!isMainThread) {
     fs.rmSync(marker);
     let current = true;
     const mutation = vi.fn(() => "committed");
-    // Keep the native implementation callable with the actual sending port.
-    const nativePost = vi.spyOn(MessagePort.prototype, "postMessage");
-    nativePost.mockRestore();
-    const dispatch = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
-      this: MessagePort,
-      message,
-      transferList,
-    ) {
-      const result = nativePost.call(this, message, transferList);
+    const nativePost = worker.postMessage.bind(worker);
+    const dispatch = vi.spyOn(worker, "postMessage").mockImplementation((message, transferList) => {
+      const result = nativePost(message, transferList);
       const request = asOptionalRecord(message);
-      if (request?.type !== "accepted" || !(request.admission instanceof MessagePort)) {
+      if (request?.type !== "execute" || !(request.operationAdmission instanceof MessagePort)) {
         return result;
       }
       dispatch.mockRestore();

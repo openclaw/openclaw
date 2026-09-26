@@ -74,29 +74,38 @@ function readRestoreSnapshot(
 export function restoreTaskExecutionSnapshot(
   store: TaskExecutionRestoreStore,
   loadSnapshot: () => TaskRegistryStoreSnapshot = () => store.loadSnapshot(),
+  assertCurrent?: () => void,
 ): TaskExecutionRestoreResult {
   const snapshot = readRestoreSnapshot(loadSnapshot);
-  if (![...snapshot.tasks.values()].some(hasOrphanedExecution)) {
+  const candidates = [...snapshot.tasks.values()].filter(hasOrphanedExecution);
+  if (candidates.length === 0) {
     return { snapshot, settledTasks: [] };
   }
-  const settle = () => {
-    // Admission can yield to another writer; only its current rows authorize settlement.
-    const current = readRestoreSnapshot(loadSnapshot);
-    const settledTasks: TaskRecord[] = [];
-    const now = Date.now();
-    for (const [taskId, task] of current.tasks) {
-      if (!hasOrphanedExecution(task)) {
-        continue;
+  const settledTasks: TaskRecord[] = [];
+  for (const candidate of candidates) {
+    const settle = () => {
+      // Each task keeps its commit boundary; admission may outlive a changed execution owner.
+      assertCurrent?.();
+      const current = store.loadMutationSnapshot
+        ? store.loadMutationSnapshot([{ taskId: candidate.taskId }])
+        : loadSnapshot();
+      assertCurrent?.();
+      const stored = current.tasks.get(candidate.taskId);
+      const task = stored && normalizeTaskTimestamps(stored);
+      if (!task || !hasOrphanedExecution(task)) {
+        return undefined;
       }
-      const next = settleOrphanedTaskAtRestore(task, now);
+      const next = settleOrphanedTaskAtRestore(task, Date.now());
       store.upsertTaskWithDeliveryState({
         task: next,
-        deliveryState: current.deliveryStates.get(taskId),
+        deliveryState: current.deliveryStates.get(task.taskId),
       });
-      current.tasks.set(taskId, next);
-      settledTasks.push(next);
+      return next;
+    };
+    const settled = store.withMutation ? store.withMutation(settle) : settle();
+    if (settled) {
+      settledTasks.push(settled);
     }
-    return { snapshot: current, settledTasks };
-  };
-  return store.withMutation ? store.withMutation(settle) : settle();
+  }
+  return { snapshot: readRestoreSnapshot(loadSnapshot), settledTasks };
 }

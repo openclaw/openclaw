@@ -2,11 +2,6 @@
 const currentModuleUrl = import.meta.url;
 
 export const updateExecutorNativeEntrypoints = {
-  coordinator: {
-    currentModuleUrl,
-    sourceWorkerName: "../../infra/state-database-coordinator",
-    distWorkerPath: "infra/state-database-coordinator.js",
-  },
   signalExitBarrier: {
     currentModuleUrl,
     sourceWorkerName: "../signal-exit-barrier",

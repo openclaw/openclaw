@@ -71,12 +71,6 @@ vi.mock("../gateway/call.js", () => ({
   isImplicitLocalGatewayTarget: async () => !process.env.OPENCLAW_GATEWAY_URL,
 }));
 
-vi.mock("../infra/gateway-lock.js", () => ({
-  acquireGatewayLock: vi.fn(async () => ({
-    release: vi.fn(async () => undefined),
-  })),
-}));
-
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
   resetConfigRuntimeState: () => undefined,

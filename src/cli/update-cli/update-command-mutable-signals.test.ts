@@ -13,7 +13,6 @@ import {
 } from "../../../test/helpers/managed-handoff-isolation.js";
 import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../../infra/state-database-coordinator.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { getUpdateRun, type createUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -74,8 +73,6 @@ it.skipIf(process.platform === "win32").for([
     }});
     sqlite.DatabaseSync = GuardedDatabase;
     syncBuiltinESMExports();
-    const { withStateDatabaseCoordinatorRuntimeDirectory } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.coordinator).href)});
-    await withStateDatabaseCoordinatorRuntimeDirectory(${JSON.stringify(control)}, async () => {
     const { resolveManagedUpdateLeaseDatabasePath, createManagedHandoffLeaseStore } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.handoffLease).href)});
     const databasePath = resolveManagedUpdateLeaseDatabasePath();
     assert.equal(databasePath, ${JSON.stringify(binding.databasePath)}, 'private handoff binding missing before admission');
@@ -133,7 +130,6 @@ it.skipIf(process.platform === "win32").for([
       } else {
         await withUpdateCommandExecutor(run.runId, async (executor) => {await enter(executor);await hold();});
       }
-    });
     });
   `,
         );
@@ -254,10 +250,7 @@ it.skipIf(process.platform === "win32").for([
                   ),
                 }
               : { env: { OPENCLAW_STATE_DIR: root } };
-          const readRun = (runId: string) =>
-            withStateDatabaseCoordinatorRuntimeDirectory(control, () =>
-              getUpdateRun(runId, options),
-            );
+          const readRun = (runId: string) => getUpdateRun(runId, options);
           const actual = readRun(message.runId);
           if (mode === "fresh") {
             expect(actual).toMatchObject({

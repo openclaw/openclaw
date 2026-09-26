@@ -27,7 +27,6 @@ function createActor(): Actor {
     openDispatch: { dispatched: true },
     initialized: true,
     backendClosed: false,
-    pendingStateLifecycles: new Set(),
   };
 }
 
@@ -57,7 +56,6 @@ it.each(["missing", "sealed"] as const)(
         track,
         assertCurrent,
         createAdmission,
-        true,
       ),
     ).rejects.toMatchObject(closedError);
     expect(operation).not.toHaveBeenCalled();

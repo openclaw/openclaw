@@ -13,15 +13,13 @@ import {
 } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
+  getOpenClawDatabaseMaintenanceResourceScope,
   isStateDatabaseReadAdmissionInvalidatedError,
   StateDatabaseReadAdmissionInvalidatedError,
   type OpenClawStateDatabaseReadAdmission,
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
-import {
-  STATE_WAL_COORDINATOR_WAIT_MS,
-  type OpenClawStateDatabase,
-} from "./openclaw-state-db-contract.js";
+import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContextWithAdmission } from "./openclaw-state-worker-context.capture.js";
 
@@ -41,40 +39,53 @@ export function createStateDatabaseWalOwner(
       if (!isMainThread) {
         return;
       }
-      const context = captureOpenClawStateWorkerContextWithAdmission(
+      const capturedContext = captureOpenClawStateWorkerContextWithAdmission(
         { path: database.path, env },
         () => admission,
       );
       const controller = new AbortController();
       let pending: Promise<SqliteWalPeriodicResult | undefined> | undefined;
-      const assertCurrent = () => {
-        controller.signal.throwIfAborted();
-        context.admission.assertCurrent();
-        if (cachedDatabases.get(database.path) !== database || !database.db.isOpen) {
-          throw new StateDatabaseReadAdmissionInvalidatedError(
-            "Shared-state WAL maintenance owner changed",
-          );
-        }
-        assertExistingDatabaseIdentity(database.path, identity.key, identity.birthtime);
-      };
       const cancel = () => {
         controller.abort();
         if (!pending) {
           unregister();
+          return undefined;
         }
+        return pending.then(
+          () => undefined,
+          () => undefined,
+        );
       };
-      const unregister = asyncResources.register({
-        async close(selected) {
+      const resource = {
+        async close(selected?: DatabasePathIdentity) {
           if (selected && selected.key !== identity.key) {
             return;
           }
-          cancel();
+          void cancel();
           // The broker retains native cleanup; this owner joins accepted work before retirement.
           await pending?.catch(() => {});
           unregister();
         },
-      });
+      };
+      const unregister = asyncResources.register(resource);
       const run = async (request: SqliteWalPeriodicRequest) => {
+        const maintenanceScope = getOpenClawDatabaseMaintenanceResourceScope(database.db);
+        const context = { ...capturedContext, maintenanceScope };
+        const assertCurrent = () => {
+          controller.signal.throwIfAborted();
+          context.admission.assertCurrent();
+          maintenanceScope?.assertAdmission();
+          if (
+            getOpenClawDatabaseMaintenanceResourceScope(database.db) !== maintenanceScope ||
+            cachedDatabases.get(database.path) !== database ||
+            !database.db.isOpen
+          ) {
+            throw new StateDatabaseReadAdmissionInvalidatedError(
+              "Shared-state WAL maintenance owner changed",
+            );
+          }
+          assertExistingDatabaseIdentity(database.path, identity.key, identity.birthtime);
+        };
         let releaseIdle: (() => void) | undefined;
         let operationStarted = false;
         try {
@@ -93,10 +104,6 @@ export function createStateDatabaseWalOwner(
             {
               existingOnly: true,
               assertCurrent,
-              requireStateLifecycle: {
-                waitMs: STATE_WAL_COORDINATOR_WAIT_MS,
-                maxPollIntervalMs: 25,
-              },
               createAdmission: () => ({
                 nativeLocations: [database.path, identity.canonicalPath],
                 admission: createSqliteWorkerOperationAdmission((_request, grant) => {

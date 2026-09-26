@@ -32,7 +32,6 @@ const ownerMocks = vi.hoisted(() => ({
       assertCurrent: vi.fn(),
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic/media" },
-    coordinatorRuntime: { directory: "/synthetic/coordinator", keepAlive: false },
   } satisfies OpenClawStateWorkerContext,
 }));
 

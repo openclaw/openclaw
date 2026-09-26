@@ -54,6 +54,18 @@ async function expectWorkerFailure(
 }
 
 describe("SQLite read-only worker diagnostics", () => {
+  it("reads cause metadata once through the registered worker", async () => {
+    let causeReads = 0;
+    const failure = Object.defineProperty(new Error("open failure"), "cause", {
+      get() {
+        causeReads += 1;
+        return undefined;
+      },
+    });
+    await expectWorkerFailure(failure, "open failure");
+    expect(causeReads).toBe(1);
+  });
+
   it("retains source contention as a typed parent error", async () => {
     await expectWorkerFailure(new SourceChangedError("source changed"), "source changed", true);
   });

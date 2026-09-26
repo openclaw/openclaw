@@ -10,8 +10,6 @@ import {
   type SqliteReaderDiagnostic,
   type SqliteReaderDiagnostics,
 } from "./sqlite-reader-lifecycle.js";
-import { StateDatabaseCoordinatorContentionError } from "./state-database-coordinator-errors.js";
-import type { StateDatabaseCoordinatorOwner } from "./state-database-coordinator-owner.js";
 
 export type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
 
@@ -32,7 +30,6 @@ export type SqliteWalHealth = {
   consecutiveBlocked: number;
   warning: boolean;
   error?: string;
-  blockingOwner?: StateDatabaseCoordinatorOwner | "unknown";
   activeReaders?: SqliteReaderDiagnostic[];
   readerDiagnostics?: Array<Omit<SqliteReaderDiagnostics, "activeReaders">>;
 };
@@ -168,17 +165,12 @@ export function createSqliteWalCheckpoint(
   });
 
   const recordCheckpointError = (error: unknown, observation = checkpointObservation()): void => {
-    const contention = error instanceof StateDatabaseCoordinatorContentionError;
-    const consecutiveBlocked = contention
-      ? (snapshot?.health.blockingOwner ? snapshot.health.consecutiveBlocked : 0) + 1
-      : 0;
     const failed: SqliteWalHealth = {
       ...observation,
       observedAtMs: Date.now(),
-      state: contention ? "blocked" : "error",
-      consecutiveBlocked,
-      warning: !contention || consecutiveBlocked >= 2,
-      ...(contention ? { blockingOwner: error.blockingOwner ?? ("unknown" as const) } : {}),
+      state: "error",
+      consecutiveBlocked: 0,
+      warning: true,
       error: formatErrorMessage(error),
     };
     snapshot = {
@@ -190,9 +182,7 @@ export function createSqliteWalCheckpoint(
     if (options.databasePath) {
       notifyCheckpoint(options.databasePath, snapshot);
     }
-    if (!contention || consecutiveBlocked % 5 === 0) {
-      options.onCheckpointError?.(error);
-    }
+    options.onCheckpointError?.(error);
   };
 
   const recordCheckpoint = (

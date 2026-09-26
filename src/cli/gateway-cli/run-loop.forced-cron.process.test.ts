@@ -103,7 +103,12 @@ it.skipIf(process.platform === "win32").each([
       await waitForOutput("process proof: ready:2", 15_000);
       expect(child.kill("SIGINT")).toBe(true);
     }
-    expect(await withTestTimeout(closed, 5_000, output)).toEqual([0, null]);
+    const outcome = await withTestTimeout(closed, 5_000, "Cron restart child did not close").catch(
+      (cause: unknown) => {
+        throw new Error(output, { cause });
+      },
+    );
+    expect(outcome).toEqual([0, null]);
     expect(fs.readFileSync(path.join(root, "cleanup.txt"), "utf8")).toBe("settled\n");
     expect(output.indexOf("process proof: cron-cleanup-settled")).toBeLessThan(
       output.indexOf("process proof: close-completed"),

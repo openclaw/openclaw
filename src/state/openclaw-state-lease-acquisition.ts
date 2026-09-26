@@ -5,15 +5,11 @@ import {
   sqliteExtendedResultCode,
 } from "../infra/sqlite-error-diagnostics.js";
 import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import {
   OpenClawStateLeaseAcquisitionError,
   OpenClawStateLeaseError,
 } from "./openclaw-state-lease-error.js";
-import {
-  isOpenClawStateLeaseWriteContention,
-  STATE_LEASE_WRITE_BACKOFF,
-} from "./openclaw-state-lease-storage.js";
+import { STATE_LEASE_WRITE_BACKOFF } from "./openclaw-state-lease-storage.js";
 import type { OpenClawStateLeaseAcquisition } from "./openclaw-state-lease-store.js";
 
 /** Wait for recorded holders; each storage owner admits and settles its own write. */
@@ -70,7 +66,7 @@ export async function acquireOpenClawStateLease(params: {
             error instanceof OpenClawStateLeaseError &&
             error.code === "OPENCLAW_STATE_LEASE_STORAGE_FAILED"
           ) &&
-          !isOpenClawStateLeaseWriteContention(error) &&
+          !isSqliteLockError(error) &&
           !isSqliteNativeOpenFailure(error) &&
           sqliteExtendedResultCode(error) === undefined &&
           !isSqliteWorkerError(error, "unavailable") &&
@@ -80,18 +76,14 @@ export async function acquireOpenClawStateLease(params: {
           throw error;
         }
         const failure = error instanceof OpenClawStateLeaseError ? error.cause : error;
-        if (isOpenClawStateLeaseWriteContention(failure)) {
+        if (isSqliteLockError(failure)) {
           assertCurrent();
         }
         throw new OpenClawStateLeaseAcquisitionError(
           params.label,
           {
             kind: "store-unavailable",
-            reason: isSqliteLockError(failure)
-              ? "sqlite-busy"
-              : failure instanceof StateDatabaseCoordinatorContentionError
-                ? "lifecycle-busy"
-                : "storage-error",
+            reason: isSqliteLockError(failure) ? "sqlite-busy" : "storage-error",
           },
           error,
         );

@@ -22,7 +22,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
 import { getTaskExecutionObservation } from "./task-execution-observation.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
@@ -117,7 +117,7 @@ describe("task maintenance session metadata", () => {
     });
   });
 
-  it.each(["publication", "coordinator hold"] as const)(
+  it.each(["publication", "write transaction"] as const)(
     "retains task payloads without synchronous refreshes during %s",
     async (boundary) => {
       await withMaintenanceState("openclaw-task-maintenance-payloads-", async () => {
@@ -178,7 +178,7 @@ describe("task maintenance session metadata", () => {
         const syncSnapshots = vi.spyOn(store, "loadMutationSnapshot");
         const clone = vi.spyOn(globalThis, "structuredClone");
         const endedAt = Date.now();
-        let holder: ReturnType<typeof holdStateDatabaseCoordinator> | undefined;
+        let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
         let acceptedRead: ReturnType<typeof prepareTaskRegistryRead> | undefined;
         let maintenance: ReturnType<typeof runTaskRegistryMaintenance> | undefined;
         let summary: Awaited<ReturnType<typeof runTaskRegistryMaintenance>> | undefined;
@@ -208,19 +208,15 @@ describe("task maintenance session metadata", () => {
             5_000,
             "Terminal publication did not pause",
           );
-          if (boundary === "coordinator hold") {
+          if (boundary === "write transaction") {
             const context = captureOpenClawStateWorkerContext();
             // The worker timeout only releases a regressed synchronous waiter.
-            holder = holdStateDatabaseCoordinator(
-              context.admission.databasePath,
-              context.coordinatorRuntime,
-              1_000,
-            );
+            holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 1_000);
             await holder.ready;
           }
-          const heldCoordinator = holder;
-          const checkpoint = heldCoordinator
-            ? sleep(0).then(() => Atomics.load(heldCoordinator.released, 0))
+          const heldWriter = holder;
+          const checkpoint = heldWriter
+            ? sleep(0).then(() => Atomics.load(heldWriter.released, 0))
             : setImmediate().then(() => undefined);
           maintenance = runTaskRegistryMaintenance();
           void maintenance.catch(recordFailure);
@@ -250,7 +246,7 @@ describe("task maintenance session metadata", () => {
           });
         }
 
-        if (boundary === "coordinator hold") {
+        if (boundary === "write transaction") {
           expect(releasedAtTimer).toBe(0);
         }
         expect(synchronousReadsDuringHold).toBe(0);

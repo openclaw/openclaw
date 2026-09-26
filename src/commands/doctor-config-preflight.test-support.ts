@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterAll, expect, onTestFinished, vi } from "vitest";
 import { withTempHome } from "../config/test-helpers.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
@@ -169,11 +168,7 @@ export async function withDoctorConfigPreflightHome<T>(
       expect(resolveManagedUpdateLeaseDatabasePath()).toBe(
         path.join(control, "managed-update-handoffs.sqlite"),
       );
-      // Fixture-owned coordinator handles must close before Windows removes the home.
-      return await withStateDatabaseCoordinatorRuntimeDirectory(
-        path.join(home, "coordinator-runtime"),
-        () => withEnvAsync(providerEnv, () => run(home)),
-      );
+      return await withEnvAsync(providerEnv, () => run(home));
     } finally {
       temporaryRoot.mockRestore();
     }

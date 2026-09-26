@@ -1149,8 +1149,6 @@ describe("dispatchReplyFromConfig", () => {
       },
       {
         assertCurrent: expect.any(Function),
-        deadlineMs: expect.any(Number),
-        onWait: undefined,
         signal: expect.any(AbortSignal),
       },
     );

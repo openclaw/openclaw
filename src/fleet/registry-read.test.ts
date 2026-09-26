@@ -219,7 +219,7 @@ it("joins an admitted read before its disposable source scope exits", async () =
 it("preserves a maintenance-created cached writer after an independent admitted registry read", async () => {
   const { root, env } = fixture();
   const record = await seed(env, root);
-  const maintenance = createOpenClawDatabaseMaintenanceScope(() => undefined);
+  const maintenance = createOpenClawDatabaseMaintenanceScope();
   const source = maintenance.run(() => openOpenClawStateDatabase({ env }));
   try {
     const calls = watchNativeSql();

@@ -1,4 +1,4 @@
-import { throwSqliteLifecycleErrors } from "../../infra/sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { readDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { runSqliteWorkerStoreOperation } from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -20,7 +20,6 @@ export async function withSkillUploadInstallOwner<T>(
   let store: Awaited<ReturnType<typeof openOpenClawStateWorkerCleanupStore>>;
   const cleanupContext = {
     environment: context.environment,
-    coordinatorRuntime: { ...context.coordinatorRuntime, keepAlive: false },
     existingSchemaPath: context.existingSchemaPath,
   };
   const assertOwned = () => {

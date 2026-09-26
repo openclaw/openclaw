@@ -124,7 +124,6 @@ export function createChannelIngressQueue<
       (worker) => worker.execute({ type, input }, { signal }),
       {
         assertCurrent: assertActive,
-        requireStateLifecycle: true,
         createAdmission: claimClock
           ? () => {
               const transitionClock = new Float64Array(
@@ -169,7 +168,7 @@ export function createChannelIngressQueue<
       context,
       (worker) =>
         worker.execute({ type: "channelIngress.list", input: { ...input, queueName, readOnly } }),
-      { existingOnly: readOnly, assertCurrent, requireStateLifecycle: true },
+      { existingOnly: readOnly, assertCurrent },
     );
     assertQueueCurrent(context);
     return rows ?? [];

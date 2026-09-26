@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { logSlowSqliteCoordinatorWait } from "../../../infra/sqlite-transaction.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { flushLogger, getLogger, resetLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
@@ -140,9 +139,8 @@ describe("missing subagent completion tasks", () => {
             );
       try {
         // SQLite diagnostics share the root transport but are not completion retirement.
-        logSlowSqliteCoordinatorWait(101, {
+        getLogger().warn("Unrelated SQLite diagnostic", {
           databaseLabel: "synthetic-completion-fixture",
-          operationLabel: "unrelated coordinator diagnostic",
         });
         attempt();
         await vi.advanceTimersByTimeAsync(300_000);

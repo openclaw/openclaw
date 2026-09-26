@@ -1,69 +1,14 @@
-// Tracks temporary directories created by tests so leaks can be detected.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 
-/** Allocates temp directories under reusable roots with explicit cleanup control. */
+/** Async adapter for callers of the shared temporary-directory owner. */
 export function createTrackedTempDirs() {
-  const prefixRoots = new Map<string, { root: string }>();
-  const pendingPrefixRoots = new Map<string, Promise<{ root: string }>>();
-  const cleanupRoots = new Set<string>();
-  let globalDirIndex = 0;
-
-  const ensurePrefixRoot = async (prefix: string) => {
-    const cached = prefixRoots.get(prefix);
-    if (cached) {
-      return cached;
-    }
-    const pending = pendingPrefixRoots.get(prefix);
-    if (pending) {
-      return await pending;
-    }
-    const create = (async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-      const state = { root };
-      prefixRoots.set(prefix, state);
-      cleanupRoots.add(root);
-      return state;
-    })();
-    pendingPrefixRoots.set(prefix, create);
-    try {
-      return await create;
-    } finally {
-      pendingPrefixRoots.delete(prefix);
-    }
-  };
-
+  const tracker = createTempDirTracker();
   return {
     async make(prefix: string): Promise<string> {
-      const state = await ensurePrefixRoot(prefix);
-      const dir = path.join(state.root, `dir-${String(globalDirIndex)}`);
-      globalDirIndex += 1;
-      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-      await fs.chmod(dir, 0o700);
-      return dir;
+      return tracker.make(prefix);
     },
     async cleanup(): Promise<void> {
-      const roots = [...cleanupRoots];
-      pendingPrefixRoots.clear();
-      const dirlists = await Promise.all(
-        roots.map((dir) =>
-          fs.readdir(dir).catch((err: unknown) => {
-            if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-              return [];
-            }
-            throw err;
-          }),
-        ),
-      );
-      await Promise.all(
-        roots.flatMap((dir, i) =>
-          expectDefined(dirlists[i], "dirlists entry at i").map((entry) =>
-            fs.rm(path.join(dir, entry), { recursive: true, force: true }),
-          ),
-        ),
-      );
+      tracker.cleanup();
     },
   };
 }

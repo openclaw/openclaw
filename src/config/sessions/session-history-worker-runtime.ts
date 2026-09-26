@@ -385,7 +385,6 @@ export async function readSessionHistoryPageInWorker(
         stateDatabase: {
           path: stateContext.admission.databasePath,
           environment: stateContext.environment,
-          coordinatorRuntime: stateContext.coordinatorRuntime,
         },
         ...(sourceReads.request
           ? { sourceDiscovery: sourceReads.request }

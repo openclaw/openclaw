@@ -8,7 +8,6 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
-import { hasNodeErrorCode } from "../infra/path-guards.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -20,7 +19,7 @@ import {
 } from "./openclaw-quarantine-store.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
-  acquireOpenClawStateDatabaseFileExclusion,
+  closeOpenClawStateDatabaseByPathAsync,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
 import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
@@ -107,11 +106,14 @@ it("keeps fresh synchronous read callbacks from returning asynchronous work", as
     const options = createOptions(root);
     openOpenClawStateDatabase(options);
     closeOpenClawStateDatabaseForTest();
+    let reader: DatabaseSync | undefined;
     expect(() =>
-      withExistingOpenClawStateDatabaseReadOnly(() => Promise.resolve(1), options),
+      withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+        reader = db;
+        return Promise.resolve(1);
+      }, options),
     ).toThrow("SQLite source read must remain synchronous");
-    const exclusion = await acquireOpenClawStateDatabaseFileExclusion(options.path);
-    exclusion.release();
+    expect(reader?.isOpen).toBe(false);
   });
 });
 
@@ -216,15 +218,13 @@ it("retains stream handle custody when native close fails until explicit close s
       expect((await rows.next()).value).toBe(1);
       await expect(rows.return()).rejects.toBe(failure);
       expect(reader?.isOpen).toBe(true);
-      await expect(acquireOpenClawStateDatabaseFileExclusion(source.path)).rejects.toThrow(
+      await expect(closeOpenClawStateDatabaseByPathAsync(source.path)).rejects.toThrow(
         "reader close failed",
       );
       expect(reader?.isOpen).toBe(true);
       refuseClose = false;
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseByPathAsync(source.path);
       expect(reader?.isOpen).toBe(false);
-      const exclusion = await acquireOpenClawStateDatabaseFileExclusion(source.path);
-      exclusion.release();
     } finally {
       refuseClose = false;
       await rows.return();
@@ -582,59 +582,6 @@ it("keeps missing and non-missing filesystem failures distinct for async reads",
       }),
     ).rejects.toMatchObject({ code: "ENOTDIR" });
     expect(operation).not.toHaveBeenCalled();
-  });
-});
-
-it("reads under its live source exclusion but refuses an unrelated caller", async () => {
-  await withOpenClawTestState({ label: "owned-ledger-read" }, async ({ env }) => {
-    const options = { env };
-    const initial = openOpenClawStateDatabase(options);
-    initial.db.exec("CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('original')");
-    const pathname = initial.path;
-    const owner = await acquireOpenClawStateDatabaseFileExclusion(pathname);
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    const read = () =>
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
-        ({ db }) => db.prepare("SELECT value FROM held").get()?.value,
-        options,
-      );
-    const family = () =>
-      Promise.all(
-        ["", "-wal", "-shm"].map(async (suffix) => {
-          try {
-            return await fsp.readFile(pathname + suffix);
-          } catch (error) {
-            if (hasNodeErrorCode(error, "ENOENT")) {
-              return null;
-            }
-            throw error;
-          }
-        }),
-      );
-    let running: Promise<void> | undefined;
-    try {
-      const before = await family();
-      running = owner.runWithSourceReads(async () => {
-        expect(await read()).toBe("original");
-        expect(await family()).toEqual(before);
-        entered.resolve();
-        await resume.promise;
-        owner.assertCurrent();
-        expect(await read()).toBe("original");
-      });
-      await Promise.race([entered.promise, running]);
-      await expect(read()).rejects.toThrow(/state-handles/);
-      expect(await family()).toEqual(before);
-    } finally {
-      resume.resolve();
-      try {
-        await running;
-      } finally {
-        owner.release();
-      }
-    }
-    expect(await read()).toBe("original");
   });
 });
 

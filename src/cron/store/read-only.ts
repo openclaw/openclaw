@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import {
@@ -7,18 +6,8 @@ import {
   retainSnapshotTempDirectory,
   retainSnapshotWork,
 } from "../../infra/sqlite-readonly-location-cleanup.js";
-import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
 import { createSqliteSnapshotStagingDirectory } from "../../infra/sqlite-snapshot-staging.js";
-import {
-  inspectDatabasePathIdentitySync,
-  type DatabasePathIdentity,
-} from "../../infra/sqlite-worker-identity.js";
-import {
-  acquireStateDatabaseHandleLease,
-  captureStateDatabaseCoordinatorRuntime,
-  hasStateDatabaseSourceExclusion,
-  prepareStateDatabaseSourceExclusion,
-} from "../../infra/state-database-coordinator.js";
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { PluginDoctorCronJob } from "../../plugins/doctor-contract-module.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -78,15 +67,9 @@ async function readCronState({
   }
   // Doctor's all-partition inventory must not create WAL/SHM files beside the source.
   const preserveArtifacts = storeKey === undefined || isArtifactPreservingStateRead();
-  const assertExcluded = hasStateDatabaseSourceExclusion(statePath)
-    ? prepareStateDatabaseSourceExclusion(statePath)
-    : undefined;
-  const coordinatorRuntime = captureStateDatabaseCoordinatorRuntime();
-  const admission = !assertExcluded
-    ? captureOpenClawStateDatabaseReadAdmission(statePath)
-    : undefined;
-  const identity = admission?.identity ?? inspectDatabasePathIdentitySync(statePath);
-  const canonicalPath = identity?.canonicalPath ?? path.resolve(statePath);
+  const admission = captureOpenClawStateDatabaseReadAdmission(statePath);
+  const identity = admission.identity;
+  const canonicalPath = identity.canonicalPath;
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   ensureSqliteLibrarySelected();
   const environment = { ...process.env };
@@ -102,8 +85,6 @@ async function readCronState({
   });
   const controller = new AbortController();
   const producerSettled = createDeferredCore();
-  let sourcePin: ReturnType<typeof acquireStateDatabaseHandleLease> | undefined;
-  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
   let stagingRoot: string | undefined;
   let releaseSnapshot: (() => void) | undefined;
   let workerStopped = false;
@@ -122,20 +103,12 @@ async function readCronState({
       await producerSettled.promise;
       releaseSnapshot?.();
       releaseSnapshot = undefined;
-      if (prepared) {
-        if (!(await prepared.cleanupAsync())) {
-          throw new Error("Cron read-only state snapshot cleanup failed.");
-        }
-        prepared = undefined;
-      }
       if (stagingRoot) {
         if (!(await removeTempDirectoryAsync(stagingRoot))) {
           throw new Error("Cron read-only state snapshot cleanup failed.");
         }
         stagingRoot = undefined;
       }
-      sourcePin?.release();
-      sourcePin = undefined;
       cleaned = true;
       unregister();
     })().finally(() => {
@@ -155,17 +128,7 @@ async function readCronState({
     let loaded: Extract<CronReadOnlyResult, { ok: true }> = { ok: true };
     try {
       maintenance?.own(resource, "shared-resources", () => resource.close());
-      // Only the native exclusion owner can prepare its already-drained source.
-      sourcePin = assertExcluded
-        ? acquireStateDatabaseHandleLease({ databasePath: statePath })
-        : undefined;
-      if (assertExcluded && preserveArtifacts) {
-        prepared = prepareSqliteReadOnlyLocationSync(statePath);
-        releaseSnapshot = retainSnapshotTempDirectory(
-          prepared.cleanupRoot ?? path.dirname(prepared.location),
-        );
-      }
-      if (preserveArtifacts && !assertExcluded) {
+      if (preserveArtifacts) {
         stagingRoot = await createSqliteSnapshotStagingDirectory(
           undefined,
           false,
@@ -174,17 +137,15 @@ async function readCronState({
         );
         releaseSnapshot = retainSnapshotTempDirectory(stagingRoot);
       }
-      const location = prepared?.location ?? statePath;
+      const location = statePath;
       controller.signal.throwIfAborted();
-      assertExcluded?.();
-      admission?.assertCurrent();
+      admission.assertCurrent();
       const result = await pool.run(
         {
           location,
           storeKey,
           history,
           stagingRoot,
-          coordinatorRuntime,
         },
         {
           signal: controller.signal,
@@ -193,7 +154,6 @@ async function readCronState({
             Buffer.byteLength(storeKey ?? "") +
             Buffer.byteLength(history?.jobId ?? "") +
             Buffer.byteLength(stagingRoot ?? "") +
-            Buffer.byteLength(coordinatorRuntime.directory) +
             environmentBytes,
         },
       );
@@ -206,8 +166,7 @@ async function readCronState({
       await cleanup();
     }
     controller.signal.throwIfAborted();
-    assertExcluded?.();
-    admission?.assertCurrent();
+    admission.assertCurrent();
     return loaded;
   };
   return await retainSnapshotWork(run(), () =>

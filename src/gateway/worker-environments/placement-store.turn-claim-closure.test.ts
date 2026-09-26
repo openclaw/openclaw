@@ -504,7 +504,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     throw new Error("expected placement-bound lineage capability");
   }
   let placementReceiptAuthority: (() => void) | undefined;
-  const sql = observeHostDataSql({ OPENCLAW_STATE_DIR: root });
+  const sql = observeHostDataSql();
   try {
     const calibration = database.db.prepare("SELECT 1");
     database.db.exec("SELECT 1");

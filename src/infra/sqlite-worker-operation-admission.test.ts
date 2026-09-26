@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
@@ -8,22 +9,48 @@ import {
   createSqliteWorkerOperationAdmission,
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
+  requestSqliteWorkerSchemaMaintenance,
   settleSqliteWorkerOperationContext,
   withSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-admission.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["grant", "revoke", "close"] as const)(
+it.each(["grant", "revoke", "close", "self-fence", "request-revoke", "late-revoke"] as const)(
   "waits for the live owner's %s decision when host scheduling is delayed",
   (outcome) => {
     const revoked = new Error("Synthetic owner authority revoked");
+    let requestCurrent = outcome !== "request-revoke";
+    let databaseCurrent = true;
     const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
       if (outcome === "revoke") {
         throw revoked;
       }
+      if (outcome === "self-fence") {
+        requestCurrent = false;
+      }
+      if (outcome === "late-revoke") {
+        databaseCurrent = false;
+      }
       grant();
+    });
+    admission.bindDatabaseAuthority({
+      databasePath: path.resolve("synthetic-delayed-writer.sqlite"),
+      assertRequest() {
+        if (!requestCurrent) {
+          throw revoked;
+        }
+      },
+      assertAccess() {
+        if (!databaseCurrent) {
+          throw revoked;
+        }
+      },
+      acquireSchema() {
+        throw new Error("Ordinary admission must not acquire schema authority");
+      },
     });
     const mutate = vi.fn();
     // Advance a delayed native wait without sleeping or blocking the test host.
@@ -44,22 +71,95 @@ it.each(["grant", "revoke", "close"] as const)(
         mutate();
       });
     try {
-      if (outcome === "grant") {
+      if (outcome === "grant" || outcome === "self-fence") {
         expect(write).not.toThrow();
         expect(mutate).toHaveBeenCalledOnce();
         expect(admission.failure).toBeUndefined();
+        expect(admission.failureSource).toBeUndefined();
       } else {
         expect(write).toThrow("SQLite transaction admission was refused");
         expect(mutate).not.toHaveBeenCalled();
         expect(admission.failure).toMatchObject({
-          message: outcome === "revoke" ? revoked.message : "SQLite worker admission is closed",
+          message: outcome === "close" ? "SQLite worker admission is closed" : revoked.message,
         });
+        expect(admission.failureSource).toBe(outcome === "revoke" ? "domain" : "authority");
       }
     } finally {
       admission.finish();
     }
   },
 );
+
+it("retains exact-target schema authority until settlement and rechecks access for later grants", () => {
+  const databasePath = path.resolve("synthetic-schema.sqlite");
+  const revoked = new Error("Database owner revoked");
+  let current = true;
+  const release = vi.fn();
+  const acquireSchema = vi.fn(() => ({ assertCurrent() {}, release }));
+  const admit = vi.fn((_request: SqliteWorkerAdmissionRequest, grant: () => boolean) => grant());
+  const admission = createSqliteWorkerOperationAdmission(admit);
+  admission.bindDatabaseAuthority({
+    databasePath,
+    assertAccess() {
+      if (!current) {
+        throw revoked;
+      }
+    },
+    acquireSchema,
+  });
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    admission.service();
+    return "ok";
+  });
+  try {
+    withSqliteWorkerOperationAdmission({ port: admission.port }, () => {
+      expect(requestSqliteWorkerSchemaMaintenance(databasePath)).toBe(true);
+      expect(requestSqliteWorkerSchemaMaintenance(databasePath)).toBe(true);
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: "ordinary write" });
+      current = false;
+      expect(() =>
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: "revoked write" }),
+      ).toThrow("SQLite transaction admission was refused");
+    });
+    expect(acquireSchema).toHaveBeenCalledOnce();
+    expect(admit).toHaveBeenCalledExactlyOnceWith(
+      { stage: "transaction", facts: "ordinary write" },
+      expect.any(Function),
+    );
+    expect(admission.failure).toBe(revoked);
+    expect(release).not.toHaveBeenCalled();
+    admission.finish();
+    expect(release).toHaveBeenCalledOnce();
+  } finally {
+    admission.finish();
+  }
+});
+
+it("refuses schema maintenance for a different database before acquiring authority", () => {
+  const databasePath = path.resolve("synthetic-schema.sqlite");
+  const admit = vi.fn();
+  const acquireSchema = vi.fn(() => ({ assertCurrent() {}, release() {} }));
+  const admission = createSqliteWorkerOperationAdmission(admit);
+  admission.bindDatabaseAuthority({ databasePath, assertAccess() {}, acquireSchema });
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    admission.service();
+    return "ok";
+  });
+  try {
+    expect(() =>
+      withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+        requestSqliteWorkerSchemaMaintenance(path.resolve("another-schema.sqlite")),
+      ),
+    ).toThrow("SQLite transaction admission was refused");
+    expect(admission.failure).toMatchObject({
+      message: "SQLite schema maintenance target differs from its admitted database",
+    });
+    expect(acquireSchema).not.toHaveBeenCalled();
+    expect(admit).not.toHaveBeenCalled();
+  } finally {
+    admission.finish();
+  }
+});
 
 it("reads a queued worker commit before settlement and message callbacks run", async () => {
   const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
@@ -290,6 +390,7 @@ it("refuses escaped continuations and captured scopes after synchronous operatio
   const duplicate = await import("./sqlite-worker-operation-admission.js");
   const { port1, port2 } = new MessageChannel();
   const requests = vi.spyOn(port1, "postMessage");
+  const schemaRequest = () => duplicate.requestSqliteWorkerSchemaMaintenance("synthetic.sqlite");
   const request = () =>
     duplicate.requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
   try {
@@ -297,10 +398,16 @@ it("refuses escaped continuations and captured scopes after synchronous operatio
       Promise.resolve().then(request),
     );
     await expect(escaped).rejects.toThrow("requires its retained admission");
+    const escapedSchema = withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+      Promise.resolve().then(schemaRequest),
+    );
+    await expect(escapedSchema).rejects.toThrow("requires its retained admission");
+    expect(schemaRequest()).toBe(false);
     const captured = withSqliteWorkerOperationAdmission({ port: port1 }, () =>
       AsyncLocalStorage.snapshot(),
     );
     expect(() => captured(request)).toThrow("requires its retained admission");
+    expect(() => captured(schemaRequest)).toThrow("requires its retained admission");
     let failedScope: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
     expect(() =>
       withSqliteWorkerOperationAdmission({ port: port1 }, () => {
@@ -310,6 +417,7 @@ it("refuses escaped continuations and captured scopes after synchronous operatio
     ).toThrow("operation failed");
     expect(failedScope).toBeDefined();
     expect(() => failedScope?.(request)).toThrow("requires its retained admission");
+    expect(() => failedScope?.(schemaRequest)).toThrow("requires its retained admission");
     expect(requests).not.toHaveBeenCalled();
   } finally {
     port1.close();

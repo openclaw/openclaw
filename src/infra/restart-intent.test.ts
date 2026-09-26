@@ -9,6 +9,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { acquireFileLockSync } from "./file-lock-manager.js";
+import { resolveGatewayStateOwnerPath } from "./gateway-state-owner.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -20,8 +22,6 @@ import {
   consumeGatewayRestartIntentSync,
   writeGatewayRestartIntentSync,
 } from "./restart-intent.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
-import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
 
 const tempDirs: string[] = [];
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
@@ -111,14 +111,17 @@ describe("gateway restart intent", () => {
     // The restart table is unchanged across this schema boundary.
     db.exec("PRAGMA user_version=15; UPDATE schema_meta SET schema_version=15");
     const before = db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all();
-    const anchor = acquireGatewayLifecycleCoordinator({ databasePath: filename });
-    anchor.release();
-    // An independent connection models the running Gateway's non-reentrant lease.
-    const owner = tryAcquireExclusiveSqliteCoordinator(anchor.path);
-    if (!owner) {
-      db.close();
-      throw new Error("Fixture Gateway lifecycle lease unavailable");
-    }
+    // Independent custody models the older serving process without lending schema authority.
+    const pathname = resolveGatewayStateOwnerPath(filename);
+    const owner = acquireFileLockSync(pathname, {
+      lockPath: pathname,
+      retry: { retries: 0 },
+      payload: () => ({
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: "synthetic",
+      }),
+    });
     try {
       expect(
         writeGatewayRestartIntentSync({

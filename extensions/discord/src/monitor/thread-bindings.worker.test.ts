@@ -34,7 +34,7 @@ it.each(["cold", "warm"] as const)(
   async (phase) => {
     expect(isMainThread).toBe(true);
     await resetThreadBindingsForTests();
-    await withOpenClawTestState({ label: `discord-binding-${phase}-sql` }, async (state) => {
+    await withOpenClawTestState({ label: `discord-binding-${phase}-sql` }, async () => {
       const saved: ThreadBindingRecord = {
         accountId: "work",
         channelId: "parent-1",
@@ -51,7 +51,7 @@ it.each(["cold", "warm"] as const)(
         maxEntries: 10_000,
       });
       native.register("work:thread-1", saved);
-      const calibration = observeHostDataSql(state.env);
+      const calibration = observeHostDataSql();
       let positive: number;
       try {
         expect(native.lookup("work:thread-1")).toEqual(saved);
@@ -61,7 +61,7 @@ it.each(["cold", "warm"] as const)(
         calibration.restore();
       }
       await closeOpenClawStateDatabaseAsync();
-      const observation = observeHostDataSql(state.env);
+      const observation = observeHostDataSql();
       const raw = [
         vi.spyOn(DatabaseSync.prototype, "prepare"),
         vi.spyOn(DatabaseSync.prototype, "exec"),
@@ -92,7 +92,6 @@ it.each(["cold", "warm"] as const)(
           nativePositive: positive,
           parentDataSql: observation.queries.length,
           rawParentOperations: raw.map((call) => call.mock.calls.length),
-          exclusion: "captured lifecycle coordinator database only",
         });
         expect(observation.queries).toEqual([]);
         for (const call of [...observation.calls, ...raw]) {

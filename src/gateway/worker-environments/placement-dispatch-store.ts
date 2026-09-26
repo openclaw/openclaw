@@ -124,7 +124,6 @@ export async function startWorkerPlacementDispatch(
       },
       {
         assertCurrent: check,
-        requireStateLifecycle: true,
         createAdmission: () => {
           let stage: "transaction" | "commit" = "transaction";
           admission = createSqliteWorkerOperationAdmission((request, grant) => {

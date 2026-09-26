@@ -1,3 +1,4 @@
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerNativeSettlementOwner } from "../infra/sqlite-worker-operation-settlement.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
@@ -72,9 +73,6 @@ export type TaskRegistryStore = TaskExecutionRestoreStore & {
     scope?: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],
     options?: { missingDatabase: "empty" },
   ) => Promise<TaskRegistryStoreSnapshot>;
-  loadMutationSnapshot?: (
-    scopes: readonly TaskRegistryMutationScope[],
-  ) => TaskRegistryStoreSnapshot;
   listTasksForOwnerKey?: (
     context: OpenClawStateWorkerContext,
     ownerKey: string,
@@ -207,35 +205,45 @@ export function resetTaskRegistryRuntimeForTests() {
 
 const storeLog = createSubsystemLogger("tasks/registry");
 
+/** The native mutation owner supplies its connection; worker publications already committed. */
+export function publishTaskRegistryAfterCommit(publish: () => void): void {
+  const database = getTaskRegistryProcessState().projection.nativeMutationDatabase;
+  if (!database || !deferSqlitePostCommitPublication(database, publish)) {
+    publish();
+  }
+}
+
 export function deliverTaskRegistryObserverEvent(
   createEvent: () => TaskRegistryObserverEvent,
   recordPublication: (event: TaskRegistryObserverEvent) => void,
 ): void {
-  const observers = getTaskRegistryObservers();
-  const state = getTaskRegistryProcessState();
-  if (
-    !observers?.onEvent &&
-    state.projection.pending.size === 0 &&
-    state.changeListeners.size === 0
-  ) {
-    return;
-  }
-  let event: TaskRegistryObserverEvent | undefined;
-  try {
-    event = createEvent();
-    recordPublication(event);
-    observers?.onEvent?.(event);
-  } catch (error) {
-    storeLog.warn("Task registry observer failed", { event: "task-registry", error });
-  } finally {
-    for (const listener of state.changeListeners) {
-      try {
-        listener(event);
-      } catch (error) {
-        storeLog.warn("Task registry change listener failed", { error });
+  publishTaskRegistryAfterCommit(() => {
+    const observers = getTaskRegistryObservers();
+    const state = getTaskRegistryProcessState();
+    if (
+      !observers?.onEvent &&
+      state.projection.pending.size === 0 &&
+      state.changeListeners.size === 0
+    ) {
+      return;
+    }
+    let event: TaskRegistryObserverEvent | undefined;
+    try {
+      event = createEvent();
+      recordPublication(event);
+      observers?.onEvent?.(event);
+    } catch (error) {
+      storeLog.warn("Task registry observer failed", { event: "task-registry", error });
+    } finally {
+      for (const listener of state.changeListeners) {
+        try {
+          listener(event);
+        } catch (error) {
+          storeLog.warn("Task registry change listener failed", { error });
+        }
       }
     }
-  }
+  });
 }
 
 export function tryPersistTaskUpsert(

@@ -34,7 +34,6 @@ export function createWorkerInferenceStore(
     };
     return runOpenClawStateWorkerOperation(context, (scope) => scope.execute(captured), {
       assertCurrent: check,
-      requireStateLifecycle: true,
       createAdmission: createSqliteWorkerWriteAdmission(check, [context.admission.databasePath]),
     });
   };

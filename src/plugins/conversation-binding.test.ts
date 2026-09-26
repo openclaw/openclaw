@@ -7,10 +7,6 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -559,62 +555,52 @@ describe("plugin conversation binding approvals", () => {
 
   it("fails closed when a pending bind approval reaches its 30-minute deadline", async () => {
     await closeOpenClawStateDatabaseAsync();
-    await withStateDatabaseCoordinatorRuntimeDirectory(
-      { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
-      async () => {
-        vi.useFakeTimers();
-        vi.setSystemTime(1_000);
-        const request = await requestPendingBinding(
-          createDiscordCodexBindRequest("channel:ttl", "Bind this conversation to Codex."),
-        );
-
-        // The deadline check is authoritative even when the event loop has not dispatched the timer.
-        vi.setSystemTime(1_000 + 30 * 60_000);
-        await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
-          status: "expired",
-        });
-        expect(sessionBindingState.bind).not.toHaveBeenCalled();
-        // Retire storage's independent idle timer before counting approval timers.
-        await closeOpenClawStateDatabaseAsync();
-        expect(vi.getTimerCount()).toBe(0);
-      },
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const request = await requestPendingBinding(
+      createDiscordCodexBindRequest("channel:ttl", "Bind this conversation to Codex."),
     );
+
+    // The deadline check is authoritative even when the event loop has not dispatched the timer.
+    vi.setSystemTime(1_000 + 30 * 60_000);
+    await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
+      status: "expired",
+    });
+    expect(sessionBindingState.bind).not.toHaveBeenCalled();
+    // Retire storage's independent idle timer before counting approval timers.
+    await closeOpenClawStateDatabaseAsync();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("evicts the oldest pending bind approval after 512 requests", async () => {
     await closeOpenClawStateDatabaseAsync();
-    await withStateDatabaseCoordinatorRuntimeDirectory(
-      { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
-      async () => {
-        vi.useFakeTimers();
-        const requests = [];
-        for (let index = 0; index < 513; index += 1) {
-          requests.push(
-            await requestPendingBinding(
-              createDiscordCodexBindRequest(
-                `channel:bounded-${index}`,
-                `Bind this conversation to Codex thread ${index}.`,
-              ),
-            ),
-          );
-        }
+    vi.useFakeTimers();
+    const requests = [];
+    for (let index = 0; index < 513; index += 1) {
+      requests.push(
+        await requestPendingBinding(
+          createDiscordCodexBindRequest(
+            `channel:bounded-${index}`,
+            `Bind this conversation to Codex thread ${index}.`,
+          ),
+        ),
+      );
+    }
 
-        // Pending approvals outlive database actors; count only their owned timers.
-        await closeOpenClawStateDatabaseAsync();
-        expect(vi.getTimerCount()).toBe(512);
-        const oldest = requests[0];
-        const newest = requests[512];
-        if (!oldest || !newest) {
-          throw new Error("expected bounded pending requests");
-        }
-        await expect(approveBindingRequest(oldest.approvalId, "allow-once")).resolves.toEqual({
-          status: "expired",
-        });
-        await expect(approveBindingRequest(newest.approvalId, "deny")).resolves.toMatchObject({
-          status: "denied",
-        });
-      },
-    );
+    // Pending approvals outlive database actors; count only their owned timers.
+    await closeOpenClawStateDatabaseAsync();
+    expect(vi.getTimerCount()).toBe(512);
+    const oldest = requests[0];
+    const newest = requests[512];
+    if (!oldest || !newest) {
+      throw new Error("expected bounded pending requests");
+    }
+    await expect(approveBindingRequest(oldest.approvalId, "allow-once")).resolves.toEqual({
+      status: "expired",
+    });
+    await expect(approveBindingRequest(newest.approvalId, "deny")).resolves.toMatchObject({
+      status: "denied",
+    });
   });
 
   it("keeps allow-once approval scoped to its requester and conversation", async () => {

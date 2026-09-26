@@ -12,7 +12,7 @@ import { onTaskRegistryChange } from "../tasks/task-registry.store.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "../tasks/task-registry.store.sqlite.js";
 import { resetTaskRegistryForTests } from "../tasks/task-registry.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import { getSession, waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -122,15 +122,11 @@ it.each(["creation", "finalization"] as const)(
         const sessionKey = `agent:main:contended-exec-${phase}`;
         const { tool, command, release } = quietBackgroundCommand(workspaceDir, sessionKey);
         const context = captureOpenClawStateWorkerContext();
-        let holder: ReturnType<typeof holdStateDatabaseCoordinator> | undefined;
-        const holdCoordinator = async () => {
+        let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
+        const holdWriter = async () => {
           // The worker watchdog releases a blocked old implementation; success
           // depends on the atomic ordering flag, never on a measured duration.
-          holder = holdStateDatabaseCoordinator(
-            context.admission.databasePath,
-            context.coordinatorRuntime,
-            10_000,
-          );
+          holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 10_000);
           await holder.ready;
         };
         const checkpoint = createDeferred<number>();
@@ -143,7 +139,7 @@ it.each(["creation", "finalization"] as const)(
           checkpointArmed = true;
           const held = holder;
           if (!held) {
-            throw new Error("Expected coordinator custody before the ledger operation");
+            throw new Error("Expected native writer contention before the ledger operation");
           }
           // Arming before tool.execute would let asynchronous preflight satisfy
           // this checkpoint before the original synchronous ledger call begins.
@@ -176,7 +172,7 @@ it.each(["creation", "finalization"] as const)(
             // Preflight is complete and the quiet child is alive. Registration
             // cannot enter until this exact native handle returns to exec.
             if (phase === "creation") {
-              await holdCoordinator();
+              await holdWriter();
             }
             spawned.resolve(run);
           }
@@ -208,7 +204,7 @@ it.each(["creation", "finalization"] as const)(
           );
           if (phase === "finalization") {
             expect((await execution).details.status).toBe("running");
-            await holdCoordinator();
+            await holdWriter();
           }
           const run = await withTestTimeout(
             spawned.promise,
@@ -227,7 +223,7 @@ it.each(["creation", "finalization"] as const)(
               15_000,
               "Exec did not reach its ledger boundary",
             ),
-            "main loop checkpoint must precede coordinator release",
+            "main loop checkpoint must precede native writer release",
           ).toBe(0);
           if (phase === "creation") {
             expect(executionSettled).toBe(false);

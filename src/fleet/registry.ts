@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import path from "node:path";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";

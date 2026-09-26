@@ -72,7 +72,7 @@ const selectionCases = [
 
 async function expectNoHostSql(stateDir: string, label: string, run: () => void | Promise<void>) {
   await closeOpenClawStateDatabaseAsync();
-  const observation = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
+  const observation = observeHostDataSql();
   const sql = observation.calls;
   try {
     await run();

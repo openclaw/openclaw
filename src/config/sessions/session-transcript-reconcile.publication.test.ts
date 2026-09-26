@@ -136,7 +136,7 @@ it("publishes a cold compressed multi-chunk branch without host data SQL", async
     .run(scope.sessionId);
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
-  const observed = observeHostDataSql(options.env);
+  const observed = observeHostDataSql();
   try {
     await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
       reconciledSessions: 1,
@@ -264,7 +264,6 @@ it("delivers a committed finalization before close permits a physical successor"
         stateContext?: Parameters<typeof runOperation>[2],
         assertCurrent?: Parameters<typeof runOperation>[3],
         createAdmission?: Parameters<typeof runOperation>[4],
-        requireStateLifecycle?: Parameters<typeof runOperation>[5],
       ) =>
         runOperation(
           target,
@@ -291,7 +290,6 @@ it("delivers a committed finalization before close permits a physical successor"
           stateContext,
           assertCurrent,
           createAdmission,
-          requireStateLifecycle,
         ),
     );
   let reconciliation: ReturnType<typeof reconcileSessionTranscriptIndexes> | undefined;

@@ -104,9 +104,9 @@ retired `cron_run_logs` table requires Doctor before runtime can open it; Doctor
 imports its retained history into task runs atomically before removing the table.
 Shared-state integrity, schema, version, and ownership checks remain in place.
 
-Schema compatibility preflight can read agent schema headers without a full integrity scan. For ordinary rollback-mode agent databases and complete WAL families, a read-only child reads the schema version and optional writer build in one fresh SQLite transaction, including committed WAL changes, without copying unrelated database contents. Its source-reader lease stays held through native close; cancellation and timeout wait for child closure. Parent-side diagnostics do not open or close the live agent file, preserving the parent's SQLite locks. As with the previous online-backup reader, native SQLite may update SHM read marks or rebuild existing SHM after a quiescent family reopens; the database and WAL contents remain unchanged. The Gateway carries successful header facts from admission to its later compatibility preflight only while the database, WAL, and rollback-journal files are unchanged. Changed or uncertain files are inspected again. Full readiness and writable admission retain their existing validation and fresh authority checks.
+Schema compatibility preflight can read agent schema headers without a full integrity scan. For ordinary rollback-mode agent databases and complete WAL families, a read-only child reads the schema version and optional writer build in one fresh SQLite transaction, including committed WAL changes, without copying unrelated database contents. Its native connection and physical identity remain owned through close; cancellation and timeout wait for child closure. Parent-side diagnostics do not open or close the live agent file, preserving the parent's SQLite locks. As with the previous online-backup reader, native SQLite may update SHM read marks or rebuild existing SHM after a quiescent family reopens; the database and WAL contents remain unchanged. The Gateway carries successful header facts from admission to its later compatibility preflight only while the database, WAL, and rollback-journal files are unchanged. Changed or uncertain files are inspected again. Full readiness and writable admission retain their existing validation and fresh authority checks.
 
-Private snapshots remain necessary inside owner-held source-exclusion scopes, for incomplete WAL families whose inspection would create source sidecars, and for rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. Shared-state preflight is unchanged. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
+Private snapshots remain necessary for artifact-preserving inspection, incomplete WAL families whose inspection would create source sidecars, and rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. Live files use native SQLite reads, never an immutable-file shortcut. Immutable reads are limited to verified private or explicit consolidated copies. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
 
 Concurrent asynchronous requests for the same physical live database share one
 snapshot operation. When the canonical runtime already owns an open SQLite
@@ -120,7 +120,9 @@ plugin migration obligations through the existing live shared-state reader or
 worker rather than copying the database and WAL. Each read sees current committed
 rows; it does not cache obligations or grant publication authority. Unobserved
 inspection and inherited artifact-preserving scopes retain private snapshots.
-Migration publication still rechecks the current generation under its coordinator.
+Migration publication rechecks the current generation inside the same native
+write transaction that protects synchronous publication. Empty historical state
+retains its schema, and absent state remains absent.
 
 Runtime config publication, including model-catalog worker generations, also reads
 Claw consent provenance through the live shared-state reader instead of copying
@@ -139,7 +141,7 @@ replacements, and changes to captured bytes require another attempt. SQLite
 interprets committed frames in the private copy. Source SHM stays untouched.
 Only raw copies reuse a scoped IPC child; native backups remain one-shot to avoid
 Node 26 completion stalls with persistent IPC. Incomplete WAL families, rollback
-crash residue, and owner-excluded sources also retain private copying and recovery.
+crash residue, and artifact-preserving inspection retain private copying and recovery.
 Existing WAL and rollback-journal files can coexist without write activity;
 inspection copies and verifies both before SQLite recovers the private family.
 It does not discard committed WAL pages, repair the source, or change plan identity.
@@ -261,7 +263,7 @@ Live snapshots use the online-backup worker. Artifact-preserving scopes and sync
 Full startup readiness checks agent ownership, integrity, foreign keys, and schema
 in one fresh read-only transaction in a disposable child. Complete WAL families
 and rollback-mode databases without journals do not need a full private copy.
-Empty files, incomplete WAL families, rollback recovery, and source-exclusion
+Empty files, incomplete WAL families, rollback recovery, and artifact-preserving
 scopes retain private snapshot inspection. The parent waits
 for native close before accepting the result or releasing its scope. The source
 database and WAL remain unchanged; native WAL readers may update SHM read marks.
@@ -401,19 +403,13 @@ checkpoint clears the warning; a large WAL alone does not mean a checkpoint is
 blocked. File-size observation failures are recorded and logged separately from
 SQLite's completion result; they do not turn a completed checkpoint into a failure.
 
-Shared-state maintenance waits up to 350 ms for lifecycle coordination. Periodic
-maintenance yields between acquisition attempts so the Gateway event loop can
-continue. It rechecks the same database owner and physical file before proceeding;
-retirement cancels and joins pending admission. Explicit synchronous checkpoint
-and close operations retain their existing contract. A refused
-periodic attempt retries once after one second, then waits for the next interval.
-Contention is recorded as blocked. Status and Doctor warn after two consecutive
-refusals; maintenance logs once per five. A completed checkpoint resets that count and clears the history
-eviction gate. On Linux, `blockingOwner` includes the observed kernel lock holder's
-PID, process start time (boot ticks), command, and coordinator family when procfs
-is available. This best-effort snapshot is diagnostic only; the SQLite lock still
-owns exclusion. Other platforms and unavailable observations report `unknown`.
-Coordinator files remain write-free, and updates require no state migration.
+Periodic maintenance yields before native work so the Gateway event loop can
+continue. After yielding, it rechecks the same database owner, physical file,
+and captured maintenance authority. Retirement cancels and joins pending work.
+SQLite handles writer contention directly with a zero busy timeout; maintenance
+does not wait on a separate coordination database. Explicit synchronous
+checkpoint and close operations retain their synchronous contract. These changes
+require no state migration.
 
 The warning includes observed WAL and database sizes, checkpointed and total WAL
 frames, the last observed complete checkpoint, the consecutive blocked count,

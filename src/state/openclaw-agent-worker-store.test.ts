@@ -335,6 +335,69 @@ describe.each(["borrowed", "captured"] as const)(
       ]);
     });
 
+    it.each(["ordinary", "admission"] as const)(
+      "preserves a single-command %s error after cleanup admission is refused",
+      async (failure) => {
+        const { db, worker } = await setup({ cleanupAdmission: true });
+        db.exec(`
+        CREATE TRIGGER fail_command BEFORE INSERT ON worker_proof
+        WHEN NEW.value = 'failed'
+        BEGIN
+          SELECT RAISE(ABORT, 'controlled command failure');
+        END
+      `);
+        const create = admission.createSqliteWorkerOperationAdmission;
+        const commandRefusal = new Error("controlled command admission refusal");
+        let commandRefusals = 0;
+        let refusals = 0;
+        const interception = vi
+          .spyOn(admission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) =>
+            create((request, grant) => {
+              if (failure === "admission" && request.stage === "transaction") {
+                commandRefusals++;
+                throw commandRefusal;
+              }
+              if (isRecord(request.facts) && request.facts.kind === "fixture-cleanup") {
+                refusals++;
+                throw new Error("controlled publication cleanup admission refusal");
+              }
+              admit(request, grant);
+            }, attachment),
+          );
+        const result = worker.execute(
+          { type: "append", input: { value: "failed" } },
+          () => undefined,
+        );
+        if (failure === "admission") {
+          await expect(result).rejects.toBe(commandRefusal);
+        } else {
+          await expect(result).rejects.toThrow("controlled command failure");
+        }
+        expect(commandRefusals).toBe(failure === "admission" ? 1 : 0);
+        expect(refusals).toBe(1);
+        expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
+        interception.mockRestore();
+
+        const following = await openOpenClawAgentSqliteWorkerStore<AgentWorkerFixtureOperations>(
+          options,
+          db,
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
+            input: undefined,
+          },
+        );
+        workers.add(following);
+        expect(
+          await following.execute(
+            { type: "append", input: { value: "follower" } },
+            () => undefined,
+          ),
+        ).toBeGreaterThan(0);
+        expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "follower" }]);
+      },
+    );
+
     it("does not grant a cleanup transaction after a single read", async () => {
       const { db, worker } = await setup({ closeWriteValue: "must not commit" });
       await expect(

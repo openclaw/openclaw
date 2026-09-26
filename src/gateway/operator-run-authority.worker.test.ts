@@ -32,7 +32,7 @@ import {
 it.each(["capture", "operator tool"])(
   "prepares %s profile authority without parent data SQL",
   async (entry) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("operator-sql@example.test");
       setUserProfileRole(profile.id, "reader");
       const sourceScopes: GatewayOperatorRoleDefinition["scopes"] =
@@ -72,7 +72,7 @@ it.each(["capture", "operator tool"])(
             },
           },
         ]);
-      const sql = observeHostDataSql(state.env);
+      const sql = observeHostDataSql();
       try {
         const calibration = new DatabaseSync(":memory:");
         try {

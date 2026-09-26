@@ -48,18 +48,16 @@ vi.mock("../../infra/gateway-owner-lease.js", async (original) => ({
       ? { state: "live", mode: "supervised", pid: 4242 }
       : undefined,
 }));
-vi.mock("../../infra/state-database-coordinator.js", async (original) => {
-  const actual = await original<typeof import("../../infra/state-database-coordinator.js")>();
+vi.mock("../../infra/gateway-state-owner.js", async (original) => {
+  const actual = await original<typeof import("../../infra/gateway-state-owner.js")>();
   return {
     ...actual,
-    acquireGatewayMaintenanceCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayMaintenanceCoordinator>[0],
-    ) => {
+    acquireGatewayStateOwner: (params: Parameters<typeof actual.acquireGatewayStateOwner>[0]) => {
       if (native.inspecting && (!native.stopped || native.contend)) {
         native.events.push(native.stopped ? "non-serving-holder" : "running-holder");
-        throw new actual.StateDatabaseCoordinatorContentionError("gateway-lifecycle");
+        throw new actual.GatewayStateOwnerContentionError(params.databasePath);
       }
-      return actual.acquireGatewayMaintenanceCoordinator(params);
+      return actual.acquireGatewayStateOwner(params);
     },
   };
 });

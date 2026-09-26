@@ -5,7 +5,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -312,9 +311,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         assertPreparedCurrent = assertCurrent;
         if (!memo.entries) {
           const reply = await inCapturedScope(() =>
-            withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
-              executeExistingOpenClawStateRead(options, { type: "agentDatabaseRegistry.read" }),
-            ),
+            executeExistingOpenClawStateRead(options, { type: "agentDatabaseRegistry.read" }),
           );
           if (reply && (!reply.ok || reply.type !== "agentDatabaseRegistry.read")) {
             throw new Error("Unexpected agent database registry read result");

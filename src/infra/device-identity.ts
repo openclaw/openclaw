@@ -1,16 +1,13 @@
 // Gateway/device Ed25519 identity API backed by canonical shared SQLite state.
 import crypto from "node:crypto";
-import path from "node:path";
-import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
-import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import {
   cacheProcessDeviceIdentity,
   readProcessDeviceIdentity,
 } from "./device-identity-process-cache.js";
 import {
+  assertNoPendingLegacyIdentity,
   generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
-  PRIMARY_DEVICE_IDENTITY_KEY,
   readStoredDeviceIdentity,
   readStoredDeviceIdentityReadOnly,
   resolveDeviceIdentityStore,
@@ -25,13 +22,8 @@ import {
   verifyEd25519Signature,
 } from "./ed25519-signature.js";
 import { pathMayExistSync } from "./path-existence.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 
 export type { DeviceIdentity } from "./device-identity-store.js";
-
-const LEGACY_DEVICE_IDENTITY_RELATIVE_PATH = path.join("identity", "device.json");
-const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
-const NATIVE_CLAIM_SUFFIX = ".native-importing";
 
 function toDeviceIdentity(stored: StoredDeviceIdentity): DeviceIdentity {
   return {
@@ -41,98 +33,30 @@ function toDeviceIdentity(stored: StoredDeviceIdentity): DeviceIdentity {
   };
 }
 
-/** Exact retired file owned by Doctor migration code. */
-function resolveLegacyDeviceIdentityPath(options: DeviceIdentityStoreOptions = {}): string {
-  const { databasePath } = resolveDeviceIdentityStore(options);
-  return path.join(
-    resolveOpenClawStateDirForDatabasePath(databasePath),
-    LEGACY_DEVICE_IDENTITY_RELATIVE_PATH,
-  );
-}
-
-export function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): void {
-  const { identityKey } = resolveDeviceIdentityStore(options);
-  if (identityKey !== PRIMARY_DEVICE_IDENTITY_KEY) {
-    return;
-  }
-  const legacyPath = resolveLegacyDeviceIdentityPath(options);
-  if (
-    // Claims first, source last: both migration owners restore claim -> source atomically.
-    pathMayExistSync(`${legacyPath}${DOCTOR_CLAIM_SUFFIX}`) ||
-    pathMayExistSync(`${legacyPath}${NATIVE_CLAIM_SUFFIX}`) ||
-    pathMayExistSync(legacyPath)
-  ) {
-    throw new Error(
-      `Legacy device identity exists at ${legacyPath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
-    );
-  }
-}
-
-function withDeviceIdentityCoordinator<T>(
-  options: DeviceIdentityStoreOptions,
-  operation: (
-    resolved: ReturnType<typeof resolveDeviceIdentityStore>,
-    resolvedOptions: DeviceIdentityStoreOptions,
-  ) => T,
-): T {
+/** Load a valid canonical identity or atomically create its SQLite row. */
+export function loadOrCreateDeviceIdentity(
+  options: DeviceIdentityStoreOptions = {},
+): DeviceIdentity {
   const resolved = resolveDeviceIdentityStore(options);
   const resolvedOptions: DeviceIdentityStoreOptions = {
     ...options,
     path: resolved.databasePath,
     identityKey: resolved.identityKey,
   };
-  const coordinator = acquireDeviceIdentityCoordinator({
-    databasePath: resolved.databasePath,
-    stateDir: resolveOpenClawStateDirForDatabasePath(resolved.databasePath),
-  });
-  let result: T;
-  try {
-    result = operation(resolved, resolvedOptions);
-  } catch (operationError) {
-    let releaseFailed = false;
-    let releaseError: unknown;
-    try {
-      coordinator.release();
-    } catch (error) {
-      releaseFailed = true;
-      releaseError = error;
-    }
-    if (releaseFailed) {
-      throw createSqliteLifecycleAggregateError(
-        [operationError, releaseError],
-        "device identity operation and coordinator release both failed",
-        operationError,
-      );
-    }
-    throw operationError;
-  }
-  coordinator.release();
-  return result;
-}
-
-function loadOrCreateDeviceIdentityOwned(options: DeviceIdentityStoreOptions): DeviceIdentity {
-  const { databasePath } = resolveDeviceIdentityStore(options);
   // A downgrade can recreate retired JSON after SQLite migration. Once this profile has
   // a canonical row, keep it authoritative and leave the retired source for Doctor.
-  const existing = pathMayExistSync(databasePath) ? readStoredDeviceIdentity(options) : null;
+  const existing = pathMayExistSync(resolved.databasePath)
+    ? readStoredDeviceIdentity(resolvedOptions)
+    : null;
   if (existing) {
     return toDeviceIdentity(existing);
   }
-  assertNoPendingLegacyIdentity(options);
+  assertNoPendingLegacyIdentity(resolvedOptions);
 
   // Generate outside the write transaction. The transaction rereads the row
   // before inserting so concurrent runtimes converge on one authoritative key.
   const candidate = generateStoredDeviceIdentity();
-  return toDeviceIdentity(insertStoredDeviceIdentityIfAbsent(candidate, options));
-}
-
-/** Load a valid canonical identity or atomically create its SQLite row. */
-export function loadOrCreateDeviceIdentity(
-  options: DeviceIdentityStoreOptions = {},
-): DeviceIdentity {
-  return withDeviceIdentityCoordinator(options, (_resolved, resolvedOptions) =>
-    loadOrCreateDeviceIdentityOwned(resolvedOptions),
-  );
+  return toDeviceIdentity(insertStoredDeviceIdentityIfAbsent(candidate, resolvedOptions));
 }
 
 /** Keep one authoritative identity stable for the lifetime of a state-dir process. */

@@ -490,7 +490,7 @@ export async function handleChatAbortRequest(options: GatewayRequestHandlerOptio
       errorShape(
         ErrorCodes.UNAVAILABLE,
         "The server is busy. Check this turn's status before trying Stop again.\n\n" +
-          "StateDatabaseCoordinatorContentionError: state-lifecycle acquisition remained busy. Stopping may already have taken effect.",
+          "SQLite transaction admission remained busy. Stopping may already have taken effect.",
         { details: { errorKind: contention.errorKind } },
       ),
     );

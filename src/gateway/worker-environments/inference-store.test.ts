@@ -18,7 +18,6 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { collectErrorGraphCandidates } from "../../infra/errors.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
-import * as lifecyclePreparation from "../../infra/sqlite-worker-lifecycle-preparation.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -238,7 +237,6 @@ describe("worker inference SQLite store", async () => {
           ...(current instanceof Error ? [current.cause] : []),
           ...(current instanceof AggregateError ? current.errors : []),
         ]);
-      const posted = createDeferred();
       const dispatched = createDeferred();
       const submitted = createDeferred<{ promise: ReturnType<WorkerInferenceStore["begin"]> }>();
       const originalBegin = store.begin;
@@ -264,28 +262,6 @@ describe("worker inference SQLite store", async () => {
       const restores: Array<() => void> = [];
       try {
         await manager.ready();
-        const armByPort = new WeakMap<MessagePort, () => void>();
-        const originalPrepare = lifecyclePreparation.createSqliteWorkerLifecyclePreparation;
-        const preparation = vi
-          .spyOn(lifecyclePreparation, "createSqliteWorkerLifecyclePreparation")
-          .mockImplementation((params) => {
-            let selected = false;
-            const prepared = originalPrepare({
-              ...params,
-              dispatch() {
-                params.dispatch();
-                if (selected) {
-                  invalid = true;
-                  dispatched.resolve();
-                }
-              },
-            });
-            armByPort.set(prepared.port, () => {
-              selected = true;
-            });
-            return prepared;
-          });
-        restores.push(() => preparation.mockRestore());
         const originalPost: unknown = Object.getOwnPropertyDescriptor(
           Worker.prototype,
           "postMessage",
@@ -309,18 +285,14 @@ describe("worker inference SQLite store", async () => {
               if (
                 typeof request.id !== "number" ||
                 typeof request.actor !== "number" ||
-                !(request.lifecyclePreparation instanceof MessagePort)
+                !(request.operationAdmission instanceof MessagePort)
               ) {
-                throw new Error("native begin did not use its maintained lifecycle preparation");
-              }
-              const arm = armByPort.get(request.lifecyclePreparation);
-              if (!arm) {
-                throw new Error("native begin preparation was not observed");
+                throw new Error("native begin omitted its operation admission");
               }
               Reflect.apply(originalPost, this, args);
               target = { worker: this, id: request.id, actor: request.actor };
-              arm();
-              posted.resolve();
+              invalid = true;
+              dispatched.resolve();
               return;
             }
           }
@@ -330,7 +302,7 @@ describe("worker inference SQLite store", async () => {
         const originalReceive = brokerReply.receiveSqliteWorkerReply;
         const replies = vi
           .spyOn(brokerReply, "receiveSqliteWorkerReply")
-          .mockImplementation((slot, reply, owner, pumping) => {
+          .mockImplementation((slot, reply, owner) => {
             const job = slot.current;
             const refusal = job?.operationAdmission?.admission.failure;
             if (
@@ -346,10 +318,10 @@ describe("worker inference SQLite store", async () => {
             ) {
               refusalReplies += 1;
               if (mode === "lost-refusal-reply" && refusalReplies === 1) {
-                return originalReceive(slot, { ...reply, id: reply.id + 1 }, owner, pumping);
+                return originalReceive(slot, { ...reply, id: reply.id + 1 }, owner);
               }
             }
-            return originalReceive(slot, reply, owner, pumping);
+            return originalReceive(slot, reply, owner);
           });
         restores.push(() => replies.mockRestore());
         const started = manager.start({
@@ -373,10 +345,9 @@ describe("worker inference SQLite store", async () => {
             throw new Error("begin failed before observed native dispatch");
           },
         );
-        await Promise.race([posted.promise, endedBeforeDispatch]);
+        await Promise.race([dispatched.promise, endedBeforeDispatch]);
         drain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
         const drained = Promise.allSettled([drain.drained]);
-        await Promise.race([dispatched.promise, endedBeforeDispatch]);
         const [native] = await Promise.allSettled([promise]);
         if (native.status !== "rejected") {
           throw new Error("native begin unexpectedly succeeded");
@@ -515,7 +486,7 @@ describe("worker inference SQLite store", async () => {
         const originalReceive = brokerReply.receiveSqliteWorkerReply;
         const receiver = vi
           .spyOn(brokerReply, "receiveSqliteWorkerReply")
-          .mockImplementation((slot, reply, owner, pumping) => {
+          .mockImplementation((slot, reply, owner) => {
             if (
               slot.current?.request.type === "execute" &&
               slot.current.nativeDispatched &&
@@ -531,18 +502,13 @@ describe("worker inference SQLite store", async () => {
               ) {
                 terminalReplies += 1;
                 if (terminalReplies === 1) {
-                  // Both lifecycle-port and Worker messages reach this receiver after COMMIT.
+                  // The Worker reply reaches this receiver after COMMIT.
                   committedOutcome = value;
-                  return originalReceive(
-                    slot,
-                    { ...reply, value: new Uint8Array([0]) },
-                    owner,
-                    pumping,
-                  );
+                  return originalReceive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
                 }
               }
             }
-            return originalReceive(slot, reply, owner, pumping);
+            return originalReceive(slot, reply, owner);
           });
         restoreReceiver = () => receiver.mockRestore();
         const cancellation = manager.captureSessionCancellation(REQUEST.sessionId).cancel();

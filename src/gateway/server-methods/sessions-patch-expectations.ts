@@ -7,7 +7,7 @@ import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-con
 import type { SessionEntry } from "../../config/sessions.js";
 import { prepareSessionEntryMutationDatabases } from "../../config/sessions/session-accessor.entry-mutation.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { prepareGatewaySessionLifecycleTargets } from "../session-lifecycle-preparation.js";

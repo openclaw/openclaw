@@ -18,7 +18,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import { DetachedTaskRuntimeOwnerRetiredError } from "./detached-task-runtime-contract.js";
 import { finalizeTaskRunByRunIdAsync } from "./detached-task-runtime.async.js";
 import { findDetachedTaskRunAsync } from "./detached-task-runtime.js";
@@ -142,11 +142,7 @@ it.each([
       await prepareTaskRegistryRead();
       const context = captureOpenClawStateWorkerContext();
       expect(context.admission.databasePath.startsWith(state.stateDir)).toBe(true);
-      const holder = holdStateDatabaseCoordinator(
-        context.admission.databasePath,
-        context.coordinatorRuntime,
-        300,
-      );
+      const holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 300);
       let pending: Promise<unknown> | undefined;
       let settled: Promise<PromiseSettledResult<unknown>[]> | undefined;
       const abort = new AbortController();
@@ -213,7 +209,7 @@ it.each([
           await expect(pending).rejects.toMatchObject({ name: "AbortError" });
           expect(
             Atomics.load(holder.released, 0),
-            "cancellation must settle before the coordinator holder releases",
+            "cancellation must settle before the write transaction holder releases",
           ).toBe(0);
         }
         holder.release();

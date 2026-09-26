@@ -6,7 +6,7 @@ import {
   type PreparedAgentHarnessSessionDeletion,
 } from "../../agents/harness/session-deletion.js";
 import type { AgentHarnessSessionDeletionMutation } from "../../agents/harness/types.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   commitSessionInitializationRollback,

@@ -11,10 +11,6 @@ import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqli
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerNativeSettlementOwner } from "../../infra/sqlite-worker-operation-settlement.js";
 import {
-  acquireStateDatabaseCoordinator,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../../infra/state-database-coordinator.js";
-import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
@@ -30,7 +26,7 @@ import {
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { holdStateDatabaseCoordinator } from "../../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
@@ -183,11 +179,7 @@ describe("registered artifact task reads", () => {
         await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         const context = captureOpenClawStateWorkerContext();
-        const holder = holdStateDatabaseCoordinator(
-          context.admission.databasePath,
-          context.coordinatorRuntime,
-          300,
-        );
+        const holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 300);
         let pending: ReturnType<typeof request> | undefined;
         let observation: ReturnType<typeof observeHostSql> | undefined;
         try {
@@ -319,7 +311,6 @@ describe("registered artifact task reads", () => {
           | undefined;
         let responded = false;
         let closing: Promise<void> | undefined;
-        let heldCoordinator: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
         const observation = observeHostSql();
         let submissionSql = observation.counts();
         let submissionExec: string[] = [];
@@ -373,12 +364,6 @@ describe("registered artifact task reads", () => {
             return receipt;
           });
         try {
-          // Keep producer coordinator cleanup outside the registered RPC SQL observation.
-          const context = captureOpenClawStateWorkerContext();
-          heldCoordinator = withStateDatabaseCoordinatorRuntimeDirectory(
-            context.coordinatorRuntime,
-            () => acquireStateDatabaseCoordinator({ databasePath: context.admission.databasePath }),
-          );
           emitAgentEvent({
             runId: task.runId!,
             stream: "tool",
@@ -400,8 +385,6 @@ describe("registered artifact task reads", () => {
           });
           expect(Object.values(observation.counts())).toEqual(Array(8).fill(0));
           observation.restore();
-          heldCoordinator.release();
-          heldCoordinator = undefined;
           if (outcome === "replaced config") {
             config = rolePolicyConfig();
           } else if (outcome === "retired database") {
@@ -438,7 +421,6 @@ describe("registered artifact task reads", () => {
           });
         } finally {
           observation.restore();
-          heldCoordinator?.release();
           release.resolve();
           await result;
           await closing;

@@ -36,7 +36,6 @@ import "./openclaw-state-read.worker.js";
 const request: OpenClawStateReadRequest = {
   context: {
     environment: { OPENCLAW_STATE_DIR: "/fixture" },
-    coordinatorRuntime: { directory: "/fixture/coordinator", keepAlive: false },
   },
   databasePath: "/fixture/state.sqlite",
   location: "/fixture/snapshot.sqlite",

@@ -11,6 +11,10 @@ const { workers } = vi.hoisted(() => ({
   workers: [] as (EventEmitter & { shared: BigInt64Array })[],
 }));
 
+vi.mock("../infra/sqlite-worker-identity.js", () => ({
+  readDatabasePathIdentitySync: (canonicalPath: string) => ({ key: "file:12:34", canonicalPath }),
+}));
+
 vi.mock("node:worker_threads", async () => {
   const { EventEmitter } = await import("node:events");
   return {

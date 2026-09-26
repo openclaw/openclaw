@@ -260,15 +260,15 @@ export async function allocateResources() {
   const jiti = createJiti(import.meta.url, { fsCache: cache, moduleCache: false, tryNative: false });
   expect((await jiti.import(${JSON.stringify(path.join(root, "tiny.ts"))})).answer).toBe(42);
   expect(fs.readdirSync(cache).length).toBeGreaterThan(0);
+  const namespaceEntries = fs.readdirSync(namespace).toSorted();
   let sdkHome;
   await withTempHomeCore(async (base) => { sdkHome = base; }, { skipSessionCleanup: true });
   expect(fs.existsSync(sdkHome)).toBe(false);
   const shared = await createTempHomeEnv("oc-shared-home-");
   await shared.restore();
   expect(fs.existsSync(shared.home)).toBe(false);
-  const roots = [path.dirname(sdkHome), path.dirname(shared.home)];
-  for (const root of roots) expect(fs.readdirSync(root)).toEqual([]);
-  return { home, cache, roots };
+  expect(fs.readdirSync(namespace).toSorted()).toEqual(namespaceEntries);
+  return { home, cache, tempHomes: [sdkHome, shared.home] };
 }
 `,
     );
@@ -322,7 +322,7 @@ it(${JSON.stringify(fixtureTests[1][1])}, () => {
   expect(current.db.prepare("SELECT count(*) AS count FROM sqlite_schema").get().count).toBeGreaterThan(0);
   expect(fs.existsSync(current.path)).toBe(true);
   expect(resources.home).toBe(previous.resources.home);
-  expect(resources.roots).not.toEqual(previous.resources.roots);
+  expect(resources.tempHomes).not.toEqual(previous.resources.tempHomes);
   fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ path: current.path, resetVerified: true, resources: [previous.resources, resources] }));
   if (process.env.OPENCLAW_TUI_PTY_MIRROR_PATH) fs.appendFileSync(process.env.OPENCLAW_TUI_PTY_MIRROR_PATH, "namespace fixture frame\\n");
   ${failRun ? `expect.fail(${JSON.stringify(intentionalFailure)});` : ""}
@@ -573,7 +573,7 @@ process.exitCode = (await completion).code ?? 1;`,
       const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as {
         path: string;
         resetVerified: boolean;
-        resources: Array<{ home: string; cache: string; roots: string[] }>;
+        resources: Array<{ home: string; cache: string; tempHomes: string[] }>;
       };
       expect(receipt.resetVerified).toBe(true);
       const configReceipt = JSON.parse(fs.readFileSync(configReceiptPath, "utf8"));
@@ -586,7 +586,7 @@ process.exitCode = (await completion).code ?? 1;`,
         syntheticCredential,
       );
       for (const resource of receipt.resources) {
-        for (const owned of [resource.home, resource.cache, ...resource.roots]) {
+        for (const owned of [resource.home, resource.cache, ...resource.tempHomes]) {
           expect(fs.existsSync(owned), owned).toBe(
             realHome && (owned === resource.home || owned === resource.cache),
           );

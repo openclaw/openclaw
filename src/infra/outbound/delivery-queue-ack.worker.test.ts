@@ -59,7 +59,7 @@ describe("outbound acknowledgement worker", () => {
         { queueId: id, expectedPlatformSendAttemptId: claimId },
         context,
       );
-      const sql = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
+      const sql = observeHostDataSql();
       try {
         await owner.ack();
         expect(owner.custody).toBe("released");

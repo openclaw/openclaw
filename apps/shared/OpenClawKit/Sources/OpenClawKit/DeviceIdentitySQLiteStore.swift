@@ -1,36 +1,13 @@
-import CryptoKit
 import Darwin
 import Foundation
 import OpenClawNativeState
-#if canImport(Security)
-import Security
-#endif
-import SQLite3
 
 enum DeviceIdentitySQLiteStore {
-    // Parallel test bursts serialize first-time identity creation behind the
-    // exclusive coordinator; 5s starved late waiters on loaded CI runners and
-    // failed whichever identity-dependent tests lost the race. Uncontended
-    // production access never waits this long.
+    // First writers serialize on the real database, including parallel native startup.
     private static let busyTimeoutMilliseconds: Int32 = 30000
     private static let maximumLegacyIdentityBytes = 64 * 1024
     private static let doctorClaimSuffix = ".doctor-importing"
     private static let nativeClaimSuffix = ".native-importing"
-    private static let appSandboxed: Bool = {
-        #if os(macOS) && canImport(Security)
-        guard let task = SecTaskCreateFromSelf(nil) else {
-            return ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
-        }
-        let value = SecTaskCopyValueForEntitlement(
-            task,
-            "com.apple.security.app-sandbox" as CFString,
-            nil)
-        return (value as? Bool) == true
-        #else
-        return true
-        #endif
-    }()
-
     private struct LegacyClaim {
         let source: DeviceIdentityPaths.LegacyIdentitySource
         let identityURL: URL
@@ -46,33 +23,6 @@ enum DeviceIdentitySQLiteStore {
         let modifiedAt: Date?
     }
 
-    private final class IdentityCoordinator {
-        private var databases: [OpaquePointer]
-
-        init(databases: [OpaquePointer]) {
-            self.databases = databases
-        }
-
-        func release() throws {
-            let databases = self.databases
-            self.databases = []
-            var releaseErrors: [String] = []
-            for database in databases.reversed() {
-                if sqlite3_exec(database, "ROLLBACK", nil, nil, nil) != SQLITE_OK {
-                    releaseErrors.append(String(cString: sqlite3_errmsg(database)))
-                }
-                if sqlite3_close(database) != SQLITE_OK {
-                    releaseErrors.append("could not close coordinator database")
-                }
-            }
-            if !releaseErrors.isEmpty {
-                throw DeviceIdentityStore.storageError(
-                    "Could not release device identity coordinator: " +
-                        releaseErrors.joined(separator: "; "))
-            }
-        }
-    }
-
     static func loadOrCreate(
         databaseURL: URL,
         destinationStateDirURL: URL,
@@ -82,31 +32,16 @@ enum DeviceIdentitySQLiteStore {
         afterLegacyCommit: (() throws -> Void)? = nil) throws
         -> DeviceIdentity
     {
+        try OpenClawNativeStateSQLite.assertNoOfflineMaintenance(databaseURL: databaseURL)
         try self.secureDirectory(destinationStateDirURL)
         try self.secureDirectory(databaseURL.deletingLastPathComponent())
-        let coordinator = try self.acquireIdentityCoordinator(
+        return try self.loadOrCreateOwned(
             databaseURL: databaseURL,
-            destinationStateDirURL: destinationStateDirURL)
-        do {
-            let identity = try self.loadOrCreateOwned(
-                databaseURL: databaseURL,
-                destinationStateDirURL: destinationStateDirURL,
-                profile: profile,
-                legacySources: legacySources,
-                beforeLegacyClaim: beforeLegacyClaim,
-                afterLegacyCommit: afterLegacyCommit)
-            try coordinator.release()
-            return identity
-        } catch {
-            do {
-                try coordinator.release()
-            } catch let releaseError {
-                throw DeviceIdentityStore.storageError(
-                    "Device identity operation failed: \(error.localizedDescription); " +
-                        "coordinator release failed: \(releaseError.localizedDescription)")
-            }
-            throw error
-        }
+            destinationStateDirURL: destinationStateDirURL,
+            profile: profile,
+            legacySources: legacySources,
+            beforeLegacyClaim: beforeLegacyClaim,
+            afterLegacyCommit: afterLegacyCommit)
     }
 
     static func loadExisting(
@@ -175,6 +110,7 @@ enum DeviceIdentitySQLiteStore {
                 destinationStateDirURL: destinationStateDirURL,
                 profile: profile,
                 claims: claims,
+                legacySources: legacySources,
                 afterLegacyCommit: afterLegacyCommit)
         } catch {
             do {
@@ -193,13 +129,16 @@ enum DeviceIdentitySQLiteStore {
         destinationStateDirURL: URL,
         profile: GatewayDeviceIdentityProfile,
         claims: [LegacyClaim],
+        legacySources: [DeviceIdentityPaths.LegacyIdentitySource],
         afterLegacyCommit: (() throws -> Void)?) throws -> DeviceIdentity
     {
         try self.requireConsistentClaims(claims)
         let generatedMaterial = claims.isEmpty ? DeviceIdentityStore.generateMaterial() : nil
         let writeTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
 
-        let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
+        let database = try OpenClawNativeStateSQLite(
+            databaseURL: databaseURL,
+            busyTimeoutMilliseconds: self.busyTimeoutMilliseconds)
         let authoritative = try database.withImmediateTransaction {
             try self.ensureIdentityTable(database, allowVersionZeroCreation: true)
             let existing = try self.readIdentity(
@@ -217,6 +156,14 @@ enum DeviceIdentitySQLiteStore {
                 }
                 selected = existing
             } else {
+                if claims.isEmpty, legacySources.contains(where: { source in
+                    self.pathMayExist(self.claimURL(source.identityURL, suffix: self.doctorClaimSuffix))
+                        || self.pathMayExist(self.claimURL(source.identityURL, suffix: self.nativeClaimSuffix))
+                        || self.pathMayExist(source.identityURL)
+                }) {
+                    throw DeviceIdentityStore.storageError(
+                        "Legacy device identity appeared during creation; retry without replacing its keys")
+                }
                 guard let candidate = claims.first?.material ?? generatedMaterial else {
                     throw DeviceIdentityStore.storageError("Device identity candidate is unavailable")
                 }
@@ -263,173 +210,6 @@ enum DeviceIdentitySQLiteStore {
             try self.removeClaimedLegacyIdentities(claims)
         }
         return authoritative.identity
-    }
-
-    static func resolveStateLifecycleRuntimeDirectory(
-        destinationStateDirURL: URL,
-        appSandboxed: Bool) -> URL
-    {
-        if !appSandboxed {
-            return URL(fileURLWithPath: "/tmp", isDirectory: true)
-        }
-        // Sandboxed app and extension processes share container-owned state that Node cannot
-        // traverse. CLI-shared macOS state is unentitled and uses the common /tmp namespace.
-        return destinationStateDirURL.standardizedFileURL
-            .appendingPathComponent("tmp", isDirectory: true)
-    }
-
-    static func resolveStateDatabaseCoordinatorURL(
-        databaseURL: URL,
-        runtimeDirectory: URL,
-        uid: uid_t) -> URL
-    {
-        let canonicalDatabasePath = self.canonicalExistingAncestorPath(databaseURL)
-        let digest = SHA256.hash(data: Data(canonicalDatabasePath.utf8))
-        let pathHash = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
-        return runtimeDirectory.standardizedFileURL
-            .appendingPathComponent("openclaw-state-locks-\(uid)", isDirectory: true)
-            .appendingPathComponent("state-lifecycle.\(pathHash).lock.sqlite", isDirectory: false)
-    }
-
-    static func resolveDeviceIdentityCoordinatorURLs(
-        databaseURL: URL,
-        destinationStateDirURL: URL,
-        uid: uid_t) -> [URL]
-    {
-        let canonicalDatabasePath = self.canonicalExistingAncestorPath(databaseURL)
-        let digest = SHA256.hash(data: Data(canonicalDatabasePath.utf8))
-        let pathHash = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
-        let filename = "device-identity.\(pathHash).lock.sqlite"
-        let suffix = "openclaw-\(uid)"
-        let canonicalStateDirURL = URL(
-            fileURLWithPath: self.canonicalExistingAncestorPath(destinationStateDirURL),
-            isDirectory: true)
-        return [
-            canonicalStateDirURL
-                .appendingPathComponent("tmp", isDirectory: true)
-                .appendingPathComponent(suffix, isDirectory: true)
-                .appendingPathComponent(filename, isDirectory: false),
-        ]
-    }
-
-    private static func acquireIdentityCoordinator(
-        databaseURL: URL,
-        destinationStateDirURL: URL) throws -> IdentityCoordinator
-    {
-        let coordinatorURLs = [
-            self.resolveStateDatabaseCoordinatorURL(
-                databaseURL: databaseURL,
-                runtimeDirectory: self.resolveStateLifecycleRuntimeDirectory(
-                    destinationStateDirURL: destinationStateDirURL,
-                    appSandboxed: self.appSandboxed),
-                uid: getuid()),
-        ] + self.resolveDeviceIdentityCoordinatorURLs(
-            databaseURL: databaseURL,
-            destinationStateDirURL: destinationStateDirURL,
-            uid: getuid())
-        for coordinatorURL in coordinatorURLs {
-            try self.secureCoordinatorDirectory(coordinatorURL.deletingLastPathComponent())
-        }
-        var databases: [OpaquePointer] = []
-        do {
-            for coordinatorURL in coordinatorURLs {
-                try databases.append(self.acquireIdentityCoordinator(at: coordinatorURL))
-            }
-            return IdentityCoordinator(databases: databases)
-        } catch let acquisitionError {
-            do {
-                try IdentityCoordinator(databases: databases).release()
-            } catch let cleanupError {
-                throw DeviceIdentityStore.storageError(
-                    "Could not acquire every device identity coordinator: " +
-                        "\(acquisitionError.localizedDescription); cleanup failed: " +
-                        cleanupError.localizedDescription)
-            }
-            throw acquisitionError
-        }
-    }
-
-    private static func acquireIdentityCoordinator(at coordinatorURL: URL) throws -> OpaquePointer {
-        var database: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
-        let openResult = sqlite3_open_v2(coordinatorURL.path, &database, flags, nil)
-        guard openResult == SQLITE_OK, let database else {
-            let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
-            if let database { sqlite3_close(database) }
-            throw DeviceIdentityStore.storageError("Could not open device identity coordinator: \(message)")
-        }
-        do {
-            guard sqlite3_busy_timeout(database, self.busyTimeoutMilliseconds) == SQLITE_OK else {
-                throw DeviceIdentityStore.storageError(
-                    "Could not configure device identity coordinator timeout: " +
-                        String(cString: sqlite3_errmsg(database)))
-            }
-            try self.secureFile(coordinatorURL)
-            var errorMessage: UnsafeMutablePointer<CChar>?
-            guard sqlite3_exec(database, "BEGIN EXCLUSIVE", nil, nil, &errorMessage) == SQLITE_OK else {
-                let detail = errorMessage.map { String(cString: $0) }
-                    ?? String(cString: sqlite3_errmsg(database))
-                sqlite3_free(errorMessage)
-                throw DeviceIdentityStore.storageError("Could not acquire device identity coordinator: \(detail)")
-            }
-            return database
-        } catch {
-            sqlite3_exec(database, "ROLLBACK", nil, nil, nil)
-            sqlite3_close(database)
-            throw error
-        }
-    }
-
-    private static func secureCoordinatorDirectory(_ url: URL) throws {
-        var info = stat()
-        if lstat(url.path, &info) != 0 {
-            let inspectError = errno
-            guard inspectError == ENOENT else {
-                throw POSIXError(POSIXErrorCode(rawValue: inspectError) ?? .EIO)
-            }
-            try FileManager.default.createDirectory(
-                at: url,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700])
-            guard lstat(url.path, &info) == 0 else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
-        }
-        guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
-              info.st_uid == geteuid()
-        else {
-            throw DeviceIdentityStore.storageError(
-                "Device identity coordinator directory must be a user-owned real directory")
-        }
-        guard chmod(url.path, mode_t(0o700)) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        guard lstat(url.path, &info) == 0,
-              info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
-              info.st_uid == geteuid(),
-              info.st_mode & mode_t(0o077) == 0
-        else {
-            throw DeviceIdentityStore.storageError(
-                "Device identity coordinator directory permissions are not private")
-        }
-    }
-
-    private static func canonicalExistingAncestorPath(_ url: URL) -> String {
-        let fileManager = FileManager.default
-        let resolved = url.standardizedFileURL
-        var current = resolved
-        var missingSegments: [String] = []
-        while !fileManager.fileExists(atPath: current.path) {
-            let parent = current.deletingLastPathComponent()
-            guard parent.path != current.path else { return resolved.path }
-            missingSegments.append(current.lastPathComponent)
-            current = parent
-        }
-        var canonical = current.resolvingSymlinksInPath().standardizedFileURL
-        for segment in missingSegments.reversed() {
-            canonical.appendPathComponent(segment)
-        }
-        return canonical.standardizedFileURL.path
     }
 
     private static func readIdentity(
@@ -896,14 +676,5 @@ extension DeviceIdentitySQLiteStore {
         attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
         #endif
         try fileManager.setAttributes(attributes, ofItemAtPath: url.path)
-    }
-
-    private static func secureFile(_ url: URL) throws {
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o600]
-        #if os(iOS) || os(watchOS)
-        attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
-        #endif
-        try FileManager.default.setAttributes(attributes, ofItemAtPath: url.path)
     }
 }

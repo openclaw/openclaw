@@ -4,8 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
-import { acquireGatewayMaintenanceCoordinator } from "../infra/state-database-coordinator.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
@@ -94,11 +94,14 @@ async function runCaptureReport(repair = false, update = false) {
 }
 
 async function duringMaintenance(run: () => Promise<string>) {
-  const lease = acquireGatewayMaintenanceCoordinator({
-    databasePath: path.join(stateDir, "openclaw.sqlite"),
-    runtimeDirectory: path.join(parent, "locks"),
+  const lease = acquireGatewayStateOwner({
+    databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
   });
-  const scope = createOpenClawDatabaseMaintenanceScope(lease.createSchemaFenceDelegate);
+  const scope = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent: lease.assertCurrent,
+    assertDatabaseAccess: lease.assertDatabaseAccess,
+  });
   try {
     return await scope.run(run);
   } finally {

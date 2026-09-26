@@ -52,18 +52,10 @@ export type SqliteWorkerStore<Operations extends SqliteWorkerOperations> = {
   close(): Promise<void>;
 };
 
-/** Optional maintenance budget; ordinary operations keep the database's default lock wait. */
-export type SqliteWorkerStateLifecycle = boolean | { waitMs: number; maxPollIntervalMs?: number };
-
 export type SqliteWorkerRequest = {
   id: number;
   actor: number;
   stateContext?: SqliteWorkerStateContext;
-  gatewaySchemaFence?: MessagePort;
-  maintenanceSchemaFence?: MessagePort;
-  stateLifecycle?: MessagePort;
-  workerStateLifecycle?: { deadlineNs: bigint; maxPollIntervalMs?: number };
-  lifecyclePreparation?: MessagePort;
   operationAdmission?: MessagePort;
   stateDatabasePath?: string;
 } & (

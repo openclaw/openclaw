@@ -1,12 +1,10 @@
 import { AsyncResource } from "node:async_hooks";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { AGENT_DATABASE_MAINTENANCE_LEASE } from "./openclaw-agent-db-lease.js";
 import {
@@ -71,20 +69,26 @@ function inspect(pathname: string) {
     db.close();
   }
 }
-it("acquires, verifies, renews and releases an actual lease without migrating", async () => {
-  const f = source();
-  const before = inspect(f.pathname);
-  let entered: ReturnType<typeof inspect> | undefined;
-  await withOpenClawStateLease(f.lease, async (lease) => {
-    lease.assertOwned();
-    lease.renew?.();
-    entered = inspect(f.pathname);
-  });
-  expect(entered?.version).toEqual(before.version);
-  expect(entered?.schema).toEqual(before.schema);
-  expect(entered?.leases).toHaveLength(1);
-  expect(inspect(f.pathname)).toEqual(before);
-});
+it.each(["timer", "worker"] as const)(
+  "acquires, verifies, renews and releases an actual %s lease without migrating",
+  async (heartbeat) => {
+    const f = source();
+    const before = inspect(f.pathname);
+    let entered: ReturnType<typeof inspect> | undefined;
+    await withOpenClawStateLease(
+      { ...f.lease, ...(heartbeat === "worker" ? { heartbeat } : {}) },
+      async (lease) => {
+        lease.assertOwned();
+        lease.renew?.();
+        entered = inspect(f.pathname);
+      },
+    );
+    expect(entered?.version).toEqual(before.version);
+    expect(entered?.schema).toEqual(before.schema);
+    expect(entered?.leases).toHaveLength(1);
+    expect(inspect(f.pathname)).toEqual(before);
+  },
+);
 it("takes plugin and agent writer ownership before allowing the candidate migration", async () => {
   const f = source();
   let atEntry: ReturnType<typeof inspect> | undefined;
@@ -133,20 +137,6 @@ it("refuses a competing owner and preserves a replacement lease on cleanup", asy
   expect(competingEntered).toBe(false);
   expect(inspect(f.pathname).version).toEqual({ user_version: 15 });
   expect(inspect(f.pathname).leases).toEqual([expect.objectContaining({ owner: "replacement" })]);
-});
-it("retains the actual heartbeat through physical capture and resumes without migration", async () => {
-  const f = source();
-  const before = inspect(f.pathname);
-  let captured = false;
-  await withOpenClawStateLease({ ...f.lease, heartbeat: "worker" }, async (lease) => {
-    await lease.withDatabaseFileExclusion?.(async (assertCurrent) => {
-      assertCurrent();
-      captured = true;
-    });
-    lease.assertOwned();
-  });
-  expect(captured).toBe(true);
-  expect(inspect(f.pathname)).toEqual(before);
 });
 it("does not create missing existing-only lease state", async () => {
   const root = dirs.make("state-lease-missing-");
@@ -232,13 +222,8 @@ it("does not recreate state displaced before the existing-schema heartbeat opens
   let moved = false;
   let entered = false;
   const onWorker = () => {
-    const held = acquireStateDatabaseCoordinator({ databasePath: f.pathname, busyTimeoutMs: 0 });
-    try {
-      fs.renameSync(f.pathname, displaced);
-      moved = true;
-    } finally {
-      held.release();
-    }
+    fs.renameSync(f.pathname, displaced);
+    moved = true;
   };
   process.once("worker", onWorker);
   try {
@@ -309,10 +294,6 @@ it("joins nested maintenance work before releasing the actual durable lease", as
       await release.promise;
       inner.assertOwned();
       inner.renew?.();
-      await inner.withDatabaseFileExclusion?.(async (assertCurrent) => {
-        assertCurrent();
-        inner.assertOwned();
-      });
     });
   }).finally(() => {
     settled = true;
@@ -326,18 +307,7 @@ it("joins nested maintenance work before releasing the actual durable lease", as
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    let lateEntered = false;
-    let lateFailure: unknown;
-    try {
-      await outer?.withDatabaseFileExclusion?.(async () => {
-        lateEntered = true;
-      });
-    } catch (error) {
-      lateFailure = error;
-    }
-    expect(lateEntered).toBe(false);
-    expect(lateFailure).toBeInstanceOf(Error);
-    expect(String(lateFailure)).toContain("closed");
+    expect(() => outer?.renew?.()).toThrow(/closed/);
     await expect(
       outside.runInAsyncScope(() =>
         withOpenClawStateLease({ ...f.lease, ...AGENT_DATABASE_MAINTENANCE_LEASE }, async () => {
@@ -366,37 +336,6 @@ it("reports a failed detached maintenance child before releasing its real owner"
     }),
   ).rejects.toBe(failure);
   expect(inspect(f.pathname).leases).toEqual([]);
-});
-
-it("does not clean up leases in a replaced excluded source", async () => {
-  const f = source();
-  let replacement: ReturnType<typeof family> | undefined;
-  const family = () =>
-    ["", "-wal", "-shm", "-journal"].map((suffix) => {
-      const file = f.pathname + suffix;
-      return {
-        suffix,
-        sha256: fs.existsSync(file)
-          ? createHash("sha256").update(fs.readFileSync(file)).digest("hex")
-          : null,
-      };
-    });
-  const replace = async () => {
-    const next = f.pathname + ".replacement";
-    fs.copyFileSync(f.pathname, next);
-    fs.renameSync(next, f.pathname);
-    replacement = family();
-  };
-  await expect(
-    withOpenClawStateLease(f.lease, async (lease) => {
-      if (!lease.withDatabaseFileExclusion) {
-        throw new Error("Missing capture owner");
-      }
-      await lease.withDatabaseFileExclusion(replace);
-    }),
-  ).rejects.toThrow();
-  expect(replacement).toBeDefined();
-  expect(family()).toEqual(replacement);
 });
 
 it.each([false, true])(

@@ -175,19 +175,17 @@ describe("SQLite read-only session operation custody", () => {
 
   it("joins a framed auth operation failure even when staging refusals may retain the child", async () => {
     const { session, child, env } = createSession();
-    const coordinatorRuntime = { directory: "/fixture/coordinator", keepAlive: false };
     const result = session.run("/fixture/auth.sqlite", {
       mode: "auth-profile-rows",
       source: "canonical",
       expectedIdentity: "file:fixture-auth",
       env,
-      coordinatorRuntime,
     });
     const settled = observeSettlement(result);
     const id = requestId(child);
     expect(child.send.mock.calls[0]?.[0]).toMatchObject({
       id,
-      auth: { expectedIdentity: "file:fixture-auth", coordinatorRuntime },
+      auth: { expectedIdentity: "file:fixture-auth" },
     });
     const transfer = createSqliteWorkerTransferOwner();
     const handle = transfer.start(

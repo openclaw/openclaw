@@ -7,12 +7,8 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createOpenClawStateLeaseCleanup } from "../state/openclaw-state-lease-cleanup.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { hasActiveGatewayStateOwner, tryBorrowGatewayStateOwner } from "./gateway-state-owner.js";
 import { readRestartSentinelSnapshotSync } from "./restart-sentinel-store.js";
-import {
-  acquireGatewayMaintenanceCoordinator,
-  hasGatewayLifecycleCoordinator,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "./state-database-coordinator.js";
 import {
   detectLegacyRestartSentinel,
   migrateLegacyRestartSentinelWithCustody,
@@ -43,17 +39,14 @@ export async function importLegacyUpdateRestartSentinel(params: {
     if (
       revoked ||
       !params.shouldRun() ||
-      !hasGatewayLifecycleCoordinator({
-        databasePath: context.admission.databasePath,
-        runtimeDirectory: context.coordinatorRuntime.directory,
-      })
+      !hasActiveGatewayStateOwner(context.admission.databasePath)
     ) {
       throw new Error("Restart notice import no longer owns this Gateway generation.");
     }
   };
   assertCurrent();
   let sourceLease: ReturnType<typeof sourceLeases.reserve> | undefined;
-  let custody: ReturnType<typeof acquireGatewayMaintenanceCoordinator> | undefined;
+  let custody: ReturnType<typeof tryBorrowGatewayStateOwner>;
   let maintenance: ReturnType<typeof createOpenClawDatabaseMaintenanceScope> | undefined;
   const revoke = () => {
     revoked = true;
@@ -63,12 +56,11 @@ export async function importLegacyUpdateRestartSentinel(params: {
     maintenanceScope: context.maintenanceScope,
     revoke,
     workerOwner: () => undefined,
-    finish: () =>
-      withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, async () => {
-        await maintenance?.close();
-        custody?.release();
-        sourceLease?.release();
-      }),
+    finish: async () => {
+      await maintenance?.close();
+      custody?.release();
+      sourceLease?.release();
+    },
   });
   return await cleanup.run(async () => {
     const lease = expectDefined(
@@ -76,60 +68,51 @@ export async function importLegacyUpdateRestartSentinel(params: {
       "Restart sentinel import lease",
     );
     sourceLease = lease;
+    // Retain this Gateway before yielding; a queued import cannot borrow its successor.
+    const owner = expectDefined(
+      tryBorrowGatewayStateOwner(context.admission.databasePath),
+      "Restart sentinel Gateway ownership",
+    );
+    custody = owner;
     await lease.wait();
     assertCurrent();
-    return await withStateDatabaseCoordinatorRuntimeDirectory(
-      context.coordinatorRuntime,
-      async () => {
-        const coordinator = acquireGatewayMaintenanceCoordinator({
-          databasePath: context.admission.databasePath,
-        });
-        custody = coordinator;
-        const resources = createOpenClawDatabaseMaintenanceScope(
-          coordinator.createSchemaFenceDelegate,
-          () => {
-            if (coordinator.closed) {
-              throw new Error("Restart notice import maintenance custody was released.");
-            }
-          },
-        );
-        maintenance = resources;
-        const assertOwned = () => {
-          resources.assertAdmission();
-          context.admission.assertCurrent();
-        };
-        // The restart sidecar joins this accepted work before replacing the Gateway.
-        // Stable custody also preserves fs-safe's portable no-replace claim path.
-        return await resources.run(async () => {
-          const expectedRevision = runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              assertOwned();
-              return readRestartSentinelSnapshotSync(db).revision;
-            },
-            { env },
-          );
-          if (
-            params.expectedRevision !== undefined &&
-            params.expectedRevision !== expectedRevision
-          ) {
-            return { changes: [], warnings: [], superseded: true };
-          }
-          const stateRoot = await root(stateDir, {
-            hardlinks: "reject",
-            symlinks: "reject",
-          });
+    const resources = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: owner.assertCurrent,
+      assertDatabaseAccess: owner.assertDatabaseAccess,
+    });
+    maintenance = resources;
+    const assertOwned = () => {
+      resources.assertAdmission();
+      context.admission.assertCurrent();
+    };
+    // The restart sidecar joins this accepted work before replacing the Gateway.
+    // Stable custody also preserves fs-safe's portable no-replace claim path.
+    return await resources.run(async () => {
+      const expectedRevision = runOpenClawStateWriteTransaction(
+        ({ db }) => {
           assertOwned();
-          return await migrateLegacyRestartSentinelWithCustody({
-            detected,
-            stateRoot,
-            stateDir,
-            env,
-            assertCurrent: assertOwned,
-            expectedRevision,
-            updatesOnly: true,
-          });
-        });
-      },
-    );
+          return readRestartSentinelSnapshotSync(db).revision;
+        },
+        { env },
+      );
+      if (params.expectedRevision !== undefined && params.expectedRevision !== expectedRevision) {
+        return { changes: [], warnings: [], superseded: true };
+      }
+      const stateRoot = await root(stateDir, {
+        hardlinks: "reject",
+        symlinks: "reject",
+      });
+      assertOwned();
+      return await migrateLegacyRestartSentinelWithCustody({
+        detected,
+        stateRoot,
+        stateDir,
+        env,
+        assertCurrent: assertOwned,
+        expectedRevision,
+        updatesOnly: true,
+      });
+    });
   }, revoke);
 }

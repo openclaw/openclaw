@@ -118,6 +118,12 @@ the job's uploaded artifacts.
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                         |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                         |
 
+Partial workflow reruns reuse successful screenshot shards from earlier attempts
+of the same run. The reducer still requires matching source and workflow SHAs,
+run ID, pinned tooling, artifact digests, and successful captures. It preserves
+each family's producer attempt and records the reducer attempt separately;
+future-attempt artifacts remain invalid.
+
 ### Test runtime selection
 
 Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The

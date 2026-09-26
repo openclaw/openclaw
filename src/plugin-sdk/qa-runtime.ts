@@ -59,21 +59,14 @@ export async function visitQaSqliteTranscriptEvents(
 
 /** Release only this QA root's parent stores before its files are removed. */
 export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
-  const [
-    auth,
-    { closeOpenClawAgentDatabasesAsync },
-    state,
-    { openClawStateDatabaseCache },
-    paths,
-    { closeIdleSqliteCoordinators },
-  ] = await Promise.all([
-    import("../agents/auth-profiles/sqlite.js"),
-    import("../state/openclaw-agent-db.js"),
-    import("../state/openclaw-state-db.js"),
-    import("../state/openclaw-state-db-cache.js"),
-    import("../state/openclaw-state-db.paths.js"),
-    import("../infra/sqlite-coordinator.js"),
-  ]);
+  const [auth, { closeOpenClawAgentDatabasesAsync }, state, { openClawStateDatabaseCache }, paths] =
+    await Promise.all([
+      import("../agents/auth-profiles/sqlite.js"),
+      import("../state/openclaw-agent-db.js"),
+      import("../state/openclaw-state-db.js"),
+      import("../state/openclaw-state-db-cache.js"),
+      import("../state/openclaw-state-db.paths.js"),
+    ]);
   // Agent close releases leases through shared state. Keep that owner alive
   // until every scoped handle closes, or exit-time release can recreate the root.
   auth.closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
@@ -86,7 +79,6 @@ export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
   if (openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(statePath)) {
     await state.closeOpenClawStateDatabaseByPathAsync(statePath);
   }
-  closeIdleSqliteCoordinators(tempRoot);
 }
 
 type QaRuntimeSurface = Pick<

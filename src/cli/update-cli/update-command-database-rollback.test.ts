@@ -16,8 +16,6 @@ import * as serviceMembership from "../../daemon/service-process-membership.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
-import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as schemas from "../../infra/update-candidate-state.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
@@ -29,12 +27,14 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../../test-utils/port-claims.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 
 const { executionParams, mocks } = await import("./update-command-execution.test-support.js");
 const dirs = createTempDirTracker();
 let service: ChildProcess | undefined;
 let port = 0;
+let portClaim: TestPortClaim | undefined;
 let packageRoot = "";
 let serviceEnv: NodeJS.ProcessEnv = {};
 const starts: string[] = [];
@@ -121,6 +121,8 @@ afterEach(async () => {
     service = undefined;
   }
   await closeOpenClawStateDatabaseAsync();
+  await portClaim?.release();
+  portClaim = undefined;
   vi.unstubAllEnvs();
   dirs.cleanup();
 });
@@ -199,20 +201,12 @@ it.each([
     packageRoot = swapFixture.packageRoot;
     const stateDir = path.join(base, "service-state");
     const controlDir = path.join(base, "control-state");
-    const coordinator = path.join(base, "coordinator");
     const shared = path.join(stateDir, "state/openclaw.sqlite");
     const agent = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
     const missing = path.join(stateDir, "agents/unused/agent/openclaw-agent.sqlite");
-    for (const directory of [
-      stateDir,
-      controlDir,
-      coordinator,
-      path.dirname(shared),
-      path.dirname(agent),
-    ]) {
+    for (const directory of [stateDir, controlDir, path.dirname(shared), path.dirname(agent)]) {
       await fs.mkdir(directory, { recursive: true });
     }
-    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(coordinator);
     serviceEnv = {
       ...process.env,
       HOME: base,
@@ -250,9 +244,6 @@ it.each([
       db.close();
     }
     const before = { shared: readDatabase(shared), agent: readDatabase(agent) };
-    const gatewayLease = acquireGatewayLifecycleCoordinator({ databasePath: shared });
-    const gatewayCoordinatorPath = gatewayLease.path;
-    gatewayLease.release();
     let retainedSnapshotDirectory = "";
     const doctorEvidence = path.join(base, "doctor-observed.json");
     const initialDoctor = path.join(base, "initial-doctor.json");
@@ -265,6 +256,14 @@ it.each([
     import { isDeepStrictEqual } from 'node:util';
     const files = ${JSON.stringify([shared, agent])};
     const manifest=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
+    const acquireCustody = async (role, port) => {
+      process.env.TSX_TSCONFIG_PATH=${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))};
+      await import(${JSON.stringify(new URL("../../../scripts/tsx.mjs", import.meta.url).href)});
+      const {acquireGatewayLock}=await import(${JSON.stringify(new URL("../../infra/gateway-lock.ts", import.meta.url).href)});
+      const owner=await acquireGatewayLock({env:process.env,role,port,allowInTests:true,timeoutMs:0});
+      assert(owner);
+      return owner;
+    };
     const read = file => {
       const db = new DatabaseSync(file, {readOnly:true});
       try { return { version:db.prepare('PRAGMA user_version').get().user_version, rows:db.prepare('SELECT rowid,value FROM payload ORDER BY rowid').all() }; }
@@ -280,8 +279,7 @@ it.each([
       process.env.TSX_TSCONFIG_PATH=${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))};
       await import(${JSON.stringify(new URL("../../../scripts/tsx.mjs", import.meta.url).href)});
       const {readUpdateDatabaseGenerations}=await import(${JSON.stringify(new URL("../../infra/update-database-generations.ts", import.meta.url).href)});
-      const custody=new DatabaseSync(${JSON.stringify(gatewayCoordinatorPath)});
-      custody.exec('PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE');
+      const custody=await acquireCustody('sqlite-maintenance');
       try {
         const expected=input.databaseGenerations;
         const unchanged=expected && isDeepStrictEqual(readUpdateDatabaseGenerations(Object.keys(expected)),expected);
@@ -307,20 +305,19 @@ it.each([
         if(expected) result.databaseWrites={unchanged,generations:readUpdateDatabaseGenerations(Object.keys(expected))};
         fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH,JSON.stringify(result));
       } finally {
-        custody.close();
+        await custody.release();
       }
     } else {
       const {version}=manifest;
       assert.equal(version,'1.0.0','candidate must never serve');
       assert.deepEqual(files.map(file=>read(file).version),[15,21],'retained runtime refuses migrated schemas');
-      const custody=new DatabaseSync(${JSON.stringify(gatewayCoordinatorPath)});
-      custody.exec('PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE');
+      const custody=await acquireCustody('gateway',Number(process.argv[3]));
       const server=http.createServer((request,response)=>{
         if(request.url==='/commit') for(const file of files) {const db=new DatabaseSync(file);db.exec("INSERT INTO payload(rowid,value) VALUES(99,'after-capture')");db.close();}
         response.setHeader('content-type','application/json');response.end(JSON.stringify({version,databases:files.map(read)}));
       });
       server.listen(Number(process.argv[3]),'127.0.0.1',()=>process.send(server.address().port));
-      const shutdown=()=>server.close(()=>{custody.close();process.exit(0);});
+      const shutdown=()=>server.close(async()=>{await custody.release();process.exit(0);});
       process.on('SIGTERM',shutdown);
       process.on('disconnect',shutdown);
     }
@@ -352,7 +349,8 @@ it.each([
       await fs.writeFile(worker, `import ${JSON.stringify(entry)};\n`);
     }
     starts.length = 0;
-    port = 0;
+    portClaim = await acquireTestPortBlock({ offsets: [0] });
+    port = portClaim.port;
     await startService();
     // The fixture owns this live child, but it is not a native launchd/systemd job.
     vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockImplementation((pid) =>

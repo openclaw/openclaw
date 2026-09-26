@@ -178,8 +178,14 @@ describe("legacy managed outgoing image migration", () => {
         createdAt: "2026-07-15T00:00:00.000Z",
       },
     });
-    const rmSpy = vi.spyOn(fs, "rmSync").mockImplementationOnce(() => {
-      throw new Error("synthetic attachment remove failure");
+    const remove = fs.rmSync;
+    let attachmentRemovalFailed = false;
+    const rmSpy = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      if (target === legacy.originalPath) {
+        attachmentRemovalFailed = true;
+        throw new Error("synthetic attachment remove failure");
+      }
+      return remove(target, options);
     });
 
     let result!: ReturnType<typeof migrate>;
@@ -189,6 +195,7 @@ describe("legacy managed outgoing image migration", () => {
       rmSpy.mockRestore();
     }
 
+    expect(attachmentRemovalFailed).toBe(true);
     expect(result.warnings.join("\n")).toContain("synthetic attachment remove failure");
     await fsp.access(legacy.sourcePath);
     await fsp.access(legacy.originalPath);
