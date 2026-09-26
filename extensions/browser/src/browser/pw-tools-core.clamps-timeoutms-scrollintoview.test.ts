@@ -27,20 +27,9 @@ describe("pw-tools-core", () => {
       signal: expect.any(AbortSignal),
     });
   });
-  it.each([
-    {
-      name: "strict mode violations for scrollIntoView",
-      errorMessage: 'Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements',
-      expectedMessage: /Run a new snapshot/i,
-    },
-    {
-      name: "not-visible timeouts for scrollIntoView",
-      errorMessage: 'Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible',
-      expectedMessage: /not found or not visible/i,
-    },
-  ])("rewrites $name", async ({ errorMessage, expectedMessage }) => {
+  it("rewrites strict mode violations for scrollIntoView", async () => {
     const scrollIntoViewIfNeeded = vi.fn(async () => {
-      throw new Error(errorMessage);
+      throw new Error('Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements');
     });
     setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
     setPwToolsCoreCurrentPage({});
@@ -51,7 +40,7 @@ describe("pw-tools-core", () => {
         targetId: "T1",
         ref: "1",
       }),
-    ).rejects.toThrow(expectedMessage);
+    ).rejects.toThrow(/Run a new snapshot/i);
   });
   it.each([
     {

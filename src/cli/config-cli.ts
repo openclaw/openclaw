@@ -174,6 +174,7 @@ export async function runConfigUnset(opts: {
   path: string;
   cliOptions?: ConfigUnsetOptions;
   runtime?: RuntimeEnv;
+  beforePersistentApply?: () => void;
 }) {
   const runtime = opts.runtime ?? defaultRuntime;
   const cliOptions = opts.cliOptions ?? {};
@@ -192,6 +193,7 @@ export async function runConfigUnset(opts: {
       operations: [buildUnsetOperation(pathTokens.map(String), pathTokens)],
       options: cliOptions,
       successMode: "set",
+      ...(opts.beforePersistentApply ? { beforePersistentApply: opts.beforePersistentApply } : {}),
     });
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: cliOptions });

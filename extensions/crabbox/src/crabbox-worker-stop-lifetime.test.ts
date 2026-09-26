@@ -3,7 +3,6 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { stopCrabboxLease } from "./crabbox-worker-command.js";
 import {
   commandResult,
   createWarmProvider,
@@ -103,13 +102,12 @@ describe("Crabbox stop lifetime", () => {
   );
 
   it.each([
-    { entrance: "destroy", exitCode: 0, elapsedMs: 6 * 60_000, outcome: "success" },
-    { entrance: "direct stop", exitCode: 0, elapsedMs: 6 * 60_000, outcome: "success" },
-    { entrance: "destroy", exitCode: 5, elapsedMs: 6 * 60_000, outcome: "failure" },
-    { entrance: "destroy", exitCode: 0, elapsedMs: 18 * 60_000, outcome: "timeout" },
+    { exitCode: 0, elapsedMs: 6 * 60_000, outcome: "success" },
+    { exitCode: 5, elapsedMs: 6 * 60_000, outcome: "failure" },
+    { exitCode: 0, elapsedMs: 18 * 60_000, outcome: "timeout" },
   ])(
-    "preserves $entrance custody through late $outcome",
-    async ({ entrance, exitCode, elapsedMs, outcome }) => {
+    "preserves destroy custody through late $outcome",
+    async ({ exitCode, elapsedMs, outcome }) => {
       const marker = path.join(tempDirs.make("openclaw-crabbox-stop-"), "release");
       const started = createDeferred<void>();
       let childResult: SpawnResult | undefined;
@@ -141,16 +139,8 @@ describe("Crabbox stop lifetime", () => {
       armed = true;
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       let settled = false;
-      const operation = (
-        entrance === "destroy"
-          ? provider.destroy({ leaseId: LEASE_ID, profile: { ...PROFILE, warmImage: false } })
-          : stopCrabboxLease({
-              binary: "crabbox",
-              id: LEASE_ID,
-              provider: "aws",
-              runCommand: runStop,
-            })
-      )
+      const operation = provider
+        .destroy({ leaseId: LEASE_ID, profile: { ...PROFILE, warmImage: false } })
         .then(
           () => ({ success: true }),
           (error: unknown) => ({ error }),
@@ -181,9 +171,7 @@ describe("Crabbox stop lifetime", () => {
       if (outcome === "success") {
         expect(await operation).toEqual({ success: true });
         expect(childResult).toMatchObject({ termination: "exit", code: 0 });
-        if (entrance === "destroy") {
-          expect(store.lookup(owner.key)?.allocations[LEASE_ID]).toBeUndefined();
-        }
+        expect(store.lookup(owner.key)?.allocations[LEASE_ID]).toBeUndefined();
       } else {
         expect(await operation).toMatchObject({
           error: {

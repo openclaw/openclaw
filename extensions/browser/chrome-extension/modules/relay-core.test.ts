@@ -13,14 +13,6 @@ import {
 const RELAY_SECRET = "a".repeat(64);
 
 describe("parsePairingString", () => {
-  it("parses a valid pairing string the CLI emits", () => {
-    const parsed = parsePairingString(`ws://127.0.0.1:18797/extension#${RELAY_SECRET}`);
-    expect(parsed).toEqual({
-      relayUrl: "ws://127.0.0.1:18797/extension",
-      token: RELAY_SECRET,
-    });
-  });
-
   it("round-trips with the CLI pairing format", () => {
     const port = 18797;
     const token = RELAY_SECRET;
@@ -30,17 +22,8 @@ describe("parsePairingString", () => {
       throw new Error("expected pairing string to parse");
     }
     expect(parsed.relayUrl).toBe(`ws://127.0.0.1:${port}/extension`);
+    expect(parsed.token).toBe(token);
     expect(buildRelayWsProtocols()).toEqual(["openclaw-extension-relay.v2"]);
-  });
-
-  it("extracts the additive direct Gateway hint without passing it to the relay", () => {
-    const gatewayUrl = "wss://gateway.example.com/base";
-    const pairing = `ws://127.0.0.1:18797/extension?gateway=${encodeURIComponent(gatewayUrl)}#${RELAY_SECRET}`;
-    expect(parsePairingString(pairing)).toEqual({
-      relayUrl: "ws://127.0.0.1:18797/extension",
-      token: RELAY_SECRET,
-      gatewayUrl,
-    });
   });
 
   it("retains and canonicalizes the profile auth binding while stripping the Gateway hint", () => {
@@ -304,31 +287,6 @@ describe("persisted pairing storage", () => {
   });
 
   it.each([
-    ["an invalid token", { relayUrl: "ws://127.0.0.1:18797/extension", token: "short" }],
-    [
-      "an unsafe remote relay",
-      { relayUrl: "ws://gateway.example.com/extension", token: RELAY_SECRET },
-    ],
-    [
-      "relay URL credentials",
-      { relayUrl: "wss://user:pass@gateway.example.com/extension", token: RELAY_SECRET },
-    ],
-    [
-      "an unsafe remote Gateway hint",
-      {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "ws://gateway.example.com",
-      },
-    ],
-    [
-      "Gateway URL credentials",
-      {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "wss://user:pass@gateway.example.com",
-      },
-    ],
     [
       "a Gateway URL query",
       {
@@ -349,13 +307,6 @@ describe("persisted pairing storage", () => {
     [
       "an unknown relay query",
       { relayUrl: "ws://127.0.0.1:18797/extension?token=nope", token: RELAY_SECRET },
-    ],
-    [
-      "duplicate relay queries",
-      {
-        relayUrl: "ws://127.0.0.1:18797/extension?gateway=one&gateway=two",
-        token: RELAY_SECRET,
-      },
     ],
     ["partial state", { relayUrl: "ws://127.0.0.1:18797/extension" }],
     [

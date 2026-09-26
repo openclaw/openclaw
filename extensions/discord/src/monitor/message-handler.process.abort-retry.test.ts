@@ -25,19 +25,10 @@ registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage deliver-lambda abort logging", () => {
   it("emits logVerbose with formatDiscordReplySkip when deliver fires on a pre-aborted signal", async () => {
-    // Capture logVerbose calls via the ESM namespace binding. We rely on the
-    // same vi.spyOn pattern used in native-command.model-picker.test.ts so the
-    // production module keeps its real logVerbose import while the test still
-    // sees every invocation that the deliver lambda surfaces.
     const verboseSpy = vi.mocked(logVerbose).mockImplementation(() => {});
 
     const abortController = new AbortController();
-    // Drive the dispatcher so deliver actually runs: abort the signal inside
-    // the dispatch mock and then queue a single block reply via the captured
-    // dispatcher. The mocked createReplyDispatcherWithTyping (see line ~229)
-    // routes sendBlockReply straight into the deliver lambda, where the very
-    // first gate is `if (abortSignal?.aborted) return;` — the line
-    // the PR added the logVerbose call to.
+    // Abort after dispatch starts so the delivery boundary observes the cancelled turn.
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       abortController.abort();
       await params?.dispatcher.sendBlockReply({ text: "post-abort block payload" });
@@ -56,9 +47,6 @@ describe("processDiscordMessage deliver-lambda abort logging", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    // The base test harness routes through guild g1 / channel c1 (see
-    // createBaseDiscordMessageContext) so the deliver lambda receives the
-    // matching deliver target and session key from ctxPayload.SessionKey.
     const dispatchedSessionKey = getLastDispatchCtx()?.SessionKey;
     expect(dispatchedSessionKey).toBeTypeOf("string");
     const expectedLog = formatDiscordReplySkip({
@@ -69,8 +57,6 @@ describe("processDiscordMessage deliver-lambda abort logging", () => {
     });
     const verboseCalls = verboseSpy.mock.calls.map((call) => call[0]);
     expect(verboseCalls).toContain(expectedLog);
-    // Restore so other tests sharing this worker (isolate=false) keep the
-    // real logVerbose binding.
     verboseSpy.mockRestore();
   });
 });

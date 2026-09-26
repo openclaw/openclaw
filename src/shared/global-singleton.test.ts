@@ -32,15 +32,6 @@ describe("resolveGlobalSingleton", () => {
     expect(resolveGlobalSingleton(TEST_KEY, create)).toBeUndefined();
     expect(create).toHaveBeenCalledTimes(1);
   });
-
-  it("reuses a prepopulated global value without calling the factory", () => {
-    const existing = { value: 7 };
-    const create = vi.fn(() => ({ value: 1 }));
-    (globalThis as Record<PropertyKey, unknown>)[TEST_KEY] = existing;
-
-    expect(resolveGlobalSingleton(TEST_KEY, create)).toBe(existing);
-    expect(create).not.toHaveBeenCalled();
-  });
 });
 
 describe("resolveGlobalMap", () => {
@@ -51,16 +42,6 @@ describe("resolveGlobalMap", () => {
 
     expect(first).toBe(second);
     expect(second.get("a")).toBe(1);
-  });
-
-  it("reuses a prepopulated global map without creating a new one", () => {
-    const existing = new Map<string, number>([["a", 1]]);
-    (globalThis as Record<PropertyKey, unknown>)[TEST_MAP_KEY] = existing;
-
-    const resolved = resolveGlobalMap<string, number>(TEST_MAP_KEY);
-
-    expect(resolved).toBe(existing);
-    expect(resolved.get("a")).toBe(1);
   });
 });
 

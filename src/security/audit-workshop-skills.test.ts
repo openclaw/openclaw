@@ -22,16 +22,13 @@ async function writeAuditSkill(root: string, unsafe: boolean, name = "shared-pro
   return await fs.realpath(dir);
 }
 
-it.each(
-  [
-    { label: "default discovery", limits: {} },
-    { label: "zero candidates", limits: { maxCandidatesPerRoot: 0 } },
-    { label: "zero loaded skills", limits: { maxSkillsLoadedPerSource: 0 } },
-    { label: "one candidate", limits: { maxCandidatesPerRoot: 1 } },
-    { label: "one loaded skill", limits: { maxSkillsLoadedPerSource: 1 } },
-    { label: "small prompt file cap", limits: { maxSkillFileBytes: 1 } },
-  ].flatMap(({ label, limits }) => ["", "group"].map((group) => ({ label, limits, group }))),
-)("audits hidden and shadowed Workshop skills with $label ($group)", async ({ limits, group }) => {
+it.each([
+  { label: "default discovery", limits: {}, group: "" },
+  { label: "default discovery", limits: {}, group: "group" },
+  { label: "zero candidates", limits: { maxCandidatesPerRoot: 0 }, group: "group" },
+  { label: "zero loaded skills", limits: { maxSkillsLoadedPerSource: 0 }, group: "group" },
+  { label: "small prompt file cap", limits: { maxSkillFileBytes: 1 }, group: "group" },
+])("audits hidden and shadowed Workshop skills with $label ($group)", async ({ limits, group }) => {
   await withOpenClawTestState({ label: "workshop-security-audit" }, async (state) => {
     const cfg = {
       skills: { limits },

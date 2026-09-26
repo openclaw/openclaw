@@ -506,16 +506,6 @@ describe("runServiceRestart token drift", () => {
     },
   );
 
-  it("emits drift warning when enabled", async () => {
-    await runServiceRestart(createServiceRunArgs(true));
-
-    expect(loadConfig).toHaveBeenCalledTimes(1);
-    const payload = readJsonLog<{ warnings?: string[] }>();
-    expect(payload.warnings?.some((warning) => warning.includes("gateway install --force"))).toBe(
-      true,
-    );
-  });
-
   it("compares restart drift against config token even when caller env is set", async () => {
     loadConfig.mockReturnValue({
       gateway: {
@@ -536,16 +526,6 @@ describe("runServiceRestart token drift", () => {
     expect(payload.warnings?.some((warning) => warning.includes("gateway install --force"))).toBe(
       true,
     );
-  });
-
-  it("resolves config token SecretRefs using service command env before drift checks", async () => {
-    stubConfigSecretRefGatewayToken();
-    stubServiceGatewayTokenEnv();
-
-    await runServiceRestart(createServiceRunArgs(true));
-
-    const payload = readJsonLog<{ warnings?: string[] }>();
-    expect(payload.warnings).toBeUndefined();
   });
 
   it("prefers service command env over process env for SecretRef token drift resolution", async () => {

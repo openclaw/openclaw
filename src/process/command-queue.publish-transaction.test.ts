@@ -1,8 +1,4 @@
-/**
- * Atomic lane publication must never admit work before the group budget exists.
- * Park admitted tasks and sample peak concurrency at task entry so an excess
- * admission cannot disappear before the assertion observes it.
- */
+// Atomic publication installs all capacities before dispatch.
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
@@ -44,10 +40,7 @@ afterEach(() => {
 
 describe("publishLaneConfiguration", () => {
   test("no member dispatches above budget DURING publication", async () => {
-    // Both lanes start closed with work already queued, so the only thing that
-    // can release them is publication itself. If publication widened a lane and
-    // drained it before installing the group — what the sequential per-lane
-    // setter does — the two lanes would admit up to 8 + 4 = 12 tasks.
+    // A per-lane drain before group installation would admit 8 + 4 tasks.
     setCommandLaneConcurrency(CRON, 0);
     setCommandLaneConcurrency(HOOK, 0);
 
@@ -62,8 +55,7 @@ describe("publishLaneConfiguration", () => {
       runs.push(
         enqueueCommandInLane(lane, async () => {
           active += 1;
-          // Peak is sampled on entry, before anything can retire, so work
-          // admitted inside the publication window cannot escape the count.
+          // Sample before any task can retire to catch transient over-admission.
           peak = Math.max(peak, active);
           if (active >= 8) {
             publishedStarts.resolve();
@@ -101,9 +93,6 @@ describe("publishLaneConfiguration", () => {
         "publication did not start the shared group budget",
       );
 
-      // Sample task entry while all admitted tasks remain parked.
-      expect(peak).toBeLessThanOrEqual(8);
-      // And not vacuous — publication must actually have dispatched to the cap.
       expect(peak).toBe(8);
     } finally {
       for (const g of gates) {
@@ -144,8 +133,7 @@ describe("publishLaneConfiguration", () => {
     );
 
     try {
-      // Deliberately publish HOOK first in both objects. The older CRON head must
-      // still own the single shared slot.
+      // HOOK is published first; the older CRON head must still win.
       publishLaneConfiguration({
         lanes: { [HOOK]: 1, [CRON]: 1 },
         groups: { [GROUP]: { budget: 1, members: [HOOK, CRON] } },
@@ -186,8 +174,7 @@ describe("publishLaneConfiguration", () => {
     const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise);
     expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 0, queuedCount: 1 });
 
-    // CRON's active task stops counting against the old group as soon as it is
-    // moved. That newly free old-group capacity must wake HOOK immediately.
+    // Moving active CRON work must immediately free its old group for HOOK.
     publishLaneConfiguration({
       groups: { [MOVED_GROUP]: { budget: 1, members: [CRON, DELIVERY] } },
     });
@@ -203,44 +190,8 @@ describe("publishLaneConfiguration", () => {
     await Promise.all([cronRun, hookRun]);
   });
 
-  test("a rejected configuration does not leave lanes widened and dispatching", async () => {
-    setCommandLaneConcurrency(CRON, 0);
-    const gates = Array.from({ length: 4 }, () => createDeferred());
-    const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
-
-    // sum(reservations) > budget is rejected. Validation must happen before any
-    // drain, or the lane is left open at width 8 governed by no group at all.
-    expect(() =>
-      publishLaneConfiguration({
-        lanes: { [CRON]: 8 },
-        groups: {
-          [GROUP]: {
-            budget: 2,
-            members: [CRON, HOOK],
-            reservations: { [CRON]: 2, [HOOK]: 1 },
-          },
-        },
-      }),
-    ).toThrow(/reserves 3 slots but its budget is 2/);
-
-    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
-
-    for (const g of gates) {
-      g.resolve();
-    }
-    // The lane never opened, so this work is still queued. resetAllLanes
-    // PRESERVES queued entries by design, so it would never settle these —
-    // clearCommandLane rejects them instead.
-    clearCommandLane(CRON);
-    await Promise.allSettled(runs);
-  });
-
   test("a rejected configuration does not leave lane maxima mutated", async () => {
-    // Stronger than asserting activeCount === 0 after the throw: that only
-    // proves no commit-time drain ran, not that the lane was left alone. If
-    // phase 1 widens a lane and group validation then throws, the lane sits at
-    // the new width governed by NO group, and the next unrelated drain trigger
-    // dispatches the preserved queue ungoverned.
+    // Reject before mutating: a later enqueue must not dispatch the preserved queue.
     setCommandLaneConcurrency(CRON, 0);
     const gates = Array.from({ length: 4 }, () => createDeferred());
     const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
@@ -259,12 +210,9 @@ describe("publishLaneConfiguration", () => {
       }),
     ).toThrow(/reserves 3 slots but its budget is 2/);
 
-    // The lane must be exactly as it was before the rejected publish.
     expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(0);
     expect(getCommandLaneSnapshot(CRON).group).toBeUndefined();
 
-    // And a later drain trigger must not dispatch the queue that was preserved
-    // across the failed publish.
     const extra = createDeferred();
     const extraRun = enqueueCommandInLane(CRON, async () => await extra.promise);
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
@@ -278,10 +226,7 @@ describe("publishLaneConfiguration", () => {
   });
 
   test("a rejected replacement does not tear down the existing group first", async () => {
-    // Combining clearGroups with an invalid replacement is the
-    // worst case — the old group could be removed before the new one throws,
-    // leaving BOTH lane width and group membership partially committed. Phase 0
-    // validation has to run before the clear, not just before the install.
+    // Validate before clearing the old group or changing its members' widths.
     publishLaneConfiguration({
       lanes: { [CRON]: 8, [HOOK]: 1 },
       groups: {
@@ -304,7 +249,6 @@ describe("publishLaneConfiguration", () => {
       }),
     ).toThrow(/reserves 2 slots but its budget is 1/);
 
-    // Everything must be exactly as before: group intact, width untouched.
     expect(getCommandLaneSnapshot(CRON).group).toBe(GROUP);
     expect(getCommandLaneSnapshot(CRON).groupBudget).toBe(8);
     expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(8);
@@ -312,8 +256,7 @@ describe("publishLaneConfiguration", () => {
   });
 
   test("publication wakes members when a replacement frees capacity", async () => {
-    // Replacing a group must wake queued members when its new budget has room,
-    // without waiting for an unrelated enqueue to trigger another drain.
+    // Budget expansion must wake queued work without another enqueue.
     setCommandLaneConcurrency(CRON, 8);
     setCommandLaneConcurrency(HOOK, 1);
     setCommandLaneGroup(GROUP, { budget: 2, members: [CRON, HOOK] });
@@ -323,10 +266,8 @@ describe("publishLaneConfiguration", () => {
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(2);
     expect(getCommandLaneSnapshot(CRON).queuedCount).toBe(3);
 
-    // Publish a wider group budget without changing individual lane widths.
     setCommandLaneGroup(GROUP, { budget: 5, members: [CRON, HOOK] });
 
-    // The queued work must start on the replacement itself.
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(5);
     expect(getCommandLaneSnapshot(CRON).queuedCount).toBe(0);
 
@@ -348,8 +289,7 @@ describe("publishLaneConfiguration", () => {
     const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(3);
 
-    // Narrowing mid-flight cannot evict running work, but it must not admit
-    // more: the group is already over its new budget.
+    // Narrowing cannot evict running work or admit more while over budget.
     publishLaneConfiguration({
       lanes: { [CRON]: 8, [HOOK]: 1 },
       groups: {

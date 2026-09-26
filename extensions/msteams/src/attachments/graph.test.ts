@@ -70,6 +70,16 @@ import { downloadMSTeamsGraphMedia } from "./graph.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import { safeFetchWithPolicy } from "./shared.js";
 
+function downloadGraphMediaWithDefaults(
+  params: Partial<Parameters<typeof downloadMSTeamsGraphMedia>[0]>,
+) {
+  return downloadMSTeamsGraphMedia({
+    tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+    maxBytes: 10 * 1024 * 1024,
+    ...params,
+  });
+}
+
 function mockFetchResponse(body: unknown, status = 200) {
   const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
   return new Response(bodyStr, { status, headers: { "content-type": "application/json" } });
@@ -141,44 +151,14 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     vi.clearAllMocks();
   });
 
-  it("fetches hosted bytes from the documented $value endpoint", async () => {
-    const imageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
-
-    const fetchCalls: string[] = [];
-
-    mockGraphMediaFetch({
-      messageId: "msg-1",
-      hostedContents: [{ id: "hosted-123", contentType: "image/png" }],
-      valueResponses: {
-        "/hostedContents/hosted-123/$value": mockBinaryResponse(imageBytes),
-      },
-      fetchCalls,
-    });
-
-    const result = await downloadMSTeamsGraphMedia({
-      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-1",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
-    });
-
-    // Verify the $value endpoint was fetched
-    expect(fetchCalls).toContain(
-      "https://graph.microsoft.com/v1.0/chats/c/messages/msg-1/hostedContents/hosted-123/$value",
-    );
-    expect(result.media.length).toBeGreaterThan(0);
-    expect(result.hostedCount).toBe(1);
-  });
-
   it("skips hosted content when the list item has no id", async () => {
     mockGraphMediaFetch({
       messageId: "msg-2",
       hostedContents: [{ contentType: "image/png" }],
     });
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-2",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     expect(result.media).toEqual([{ kind: "image", contentType: "image/png" }]);
@@ -202,9 +182,8 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       fetchCalls,
     });
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-cl",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
       maxBytes: 1024, // 1 KB limit
     });
 
@@ -235,10 +214,8 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       fetchCalls,
     });
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-huge",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     expect(result.media).toHaveLength(0);
@@ -259,10 +236,8 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       fetchCalls,
     });
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-500",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     expect(result.media).toEqual([
@@ -284,10 +259,8 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       fetchCalls,
     });
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-err",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     expect(result.media).toEqual([]);
@@ -321,10 +294,8 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       return guardedFetchResult(params, mockFetchResponse({ body: {}, attachments: [] }));
     });
 
-    const operation = downloadMSTeamsGraphMedia({
+    const operation = downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-cloned-collection",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     try {
@@ -358,25 +329,22 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       fetchCalls,
     });
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-3",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     expect(fetchCalls).toContain(
       "https://graph.microsoft.com/v1.0/chats/c/messages/msg-3/hostedContents/hosted-456/$value",
     );
     expect(result.media.length).toBeGreaterThan(0);
+    expect(result.hostedCount).toBe(1);
   });
 
   it("adds the OpenClaw User-Agent to guarded Graph attachment fetches", async () => {
     mockGraphMediaFetch({ messageId: "msg-ua" });
 
-    await downloadMSTeamsGraphMedia({
+    await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-ua",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     const guardCalls = vi.mocked(fetchWithSsrFGuard).mock.calls;
@@ -417,10 +385,8 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       };
     });
 
-    await downloadMSTeamsGraphMedia({
+    await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-share",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     const [fetchParams] = requireFirstMockCall(
@@ -457,10 +423,8 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
       fetchCalls,
     });
 
-    await downloadMSTeamsGraphMedia({
+    await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-no-sub",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     const calledSubResource = fetchCalls.some((u) =>
@@ -492,10 +456,8 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
       kind: "document",
     });
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-inline",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     expect(result.media).toHaveLength(1);
@@ -524,10 +486,8 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
       new Error("download failed"),
     );
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-failed-reference",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     expect(result.media).toEqual([{ kind: "document", sourceId: "reference-1" }]);
@@ -560,10 +520,8 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
       return { path: "/tmp/release.pdf", contentType: "application/pdf", kind: "document" };
     });
 
-    await downloadMSTeamsGraphMedia({
+    await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-release",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
     });
 
     expect(order.slice(0, 2)).toEqual(["message-release", "sharepoint-download"]);
@@ -576,10 +534,8 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     });
     const logger = { warn: vi.fn() };
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-huge",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
       logger,
     });
 
@@ -606,10 +562,8 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     });
     const logger = { warn: vi.fn() };
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-err",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
       logger,
     });
 
@@ -644,10 +598,8 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     });
     const logger = { warn: vi.fn() };
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-partial",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
       logger,
     });
 
@@ -675,10 +627,8 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     });
     const logger = { debug: vi.fn() };
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-403",
-      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
-      maxBytes: 10 * 1024 * 1024,
       logger,
     });
 
@@ -695,14 +645,13 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     );
     const logger = { warn: vi.fn() };
 
-    const result = await downloadMSTeamsGraphMedia({
+    const result = await downloadGraphMediaWithDefaults({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-token",
       tokenProvider: {
         getAccessToken: vi.fn(async () => {
           throw new Error("token expired");
         }),
       },
-      maxBytes: 10 * 1024 * 1024,
       logger,
     });
 
@@ -715,7 +664,7 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
   it("bounds stalled token acquisition to the shared operation deadline", async () => {
     vi.useFakeTimers();
     try {
-      const resultPromise = downloadMSTeamsGraphMedia({
+      const resultPromise = downloadGraphMediaWithDefaults({
         messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-token-timeout",
         tokenProvider: { getAccessToken: vi.fn(() => new Promise<string>(() => {})) },
         maxBytes: 10 * 1024 * 1024,
