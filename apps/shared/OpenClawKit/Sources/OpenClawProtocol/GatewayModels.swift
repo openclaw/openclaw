@@ -140,6 +140,17 @@ public enum PluginApprovalSeverity: String, Codable, Sendable {
     case critical = "critical"
 }
 
+public enum PluginUiCapability: String, Codable, Sendable {
+    case page = "page"
+    case navigation = "navigation"
+    case panel = "panel"
+    case action = "action"
+    case accessory = "accessory"
+    case widget = "widget"
+    case replacement = "replacement"
+    case linkReader = "link-reader"
+}
+
 public enum ProgressCardStepStatus: String, Codable, Sendable {
     case pending = "pending"
     case inProgress = "in_progress"
@@ -10494,6 +10505,7 @@ public struct PluginControlUiModule: Codable, Sendable {
     public let name: String
     public let revision: String
     public let entryurl: String
+    public let uicapabilities: [PluginUiCapability]?
     public let styles: [String]
 
     public init(
@@ -10501,12 +10513,14 @@ public struct PluginControlUiModule: Codable, Sendable {
         name: String,
         revision: String,
         entryurl: String,
+        uicapabilities: [PluginUiCapability]? = nil,
         styles: [String])
     {
         self.pluginid = pluginid
         self.name = name
         self.revision = revision
         self.entryurl = entryurl
+        self.uicapabilities = uicapabilities
         self.styles = styles
     }
 
@@ -10515,6 +10529,7 @@ public struct PluginControlUiModule: Codable, Sendable {
         case name
         case revision
         case entryurl = "entryUrl"
+        case uicapabilities = "uiCapabilities"
         case styles
     }
 }

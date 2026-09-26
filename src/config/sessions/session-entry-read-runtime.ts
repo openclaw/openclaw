@@ -347,7 +347,7 @@ type SessionStoreWorkerReadScope = {
 type SessionEntryWorkerRead = SessionStoreWorkerReadScope & {
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
-  projection?: "full" | "backing" | "sharing";
+  projection?: "full" | "backing" | "sharing" | "list";
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
@@ -431,7 +431,7 @@ async function withSessionEntriesFromStoreInWorker<T>(
       assertCurrent();
       return consume({ result, database, assertCurrent });
     },
-    { backing: input.projection === "backing", dataOnly },
+    { backing: input.projection === "backing" || input.projection === "list", dataOnly },
   );
 }
 

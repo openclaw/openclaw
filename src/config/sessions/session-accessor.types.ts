@@ -835,7 +835,16 @@ export type SessionEntryCommitContext = {
   assertCurrent: () => void;
 };
 
+export type SessionEntryCreationPhase =
+  | "snapshot"
+  | "entry"
+  | "transcript"
+  | "writerAdmission"
+  | "commit"
+  | "publication";
+
 export type SessionEntryCreateWithTranscriptOptions = {
+  onPhase?: (phase: SessionEntryCreationPhase) => void;
   /** Bind retained target facts to this creator's own placeholder publication. */
   bindCreation?: (operation: SessionEntryCreationOperation) => void;
   /** Protect the newly created row from maintenance during its initial write. */

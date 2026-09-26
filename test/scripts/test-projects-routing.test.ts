@@ -26,11 +26,23 @@ const {
   buildVitestRunPlans,
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
+  hasImportGraphImpactOnTargets,
   parseTestProjectsArgs,
   resolveChangedTargetArgs,
   resolveChangedTestTargetPlan,
   resolveParallelFullSuiteConcurrency,
 } = await import("../../scripts/test-projects.test-support.mts");
+
+it("tracks compile-cache dependencies through generated SQLite lifecycle fixtures", () => {
+  expect(
+    hasImportGraphImpactOnTargets(
+      ["node-compile-cache.mjs"],
+      ["test/non-isolated-runner.sqlite.test.ts"],
+      process.cwd(),
+      { tooling: true, runtimeOnly: true },
+    ),
+  ).toBe(true);
+});
 
 const VITEST_NODE_PREFIX = [
   "exec",

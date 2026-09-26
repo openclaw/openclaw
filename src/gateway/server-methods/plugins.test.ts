@@ -830,6 +830,13 @@ describe("plugin management Gateway handlers", () => {
       ok: true,
       plugin: localOnly,
       source: { kind: "official-catalog" },
+      overview: {
+        capabilities: {
+          channels: ["workboard-chat"],
+          providers: ["workboard-models"],
+          contracts: {},
+        },
+      },
       declared: {
         channels: ["workboard-chat"],
         providers: ["workboard-models"],

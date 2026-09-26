@@ -82,12 +82,24 @@ packaging recovery keeps the original tag and follows
 
 ## Registry selectors
 
-Promote through the restricted release-ops
-`openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow.
-Unlike package publication, npm selector management requires `NPM_TOKEN`.
-Prefer repairing that workflow's token path. Point `latest`, `beta`, or
-`extended-stable` only at the operator-approved already-published version, then
-verify cache-bypassed registry readback.
+Beta-to-stable promotion and stable selector recovery remain supported after the
+exact final release passes stable/full validation, soak, and blocking performance.
+Beta-profile evidence or a publication waiver cannot replace those prerequisites.
+
+Use the restricted release-ops
+`openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow with
+`mode=promote_beta_to_latest` to promote an already-published final version from
+`beta` to `latest`, or `mode=sync_stable_dist_tags` to recover stable selectors.
+The operator must verify successful qualification for the exact target before
+dispatch. These modes check tag/package identity and selectors; they do not run
+or authenticate Full Release Validation. A `-beta.N` prerelease cannot be promoted
+through this final-version route.
+
+The same workflow supports the stable-to-beta floor and extended-stable promotion.
+Its `sync_beta_to_stable` mode only updates `beta` to the already-published stable
+version; it does not publish stable or substitute for stable validation. npm
+selector management requires `NPM_TOKEN`. Verify cache-bypassed registry readback
+after an approved change.
 
 To promote an already-published core version to `extended-stable`, use
 `mode=promote_extended_stable` with an exact public final release tag after
