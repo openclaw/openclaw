@@ -1060,15 +1060,13 @@ extensions/telegram/src/channel-actions.ts	1
 extensions/telegram/src/client-fetch.ts	5
 extensions/telegram/src/doctor-contract.ts	3
 extensions/telegram/src/doctor.ts	10
-extensions/telegram/src/fetch.ts	8
+extensions/telegram/src/fetch.ts	7
 extensions/telegram/src/forum-service-message.ts	1
 extensions/telegram/src/group-history-window.ts	1
 extensions/telegram/src/interactive-fallback.ts	1
-extensions/telegram/src/lane-delivery-text-deliverer.ts	1
 extensions/telegram/src/miniapp/command.ts	1
 extensions/telegram/src/miniapp/init-data.ts	1
 extensions/telegram/src/miniapp/routes.ts	1
-extensions/telegram/src/monitor.ts	1
 extensions/telegram/src/network-errors.ts	7
 extensions/telegram/src/outbound-adapter.ts	5
 extensions/telegram/src/outbound-message-context.ts	1
@@ -1092,8 +1090,7 @@ extensions/telegram/src/telegram-ingress-drain.ts	5
 extensions/telegram/src/telegram-ingress-spool.ts	1
 extensions/telegram/src/telegram-ingress-supersede-auth.ts	6
 extensions/telegram/src/telegram-ingress-supersede.ts	7
-extensions/telegram/src/telegram-ingress-worker.runtime.ts	4
-extensions/telegram/src/telegram-ingress-worker.ts	2
+extensions/telegram/src/telegram-ingress-worker.runtime.ts	3
 extensions/telegram/src/thread-bindings-store.ts	1
 extensions/telegram/src/topic-name-cache.ts	1
 extensions/telegram/src/update-offset-store.ts	1
