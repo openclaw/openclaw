@@ -80,41 +80,42 @@ describe("write-package-dist-inventory direct entry", () => {
     });
   });
 
-  describe.each([false, true])("import with existing artifacts=%s", (seeded) => {
-    it.each(["no argv", "same basename"])("stays inert with %s and PM2 hints", (entry) => {
-      withPackageFixture((packageRoot) => {
-        const expected: Record<string, string> = { "entry.js": "export {};\n" };
-        if (seeded) {
-          expected[path.basename(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)] = '["dist/previous.js"]\n';
-          for (const [name, content] of Object.entries(expected)) {
-            fs.writeFileSync(path.join(packageRoot, "dist", name), content);
-          }
-          fs.writeFileSync(
-            path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
-            "existing marker\n",
-          );
+  it.each([
+    { entry: "no argv", seeded: false },
+    { entry: "same basename", seeded: true },
+  ])("stays inert with $entry, existing artifacts=$seeded and PM2 hints", ({ entry, seeded }) => {
+    withPackageFixture((packageRoot) => {
+      const expected: Record<string, string> = { "entry.js": "export {};\n" };
+      if (seeded) {
+        expected[path.basename(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)] = '["dist/previous.js"]\n';
+        for (const [name, content] of Object.entries(expected)) {
+          fs.writeFileSync(path.join(packageRoot, "dist", name), content);
         }
-        const importSource = `await import(${JSON.stringify(pathToFileURL(writerPath).href)});\n`;
-        const importerPath = path.join(packageRoot, path.basename(writerPath));
-        fs.writeFileSync(importerPath, importSource);
-        runNode(
-          packageRoot,
-          entry === "no argv" ? ["--input-type=module", "--eval", importSource] : [importerPath],
+        fs.writeFileSync(
+          path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
+          "existing marker\n",
         );
+      }
+      const importSource = `await import(${JSON.stringify(pathToFileURL(writerPath).href)});\n`;
+      const importerPath = path.join(packageRoot, path.basename(writerPath));
+      fs.writeFileSync(importerPath, importSource);
+      runNode(
+        packageRoot,
+        entry === "no argv" ? ["--input-type=module", "--eval", importSource] : [importerPath],
+      );
 
-        const actual = Object.fromEntries(
-          fs
-            .readdirSync(path.join(packageRoot, "dist"))
-            .map((name) => [name, fs.readFileSync(path.join(packageRoot, "dist", name), "utf8")]),
-        );
-        expect(actual).toEqual(expected);
-        const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
-        if (seeded) {
-          expect(fs.readFileSync(markerPath, "utf8")).toBe("existing marker\n");
-        } else {
-          expect(fs.existsSync(markerPath)).toBe(false);
-        }
-      });
+      const actual = Object.fromEntries(
+        fs
+          .readdirSync(path.join(packageRoot, "dist"))
+          .map((name) => [name, fs.readFileSync(path.join(packageRoot, "dist", name), "utf8")]),
+      );
+      expect(actual).toEqual(expected);
+      const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+      if (seeded) {
+        expect(fs.readFileSync(markerPath, "utf8")).toBe("existing marker\n");
+      } else {
+        expect(fs.existsSync(markerPath)).toBe(false);
+      }
     });
   });
 });

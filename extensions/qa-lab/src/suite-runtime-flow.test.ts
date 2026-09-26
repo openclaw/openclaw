@@ -44,11 +44,11 @@ vi.mock("./runtime-tool-fixture.js", async (importOriginal) => ({
   runRuntimeToolFixture,
 }));
 
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import * as browserRuntime from "./browser-runtime.js";
 import * as cronRunWait from "./cron-run-wait.js";
 import * as discoveryEval from "./discovery-eval.js";
 import { QaSuiteScenarioSkipError } from "./errors.js";
-import * as extractToolPayload from "./extract-tool-payload.js";
 import * as modelSwitchEval from "./model-switch-eval.js";
 import * as suiteRuntimeAgent from "./suite-runtime-agent.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
@@ -297,7 +297,7 @@ describe("qa suite runtime flow", () => {
       suiteRuntimeGateway,
       cronRunWait,
       discoveryEval,
-      extractToolPayload,
+      { extractQaToolPayload },
       modelSwitchEval,
     ]) {
       for (const [name, helper] of Object.entries(dependencyModule)) {

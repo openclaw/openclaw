@@ -126,10 +126,6 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
   return value;
 }
 
-export function toWorkerConnectionError(error: unknown): Error {
-  return toStructuredErrorObject(error);
-}
-
 export function formatWorkerConnectionFailure(
   options: WorkerConnectionOptions,
   error: unknown,
@@ -144,7 +140,7 @@ export function formatWorkerConnectionFailure(
     address = endpoint.socketPath;
   }
   const target = truncateUtf16Safe(address, 128);
-  let detail = toWorkerConnectionError(error).message;
+  let detail = toStructuredErrorObject(error).message;
   const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
   const credentials = [
     options.connectParams.admission.credential,

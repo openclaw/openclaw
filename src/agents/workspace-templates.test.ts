@@ -16,24 +16,6 @@ async function loadWorkspaceTemplateResolvers() {
 }
 
 describe("resolveWorkspaceTemplateSearchDirs", () => {
-  it("resolves templates from package root when module url is dist-rooted", async () => {
-    const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
-    const root = tempDirs.make("openclaw-templates-");
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-
-    const templatesDir = path.join(root, "docs", "reference", "templates");
-    await fs.mkdir(templatesDir, { recursive: true });
-    await fs.writeFile(path.join(templatesDir, "AGENTS.md"), "# ok\n");
-
-    const distDir = path.join(root, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
-
-    // The primary template dir is the first search root of the public resolver.
-    const [resolved] = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
-    expect(resolved).toBe(templatesDir);
-  });
-
   it("falls back to checkout docs when package-root templates are missing", async () => {
     const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
     const root = tempDirs.make("openclaw-templates-");

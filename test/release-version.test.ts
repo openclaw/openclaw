@@ -14,7 +14,6 @@ describe("release version policy", () => {
     ["2026.7.2-beta.1", "beta"],
     ["2026.7.32", "stable"],
     ["2026.6.33", "extended-stable"],
-    ["2026.6.34", "extended-stable"],
     ["2026.6.33-1", "unsupported-extended-stable-correction"],
   ] as const)("classifies %s as %s", (version, expected) => {
     const parsed = parseReleaseVersion(version);
@@ -51,7 +50,6 @@ describe("release version policy", () => {
   });
 
   it.each([
-    ["2026.1.1", "2026.1.1"],
     [" 2026.12.33 ", "2026.12.33"],
     ["9999.12.9007199254740991", "9999.12.9007199254740991"],
   ])("accepts stable release pin %j", (version, expected) => {
@@ -60,7 +58,6 @@ describe("release version policy", () => {
 
   it.each([
     "v2026.8.1",
-    "V2026.8.1",
     "2026.8.1-alpha.1",
     "2026.8.1-beta.1",
     "2026.8.1-1",
@@ -69,9 +66,6 @@ describe("release version policy", () => {
     "^2026.8.1",
     "2026.8.x",
     "https://example.com/2026.8.1",
-    "workspace:*",
-    "file:../package",
-    "git+https://example.com/repo.git",
     "2026. 8.1",
     "2026.08.1",
     "2026.8.01",

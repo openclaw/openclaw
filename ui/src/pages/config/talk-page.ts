@@ -548,9 +548,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
    */
   private liveSelection() {
     const form = this.context.runtimeConfig.state.configForm;
-    const configObject =
-      form && typeof form === "object" ? (form as Record<string, unknown>) : this.configObject;
-    return resolveTalkRealtimeSelection(configObject);
+    return resolveTalkRealtimeSelection(form ?? this.configObject);
   }
 
   /**

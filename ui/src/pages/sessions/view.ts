@@ -8,7 +8,6 @@ import type {
   AgentIdentityResult,
   GatewaySessionRow,
   SessionRunStatus,
-  FastMode,
   SessionsListResult,
 } from "../../api/types.ts";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
@@ -47,6 +46,7 @@ import {
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
+import type { SessionPatch } from "../../lib/sessions/patch.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
@@ -92,23 +92,7 @@ export type SessionsProps = {
   onRefresh: () => void;
   onStatusFilterChange: (statusFilter: SessionArchivedFilter) => void;
   onDeleteAllArchived: () => void;
-  onPatch: (
-    key: string,
-    patch: {
-      label?: string | null;
-      icon?: string | null;
-      color?: string | null;
-      category?: string | null;
-      archived?: boolean;
-      pinned?: boolean;
-      unread?: boolean;
-      thinkingLevel?: string | null;
-      fastMode?: FastMode | null;
-      verboseLevel?: string | null;
-      reasoningLevel?: string | null;
-    },
-    options?: { sessionScope?: boolean },
-  ) => void;
+  onPatch: (key: string, patch: SessionPatch, options?: { sessionScope?: boolean }) => void;
   onToggleSelect: (key: string) => void;
   onSelectPage: (keys: string[]) => void;
   onDeselectPage: (keys: string[]) => void;
@@ -182,10 +166,6 @@ const SESSION_RUN_STATUS_LABELS = {
   timeout: "sessionsView.statusTimeout",
 } as const satisfies Record<SessionRunStatus, string>;
 
-function formatSessionRunStatus(status: SessionRunStatus): string {
-  return t(SESSION_RUN_STATUS_LABELS[status] ?? "sessionsView.statusUnknown");
-}
-
 function renderSessionStatusBadge(row: GatewaySessionRow) {
   const active = isSessionRunActive(row);
   const idle = row.hasActiveRun === false && (!row.status || row.status === "running");
@@ -197,7 +177,7 @@ function renderSessionStatusBadge(row: GatewaySessionRow) {
         : idle
           ? t("sessionsView.statusIdle")
           : row.status
-            ? formatSessionRunStatus(row.status)
+            ? t(SESSION_RUN_STATUS_LABELS[row.status] ?? "sessionsView.statusUnknown")
             : t("sessionsView.statusUnknown");
   const kind =
     row.status === "queued"
@@ -347,11 +327,6 @@ function renderSkeletonRows(columnCount: number) {
       </tr>
     `,
   );
-}
-
-function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
-  const start = page * pageSize;
-  return rows.slice(start, start + pageSize);
 }
 
 function hasActiveFilters(props: SessionsProps): boolean {
@@ -606,7 +581,7 @@ export function renderSessions(props: SessionsProps) {
         })
       : null;
   const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
-  const paginated = paginateRows(displayRows, page, props.pageSize);
+  const paginated = displayRows.slice(page * props.pageSize, (page + 1) * props.pageSize);
   const emptyBecauseFiltered = rawRows.length === 0 && hasActiveFilters(props);
   const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
   const archivedCount = rawRows.filter((row) => row.archived === true).length;
@@ -1170,10 +1145,6 @@ function renderSessionDetailsRow(params: {
   const labelDisabledReason = props.labelDisabledReason?.(row);
   const rawThinking = row.thinkingLevel ?? "";
   const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
-  const thinkLevels = withCurrentLabeledOption(
-    resolveThinkLevelOptions(row, props.result?.defaults),
-    thinking,
-  );
   const fastMode =
     row.fastMode === "auto"
       ? "auto"
@@ -1182,20 +1153,37 @@ function renderSessionDetailsRow(params: {
         : row.fastMode === false
           ? "off"
           : "";
-  const fastLevels = withCurrentLabeledOption(
-    buildSessionLevelOptions(FAST_LEVEL_VALUES),
-    fastMode,
-  );
-  const verbose = row.verboseLevel ?? "";
-  const verboseLevels = withCurrentLabeledOption(
-    buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
-    verbose,
-  );
-  const reasoning = row.reasoningLevel ?? "";
-  const reasoningLevels = withCurrentLabeledOption(
-    buildSessionLevelOptions(REASONING_LEVELS),
-    reasoning,
-  );
+  const overrides: Array<
+    Omit<Parameters<typeof renderOverrideSelect>[0], "disabled" | "disabledReason">
+  > = [
+    {
+      label: t("sessionsView.thinking"),
+      current: thinking,
+      options: resolveThinkLevelOptions(row, props.result?.defaults),
+      onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
+    },
+    {
+      label: t("sessionsView.fast"),
+      current: fastMode,
+      options: buildSessionLevelOptions(FAST_LEVEL_VALUES),
+      onChange: (value) =>
+        props.onPatch(row.key, {
+          fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
+        }),
+    },
+    {
+      label: t("sessionsView.verbose"),
+      current: row.verboseLevel ?? "",
+      options: buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
+      onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
+    },
+    {
+      label: t("sessionsView.reasoning"),
+      current: row.reasoningLevel ?? "",
+      options: buildSessionLevelOptions(REASONING_LEVELS),
+      onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
+    },
+  ];
   const sessionDetails = sessionDetailItems({
     row,
     updated,
@@ -1238,41 +1226,14 @@ function renderSessionDetailsRow(params: {
                 }}
               />
             </label>
-            ${renderOverrideSelect({
-              label: t("sessionsView.thinking"),
-              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-              disabledReason: props.patchAdminDisabledReason,
-              options: thinkLevels,
-              current: thinking,
-              onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
-            })}
-            ${renderOverrideSelect({
-              label: t("sessionsView.fast"),
-              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-              disabledReason: props.patchAdminDisabledReason,
-              options: fastLevels,
-              current: fastMode,
-              onChange: (value) =>
-                props.onPatch(row.key, {
-                  fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
-                }),
-            })}
-            ${renderOverrideSelect({
-              label: t("sessionsView.verbose"),
-              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-              disabledReason: props.patchAdminDisabledReason,
-              options: verboseLevels,
-              current: verbose,
-              onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
-            })}
-            ${renderOverrideSelect({
-              label: t("sessionsView.reasoning"),
-              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-              disabledReason: props.patchAdminDisabledReason,
-              options: reasoningLevels,
-              current: reasoning,
-              onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
-            })}
+            ${overrides.map((override) =>
+              renderOverrideSelect({
+                ...override,
+                options: withCurrentLabeledOption(override.options, override.current),
+                disabled: props.loading || Boolean(props.patchAdminDisabledReason),
+                disabledReason: props.patchAdminDisabledReason,
+              }),
+            )}
           </div>
         </div>
 

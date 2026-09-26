@@ -85,7 +85,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       mentionInbox: { invalidate: invalidateMentions },
     } as unknown as GatewayRequestContext;
     const reloader = startManagedGatewayConfigReloader({
-      scheduler: createTestGatewayScheduler(),
+      scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
       getPluginRegistry: () => pluginRegistry,
       configRevisionProjector: {
         projectRawHash: (hash) => `opaque:${hash}`,

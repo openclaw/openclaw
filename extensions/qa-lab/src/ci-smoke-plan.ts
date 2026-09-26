@@ -1,4 +1,3 @@
-// Qa Lab plugin module plans the bounded CI smoke pack parts.
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./model-selection.js";
 import { resolveQaProfileScenarios } from "./profile-planning.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";

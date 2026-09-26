@@ -272,10 +272,6 @@ export function deleteClawWorkspaceFileRecord(
   }, options);
 }
 
-function workspaceFileActions(plan: ClawAddPlan): ClawAddPlanAction[] {
-  return plan.actions.filter((action) => action.kind === "workspaceFile");
-}
-
 export function readClawWorkspaceFiles(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
@@ -323,7 +319,7 @@ export async function createClawWorkspaceFiles(
   plan: ClawAddPlan,
   options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
 ): Promise<PersistedClawWorkspaceFile[]> {
-  const actions = workspaceFileActions(plan);
+  const actions = plan.actions.filter((action) => action.kind === "workspaceFile");
   if (actions.length === 0) {
     return [];
   }
@@ -344,31 +340,18 @@ export async function createClawWorkspaceFiles(
   const nowMs = options.nowMs ?? Date.now();
 
   for (const action of actions) {
+    const writeError = (code: string, message: string) =>
+      new ClawWorkspaceWriteError([diagnostic(action, code, message)], createdFiles);
     try {
       if (!action.source || !action.digest) {
-        throw new ClawWorkspaceWriteError(
-          [
-            diagnostic(
-              action,
-              "workspace_file_plan_invalid",
-              "File action lacks source or digest.",
-            ),
-          ],
-          createdFiles,
-        );
+        throw writeError("workspace_file_plan_invalid", "File action lacks source or digest.");
       }
       const targetPath = resolve(action.target);
       const targetRelative = clawContainedRelativePath(workspaceRoot, targetPath);
       if (!targetRelative) {
-        throw new ClawWorkspaceWriteError(
-          [
-            diagnostic(
-              action,
-              "workspace_file_path_escape",
-              "Workspace file source and destination must remain inside their owned roots.",
-            ),
-          ],
-          createdFiles,
+        throw writeError(
+          "workspace_file_path_escape",
+          "Workspace file source and destination must remain inside their owned roots.",
         );
       }
       const resolvedSource = await readClawWorkspaceActionSource({
@@ -378,15 +361,9 @@ export async function createClawWorkspaceFiles(
       });
       const digest = contentDigest(resolvedSource.content);
       if (digest !== action.digest) {
-        throw new ClawWorkspaceWriteError(
-          [
-            diagnostic(
-              action,
-              "workspace_source_changed",
-              `Workspace source for ${JSON.stringify(action.id)} changed after planning.`,
-            ),
-          ],
-          createdFiles,
+        throw writeError(
+          "workspace_source_changed",
+          `Workspace source for ${JSON.stringify(action.id)} changed after planning.`,
         );
       }
       const expectedRecord: PersistedClawWorkspaceFile = {
@@ -406,28 +383,16 @@ export async function createClawWorkspaceFiles(
         options,
       );
       if (existingRecord && !sameWorkspaceFileOwner(existingRecord, expectedRecord)) {
-        throw new ClawWorkspaceWriteError(
-          [
-            diagnostic(
-              action,
-              "workspace_file_ownership_conflict",
-              `Workspace destination ${JSON.stringify(targetRelative)} is already claimed by different Claw provenance.`,
-            ),
-          ],
-          createdFiles,
+        throw writeError(
+          "workspace_file_ownership_conflict",
+          `Workspace destination ${JSON.stringify(targetRelative)} is already claimed by different Claw provenance.`,
         );
       }
       if (await workspace.exists(targetRelative)) {
         if (!existingRecord || existingRecord.status === "failed") {
-          throw new ClawWorkspaceWriteError(
-            [
-              diagnostic(
-                action,
-                "workspace_file_collision",
-                `Workspace destination ${JSON.stringify(targetRelative)} already exists.`,
-              ),
-            ],
-            createdFiles,
+          throw writeError(
+            "workspace_file_collision",
+            `Workspace destination ${JSON.stringify(targetRelative)} already exists.`,
           );
         }
         const existingTarget = await workspace.read(targetRelative, {
@@ -436,15 +401,9 @@ export async function createClawWorkspaceFiles(
           symlinks: "reject",
         });
         if (contentDigest(existingTarget.buffer) !== expectedRecord.contentDigest) {
-          throw new ClawWorkspaceWriteError(
-            [
-              diagnostic(
-                action,
-                "workspace_file_drift",
-                `Claw-owned workspace destination ${JSON.stringify(targetRelative)} no longer matches its recorded content.`,
-              ),
-            ],
-            createdFiles,
+          throw writeError(
+            "workspace_file_drift",
+            `Claw-owned workspace destination ${JSON.stringify(targetRelative)} no longer matches its recorded content.`,
           );
         }
         const previousStatus = existingRecord.status;
@@ -492,10 +451,7 @@ export async function createClawWorkspaceFiles(
           : error instanceof FsSafeError
             ? `workspace_file_${error.code}`
             : "workspace_file_io_error";
-      throw new ClawWorkspaceWriteError(
-        [diagnostic(action, code, coerceErrorMessage(error))],
-        createdFiles,
-      );
+      throw writeError(code, coerceErrorMessage(error));
     }
   }
   return createdFiles;

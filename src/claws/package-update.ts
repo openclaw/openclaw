@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
+import { clawPackageKey } from "./application-provenance.js";
 import {
   digestClawPackageRef,
   replaceClawPackageRefExpected,
@@ -40,10 +41,6 @@ function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
 }
 
-function packageKey(value: Pick<ClawPackage, "kind" | "ref">): string {
-  return `${value.kind}:${value.ref}`;
-}
-
 export async function applyClawPackageUpdate(
   updatePlan: ClawUpdatePlan,
   targetAddPlan: ClawAddPlan,
@@ -65,7 +62,7 @@ export async function applyClawPackageUpdate(
   const readRefs = options.readRefs ?? readClawPackageRefs;
   const replaceExpected = options.replaceExpected ?? replaceClawPackageRefExpected;
   const currentRefs = new Map(
-    readRefs({ ...options, agentId: updatePlan.agentId }).map((ref) => [packageKey(ref), ref]),
+    readRefs({ ...options, agentId: updatePlan.agentId }).map((ref) => [clawPackageKey(ref), ref]),
   );
   const allRefs = readRefs(options);
   const undo: Array<() => Promise<void>> = [];
@@ -249,7 +246,7 @@ export async function applyClawPackageUpdate(
         },
       );
       const installed = refs.find(
-        (ref) => packageKey(ref) === action.id && ref.version === target.version,
+        (ref) => clawPackageKey(ref) === action.id && ref.version === target.version,
       );
       if (!installed) {
         throw new ClawPackageUpdateError(

@@ -195,7 +195,7 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
               }
             </div>`,
           }),
-          failed
+          failed && run?.target.installationMethod !== "ocm"
             ? renderSettingsRow({
                 title: t("updates.page.cliFallback"),
                 description: t("updates.triage.hostHint"),

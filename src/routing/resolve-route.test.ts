@@ -1,8 +1,8 @@
 // Route resolution tests cover resolving channel route targets from input.
 import { describe, expect, test, vi } from "vitest";
 import { AgentSelectionRequiredError, resolveAgentConfig } from "../agents/agent-scope-config.js";
+import * as configBindings from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
-import * as routingBindings from "./bindings.js";
 import {
   listExactDirectMessageBindingPeerIds,
   resolveAgentRoute,
@@ -1273,7 +1273,7 @@ describe("binding evaluation cache scalability", () => {
         },
       ],
     };
-    const listBindingsSpy = vi.spyOn(routingBindings, "listBindings");
+    const listBindingsSpy = vi.spyOn(configBindings, "listRouteBindings");
     try {
       const boundRoute = resolveAgentRoute({
         cfg,

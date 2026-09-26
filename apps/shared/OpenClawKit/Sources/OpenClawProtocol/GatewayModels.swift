@@ -5635,6 +5635,58 @@ public struct CronDeliveryPreview: Codable, Sendable {
     }
 }
 
+public struct CronHistoryParams: Codable, Sendable {
+    public let id: String
+    public let runid: String?
+    public let runatms: Int?
+    public let cursor: String?
+    public let limit: Int?
+
+    public init(
+        id: String,
+        runid: String? = nil,
+        runatms: Int? = nil,
+        cursor: String? = nil,
+        limit: Int? = nil)
+    {
+        self.id = id
+        self.runid = runid
+        self.runatms = runatms
+        self.cursor = cursor
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case runid = "runId"
+        case runatms = "runAtMs"
+        case cursor
+        case limit
+    }
+}
+
+public struct CronHistoryResult: Codable, Sendable {
+    public let messages: [AnyCodable]
+    public let activity: [ChatHistoryActivity]?
+    public let nextcursor: String?
+
+    public init(
+        messages: [AnyCodable],
+        activity: [ChatHistoryActivity]? = nil,
+        nextcursor: String? = nil)
+    {
+        self.messages = messages
+        self.activity = activity
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case messages
+        case activity
+        case nextcursor = "nextCursor"
+    }
+}
+
 public struct CronJobNotFoundErrorDetails: Codable, Sendable {
     public let code: String
     public let jobid: String

@@ -1266,6 +1266,163 @@ def app_store_build_upload_state(upload)
   state
 end
 
+def normalized_app_store_timestamp(value, label:)
+  parsed = Time.iso8601(value.to_s).utc
+  parsed.iso8601(3)
+rescue ArgumentError
+  UI.user_error!("Invalid #{label} timestamp.")
+end
+
+def ios_release_reconcile_observation!(
+  app_store_version:,
+  build_number:,
+  configured_group_id:,
+  output_path:
+)
+  unless app_store_version.match?(/\A\d{4}\.\d+\.\d+\z/) &&
+         build_number.match?(/\A[1-9]\d*\z/) &&
+         configured_group_id.match?(/\A[A-Za-z0-9][A-Za-z0-9-]{0,127}\z/)
+    UI.user_error!("Invalid iOS release reconciliation identity.")
+  end
+  UI.user_error!("Missing iOS release reconciliation output path.") if output_path.empty?
+
+  app = app_store_connect_target_app
+  builds = app.get_builds(
+    filter: {
+      "preReleaseVersion.version" => app_store_version,
+      version: build_number
+    },
+    includes: "preReleaseVersion,buildBetaDetail",
+    limit: 200
+  ).select do |build|
+    build.app_version == app_store_version &&
+      build.version.to_s == build_number &&
+      build.platform.to_s == Spaceship::ConnectAPI::Platform::IOS.to_s
+  end
+  unless builds.length == 1
+    UI.user_error!(
+      "Expected one iOS TestFlight build #{app_store_version} (#{build_number}); found #{builds.length}."
+    )
+  end
+  build = builds.first
+
+  uploads = app_store_build_uploads(
+    app_id: app.id,
+    short_version: app_store_version
+  ).select do |upload|
+    upload.cf_build_short_version_string.to_s == app_store_version &&
+      upload.cf_build_version.to_s == build_number &&
+      upload.platform.to_s == Spaceship::ConnectAPI::Platform::IOS.to_s
+  end
+  unless uploads.length == 1
+    UI.user_error!(
+      "Expected one iOS build upload #{app_store_version} (#{build_number}); found #{uploads.length}."
+    )
+  end
+  upload = uploads.first
+  upload_state = upload.state
+  diagnostic_keys = ["errors", "infos", "warnings"]
+  diagnostics_valid = diagnostic_keys.all? do |key|
+    next true unless upload_state.is_a?(Hash) && upload_state.key?(key)
+
+    details = upload_state[key]
+    details.is_a?(Array) && details.all? do |detail|
+      detail.is_a?(Hash) &&
+        (detail.keys - ["code", "description"]).empty? &&
+        ["code", "description"].all? do |field|
+          !detail.key?(field) || detail[field].is_a?(String)
+        end
+    end
+  end
+  unless upload_state.is_a?(Hash) &&
+         (upload_state.keys - ["errors", "infos", "state", "warnings"]).empty? &&
+         upload_state["state"] == "COMPLETE" &&
+         diagnostics_valid
+    UI.user_error!("iOS build upload state must be a complete StateDetail object.")
+  end
+
+  groups = app.get_beta_groups(limit: 200).map do |group|
+    unless [true, false].include?(group.is_internal_group) &&
+           [true, false].include?(group.has_access_to_all_builds)
+      UI.user_error!("TestFlight group flags must be explicit booleans.")
+    end
+    relationship_builds = group.fetch_builds
+    {
+      "containsBuild" => relationship_builds.any? { |candidate| candidate.id.to_s == build.id.to_s },
+      "hasAccessToAllBuilds" => group.has_access_to_all_builds,
+      "id" => group.id.to_s,
+      "isInternalGroup" => group.is_internal_group
+    }
+  end
+  configured_groups = groups.select { |group| group.fetch("id") == configured_group_id }
+  unless configured_groups.length == 1 &&
+         configured_groups.first.fetch("isInternalGroup") &&
+         configured_groups.first.fetch("hasAccessToAllBuilds") &&
+         configured_groups.first.fetch("containsBuild")
+    UI.user_error!("Configured automatic internal TestFlight group does not uniquely contain the build.")
+  end
+  assigned_group_ids = groups
+    .select { |group| group.fetch("containsBuild") }
+    .map { |group| group.fetch("id") }
+  unless assigned_group_ids == [configured_group_id]
+    UI.user_error!("TestFlight build is not assigned exclusively to the configured group.")
+  end
+  unsafe_automatic_groups = groups.select do |group|
+    group.fetch("id") != configured_group_id &&
+      group.fetch("isInternalGroup") &&
+      group.fetch("hasAccessToAllBuilds")
+  end
+  unless unsafe_automatic_groups.empty?
+    UI.user_error!("A non-target internal TestFlight group has automatic access to all builds.")
+  end
+  unless build.processing_state.to_s == "VALID" && build.expired == false
+    UI.user_error!("TestFlight build is not VALID and unexpired.")
+  end
+  internal_build_state = build.build_beta_detail&.internal_build_state.to_s
+  unless ["READY_FOR_BETA_TESTING", "IN_BETA_TESTING"].include?(internal_build_state)
+    UI.user_error!("TestFlight build is not usable for internal testing.")
+  end
+
+  result = {
+    "app" => {
+      "bundleId" => app.bundle_id.to_s,
+      "id" => app.id.to_s
+    },
+    "build" => {
+      "appStoreVersion" => build.app_version.to_s,
+      "buildNumber" => build.version.to_s,
+      "expired" => build.expired,
+      "id" => build.id.to_s,
+      "internalBuildState" => internal_build_state,
+      "platform" => build.platform.to_s,
+      "processingState" => build.processing_state.to_s
+    },
+    "configuredGroupId" => configured_group_id,
+    "groups" => groups,
+    "kind" => "openclaw-ios-release-store-observation",
+    "observedAt" => Time.now.utc.iso8601(3),
+    "readOnly" => true,
+    "schemaVersion" => 1,
+    "upload" => {
+      "buildNumber" => upload.cf_build_version.to_s,
+      "id" => upload.id.to_s,
+      "platform" => upload.platform.to_s,
+      "shortVersion" => upload.cf_build_short_version_string.to_s,
+      "state" => upload_state,
+      "uploadedAt" => normalized_app_store_timestamp(
+        upload.uploaded_date,
+        label: "build upload"
+      )
+    }
+  }
+
+  FileUtils.mkdir_p(File.dirname(output_path), mode: 0o700)
+  File.open(output_path, File::WRONLY | File::CREAT | File::EXCL, 0o600) do |file|
+    file.write("#{JSON.generate(result)}\n")
+  end
+  result
+end
+
 def release_source_clean?
   stdout, _stderr, status = Open3.capture3(
     "git",
@@ -1902,6 +2059,21 @@ def app_store_connect_api_key_config
 end
 
 platform :ios do
+  desc "Read and validate an existing TestFlight build without mutating App Store state"
+  lane :release_reconcile do |options|
+    app_store_connect_api_key_config
+    observation = ios_release_reconcile_observation!(
+      app_store_version: options[:app_store_version].to_s.strip,
+      build_number: options[:build_number].to_s.strip,
+      configured_group_id: options[:group_id].to_s.strip,
+      output_path: options[:output_path].to_s.strip
+    )
+    UI.success(
+      "Observed existing iOS build #{observation.fetch("build").fetch("appStoreVersion")} " \
+      "(#{observation.fetch("build").fetch("buildNumber")}) without mutation."
+    )
+  end
+
   private_lane :prepare_app_store_context do |options|
     require_api_key = options[:require_api_key] == true
     release_version = options[:release_version].to_s.strip

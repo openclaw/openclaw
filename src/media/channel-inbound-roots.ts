@@ -1,4 +1,3 @@
-// Channel inbound root helpers resolve media roots for channel-delivered files.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -154,19 +153,6 @@ function loadInstalledChannelMediaContractApi(params: {
   return undefined;
 }
 
-function loadChannelMediaContractApi(params: {
-  channelId: string;
-  cfg: OpenClawConfig;
-  resolver: ChannelMediaRootResolver;
-}): ChannelMediaContractApi | undefined {
-  return (
-    loadBundledChannelMediaContractApi(params.channelId, params.resolver) ??
-    // External official channel packages ship outside the core bundle, so the
-    // installed plugin root is the only place their media contract can live.
-    loadInstalledChannelMediaContractApi(params)
-  );
-}
-
 function findChannelMediaContractApi(params: {
   channelId: string | null | undefined;
   cfg: OpenClawConfig;
@@ -176,11 +162,11 @@ function findChannelMediaContractApi(params: {
   if (!normalized) {
     return undefined;
   }
-  return loadChannelMediaContractApi({
-    channelId: normalized,
-    cfg: params.cfg,
-    resolver: params.resolver,
-  });
+  return (
+    loadBundledChannelMediaContractApi(normalized, params.resolver) ??
+    // External official packages expose the contract from their installed root.
+    loadInstalledChannelMediaContractApi({ ...params, channelId: normalized })
+  );
 }
 
 /** Resolves local inbound attachment roots from the channel named in a message context. */

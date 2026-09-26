@@ -1,4 +1,3 @@
-// Session reaper finally tests cover cleanup after cron service failures.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +6,8 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import * as sessionEntryReadRuntime from "../config/sessions/session-entry-read-runtime.js";
+// Session reaper finally tests cover cleanup after cron service failures.
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createSessionReaperTimerHarness } from "./service.session-reaper.test-support.js";
 import {
   createNoopLogger,
@@ -87,6 +88,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     const readExpired = vi.spyOn(sessionEntryReadRuntime, "readExpiredCronRunEntriesInWorker");
     const isAgentAvailable = vi.fn(() => true);
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       cronConfig: { sessionRetention: false },
@@ -148,6 +150,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     const readExpired = vi.spyOn(sessionEntryReadRuntime, "readExpiredCronRunEntriesInWorker");
     const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -202,6 +205,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     );
     const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -238,6 +242,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       await saveCronStore(store.storePath, { version: 1, jobs: [job] });
       const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath: store.storePath,
         cronEnabled: true,
         log: noopLogger,
@@ -284,6 +289,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     const runIsolatedAgentJob = vi.fn().mockRejectedValue(new Error("gateway down"));
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -329,6 +335,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     const fresh = await seedReaperSessions(sessionStorePath, now);
     const runIsolatedAgentJob = vi.fn();
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -398,6 +405,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       { sessionId: "worker-expired", updatedAt: now - 25 * 3_600_000 },
     );
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -445,6 +453,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
 
     const resolvedAgentIds: string[] = [];
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -491,6 +500,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       );
     }
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -545,6 +555,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     const readExpired = vi.spyOn(sessionEntryReadRuntime, "readExpiredCronRunEntriesInWorker");
     const isAgentAvailable = vi.fn((agentId: string) => agentId === liveAgentId);
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -599,6 +610,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     );
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -640,6 +652,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     );
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,

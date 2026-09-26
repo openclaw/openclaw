@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
 import type {
   MeetingParticipationAttempt,
@@ -421,9 +422,7 @@ export class MeetingParticipation<TSession> {
       }
       assertCurrent();
     } catch (error) {
-      return await finish(
-        result("rejected", error instanceof Error ? error.message : String(error)),
-      );
+      return await finish(result("rejected", coerceErrorMessage(error)));
     }
     let outcome: MeetingParticipationResult;
     try {
@@ -446,7 +445,7 @@ export class MeetingParticipation<TSession> {
     } catch (error) {
       outcome = result(
         "uncertain",
-        `The action outcome is unknown: ${error instanceof Error ? error.message : String(error)}. Do not retry it.`,
+        `The action outcome is unknown: ${coerceErrorMessage(error)}. Do not retry it.`,
       );
     }
     return await finish(outcome);

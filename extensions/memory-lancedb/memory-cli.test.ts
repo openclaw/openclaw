@@ -40,6 +40,7 @@ function createHarness(params?: {
       captureMaxChars: 500,
       recallMaxChars: 1000,
     }),
+    { dbPath: "/fixture/memory" },
   );
   const registrar = registerCli.mock.calls[0]?.[0] as
     | ((params: { program: Command }) => void)

@@ -89,7 +89,12 @@ export async function compileNativeProject({
     const virtualFiles = new Map([
       [config, JSON.stringify({ extends: admittedConfig, compilerOptions })],
     ]);
-    view = createDeclarationFileSystem(root, assertInput ? admit : undefined, virtualFiles);
+    view = createDeclarationFileSystem(
+      root,
+      assertInput ? admit : undefined,
+      virtualFiles,
+      before.readText,
+    );
     const manifestFile = admit(path.join(root, "package.json"));
     const manifestText = view.filesystem.readFile(manifestFile);
     view.assertValid();

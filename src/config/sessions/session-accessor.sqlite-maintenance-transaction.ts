@@ -23,6 +23,7 @@ import type {
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
+  invalidateSessionEntryMaintenanceAgeFact,
   readSessionEntryMaintenanceAgeFact,
   stageSessionEntryMaintenanceAgeFact,
 } from "./session-accessor.sqlite-maintenance-age.js";
@@ -31,6 +32,7 @@ import {
   prepareSessionEntryMaintenanceInDatabase,
   refreshSessionPlannerStatisticsInDatabase,
 } from "./session-accessor.sqlite-maintenance-store.js";
+import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 
 type MaintenancePlan = Extract<
   SqliteSessionReclamationPlan,
@@ -50,7 +52,7 @@ function readPreservation(input: SessionEntryMaintenanceInput) {
   return input.preservation;
 }
 
-/** Retain the snapshot's connection until its revision is checked inside the final writer. */
+/** Retain the snapshot connection; its revision fences age facts, not unrelated row writes. */
 export function prepareSessionMaintenanceInWorker(
   plan: Extract<MaintenancePlan, { kind: "maintenance-plan" }>,
 ) {
@@ -84,10 +86,16 @@ export function prepareSessionMaintenanceInWorker(
     return {
       apply(current: OpenClawAgentDatabase) {
         claim.assertCurrent();
-        if (!cacheValidityTokensEqual(revision, readSessionEntryCacheValidityToken(database.db))) {
-          return undefined;
+        const snapshotCurrent = cacheValidityTokensEqual(
+          revision,
+          readSessionEntryCacheValidityToken(database.db),
+        );
+        const maintenance = apply(current);
+        // Unrelated commits can change age/count hints without changing the selected victims.
+        if (!snapshotCurrent) {
+          invalidateSessionEntryMaintenanceAgeFact(current.db);
         }
-        return apply(current);
+        return maintenance;
       },
       release: claim.release,
     };
@@ -129,9 +137,6 @@ export function reclaimSessionMaintenanceInTransaction(
             : applySessionEntryMaintenanceInDatabase(database, plan.input, () =>
                 readPreservation(plan.input),
               );
-          if (!maintenance) {
-            return { kind: "maintenance-plan-stale" };
-          }
           if (maintenance.archived > 0 || maintenance.entryRemovals.length > 0) {
             callbacks.onCommit?.(database);
           }
@@ -145,6 +150,9 @@ export function reclaimSessionMaintenanceInTransaction(
         { operationLabel: "session.maintenance.plan.write" },
       );
     } catch (error) {
+      if (error instanceof SqliteReclamationInputsChangedError) {
+        return { kind: "maintenance-plan-stale" };
+      }
       if (error instanceof MaintenancePreservationRequiredError) {
         // Candidate discovery requested protection before writes; the transaction has rolled back.
         return { kind: "maintenance-preservation-required" };

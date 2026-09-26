@@ -51,21 +51,7 @@ struct ChatProTab: View {
     @State private var speech: OpenClawChatSpeechController?
     @State private var isGatewayStatusManuallyExpanded = false
     let headerSidebarAction: OpenClawSidebarHeaderAction?
-    let headerTitle: String?
-    let showsAgentBadge: Bool
-    let openSettings: (() -> Void)?
-
-    init(
-        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
-        headerTitle: String? = nil,
-        showsAgentBadge: Bool = true,
-        openSettings: (() -> Void)? = nil)
-    {
-        self.headerSidebarAction = headerSidebarAction
-        self.headerTitle = headerTitle
-        self.showsAgentBadge = showsAgentBadge
-        self.openSettings = openSettings
-    }
+    let openSettings: () -> Void
 
     var body: some View {
         self.content
@@ -93,7 +79,7 @@ struct ChatProTab: View {
     private var content: some View {
         self.chatSurface
             .modifier(ChatScrollEdgeTreatment())
-            .navigationTitle(self.showsAgentBadge ? "" : self.headerDisplayTitle)
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if let headerSidebarAction {
@@ -101,25 +87,14 @@ struct ChatProTab: View {
                         action: headerSidebarAction,
                         placement: .topBarLeading)
                 }
-                if self.showsAgentBadge {
-                    if #available(iOS 26.0, *) {
-                        ToolbarItem(placement: .topBarLeading) {
-                            self.headerAgentIdentity
-                        }
-                        .sharedBackgroundVisibility(.hidden)
-                    } else {
-                        ToolbarItem(placement: .topBarLeading) {
-                            self.headerAgentIdentity
-                        }
+                if #available(iOS 26.0, *) {
+                    ToolbarItem(placement: .topBarLeading) {
+                        self.headerAgentIdentity
                     }
+                    .sharedBackgroundVisibility(.hidden)
                 } else {
-                    if let session = self.coloredHeaderSession {
-                        ToolbarItem(placement: .principal) {
-                            self.headerSessionTitle(session)
-                        }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        self.headerGatewayStatus
+                    ToolbarItem(placement: .topBarLeading) {
+                        self.headerAgentIdentity
                     }
                 }
                 if #available(iOS 26.0, *) {
@@ -253,54 +228,15 @@ struct ChatProTab: View {
             .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
     }
 
-    @ViewBuilder
-    private var headerGatewayStatus: some View {
-        if self.gatewayStatusIsHealthy || self.openSettings != nil {
-            Button(action: self.handleHeaderAgentIdentityTap) {
-                self.headerGatewayStatusLabel
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(verbatim: self.gatewayAccessibilityLabel))
-            .accessibilityHint(self.gatewayStatusAccessibilityHint)
-            .accessibilityIdentifier("chat-gateway-status")
-        } else {
-            self.headerGatewayStatusLabel
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text(verbatim: self.gatewayAccessibilityLabel))
-                .accessibilityIdentifier("chat-gateway-status")
-        }
-    }
-
-    private var headerGatewayStatusLabel: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(self.gatewayStatusColor)
-                .frame(width: 10, height: 10)
-            if self.showsExpandedGatewayStatus {
-                self.expandedGatewayStatusLabel
-            }
-        }
-        .frame(minHeight: 44)
-        .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
-    }
-
-    @ViewBuilder
     private var headerAgentIdentityControl: some View {
-        if self.gatewayStatusIsHealthy || self.openSettings != nil {
-            Button(action: self.handleHeaderAgentIdentityTap) {
-                self.headerAgentIdentityLabel
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
-            .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
-            .accessibilityHint(self.gatewayStatusAccessibilityHint)
-            .accessibilityIdentifier("chat-gateway-status")
-        } else {
+        Button(action: self.handleHeaderAgentIdentityTap) {
             self.headerAgentIdentityLabel
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
-                .accessibilityIdentifier("chat-gateway-status")
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
+        .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
+        .accessibilityHint(self.gatewayStatusAccessibilityHint)
+        .accessibilityIdentifier("chat-gateway-status")
     }
 
     private var headerAgentIdentityLabel: some View {
@@ -357,7 +293,7 @@ struct ChatProTab: View {
                 self.isGatewayStatusManuallyExpanded.toggle()
             }
         } else {
-            self.openSettings?()
+            self.openSettings()
         }
     }
 
@@ -558,12 +494,10 @@ struct ChatProTab: View {
                     self.pendingChatAction = .exportTranscript
                 }
 
-                if self.openSettings != nil {
-                    self.chatActionButton(title: "Gateway settings", systemImage: "network") {
-                        self.pendingChatAction = .gatewaySettings
-                    }
-                    .accessibilityIdentifier("chat-gateway-settings")
+                self.chatActionButton(title: "Gateway settings", systemImage: "network") {
+                    self.pendingChatAction = .gatewaySettings
                 }
+                .accessibilityIdentifier("chat-gateway-settings")
             }
             .padding(.vertical, 8)
         }
@@ -596,7 +530,7 @@ struct ChatProTab: View {
         case .exportTranscript:
             self.exportTranscript()
         case .gatewaySettings:
-            self.openSettings?()
+            self.openSettings()
         case .newSessionOptions:
             self.showsNewSessionOptions = true
         }
@@ -732,15 +666,6 @@ struct ChatProTab: View {
                 : self.appModel.hasVerifiedChatOfflineRoutingIdentity)
     }
 
-    private var headerDisplayTitle: String {
-        self.normalized(self.headerTitle)
-            ?? Self.defaultHeaderTitle(showsAgentBadge: self.showsAgentBadge, agentDisplayName: self.agentDisplayName)
-    }
-
-    nonisolated static func defaultHeaderTitle(showsAgentBadge: Bool, agentDisplayName: String) -> String {
-        showsAgentBadge ? agentDisplayName : "Chat"
-    }
-
     private var chatUserAccent: Color {
         ColorHexSupport.color(fromHex: self.appModel.gatewayAccentColorHex) ?? OpenClawBrand.accent
     }
@@ -782,25 +707,13 @@ struct ChatProTab: View {
     }
 
     private var currentAgentBadge: String {
-        if let identity = currentActiveAgent?.identity,
-           let emoji = identity["emoji"]?.value as? String,
-           let normalizedEmoji = Self.normalizedBadgeEmoji(emoji)
-        {
-            return normalizedEmoji
-        }
-        return Self.initialsBadge(for: self.currentAgentDisplayName)
+        AgentIdentityPresentation.badge(
+            avatarText: self.currentActiveAgent?.identity?["emoji"]?.value as? String,
+            displayName: self.currentAgentDisplayName)
     }
 
     private var agentBadge: String {
         self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentBadge : self.currentAgentBadge
-    }
-
-    nonisolated static func initialsBadge(for displayName: String) -> String {
-        AgentIdentityPresentation.initialsBadge(for: displayName)
-    }
-
-    nonisolated static func normalizedBadgeEmoji(_ value: String?) -> String? {
-        AgentIdentityPresentation.normalizedBadgeEmoji(value)
     }
 
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [

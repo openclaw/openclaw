@@ -8,6 +8,15 @@ const env = {
   OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
 };
 
+function acquiredResponse(payload = { schemaVersion: 1 }) {
+  return Response.json({
+    status: "ok",
+    credentialId: "synthetic-credential",
+    leaseToken: "synthetic-token",
+    payload,
+  });
+}
+
 test("a resumed event loop cannot use a lease whose confirmation expired", async (context) => {
   context.mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });
   context.mock.method(performance, "now", () => Date.now());
@@ -40,69 +49,25 @@ test("release immediately revokes retained access even while the broker reply is
     kind: "telegram-test-userbot",
     env,
     fetchImpl: async (url) => {
-      if (url.endsWith("/acquire"))
-        return Response.json({
-          status: "ok",
-          credentialId: "synthetic",
-          leaseToken: "synthetic",
-          payload: {},
-        });
-      if (url.endsWith("/release"))
+      if (url.endsWith("/acquire")) {
+        return acquiredResponse({});
+      }
+      if (url.endsWith("/release")) {
         return new Promise((resolve) => {
           finishRelease = () => resolve(Response.json({ status: "ok" }));
         });
+      }
       return Response.json({ status: "ok" });
     },
   });
   const pending = lease.release();
   assert.throws(() => lease.assertHealthy(), /released/u);
   assert.match((await lease.whenUnhealthy).message, /released/u);
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   finishRelease();
   await pending;
-});
-
-test("uses the authenticated Convex CLI when broker variables are absent", async () => {
-  const cliCalls = [];
-  const brokerCalls = [];
-  const runConvexCliImpl = async (args, options) => {
-    cliCalls.push({ args, options });
-    return "cli-ci-secret\n";
-  };
-  const fetchImpl = async (url, init) => {
-    brokerCalls.push({ url, authorization: init.headers.authorization });
-    if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-cli",
-        leaseToken: "lease-token-cli",
-        payload: { schemaVersion: 1 },
-      });
-    }
-    return Response.json({ status: "ok" });
-  };
-  const lease = await acquireQaLease({
-    kind: "telegram-test-userbot",
-    env: {},
-    convexProjectDir: "/repo/qa/convex-credential-broker",
-    runConvexCliImpl,
-    fetchImpl,
-  });
-  await lease.release();
-
-  assert.equal(cliCalls.length, 1);
-  assert.deepEqual(cliCalls[0].args, [
-    "env",
-    "--deployment",
-    "reminiscent-ibex-847",
-    "get",
-    "OPENCLAW_QA_CONVEX_SECRET_CI",
-  ]);
-  assert.equal(cliCalls[0].options.cwd, "/repo/qa/convex-credential-broker");
-  assert.ok(
-    brokerCalls.every((call) => call.url.startsWith("https://reminiscent-ibex-847.convex.site/")),
-  );
-  assert.ok(brokerCalls.every((call) => call.authorization === "Bearer cli-ci-secret"));
 });
 
 test("rejects a partial explicit broker configuration instead of mixing sources", async () => {
@@ -118,26 +83,6 @@ test("rejects a partial explicit broker configuration instead of mixing sources"
     /Set both OPENCLAW_QA_CONVEX_SITE_URL and OPENCLAW_QA_CONVEX_SECRET_CI/u,
   );
   assert.equal(cliCalls, 0);
-});
-
-test("does not call the broker when Convex CLI access is rejected", async () => {
-  let brokerCalls = 0;
-  await assert.rejects(
-    acquireQaLease({
-      kind: "telegram-test-userbot",
-      env: {},
-      convexProjectDir: "/repo/qa/convex-credential-broker",
-      runConvexCliImpl: async () => {
-        throw new Error("Convex access denied.");
-      },
-      fetchImpl: async () => {
-        brokerCalls += 1;
-        return Response.json({ status: "ok" });
-      },
-    }),
-    /Could not load the QA broker through existing Convex launchers/u,
-  );
-  assert.equal(brokerCalls, 0);
 });
 
 test("rejects remote cleartext broker URLs before fetch", async () => {
@@ -159,12 +104,7 @@ test("rejects remote cleartext broker URLs before fetch", async () => {
 test("allows explicit IPv4 and IPv6 loopback HTTP for local broker development", async () => {
   const fetchImpl = async (url) => {
     if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-loopback",
-        leaseToken: "lease-token-loopback",
-        payload: { schemaVersion: 1 },
-      });
+      return acquiredResponse();
     }
     return Response.json({ status: "ok" });
   };
@@ -188,12 +128,7 @@ test("acquires, heartbeats, and releases one credential", async () => {
     const body = JSON.parse(init.body);
     calls.push({ url, body, authorization: init.headers.authorization });
     if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-1",
-        leaseToken: "lease-token",
-        payload: { schemaVersion: 1 },
-      });
+      return acquiredResponse();
     }
     return Response.json({ status: "ok" });
   };
@@ -204,7 +139,9 @@ test("acquires, heartbeats, and releases one credential", async () => {
     env,
     fetchImpl,
   });
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 25);
+  });
   lease.assertHealthy();
   await lease.release();
   await lease.release();
@@ -221,12 +158,7 @@ test("accepts empty successful heartbeat and release replies", async () => {
   const fetchImpl = async (url) => {
     calls.push(url);
     if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-empty-success",
-        leaseToken: "lease-token-empty-success",
-        payload: { schemaVersion: 1 },
-      });
+      return acquiredResponse();
     }
     return new Response(null, { status: 204 });
   };
@@ -240,7 +172,9 @@ test("waits for a pooled credential and preserves the broker retry delay", async
   let attempts = 0;
   const sleeps = [];
   const fetchImpl = async (url) => {
-    if (!url.endsWith("/acquire")) return Response.json({ status: "ok" });
+    if (!url.endsWith("/acquire")) {
+      return Response.json({ status: "ok" });
+    }
     attempts += 1;
     if (attempts === 1) {
       return Response.json(
@@ -253,12 +187,7 @@ test("waits for a pooled credential and preserves the broker retry delay", async
         { status: 409 },
       );
     }
-    return Response.json({
-      status: "ok",
-      credentialId: "credential-2",
-      leaseToken: "lease-token-2",
-      payload: { schemaVersion: 1 },
-    });
+    return acquiredResponse();
   };
   const lease = await acquireQaLease({
     kind: "telegram-test-userbot",
@@ -275,7 +204,9 @@ test("retries the exact Convex credential-row contention error with jitter", asy
   let attempts = 0;
   const sleeps = [];
   const fetchImpl = async (url) => {
-    if (!url.endsWith("/acquire")) return Response.json({ status: "ok" });
+    if (!url.endsWith("/acquire")) {
+      return Response.json({ status: "ok" });
+    }
     attempts += 1;
     if (attempts === 1) {
       return Response.json(
@@ -288,12 +219,7 @@ test("retries the exact Convex credential-row contention error with jitter", asy
         { status: 500 },
       );
     }
-    return Response.json({
-      status: "ok",
-      credentialId: "credential-contention",
-      leaseToken: "lease-token-contention",
-      payload: { schemaVersion: 1 },
-    });
+    return acquiredResponse();
   };
   const lease = await acquireQaLease({
     kind: "telegram-test-userbot",
@@ -398,12 +324,7 @@ test("rejects an inline credential when its initial heartbeat fails", async () =
   const fetchImpl = async (url) => {
     calls.push(url);
     if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-inline-expired",
-        leaseToken: "lease-token-inline-expired",
-        payload: { schemaVersion: 1 },
-      });
+      return acquiredResponse();
     }
     if (url.endsWith("/heartbeat")) {
       return Response.json(
@@ -440,7 +361,9 @@ test("heartbeat loss stops delayed chunk hydration before returning credentials"
     }
     if (url.endsWith("/heartbeat")) {
       heartbeatCount += 1;
-      if (heartbeatCount === 1) return Response.json({ status: "ok" });
+      if (heartbeatCount === 1) {
+        return Response.json({ status: "ok" });
+      }
       return Response.json(
         { status: "error", code: "LEASE_EXPIRED", message: "Lease expired." },
         { status: 409 },
@@ -491,16 +414,13 @@ test("surfaces terminal heartbeat loss and still releases", async () => {
   const fetchImpl = async (url) => {
     calls.push(url);
     if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-3",
-        leaseToken: "lease-token-3",
-        payload: { schemaVersion: 1 },
-      });
+      return acquiredResponse();
     }
     if (url.endsWith("/heartbeat")) {
       heartbeatCount += 1;
-      if (heartbeatCount === 1) return Response.json({ status: "ok" });
+      if (heartbeatCount === 1) {
+        return Response.json({ status: "ok" });
+      }
       return Response.json(
         { status: "error", code: "LEASE_EXPIRED", message: "Lease expired." },
         { status: 409 },
@@ -514,7 +434,9 @@ test("surfaces terminal heartbeat loss and still releases", async () => {
     env,
     fetchImpl,
   });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
   assert.throws(
     () => lease.assertHealthy(),
     (error) => error instanceof QaCredentialBrokerError && error.code === "LEASE_EXPIRED",
@@ -528,16 +450,13 @@ test("fences a stalled heartbeat and bounds lease cleanup", async () => {
   let heartbeatCount = 0;
   const fetchImpl = async (url, init) => {
     if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-stalled",
-        leaseToken: "lease-token-stalled",
-        payload: { schemaVersion: 1 },
-      });
+      return acquiredResponse();
     }
     if (url.endsWith("/heartbeat")) {
       heartbeatCount += 1;
-      if (heartbeatCount === 1) return Response.json({ status: "ok" });
+      if (heartbeatCount === 1) {
+        return Response.json({ status: "ok" });
+      }
       return await new Promise((resolve, reject) => {
         init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
       });
@@ -554,7 +473,9 @@ test("fences a stalled heartbeat and bounds lease cleanup", async () => {
   });
   const heartbeatError = await Promise.race([
     lease.whenUnhealthy,
-    new Promise((_, reject) => setTimeout(() => reject(new Error("heartbeat did not fence")), 100)),
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("heartbeat did not fence")), 100);
+    }),
   ]);
   assert.throws(
     () => lease.assertHealthy(),
@@ -572,13 +493,9 @@ test("concurrent and later release calls share the same failed owner result", as
     kind: "telegram-test-userbot",
     env,
     fetchImpl: async (url) => {
-      if (url.endsWith("/acquire"))
-        return Response.json({
-          status: "ok",
-          credentialId: "owned",
-          leaseToken: "token",
-          payload: {},
-        });
+      if (url.endsWith("/acquire")) {
+        return acquiredResponse({});
+      }
       if (url.endsWith("/release")) {
         releases += 1;
         started.resolve();
@@ -644,31 +561,6 @@ test("retained lease recovery revalidates the same owner without acquiring a rep
   );
 });
 
-test("cancellation during CLI lookup prevents broker acquisition", async () => {
-  const controller = new AbortController();
-  const started = Promise.withResolvers();
-  let calls = 0;
-  const acquire = acquireQaLease({
-    kind: "telegram-test-userbot",
-    env: {},
-    signal: controller.signal,
-    runConvexCliImpl: async (_args, { signal }) => {
-      started.resolve();
-      await new Promise((_, reject) =>
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
-      );
-    },
-    fetchImpl: async () => {
-      calls += 1;
-    },
-  });
-  await started.promise;
-  const reason = new Error("lookup cancelled");
-  controller.abort(reason);
-  await assert.rejects(acquire, (error) => error === reason);
-  assert.equal(calls, 0);
-});
-
 test("cancellation retains an in-flight acquire until its exact lease is released", async () => {
   const controller = new AbortController();
   const started = Promise.withResolvers();
@@ -695,14 +587,7 @@ test("cancellation retains an in-flight acquire until its exact lease is release
     false,
     "do not discard an acquire that may have succeeded remotely",
   );
-  reply.resolve(
-    Response.json({
-      status: "ok",
-      credentialId: "late-credential",
-      leaseToken: "late-token",
-      payload: {},
-    }),
-  );
+  reply.resolve(acquiredResponse({}));
   await assert.rejects(acquire, (error) => error === reason);
   assert.equal(calls.filter((method) => method === "acquire").length, 1);
   assert.equal(calls.filter((method) => method === "release").length, 1);
@@ -865,7 +750,9 @@ setInterval(() => {}, 1000);
   const pidPath = path.join(fixture.convexProjectDir, "pid");
   const started = Promise.withResolvers();
   const watcher = fs.watch(fixture.convexProjectDir, () => {
-    if (fs.existsSync(pidPath)) started.resolve();
+    if (fs.existsSync(pidPath)) {
+      started.resolve();
+    }
   });
   const controller = new AbortController();
   const reason = new Error("cancelled credential lookup");

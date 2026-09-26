@@ -294,19 +294,10 @@ enum MacNodeClaudeSessionCatalog {
             isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
-    static func list(paramsJSON: String?) throws -> String {
-        try self.list(
-            paramsJSON: paramsJSON,
-            homeURL: FileManager.default.homeDirectoryForCurrentUser)
-    }
-
-    static func read(paramsJSON: String?) throws -> String {
-        try self.read(
-            paramsJSON: paramsJSON,
-            homeURL: FileManager.default.homeDirectoryForCurrentUser)
-    }
-
-    static func list(paramsJSON: String?, homeURL: URL) throws -> String {
+    static func list(
+        paramsJSON: String?,
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> String
+    {
         try Task.checkCancellation()
         let params = try decodeListParams(paramsJSON)
         let offset = try decodeCursor(params.cursor, label: "catalog")
@@ -329,7 +320,10 @@ enum MacNodeClaudeSessionCatalog {
         return try encode(response, maxBytes: self.maxTranscriptPageBytes)
     }
 
-    static func read(paramsJSON: String?, homeURL: URL) throws -> String {
+    static func read(
+        paramsJSON: String?,
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> String
+    {
         try Task.checkCancellation()
         let params = try decodeReadParams(paramsJSON)
         let cursor = try params.cursor.map(self.decodeTranscriptCursor)

@@ -1,5 +1,6 @@
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import type { MeetingParticipationOptions } from "./participation-types.js";
+import type { MeetingSpeechReadinessMessages } from "./session-speech-readiness.js";
 import type {
   MeetingBrowserHealth,
   MeetingBrowserTab,
@@ -49,16 +50,7 @@ export type MeetingSessionRuntimeMessages<TSpeechBlockedReason extends string> =
   reusedSessionNote: string;
   replacementBrowserLeaveFailed: string;
   speechBlockedFallback: string;
-  speech: {
-    audioBridgeUnavailable: string;
-    browserUnverified: string;
-    microphoneMuted: string;
-    microphoneMutedReason: TSpeechBlockedReason;
-    notInCall: string;
-    notInCallReason: TSpeechBlockedReason;
-    browserUnverifiedReason: TSpeechBlockedReason;
-    audioBridgeUnavailableReason: TSpeechBlockedReason;
-  };
+  speech: MeetingSpeechReadinessMessages<TSpeechBlockedReason>;
 };
 
 export type MeetingSessionRuntimeOptions<

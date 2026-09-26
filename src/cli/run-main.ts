@@ -861,20 +861,18 @@ async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
-  // Capture init, exit finalize, and coverage warnings all no-op unless the
+  // Capture init and coverage warnings no-op unless the
   // debug-proxy env requests capture; importing their sqlite-store graph anyway
   // costs ~100 MB RSS on metadata-only commands such as `plugins list --json`.
   if (isDebugProxyCaptureEnvEnabled()) {
-    const [
-      { initializeDebugProxyCapture, finalizeDebugProxyCapture },
-      { maybeWarnAboutDebugProxyCoverage },
-    ] = await startupTrace.measure("proxy-imports", () =>
-      Promise.all([import("../proxy-capture/runtime.js"), import("../proxy-capture/coverage.js")]),
-    );
-    initializeDebugProxyCapture("cli");
-    process.once("exit", () => {
-      finalizeDebugProxyCapture();
-    });
+    const [{ initializeDebugProxyCaptureAsync }, { maybeWarnAboutDebugProxyCoverage }] =
+      await startupTrace.measure("proxy-imports", () =>
+        Promise.all([
+          import("../proxy-capture/runtime.js"),
+          import("../proxy-capture/coverage.js"),
+        ]),
+      );
+    await initializeDebugProxyCaptureAsync("cli");
     maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
   }
   if (options.ensureDispatcher !== false) {

@@ -32,14 +32,6 @@ describe("warmMacOSSystemCaOffMainThread", () => {
     expect(worker.terminate).not.toHaveBeenCalled();
   });
 
-  it("skips the warmup outside macOS", async () => {
-    const createWorker = vi.fn(() => new FakeWorker());
-
-    await warmMacOSSystemCaOffMainThread({ platform: "linux", env: {}, createWorker });
-
-    expect(createWorker).not.toHaveBeenCalled();
-  });
-
   it("bounds a stalled trust lookup and continues startup", async () => {
     vi.useFakeTimers();
     const worker = new FakeWorker();

@@ -1,4 +1,3 @@
-// QA Lab WhatsApp media fixtures and structured inbound probes.
 import type { WhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import type { WhatsAppQaMessageScenarioContext } from "./whatsapp-live.contracts.js";
 import { callWhatsAppGatewaySend } from "./whatsapp-live.gateway.js";

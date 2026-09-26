@@ -219,20 +219,20 @@ extension SettingsProTab {
             self.detailStatusCard(
                 icon: "checkmark.shield.fill",
                 title: "Approvals",
-                detail: .verbatim(self.notificationsNeedAttention
+                detail: .verbatim(self.notificationPresentation.needsAttention
                     ? String(localized: "Out-of-app approval alerts need notification permission.")
-                    : (self.pendingApprovalCount == 0
+                    : (self.appModel.pendingExecApprovalCount == 0
                         ? String(localized: "No gateway actions are waiting for review.")
                         : String(localized: "Review pending gateway actions."))),
-                value: self.notificationsNeedAttention
+                value: self.notificationPresentation.needsAttention
                     ? .verbatim(String(localized: "Alerts Off"))
-                    : (self.pendingApprovalCount == 0
+                    : (self.appModel.pendingExecApprovalCount == 0
                         ? .verbatim(String(localized: "clear"))
                         : .verbatim(self.approvalWaitingText)),
-                color: self.notificationsNeedAttention ? OpenClawBrand.warn :
-                    (self.pendingApprovalCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn))
+                color: self.notificationPresentation.needsAttention ? OpenClawBrand.warn :
+                    (self.appModel.pendingExecApprovalCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn))
 
-            if self.notificationsNeedAttention {
+            if self.notificationPresentation.needsAttention {
                 self.approvalNotificationsWarningCard
             }
 
@@ -356,7 +356,7 @@ extension SettingsProTab {
             }
         }
 
-        if let pendingApproval {
+        if let pendingApproval = self.appModel.pendingExecApprovalPrompt {
             Section("Reviewing") {
                 ForEach(self.approvalItems, id: \.id) { item in
                     SettingsApprovalRow(item: item)
@@ -429,7 +429,7 @@ extension SettingsProTab {
                     }
                 }
             }
-        } else if self.pendingApprovalCount == 0 {
+        } else if self.appModel.pendingExecApprovalCount == 0 {
             Section {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
@@ -482,7 +482,7 @@ extension SettingsProTab {
             self.diagnosticChecksCard
 
             Section {
-                SettingsDetailRow("Device", value: .verbatim(DeviceInfoHelper.deviceFamily()))
+                SettingsDetailRow("Device", value: .verbatim(InstanceIdentity.deviceFamily))
                 SettingsDetailRow(
                     "Platform",
                     value: .verbatim(DeviceInfoHelper.platformStringForDisplay()))
@@ -586,7 +586,7 @@ extension SettingsProTab {
 
             // Concise public details only; deep hardware identifiers live in Diagnostics.
             Section {
-                SettingsDetailRow("Device", value: .verbatim(DeviceInfoHelper.deviceFamily()))
+                SettingsDetailRow("Device", value: .verbatim(InstanceIdentity.deviceFamily))
                 SettingsDetailRow(
                     "iOS",
                     value: .verbatim(DeviceInfoHelper.iOSVersionStringForDisplay()))

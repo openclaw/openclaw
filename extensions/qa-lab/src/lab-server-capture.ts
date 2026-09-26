@@ -1,5 +1,60 @@
 import net from "node:net";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  acquireDebugProxyCaptureStoreAsync,
+  type AsyncDebugProxyCaptureStore,
+  type CaptureQueryPreset,
+} from "openclaw/plugin-sdk/proxy-capture";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import {
+  normalizeOptionalString,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
+export function createQaCaptureLifecycle() {
+  const captureEnv = {
+    OPENCLAW_STATE_DIR: resolveStateDir(),
+    OPENCLAW_SUPERVISOR_MODE: process.env.OPENCLAW_SUPERVISOR_MODE,
+  };
+  let captureStoreLease: ReturnType<typeof acquireDebugProxyCaptureStoreAsync> | undefined;
+  let captureClosing = false;
+  const captureOperations = new Set<Promise<unknown>>();
+  const withCaptureStore = <T>(operation: (store: AsyncDebugProxyCaptureStore) => Promise<T>) => {
+    if (captureClosing) {
+      return Promise.reject(new Error("Capture store is closing."));
+    }
+    if (!captureStoreLease) {
+      const lease = acquireDebugProxyCaptureStoreAsync({ env: captureEnv });
+      captureStoreLease = lease;
+      void lease.catch(() => {
+        // A failed acquisition owns no store; a later request can acquire again.
+        if (captureStoreLease === lease) {
+          captureStoreLease = undefined;
+        }
+      });
+    }
+    const pending = captureStoreLease.then(({ store }) => operation(store));
+    captureOperations.add(pending);
+    void pending.then(
+      () => captureOperations.delete(pending),
+      () => captureOperations.delete(pending),
+    );
+    return pending;
+  };
+
+  const releaseCaptureStore = async () => {
+    await Promise.allSettled(captureOperations);
+    await (await captureStoreLease)?.release();
+    captureStoreLease = undefined;
+  };
+  return {
+    withStore: withCaptureStore,
+    stopAdmission() {
+      captureClosing = true;
+    },
+    release: releaseCaptureStore,
+  };
+}
 
 const CAPTURE_QUERY_PRESETS = new Set([
   "double-sends",
@@ -17,13 +72,7 @@ type QaStartupProbeStatus = {
   error?: string;
 };
 
-export function isCaptureQueryPreset(
-  value: string,
-): value is Parameters<
-  ReturnType<
-    typeof import("openclaw/plugin-sdk/proxy-capture").getDebugProxyCaptureStore
-  >["queryPreset"]
->[0] {
+export function isCaptureQueryPreset(value: string): value is CaptureQueryPreset {
   return CAPTURE_QUERY_PRESETS.has(value);
 }
 
@@ -39,23 +88,15 @@ function parseCaptureMeta(metaJson: unknown): Record<string, unknown> | null {
   }
 }
 
-function readCaptureMetaString(
-  meta: Record<string, unknown> | null,
-  key: string,
-): string | undefined {
-  const value = meta?.[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 export function mapCaptureEventForQa(row: Record<string, unknown>) {
   const meta = parseCaptureMeta(row.metaJson);
   return {
     ...row,
     payloadPreview: typeof row.dataText === "string" ? row.dataText : undefined,
-    provider: readCaptureMetaString(meta, "provider"),
-    api: readCaptureMetaString(meta, "api"),
-    model: readCaptureMetaString(meta, "model"),
-    captureOrigin: readCaptureMetaString(meta, "captureOrigin"),
+    provider: normalizeOptionalString(readStringField(meta, "provider")),
+    api: normalizeOptionalString(readStringField(meta, "api")),
+    model: normalizeOptionalString(readStringField(meta, "model")),
+    captureOrigin: normalizeOptionalString(readStringField(meta, "captureOrigin")),
   };
 }
 
@@ -69,7 +110,7 @@ function defaultPortForProtocol(protocol: string): number {
   return 0;
 }
 
-export async function probeTcpReachability(
+async function probeTcpReachability(
   rawUrl: string,
   timeoutMs = 700,
 ): Promise<QaStartupProbeStatus> {
@@ -124,4 +165,20 @@ export async function probeTcpReachability(
       error: formatErrorMessage(error),
     };
   }
+}
+
+export async function readQaCaptureStartupStatus(params: {
+  proxyUrl?: string;
+  gatewayUrl?: string | null;
+  publicBaseUrl: string;
+}) {
+  const [proxy, gateway] = await Promise.all([
+    probeTcpReachability(params.proxyUrl || "http://127.0.0.1:7799"),
+    probeTcpReachability(params.gatewayUrl || "http://127.0.0.1:18789/"),
+  ]);
+  return {
+    proxy: { ...proxy, label: "Proxy" },
+    gateway: { ...gateway, label: "Gateway" },
+    qaLab: { label: "QA Lab", url: params.publicBaseUrl, ok: true },
+  };
 }

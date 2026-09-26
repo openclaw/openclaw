@@ -116,7 +116,7 @@ async function listMicrosoftVoices(
 ): Promise<SpeechVoiceOption[]> {
   const { assertOkOrThrowProviderError, readProviderJsonResponse } =
     await import("openclaw/plugin-sdk/provider-http");
-  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
+  const { captureHttpExchangeAsync, isDebugProxyGlobalFetchPatchInstalled } =
     await import("openclaw/plugin-sdk/proxy-capture");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
@@ -135,7 +135,8 @@ async function listMicrosoftVoices(
   });
   try {
     if (!isDebugProxyGlobalFetchPatchInstalled()) {
-      captureHttpExchange({
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void captureHttpExchangeAsync({
         url,
         method: "GET",
         requestHeaders: headers,
@@ -145,7 +146,7 @@ async function listMicrosoftVoices(
           provider: "microsoft",
           capability: "speech-voices",
         },
-      });
+      }).catch(() => {});
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
     const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");

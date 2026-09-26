@@ -128,8 +128,12 @@ enum GatewaySettingsStore {
 
     static func bootstrapPersistence() {
         self.ensureStableInstanceID()
-        self.ensurePreferredGatewayStableID()
-        self.ensureLastDiscoveredGatewayStableID()
+        self.ensureGatewayStableID(
+            defaultsKey: self.preferredGatewayStableIDDefaultsKey,
+            account: self.preferredGatewayStableIDAccount)
+        self.ensureGatewayStableID(
+            defaultsKey: self.lastDiscoveredGatewayStableIDDefaultsKey,
+            account: self.lastDiscoveredGatewayStableIDAccount)
         self.migrateGatewayRegistryIfNeeded()
         if let instanceID = self.loadStableInstanceID() {
             self.migrateGatewayCredentialBundleIfNeeded(instanceId: instanceID)
@@ -167,12 +171,6 @@ enum GatewaySettingsStore {
             account: self.instanceIdAccount)
     }
 
-    static func loadPreferredGatewayStableID() -> String? {
-        GatewayStableIdentifier.exact(GenericPasswordKeychainStore.loadString(
-            service: self.gatewayService,
-            account: self.preferredGatewayStableIDAccount))
-    }
-
     static func savePreferredGatewayStableID(_ stableID: String) {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
         _ = GenericPasswordKeychainStore.saveString(
@@ -186,12 +184,6 @@ enum GatewaySettingsStore {
             service: self.gatewayService,
             account: self.preferredGatewayStableIDAccount)
         defaults.removeObject(forKey: self.preferredGatewayStableIDDefaultsKey)
-    }
-
-    static func loadLastDiscoveredGatewayStableID() -> String? {
-        GatewayStableIdentifier.exact(GenericPasswordKeychainStore.loadString(
-            service: self.gatewayService,
-            account: self.lastDiscoveredGatewayStableIDAccount))
     }
 
     static func saveLastDiscoveredGatewayStableID(_ stableID: String) {
@@ -975,37 +967,20 @@ enum GatewaySettingsStore {
         defaults.set(fresh, forKey: self.instanceIdDefaultsKey)
     }
 
-    private static func ensurePreferredGatewayStableID() {
+    private static func ensureGatewayStableID(defaultsKey: String, account: String) {
         let defaults = UserDefaults.standard
-
-        if let existing = GatewayStableIdentifier.exact(
-            defaults.string(forKey: self.preferredGatewayStableIDDefaultsKey))
-        {
-            if self.loadPreferredGatewayStableID() == nil {
-                self.savePreferredGatewayStableID(existing)
+        let existing = GatewayStableIdentifier.exact(defaults.string(forKey: defaultsKey))
+        let stored = GatewayStableIdentifier.exact(GenericPasswordKeychainStore.loadString(
+            service: self.gatewayService,
+            account: account))
+        if let existing {
+            if stored == nil {
+                _ = GenericPasswordKeychainStore.saveString(existing, service: self.gatewayService, account: account)
             }
             return
         }
-
-        if let stored = self.loadPreferredGatewayStableID(), !stored.isEmpty {
-            defaults.set(stored, forKey: self.preferredGatewayStableIDDefaultsKey)
-        }
-    }
-
-    private static func ensureLastDiscoveredGatewayStableID() {
-        let defaults = UserDefaults.standard
-
-        if let existing = GatewayStableIdentifier.exact(
-            defaults.string(forKey: self.lastDiscoveredGatewayStableIDDefaultsKey))
-        {
-            if self.loadLastDiscoveredGatewayStableID() == nil {
-                self.saveLastDiscoveredGatewayStableID(existing)
-            }
-            return
-        }
-
-        if let stored = self.loadLastDiscoveredGatewayStableID(), !stored.isEmpty {
-            defaults.set(stored, forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
+        if let stored {
+            defaults.set(stored, forKey: defaultsKey)
         }
     }
 }

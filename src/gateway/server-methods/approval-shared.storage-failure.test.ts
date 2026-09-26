@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { handlePendingApprovalRequest, registerPendingApprovalRecord } from "./approval-shared.js";
 import { handleApprovalResolve } from "./approval.test-support.js";
@@ -19,6 +20,7 @@ describe("approval storage failures", () => {
     const databasePath = path.join(tempDir, "state.sqlite");
     fs.mkdirSync(databasePath);
     const manager = new ExecApprovalManager({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "exec",
       persistence: {
         runtimeEpoch: "approval-shared-register-failure",
@@ -58,6 +60,7 @@ describe("approval storage failures", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-route-failure-"));
     const databasePath = path.join(tempDir, "state.sqlite");
     const manager = new ExecApprovalManager({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "exec",
       persistence: {
         runtimeEpoch: "approval-shared-route-failure",
@@ -120,6 +123,7 @@ describe("approval storage failures", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-resolve-failure-"));
     const databasePath = path.join(tempDir, "state.sqlite");
     const manager = new ExecApprovalManager({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "exec",
       persistence: {
         runtimeEpoch: "approval-shared-resolve-failure",

@@ -2,7 +2,7 @@ import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { clawProfileExtensionPackages } from "./application-plan.js";
+import { clawTargetPackages } from "./application-provenance.js";
 import { buildClawAddPlan, type ClawAddPlanContext } from "./lifecycle.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import type { ClawManifest, ClawPackagePreflightResult, ClawSourceIdentity } from "./types.js";
@@ -157,18 +157,22 @@ describe("Claw application planning v1", () => {
     expect(unavailable.planIntegrity).not.toBe(plan.planIntegrity);
   });
 
-  it("projects profile extensions onto canonical plugin package identities", () => {
-    expect(
-      clawProfileExtensionPackages({ schemaVersion: 1, agent: {}, extensions: [extension] }),
-    ).toEqual([
-      {
-        kind: "plugin",
-        source: "clawhub",
-        ref: "@acme/market-data",
-        version: "2.0.1",
-      },
+  it("indexes profile extensions by canonical plugin package identity", () => {
+    const manifest = requireManifest({ schemaVersion: 1, agent: { id: "analyst" } });
+    expect([
+      ...clawTargetPackages(manifest, { schemaVersion: 1, agent: {}, extensions: [extension] }),
+    ]).toEqual([
+      [
+        "plugin:@acme/market-data",
+        {
+          kind: "plugin",
+          source: "clawhub",
+          ref: "@acme/market-data",
+          version: "2.0.1",
+        },
+      ],
     ]);
-    expect(clawProfileExtensionPackages(undefined)).toEqual([]);
+    expect(clawTargetPackages(manifest, undefined)).toEqual(new Map());
   });
 
   it("plans a canonical extension and an ordinary managed schema asset", async () => {

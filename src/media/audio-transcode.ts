@@ -1,4 +1,3 @@
-// Audio transcode helpers run ffmpeg to convert audio for provider requirements.
 import path from "node:path";
 import { tempWorkspaceSync, withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
@@ -145,8 +144,7 @@ export async function transcodeAudioBuffer(params: {
   if (source === target) {
     return { ok: false, reason: "noop-same-container" };
   }
-  const recipe = pickAfconvertRecipe(source, target);
-  if (!recipe) {
+  if (target !== "caf") {
     return { ok: false, reason: "no-recipe" };
   }
   if (process.platform !== "darwin") {
@@ -162,7 +160,8 @@ export async function transcodeAudioBuffer(params: {
     const inPath = tmp.write(`in.${source}`, params.audioBuffer);
     const outPath = tmp.path(`out.${target}`);
     const result = await runAfconvert({
-      args: [...recipe, inPath, outPath],
+      // Opus-in-CAF matches native Messages voice memo attachments.
+      args: ["-f", "caff", "-d", "opus@24000", "-c", "1", inPath, outPath],
       timeoutMs: params.timeoutMs ?? 5000,
     });
     if (!result.ok) {
@@ -179,14 +178,6 @@ export async function transcodeAudioBuffer(params: {
 function normalizeContainerExt(ext: string): string | undefined {
   const trimmed = ext.trim().toLowerCase().replace(/^\./, "");
   return /^[a-z0-9]{1,12}$/.test(trimmed) ? trimmed : undefined;
-}
-
-function pickAfconvertRecipe(_source: string, target: string): string[] | undefined {
-  if (target === "caf") {
-    // Opus-in-CAF matches native Messages voice memo attachments.
-    return ["-f", "caff", "-d", "opus@24000", "-c", "1"];
-  }
-  return undefined;
 }
 
 async function runAfconvert(params: {

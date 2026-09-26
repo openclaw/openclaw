@@ -614,15 +614,15 @@ export async function runCopilotExecution(context: {
       params.abortSignal?.removeEventListener("abort", onAbort);
     } else {
       await bridge?.awaitCompactionChain();
+      bridge?.detach();
       await bridge?.awaitAgentEventChain();
       try {
-        nativeSubagentTaskMirror?.finalizeActiveRuns();
+        await nativeSubagentTaskMirror?.finalizeActiveRuns();
       } catch (error) {
         promptError ??= toCopilotError(error);
       }
       cleanupToolBridge?.();
       await cleanupByokProxy?.();
-      bridge?.detach();
       params.abortSignal?.removeEventListener("abort", onAbort);
       if (session) {
         try {

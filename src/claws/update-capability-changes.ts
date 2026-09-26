@@ -269,33 +269,20 @@ function pushAgentCapabilityChanges(params: {
     ["heartbeat", "timeoutSeconds"],
   ] as const;
   for (const field of fields) {
-    const sandboxField = field[0] === "sandbox" ? field.slice(1) : undefined;
-    const heartbeatField = field[0] === "heartbeat" ? field.slice(1) : undefined;
-    const memorySearchField =
-      field[0] === "memory" && field[1] === "search" ? field.slice(2) : undefined;
-    const effectiveToolField =
-      field[0] === "tools" &&
-      (field[1] === "profile" || field[1] === "alsoAllow" || field[1] === "fs")
-        ? field.slice(1)
-        : undefined;
-    const currentValue = sandboxField
-      ? getPath(params.currentSandbox, sandboxField)
-      : heartbeatField
-        ? getPath(params.currentHeartbeat, heartbeatField)
-        : memorySearchField
-          ? getPath(params.currentMemorySearch, memorySearchField)
-          : effectiveToolField
-            ? getPath(params.currentTools, effectiveToolField)
-            : getPath(params.currentAgent, field);
-    const desiredValue = sandboxField
-      ? getPath(params.desiredSandbox, sandboxField)
-      : heartbeatField
-        ? getPath(params.desiredHeartbeat, heartbeatField)
-        : memorySearchField
-          ? getPath(params.desiredMemorySearch, memorySearchField)
-          : effectiveToolField
-            ? getPath(params.desiredTools, effectiveToolField)
-            : getPath(params.desiredAgent, field);
+    const [currentRoot, desiredRoot, offset]: [unknown, unknown, number] =
+      field[0] === "sandbox"
+        ? [params.currentSandbox, params.desiredSandbox, 1]
+        : field[0] === "heartbeat"
+          ? [params.currentHeartbeat, params.desiredHeartbeat, 1]
+          : field[0] === "memory" && field[1] === "search"
+            ? [params.currentMemorySearch, params.desiredMemorySearch, 2]
+            : field[0] === "tools" &&
+                (field[1] === "profile" || field[1] === "alsoAllow" || field[1] === "fs")
+              ? [params.currentTools, params.desiredTools, 1]
+              : [params.currentAgent, params.desiredAgent, 0];
+    const valuePath = field.slice(offset);
+    const currentValue = getPath(currentRoot, valuePath);
+    const desiredValue = getPath(desiredRoot, valuePath);
     const profileField = field[0] === "tools" && field[1] === "profile";
     const current = profileField ? resolveClawProfileCapabilities(currentValue) : currentValue;
     const desired = profileField ? resolveClawProfileCapabilities(desiredValue) : desiredValue;
