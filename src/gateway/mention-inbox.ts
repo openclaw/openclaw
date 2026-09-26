@@ -1,8 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   MAX_HUMAN_MENTIONS,
@@ -22,6 +20,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
 import { createHumanMentionPolicy, humanMentionDisplayLabel } from "./human-mention-policy.js";
+import { formatMentionExcerpt, formatMentionSessionTitle } from "./mention-inbox-presentation.js";
 import {
   MAX_MENTION_SOURCES,
   MENTION_RETENTION_MS,
@@ -35,7 +34,6 @@ import type { MentionCommittedInput, MentionInbox } from "./mention-inbox.types.
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveSessionSharingTarget } from "./session-sharing.js";
-import { deriveSessionTitle } from "./session-utils-core.js";
 
 const MAX_GLOBAL_ITEMS = 10_000;
 const log = createSubsystemLogger("gateway/mentions");
@@ -330,14 +328,7 @@ export function createMentionInbox(params: {
       senderProfileId: current.sender?.profileId ?? content.senderProfileId,
       senderLabel: humanMentionDisplayLabel(current.sender?.label, content.senderProfileId),
       ...(current.sender ? { senderAvatarUrl: current.sender.avatarUrl } : {}),
-      sessionTitle:
-        truncateUtf16Safe(
-          (deriveSessionTitle(current.target.entry) ?? "Conversation")
-            .replace(/[\p{Cc}\p{Cf}]/gu, " ")
-            .replace(/\s+/gu, " ")
-            .trim(),
-          256,
-        ) || "Conversation",
+      sessionTitle: formatMentionSessionTitle(current.target.entry),
     };
   }
 
@@ -650,15 +641,7 @@ export function createMentionInbox(params: {
             sessionKey: resolved.canonicalKey,
             entry: resolved.entry,
           };
-          const excerpt = input.excerpt
-            ? truncateUtf16Safe(
-                flattenMarkdownToPlainText(truncateUtf16Safe(input.excerpt, 2_048))
-                  .replace(/[\p{Cc}\p{Cf}]/gu, " ")
-                  .replace(/\s+/gu, " ")
-                  .trim(),
-                280,
-              )
-            : undefined;
+          const excerpt = formatMentionExcerpt(input.excerpt);
           // Recipients share immutable message data; consumed sources retain only replay tombstones.
           const message: StoredMention["message"] = {
             sessionId: input.sessionId,
