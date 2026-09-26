@@ -39,6 +39,7 @@ type NarrationSource = Pick<SessionCapability, "subscribeMessages" | "unsubscrib
 type NarrationSubscription = {
   source: NarrationSource;
   subscription: SessionMessageSubscription;
+  release?: Promise<void>;
 };
 
 type PendingSubscription = {
@@ -127,6 +128,7 @@ export class SidebarSessionNarrationController {
   private agentId = "main";
   private desiredKeys = new Set<string>();
   private subscriptions = new Map<string, NarrationSubscription>();
+  private pendingReleases = new Set<NarrationSubscription>();
   private pendingSubscriptions = new Map<string, PendingSubscription>();
   private internalRuntimeBlockDepth = new Map<string, number>();
   private internalRuntimeDelimiterTails = new Map<string, string>();
@@ -149,6 +151,9 @@ export class SidebarSessionNarrationController {
   ) {}
 
   sync(input: SidebarNarrationSyncInput): void {
+    for (const owned of this.pendingReleases) {
+      this.releaseSubscription(owned);
+    }
     if (!this.input) {
       this.visibilityDocument = globalThis.document ?? null;
       this.visibilityDocument?.addEventListener("visibilitychange", this.handleVisibilityChange);
@@ -233,6 +238,9 @@ export class SidebarSessionNarrationController {
   }
 
   disconnect(): void {
+    for (const owned of this.pendingReleases) {
+      this.releaseSubscription(owned);
+    }
     this.visibilityDocument?.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.visibilityDocument = null;
     this.input = null;
@@ -261,18 +269,17 @@ export class SidebarSessionNarrationController {
         agentId: agentId ?? undefined,
       });
       const pending = this.pendingSubscriptions.get(key);
-      if (pending?.operationId !== operationId) {
-        await source.unsubscribeMessages(subscription).catch(() => undefined);
-        return;
+      if (pending?.operationId === operationId) {
+        this.pendingSubscriptions.delete(key);
       }
-      this.pendingSubscriptions.delete(key);
       if (
+        pending?.operationId !== operationId ||
         source !== this.source ||
         !this.connected ||
         !this.enabled ||
         !this.desiredKeys.has(key)
       ) {
-        await source.unsubscribeMessages(subscription).catch(() => undefined);
+        this.releaseSubscription({ source, subscription });
         return;
       }
       this.subscriptions.set(key, { source, subscription });
@@ -293,9 +300,27 @@ export class SidebarSessionNarrationController {
     const owned = this.subscriptions.get(key);
     this.subscriptions.delete(key);
     if (owned) {
-      void owned.source.unsubscribeMessages(owned.subscription).catch(() => undefined);
+      this.releaseSubscription(owned);
     }
     this.clearLine(key);
+  }
+
+  private releaseSubscription(owned: NarrationSubscription): void {
+    if (owned.release) {
+      return;
+    }
+    this.pendingReleases.add(owned);
+    owned.release = owned.source
+      .unsubscribeMessages(owned.subscription)
+      .then(() => {
+        this.pendingReleases.delete(owned);
+      })
+      .catch(() => {
+        // The coordinator still owns this exact handle; retry on sync or disconnect.
+      })
+      .finally(() => {
+        owned.release = undefined;
+      });
   }
 
   private resetSubscriptions(): void {
