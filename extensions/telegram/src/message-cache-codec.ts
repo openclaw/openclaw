@@ -1,16 +1,15 @@
 import type { Message } from "grammy/types";
-import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessageBody,
   type TelegramMediaKind,
 } from "./bot/body-helpers.js";
 import {
   buildSenderName,
-  extractTelegramLocation,
   getTelegramTextParts,
   normalizeForwardedContext,
   type TelegramThreadSpec,
@@ -83,9 +82,9 @@ function resolveMessageBody(msg: Message, preserveWhitespace: boolean): string |
   if (text.trim()) {
     return preserveWhitespace ? text : text.trim();
   }
-  const location = extractTelegramLocation(msg);
-  if (location) {
-    return formatLocationText(location);
+  const nonText = resolveTelegramNonTextBody(msg);
+  if (nonText) {
+    return nonText.text;
   }
   return resolveTelegramRichMessageBody(msg);
 }

@@ -417,6 +417,42 @@ describe("Telegram admitted model input", () => {
     },
   );
 
+  it("delivers a dice-only update instead of dropping it as an empty body", async () => {
+    // A dice roll carries no text and no downloadable file. Before the fix it normalized to an
+    // empty body, so the DM was discarded exactly like the empty-DM case that stays silent below.
+    await receive(await createBot(false, true, config()), {
+      ...textMessage("", false),
+      text: undefined,
+      dice: { emoji: "\u{1F3B2}", value: 4 },
+    });
+
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    expect(harness.replySpy.mock.calls[0]?.[0]?.BodyForAgent).toBe("[Dice \u{1F3B2} = 4]");
+  });
+
+  it("keeps a mention-skipped dice roll in ambient group history", async () => {
+    // Ambient ingest projects the skipped turn through its own history body, which is resolved
+    // separately from the agent body; dropping dice there leaves the room history with a blank
+    // entry nobody can read back.
+    const received = vi.fn();
+    registerInternalHook("message:received", received);
+    const cfg = config({ requireMention: true, ingest: true });
+    cfg.channels!.telegram!.groups!["-10042001"] = { requireMention: true };
+
+    await receive(await createBot(false, true, cfg), {
+      ...textMessage(""),
+      text: undefined,
+      dice: { emoji: "\u{1F3AF}", value: 3 },
+    });
+
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(received).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ content: "[Dice \u{1F3AF} = 3]" }),
+      }),
+    );
+  });
+
   it("renders nested rich-only messages in order and retains sender attribution", async () => {
     const rich = {
       blocks: [
