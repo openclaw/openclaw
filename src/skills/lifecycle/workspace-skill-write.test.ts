@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { configureFsSafeNative } from "@openclaw/fs-safe";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { root } from "../../infra/fs-safe.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
   applyWorkspaceSkillMutation,
@@ -15,6 +17,8 @@ import {
 const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  configureFsSafeNative({ mode: "auto" });
   await tempDirs.cleanup();
 });
 
@@ -30,6 +34,115 @@ async function mutationPaths(slug: string) {
 }
 
 describe("workspace skill mutations", () => {
+  it("revalidates run authority immediately before the atomic file write", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workspace-skill-revoked-write-"),
+    );
+    const skillDir = path.join(workspaceDir, "skills", "revoked-write");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const supportFile = path.join(skillDir, "references", "proof.md");
+    const mutation = await prepareWorkspaceSkillMutation({
+      skillsRoot: workspaceDir,
+      skillDir,
+      skillFile,
+      content: "# Revoked Write\n",
+      supportFiles: [{ path: "references/proof.md", content: "must not be written\n" }],
+      mode: "create",
+    });
+    let authorized = true;
+    let checks = 0;
+
+    await expect(
+      applyWorkspaceSkillMutation(mutation, {
+        assertMutationAuthorized: () => {
+          checks += 1;
+          if (checks === 1) {
+            queueMicrotask(() => {
+              authorized = false;
+            });
+          }
+          if (!authorized) {
+            throw new Error("run authority closed before write");
+          }
+        },
+      }),
+    ).rejects.toThrow("run authority closed before write");
+
+    expect(checks).toBe(2);
+    await expect(fs.access(supportFile)).rejects.toThrow();
+    await expect(fs.access(skillFile)).rejects.toThrow();
+  });
+
+  it("rejects authority revoked while an fs-safe write waits in the same-path queue", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workspace-skill-queued-revocation-"),
+    );
+    const skillDir = path.join(workspaceDir, "skills", "queued-revocation");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(skillFile, "# Before\n", "utf8");
+    const mutation = await prepareWorkspaceSkillMutation({
+      skillsRoot: workspaceDir,
+      skillDir,
+      skillFile,
+      content: "# After\n",
+      mode: "update",
+    });
+
+    configureFsSafeNative({ mode: "off" });
+    const rename = fs.rename.bind(fs);
+    let releaseFirstRename: (() => void) | undefined;
+    const firstRenameRelease = new Promise<void>((resolve) => {
+      releaseFirstRename = resolve;
+    });
+    let markFirstRenameStarted: (() => void) | undefined;
+    const firstRenameStarted = new Promise<void>((resolve) => {
+      markFirstRenameStarted = resolve;
+    });
+    let blocked = false;
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (!blocked && String(to) === skillFile) {
+        blocked = true;
+        markFirstRenameStarted?.();
+        await firstRenameRelease;
+      }
+      await rename(from, to);
+    });
+
+    const targetRoot = await root(workspaceDir);
+    const blocker = targetRoot.write("skills/queued-revocation/SKILL.md", "# Before\n", {
+      encoding: "utf8",
+    });
+    await firstRenameStarted;
+
+    let authorized = true;
+    let markCallerChecksComplete: (() => void) | undefined;
+    const callerChecksComplete = new Promise<void>((resolve) => {
+      markCallerChecksComplete = resolve;
+    });
+    let checks = 0;
+    const application = applyWorkspaceSkillMutation(mutation, {
+      assertMutationAuthorized: () => {
+        checks += 1;
+        if (checks === 2) {
+          markCallerChecksComplete?.();
+        }
+        if (!authorized) {
+          throw new Error("run authority closed while write was queued");
+        }
+      },
+    });
+    await callerChecksComplete;
+    await Promise.resolve();
+    authorized = false;
+    releaseFirstRename?.();
+
+    await blocker;
+    await expect(application).rejects.toThrow("run authority closed while write was queued");
+    expect(checks).toBe(3);
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toBe("# Before\n");
+  });
+
   it("removes support files when the activating SKILL.md write fails", async () => {
     const { workspaceDir, skillDir, skillFile, supportFile } =
       await mutationPaths("partial-create");

@@ -23,6 +23,7 @@ export function executeSkillWorkshopOperation<Key extends keyof SkillWorkshopExe
   type: Key,
   value: SkillWorkshopExecutionOperations[Key]["input"]["value"],
   options: SkillWorkshopStoreOptions = {},
+  assertMutationAuthorized?: () => void,
 ): Promise<SkillWorkshopExecutionOperations[Key]["output"]> {
   const captured = structuredClone(value);
   const store = captureSkillWorkshopStoreOptions(options);
@@ -43,11 +44,22 @@ export function executeSkillWorkshopOperation<Key extends keyof SkillWorkshopExe
     });
   };
   if (leases.length > 0) {
-    return runWithOpenClawStateLeasesWorker(leases, context, execute);
+    return runWithOpenClawStateLeasesWorker(
+      leases,
+      context,
+      execute,
+      assertMutationAuthorized
+        ? {
+            assertCurrent: assertMutationAuthorized,
+            beforeCommit: assertMutationAuthorized,
+          }
+        : undefined,
+    );
   }
   const assertCurrent = () => {
     context.admission.assertCurrent();
     context.maintenanceScope?.assertAdmission();
+    assertMutationAuthorized?.();
   };
   return runOpenClawStateWorkerOperation(context, execute, {
     assertCurrent,

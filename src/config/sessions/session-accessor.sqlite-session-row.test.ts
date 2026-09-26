@@ -466,6 +466,14 @@ describe("SQLite session row persistence", () => {
         source: "# Demo\n\n" + "runtime skill content ".repeat(100),
       }),
     ];
+    const skillCommandUsagePaths = [
+      {
+        readPath: "/skills/demo/SKILL.md",
+        skillFile: "/skills/demo/SKILL.md",
+        skillName: "demo",
+        skillSource: "workspace" as const,
+      },
+    ];
     const entry: InternalSessionEntry = {
       sessionId: "runtime-skills-session",
       updatedAt: 42,
@@ -479,6 +487,7 @@ describe("SQLite session row persistence", () => {
         skills: [{ name: "demo" }],
         skillFilter: ["demo"],
         resolvedSkills,
+        skillCommandUsagePaths,
         version: 7,
       },
     };
@@ -503,5 +512,6 @@ describe("SQLite session row persistence", () => {
       version: 7,
     });
     expect(entry.skillsSnapshot?.resolvedSkills).toBe(resolvedSkills);
+    expect(entry.skillsSnapshot?.skillCommandUsagePaths).toBe(skillCommandUsagePaths);
   });
 });

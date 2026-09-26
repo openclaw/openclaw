@@ -1,6 +1,7 @@
 import { prepareGitHubPublicationAvailability } from "../../../gateway/github-publication-availability.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { agentHarnessExposesOpenClawTools } from "../../harness/tool-surface.js";
+import { recordExplicitSkillSelectionsForRun } from "../../skill-selection-usage.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -23,6 +24,8 @@ export async function withPreparedEmbeddedGatewayTools<T>(
     | "disableTools"
     | "sessionPersistence"
     | "githubPublicationAvailable"
+    | "explicitSkillSelections"
+    | "skillsSnapshot"
   > & { agentId: string; sessionKey: string; agentHarnessId: string },
   isAttemptCurrent: () => boolean,
   run: () => Promise<T>,
@@ -66,6 +69,11 @@ export async function withPreparedEmbeddedGatewayTools<T>(
         throw new Error("GitHub tool preparation outlived its admitted Gateway run");
       }
     }
+    recordExplicitSkillSelectionsForRun({
+      operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
+      selections: attempt.explicitSkillSelections,
+      skillsSnapshot: attempt.skillsSnapshot,
+    });
     return run();
   });
 }

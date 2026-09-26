@@ -68,6 +68,8 @@ import {
 } from "./attempt-execution.announce.test-support.js";
 import {
   createCliImageCapabilityPlugins,
+  makeCliResult,
+  persistCliTranscriptEntry,
   resetCliAttemptFixtureDatabases,
 } from "./attempt-execution.cli.test-support.js";
 import { runAgentAttempt as runAgentAttemptImpl } from "./attempt-execution.js";
@@ -221,42 +223,6 @@ vi.mock("../embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
-function makeCliResult(text: string, sessionId = "session-cli"): EmbeddedAgentRunResult {
-  return {
-    payloads: [{ text }],
-    meta: {
-      durationMs: 5,
-      finalAssistantVisibleText: text,
-      agentMeta: {
-        sessionId,
-        ...(sessionId ? { cliSessionBinding: { sessionId } } : {}),
-        provider: "claude-cli",
-        model: "opus",
-        usage: {
-          input: 12,
-          output: 4,
-          cacheRead: 3,
-          cacheWrite: 0,
-          total: 19,
-        },
-        lastCallUsage: {
-          input: 12,
-          output: 4,
-          cacheRead: 3,
-          cacheWrite: 0,
-          total: 19,
-        },
-      },
-      executionTrace: {
-        winnerProvider: "claude-cli",
-        winnerModel: "opus",
-        fallbackUsed: false,
-        runner: "cli",
-      },
-    },
-  };
-}
-
 function saveTestAuthProfiles(
   agentDir: string,
   profiles: Parameters<typeof saveAuthProfileStore>[0]["profiles"],
@@ -269,16 +235,6 @@ function saveTestAuthProfiles(
 
 function makeSessionEntry(sessionId: string, overrides: Partial<SessionEntry> = {}): SessionEntry {
   return { sessionId, updatedAt: Date.now(), ...overrides };
-}
-
-async function persistCliTranscriptEntry(
-  params: Parameters<typeof persistCliTurnTranscript>[0],
-): Promise<SessionEntry | undefined> {
-  const result = await persistCliTurnTranscript(params);
-  if (result.kind !== "persisted") {
-    throw new Error("expected CLI transcript persistence to keep the current session");
-  }
-  return result.sessionEntry;
 }
 
 type TranscriptReadTarget =
@@ -396,6 +352,7 @@ describe("CLI attempt execution", () => {
     sessionKey?: string;
     body?: string;
     transcriptBody?: string;
+    explicitSkillSelections?: RunAgentAttemptParams["explicitSkillSelections"];
     providerOverride?: string;
     modelOverride?: string;
     isFallbackRetry?: boolean;
@@ -448,6 +405,7 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       body: overrides?.body ?? "stream gate",
       transcriptBody: overrides?.transcriptBody,
+      explicitSkillSelections: overrides?.explicitSkillSelections,
       isFallbackRetry: overrides?.isFallbackRetry ?? false,
       fallbackRuntimeState: overrides?.fallbackRuntimeState,
       timeoutMs: overrides?.timeoutMs ?? 1_000,
@@ -574,6 +532,21 @@ describe("CLI attempt execution", () => {
     expect(onExecutionStarted).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards CLI-resolved explicit skill selections to embedded dispatch", async () => {
+    const explicitSkillSelections = [
+      {
+        name: "receipt-proof",
+        path: path.join(tmpDir, "skills", "receipt-proof", "SKILL.md"),
+      },
+    ];
+    const embedded = await runOpenClawEmbeddedAttemptForTest({
+      runId: "embedded-explicit-skill-selection",
+      explicitSkillSelections,
+    });
+
+    expect(embedded.explicitSkillSelections).toEqual(explicitSkillSelections);
+  });
+
   it("forwards authoritative channel type to embedded runs with opaque session keys", async () => {
     const embedded = await runOpenClawEmbeddedAttemptForTest({
       runId: "embedded-opaque-channel",
@@ -622,6 +595,7 @@ describe("CLI attempt execution", () => {
     sessionStore: Record<string, SessionEntry>;
     body: string;
     runId: string;
+    explicitSkillSelections?: RunAgentAttemptParams["explicitSkillSelections"];
     cwd?: string;
     abortSignal?: AbortSignal;
     onExecutionStarted?: () => void;
@@ -637,6 +611,7 @@ describe("CLI attempt execution", () => {
       cwd: params.cwd,
       body: params.body,
       classifyResult: params.classifyResult,
+      explicitSkillSelections: params.explicitSkillSelections,
       runId: params.runId,
       opts: {
         onExecutionStarted: params.onExecutionStarted,
@@ -680,6 +655,31 @@ describe("CLI attempt execution", () => {
       });
     },
   );
+
+  it("forwards frozen explicit skill selections to the configured CLI runtime", async () => {
+    const sessionKey = "agent:main:direct:cli-explicit-skill";
+    const sessionEntry = makeSessionEntry("session-cli-explicit-skill");
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const explicitSkillSelections = [
+      {
+        name: "receipt-proof",
+        path: path.join(tmpDir, "skills", "receipt-proof", "SKILL.md"),
+      },
+    ];
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("selected"));
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "use the selected skill",
+      runId: "run-cli-explicit-skill",
+      explicitSkillSelections,
+    });
+
+    expect(firstRunCliAgentArg().explicitSkillSelections).toEqual(explicitSkillSelections);
+  });
 
   it.each(["assistant_output_started", "tool_execution_started"] as const)(
     "keeps CLI admission separate from observed %s",
@@ -866,6 +866,7 @@ describe("CLI attempt execution", () => {
       cfg,
       body: opts.message,
       transcriptBody: opts.message,
+      explicitSkillSelections: undefined,
       configuredThinkingCatalog,
       normalizedSpawned: {},
       agentCfg: undefined,

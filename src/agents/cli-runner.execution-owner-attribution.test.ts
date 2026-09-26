@@ -10,6 +10,7 @@ import type { HookRunner } from "../plugins/hooks.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
+import { admitCliRunParams } from "./cli-runner/run-admission.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
 // vi.mock factories are hoisted above imports, so any references inside them
@@ -121,10 +122,9 @@ beforeEach(() => {
   executePreparedCliRunMock.mockReset();
   executePreparedCliRunMock.mockResolvedValue({ text: "ok" });
   prepareCliRunContextMock.mockReset();
-  // Mirror admitPreparedParams: preparation resolves the session owner from
-  // sessionKey "agent:main:main" and replaces the caller's agentId with it.
+  // Real preparation admits the run after resolving the execution owner.
   prepareCliRunContextMock.mockImplementation(async (params: RunCliAgentParams) =>
-    makeStubContext({ ...params, agentId: "main" }),
+    makeStubContext(await admitCliRunParams(params, "main")),
   );
   closeCliSessionMock.mockReset();
   closeMcpLoopbackServerMock.mockReset();

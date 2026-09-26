@@ -149,6 +149,8 @@ export type SkillProposalUpdateInput = Omit<
   composePatch?: { oldString: string; newString: string };
   /** Refuse composition when the service's own read hashes differently (reviewer receipt). */
   expectedCurrentContentHash?: string;
+  /** Runtime-only final authority check invoked at the proposal persistence boundary. */
+  assertMutationAuthorized?: () => void;
 };
 
 export type SkillProposalReviseInput = SkillProposalRevisionInput & {
@@ -164,6 +166,8 @@ type SkillProposalRevisionInput = SkillProposalContext & {
   proposalId: string;
   expectedRevisionHash?: string;
   correlationId?: string;
+  /** Runtime-only final authority check invoked at the live artifact persistence boundary. */
+  assertMutationAuthorized?: () => void;
 };
 
 export type SkillProposalActionInput = SkillProposalRevisionInput & { reason?: string };

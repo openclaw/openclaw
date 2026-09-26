@@ -6,5 +6,6 @@ export {
   listSkillCommandsForAgents,
   listSkillCommandsForWorkspace,
   prepareSkillCommandsForWorkspace,
+  skillCommandsToExplicitSelections,
 } from "./chat-commands.js";
 export { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";

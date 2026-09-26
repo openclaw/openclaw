@@ -251,6 +251,7 @@ export async function writeSkillProposal(request: {
   ownerAgentId: string;
   maxPending: number;
   event: NewSkillProposalEvent;
+  assertMutationAuthorized?: () => void;
   store?: SkillWorkshopStoreOptions;
 }): Promise<SkillProposalEvent> {
   assertProposalId(request.record.id);
@@ -270,6 +271,7 @@ export async function writeSkillProposal(request: {
   await stageSkillProposalGeneration(params);
 
   try {
+    request.assertMutationAuthorized?.();
     return await executeSkillWorkshopOperation(
       "workshop.proposal.create",
       {
@@ -279,6 +281,7 @@ export async function writeSkillProposal(request: {
         event: params.event,
       },
       params.store,
+      request.assertMutationAuthorized,
     );
   } catch (error) {
     const committed = await readCommittedSkillProposalTransition({

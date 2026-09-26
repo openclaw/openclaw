@@ -40,6 +40,7 @@ import {
   createTestModelSelection,
   createTestModelVisibilityPolicy,
   makeSuccessResult,
+  requireArray,
 } from "./agent-command.live-model-switch.test-helpers.js";
 import { registerAgentCommandRecoveryCases } from "./agent-command.restart-recovery.test-harness.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
@@ -412,6 +413,7 @@ vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   prepareSkillCommandsForWorkspace: async (params: unknown) =>
     state.listSkillCommandsForWorkspaceMock(params),
   resolveEffectiveAgentSkillFilter: () => undefined,
+  skillCommandsToExplicitSelections: () => [],
 }));
 
 vi.mock("../config/runtime-snapshot.js", async () => {
@@ -890,13 +892,6 @@ function setupAcpSession(): void {
 }
 
 const requireRecord = createRequireRecord("object", "expected-label-object");
-
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an array`);
-  }
-  return value;
-}
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
   const call = mock.mock.calls[callIndex] as unknown[] | undefined;

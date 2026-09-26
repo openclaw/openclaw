@@ -5,6 +5,11 @@ import type { GatewayRequestContext } from "../../gateway/server-methods/types.j
 import { resolveWorkerToolAuthority } from "../../gateway/worker-environments/worker-tool-authority.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindWorkspaceSkillUsage,
+  consumeRunSkillUsage,
+  discardRunWorkspaceSkillUsage,
+} from "../../skills/runtime/run-usage.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -216,13 +221,17 @@ async function dispatchExecSession(execSession: ExecSessionDefaults) {
 describe("embedded run retry dispatch", () => {
   let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
   beforeEach(async () => {
+    consumeRunSkillUsage("run-1");
     mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
     mocks.settleRequesterAfterSessionSpawns.mockReset();
     mocks.prepareGitHubPublicationAvailability.mockReset().mockResolvedValue(true);
     admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
     admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
   });
-  afterEach(() => admission.close());
+  afterEach(() => {
+    discardRunWorkspaceSkillUsage(admittedRunContext.operationalRunInstance);
+    admission.close();
+  });
 
   it.each([undefined, "global", "agent:main:policy"])(
     "dispatches a global plugin attempt with its prepared owner (%s)",
@@ -304,6 +313,64 @@ describe("embedded run retry dispatch", () => {
 
     expect(authority.exec).toEqual({ host: "sandbox", security: "deny", ask: "off", safeBins: [] });
   });
+
+  it.each(["openclaw", "codex", "third-party"])(
+    "records only snapshot-matched explicit skill selections for the admitted %s run",
+    async (agentHarnessId) => {
+      const skillFile = "/tmp/workspace/skills/release/SKILL.md";
+      const bundledSkillFile = "/tmp/bundled/skills/lint/SKILL.md";
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.preparedRuntime.snapshot().agentHarness.id = agentHarnessId;
+      input.runInput.runParams.explicitSkillSelections = [
+        { name: "release_alias", path: skillFile },
+        { name: "bundled_lint", path: bundledSkillFile },
+        { name: "unmatched", path: "/tmp/workspace/skills/unmatched/SKILL.md" },
+      ];
+      input.runInput.runParams.skillsSnapshot = {
+        prompt: "",
+        skills: [],
+        skillCommandUsagePaths: [
+          {
+            readPath: skillFile,
+            skillFile,
+            skillName: "release",
+            skillSource: "workspace",
+          },
+          {
+            readPath: bundledSkillFile,
+            skillFile: bundledSkillFile,
+            skillName: "lint",
+            skillSource: "bundled",
+          },
+        ],
+      };
+
+      await prepareAndDispatchEmbeddedRunAttempt(input);
+      await prepareAndDispatchEmbeddedRunAttempt(input);
+
+      expect(
+        bindWorkspaceSkillUsage({
+          operationalRunInstance: admittedRunContext.operationalRunInstance,
+          skillFile,
+        })?.(),
+      ).toBe(true);
+      expect(
+        bindWorkspaceSkillUsage({
+          operationalRunInstance: admittedRunContext.operationalRunInstance,
+          skillFile: bundledSkillFile,
+        }),
+      ).toBeUndefined();
+      expect(consumeRunSkillUsage("run-1")).toEqual([
+        { name: "release", source: "workspace", activation: "command", skillFile },
+        {
+          name: "lint",
+          source: "bundled",
+          activation: "command",
+          skillFile: bundledSkillFile,
+        },
+      ]);
+    },
+  );
 
   it("forwards private commit accounting before queued notices and thrown attempt cleanup", async () => {
     const flushStarted = createDeferred();

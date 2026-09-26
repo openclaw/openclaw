@@ -306,6 +306,9 @@ async function createPendingSkillProposal(
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
   };
+  const assertMutationAuthorized =
+    "skillName" in input ? input.assertMutationAuthorized : undefined;
+  assertMutationAuthorized?.();
   const event = await writeSkillProposal({
     record,
     content,
@@ -317,6 +320,7 @@ async function createPendingSkillProposal(
       type: "created",
       actor: input.eventActor,
     }),
+    assertMutationAuthorized,
     store: params.store,
   });
   await dispatchSkillProposalChanged({

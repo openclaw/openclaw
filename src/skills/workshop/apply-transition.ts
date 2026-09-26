@@ -218,6 +218,7 @@ export async function applySkillProposalTransition(
             })
           : undefined;
       const rollback = createSkillProposalRollbackFromMutation(record, mutation);
+      input.assertMutationAuthorized?.();
       await writeSkillProposalRollback({
         proposalId: record.id,
         rollback,
@@ -225,7 +226,12 @@ export async function applySkillProposalTransition(
       });
 
       try {
-        await applyWorkspaceSkillMutation(mutation);
+        await applyWorkspaceSkillMutation(
+          mutation,
+          input.assertMutationAuthorized
+            ? { assertMutationAuthorized: input.assertMutationAuthorized }
+            : {},
+        );
       } catch (error) {
         // A rejected filesystem write may have partially changed its target
         // before throwing. Keep recovery facts unless the full bundle is

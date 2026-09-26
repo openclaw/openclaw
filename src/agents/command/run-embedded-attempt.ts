@@ -482,6 +482,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               cwd,
               body,
               transcriptBody,
+              explicitSkillSelections: params.prepared.explicitSkillSelections,
               isFallbackRetry: runOptions.isFallbackRetry,
               classifyResult: runOptions.classifyResult,
               preserveCliSessionBinding:

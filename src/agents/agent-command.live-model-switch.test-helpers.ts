@@ -344,3 +344,10 @@ export function createTestModelSelection(params: {
     resolveThinkingDefault: (args: unknown) => params.resolveThinkingDefaultMock(args),
   };
 }
+
+export function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an array`);
+  }
+  return value;
+}
