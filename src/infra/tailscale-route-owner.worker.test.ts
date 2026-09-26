@@ -43,7 +43,11 @@ function spawnRouteOwnerFixture(waitForReady: boolean, abortSignal: AbortSignal)
             cleanup();
             resolve();
           } else if (message.type === "failed") {
-            onError(new Error(message.stderr || message.stdout || "route owner failed"));
+            const exitStatus = message.signal
+              ? `signal ${message.signal}`
+              : `code ${message.code ?? "unknown"}`;
+            const output = message.stderr || message.stdout;
+            onError(new Error(`route owner failed (${exitStatus})${output ? `: ${output}` : ""}`));
           }
         };
         const onError = (error: Error) => {
