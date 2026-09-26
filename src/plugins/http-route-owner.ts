@@ -1,4 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getPluginHttpRouteCanonicalPath } from "./http-path.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
   getPluginInstanceOwner,
@@ -147,6 +148,7 @@ export function replacePluginHttpRoutes(
   previous: readonly PluginHttpRouteRegistration[] = [],
   keepPosition = false,
 ): () => void {
+  getPluginHttpRouteCanonicalPath(entry);
   // Retry handlers are host code, but retain the original route's instance ownership.
   const owner = resolveEntryOwner(registry, entry.handoff ? (previous[0] ?? entry) : entry);
   const views = ownerViews(registry, owner);
