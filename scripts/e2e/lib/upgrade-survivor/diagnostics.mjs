@@ -57,6 +57,8 @@ const logNames = [
   "install.log",
   "update.json",
   "update.err",
+  "update-noop.json",
+  "update-noop.err",
   ...siblingRefusalLogs,
   ...restoredIndexLogs,
   ...backupRollbackLogs,
@@ -107,6 +109,15 @@ const logNames = [
   "legacy-operator-run-survivor-default-owner.err",
   "legacy-operator-run-survivor-ops-owner.out",
   "legacy-operator-run-survivor-ops-owner.err",
+  ...["post-update", "candidate"].flatMap((stage) =>
+    [0, 1].flatMap((index) =>
+      ["", "-earlier"].flatMap((page) =>
+        ["out", "err"].map(
+          (extension) => `legacy-operator-${stage}-transcript-${index}${page}.${extension}`,
+        ),
+      ),
+    ),
+  ),
   "gateway.log",
   "gateway.log.doctor",
   "missing-load-path/baseline-gateway.log",

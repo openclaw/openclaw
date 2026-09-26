@@ -1,8 +1,5 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-// Agent model selection staged against the runtime config form, split out of
-// agents-page.ts to keep that page inside the TS LOC ratchet.
 import type { ApplicationContext } from "../../app/context.ts";
-import type { AgentConfigEntryTarget } from "../../lib/config/config-state-model.ts";
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
 
@@ -49,13 +46,6 @@ function stageAgentDecisionModel(
   }
 }
 
-function modelEntry(target: AgentConfigEntryTarget) {
-  return {
-    path: [...target.path, "model"] as Array<string | number>,
-    existing: target.entry.model,
-  };
-}
-
 // Stage the smallest config shape that expresses the selection. The gateway
 // resolver honors a bare string, { primary, fallbacks }, and { fallbacks }
 // with no primary (agent-scope.ts); staging must write all three or an
@@ -94,7 +84,6 @@ function existingModelParts(existing: unknown): {
   return { primary: null, fallbacks: null };
 }
 
-/** Stage a primary-model change; clearing falls back to the inherited default. */
 function stageAgentPrimaryModel(
   runtimeConfig: RuntimeConfig,
   agentId: string,
@@ -104,13 +93,16 @@ function stageAgentPrimaryModel(
   if (!target) {
     return;
   }
-  const entry = modelEntry(target);
   // Clearing the primary must not delete authored agent fallbacks: the
   // { fallbacks }-only shape stays representable.
-  stageModelShape(runtimeConfig, entry.path, modelId, existingModelParts(entry.existing).fallbacks);
+  stageModelShape(
+    runtimeConfig,
+    [...target.path, "model"],
+    modelId,
+    existingModelParts(target.entry.model).fallbacks,
+  );
 }
 
-/** Stage an explicit fallback chain without changing primary inheritance. */
 function stageAgentModelFallbacks(
   runtimeConfig: RuntimeConfig,
   agentId: string,
@@ -120,11 +112,10 @@ function stageAgentModelFallbacks(
   if (!target) {
     return;
   }
-  const entry = modelEntry(target);
   stageModelShape(
     runtimeConfig,
-    entry.path,
-    existingModelParts(entry.existing).primary,
+    [...target.path, "model"],
+    existingModelParts(target.entry.model).primary,
     normalizeStringEntries(fallbacks),
   );
 }

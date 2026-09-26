@@ -193,16 +193,6 @@ describe("Telegram permanent rejection over real Bot API transport", () => {
           expect(
             getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, DELIVERY_INTENT_ID, stateDir),
           ).toBe("failed");
-
-          console.log(
-            `[telegram permanent-rejection proof] ${JSON.stringify({
-              queueTerminal: "failed",
-              restartReplayCount: 0,
-              providerStatus: 400,
-              classification: "typed non-retryable",
-              transport: "grammY Bot API HTTP to 127.0.0.1:<redacted>",
-            })}`,
-          );
         } finally {
           closeOpenClawAgentDatabasesForTest();
           closeOpenClawStateDatabaseForTest();

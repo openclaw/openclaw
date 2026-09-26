@@ -393,11 +393,11 @@ class NodeForegroundServiceTest {
   fun stopRetiresQueuedActivityRefresh() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Refresh)
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
   fun stopRetiresQueuedSavedGatewayConnection() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Save)
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
   fun stopRetiresQueuedConversationNotification() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Notification)
 
   @Test
@@ -1574,6 +1574,8 @@ class NodeForegroundServiceTest {
     val nextGateway = lifetimeGateway()
     val gate = RuntimeReturnGate()
     val appFixture = Shadow.extract<ServiceRuntimePrefsShadow>(app)
+    val hasDirectAdmission =
+      action == QueuedGatewayAction.Connect || action == QueuedGatewayAction.Save || action == QueuedGatewayAction.Notification
 
     try {
       runtime.connect(
@@ -1585,7 +1587,7 @@ class NodeForegroundServiceTest {
           runtime.gatewayConnectionDisplay.first { it.isConnected && runtime.nodeConnected.value }
         }
       }
-      if (action == QueuedGatewayAction.Connect) {
+      if (hasDirectAdmission) {
         val initialRoles =
           appFixture.sessionConnections
             .filter { it.endpoint.port == initialGateway.port }
@@ -1675,7 +1677,7 @@ class NodeForegroundServiceTest {
       }
       gate.release.countDown()
       drainWithMainLooper { withTimeout(10_000) { operation.join() } }
-      if (action == QueuedGatewayAction.Connect) assertFalse("Call-through probe must not crash the gateway operation", operation.isCancelled)
+      if (hasDirectAdmission) assertFalse("Call-through probe must not crash the gateway operation", operation.isCancelled)
 
       if (action == QueuedGatewayAction.Forget) {
         val savedId = GatewayEndpoint.manual("127.0.0.1", initialGateway.port).stableId
@@ -1684,16 +1686,15 @@ class NodeForegroundServiceTest {
           app.prefs.gatewayRegistry.entries.value
             .any { it.stableId == savedId },
         )
-      } else if (action == QueuedGatewayAction.Connect) {
-        // This unsaved cleartext target reaches session admission before the direct operation returns.
+      } else if (hasDirectAdmission) {
+        // These cleartext actions reach session admission before the joined operation returns.
         // Observe admission rather than delayed HTTP arrival; newer activity sockets remain valid.
         assertTrue(
           "Stopped activity work must not admit another Gateway connection",
           appFixture.sessionConnections.none { it.endpoint.stableId == nextEndpoint.stableId },
         )
       } else {
-        val target = if (action == QueuedGatewayAction.Refresh) initialGateway else nextGateway
-        assertNull("Stopped activity work must not open another Gateway socket", target.takeRequest(10, TimeUnit.SECONDS))
+        assertNull("Stopped activity work must not open another Gateway socket", initialGateway.takeRequest(10, TimeUnit.SECONDS))
       }
       if (resumeFromAnotherActivity) assertTrue(runtime.gatewayConnectionDisplay.value.isConnected && runtime.nodeConnected.value)
     } finally {

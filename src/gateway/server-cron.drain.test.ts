@@ -5,6 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 
 const { cancelAllMock, getRuntimeConfigMock, stopAllMock } = vi.hoisted(() => ({
   cancelAllMock: vi.fn<() => Promise<void>>(),
@@ -46,6 +50,7 @@ import { buildGatewayCronService } from "./server-cron.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 
 type StartedGatewayCron = {
+  clock: ReturnType<typeof createGatewaySchedulerClock>;
   state: ReturnType<typeof buildGatewayCronService>;
   cfg: OpenClawConfig;
   stateDir: string;
@@ -58,7 +63,9 @@ async function startGatewayCron(label: string, enabled = true): Promise<StartedG
     cron: { enabled, triggers: { enabled: true } },
   };
   getRuntimeConfigMock.mockReturnValue(cfg);
+  const clock = createGatewaySchedulerClock(Date.now());
   const state = buildGatewayCronService({
+    scheduler: createTestGatewayScheduler(clock.clock),
     cfg,
     deps: {} as CliDeps,
     broadcast: () => {},
@@ -73,7 +80,7 @@ async function startGatewayCron(label: string, enabled = true): Promise<StartedG
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
   });
-  return { state, cfg, stateDir };
+  return { state, cfg, stateDir, clock };
 }
 
 async function cleanGatewayCron({ state, stateDir }: StartedGatewayCron): Promise<void> {
@@ -103,7 +110,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
         const job = await original.state.cron.add({
           name: "one-shot binding",
           enabled: true,
-          schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+          schedule: { kind: "at", at: new Date(original.clock.clock.now() - 1_000).toISOString() },
           payload: { kind: "command", argv: [process.execPath, "-e", "process.exit(0)"] },
           sessionTarget: "isolated",
           wakeMode: "next-heartbeat",

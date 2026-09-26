@@ -150,8 +150,8 @@ upload is disabled. Notes generation requires `OPENAI_API_KEY`.
 
 ## Native release qualification
 
-On an Apple Silicon Mac with `/Applications/Xcode.app`, the iOS 26.5 runtime, iPhone 17 Pro
-device type, and the repository's pinned native tools installed:
+On an Apple Silicon Mac with `/Applications/Xcode.app`, an available iOS simulator
+runtime supporting iPhone 17 Pro and arm64, and the repository's pinned native tools installed:
 
 ```bash
 node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
@@ -164,7 +164,9 @@ OPENCLAW_CI_SIMSLIM_BINARY=/tmp/ios-e2e-tools/simslim \
 ```
 
 The gate requires a clean tracked and untracked source tree at the exact SHA;
-gitignored build outputs are allowed. It builds the Gateway runtime and ad-hoc-signed
+gitignored build outputs are allowed. It selects the newest available iOS runtime
+that supports the test device and architecture, and records that runtime in its proof.
+It builds the Gateway runtime and ad-hoc-signed
 Debug `OpenClawUITests` simulator products once. Ad-hoc signing preserves Keychain
 entitlements without certificates or provisioning profiles; this is not a signed
 Release build. Each of the two live Gateway UI tests gets a new simulator, isolated real

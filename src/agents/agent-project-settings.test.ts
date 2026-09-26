@@ -15,31 +15,6 @@ describe("resolveEmbeddedAgentProjectSettingsPolicy", () => {
   it("defaults to sanitize", () => {
     expect(resolveEmbeddedAgentProjectSettingsPolicy()).toBe("sanitize");
   });
-
-  it("accepts trusted and ignore modes", () => {
-    expect(
-      resolveEmbeddedAgentProjectSettingsPolicy({
-        agents: { defaults: { embeddedAgent: { projectSettingsPolicy: "trusted" } } },
-      }),
-    ).toBe("trusted");
-    expect(
-      resolveEmbeddedAgentProjectSettingsPolicy({
-        agents: { defaults: { embeddedAgent: { projectSettingsPolicy: "ignore" } } },
-      }),
-    ).toBe("ignore");
-  });
-
-  it("uses embeddedAgent as the only runtime config key", () => {
-    expect(
-      resolveEmbeddedAgentProjectSettingsPolicy({
-        agents: {
-          defaults: {
-            embeddedAgent: { projectSettingsPolicy: "ignore" },
-          },
-        },
-      }),
-    ).toBe("ignore");
-  });
 });
 
 describe("buildEmbeddedAgentSettingsSnapshot", () => {

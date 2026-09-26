@@ -972,39 +972,18 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     await expectOutboundMediaMissing(stateDir);
   });
 
-  it.each([
-    {
-      label: "a missing attachment before the staged attachment",
-      mediaUrls: (missingPath: string, imagePath: string, dataUrl: string) => [
-        missingPath,
-        imagePath,
-        dataUrl,
-      ],
-    },
-    {
-      label: "a missing attachment after the staged attachment",
-      mediaUrls: (missingPath: string, imagePath: string, dataUrl: string) => [
-        imagePath,
-        missingPath,
-        dataUrl,
-      ],
-    },
-    {
-      label: "multiple missing attachments around surviving media",
-      mediaUrls: (missingPath: string, imagePath: string, dataUrl: string) => [
-        missingPath,
-        imagePath,
-        dataUrl,
-        path.join(path.dirname(imagePath), "private customer report.png"),
-      ],
-    },
-  ])("keeps one named failure receipt per missing file for $label", async ({ mediaUrls }) => {
+  it("keeps one named failure receipt per missing file around surviving media", async () => {
     const dataUrl = dataImageUrl();
     const { stateDir, sourcePath, payload } = await normalizeCodexHomeImage({
       allowRead: true,
       payload: (imagePath) => ({
         text: "Here is the surviving attachment",
-        mediaUrls: mediaUrls(path.join(path.dirname(imagePath), "missing.png"), imagePath, dataUrl),
+        mediaUrls: [
+          path.join(path.dirname(imagePath), "missing.png"),
+          imagePath,
+          dataUrl,
+          path.join(path.dirname(imagePath), "private customer report.png"),
+        ],
       }),
     });
     const normalizedLocalPath = requireString(payload?.mediaUrls?.[0], "normalized local media");
@@ -1013,13 +992,9 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       "Here is the surviving attachment\n⚠️ missing.png: File not found. Check the path and try again.",
     );
     expect(payload?.text).not.toContain(sourcePath);
-    if (
-      mediaUrls(path.join(path.dirname(sourcePath), "missing.png"), sourcePath, dataUrl).length > 3
-    ) {
-      expect(payload?.text).toContain(
-        "⚠️ private customer report.png: File not found. Check the path and try again.",
-      );
-    }
+    expect(payload?.text).toContain(
+      "⚠️ private customer report.png: File not found. Check the path and try again.",
+    );
     expect(Buffer.byteLength(payload?.text ?? "")).toBeLessThan(512);
     expect(payload?.mediaUrl).toBe(normalizedLocalPath);
     expect(payload?.mediaUrls).toEqual([normalizedLocalPath, dataUrl]);

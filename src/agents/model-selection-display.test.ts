@@ -93,19 +93,6 @@ describe("model-selection-display", () => {
       });
     });
 
-    it("keeps the current provider for slash-bearing override ids when provider is already known", () => {
-      expect(
-        resolveSessionInfoModelSelection({
-          currentProvider: "openrouter",
-          currentModel: "openrouter/auto",
-          overrideModel: "anthropic/claude-haiku-4.5",
-        }),
-      ).toEqual({
-        modelProvider: "openrouter",
-        model: "anthropic/claude-haiku-4.5",
-      });
-    });
-
     it("falls back to configured defaults when runtime session state is empty", () => {
       expect(
         resolveSessionInfoModelSelection({

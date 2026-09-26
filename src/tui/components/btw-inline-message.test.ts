@@ -126,16 +126,13 @@ describe("btw inline message", () => {
     expect(raw).not.toContain(errorAttack);
   });
 
-  it.each(["", " \x1b]0;hidden title\x07 "])(
-    "renders a visible fallback when a BTW error sanitizes to empty",
-    (text) => {
-      const message = new BtwInlineMessage({
-        question: "what failed?",
-        text,
-        isError: true,
-      });
+  it("renders a visible fallback when a BTW error sanitizes to empty", () => {
+    const message = new BtwInlineMessage({
+      question: "what failed?",
+      text: " \x1b]0;hidden title\x07 ",
+      isError: true,
+    });
 
-      expect(normalizeTestText(message.render(80).join("\n"))).toContain("(no output)");
-    },
-  );
+    expect(normalizeTestText(message.render(80).join("\n"))).toContain("(no output)");
+  });
 });

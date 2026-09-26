@@ -139,7 +139,7 @@ it("commits model-only role changes without retiring permitted models or origina
     });
     const log = createInfoWarnErrorLogger();
     const reloader = startManagedGatewayConfigReloader({
-      scheduler: createTestGatewayScheduler(),
+      scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
       getPluginRegistry: () => registry,
       configRevisionProjector: {
         projectRawHash: (hash) => hash,

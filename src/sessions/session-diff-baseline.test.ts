@@ -102,6 +102,16 @@ function expectWorkStartError(
   }
 }
 
+function deferCapture() {
+  const started = createDeferredCore();
+  const capture = createDeferredCore<SessionDiffBaseline>();
+  captureMocks.capture.mockImplementation(() => {
+    started.resolve();
+    return capture.promise;
+  });
+  return { started: started.promise, resolve: capture.resolve };
+}
+
 describe("ensureSessionDiffBaseline", () => {
   beforeEach(() => {
     captureMocks.capture.mockReset();
@@ -159,17 +169,23 @@ describe("ensureSessionDiffBaseline", () => {
     const sessionId = "concurrent-session";
     const entry = makeEntry(sessionId);
     const target = await seedEntry({ entry });
-    const capture = createDeferredCore<SessionDiffBaseline>();
-    captureMocks.capture.mockReturnValue(capture.promise);
+    const capture = deferCapture();
 
     const first = ensure(target, true);
     const second = ensure(target, true);
-    await vi.waitFor(() => expect(captureMocks.capture).toHaveBeenCalledTimes(1));
-    capture.resolve(baseline(sessionId));
+    try {
+      await capture.started;
+      expect(captureMocks.capture).toHaveBeenCalledTimes(1);
+      capture.resolve(baseline(sessionId));
 
-    const [firstResult, secondResult] = await Promise.all([first, second]);
-    expect(firstResult.sessionDiffBaseline).toEqual(baseline(sessionId));
-    expect(secondResult.sessionDiffBaseline).toEqual(baseline(sessionId));
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      expect(captureMocks.capture).toHaveBeenCalledTimes(1);
+      expect(firstResult.sessionDiffBaseline).toEqual(baseline(sessionId));
+      expect(secondResult.sessionDiffBaseline).toEqual(baseline(sessionId));
+    } finally {
+      capture.resolve(baseline(sessionId));
+      await Promise.allSettled([first, second]);
+    }
   });
 
   it("rejects a stale cached baseline after the authoritative generation rotates", async () => {
@@ -384,11 +400,11 @@ describe("ensureSessionDiffBaseline", () => {
       sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
     });
     const target = await seedEntry({ entry });
-    const capture = createDeferredCore<SessionDiffBaseline>();
-    captureMocks.capture.mockReturnValue(capture.promise);
+    const capture = deferCapture();
     const completion = ensure(target);
     const outcome = Promise.allSettled([completion]);
-    await vi.waitFor(() => expect(captureMocks.capture).toHaveBeenCalledOnce());
+    await capture.started;
+    expect(captureMocks.capture).toHaveBeenCalledOnce();
     await deleteSessionEntryLifecycle({
       archiveTranscript: false,
       storePath: target.storePath,
@@ -411,11 +427,11 @@ describe("ensureSessionDiffBaseline", () => {
       sessionDiffBaselineCapture: oldClaim,
     });
     const target = await seedEntry({ entry });
-    const capture = createDeferredCore<SessionDiffBaseline>();
-    captureMocks.capture.mockReturnValue(capture.promise);
+    const capture = deferCapture();
     const oldCompletions = [ensure(target), ensure(target)];
     const outcomes = Promise.allSettled(oldCompletions);
-    await vi.waitFor(() => expect(captureMocks.capture).toHaveBeenCalledTimes(1));
+    await capture.started;
+    expect(captureMocks.capture).toHaveBeenCalledTimes(1);
 
     const freshClaim = createSessionDiffBaselineCaptureClaim();
     await replaceSessionEntry(
@@ -442,11 +458,11 @@ describe("ensureSessionDiffBaseline", () => {
       sessionDiffBaselineCapture: claim,
     });
     const target = await seedEntry({ entry });
-    const capture = createDeferredCore<SessionDiffBaseline>();
-    captureMocks.capture.mockReturnValue(capture.promise);
+    const capture = deferCapture();
     const completion = ensure(target);
     const outcome = Promise.allSettled([completion]);
-    await vi.waitFor(() => expect(captureMocks.capture).toHaveBeenCalledOnce());
+    await capture.started;
+    expect(captureMocks.capture).toHaveBeenCalledOnce();
 
     await replaceSessionEntry(
       { sessionKey: target.sessionKey, storePath: target.storePath },

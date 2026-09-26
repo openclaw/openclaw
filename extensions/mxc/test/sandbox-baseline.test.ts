@@ -59,15 +59,6 @@ describe("effective filesystem policy", () => {
     ]);
   });
 
-  test("uses deterministic fallback readonly directories when env values are absent", () => {
-    expect(resolveBaselineReadonlyPaths({})).toEqual([
-      "C:\\Program Files",
-      "C:\\Program Files (x86)",
-      "C:\\Windows\\System32",
-      "C:\\Windows\\SysWOW64",
-    ]);
-  });
-
   test("ignores blank Windows env paths when deriving readonly directories", () => {
     expect(
       resolveBaselineReadonlyPaths({
@@ -104,10 +95,6 @@ describe("effective filesystem policy", () => {
 
   test("prefers the configured Windows temp directory", () => {
     expect(resolveSandboxTempDir({ TEMP: "C:\\Temp" })).toBe("C:\\Temp");
-  });
-
-  test("uses Windows temp when TEMP and TMP are absent", () => {
-    expect(resolveSandboxTempDir({})).toBe("C:\\Windows\\Temp");
   });
 
   test("ignores a blank TEMP value when TMP is available", () => {

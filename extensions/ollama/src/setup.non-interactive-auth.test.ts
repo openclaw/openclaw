@@ -71,31 +71,28 @@ describe("Ollama non-interactive onboarding", () => {
     upsertAuthProfileWithLock.mockClear();
   });
 
-  it.each([{ capabilities: ["embedding"] }, { capabilities: ["embedding", "tools"] }])(
-    "rejects an explicitly selected embedding-only model with capabilities $capabilities",
-    async ({ capabilities }) => {
-      vi.stubGlobal(
-        "fetch",
-        createOllamaFetchMock({
-          tags: ["embedding-model"],
-          capabilities: { "embedding-model": capabilities },
-        }),
-      );
-      const runtime: RuntimeEnv = createRuntimeSpies();
-      const nextConfig = { agents: { defaults: { model: { primary: "ollama/qwen3:1.7b" } } } };
-      const result = await configureOllamaNonInteractive({
-        nextConfig,
-        opts: { customBaseUrl: "http://127.0.0.1:11434", customModelId: "embedding-model" },
-        runtime,
-      });
-      expect(result).toBe(nextConfig);
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(
-        "Ollama model embedding-model only supports embeddings. Choose a chat model instead.",
-      );
-      expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects an explicitly selected embedding-only model despite advertised tools", async () => {
+    vi.stubGlobal(
+      "fetch",
+      createOllamaFetchMock({
+        tags: ["embedding-model"],
+        capabilities: { "embedding-model": ["embedding", "tools"] },
+      }),
+    );
+    const runtime: RuntimeEnv = createRuntimeSpies();
+    const nextConfig = { agents: { defaults: { model: { primary: "ollama/qwen3:1.7b" } } } };
+    const result = await configureOllamaNonInteractive({
+      nextConfig,
+      opts: { customBaseUrl: "http://127.0.0.1:11434", customModelId: "embedding-model" },
+      runtime,
+    });
+    expect(result).toBe(nextConfig);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Ollama model embedding-model only supports embeddings. Choose a chat model instead.",
+    );
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
@@ -127,6 +124,7 @@ describe("Ollama non-interactive onboarding", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith(error);
+    expect(runtime.log).not.toHaveBeenCalledWith("Downloaded missing-model");
     expect(runtime.error).toHaveBeenCalledWith(
       [
         "No Ollama chat models are available at http://127.0.0.1:11434.",

@@ -8,8 +8,6 @@ type CronRunsSectionProps = Parameters<typeof renderRunsSection>[0];
 
 function createRunsProps(overrides: Partial<CronRunsSectionProps> = {}): CronRunsSectionProps {
   return {
-    basePath: "",
-    agentId: "main",
     runs: [],
     runsState: "ready",
     runsHasMore: false,
