@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 import { createTransportActivityStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { asDateTimestampMs, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -95,29 +94,25 @@ async function restartGatewayAfterReadyTimeout(params: {
       socket.removeListener("close", onClose);
       socket.removeListener("error", ignoreSocketError);
     };
-    const finishResolve = () => {
+    const finish = (error?: Error) => {
       if (settled) {
         return;
       }
       settled = true;
       cleanup();
-      resolve();
-    };
-    const finishReject = (error: Error) => {
-      if (params.abortSignal?.aborted) {
-        finishResolve();
-        return;
+      if (error && !params.abortSignal?.aborted) {
+        reject(error);
+      } else {
+        resolve();
       }
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(error);
     };
-    const onClose = () => {
-      finishResolve();
-    };
+    const onClose = () => finish();
+    const failClose = () =>
+      finish(
+        new Error(
+          `discord gateway socket did not close within ${DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS}ms before restart`,
+        ),
+      );
 
     socket.on("error", ignoreSocketError);
     socket.on("close", onClose);
@@ -128,11 +123,7 @@ async function restartGatewayAfterReadyTimeout(params: {
         return;
       }
       if (typeof socket.terminate !== "function") {
-        finishReject(
-          new Error(
-            `discord gateway socket did not close within ${DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS}ms before restart`,
-          ),
-        );
+        failClose();
         return;
       }
       params.runtime.error?.(
@@ -143,20 +134,13 @@ async function restartGatewayAfterReadyTimeout(params: {
       try {
         socket.terminate();
       } catch {
-        finishReject(
-          new Error(
-            `discord gateway socket did not close within ${DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS}ms before restart`,
-          ),
-        );
+        failClose();
         return;
       }
-      terminateCloseTimeout = setTimeout(() => {
-        finishReject(
-          new Error(
-            `discord gateway socket did not close within ${DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS}ms before restart`,
-          ),
-        );
-      }, DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS);
+      terminateCloseTimeout = setTimeout(
+        failClose,
+        DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS,
+      );
       terminateCloseTimeout.unref?.();
     }, DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS);
     drainTimeout.unref?.();

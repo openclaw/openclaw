@@ -33,17 +33,7 @@ export function resolveDiscordNativeInteractionRouteState(params: {
   parentConversationId?: string;
   threadBinding?: ThreadBindingRecord;
 }): DiscordNativeInteractionRouteState {
-  const route = resolveDiscordBoundConversationRoute({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    guildId: params.guildId,
-    memberRoleIds: params.memberRoleIds,
-    isDirectMessage: params.isDirectMessage,
-    isGroupDm: params.isGroupDm,
-    directUserId: params.directUserId,
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
-  });
+  const route = resolveDiscordBoundConversationRoute(params);
   const configuredRoute =
     params.threadBinding == null
       ? resolveConfiguredBindingRoute({

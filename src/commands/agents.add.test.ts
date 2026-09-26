@@ -870,20 +870,6 @@ describe("agents add command", () => {
     });
   });
 
-  it("runs channel post-write hooks only after fresh agent creation", async () => {
-    const hook = vi.fn(async () => {});
-    setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
-    useFreshAgentWizard({ workspaceDir: "/tmp/workspace-work", confirmValues: [false] });
-    stageChannelPostWriteHook(hook);
-
-    await agentsAddCommand({}, runtime);
-
-    expect(hook).toHaveBeenCalledOnce();
-    expect(createAgentMock.mock.invocationCallOrder[0]!).toBeLessThan(
-      hook.mock.invocationCallOrder[0]!,
-    );
-  });
-
   it("passes canonical created config to fresh-agent post-write hooks", async () => {
     const persistedConfig = {
       agents: { entries: { work: { id: "work", workspace: "/tmp/canonical-workspace" } } },
@@ -906,7 +892,10 @@ describe("agents add command", () => {
 
     await agentsAddCommand({}, runtime);
 
-    expect(hook).toHaveBeenCalledWith(expect.objectContaining({ cfg: persistedConfig }));
+    expect(hook).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cfg: persistedConfig }));
+    expect(createAgentMock.mock.invocationCallOrder[0]!).toBeLessThan(
+      hook.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("does not run channel post-write hooks when fresh agent creation fails", async () => {

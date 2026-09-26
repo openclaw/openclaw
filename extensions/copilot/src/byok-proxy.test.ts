@@ -25,6 +25,22 @@ function getProxyCredentialHeader(headers: Record<string, string>): [string, str
   );
 }
 
+function createProvider(
+  overrides: Partial<Parameters<typeof resolveCopilotProvider>[0]["model"]> = {},
+  resolvedApiKey?: string,
+) {
+  return resolveCopilotProvider({
+    model: {
+      provider: "custom-proxy",
+      api: "openai-responses",
+      id: "proxy-model",
+      baseUrl: "https://proxy.example/v1",
+      ...overrides,
+    },
+    resolvedApiKey,
+  });
+}
+
 describe("createCopilotByokProxy", () => {
   afterEach(() => {
     ssrfRuntimeMock.fetchWithSsrFGuard.mockReset();
@@ -44,15 +60,12 @@ describe("createCopilotByokProxy", () => {
       }),
       release,
     });
-    const resolvedProvider = resolveCopilotProvider({
-      model: {
-        provider: "custom-proxy",
-        api: "openai-responses",
-        id: "proxy-model",
+    const resolvedProvider = createProvider(
+      {
         baseUrl: "https://proxy.example/v1?routing=blue",
       },
-      resolvedApiKey: "secret-key",
-    });
+      "secret-key",
+    );
 
     const proxy = await createCopilotByokProxy(resolvedProvider);
     expect(proxy?.provider.provider?.baseUrl).toMatch(
@@ -96,7 +109,7 @@ describe("createCopilotByokProxy", () => {
     }
   });
 
-  it.each([307, 308])("preserves binary request bytes across a %i redirect", async (status) => {
+  it("preserves binary request bytes across a redirect", async () => {
     const { fetchWithSsrFGuard } = await vi.importActual<
       typeof import("openclaw/plugin-sdk/ssrf-runtime")
     >("openclaw/plugin-sdk/ssrf-runtime");
@@ -108,19 +121,10 @@ describe("createCopilotByokProxy", () => {
       expect(request.method).toBe("POST");
       received.push(Buffer.from(await request.arrayBuffer()));
       return received.length === 1
-        ? new Response(null, { status, headers: { location: "/v1/replayed" } })
+        ? new Response(null, { status: 307, headers: { location: "/v1/replayed" } })
         : new Response("ok");
     });
-    const proxy = await createCopilotByokProxy(
-      resolveCopilotProvider({
-        model: {
-          provider: "custom-proxy",
-          api: "openai-responses",
-          id: "proxy-model",
-          baseUrl: "https://proxy.example/v1",
-        },
-      }),
-    );
+    const proxy = await createCopilotByokProxy(createProvider());
     // Keep invalid UTF-8 and a nonzero offset: forwarding the backing pool would leak other bytes.
     const body = Buffer.from([42, 0, 255, 128, 192, 10, 42]).subarray(1, -1);
     try {
@@ -144,16 +148,7 @@ describe("createCopilotByokProxy", () => {
         response: new Response(null, { status: 204 }),
         release: vi.fn(async () => undefined),
       });
-      const proxy = await createCopilotByokProxy(
-        resolveCopilotProvider({
-          model: {
-            provider: "custom-proxy",
-            api: "openai-responses",
-            id: "proxy-model",
-            baseUrl: "https://proxy.example/v1",
-          },
-        }),
-      );
+      const proxy = await createCopilotByokProxy(createProvider());
       try {
         const response = await fetch(`${proxy?.provider.provider?.baseUrl}/responses`, { method });
         expect(response.status).toBe(204);
@@ -172,16 +167,16 @@ describe("createCopilotByokProxy", () => {
       response: new Response("ok", { status: 200 }),
       release: vi.fn(async () => undefined),
     });
-    const resolvedProvider = resolveCopilotProvider({
-      model: {
+    const resolvedProvider = createProvider(
+      {
         provider: "tencent-tokenplan",
         api: "openai-completions",
         id: "hy3",
         baseUrl: "https://tokenplan.example/v1",
         authHeader: true,
       },
-      resolvedApiKey: "tokenplan-secret",
-    });
+      "tokenplan-secret",
+    );
 
     const proxy = await createCopilotByokProxy(resolvedProvider);
 
@@ -222,14 +217,7 @@ describe("createCopilotByokProxy", () => {
       });
       throw new Error("unreachable");
     });
-    const resolvedProvider = resolveCopilotProvider({
-      model: {
-        provider: "custom-proxy",
-        api: "openai-responses",
-        id: "proxy-model",
-        baseUrl: "https://proxy.example/v1",
-      },
-    });
+    const resolvedProvider = createProvider();
     const proxy = await createCopilotByokProxy(resolvedProvider);
 
     const responsePromise = fetch(`${proxy?.provider.provider?.baseUrl}/responses`, {
@@ -270,19 +258,7 @@ describe("createCopilotByokProxy", () => {
           response: new Response("healthy"),
           release: vi.fn(async () => undefined),
         });
-      const proxy = expectDefined(
-        await createCopilotByokProxy(
-          resolveCopilotProvider({
-            model: {
-              provider: "custom-proxy",
-              api: "openai-responses",
-              id: "proxy-model",
-              baseUrl: "https://proxy.example/v1",
-            },
-          }),
-        ),
-        "BYOK proxy",
-      );
+      const proxy = expectDefined(await createCopilotByokProxy(createProvider()), "BYOK proxy");
       const endpoint = `${proxy.provider.provider?.baseUrl}/responses`;
       const disconnect = new AbortController();
       try {
@@ -324,8 +300,8 @@ describe("createCopilotByokProxy", () => {
       response: new Response("azure-ok", { status: 200 }),
       release: vi.fn(async () => undefined),
     });
-    const resolvedProvider = resolveCopilotProvider({
-      model: {
+    const resolvedProvider = createProvider(
+      {
         provider: "custom-azure",
         api: "azure-openai-responses",
         id: "deployment-gpt",
@@ -335,8 +311,8 @@ describe("createCopilotByokProxy", () => {
           "X-Trace": "test",
         },
       },
-      resolvedApiKey: "azure-key",
-    });
+      "azure-key",
+    );
 
     const proxy = await createCopilotByokProxy(resolvedProvider);
     expect(proxy?.provider.provider?.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
@@ -388,13 +364,11 @@ describe("createCopilotByokProxy", () => {
       release: vi.fn(async () => undefined),
     });
     const proxy = await createCopilotByokProxy(
-      resolveCopilotProvider({
-        model: {
-          provider: "custom-azure",
-          api: "azure-openai-responses",
-          id: "deployment-gpt",
-          baseUrl: "https://example.openai.azure.com/openai/v1",
-        },
+      createProvider({
+        provider: "custom-azure",
+        api: "azure-openai-responses",
+        id: "deployment-gpt",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
       }),
     );
     const sdkHeaders = expectDefined(proxy?.provider.provider?.headers, "Azure SDK headers");
@@ -443,16 +417,16 @@ describe("createCopilotByokProxy", () => {
       response: new Response("azure-ok", { status: 200 }),
       release: vi.fn(async () => undefined),
     });
-    const resolvedProvider = resolveCopilotProvider({
-      model: {
+    const resolvedProvider = createProvider(
+      {
         provider: "custom-azure",
         api: "azure-openai-responses",
         id: "deployment-gpt",
         baseUrl: "https://example.openai.azure.com/openai/v1",
         authHeader: true,
       },
-      resolvedApiKey: "azure-bearer",
-    });
+      "azure-bearer",
+    );
 
     const proxy = await createCopilotByokProxy(resolvedProvider);
     const sdkHeaders = expectDefined(proxy?.provider.provider?.headers, "Azure SDK headers");

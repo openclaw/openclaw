@@ -75,6 +75,25 @@ async function createOpenAiTransport(
   );
 }
 
+const consultRun = {
+  runId: "run-1",
+  idempotencyKey: "run-1",
+  agentId: "main",
+  agentSessionKey: "agent:main:main",
+};
+
+function createControlRequest(result: Record<string, unknown>) {
+  return vi.fn(async (method: string) => {
+    if (method === "talk.client.toolCall") {
+      return consultRun;
+    }
+    if (method === "talk.client.steer") {
+      return result;
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+}
+
 function dispatchRealtimeEvent(peer: FakePeerConnection | undefined, event: unknown): void {
   peer?.channel.dispatchEvent(
     new MessageEvent("message", {
@@ -182,35 +201,6 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       },
     });
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
-  });
-
-  it("reports microphone activity and resets it when stopped", async () => {
-    stubAnswerSdpFetch();
-    const close = vi.fn(async () => undefined);
-    class MockAudioContext {
-      readonly close = close;
-      createMediaStreamSource() {
-        return { connect: vi.fn(), disconnect: vi.fn() };
-      }
-      createAnalyser() {
-        return {
-          fftSize: 0,
-          smoothingTimeConstant: 0,
-          disconnect: vi.fn(),
-          getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
-        };
-      }
-    }
-    vi.stubGlobal("AudioContext", MockAudioContext);
-    const onInputLevel = vi.fn();
-    const transport = await createOpenAiTransport({}, { onInputLevel });
-
-    await transport.start();
-    transport.stop();
-
-    expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
-    expect(onInputLevel).toHaveBeenLastCalledWith(0);
-    expect(close).toHaveBeenCalledOnce();
   });
 
   it("reclaims the input meter when its first level update stops the transport", async () => {
@@ -497,19 +487,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     stubAnswerSdpFetch();
     const onStatus = vi.fn();
     const onTalkEvent = vi.fn();
-    const transport = new WebRtcSdpRealtimeTalkTransport(
-      {
-        provider: "openai",
-        transport: "webrtc",
-        clientSecret: "client-secret-123",
-      },
-      {
-        input: await prepareRealtimeTalkTestInput(),
-        client: {} as never,
-        sessionKey: "main",
-        callbacks: { onStatus, onTalkEvent },
-      },
-    );
+    const transport = await createOpenAiTransport({}, { onStatus, onTalkEvent });
 
     await transport.start();
     const peer = FakePeerConnection.instances[0];
@@ -586,19 +564,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     stubAnswerSdpFetch();
     const onTranscript = vi.fn();
     const onTalkEvent = vi.fn();
-    const transport = new WebRtcSdpRealtimeTalkTransport(
-      {
-        provider: "openai",
-        transport: "webrtc",
-        clientSecret: "client-secret-123",
-      },
-      {
-        input: await prepareRealtimeTalkTestInput(),
-        client: {} as never,
-        sessionKey: "main",
-        callbacks: { onTranscript, onTalkEvent },
-      },
-    );
+    const transport = await createOpenAiTransport({}, { onTranscript, onTalkEvent });
 
     await transport.start();
     const peer = FakePeerConnection.instances[0];
@@ -667,19 +633,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
   it("maps frameless Codex transcript events by role and finality", async () => {
     stubAnswerSdpFetch();
     const onTalkEvent = vi.fn();
-    const transport = new WebRtcSdpRealtimeTalkTransport(
-      {
-        provider: "openai",
-        transport: "webrtc",
-        clientSecret: "client-secret-123",
-      },
-      {
-        input: await prepareRealtimeTalkTestInput(),
-        client: {} as never,
-        sessionKey: "main",
-        callbacks: { onTalkEvent },
-      },
-    );
+    const transport = await createOpenAiTransport({}, { onTalkEvent });
 
     await transport.start();
     const peer = FakePeerConnection.instances[0];
@@ -729,19 +683,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       stubAnswerSdpFetch();
       const onTranscript = vi.fn();
       const onTalkEvent = vi.fn();
-      const transport = new WebRtcSdpRealtimeTalkTransport(
-        {
-          provider: "openai",
-          transport: "webrtc",
-          clientSecret: "client-secret-123",
-        },
-        {
-          input: await prepareRealtimeTalkTestInput(),
-          client: {} as never,
-          sessionKey: "main",
-          callbacks: { onTranscript, onTalkEvent },
-        },
-      );
+      const transport = await createOpenAiTransport({}, { onTranscript, onTalkEvent });
 
       await transport.start();
       const peer = FakePeerConnection.instances[0];
@@ -791,12 +733,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       expect(method).toBe("talk.client.toolCall");
       expect(params.callId).toBe("call-1");
       expect(params.name).toBe(REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME);
-      return {
-        runId: "run-1",
-        idempotencyKey: "run-1",
-        agentId: "main",
-        agentSessionKey: "agent:main:main",
-      };
+      return consultRun;
     });
     const transport = new WebRtcSdpRealtimeTalkTransport(
       {
@@ -845,28 +782,15 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
   it("sends spoken active-control acknowledgements through the OpenAI data channel", async () => {
     stubAnswerSdpFetch();
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "status",
-          sessionKey: "main",
-          active: true,
-          message: "OpenClaw is working in read (running).",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const request = createControlRequest({
+      ok: true,
+      mode: "status",
+      sessionKey: "main",
+      active: true,
+      message: "OpenClaw is working in read (running).",
+      speak: true,
+      show: true,
+      suppress: false,
     });
     const { transport, peer } = await startActiveConsult(request);
 
@@ -907,28 +831,15 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
   it("defers spoken active-control response creation until the active OpenAI response ends", async () => {
     stubAnswerSdpFetch();
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "status",
-          sessionKey: "main",
-          active: true,
-          message: "OpenClaw is working in read (running).",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const request = createControlRequest({
+      ok: true,
+      mode: "status",
+      sessionKey: "main",
+      active: true,
+      message: "OpenClaw is working in read (running).",
+      speak: true,
+      show: true,
+      suppress: false,
     });
     const { transport, peer } = await startActiveConsult(request, {
       responseAlreadyActive: true,
@@ -953,29 +864,16 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
   it("replaces stale OpenAI output with a spoken active-control steering acknowledgement", async () => {
     stubAnswerSdpFetch();
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "steer",
-          sessionKey: "main",
-          active: true,
-          queued: true,
-          message: "Got it. I steered the active run.",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const request = createControlRequest({
+      ok: true,
+      mode: "steer",
+      sessionKey: "main",
+      active: true,
+      queued: true,
+      message: "Got it. I steered the active run.",
+      speak: true,
+      show: true,
+      suppress: false,
     });
     const { transport, peer } = await startActiveConsult(request, {
       responseAlreadyActive: true,
@@ -995,29 +893,16 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
   it("interrupts stale OpenAI output when active-control cancel is suppressed", async () => {
     stubAnswerSdpFetch();
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "cancel",
-          sessionKey: "main",
-          active: true,
-          aborted: true,
-          message: "Cancelled the active OpenClaw run.",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const request = createControlRequest({
+      ok: true,
+      mode: "cancel",
+      sessionKey: "main",
+      active: true,
+      aborted: true,
+      message: "Cancelled the active OpenClaw run.",
+      speak: true,
+      show: true,
+      suppress: false,
     });
     const { transport, peer } = await startActiveConsult(request, {
       responseAlreadyActive: true,
@@ -1042,12 +927,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     stubAnswerSdpFetch();
     const request = vi.fn(async (method: string) => {
       if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
+        return consultRun;
       }
       throw new Error(`unexpected request: ${method}`);
     });

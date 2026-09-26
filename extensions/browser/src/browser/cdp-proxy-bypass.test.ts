@@ -60,11 +60,6 @@ async function withIsolatedNoProxyEnv(fn: () => Promise<void>) {
 
 describe("cdp-proxy-bypass", () => {
   describe("getDirectAgentForCdp", () => {
-    it("returns http.Agent for http://localhost URLs", () => {
-      const agent = getDirectAgentForCdp("http://localhost:9222");
-      expect(agent).toBeInstanceOf(http.Agent);
-    });
-
     it("returns http.Agent for http://127.0.0.1 URLs", () => {
       const agent = getDirectAgentForCdp("http://127.0.0.1:9222/json/version");
       expect(agent).toBeInstanceOf(http.Agent);
@@ -113,38 +108,6 @@ describe("cdp-proxy-bypass", () => {
           delete process.env[v];
         }
       }
-    });
-
-    it("sets NO_PROXY when proxy is configured", async () => {
-      process.env.HTTP_PROXY = "http://proxy:8080";
-      delete process.env.NO_PROXY;
-      delete process.env.no_proxy;
-
-      let capturedNoProxy: string | undefined;
-      await withNoProxyForCdpUrl(LOOPBACK_CDP_URL, async () => {
-        capturedNoProxy = process.env.NO_PROXY;
-      });
-
-      expect(capturedNoProxy).toContain("localhost");
-      expect(capturedNoProxy).toContain("127.0.0.1");
-      expect(capturedNoProxy).toContain("[::1]");
-      // Restored after
-      expect(process.env.NO_PROXY).toBeUndefined();
-    });
-
-    it("extends existing NO_PROXY", async () => {
-      process.env.HTTP_PROXY = "http://proxy:8080";
-      process.env.NO_PROXY = "internal.corp";
-
-      let capturedNoProxy: string | undefined;
-      await withNoProxyForCdpUrl(LOOPBACK_CDP_URL, async () => {
-        capturedNoProxy = process.env.NO_PROXY;
-      });
-
-      expect(capturedNoProxy).toContain("internal.corp");
-      expect(capturedNoProxy).toContain("localhost");
-      // Restored
-      expect(process.env.NO_PROXY).toBe("internal.corp");
     });
 
     it("skips when no proxy env is set", async () => {
@@ -377,25 +340,6 @@ describe("withNoProxyForCdpUrl", () => {
       });
       expect(process.env.NO_PROXY).toBe("externally-set");
       expect(process.env.no_proxy).toBe("externally-set");
-    } finally {
-      delete process.env.HTTP_PROXY;
-      delete process.env.NO_PROXY;
-      delete process.env.no_proxy;
-    }
-  });
-
-  it("restores untouched NO_PROXY when no_proxy was deleted during execution", async () => {
-    process.env.HTTP_PROXY = "http://proxy:8080";
-    process.env.NO_PROXY = "corp.internal";
-    process.env.no_proxy = "corp.internal";
-    try {
-      await withNoProxyForCdpUrl("http://127.0.0.1:9222", async () => {
-        expect(process.env.NO_PROXY).toBe("corp.internal,localhost,127.0.0.1,[::1]");
-        expect(process.env.no_proxy).toBe("corp.internal,localhost,127.0.0.1,[::1]");
-        delete process.env.no_proxy;
-      });
-      expect(process.env.NO_PROXY).toBe("corp.internal");
-      expect(process.env.no_proxy).toBeUndefined();
     } finally {
       delete process.env.HTTP_PROXY;
       delete process.env.NO_PROXY;

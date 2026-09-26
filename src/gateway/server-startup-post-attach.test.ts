@@ -14,6 +14,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as configPaths from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasRestartSentinel, writeRestartSentinel } from "../infra/restart-sentinel.js";
+import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";
 import type { PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { createHookRunner } from "../plugins/hooks.js";
@@ -1088,6 +1089,28 @@ describe("startGatewayPostAttachRuntime", () => {
     await cleanupGatewayTestState();
     expect(postReadySidecar.stop).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["minimal", "canary"] as const)(
+    "owns update RPC work without starting autonomous checks in %s mode",
+    async (mode) => {
+      const runtimeDeps = createPostAttachRuntimeDeps();
+      const runtime = await startGatewayPostAttachRuntime(
+        createPostAttachParams({
+          minimalTestGateway: mode === "minimal",
+          updateCanary: mode === "canary",
+        }),
+        runtimeDeps,
+      );
+      await runtime.startupSettled;
+      const lifecycle = currentUpdateCheckLifecycle();
+      const updateSignal = await lifecycle.run(async (signal) => signal);
+      expect(updateSignal.aborted).toBe(false);
+      expect(runtimeDeps.createGatewayUpdateCheck).not.toHaveBeenCalled();
+
+      await stopTrackedSidecars(publishedGatewayLifetimeSidecars);
+      expect(updateSignal.aborted).toBe(true);
+    },
+  );
 
   it("loads update discovery only after the post-ready barrier", async () => {
     const events: string[] = [];

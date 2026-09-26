@@ -628,6 +628,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       expect(hookContext?.trigger).toBe("cron");
       expect(hookContext?.chatId).toBeUndefined();
       expect(hookContext?.channel).toBeUndefined();
+      expect(prepareCliRunContextMock).not.toHaveBeenCalled();
       expect(executePreparedCliRunMock).not.toHaveBeenCalled();
       expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
       expect(result.meta.agentMeta?.sessionId).toBe("");
@@ -692,19 +693,6 @@ describe("runCliAgent before_agent_reply seam", () => {
 
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
-    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
-  });
-
-  it("does not run prepareCliRunContext when the cron hook claims (no resource allocation, no leak)", async () => {
-    // Regression for PR #70950 review (greptile-apps, P1): the gate must fire
-    // before any backend resources are allocated, otherwise preparedBackend.cleanup
-    // is silently skipped on every claimed cron turn.
-    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
-    runBeforeAgentReplyMock.mockResolvedValue({ handled: true });
-
-    await runCliAgent({ ...baseRunParams, trigger: "cron", jobId: "cron-job-123" });
-
     expect(prepareCliRunContextMock).not.toHaveBeenCalled();
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
   });
