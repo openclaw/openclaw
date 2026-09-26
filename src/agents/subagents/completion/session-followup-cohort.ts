@@ -1,10 +1,10 @@
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { FollowupCompletionOwner } from "./task-followup-completion.types.js";
+import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import type { FollowupCompletionOwner } from "./session-followup-completion.types.js";
 
-// Weak projection only: the task run owner retains custody and makes every decision.
+// Weak projection only: the logical followup owner retains custody and makes every decision.
 const owners = resolveGlobalSingleton(
-  Symbol.for("openclaw.tasks.followupCohorts"),
+  Symbol.for("openclaw.sessions.followupCohorts"),
   () => new WeakMap<SubagentRunRecord, FollowupCompletionOwner>(),
 );
 export function getFollowupCohortOwner(entry: SubagentRunRecord) {

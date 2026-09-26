@@ -25,6 +25,7 @@ import { GatewayClient } from "../gateway/client.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
@@ -109,37 +110,19 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
 
   let agent: AcpGatewayAgent | null = null;
   let sessionStore: ReturnType<typeof createInMemorySessionStore> | null = null;
-  let onClosed!: () => void;
-  let onCloseFailed!: (error: unknown) => void;
-  const closed = new Promise<void>((resolve, reject) => {
-    onClosed = resolve;
-    onCloseFailed = reject;
-  });
+  const { promise: closed, resolve: onClosed, reject: onCloseFailed } = createDeferredCore();
   // Startup can still be awaiting Gateway readiness when shutdown fails.
   void closed.catch(() => {});
   const startupAbortController = new AbortController();
   let stopped = false;
   let gatewayConnected = false;
-  let onGatewayReadyResolve!: () => void;
-  let onGatewayReadyReject!: (err: Error) => void;
-  let gatewayReadySettled = false;
-  const gatewayReady = new Promise<void>((resolve, reject) => {
-    onGatewayReadyResolve = resolve;
-    onGatewayReadyReject = reject;
-  });
-  const resolveGatewayReady = () => {
-    if (gatewayReadySettled) {
-      return;
-    }
-    gatewayReadySettled = true;
-    onGatewayReadyResolve();
-  };
+  const {
+    promise: gatewayReady,
+    resolve: resolveGatewayReady,
+    reject: rejectReady,
+  } = createDeferredCore();
   const rejectGatewayReady = (err: unknown) => {
-    if (gatewayReadySettled) {
-      return;
-    }
-    gatewayReadySettled = true;
-    onGatewayReadyReject(err instanceof Error ? err : new Error(String(err)));
+    rejectReady(err instanceof Error ? err : new Error(String(err)));
   };
   const closeStateDatabase = async () => {
     try {

@@ -381,7 +381,7 @@ extensions/feishu/src/bot-sender-name.ts	2
 extensions/feishu/src/bot.ts	7
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
-extensions/feishu/src/channel.ts	5
+extensions/feishu/src/channel.ts	4
 extensions/feishu/src/client.ts	4
 extensions/feishu/src/comment-handler.ts	2
 extensions/feishu/src/comment-reaction.ts	2
@@ -396,7 +396,6 @@ extensions/feishu/src/media.ts	9
 extensions/feishu/src/monitor.account.ts	4
 extensions/feishu/src/monitor.comment.ts	2
 extensions/feishu/src/monitor.message-handler.ts	1
-extensions/feishu/src/monitor.state.ts	1
 extensions/feishu/src/monitor.transport.ts	1
 extensions/feishu/src/monitor.vc-meeting-invited-handler.ts	1
 extensions/feishu/src/perm.ts	2
@@ -2771,9 +2770,8 @@ src/logging/config.ts	2
 src/logging/console.ts	5
 src/logging/diagnostic-run-activity.ts	1
 src/logging/diagnostic-session-recovery-coordinator.ts	1
-src/logging/diagnostic-stability-bundle.ts	9
+src/logging/diagnostic-stability-bundle.ts	6
 src/logging/diagnostic-stability.ts	2
-src/logging/diagnostic-support-log-redaction.ts	1
 src/logging/diagnostic-support-redaction.ts	1
 src/logging/diagnostic.ts	1
 src/logging/json-console-line.ts	2
@@ -3115,7 +3113,7 @@ src/shared/store-writer-queue.ts	1
 src/shared/transcript-only-openclaw-assistant.ts	4
 src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	2
-src/skills/lifecycle/clawhub-store.ts	12
+src/skills/lifecycle/clawhub-store.ts	4
 src/skills/lifecycle/upload-store.ts	1
 src/skills/lifecycle/workspace-skill-write.ts	1
 src/skills/loading/frontmatter.ts	1

@@ -5,7 +5,7 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
-import { transferFollowupCohort } from "../../../tasks/task-followup-cohort.js";
+import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";

@@ -90,45 +90,6 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
     });
   });
 
-  it("records thread metadata for group thread messages", async () => {
-    const { handler, finalizeInboundContext, recordInboundSession } =
-      createMatrixHandlerTestHarness({
-        client: {
-          getEvent: async () =>
-            createMatrixTextMessageEvent({
-              eventId: "$thread-root",
-              sender: "@alice:example.org",
-              body: "Root topic",
-            }),
-        },
-        isDirectMessage: false,
-        getMemberDisplayName: async (_roomId, userId) =>
-          userId === "@alice:example.org" ? "Alice" : "sender",
-      });
-
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$reply1",
-        body: "@room follow up",
-        relatesTo: {
-          rel_type: "m.thread",
-          event_id: "$thread-root",
-          "m.in_reply_to": { event_id: "$thread-root" },
-        },
-        mentions: { room: true },
-      }),
-    );
-
-    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
-    expect(finalized.MessageThreadId).toBe("$thread-root");
-    expect(finalized.ThreadStarterBody).toBe(
-      "Matrix thread root $thread-root from Alice:\nRoot topic",
-    );
-    // Thread messages get thread-scoped session keys (thread isolation feature).
-    expect(latestSessionKey(recordInboundSession)).toBe("agent:ops:main:thread:$thread-root");
-  });
-
   it("starts the thread-scoped session from the triggering message when threadReplies is always", async () => {
     const { handler, finalizeInboundContext, recordInboundSession } =
       createMatrixHandlerTestHarness({

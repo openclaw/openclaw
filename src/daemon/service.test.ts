@@ -782,20 +782,6 @@ describe("startGatewayService", () => {
     );
   });
 
-  it("allows asynchronously starting services without terminal failure evidence", async () => {
-    const service = createService({
-      readCommand: vi.fn(async () => ({
-        programArguments: ["openclaw", "gateway", "run"],
-      })),
-      isLoaded: vi.fn(async () => true),
-      readRuntime: vi.fn(async () => ({ status: "stopped" })),
-    });
-
-    await expect(
-      startGatewayService(service, { env: {}, stdout: process.stdout }),
-    ).resolves.toMatchObject({ outcome: "started" });
-  });
-
   it("does not mistake a previous exit code for a new asynchronous start failure", async () => {
     const service = createService({
       readCommand: vi.fn(async () => ({
@@ -808,27 +794,6 @@ describe("startGatewayService", () => {
     await expect(
       startGatewayService(service, { env: {}, stdout: process.stdout }),
     ).resolves.toMatchObject({ outcome: "started" });
-  });
-
-  it("returns already-running without starting a loaded running service", async () => {
-    const service = createService({
-      readCommand: vi.fn(async () => ({
-        programArguments: ["openclaw", "gateway", "run"],
-      })),
-      isLoaded: vi.fn(async () => true),
-      readRuntime: vi.fn(async () => ({ status: "running", pid: 4242 })),
-    });
-
-    const result = await startGatewayService(service, {
-      env: {},
-      stdout: process.stdout,
-    });
-
-    expect(result.outcome).toBe("already-running");
-    if (result.outcome === "already-running") {
-      expect(result.state.runtime?.pid).toBe(4242);
-    }
-    expect(service.start).not.toHaveBeenCalled();
   });
 
   it("ignores legacy version metadata on an already-running service", async () => {
@@ -849,6 +814,7 @@ describe("startGatewayService", () => {
     expect(result.outcome).toBe("already-running");
     if (result.outcome === "already-running") {
       expect(result.issues).toEqual([]);
+      expect(result.state.runtime?.pid).toBe(4242);
     }
     expect(service.start).not.toHaveBeenCalled();
   });

@@ -34,12 +34,7 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  resolvePreferredProviderForAuthChoice: (params: {
-    choice: string;
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-  }) => Promise<string | undefined>;
+  resolvePreferredProviderForAuthChoice: (typeof import("../commands/auth-choice.js"))["resolvePreferredProviderForAuthChoice"];
 }): Promise<{
   preferredProvider?: string;
   promptWhenAuthChoiceProvided: boolean;
@@ -328,10 +323,10 @@ export async function runSetupModelAuthStep(params: {
       const modelSelection = await promptDefaultModel({
         config: nextConfig,
         prompter,
-        allowKeep: authChoiceModelSelectionPolicy?.allowKeepCurrent ?? true,
+        allowKeep: authChoiceModelSelectionPolicy.allowKeepCurrent,
         ignoreAllowlist: true,
         includeProviderPluginSetups: true,
-        preferredProvider: authChoiceModelSelectionPolicy?.preferredProvider,
+        preferredProvider: authChoiceModelSelectionPolicy.preferredProvider,
         browseCatalogOnDemand: true,
         agentId: target.agentId,
         agentDir: target.agentDir,
