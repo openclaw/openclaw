@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 
 /** Join the logical ACP key to its canonical SQLite entry without renaming ACP metadata. */
-export function resolveStoreEntryForSessionKey(params: {
+function resolveStoreEntryForSessionKey(params: {
   agentId?: string;
   storePath: string;
   sessionKey: string;
