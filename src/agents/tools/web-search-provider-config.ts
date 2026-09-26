@@ -1,19 +1,13 @@
-/**
- * Provider-scoped web-search config helpers.
- *
- * Projects plugin-owned provider configuration into the tool-local search shape.
- */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolvePluginWebSearchConfig } from "../../config/plugin-web-search-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLegacyWebSearchProviderConfigKey } from "../../config/web-search-legacy-provider-keys.js";
 
-/** Reads the legacy top-level web search credential value. */
+export { resolvePluginWebSearchConfig as resolveProviderWebSearchPluginConfig } from "../../config/plugin-web-search-config.js";
+
 export function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
   return searchConfig?.apiKey;
 }
 
-/** Writes the legacy top-level web search credential value. */
 export function setTopLevelCredentialValue(
   searchConfigTarget: Record<string, unknown>,
   value: unknown,
@@ -21,7 +15,6 @@ export function setTopLevelCredentialValue(
   searchConfigTarget.apiKey = value;
 }
 
-/** Reads a provider-scoped credential value from a web search config object. */
 export function getScopedCredentialValue(
   searchConfig: Record<string, unknown> | undefined,
   key: string,
@@ -29,7 +22,6 @@ export function getScopedCredentialValue(
   return asOptionalRecord(searchConfig?.[key])?.apiKey;
 }
 
-/** Writes a provider-scoped credential value, creating the scoped object when needed. */
 export function setScopedCredentialValue(
   searchConfigTarget: Record<string, unknown>,
   key: string,
@@ -72,14 +64,6 @@ export function mergeScopedSearchConfig(
   }
 
   return next;
-}
-
-/** Resolves plugin-owned web-search config for a provider plugin id. */
-export function resolveProviderWebSearchPluginConfig(
-  config: OpenClawConfig | undefined,
-  pluginId: string,
-): Record<string, unknown> | undefined {
-  return resolvePluginWebSearchConfig(config, pluginId);
 }
 
 function ensureObject(target: Record<string, unknown>, key: string): Record<string, unknown> {

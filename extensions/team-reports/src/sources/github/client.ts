@@ -205,7 +205,11 @@ export class GithubClient {
     }
   }
 
-  async *pages<T>(path: string, schema: z.ZodType<T>): AsyncGenerator<T> {
+  async *pages<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    afterPage?: () => Promise<void>,
+  ): AsyncGenerator<T> {
     let next: string | undefined = path;
     const seen = new Set<string>();
     while (next) {
@@ -220,6 +224,7 @@ export class GithubClient {
         checkAbort(this.runtime.signal, ABORT_LABEL);
         yield item;
       }
+      await afterPage?.();
       next = page.next;
     }
   }

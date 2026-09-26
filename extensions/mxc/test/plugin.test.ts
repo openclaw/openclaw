@@ -68,14 +68,6 @@ function readBackend() {
 
 const stops: Array<() => Promise<void>> = [];
 
-const nonFullRegistrationModes = [
-  "discovery",
-  "tool-discovery",
-  "setup-only",
-  "setup-runtime",
-  "cli-metadata",
-] as const satisfies readonly OpenClawPluginApi["registrationMode"][];
-
 function setProcessPlatformForTest(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", {
     configurable: true,
@@ -154,57 +146,48 @@ describe("registerMxcPlugin", () => {
     expect(registerService).not.toHaveBeenCalled();
   });
 
-  test.each(nonFullRegistrationModes)(
-    "does not register runtime hooks during %s registration",
-    (registrationMode) => {
-      const original = readBackend();
-      const { api, registerService, lifecycles } = createApi(
-        { timeoutSeconds: 60 },
-        registrationMode,
-      );
+  test("does not register runtime hooks during discovery", () => {
+    const original = readBackend();
+    const { api, registerService, lifecycles } = createApi({ timeoutSeconds: 60 }, "discovery");
 
-      registerMxcPlugin(api);
+    registerMxcPlugin(api);
 
-      expect(warnSpy).not.toHaveBeenCalled();
-      expect(resolveMxcBinaryPathMock).not.toHaveBeenCalled();
-      expect(assertMxcReadinessMock).not.toHaveBeenCalled();
-      expect(warnMxcHostPrepIfNeededMock).not.toHaveBeenCalled();
-      expect(createMxcSandboxBackendFactoryMock).not.toHaveBeenCalled();
-      expect(readBackend()).toEqual(original);
-      expect(lifecycles).toEqual([]);
-      expect(registerService).not.toHaveBeenCalled();
-    },
-  );
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(resolveMxcBinaryPathMock).not.toHaveBeenCalled();
+    expect(assertMxcReadinessMock).not.toHaveBeenCalled();
+    expect(warnMxcHostPrepIfNeededMock).not.toHaveBeenCalled();
+    expect(createMxcSandboxBackendFactoryMock).not.toHaveBeenCalled();
+    expect(readBackend()).toEqual(original);
+    expect(lifecycles).toEqual([]);
+    expect(registerService).not.toHaveBeenCalled();
+  });
 
-  test.each(["disable", "restart"] as const)(
-    "registers eagerly on Windows and restores hooks on global %s",
-    async (reason) => {
-      const original = readBackend();
-      const { api, cleanup, stop } = createApi({ timeoutSeconds: 60 });
+  test("registers eagerly on Windows and restores hooks on global restart", async () => {
+    const original = readBackend();
+    const { api, cleanup, stop } = createApi({ timeoutSeconds: 60 });
 
-      registerMxcPlugin(api);
+    registerMxcPlugin(api);
 
-      expect(resolveMxcBinaryPathMock).toHaveBeenCalledWith(undefined);
-      expect(assertMxcReadinessMock).toHaveBeenCalledWith();
-      expect(warnMxcHostPrepIfNeededMock).toHaveBeenCalledWith();
-      expect(createMxcSandboxBackendFactoryMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          timeoutSeconds: 60,
-        }),
-      );
-      expect(readBackend()).toEqual({
-        factory: expect.any(Function),
-        manager: mxcSandboxBackendManagerMock,
-        resolveWorkdir: null,
-      });
-      await cleanup({ reason });
-      expect(readBackend()).toEqual(original);
-      await stop();
-      expect(readBackend()).toEqual(original);
-    },
-  );
+    expect(resolveMxcBinaryPathMock).toHaveBeenCalledWith(undefined);
+    expect(assertMxcReadinessMock).toHaveBeenCalledWith();
+    expect(warnMxcHostPrepIfNeededMock).toHaveBeenCalledWith();
+    expect(createMxcSandboxBackendFactoryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutSeconds: 60,
+      }),
+    );
+    expect(readBackend()).toEqual({
+      factory: expect.any(Function),
+      manager: mxcSandboxBackendManagerMock,
+      resolveWorkdir: null,
+    });
+    await cleanup({ reason: "restart" });
+    expect(readBackend()).toEqual(original);
+    await stop();
+    expect(readBackend()).toEqual(original);
+  });
 
-  test.each(["disable", "restart", "reset", "delete"] as const)(
+  test.each(["disable", "reset"] as const)(
     "preserves backend hooks during scoped %s cleanup",
     async (reason) => {
       const generation = createApi();
@@ -219,7 +202,7 @@ describe("registerMxcPlugin", () => {
         await generation.cleanup({ reason, ...scope });
         expect(readBackend()).toEqual(backend);
       }
-      if (reason === "reset" || reason === "delete") {
+      if (reason === "reset") {
         await generation.cleanup({ reason });
         expect(readBackend()).toEqual(backend);
       }

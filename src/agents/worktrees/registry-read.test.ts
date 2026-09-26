@@ -9,7 +9,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { readLiveRegistryWorktreeIds } from "./registry-read.js";
+import { readLiveRegistryWorktreeIds, readRegistryWorktrees } from "./registry-read.js";
 import {
   getRegistryWorktree,
   getRegistryWorktreeProvisionedChunk,
@@ -132,6 +132,14 @@ describe("managed worktree registry worker reads", () => {
     env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
     expect(await pending).toEqual([removed, newer, older]);
     await closeOpenClawStateDatabaseAsync();
+    sql.expectIdle();
+
+    env.OPENCLAW_STATE_DIR = stateDir;
+    const listOptions = { liveOnly: true };
+    const liveRecords = readRegistryWorktrees(env, listOptions);
+    listOptions.liveOnly = false;
+    env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
+    expect(await liveRecords).toEqual([newer, older]);
     sql.expectIdle();
 
     env.OPENCLAW_STATE_DIR = stateDir;

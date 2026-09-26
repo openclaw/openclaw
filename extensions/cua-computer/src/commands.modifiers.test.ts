@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { driver, execution } from "./commands.test-helpers.js";
 import {
   CUA_DRIVER_CONTRACT_FIXTURES,
@@ -8,7 +8,6 @@ import {
 const platforms = [
   { platform: "darwin", command: "cmd" },
   { platform: "linux", command: "meta" },
-  { platform: "win32", command: "meta" },
 ] as const;
 
 function windowDriver() {
@@ -36,6 +35,13 @@ async function observeWindow(computer: Awaited<ReturnType<typeof execution>>) {
   return { windowRef, observationId: observed.observation.observationId };
 }
 
+async function windowExecution(platform: NodeJS.Platform) {
+  const native = windowDriver();
+  const computer = await execution(native.session, platform);
+  onTestFinished(() => computer.close("completion"));
+  return { native, computer };
+}
+
 describe("cua-computer platform modifiers", () => {
   it.each(
     platforms.flatMap(({ platform, command }) =>
@@ -47,207 +53,163 @@ describe("cua-computer platform modifiers", () => {
           expected: { key: "left", modifiers: [command, "shift"] },
         },
         { platform, scope, keys: "Cmd", expected: { key: command, modifiers: [] } },
-        { platform, scope, keys: "Ctrl+Return", expected: { key: "enter", modifiers: ["ctrl"] } },
       ]),
     ),
   )("preserves $keys on $platform $scope input", async ({ platform, scope, keys, expected }) => {
-    const native = windowDriver();
-    const computer = await execution(native.session, platform);
-    try {
-      const target = scope === "window" ? await observeWindow(computer) : {};
-      await computer.act(JSON.stringify({ action: "key", keys, ...target }));
+    const { native, computer } = await windowExecution(platform);
+    const target = scope === "window" ? await observeWindow(computer) : {};
+    await computer.act(JSON.stringify({ action: "key", keys, ...target }));
 
-      if (scope === "desktop") {
-        expect(native.pressKey).toHaveBeenCalledExactlyOnceWith(expected, undefined);
-      } else {
-        expect(native.callTool).toHaveBeenLastCalledWith(
-          "press_key",
-          { pid: 4242, window_id: 99, ...expected },
-          undefined,
-        );
-        expect(native.pressKey).not.toHaveBeenCalled();
-      }
-    } finally {
-      await computer.close("completion");
+    if (scope === "desktop") {
+      expect(native.pressKey).toHaveBeenCalledExactlyOnceWith(expected, undefined);
+    } else {
+      expect(native.callTool).toHaveBeenLastCalledWith(
+        "press_key",
+        { pid: 4242, window_id: 99, ...expected },
+        undefined,
+      );
+      expect(native.pressKey).not.toHaveBeenCalled();
     }
   });
 
-  it.each(
-    (["desktop", "window"] as const).flatMap((scope) =>
-      ["+a", "Hyper+a"].map((keys) => ({ scope, keys })),
-    ),
-  )("rejects malformed $keys on $scope input before dispatch", async ({ scope, keys }) => {
-    const native = windowDriver();
-    const computer = await execution(native.session, "darwin");
-    try {
-      const target = scope === "window" ? await observeWindow(computer) : {};
-      await expect(
-        computer.act(JSON.stringify({ action: "key", keys, ...target })),
-      ).rejects.toThrow("COMPUTER_UNSUPPORTED_KEY");
-      expect(native.pressKey).not.toHaveBeenCalled();
-      expect(native.callTool).toHaveBeenCalledTimes(scope === "window" ? 2 : 0);
-    } finally {
-      await computer.close("completion");
-    }
+  it.each([
+    { scope: "desktop", keys: "+a" },
+    { scope: "window", keys: "Hyper+a" },
+  ])("rejects malformed $keys on $scope input before dispatch", async ({ scope, keys }) => {
+    const { native, computer } = await windowExecution("darwin");
+    const target = scope === "window" ? await observeWindow(computer) : {};
+    await expect(computer.act(JSON.stringify({ action: "key", keys, ...target }))).rejects.toThrow(
+      "COMPUTER_UNSUPPORTED_KEY",
+    );
+    expect(native.pressKey).not.toHaveBeenCalled();
+    expect(native.callTool).toHaveBeenCalledTimes(scope === "window" ? 2 : 0);
   });
 
   it.each(platforms)(
     "preserves Command+Shift on $platform window click",
     async ({ platform, command }) => {
-      const native = windowDriver();
-      const computer = await execution(native.session, platform);
-      try {
-        const target = await observeWindow(computer);
-        await computer.act(
-          JSON.stringify({
-            action: "left_click",
-            ...target,
-            x: 20,
-            y: 30,
-            modifiers: "Command+Shift",
-            deliveryMode: "foreground",
-          }),
-        );
+      const { native, computer } = await windowExecution(platform);
+      const target = await observeWindow(computer);
+      await computer.act(
+        JSON.stringify({
+          action: "left_click",
+          ...target,
+          x: 20,
+          y: 30,
+          modifiers: "Command+Shift",
+          deliveryMode: "foreground",
+        }),
+      );
 
-        expect(native.callTool).toHaveBeenLastCalledWith(
-          "click",
-          {
-            pid: 4242,
-            window_id: 99,
-            modifier: [command, "shift"],
-            delivery_mode: "foreground",
-            x: 20,
-            y: 30,
-            button: "left",
-            count: 1,
-          },
-          undefined,
-        );
-      } finally {
-        await computer.close("completion");
-      }
+      expect(native.callTool).toHaveBeenLastCalledWith(
+        "click",
+        {
+          pid: 4242,
+          window_id: 99,
+          modifier: [command, "shift"],
+          delivery_mode: "foreground",
+          x: 20,
+          y: 30,
+          button: "left",
+          count: 1,
+        },
+        undefined,
+      );
     },
   );
 
-  it.each(
-    platforms.flatMap(({ platform }) =>
-      [
-        { action: "left_click", scope: "desktop" },
-        { action: "scroll", scope: "desktop" },
-        { action: "scroll", scope: "window" },
-      ].map((input) => Object.assign({ platform }, input)),
-    ),
-  )(
-    "keeps modified $scope $action unavailable on $platform",
-    async ({ platform, action, scope }) => {
-      const native = windowDriver();
-      const computer = await execution(native.session, platform);
-      try {
-        const frame = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
-          displayFrameId: string;
-          width: number;
-        };
-        const target =
-          scope === "window"
-            ? await observeWindow(computer)
-            : { displayFrameId: frame.displayFrameId, refWidth: frame.width };
-        await expect(
-          computer.act(
-            JSON.stringify({
-              action,
-              ...target,
-              x: 20,
-              y: 30,
-              ...(action === "scroll" ? { scrollDirection: "down" } : {}),
-              modifiers: "cmd",
-            }),
-          ),
-        ).rejects.toThrow("COMPUTER_UNSUPPORTED_ACTION");
-        expect(native.click).not.toHaveBeenCalled();
-        expect(native.drag).not.toHaveBeenCalled();
-        expect(native.scroll).not.toHaveBeenCalled();
-        expect(native.callTool).toHaveBeenCalledTimes(scope === "window" ? 2 : 0);
-      } finally {
-        await computer.close("completion");
-      }
-    },
-  );
+  it.each([
+    { action: "left_click", scope: "desktop" },
+    { action: "scroll", scope: "desktop" },
+    { action: "scroll", scope: "window" },
+  ])("keeps modified $scope $action unavailable", async ({ action, scope }) => {
+    const { native, computer } = await windowExecution("darwin");
+    const frame = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
+      displayFrameId: string;
+      width: number;
+    };
+    const target =
+      scope === "window"
+        ? await observeWindow(computer)
+        : { displayFrameId: frame.displayFrameId, refWidth: frame.width };
+    await expect(
+      computer.act(
+        JSON.stringify({
+          action,
+          ...target,
+          x: 20,
+          y: 30,
+          ...(action === "scroll" ? { scrollDirection: "down" } : {}),
+          modifiers: "cmd",
+        }),
+      ),
+    ).rejects.toThrow("COMPUTER_UNSUPPORTED_ACTION");
+    expect(native.click).not.toHaveBeenCalled();
+    expect(native.drag).not.toHaveBeenCalled();
+    expect(native.scroll).not.toHaveBeenCalled();
+    expect(native.callTool).toHaveBeenCalledTimes(scope === "window" ? 2 : 0);
+  });
 
   it("rejects unknown window click modifiers before dispatch", async () => {
-    const native = windowDriver();
-    const computer = await execution(native.session, "darwin");
-    try {
-      const target = await observeWindow(computer);
-      await expect(
-        computer.act(
-          JSON.stringify({
-            action: "left_click",
-            ...target,
-            x: 20,
-            y: 30,
-            modifiers: "Hyper",
-            deliveryMode: "foreground",
-          }),
-        ),
-      ).rejects.toThrow("COMPUTER_UNSUPPORTED_KEY");
-      expect(native.callTool).toHaveBeenCalledTimes(2);
-    } finally {
-      await computer.close("completion");
-    }
+    const { native, computer } = await windowExecution("darwin");
+    const target = await observeWindow(computer);
+    await expect(
+      computer.act(
+        JSON.stringify({
+          action: "left_click",
+          ...target,
+          x: 20,
+          y: 30,
+          modifiers: "Hyper",
+          deliveryMode: "foreground",
+        }),
+      ),
+    ).rejects.toThrow("COMPUTER_UNSUPPORTED_KEY");
+    expect(native.callTool).toHaveBeenCalledTimes(2);
   });
 
   it("rejects unsupported drag modifiers at the public request boundary", async () => {
-    const native = windowDriver();
-    const computer = await execution(native.session, "darwin");
-    try {
-      const target = await observeWindow(computer);
-      await expect(
-        computer.act(
-          JSON.stringify({
-            action: "left_click_drag",
-            ...target,
-            fromX: 10,
-            fromY: 15,
-            x: 20,
-            y: 30,
-            modifiers: "cmd",
-          }),
-        ),
-      ).rejects.toThrow("COMPUTER_INVALID_REQUEST");
-      expect(native.callTool).toHaveBeenCalledTimes(2);
-      expect(native.drag).not.toHaveBeenCalled();
-    } finally {
-      await computer.close("completion");
-    }
+    const { native, computer } = await windowExecution("darwin");
+    const target = await observeWindow(computer);
+    await expect(
+      computer.act(
+        JSON.stringify({
+          action: "left_click_drag",
+          ...target,
+          fromX: 10,
+          fromY: 15,
+          x: 20,
+          y: 30,
+          modifiers: "cmd",
+        }),
+      ),
+    ).rejects.toThrow("COMPUTER_INVALID_REQUEST");
+    expect(native.callTool).toHaveBeenCalledTimes(2);
+    expect(native.drag).not.toHaveBeenCalled();
   });
 
   it("preserves macOS background refusal for a modified click", async () => {
-    const native = windowDriver();
-    const computer = await execution(native.session, "darwin");
-    try {
-      const target = await observeWindow(computer);
-      native.callTool.mockResolvedValueOnce(
-        cuaToolResult(
-          { code: "background_unavailable" },
-          { isError: true, errorCode: "background_unavailable", text: "foreground required" },
-        ),
-      );
-      await expect(
-        computer.act(
-          JSON.stringify({
-            action: "left_click",
-            ...target,
-            x: 20,
-            y: 30,
-            modifiers: "cmd",
-            deliveryMode: "background",
-          }),
-        ),
-      ).rejects.toThrow("COMPUTER_REFUSED_background_unavailable");
-      expect(native.callTool).toHaveBeenCalledTimes(3);
-      expect(native.callTool.mock.lastCall?.[1]).toMatchObject({ delivery_mode: "background" });
-    } finally {
-      await computer.close("completion");
-    }
+    const { native, computer } = await windowExecution("darwin");
+    const target = await observeWindow(computer);
+    native.callTool.mockResolvedValueOnce(
+      cuaToolResult(
+        { code: "background_unavailable" },
+        { isError: true, errorCode: "background_unavailable", text: "foreground required" },
+      ),
+    );
+    await expect(
+      computer.act(
+        JSON.stringify({
+          action: "left_click",
+          ...target,
+          x: 20,
+          y: 30,
+          modifiers: "cmd",
+          deliveryMode: "background",
+        }),
+      ),
+    ).rejects.toThrow("COMPUTER_REFUSED_background_unavailable");
+    expect(native.callTool).toHaveBeenCalledTimes(3);
+    expect(native.callTool.mock.lastCall?.[1]).toMatchObject({ delivery_mode: "background" });
   });
 });

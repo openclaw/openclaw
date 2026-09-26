@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "./agent-id.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite();
+const { logger, makeStorePath } = setupCronServiceSuite({ fakeTimers: false });
 
 describe("cron jobs with unresolved owners", () => {
   it.each(["startup", "timer", "reload"] as const)(
@@ -13,6 +17,7 @@ describe("cron jobs with unresolved owners", () => {
     async (phase) => {
       const { storePath, cleanup } = await makeStorePath();
       const now = Date.now();
+      const clock = createGatewaySchedulerClock(now);
       const dueAt = phase === "startup" ? now - 60_000 : now + 1_000;
       const unowned: CronJob = {
         id: "legacy-unowned",
@@ -32,6 +37,7 @@ describe("cron jobs with unresolved owners", () => {
       const onEvent = vi.fn();
       let currentOwner: string | undefined = phase === "reload" ? "main" : undefined;
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(clock.clock),
         storePath,
         cronEnabled: true,
         log: logger,
@@ -52,13 +58,11 @@ describe("cron jobs with unresolved owners", () => {
             expect(cron.getDefaultAgentId()).toBeUndefined();
             expect((await cron.listPage({ agentId: "main" })).jobs).toEqual([]);
           }
-          await vi.advanceTimersByTimeAsync(1_000);
+          await clock.advanceBy(1_000);
         }
-        await vi.waitFor(() => {
-          expect(onEvent).toHaveBeenCalledWith(
-            expect.objectContaining({ jobId: owned.id, action: "finished", status: "ok" }),
-          );
-        });
+        expect(onEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ jobId: owned.id, action: "finished", status: "ok" }),
+        );
         expect(runCommandJob).toHaveBeenCalledTimes(1);
         expect(runCommandJob).toHaveBeenCalledWith(
           expect.objectContaining({ job: expect.objectContaining({ id: owned.id }) }),
@@ -78,8 +82,8 @@ describe("cron jobs with unresolved owners", () => {
           }),
         );
 
-        await vi.advanceTimersByTimeAsync(60_000);
-        await vi.waitFor(() => expect(runCommandJob).toHaveBeenCalledTimes(2));
+        await clock.advanceBy(60_000);
+        expect(runCommandJob).toHaveBeenCalledTimes(2);
         expect(runCommandJob.mock.calls.every(([params]) => params.job.id === owned.id)).toBe(true);
       } finally {
         cron.stop();

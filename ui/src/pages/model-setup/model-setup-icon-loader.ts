@@ -6,7 +6,7 @@ import {
   renderProviderFallbackIcon,
 } from "../../components/provider-icon.ts";
 import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
-import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
+import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
 import type { ModelSetupPageState } from "./state.ts";
 
 type SetupIconEntry = {
@@ -51,31 +51,19 @@ export class ModelSetupIconLoader {
   private readonly loader: PluginIconController;
 
   constructor(
-    private readonly getContext: () => ApplicationContext,
+    getContext: () => ApplicationContext,
     private readonly getPageState: () => ModelSetupPageState,
-    private readonly onChange: (urls: Record<string, string>) => void,
+    onChange: (urls: Record<string, string>) => void,
   ) {
     this.loader = new PluginIconController({
-      getFetchContext: () => {
-        const context = this.getContext();
-        return {
-          resourceBasePath: context.resourceBasePath,
-          gatewayUrl: context.gateway.connection.gatewayUrl,
-          auth: {
-            hello: context.gateway.snapshot.hello,
-            settings: { token: context.gateway.connection.token },
-            password: context.gateway.connection.password,
-          },
-        };
-      },
+      getFetchContext: () => pluginIconFetchContext(getContext()),
       // Eligibility can change before Lit's next reconciliation callback.
       isConnected: (iconUrl) =>
-        this.getContext().gateway.snapshot.phase === "connected" &&
-        this.currentIconUrls().has(iconUrl),
+        getContext().gateway.snapshot.phase === "connected" && this.currentIconUrls().has(iconUrl),
       fetchIcon: (iconUrl, context, signal) =>
         fetchCatalogIconBlobUrl({ iconUrl, ...context, signal }),
       timeoutError: () => new DOMException("catalog icon fetch timed out", "TimeoutError"),
-      onUrlsChange: (urls) => this.onChange(urls),
+      onUrlsChange: onChange,
     });
   }
 

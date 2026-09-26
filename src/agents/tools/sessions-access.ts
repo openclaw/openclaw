@@ -1,8 +1,3 @@
-/**
- * Session visibility and access helpers for session tools.
- *
- * Adds OpenClaw session-key alias normalization and sandbox requester scoping over SDK visibility contracts.
- */
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -47,8 +42,7 @@ export {
 } from "../../plugin-sdk/session-visibility.js";
 
 type SessionToolAccessDenied = Extract<SessionVisibilityDecision, { allowed: false }>;
-export type SessionToolAccessResult = SessionVisibilityDecision;
-export type SessionToolActionOperation =
+type SessionToolActionOperation =
   | "archive"
   | "create"
   | "delete"
@@ -57,7 +51,7 @@ export type SessionToolActionOperation =
   | "reset"
   | "restore"
   | "send";
-export type SessionToolActionFact = "committed" | "conflict" | "no-op" | "scheduled";
+type SessionToolActionFact = "committed" | "conflict" | "no-op" | "scheduled";
 
 type DescribedSessionVisibilityRow = SessionVisibilityRow & { sessionId?: string };
 
@@ -227,7 +221,7 @@ export async function resolveSessionToolAccess(params: {
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
   callGateway?: AgentToolGatewayRequestCaller;
-}): Promise<SessionToolAccessResult> {
+}): Promise<SessionVisibilityDecision> {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
   const deny = (denial: SessionToolAccessDenied) => {

@@ -11,51 +11,15 @@ describe("zalouser directory group members", () => {
     listZaloGroupMembersMock.mockClear();
   });
 
-  it("accepts prefixed group ids from directory groups list output", async () => {
+  it.each([
+    ["group:1471383327500481391", "1471383327500481391"],
+    ["1471383327500481391", "1471383327500481391"],
+    ["g-1471383327500481391", "g-1471383327500481391"],
+  ])("resolves directory group %s to %s", async (groupId, expectedId) => {
     await listZalouserDirectoryGroupMembers(
-      {
-        cfg: {},
-        accountId: "default",
-        groupId: "group:1471383327500481391",
-      },
-      {
-        listZaloGroupMembers: async (profile, groupId) =>
-          await listZaloGroupMembersMock(profile, groupId),
-      },
+      { cfg: {}, accountId: "default", groupId },
+      { listZaloGroupMembers: listZaloGroupMembersMock },
     );
-
-    expect(listZaloGroupMembersMock).toHaveBeenLastCalledWith("default", "1471383327500481391");
-  });
-
-  it("keeps backward compatibility for raw group ids", async () => {
-    await listZalouserDirectoryGroupMembers(
-      {
-        cfg: {},
-        accountId: "default",
-        groupId: "1471383327500481391",
-      },
-      {
-        listZaloGroupMembers: async (profile, groupId) =>
-          await listZaloGroupMembersMock(profile, groupId),
-      },
-    );
-
-    expect(listZaloGroupMembersMock).toHaveBeenLastCalledWith("default", "1471383327500481391");
-  });
-
-  it("accepts provider-native g- group ids without stripping the prefix", async () => {
-    await listZalouserDirectoryGroupMembers(
-      {
-        cfg: {},
-        accountId: "default",
-        groupId: "g-1471383327500481391",
-      },
-      {
-        listZaloGroupMembers: async (profile, groupId) =>
-          await listZaloGroupMembersMock(profile, groupId),
-      },
-    );
-
-    expect(listZaloGroupMembersMock).toHaveBeenLastCalledWith("default", "g-1471383327500481391");
+    expect(listZaloGroupMembersMock).toHaveBeenLastCalledWith("default", expectedId);
   });
 });
