@@ -29,7 +29,9 @@ const describeError = (/** @type {unknown} */ error) => ({
 });
 
 async function runCell(mode, source, evidenceDir) {
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-addon-owner-"));
+  const temporaryRoot = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-addon-owner-")),
+  );
   const evidencePath = path.join(evidenceDir, `${mode}.json`);
   const receipt = {
     mode,
@@ -120,8 +122,8 @@ async function runCell(mode, source, evidenceDir) {
     assert.equal(result.modulePresent, mode === "loaded");
     if (mode === "loaded") {
       assert.equal(
-        path.resolve(result.modulePath).toLowerCase(),
-        path.join(path.resolve(created.root), "koffi.node").toLowerCase(),
+        path.toNamespacedPath(path.resolve(result.modulePath)).toLowerCase(),
+        path.toNamespacedPath(path.join(path.resolve(created.root), "koffi.node")).toLowerCase(),
       );
     }
     receipt.modulePath = result.modulePath ?? null;

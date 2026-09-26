@@ -22,14 +22,25 @@ async function main() {
   // The external maintained command owner must remove this root after child exit.
   process.stdout.write(JSON.stringify({ event: "created", mode, root, sha256 }) + "\n");
   await fs.writeFile(addon, bytes, { flag: "wx" });
+  const canonicalAddon = await fs.realpath(addon);
   if (mode === "loaded") {
-    require(addon);
+    require(canonicalAddon);
   }
-  const normalize = (value) => path.resolve(value).toLowerCase();
+  const normalize = (value) => path.toNamespacedPath(path.resolve(value)).toLowerCase();
   const sharedObjects = process.report.getReport().sharedObjects;
-  const modulePath = sharedObjects.find((value) => normalize(value) === normalize(addon));
+  const addonModulePaths = sharedObjects.filter(
+    (value) => path.basename(value).toLowerCase() === "koffi.node",
+  );
+  assert.ok(addonModulePaths.length <= 4, "Unexpected addon module count");
+  const modulePath = addonModulePaths.find(
+    (value) => normalize(value) === normalize(canonicalAddon),
+  );
   const modulePresent = modulePath !== undefined;
-  assert.equal(modulePresent, mode === "loaded");
+  assert.equal(
+    modulePresent,
+    mode === "loaded",
+    JSON.stringify({ canonicalAddon, addonModulePaths }),
+  );
   const started = performance.now();
   let removalError;
   try {
