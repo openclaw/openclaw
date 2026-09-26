@@ -15,10 +15,10 @@ import {
 } from "../config/sessions.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayMutationFallback } from "../gateway/call-mutation-fallback.js";
 import {
   buildGatewayConnectionDetails,
   callGateway,
-  isGatewayTransportError,
   isImplicitLocalGatewayTarget,
 } from "../gateway/call.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -258,14 +258,7 @@ async function maybeRunGatewayCleanup(
     });
     return { delegated: true, result };
   } catch (error) {
-    if (
-      localTarget &&
-      isGatewayTransportError(error) &&
-      error.kind === "closed" &&
-      error.code === undefined
-    ) {
-      // Only a pre-connect failure to this local backend permits offline cleanup.
-      // Remote targets can use loopback SSH tunnels; never redirect their writes.
+    if (resolveGatewayMutationFallback({ error, localTarget }) === "unreachable") {
       return { delegated: false };
     }
     if (isRecord(error) && isSessionsCleanupPartialResult(error.details)) {

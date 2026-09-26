@@ -66,9 +66,11 @@ mock.module(new URL(`../gateway/call.${extension}`, import.meta.url), {
   namedExports: {
     buildGatewayConnectionDetails: unexpected,
     callGateway: unexpected,
-    isGatewayTransportError: () => false,
     isImplicitLocalGatewayTarget: unexpected,
   },
+});
+mock.module(new URL(`../gateway/call-mutation-fallback.${extension}`, import.meta.url), {
+  namedExports: { resolveGatewayMutationFallback: unexpected },
 });
 mock.module(new URL(`../config/sessions/session-sqlite-target.${extension}`, import.meta.url), {
   namedExports: { resolveSqliteTargetFromSessionStorePath: () => ({ path: storePath }) },

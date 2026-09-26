@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -244,6 +245,13 @@ describe("sessionsCleanupCommand", () => {
     { label: "request timeout after dispatch", error: gatewayTransportError("timeout") },
     { label: "established WebSocket close", error: gatewayTransportError("closed", 1006) },
     { label: "authentication rejection", error: new Error("unauthorized") },
+    {
+      label: "missing local credentials",
+      error: new GatewayCredentialsRequiredError({
+        method: "sessions.cleanup",
+        configPath: "/tmp/openclaw.json",
+      }),
+    },
     {
       label: "malformed transport failure",
       error: Object.assign(new Error("malformed transport failure"), {
