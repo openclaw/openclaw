@@ -4,7 +4,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -14,15 +13,12 @@ import {
   resolveOpenClawRegisteredAgentDatabasePath,
   resolveOpenClawStateDirForDatabasePath,
 } from "../state/openclaw-state-db.paths.js";
-import { formatErrorMessageWithCode } from "./errors.js";
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode, normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
-  releaseSnapshotTempDirectory,
-  removeTempDirectory,
   retainSnapshotWork,
   withPreparedSqliteSnapshot,
 } from "./sqlite-readonly-location-cleanup.js";
@@ -50,6 +46,7 @@ import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
 } from "./update-candidate-state.inspection.js";
+import { finishStateInspection } from "./update-candidate-state.process.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
 
@@ -426,30 +423,6 @@ export async function readUpdateStateSchemaVersionsInProcess(
     );
   }
   return publishStateDatabaseVersions(files, inspected);
-}
-
-function finishStateInspection<T>(
-  stagingRoot: string,
-  outcome: { value: T } | { cause: unknown },
-): T {
-  if ("cause" in outcome && hasCommandProcessCleanupError(outcome.cause)) {
-    // Command settlement failed. Keep the bytes for the existing snapshot
-    // reclaimer instead of registering another exit/signal deletion attempt.
-    releaseSnapshotTempDirectory(stagingRoot);
-    throw new Error(
-      `${formatErrorMessageWithCode(outcome.cause)}. Staging retained at ${stagingRoot}. Confirm that update workers have stopped before retrying the update.`,
-      { cause: outcome.cause },
-    );
-  }
-  if (!removeTempDirectory(stagingRoot)) {
-    throw new Error(`State schema inspection snapshot cleanup failed: ${stagingRoot}`, {
-      cause: "cause" in outcome ? outcome.cause : undefined,
-    });
-  }
-  if ("cause" in outcome) {
-    throw outcome.cause;
-  }
-  return outcome.value;
 }
 
 /** Released candidates can snapshot shared state even when they cannot expose discovery. */

@@ -1,10 +1,8 @@
 import path from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
-import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
 import {
   createUpdateDoctorConfigWarningStep,
@@ -13,7 +11,7 @@ import {
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
-import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -30,6 +28,7 @@ import {
   resolveGitInstallDir,
   UpdatePreMutationError,
 } from "./shared.js";
+import { validateUpdateCandidateWithProgress } from "./update-command-candidate-validation.js";
 import {
   captureUpdateDatabases,
   restoreFailedUpdateDatabases,
@@ -444,25 +443,11 @@ export async function executeMutableUpdate(
       const snapshot =
         validatedConfigSnapshot ??
         (await readUpdateCandidateSource(env, params.legacyConfigPlan, { configValidation }));
-      const validation = await validateUpdateCandidateCanary({
-        root,
-        config: snapshot.config,
-        stateDir: resolveStateDir(env),
-        env,
-        assertCurrent: assertExecutionCurrent,
-        nodeRunner: params.packageUpdateNodeRunner,
-        timeoutMs: params.timeoutMs,
-        onProgress: (step) => {
-          assertExecutionCurrent();
-          if (originalRun) {
-            recordUpdateRunStep(originalRun.runId, step, { env: originalRun.env });
-          }
-          defaultRuntime[opts.json ? "error" : "log"](
-            `${step.step}: ${step.detail ?? step.status}`,
-          );
-        },
-        onStep: (step) => params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 }),
-      });
+      const validation = await validateUpdateCandidateWithProgress(
+        { root, config: snapshot.config, env, assertCurrent: assertExecutionCurrent },
+        params,
+        originalRun,
+      );
       assertExecutionCurrent();
       doctorConfigChanges.push(...(validation.doctorConfigChanges ?? []));
       if (validation.status === "ok") {
