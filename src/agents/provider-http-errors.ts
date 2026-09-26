@@ -372,17 +372,7 @@ export class ProviderHttpError extends Error {
   }
 }
 
-/**
- * Error raised when a bounded provider JSON response cannot be decoded or parsed.
- *
- * Public contract: only the decode/parse step of the bounded JSON readers
- * (`readProviderJsonResponse` and its object/array variants) throws this subtype, so callers can
- * distinguish malformed JSON from transport failures. Reader-level failures such as size caps,
- * stalled or truncated bodies, and binary content keep their existing error types and are never
- * relabeled as this class. The `name` is the stable string "ProviderJsonParseError" and the
- * message is `<label>: malformed JSON response`; the underlying cause is attached only when the
- * request had no headers, so header-bearing failures never leak credentials through the cause.
- */
+/** A decode or parse failure from the bounded provider JSON readers. */
 export class ProviderJsonParseError extends Error {
   constructor(label: string, cause: unknown, options?: { omitCause?: boolean }) {
     super(`${label}: malformed JSON response`, options?.omitCause ? undefined : { cause });
