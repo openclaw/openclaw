@@ -261,7 +261,12 @@ export async function startGatewayCoreRuntime(input: {
   Object.assign(runtimeState, runtimeSubscriptionUnsubs);
 
   await startupTrace.measure("runtime.services", () =>
-    kernel.setChannelHealthMonitor(startGatewayChannelHealthMonitor({ channelManager })),
+    kernel.setChannelHealthMonitor(
+      startGatewayChannelHealthMonitor({
+        channelManager,
+        scheduler: runtime.scheduler,
+      }),
+    ),
   );
 
   const { createOperatorApprovalSessionEventRuntime } =
