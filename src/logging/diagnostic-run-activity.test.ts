@@ -10,6 +10,7 @@ import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-l
 import {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
+  onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
@@ -18,6 +19,7 @@ import {
   emitCoreModelRequestStartedDiagnosticEvent,
 } from "../infra/diagnostic-model-request.js";
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
+import { activityByRunId, resolveSessionActivity } from "./diagnostic-run-activity-state.js";
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   clearDiagnosticEmbeddedRunActivityForSession,
@@ -43,6 +45,115 @@ afterEach(() => {
 });
 
 describe("core model owner generations", () => {
+  it.each([false, true])(
+    "releases drained run fences without losing idle progress (merged: %s)",
+    async (merge) => {
+      const ref = { sessionId: "fenced-session", sessionKey: "agent:main:fenced" };
+      const target = { sessionId: "merged-session", sessionKey: ref.sessionKey };
+      startDiagnosticRunActivityTracking();
+      if (merge) {
+        markDiagnosticRunProgress({ sessionId: target.sessionId, reason: "prior-progress" });
+      }
+      for (let index = 0; index < 32; index++) {
+        const runId = `completed-run-${index}`;
+        const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+        markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+        emitDiagnosticEvent({
+          type: "tool.execution.started",
+          ...ref,
+          runId,
+          toolName: "stale-tool",
+          toolCallId: runId,
+        });
+        closeDiagnosticEmbeddedRunOwner(owner);
+      }
+      const observedRef = merge ? target : ref;
+      const observedAt = Date.now();
+      const beforeDrain = getDiagnosticSessionActivitySnapshot(observedRef, observedAt);
+      const cutoffs = resolveSessionActivity(observedRef)?.recoveredOwnerStartEventCutoffs;
+      expect(cutoffs?.has("completed-run-0")).toBe(true);
+      expect(beforeDrain).toMatchObject({
+        activeWorkKind: undefined,
+        lastProgressReason: "embedded_run:ended",
+      });
+      expect(activityByRunId.size).toBe(0);
+
+      await waitForDiagnosticEventsDrained();
+
+      expect(getDiagnosticSessionActivitySnapshot(observedRef, observedAt)).toEqual(beforeDrain);
+      expect(cutoffs?.size).toBe(0);
+      expect(activityByRunId.size).toBe(0);
+    },
+  );
+
+  it("preserves a newer fence while an earlier diagnostic prefix drains", async () => {
+    const ref = { sessionId: "overlapping-fences", sessionKey: "agent:main:fences" };
+    let newerFenceAtDelivery: boolean | undefined;
+    onInternalDiagnosticEvent(
+      (event) => {
+        if (event.type !== "tool.execution.started") {
+          return;
+        }
+        if (event.toolCallId === "first-start") {
+          const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId: "second-run" });
+          markDiagnosticEmbeddedRunStarted({ ...ref, runId: "second-run", owner });
+          emitDiagnosticEvent({
+            type: "tool.execution.started",
+            ...ref,
+            runId: "second-run",
+            toolName: "second-stale-tool",
+            toolCallId: "second-start",
+          });
+          closeDiagnosticEmbeddedRunOwner(owner);
+        } else if (event.toolCallId === "second-start") {
+          newerFenceAtDelivery =
+            resolveSessionActivity(ref)?.recoveredOwnerStartEventCutoffs.has("second-run");
+        }
+      },
+      { include: ["tool.execution.started"] },
+    );
+    startDiagnosticRunActivityTracking();
+    const first = createDiagnosticEmbeddedRunOwner({ ...ref, runId: "first-run" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "first-run", owner: first });
+    emitDiagnosticEvent({
+      type: "tool.execution.started",
+      ...ref,
+      runId: "first-run",
+      toolName: "first-stale-tool",
+      toolCallId: "first-start",
+    });
+    closeDiagnosticEmbeddedRunOwner(first);
+
+    await waitForDiagnosticEventsDrained();
+    // The first batch enqueues the second owner's start behind its captured prefix.
+    await waitForDiagnosticEventsDrained();
+
+    expect(newerFenceAtDelivery).toBe(true);
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: undefined,
+      activeToolName: undefined,
+      lastProgressReason: "embedded_run:ended",
+    });
+    expect(resolveSessionActivity(ref)?.recoveredOwnerStartEventCutoffs.size).toBe(0);
+    expect(activityByRunId.size).toBe(0);
+
+    const replacement = createDiagnosticEmbeddedRunOwner({ ...ref, runId: "replacement-run" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "replacement-run", owner: replacement });
+    emitDiagnosticEvent({
+      type: "tool.execution.started",
+      ...ref,
+      runId: "replacement-run",
+      toolName: "replacement-tool",
+      toolCallId: "replacement-start",
+    });
+    await waitForDiagnosticEventsDrained();
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: "tool_call",
+      activeToolName: "replacement-tool",
+    });
+    expect(activityByRunId.has("replacement-run")).toBe(true);
+  });
+
   it("keeps the newest run's clocks when an earlier work key is rearmed", async () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-09-04T00:00:00Z");
