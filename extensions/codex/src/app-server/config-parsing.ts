@@ -69,15 +69,6 @@ const codexAppServerExperimentalSchema = z
 const codexAppServerRemoteWorkspaceRootSchema = z.string().trim().min(1);
 const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
 const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
-const PRIVATE_ENDPOINT_HOST_PATTERN =
-  /^(?!\d{1,3}(?:\.\d{1,3}){3}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?))*$/u;
-const codexAppServerNetworkProxyPrivateEndpointSchema = z
-  .object({
-    host: z.string().min(1).regex(PRIVATE_ENDPOINT_HOST_PATTERN),
-    port: z.literal(443),
-    allowMethods: z.tuple([z.literal("POST")]),
-  })
-  .strict();
 const codexAppServerNetworkProxySchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -88,7 +79,6 @@ const codexAppServerNetworkProxySchema = z
     unixSockets: z
       .record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema)
       .optional(),
-    privateEndpoints: z.array(codexAppServerNetworkProxyPrivateEndpointSchema).optional(),
     proxyUrl: z.string().trim().min(1).optional(),
     socksUrl: z.string().trim().min(1).optional(),
     enableSocks5: z.boolean().optional(),

@@ -55,7 +55,6 @@ export function resolveCodexAppServerNetworkProxy(
     mode: config.mode,
     domains: normalizeNetworkProxyPermissionMap(config.domains),
     unix_sockets: normalizeNetworkProxyPermissionMap(config.unixSockets),
-    private_endpoints: normalizeNetworkProxyPrivateEndpoints(config.privateEndpoints),
     proxy_url: readNonEmptyString(config.proxyUrl),
     socks_url: readNonEmptyString(config.socksUrl),
     enable_socks5: config.enableSocks5,
@@ -117,17 +116,6 @@ function normalizeNetworkProxyPermissionMap(
     .map(([key, permission]) => [key.trim(), permission === "none" ? "deny" : permission] as const)
     .filter(([key]) => key.length > 0);
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-}
-
-function normalizeNetworkProxyPrivateEndpoints(
-  value: CodexAppServerNetworkProxyConfig["privateEndpoints"] | undefined,
-): JsonObject[] | undefined {
-  const entries = (value ?? []).map((endpoint) => ({
-    host: endpoint.host,
-    port: endpoint.port,
-    allow_methods: endpoint.allowMethods,
-  }));
-  return entries.length > 0 ? entries : undefined;
 }
 
 function removeUndefinedJsonFields(value: Record<string, JsonValue | undefined>): JsonObject {

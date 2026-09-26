@@ -163,17 +163,14 @@ required.
             sandbox: "workspace-write",
             networkProxy: {
               enabled: true,
+              mode: "full",
+              allowLocalBinding: true,
               domains: {
+                "git.openclaw-system.svc": "allow",
                 "api.openai.com": "allow",
+                "169.254.169.254": "deny",
                 "blocked.example.com": "deny",
               },
-              privateEndpoints: [
-                {
-                  host: "git.openclaw-system.svc",
-                  port: 443,
-                  allowMethods: ["POST"],
-                },
-              ],
             },
           },
         },
@@ -188,9 +185,12 @@ Hosts absent from the effective native allowlist are denied. The example's
 requirements can still contribute allowed domains. These restrictions apply to
 Codex sandbox commands. See the [network proxy configuration reference](/plugins/codex-harness/config-fields)
 for matching, policy inheritance, scope, and explicit Doctor repair of blank optional fields after updates.
-Private endpoint entries are exact host exceptions for repository broker
-traffic; they reject wildcards, URLs, non-443 ports, and methods other than
-`POST`.
+Repository broker access uses the same stock Codex domain policy. A
+repository-bound Agent should allow the exact broker DNS host, keep explicit
+denies such as link-local metadata addresses, use `mode: "full"`, and set
+`allowLocalBinding: true` so the managed bridge can bind and route local proxy
+traffic. Allowed domains use Codex's normal network behavior; OpenClaw does not
+add a separate port, method, or private-address exception list.
 
 If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated

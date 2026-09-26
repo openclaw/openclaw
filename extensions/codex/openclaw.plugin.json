@@ -452,28 +452,6 @@
                   "enum": ["allow", "none"]
                 }
               },
-              "privateEndpoints": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["host", "port", "allowMethods"],
-                  "properties": {
-                    "host": {
-                      "type": "string",
-                      "minLength": 1,
-                      "pattern": "^(?!\\d{1,3}(?:\\.\\d{1,3}){3}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)(?:\\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?))*$"
-                    },
-                    "port": { "const": 443 },
-                    "allowMethods": {
-                      "type": "array",
-                      "items": { "const": "POST" },
-                      "minItems": 1,
-                      "maxItems": 1
-                    }
-                  }
-                }
-              },
               "proxyUrl": { "type": "string" },
               "socksUrl": { "type": "string" },
               "enableSocks5": { "type": "boolean" },
@@ -795,11 +773,6 @@
     "appServer.networkProxy.unixSockets": {
       "label": "Unix Sockets",
       "help": "Unix socket allow and none rules for Codex sandboxed networking.",
-      "advanced": true
-    },
-    "appServer.networkProxy.privateEndpoints": {
-      "label": "Private Endpoints",
-      "help": "Exact host and port exceptions for Codex sandboxed networking to private broker endpoints.",
       "advanced": true
     },
     "appServer.networkProxy.proxyUrl": {

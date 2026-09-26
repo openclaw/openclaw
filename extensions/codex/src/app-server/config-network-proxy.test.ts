@@ -88,14 +88,20 @@ describe("Codex network proxy config admission", () => {
     );
   });
 
-  it("admits numeric-leading Kubernetes DNS labels for private endpoints", () => {
+  it("admits a stock Codex repository broker network profile", () => {
     const pluginConfig = {
       appServer: {
         networkProxy: {
           enabled: true,
-          profileName: "numeric-label-test",
-          domains: { "api.openai.com": "allow" },
-          privateEndpoints: [{ host: "git.123-control.svc", port: 443, allowMethods: ["POST"] }],
+          profileName: "repository-broker-test",
+          mode: "full",
+          allowLocalBinding: true,
+          domains: {
+            "git.123-control.svc": "allow",
+            "api.openai.com": "allow",
+            "169.254.169.254": "deny",
+            "blocked.example.com": "deny",
+          },
         },
       },
     };
@@ -107,78 +113,34 @@ describe("Codex network proxy config admission", () => {
     });
     expect(validated.ok).toBe(true);
     if (!validated.ok) {
-      throw new Error("Expected manifest-valid private endpoint config");
+      throw new Error("Expected manifest-valid repository broker network profile");
     }
 
     expect(
       resolveRuntimeForTest({ pluginConfig: validated.value }).networkProxy?.configPatch,
     ).toMatchObject({
       permissions: {
-        "numeric-label-test": {
+        "repository-broker-test": {
           network: {
-            private_endpoints: [
-              { host: "git.123-control.svc", port: 443, allow_methods: ["POST"] },
-            ],
+            mode: "full",
+            allow_local_binding: true,
+            domains: {
+              "git.123-control.svc": "allow",
+              "api.openai.com": "allow",
+              "169.254.169.254": "deny",
+              "blocked.example.com": "deny",
+            },
           },
         },
       },
     });
-  });
-
-  it.each([
-    {
-      name: "wildcard host",
-      privateEndpoints: [{ host: "*.svc.cluster.local", port: 443, allowMethods: ["POST"] }],
-    },
-    {
-      name: "URL host",
-      privateEndpoints: [
-        { host: "https://git.openclaw-system.svc", port: 443, allowMethods: ["POST"] },
-      ],
-    },
-    {
-      name: "whitespace-padded host",
-      privateEndpoints: [{ host: " git.openclaw-system.svc ", port: 443, allowMethods: ["POST"] }],
-    },
-    {
-      name: "IP literal host",
-      privateEndpoints: [{ host: "169.254.169.254", port: 443, allowMethods: ["POST"] }],
-    },
-    {
-      name: "empty DNS label",
-      privateEndpoints: [{ host: "git..openclaw-system.svc", port: 443, allowMethods: ["POST"] }],
-    },
-    {
-      name: "non-broker port",
-      privateEndpoints: [{ host: "git.openclaw-system.svc", port: 8443, allowMethods: ["POST"] }],
-    },
-    {
-      name: "non-Git method",
-      privateEndpoints: [{ host: "git.openclaw-system.svc", port: 443, allowMethods: ["GET"] }],
-    },
-  ])("rejects private endpoint $name without broadening the proxy", ({ privateEndpoints }) => {
-    const pluginConfig = {
-      appServer: {
-        networkProxy: {
-          enabled: true,
-          domains: { "api.openai.com": "allow" },
-          privateEndpoints,
-        },
-      },
-    };
-
-    expect(
-      validateJsonSchemaValue({
-        schema: manifest.configSchema,
-        value: pluginConfig,
-        applyDefaults: true,
-      }).ok,
-    ).toBe(false);
-    expect(() => resolveRuntimeForTest({ pluginConfig })).toThrow(
-      new Error(
-        'Invalid plugins.entries.codex.config.appServer.networkProxy.privateEndpoints; fix this field before starting Codex with network restrictions. Run "openclaw doctor --fix" for supported repairs.',
-      ),
-    );
+    const permissions = resolveRuntimeForTest({
+      pluginConfig: validated.value,
+    }).networkProxy?.configPatch.permissions as Record<
+      string,
+      { network: Record<string, unknown> }
+    >;
+    expect(permissions["repository-broker-test"].network).not.toHaveProperty("private_endpoints");
   });
 
   it("preserves blank-field admission and fallback without an enabled proxy", () => {
