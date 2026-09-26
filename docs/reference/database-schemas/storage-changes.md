@@ -1781,11 +1781,12 @@ async context. The worker clears operation buffers and acknowledges transaction
 settlement before the parent publishes committed removals and releases that
 operation's writer admission. Later requests reuse the connection only for the
 same physical database and shared-state owner; every request checks its live lease.
-Refused admission or commit requests leave an already admitted worker reusable only
+Ordinary reclamation's refused admission or commit requests leave an already admitted worker reusable only
 after confirmed rollback, with an open retained connection and current parent
 authority. The caller still receives its refusal; no mutation is replayed. Native
 failures and uncertain settlement still retire the worker. Retirement logs include
 the reason, last operation kind, age, operation count, and worker thread ID.
+Canonical validation scopes retain their existing native failure and drainage contract.
 
 During Doctor maintenance, session mutation and worker-close jobs borrow its
 existing state-lifecycle coordinator through a live delegate bound to the actor,
