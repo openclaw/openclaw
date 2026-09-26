@@ -23,6 +23,7 @@ import {
   UserProfileNotFoundError,
 } from "./user-profiles-schema.js";
 import type {
+  PreparedUserProfileIdentity,
   ProfileDisplayRow,
   UserProfileDisplay,
   UserProfileAvatarMime,
@@ -345,4 +346,64 @@ export function projectCatalogUserProfileIdentity(
       ),
     }
   );
+}
+
+/** Bind a canonical account and its original email lifetimes to the retained catalog owner. */
+export function bindPreparedUserProfileIdentity(
+  profileId: string,
+  catalog: {
+    rows: Map<string, ProfileDisplayRow>;
+    bindings: UserProfileEmailBindingIndex;
+    assertCurrent: (profileId: string) => void;
+    release: () => void;
+  },
+): PreparedUserProfileIdentity {
+  const { rows, bindings } = catalog;
+  const initial = [...bindings.byEmail.values()].filter(
+    (binding) => binding.profileId === profileId,
+  );
+  const ids = Object.freeze(
+    initial.flatMap((binding) => (binding.bindingId ? [binding.bindingId] : [])).toSorted(),
+  );
+  const assertCurrent = (requiredEmailBindingIds: readonly string[] = []) => {
+    catalog.assertCurrent(profileId);
+    if (
+      resolveCatalogProfile(rows, profileId)?.id !== profileId ||
+      requiredEmailBindingIds.some((id) => bindings.byId.get(id) !== profileId)
+    ) {
+      throw new UserProfileNotFoundError(profileId);
+    }
+  };
+  function readCurrentProfile(this: void, requiredEmailBindingIds?: readonly string[]) {
+    assertCurrent(requiredEmailBindingIds);
+    return { profileId, assignedRole: rows.get(profileId)?.role || null };
+  }
+  return {
+    readCurrentProfile,
+    get emailBindingIds() {
+      assertCurrent();
+      if (initial.some((binding) => binding.bindingId === null)) {
+        throw new UserProfileNotFoundError(profileId);
+      }
+      return ids;
+    },
+    readCurrentFacts(this: void, requiredEmailBindingIds) {
+      const profile = readCurrentProfile(requiredEmailBindingIds);
+      const aliases = new Set([profileId]);
+      for (const row of rows.values()) {
+        if (row.merged_into === profileId) {
+          aliases.add(row.id);
+        }
+      }
+      return {
+        profile: {
+          profileId: profile.profileId,
+          emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
+          assignedRole: profile.assignedRole,
+        },
+        aliases,
+      };
+    },
+    release: catalog.release,
+  };
 }

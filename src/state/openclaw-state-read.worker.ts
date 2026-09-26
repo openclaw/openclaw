@@ -91,6 +91,7 @@ import {
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
+import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
   readUserProfileEmailBindings,
@@ -623,6 +624,14 @@ serveOwnedWorkerTasks(
                     emailBindings: readUserProfileEmailBindings(db),
                   }));
                   return { ok: true, type: command.type, sourceAdmitted, ...facts };
+                }
+                if (command.type === "userPreferences.values") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    values: selectUserPreferenceValues(db, command.profileIds, command.key),
+                  };
                 }
                 if (command.type === "userProfiles.email.resolve") {
                   return {

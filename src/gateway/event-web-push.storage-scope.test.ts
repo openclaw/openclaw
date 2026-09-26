@@ -77,12 +77,21 @@ vi.mock("../infra/device-pairing-worker.js", () => ({
 vi.mock("../infra/device-pairing.js", () => ({
   hasEffectivePairedDeviceRole: () => true,
 }));
-vi.mock("../state/user-profiles.js", () => ({
-  resolveUserProfileId: (profileId: string) => profileId,
+vi.mock("../state/user-profile-list.js", () => ({
+  prepareUserProfileCatalog: async () => ({
+    readCurrentIdentity: (profileId: string) => ({
+      profileId,
+      aliases: new Set([profileId]),
+      role: null,
+    }),
+    release: () => {},
+  }),
 }));
-vi.mock("../state/user-preferences.js", () => ({ getUserPreferences: () => ({}) }));
+vi.mock("../state/user-preferences.js", () => ({
+  getUserPreferenceValues: async () => ({ values: new Map(), isCurrent: () => true }),
+}));
 vi.mock("./operator-role-policy.js", () => ({
-  resolveOperatorRolePolicyForProfile: () => undefined,
+  resolveOperatorRolePolicyForAssignment: () => undefined,
 }));
 vi.mock("./session-sharing.js", () => ({ canReceiveSessionEvent: () => true }));
 

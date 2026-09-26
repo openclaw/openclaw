@@ -169,6 +169,7 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
+  | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | {
       type: "githubPublication.lifecycle";
       publicationKind: "shared" | "personal";
@@ -392,6 +393,12 @@ export type OpenClawStateReadReply = (
       sourceAdmitted: true;
       profiles: Array<[string, ProfileDisplayRow]>;
       emailBindings: UserProfileEmailBinding[];
+    }
+  | {
+      ok: true;
+      type: "userPreferences.values";
+      sourceAdmitted: true;
+      values: Map<string, unknown>;
     }
   | {
       ok: true;

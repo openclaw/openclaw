@@ -8,8 +8,14 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
+import {
+  getUserPreferences,
+  getUserPreferenceValues,
+  setCanonicalUserPreferences,
+  setUserPreferences,
+} from "./user-preferences.js";
 import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.store.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -29,6 +35,42 @@ afterEach(() => {
 });
 
 describe("user preferences", () => {
+  it("reads selected profile preferences in the worker and observes subsequent writes", async () => {
+    const options = stateOptions();
+    const first = ensureProfileForEmail("first@example.test", options).id;
+    setUserPreferences(first, { push: { enabled: true }, other: "excluded" }, options);
+    setUserPreferences("second", { push: false }, options);
+    setUserPreferences("excluded", { push: true }, options);
+    const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+    const initial = await getUserPreferenceValues([first, "second", "missing"], "push", options);
+    expect(initial.values).toEqual(
+      new Map<string, unknown>([
+        [first, { enabled: true }],
+        ["second", false],
+      ]),
+    );
+    expect(initial.isCurrent()).toBe(true);
+    expect(native).not.toHaveBeenCalled();
+    native.mockRestore();
+    setUserPreferences(first, { push: { enabled: false } }, options);
+    expect(initial.isCurrent()).toBe(false);
+    const updated = await getUserPreferenceValues([first], "push", options);
+    expect(updated.values).toEqual(new Map([[first, { enabled: false }]]));
+    const pending = setCanonicalUserPreferences(first, { push: "worker" }, options);
+    expect(updated.isCurrent()).toBe(false);
+    expect(await pending).toEqual({ ok: true, value: { profileId: first } });
+    expect((await getUserPreferenceValues([first], "push", options)).values).toEqual(
+      new Map([[first, "worker"]]),
+    );
+    expect((await getUserPreferenceValues([first], "push", stateOptions())).values).toEqual(
+      new Map(),
+    );
+    const missingTable = openWithoutFeatureSchemas();
+    expect((await getUserPreferenceValues([first], "push", missingTable.options)).values).toEqual(
+      new Map(),
+    );
+  });
+
   it("initializes each feature independently on each database handle", () => {
     const first = openWithoutFeatureSchemas();
     const second = openWithoutFeatureSchemas();
