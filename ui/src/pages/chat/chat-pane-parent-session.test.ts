@@ -47,7 +47,7 @@ describe("mounted pane parent session", () => {
         kind: "direct",
         updatedAt: 1,
         displayName: "Release prep — café 雪",
-        incognito,
+        incognito: incognito || undefined,
       };
       const child: GatewaySessionRow = {
         ...parent,
