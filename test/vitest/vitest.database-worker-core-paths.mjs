@@ -28,6 +28,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-channel-ingress.test.ts",
   "src/plugins/registry.runtime-config.test.ts",
   "src/acp/control-plane/manager.owner.test.ts",
+  "src/acp/control-plane/spawn.test.ts",
+  "src/agents/tools/subagents-tool.acp-cancellation.test.ts",
   "src/acp/runtime/session-meta.alias-lifecycle.test.ts",
   "src/acp/runtime/session-meta.changes.test.ts",
   "src/acp/runtime/session-meta.test.ts",
