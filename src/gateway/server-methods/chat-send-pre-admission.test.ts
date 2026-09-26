@@ -358,16 +358,21 @@ describe("chat send retry identity", () => {
     const deferred = createDeferred<Awaited<ReturnType<typeof resolveDurableChatClaim>>>();
     vi.mocked(resolveDurableChatClaim).mockReturnValue(deferred.promise);
     const pending = runChatSendPreAdmission(params);
-    expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
-    fixture.context.dedupe.set(`chat:${session.clientRunId}`, {
-      ts: 200,
-      ok: true,
-      requestIdentity: "competing-input",
-      payload: { runId: session.clientRunId, status: "ok" },
-    });
-    deferred.resolve({ kind: "continue", entry: session.entry });
-    expect(await pending).toBe(false);
-    expectConflict(fixture.respond);
+    try {
+      expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
+      fixture.context.dedupe.set(`chat:${session.clientRunId}`, {
+        ts: 200,
+        ok: true,
+        requestIdentity: "competing-input",
+        payload: { runId: session.clientRunId, status: "ok" },
+      });
+      deferred.resolve({ kind: "continue", entry: session.entry });
+      expect(await pending).toBe(false);
+      expectConflict(fixture.respond);
+    } finally {
+      deferred.resolve({ kind: "continue", entry: session.entry });
+      await pending.catch(() => undefined);
+    }
   });
 
   it.each(["unchanged", "cached-success", "cached-error", "new-admission"] as const)(

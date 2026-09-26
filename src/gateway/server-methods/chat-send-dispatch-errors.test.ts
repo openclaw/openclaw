@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSelectedAuthProfileUnavailableError } from "../../agents/auth-profiles/selection-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
@@ -84,6 +85,14 @@ describe("handleChatSendSetupError", () => {
 });
 
 describe("createChatSendDispatchErrorLifecycle", () => {
+  let finishHeldCase: (() => Promise<void>) | undefined;
+
+  afterEach(async () => {
+    const finish = finishHeldCase;
+    finishHeldCase = undefined;
+    await finish?.();
+  });
+
   it.each([
     { settlement: "fallback", missingProfile: false, policyFailure: false, sessionChanged: false },
     { settlement: "fallback", stateContention: true },
@@ -711,39 +720,51 @@ describe("createChatSendDispatchErrorLifecycle", () => {
   });
 
   it("keeps a failed non-default global send admitted through lifecycle persistence", async () => {
-    const cfg = retainLegacyDefaultAgentId(
-      {
-        agents: {
-          list: [{ id: "main" }, { id: "ops" }],
-        },
-      },
-      "main",
-    );
-    const persistenceEntered = createDeferred();
+    const lifetime = createFixtureLifetime();
+    const retired = new AbortController();
     const releasePersistence = createDeferred();
-    const persistLifecycleEvent = vi
-      .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
-      .mockImplementation(async () => {
-        persistenceEntered.resolve();
-        await releasePersistence.promise;
-      });
-    const cleanupAdmittedRun = vi.fn();
-    const activeRunCleanup = vi.fn();
-    const broadcast = vi.fn();
-    const dedupe = new Map();
-    const clientRunId = "failed-ops-global-send";
-    const chatAbortControllers = new Map([
-      [
-        "compat-owner-run",
+    let restorePersistence = () => {};
+    // Timeout teardown releases the gate and joins the original body before restoring its spy.
+    finishHeldCase = async () => {
+      retired.abort();
+      releasePersistence.resolve();
+      await lifetime.cleanup();
+      restorePersistence();
+    };
+    await lifetime.run(async () => {
+      retired.signal.throwIfAborted();
+      const cfg = retainLegacyDefaultAgentId(
         {
-          controller: new AbortController(),
-          sessionId: "sess-main",
-          sessionKey: "global",
+          agents: {
+            list: [{ id: "main" }, { id: "ops" }],
+          },
         },
-      ],
-    ]);
+        "main",
+      );
+      const persistenceEntered = createDeferred();
+      const persistLifecycleEvent = vi
+        .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
+        .mockImplementation(async () => {
+          persistenceEntered.resolve();
+          await releasePersistence.promise;
+        });
+      restorePersistence = () => persistLifecycleEvent.mockRestore();
+      const cleanupAdmittedRun = vi.fn();
+      const activeRunCleanup = vi.fn();
+      const broadcast = vi.fn();
+      const dedupe = new Map();
+      const clientRunId = "failed-ops-global-send";
+      const chatAbortControllers = new Map([
+        [
+          "compat-owner-run",
+          {
+            controller: new AbortController(),
+            sessionId: "sess-main",
+            sessionKey: "global",
+          },
+        ],
+      ]);
 
-    try {
       const lifecycle = createChatSendDispatchErrorLifecycle({
         admission: {
           sessionBinding: {
@@ -792,8 +813,15 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       });
 
       await lifecycle.handleError(new Error("dispatch rejected"));
-      const finalization = lifecycle.finalize();
-      await persistenceEntered.promise;
+      retired.signal.throwIfAborted();
+      const finalization = lifetime.track(lifecycle.finalize());
+      await Promise.race([
+        persistenceEntered.promise,
+        finalization.then(() => {
+          throw new Error("Lifecycle finalization settled before entering persistence");
+        }),
+      ]);
+      retired.signal.throwIfAborted();
       expect(dedupe.get(`chat:${clientRunId}`)).toBeUndefined();
       expect(broadcast).not.toHaveBeenCalled();
       expect(persistLifecycleEvent).toHaveBeenCalledWith({
@@ -819,9 +847,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       );
       expect(activeRunCleanup).toHaveBeenCalledExactlyOnceWith();
       expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
-    } finally {
-      releasePersistence.resolve();
-      persistLifecycleEvent.mockRestore();
-    }
+    });
   });
 });

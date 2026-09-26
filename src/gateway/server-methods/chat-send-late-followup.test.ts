@@ -1,8 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createChatSendLateFollowupDisposition } from "./chat-send-late-followup.js";
 
 describe("chat.send late queued follow-up disposition", () => {
+  let finishHeldCase: (() => Promise<void>) | undefined;
+
+  afterEach(async () => {
+    const finish = finishHeldCase;
+    finishHeldCase = undefined;
+    await finish?.();
+  });
+
   it("keeps progress open and includes its payloads in terminal delivery", async () => {
     const deliver = vi.fn(async () => ({ kind: "delivered" as const }));
     const disposition = createChatSendLateFollowupDisposition({
@@ -67,37 +76,47 @@ describe("chat.send late queued follow-up disposition", () => {
   });
 
   it("claims delivery before awaiting and records a concurrent duplicate", async () => {
-    const info = vi.fn();
+    const lifetime = createFixtureLifetime();
     const delivery = createDeferred<{ kind: "delivered" }>();
-    const deliver = vi.fn(() => delivery.promise);
-    const disposition = createChatSendLateFollowupDisposition({
-      runId: "original-run",
-      originatingChannel: "webchat",
-      logGateway: { info } as never,
-      deliver,
+    // The duplicate may await the same gate if the synchronous claim regresses.
+    finishHeldCase = async () => {
+      delivery.resolve({ kind: "delivered" });
+      await lifetime.cleanup();
+    };
+    await lifetime.run(async () => {
+      const info = vi.fn();
+      const deliver = vi.fn(() => delivery.promise);
+      const disposition = createChatSendLateFollowupDisposition({
+        runId: "original-run",
+        originatingChannel: "webchat",
+        logGateway: { info } as never,
+        deliver,
+      });
+      disposition.recordQueued();
+      const first = disposition.deliver({
+        kind: "queued-followup",
+        completion: { kind: "completed" },
+        runId: "first-followup",
+        originatingChannel: "webchat",
+        payloads: [{ text: "first" }],
+      });
+      lifetime.track(Promise.resolve(first));
+      const duplicate = disposition.deliver({
+        kind: "queued-followup",
+        completion: { kind: "completed" },
+        runId: "duplicate-followup",
+        originatingChannel: "webchat",
+        payloads: [{ text: "duplicate" }],
+      });
+      await lifetime.track(Promise.resolve(duplicate));
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(info).toHaveBeenCalledWith(
+        "webchat late reply disposition",
+        expect.objectContaining({ reason: "delivery-in-flight" }),
+      );
+      delivery.resolve({ kind: "delivered" });
+      await first;
     });
-    disposition.recordQueued();
-    const first = disposition.deliver({
-      kind: "queued-followup",
-      completion: { kind: "completed" },
-      runId: "first-followup",
-      originatingChannel: "webchat",
-      payloads: [{ text: "first" }],
-    });
-    await disposition.deliver({
-      kind: "queued-followup",
-      completion: { kind: "completed" },
-      runId: "duplicate-followup",
-      originatingChannel: "webchat",
-      payloads: [{ text: "duplicate" }],
-    });
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(info).toHaveBeenCalledWith(
-      "webchat late reply disposition",
-      expect.objectContaining({ reason: "delivery-in-flight" }),
-    );
-    delivery.resolve({ kind: "delivered" });
-    await first;
   });
 
   it("settles a failed delivery and rejects every subsequent attempt", async () => {

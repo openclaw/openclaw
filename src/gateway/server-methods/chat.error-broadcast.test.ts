@@ -174,43 +174,52 @@ describe("chat.send error broadcast", () => {
           await release.promise;
           return true;
         });
-        await Promise.race([
-          entered.promise,
-          sending.then(() => {
-            throw new Error("send finished before reaching admission");
-          }),
-        ]);
-        expect(client.personPresence?.lastActivityAt).toBeUndefined();
-        const duplicateResponse = vi.fn();
-        await handleChatSend({ ...options, respond: duplicateResponse });
-        expect(duplicateResponse).toHaveBeenCalledWith(
-          true,
-          { runId: "activity-send", status: "in_flight" },
-          undefined,
-          expect.objectContaining({ cached: true }),
+        const sendingSettled = sending.then(
+          () => undefined,
+          () => undefined,
         );
-        expect(ctx.recordClientActivity).not.toHaveBeenCalled();
-        if (closedDuringAdmission) {
-          clients.delete(client);
+        try {
+          await Promise.race([
+            entered.promise,
+            sending.then(() => {
+              throw new Error("send finished before reaching admission");
+            }),
+          ]);
+          expect(client.personPresence?.lastActivityAt).toBeUndefined();
+          const duplicateResponse = vi.fn();
+          await handleChatSend({ ...options, respond: duplicateResponse });
+          expect(duplicateResponse).toHaveBeenCalledWith(
+            true,
+            { runId: "activity-send", status: "in_flight" },
+            undefined,
+            expect.objectContaining({ cached: true }),
+          );
+          expect(ctx.recordClientActivity).not.toHaveBeenCalled();
+          if (closedDuringAdmission) {
+            clients.delete(client);
+          }
+          const admittedAt = Date.now() + 1_000;
+          const clock = vi.spyOn(Date, "now").mockReturnValue(admittedAt);
+          onTestFinished(() => clock.mockRestore());
+          release.resolve();
+          await sending;
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ runId: "activity-send", status: "started" }),
+            undefined,
+            { runId: "activity-send" },
+          );
+          expect(client.personPresence?.lastActivityAt).toBe(
+            closedDuringAdmission ? undefined : admittedAt,
+          );
+          const cachedResponse = vi.fn();
+          await handleChatSend({ ...options, respond: cachedResponse });
+          expect(cachedResponse.mock.calls[0]?.[3]).toMatchObject({ cached: true });
+          expect(ctx.recordClientActivity).toHaveBeenCalledExactlyOnceWith(client);
+        } finally {
+          release.resolve();
+          await sendingSettled;
         }
-        const admittedAt = Date.now() + 1_000;
-        const clock = vi.spyOn(Date, "now").mockReturnValue(admittedAt);
-        onTestFinished(() => clock.mockRestore());
-        release.resolve();
-        await sending;
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ runId: "activity-send", status: "started" }),
-          undefined,
-          { runId: "activity-send" },
-        );
-        expect(client.personPresence?.lastActivityAt).toBe(
-          closedDuringAdmission ? undefined : admittedAt,
-        );
-        const cachedResponse = vi.fn();
-        await handleChatSend({ ...options, respond: cachedResponse });
-        expect(cachedResponse.mock.calls[0]?.[3]).toMatchObject({ cached: true });
-        expect(ctx.recordClientActivity).toHaveBeenCalledExactlyOnceWith(client);
       });
     },
   );
@@ -245,7 +254,7 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    // Make addChatRun throw synchronously (inside the try block at line 2470)
+    // Make addChatRun throw synchronously
     ctx.addChatRun.mockImplementation(() => {
       throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
     });
