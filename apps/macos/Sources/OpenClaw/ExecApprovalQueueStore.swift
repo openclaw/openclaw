@@ -6,7 +6,7 @@ import OpenClawProtocol
 import OSLog
 
 struct ExecApprovalQueueItem: Decodable, Identifiable {
-    enum ApprovalKind: String {
+    enum ApprovalKind: String, Hashable {
         case exec
         case plugin
         case systemAgent = "system-agent"
