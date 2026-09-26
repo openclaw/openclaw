@@ -109,18 +109,19 @@ const transactionControlPrefix =
 
 function batchTransactionControl(sql: string): string | undefined {
   let control: string | undefined;
-  while (sql) {
-    const next = transactionControlPrefix.exec(sql)?.[1]?.toUpperCase();
+  let remaining = sql;
+  while (remaining) {
+    const next = transactionControlPrefix.exec(remaining)?.[1]?.toUpperCase();
     if (next === "ROLLBACK") {
       return next;
     }
     control ||= next;
     // Exec accepts batches; quoted semicolons and comments do not start statements.
-    const end = sql.includes(";") ? findSqlCharacter(sql, ";") : -1;
+    const end = remaining.includes(";") ? findSqlCharacter(remaining, ";") : -1;
     if (end < 0) {
       break;
     }
-    sql = sql.slice(end + 1);
+    remaining = remaining.slice(end + 1);
   }
   return control;
 }
