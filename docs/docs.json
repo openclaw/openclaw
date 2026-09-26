@@ -836,7 +836,11 @@
     },
     {
       "source": "/showcase",
-      "destination": "/start/showcase"
+      "destination": "/start/getting-started"
+    },
+    {
+      "source": "/start/showcase",
+      "destination": "/start/getting-started"
     },
     {
       "source": "/signal",
@@ -1295,7 +1299,6 @@
                 "group": "Overview",
                 "pages": [
                   "index",
-                  "start/showcase",
                   "start/why-openclaw",
                   "start/why-openclaw/the-trust-boundary",
                   "start/why-openclaw/policy-as-code",
