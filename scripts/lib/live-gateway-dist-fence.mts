@@ -72,10 +72,10 @@ function dedupeBindings(bindings: readonly ManagedGatewayBinding[]): ManagedGate
   return out;
 }
 
-function formatStopHint(profile: string): string {
+function formatServiceHint(profile: string, action: "stop" | "start"): string {
   return profile === "default"
-    ? "`openclaw gateway stop`"
-    : `\`openclaw gateway stop --profile ${profile}\``;
+    ? `\`openclaw gateway ${action}\``
+    : `\`openclaw gateway ${action} --profile ${profile}\``;
 }
 
 function formatRefuseMessage(params: {
@@ -93,7 +93,7 @@ function formatRefuseMessage(params: {
   const entry = params.entrypoint ? ` (${params.entrypoint})` : "";
   const unit = params.unit ? ` unit ${params.unit}` : "";
   const stopHints = [
-    ...new Set(params.serviceProfiles.map((profile) => formatStopHint(profile))),
+    ...new Set(params.serviceProfiles.map((profile) => formatServiceHint(profile, "stop"))),
     ...new Set(
       params.startupEntries.map(
         (startupPath) =>
@@ -101,10 +101,15 @@ function formatRefuseMessage(params: {
       ),
     ),
   ].join(", ");
+  const startHints = params.serviceProfiles
+    .map((profile) => formatServiceHint(profile, "start"))
+    .join(", ");
   const recovery =
     params.startupEntries.length > 0
-      ? `Stop the Gateway first (${stopHints}), then rebuild and start.`
-      : `Stop the Gateway first (${stopHints} or the matching service stop) or run \`openclaw update\`, then rebuild and start.`;
+      ? `From an external terminal, stop every listed Gateway (${stopHints}), run \`pnpm build\` in this checkout, then after a successful build start the same Startup entries and any listed services.`
+      : `From an external terminal, stop every listed Gateway (${stopHints} or the matching service stops), ` +
+        `run \`pnpm build\` in this checkout, then after a successful build start those services (${startHints} or the matching service starts). ` +
+        `\`openclaw update\` can apply an available update; an already-current result does not rebuild stale dist.`;
   return (
     `[openclaw] Refusing to rebuild dist while a managed Gateway${profileText}${unit} is still running from this checkout's dist${entry}. ` +
     recovery
