@@ -6,6 +6,7 @@
 // blanks during load so existing installations keep loading and keep their
 // effective (defaulted) agent directory.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { listAgentEntries } from "../agents/agent-roster.js";
 import {
   getRetainedLegacyDefaultAgentId,
   setRetainedLegacyDefaultAgentId,
@@ -55,6 +56,7 @@ function isPreservedAgentDirPath(
 function migrateBlankAgentDirRaw(
   raw: unknown,
   preservedAgentDirPaths?: ReadonlySet<string>,
+  savedConfig?: unknown,
 ): BlankAgentDirMigration {
   if (!isRecord(raw) || !isRecord(raw.agents)) {
     return { config: raw, changed: false, changes: [], warnings: [] };
@@ -69,11 +71,23 @@ function migrateBlankAgentDirRaw(
   }
   const agents = isRecord(next.agents) ? (next.agents as Record<string, unknown>) : {};
   const changes: ConfigValidationIssue[] = [];
+  // A blank is a *saved* value (migrate it away so an unrelated settings write
+  // is not blocked) only when it also exists as a blank in the saved source
+  // config. A blank the current write newly introduced (not in the saved
+  // source) must be preserved so strict validation reports the field error —
+  // including metadata-free full-config writes, where explicitSetPaths cannot
+  // distinguish new authoring from restored saved values. When no saved config
+  // is supplied (load path) every blank is treated as saved.
+  const savedBlankPaths =
+    savedConfig === undefined ? undefined : indexSavedBlankAgentDirPaths(savedConfig);
+  const migrateUnlessNew = (agentDirPath: string): boolean =>
+    !isPreservedAgentDirPath(preservedAgentDirPaths, agentDirPath) &&
+    (savedBlankPaths === undefined || savedBlankPaths.has(agentDirPath));
 
   if (isRecord(agents.entries)) {
     for (const [key, entry] of Object.entries(agents.entries)) {
       const agentDirPath = `agents.entries.${key}.agentDir`;
-      if (!isPreservedAgentDirPath(preservedAgentDirPaths, agentDirPath)) {
+      if (migrateUnlessNew(agentDirPath)) {
         removeBlankAgentDirFromAgent(entry as Record<string, unknown>, `entries.${key}`, changes);
       }
     }
@@ -85,7 +99,15 @@ function migrateBlankAgentDirRaw(
       // e.g. agents.list.0.agentDir) so prefix matching preserves a blank that
       // the current write itself sets.
       const agentDirPath = `agents.list.${index}.agentDir`;
-      if (!isPreservedAgentDirPath(preservedAgentDirPaths, agentDirPath)) {
+      const savedPath =
+        isRecord(entry) && typeof entry.id === "string"
+          ? `agents.entries.${entry.id}.agentDir`
+          : undefined;
+      const migrate =
+        !isPreservedAgentDirPath(preservedAgentDirPaths, agentDirPath) &&
+        (savedBlankPaths === undefined ||
+          (savedPath !== undefined && savedBlankPaths.has(savedPath)));
+      if (migrate) {
         removeBlankAgentDirFromAgent(entry as Record<string, unknown>, `list.${index}`, changes);
       }
     }
@@ -96,6 +118,19 @@ function migrateBlankAgentDirRaw(
     : { config: raw, changed: false, changes, warnings: [] };
 }
 
+/** Index every agent agentDir that is blank in the saved source config,
+ * normalized across the legacy list and canonical entries roster forms. Only
+ * these paths count as "saved blanks" for write-path migration. */
+function indexSavedBlankAgentDirPaths(savedConfig: unknown): Set<string> {
+  const set = new Set<string>();
+  for (const entry of listAgentEntries(savedConfig as OpenClawConfig)) {
+    if (isRecord(entry) && typeof entry.id === "string" && isBlankString(entry.agentDir)) {
+      set.add(`agents.entries.${entry.id}.agentDir`);
+    }
+  }
+  return set;
+}
+
 export function migrateBlankAgentDir(raw: OpenClawConfig): BlankAgentDirMigration<OpenClawConfig>;
 export function migrateBlankAgentDir(raw: unknown): BlankAgentDirMigration;
 export function migrateBlankAgentDir(raw: unknown): BlankAgentDirMigration {
@@ -103,7 +138,10 @@ export function migrateBlankAgentDir(raw: unknown): BlankAgentDirMigration {
 }
 
 /** Write-path variant: migrate saved blank agentDir values but preserve the ones
- * the current write explicitly sets (so new authoring still gets the field error). */
+ * the current write explicitly sets (so new authoring still gets the field
+ * error). `savedConfig` is the pre-write source config; a blank that also
+ * exists there is a saved value and can be migrated, while a blank the write
+ * newly introduced is preserved for strict validation. */
 export function migrateBlankAgentDirForWrite(
   raw: OpenClawConfig,
   explicitSetPaths?: ReadonlySet<string>,
@@ -115,15 +153,9 @@ export function migrateBlankAgentDirForWrite(
 export function migrateBlankAgentDirForWrite(
   raw: unknown,
   explicitSetPaths?: ReadonlySet<string>,
+  savedConfig?: unknown,
 ): BlankAgentDirMigration {
-  // Without explicit path metadata the writer cannot distinguish a saved blank
-  // from new authoring; treat the whole write as explicit authoring and keep
-  // every blank so strict validation reports it instead of silently migrating
-  // a value the operator just supplied.
-  if (explicitSetPaths === undefined || explicitSetPaths.size === 0) {
-    return { config: raw as OpenClawConfig, changed: false, changes: [], warnings: [] };
-  }
-  return migrateBlankAgentDirRaw(raw, explicitSetPaths);
+  return migrateBlankAgentDirRaw(raw, explicitSetPaths, savedConfig);
 }
 
 /** Remap explicit legacy-list field paths (`agents.list.<N>.<field>`) to the
