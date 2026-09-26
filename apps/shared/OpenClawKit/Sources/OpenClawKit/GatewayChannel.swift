@@ -1116,12 +1116,7 @@ extension GatewayChannelActor {
         connectionGeneration: UInt64) async
     {
         guard self.isConnected(connectionGeneration: connectionGeneration) else { return }
-        let data: Data? = switch msg {
-        case let .data(d): d
-        case let .string(s): s.data(using: .utf8)
-        @unknown default: nil
-        }
-        guard let data else { return }
+        guard let data = self.decodeMessageData(msg) else { return }
         guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else {
             self.logger.error("gateway decode failed")
             return
@@ -1601,12 +1596,7 @@ extension GatewayChannelActor {
     {
         let id = UUID().uuidString
         // Encode request using the generated models to avoid JSONSerialization/ObjC bridging pitfalls.
-        let paramsObject: ProtoAnyCodable? = params.map { entries in
-            let dict = entries.reduce(into: [String: ProtoAnyCodable]()) { dict, entry in
-                dict[entry.key] = ProtoAnyCodable(entry.value.value)
-            }
-            return ProtoAnyCodable(dict)
-        }
+        let paramsObject = params.map(ProtoAnyCodable.init)
         let frame = RequestFrame(
             type: "req",
             id: id,
@@ -1642,5 +1632,3 @@ extension GatewayChannelActor {
         waiter.resume(throwing: CancellationError())
     }
 }
-
-// Intentionally no `GatewayChannel` wrapper: the app should use the single shared `GatewayConnection`.

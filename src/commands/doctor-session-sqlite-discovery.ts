@@ -56,7 +56,7 @@ export type LegacySessionRecord = {
   sessionKey: string;
   transcriptPath?: string;
   transcriptDependencies: string[];
-  recovery?: { complete: boolean; repaired: boolean; events: number };
+  recovery?: { complete: boolean; repaired: boolean; events: number; sqliteEvents?: number };
   sourceFingerprint?: ReturnType<typeof readTranscriptFingerprint>;
   historical?: {
     originalPath: string;

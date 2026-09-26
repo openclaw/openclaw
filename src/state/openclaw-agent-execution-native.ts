@@ -79,7 +79,7 @@ export type AgentDatabaseNativeGeneration = {
   run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
-    assertCallerCurrent?: () => void,
+    assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing?: boolean,
   ): Promise<T | undefined>;
   close(): Promise<void>;
@@ -132,7 +132,7 @@ export function createAgentDatabaseNativeGeneration(
     (
       source: AgentDatabaseRequestExecutionSource,
       registration?: Registration,
-      assertCallerCurrent?: () => void,
+      assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     ): SqliteWorkerAdmissionFactory =>
     (operation) => {
       const assertPreparationJournal = captureAgentDatabasePreparationJournal(agentId, {
@@ -144,7 +144,22 @@ export function createAgentDatabaseNativeGeneration(
         context.admission.databasePath,
         context.admission.identity.canonicalPath,
       ];
-      const authorizeNative = (request: SqliteWorkerAdmissionRequest): boolean => {
+      const assertSourceCurrent = (identity?: AgentDatabaseExecutionIdentity) => {
+        source.assertCurrent();
+        assertCurrent();
+        // The reference checks its captured constraints; this owner checks the path last.
+        assertCallerCurrent?.(identity);
+        if (identity) {
+          assertExistingDatabaseIdentity(
+            pathname,
+            `file:${identity.physicalIdentity}`,
+            identity.birthtime,
+          );
+        }
+      };
+      const authorizeNative = (
+        request: SqliteWorkerAdmissionRequest,
+      ): AgentDatabaseExecutionIdentity | undefined => {
         const facts = request.facts;
         if (
           request.stage === "prepare" &&
@@ -170,16 +185,18 @@ export function createAgentDatabaseNativeGeneration(
             stateDatabasePath: lease.sharedStatePath,
             stateDatabaseIdentity: lease.sharedStateIdentity,
           });
-          return true;
+          return undefined;
         }
         assertCurrent();
-        assertCallerCurrent?.();
+        if (!nativeIdentity || creatingIdentity) {
+          assertCallerCurrent?.();
+        }
         if (request.stage === "prepare" && isRecord(facts) && facts.kind === "shared-owner") {
           if (!(facts.validationPort instanceof MessagePort)) {
             throw new Error("Agent worker lost its validation handoff port");
           }
           try {
-            source.assertCurrent();
+            assertSourceCurrent();
             publishOpenClawStateDatabaseWorkerAdmission(context.admission);
             const received = facts.lease;
             if (
@@ -215,19 +232,19 @@ export function createAgentDatabaseNativeGeneration(
           } finally {
             facts.validationPort.close();
           }
-          return true;
+          return undefined;
         }
         if (
           request.stage === "prepare" &&
           isRecord(facts) &&
           facts.kind === "agent-integrity-cached"
         ) {
-          source.assertCurrent();
+          assertSourceCurrent();
           if (!lease || !isDeepStrictEqual(facts.lease, lease)) {
             throw new Error("Agent integrity notice differs from its captured native lease");
           }
           quickCheckPending = true;
-          return true;
+          return undefined;
         }
         if (request.stage === "open") {
           if (!isDeepStrictEqual(facts, input)) {
@@ -246,23 +263,29 @@ export function createAgentDatabaseNativeGeneration(
           ) {
             throw new Error("Agent database operation belongs to another native owner");
           }
-          const receivedIdentity: AgentDatabaseExecutionIdentity = {
-            kind: "file",
-            physicalIdentity: received.physicalIdentity,
-            birthtime: received.birthtime,
-            incarnation: received.incarnation,
-            nativeLocation: received.nativeLocation,
-          };
-          assertExistingDatabaseIdentity(
-            pathname,
-            `file:${receivedIdentity.physicalIdentity}`,
-            receivedIdentity.birthtime,
-          );
+          const receivedIdentity: AgentDatabaseExecutionIdentity =
+            nativeIdentity ??
+            Object.freeze({
+              kind: "file",
+              physicalIdentity: received.physicalIdentity,
+              birthtime: received.birthtime,
+              incarnation: received.incarnation,
+              nativeLocation: received.nativeLocation,
+            });
           if (
             expectedIdentity &&
-            receivedIdentity.physicalIdentity !== expectedIdentity.physicalIdentity
+            (receivedIdentity.physicalIdentity !== expectedIdentity.physicalIdentity ||
+              (expectedIdentity.birthtime !== undefined &&
+                receivedIdentity.birthtime !== expectedIdentity.birthtime))
           ) {
             throw new Error("Agent database operation differs from its expected physical file");
+          }
+          if (!nativeIdentity) {
+            assertExistingDatabaseIdentity(
+              pathname,
+              `file:${receivedIdentity.physicalIdentity}`,
+              receivedIdentity.birthtime,
+            );
           }
           acceptFileIdentity({
             kind: "file",
@@ -274,8 +297,9 @@ export function createAgentDatabaseNativeGeneration(
             isRecord(facts) ? facts.agentDeletionJournalPresent : undefined,
           );
           nativeIdentity ??= receivedIdentity;
+          return nativeIdentity;
         }
-        return false;
+        return undefined;
       };
       return source.createAdmission({
         attachment: {
@@ -285,25 +309,28 @@ export function createAgentDatabaseNativeGeneration(
         nativeLocations,
         assertCurrent,
         authorize(request) {
-          if (authorizeNative(request)) {
-            return;
+          const identity = authorizeNative(request);
+          if (request.stage === "open" && registration) {
+            assertSourceCurrent();
+            registration.begin();
           }
-          source.assertCurrent();
-          assertCurrent();
-          assertCallerCurrent?.();
-          if (request.stage === "open") {
-            registration?.begin();
-          }
-          if (request.stage === "prepare" && nativeIdentity && isRecord(request.facts)) {
-            receiveValidation?.(nativeIdentity.physicalIdentity, request.facts.validation);
+          if (
+            request.stage === "prepare" &&
+            identity &&
+            receiveValidation &&
+            isRecord(request.facts)
+          ) {
+            assertSourceCurrent(identity);
+            receiveValidation(identity.physicalIdentity, request.facts.validation);
             receiveValidation = undefined;
           }
+          assertSourceCurrent(identity);
         },
       })(operation);
     };
   const open = (
     source: AgentDatabaseRequestExecutionSource,
-    assertCallerCurrent?: () => void,
+    assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing = false,
   ): Promise<Store | undefined> => {
     assertCurrent();
@@ -375,13 +402,14 @@ export function createAgentDatabaseNativeGeneration(
   async function run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
-    assertCallerCurrent?: () => void,
+    assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing = false,
   ): Promise<T | undefined> {
-    const store = await open(source, assertCallerCurrent, createIfMissing);
+    const store = openedStore ?? (await open(source, assertCallerCurrent, createIfMissing));
+    assertCurrent();
+    source.assertCurrent();
     assertCurrent();
     assertCallerCurrent?.();
-    source.assertCurrent();
     if (!store) {
       return undefined;
     }

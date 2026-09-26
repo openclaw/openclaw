@@ -22,6 +22,7 @@ import {
   settleSqliteWorkerJob,
   dispatchSqliteWorkerJob,
   settleFailedSqliteWorkerJobs,
+  type CompletedSqliteWorkerOutcome,
 } from "./sqlite-worker-broker-reply.js";
 import type {
   Actor,
@@ -34,6 +35,7 @@ import type {
   StoreClient,
   SqliteWorkerOpenCustody,
   SqliteWorkerInputPreparation,
+  SqliteWorkerInputRetention,
 } from "./sqlite-worker-broker.types.js";
 import {
   createSqliteWorkerClient,
@@ -90,8 +92,11 @@ export class SqliteWorkerBroker {
   });
   private draining?: Promise<void>;
 
-  reserveInputPreparation(inputBytes: number): SqliteWorkerInputPreparation {
-    return this.inputAdmission.reserveInputPreparation(inputBytes);
+  reserveInputPreparation(
+    inputBytes: number,
+    retention: SqliteWorkerInputRetention = "stream",
+  ): SqliteWorkerInputPreparation {
+    return this.inputAdmission.reserveInputPreparation(inputBytes, retention);
   }
 
   open<Operations extends SqliteWorkerOperations>(
@@ -440,8 +445,8 @@ export class SqliteWorkerBroker {
       return selected;
     }
     return this.lifecycle.createSlot(options, borrowedGenerationSlot, (slot) => ({
-      fail: (reason, currentError, openOutcome) =>
-        this.fail(slot, reason, currentError, openOutcome),
+      fail: (reason, currentError, openOutcome, completed) =>
+        this.fail(slot, reason, currentError, openOutcome, completed),
       finish: (job, error, value, settlement, closeReceipt) => {
         if (job.request.type === "close" && closeReceipt) {
           const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
@@ -656,6 +661,7 @@ export class SqliteWorkerBroker {
     reason: unknown,
     currentError?: Error,
     openOutcome?: "refused-before-agent-open",
+    completed?: CompletedSqliteWorkerOutcome,
   ): void {
     if (slot.failed) {
       return;
@@ -679,6 +685,7 @@ export class SqliteWorkerBroker {
       queued,
       error,
       currentError,
+      completed,
       openOutcome,
       retire: () => this.lifecycle.retire(slot),
       finish: (job, failure, value, settlement) =>

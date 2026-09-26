@@ -1,7 +1,11 @@
 import { deserialize, serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
-import { retainOpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
+import {
+  retainOpenClawStateWorkerErrorPayload,
+  hydrateOpenClawStateWorkerError,
+  type OpenClawStateWorkerErrorPayload,
+} from "../state/openclaw-state-worker-error.js";
 import {
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
@@ -262,8 +266,21 @@ function decodeSqliteWorkerReplyError(
   return failure;
 }
 
+function decodeSqliteWorkerCleanupError(payload: OpenClawStateWorkerErrorPayload): Error {
+  const failure = new Error("SQLite worker native cleanup failed");
+  retainOpenClawStateWorkerErrorPayload(failure, payload);
+  return hydrateOpenClawStateWorkerError(failure, { includeOrdinary: true });
+}
+
+export type CompletedSqliteWorkerOutcome = { value: unknown } | { error: unknown };
+
 export type SqliteWorkerReplyOwner = {
-  fail(reason: unknown, currentError?: Error, openOutcome?: "refused-before-agent-open"): void;
+  fail(
+    reason: unknown,
+    currentError?: Error,
+    openOutcome?: "refused-before-agent-open",
+    completed?: CompletedSqliteWorkerOutcome,
+  ): void;
   finish(
     job: Job,
     error?: unknown,
@@ -285,6 +302,18 @@ export function receiveSqliteWorkerReply(
     return;
   }
   if (!reply.ok) {
+    if (reply.cleanupFailure && job.nativeDispatched && !reply.retire) {
+      const admission = job.operationAdmission?.admission;
+      const failure =
+        admission?.failureSource === "domain" && !reply.admissionRefused
+          ? undefined
+          : admission?.failure;
+      const original = failure ?? decodeSqliteWorkerReplyError(job, reply.error);
+      owner.fail(decodeSqliteWorkerCleanupError(reply.cleanupFailure), undefined, undefined, {
+        error: original,
+      });
+      return;
+    }
     if (reply.openNotEntered && job.request.type === "open" && job.dispatchState) {
       job.dispatchState.openNotEntered = true;
     }
@@ -328,6 +357,17 @@ export function receiveSqliteWorkerReply(
     owner.fail(error);
     return;
   }
+  if (reply.cleanupFailure) {
+    const admission = job.operationAdmission?.admission;
+    const failure = admission?.failureSource === "domain" ? undefined : admission?.failure;
+    owner.fail(
+      decodeSqliteWorkerCleanupError(reply.cleanupFailure),
+      undefined,
+      undefined,
+      failure === undefined ? { value } : { error: failure },
+    );
+    return;
+  }
   slot.current = undefined;
   if (job.request.type === "close") {
     owner.finish(job, undefined, value, undefined, reply.closeReceipt);
@@ -362,6 +402,7 @@ export function settleFailedSqliteWorkerJobs({
   queued,
   error,
   currentError,
+  completed,
   openOutcome,
   retire,
   finish,
@@ -371,6 +412,7 @@ export function settleFailedSqliteWorkerJobs({
   queued: Job[];
   error: Error;
   currentError?: Error;
+  completed?: CompletedSqliteWorkerOutcome;
   openOutcome?: "refused-before-agent-open";
   retire: () => Promise<void>;
   finish: typeof settleSqliteWorkerJob;
@@ -378,7 +420,19 @@ export function settleFailedSqliteWorkerJobs({
   const retirement = retire();
   // Join native exit before releasing any operation that might have touched SQLite.
   const finishFailed = (retired: boolean, cleanupError?: unknown) => {
-    if (current) {
+    if (current && completed) {
+      process.emitWarning(
+        new Error("SQLite worker operation completed before native cleanup failed", {
+          cause: withSqliteWorkerCleanupFailure(error, cleanupError),
+        }),
+      );
+      finish(
+        current,
+        "error" in completed ? completed.error : undefined,
+        "value" in completed ? completed.value : undefined,
+        retired ? { kind: "completed" } : { kind: "unknown", error: cleanupError ?? error },
+      );
+    } else if (current) {
       const failure =
         currentError ??
         new SqliteWorkerError(

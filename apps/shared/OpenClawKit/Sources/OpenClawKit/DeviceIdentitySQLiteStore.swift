@@ -23,10 +23,6 @@ enum DeviceIdentitySQLiteStore {
         let modifiedAt: Date?
     }
 
-    private struct LegacyAuthCandidate {
-        let store: DeviceAuthStoreFile
-    }
-
     static func loadOrCreate(
         databaseURL: URL,
         destinationStateDirURL: URL,
@@ -541,7 +537,7 @@ enum DeviceIdentitySQLiteStore {
         profile: GatewayDeviceIdentityProfile,
         deviceId: String) throws
     {
-        let sourceAuth = try claims.compactMap { claim -> LegacyAuthCandidate? in
+        let sourceAuth = try claims.compactMap { claim -> DeviceAuthStoreFile? in
             let source = claim.source
             guard source.stateDirURL.standardizedFileURL != destinationStateDirURL.standardizedFileURL else {
                 return nil
@@ -552,7 +548,7 @@ enum DeviceIdentitySQLiteStore {
                 deviceId: deviceId)
         }
         if let firstSourceAuth = sourceAuth.first,
-           !sourceAuth.dropFirst().allSatisfy({ $0.store == firstSourceAuth.store })
+           !sourceAuth.dropFirst().allSatisfy({ $0 == firstSourceAuth })
         {
             throw DeviceIdentityStore.storageError(
                 "Legacy device auth sources conflict; all identity sources preserved")
@@ -560,7 +556,7 @@ enum DeviceIdentitySQLiteStore {
         guard let selectedAuth = sourceAuth.first else { return }
         // Cross-container auth remains at its source; only canonical SQLite rows move.
         try DeviceAuthStore.importLegacyStore(
-            selectedAuth.store,
+            selectedAuth,
             stateDirectoryURL: destinationStateDirURL,
             profile: profile)
     }
@@ -568,7 +564,7 @@ enum DeviceIdentitySQLiteStore {
     private static func readDeviceAuth(
         _ url: URL,
         beneath stateDirURL: URL,
-        deviceId: String) throws -> LegacyAuthCandidate?
+        deviceId: String) throws -> DeviceAuthStoreFile?
     {
         let before: LegacyFileSnapshot
         do {
@@ -600,7 +596,7 @@ enum DeviceIdentitySQLiteStore {
                 throw DeviceIdentityStore.storageError(
                     "Device auth does not belong to the migrated device identity; source preserved")
             }
-            return LegacyAuthCandidate(store: normalized)
+            return normalized
         } catch where DeviceAuthStore.isMissingFileError(error) {
             throw DeviceIdentityStore.storageError("Device auth changed during identity migration")
         }

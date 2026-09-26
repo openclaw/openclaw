@@ -4,11 +4,16 @@ import { parentPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { routeLogsToStderr } from "../logging/console.js";
 import { drainProcessOutput } from "../process/output-drain.js";
-import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
+import {
+  encodeOpenClawStateWorkerError,
+  type OpenClawStateWorkerErrorPayload,
+} from "../state/openclaw-state-worker-error.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   SQLITE_WORKER_PREPARE_COMMAND,
+  SQLITE_WORKER_PREPARE_ADMITTED,
+  SQLITE_WORKER_OPERATION_CLEANUP,
   SQLITE_WORKER_CLOSE_RECEIPT,
   type SqliteWorkerCloseReceipt,
   type SqliteWorkerPreparedBackend,
@@ -56,6 +61,7 @@ let pendingInput: StagedInput | undefined;
 const actorPaths = new Map<number, string>();
 const stateContexts = new Map<number, SqliteWorkerStateContext>();
 let sourceLoaderRegistered = false;
+let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
 let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
 
 function runWithActorFacts<T>(actor: number, operation: () => T): T {
@@ -78,6 +84,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   let completeResult = false;
   let inputNext = false;
   let openNotEntered = false;
+  let commandAdmissionRefused = false;
   try {
     let value: unknown;
     let closeReceipt: SqliteWorkerCloseReceipt | undefined;
@@ -100,21 +107,27 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       if (!backend) {
         throw new Error("SQLite worker actor is closed");
       }
-      const assertSettled = (failure?: { error: unknown }) => {
-        try {
-          const settlement: unknown = runInActorContext(request.actor, () =>
-            backend.assertSettled?.(),
-          );
-          if (
-            isPromise(settlement) ||
-            (isRecord(settlement) && typeof settlement.then === "function")
-          ) {
-            if (isPromise(settlement)) {
-              void settlement.catch(() => {});
-            }
-            throw new Error("SQLite worker settlement checks must remain synchronous");
+      // SAFETY: The broker serialized a command from this actor's typed store contract.
+      const typedCommand = command as SqliteWorkerCommand<SqliteWorkerOperations>;
+      const assertSettled = () => {
+        const settlement: unknown = runInActorContext(request.actor, () => ({
+          settlement: backend.assertSettled?.(),
+        })).settlement;
+        if (
+          isPromise(settlement) ||
+          (isRecord(settlement) && typeof settlement.then === "function")
+        ) {
+          if (isPromise(settlement)) {
+            void settlement.catch(() => {});
           }
-          return backend.assertSettled !== undefined;
+          throw new Error("SQLite worker settlement checks must remain synchronous");
+        }
+        return backend.assertSettled !== undefined;
+      };
+      const settleCommand = (failure?: { error: unknown }) => {
+        let verified: boolean;
+        try {
+          verified = assertSettled();
         } catch (error) {
           if (operationAdmission) {
             settleSqliteWorkerOperationContext(operationAdmission.context, "unknown");
@@ -130,9 +143,36 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           }
           throw error;
         }
+        try {
+          if (verified && backend[SQLITE_WORKER_OPERATION_CLEANUP]) {
+            const cleanup: unknown = runInActorContext(request.actor, () => ({
+              cleanup: backend[SQLITE_WORKER_OPERATION_CLEANUP]?.(typedCommand),
+            })).cleanup;
+            if (isPromise(cleanup) || (isRecord(cleanup) && typeof cleanup.then === "function")) {
+              if (isPromise(cleanup)) {
+                void cleanup.catch(() => {});
+              }
+              throw new Error("SQLite worker operation cleanup must remain synchronous");
+            }
+            assertSettled();
+          }
+        } catch (error) {
+          const cleanupError = error instanceof Error ? error : new Error(String(error));
+          nativeCleanupFailure =
+            encodeOpenClawStateWorkerError(cleanupError, { includeOrdinary: true }) ??
+            encodeOpenClawStateWorkerError(new Error("SQLite worker operation cleanup failed"), {
+              includeOrdinary: true,
+            });
+        } finally {
+          // Cleanup can still request live source authority; preserve the prior native outcome.
+          if (operationAdmission) {
+            settleSqliteWorkerOperationContext(
+              operationAdmission.context,
+              verified ? "completed" : "unknown",
+            );
+          }
+        }
       };
-      // SAFETY: The broker serialized a command from this actor's typed store contract.
-      const typedCommand = command as SqliteWorkerCommand<SqliteWorkerOperations>;
       const loading = backend[SQLITE_WORKER_PREPARE_COMMAND]?.(typedCommand.type);
       if (loading) {
         await loading;
@@ -142,6 +182,15 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         const preparation = runWithActorFacts(request.actor, () => backend.prepare?.(typedCommand));
         if (preparation !== undefined) {
           await preparation;
+        }
+        if (backend[SQLITE_WORKER_PREPARE_ADMITTED]) {
+          // Only the synchronous prefix inherits authority; deferred preparation does not.
+          const admitted = runInActorContext(request.actor, () => ({
+            preparation: backend[SQLITE_WORKER_PREPARE_ADMITTED]?.(typedCommand),
+          })).preparation;
+          if (admitted !== undefined) {
+            await admitted;
+          }
         }
         value = runInActorContext(request.actor, () =>
           withSqliteReaderOwner(
@@ -157,13 +206,13 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           ),
         ).result;
       } catch (error) {
-        const verified = assertSettled({ error });
-        if (operationAdmission) {
-          settleSqliteWorkerOperationContext(
-            operationAdmission.context,
-            verified ? "completed" : "unknown",
-          );
-        }
+        // Cleanup can replace the refusal; only settled command failures retain its provenance.
+        const admissionRefused =
+          operationAdmission?.actor === request.actor &&
+          operationAdmission.context.refusal !== undefined &&
+          operationAdmission.context.refusal === error;
+        settleCommand({ error });
+        commandAdmissionRefused = admissionRefused;
         throw error;
       }
       executed = true;
@@ -179,13 +228,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         throw new Error("SQLite worker operations must remain synchronous");
       }
-      const verified = assertSettled();
-      if (operationAdmission) {
-        settleSqliteWorkerOperationContext(
-          operationAdmission.context,
-          verified ? "completed" : "unknown",
-        );
-      }
+      settleCommand();
     };
     if (request.type === "result-next") {
       if (
@@ -301,6 +344,14 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         (SQLITE_WORKER_PREPARE_COMMAND in backend &&
           backend[SQLITE_WORKER_PREPARE_COMMAND] !== undefined &&
           typeof backend[SQLITE_WORKER_PREPARE_COMMAND] !== "function") ||
+        (SQLITE_WORKER_PREPARE_ADMITTED in backend &&
+          backend[SQLITE_WORKER_PREPARE_ADMITTED] !== undefined &&
+          (typeof backend[SQLITE_WORKER_PREPARE_ADMITTED] !== "function" ||
+            typeof backend.assertSettled !== "function")) ||
+        (SQLITE_WORKER_OPERATION_CLEANUP in backend &&
+          backend[SQLITE_WORKER_OPERATION_CLEANUP] !== undefined &&
+          (typeof backend[SQLITE_WORKER_OPERATION_CLEANUP] !== "function" ||
+            typeof backend.assertSettled !== "function")) ||
         (SQLITE_WORKER_CLOSE_RECEIPT in backend &&
           backend[SQLITE_WORKER_CLOSE_RECEIPT] !== undefined &&
           typeof backend[SQLITE_WORKER_CLOSE_RECEIPT] !== "function") ||
@@ -362,10 +413,11 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     const refusedOpen = request.type === "open" && error instanceof SqliteWorkerOpenRefusedError;
     const originalError = refusedOpen ? error.originalError : error;
     const admissionRefused =
-      request.type === "open" &&
-      operationAdmission?.actor === request.actor &&
-      operationAdmission.context.refusal !== undefined &&
-      operationAdmission.context.refusal === originalError;
+      commandAdmissionRefused ||
+      (request.type === "open" &&
+        operationAdmission?.actor === request.actor &&
+        operationAdmission.context.refusal !== undefined &&
+        operationAdmission.context.refusal === originalError);
     const failure =
       originalError instanceof Error ? originalError : new Error(String(originalError));
     const code = executed ? "outcome-unknown" : "code" in failure ? failure.code : undefined;
@@ -377,7 +429,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     reply = {
       id: request.id,
       ok: false,
-      ...(retire ? { retire: true } : {}),
+      ...(retire || (nativeCleanupFailure && executed) ? { retire: true } : {}),
       ...(refusedOpen ? { openOutcome: "refused-before-agent-open" } : {}),
       ...(openNotEntered ? { openNotEntered: true } : {}),
       ...(admissionRefused ? { admissionRefused: true } : {}),
@@ -400,6 +452,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     });
   }
   const complete = !reply.ok || (!pendingInput && !pendingResult);
+  if (complete && nativeCleanupFailure) {
+    reply.cleanupFailure = nativeCleanupFailure;
+    nativeCleanupFailure = undefined;
+  }
   if (reply.ok) {
     const bytes = ownedWorkerBytes(reply.value);
     port.postMessage({ ...reply, value: bytes }, [bytes.buffer]);

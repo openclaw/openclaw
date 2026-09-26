@@ -29,12 +29,18 @@ export type SqliteWorkerCloseReceipt = {
 
 // Source fixtures and compiled backends can load separate copies in the same Worker.
 export const SQLITE_WORKER_PREPARE_COMMAND = Symbol.for("openclaw.sqliteWorkerPrepareCommand");
+export const SQLITE_WORKER_PREPARE_ADMITTED = Symbol.for("openclaw.sqliteWorkerPrepareAdmitted");
+export const SQLITE_WORKER_OPERATION_CLEANUP = Symbol.for("openclaw.sqliteWorkerOperationCleanup");
 export const SQLITE_WORKER_CLOSE_RECEIPT = Symbol.for("openclaw.sqliteWorkerCloseReceipt");
 
 /** Internal preparation and cleanup facts; public SDK operation and close contracts stay unchanged. */
 export type SqliteWorkerPreparedBackend<Operations extends SqliteWorkerOperations> =
   SqliteWorkerBackend<Operations> & {
     [SQLITE_WORKER_PREPARE_COMMAND]?(commandType: keyof Operations): void | Promise<void>;
+    [SQLITE_WORKER_PREPARE_ADMITTED]?(
+      command: SqliteWorkerCommand<Operations>,
+    ): void | Promise<void>;
+    [SQLITE_WORKER_OPERATION_CLEANUP]?(command: SqliteWorkerCommand<Operations>): void;
     [SQLITE_WORKER_CLOSE_RECEIPT]?(): SqliteWorkerCloseReceipt | undefined;
   };
 
@@ -72,6 +78,7 @@ export type SqliteWorkerRequest = {
 
 export type SqliteWorkerReply = {
   id: number;
+  cleanupFailure?: OpenClawStateWorkerErrorPayload;
 } & (
   | {
       ok: true;

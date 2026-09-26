@@ -39,6 +39,7 @@ export async function runTaskRegistryWorkerOperation<Key extends keyof Operation
                 !(
                   request.stage === "commit" &&
                   (command.type === "tasks.bindRunOwner" ||
+                    command.type === "tasks.maintainCron" ||
                     command.type === "tasks.finalizeActive" ||
                     command.type === "tasks.settleUnstarted")
                 )) ||

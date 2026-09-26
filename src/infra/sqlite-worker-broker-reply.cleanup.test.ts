@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import type { MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
+  settleFailedSqliteWorkerJobs,
   settleSqliteWorkerJob,
   withSqliteWorkerCleanupFailure,
 } from "./sqlite-worker-broker-reply.js";
@@ -136,6 +138,64 @@ afterEach(() => {
 });
 
 describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () => {
+  it.each([
+    { outcome: "value", retired: true },
+    { outcome: "error", retired: true },
+    { outcome: "value", retired: false },
+    { outcome: "error", retired: false },
+  ] as const)(
+    "preserves a completed $outcome after joining failed native cleanup (retired: $retired)",
+    async ({ outcome, retired }) => {
+      const current = jobWithCleanup();
+      const queued = jobWithCleanup();
+      queued.job.nativeDispatched = false;
+      const value = { revision: 42 };
+      const original = new Error("Original operation refused");
+      const cleanup = new Error("Native operation cleanup failed");
+      const retirementFailure = new Error("Worker retirement could not be confirmed");
+      const queuedError = new SqliteWorkerError("Worker retired before queued work", "unavailable");
+      const retirement = createDeferredCore();
+      settleFailedSqliteWorkerJobs({
+        current: current.job,
+        queued: [queued.job],
+        error: cleanup,
+        queuedError,
+        completed: outcome === "value" ? { value } : { error: original },
+        retire: () => retirement.promise,
+        finish: settleSqliteWorkerJob,
+      });
+      expect(current.resolve).not.toHaveBeenCalled();
+      expect(current.reject).not.toHaveBeenCalled();
+      expect(current.settleNative).not.toHaveBeenCalled();
+      expect(queued.reject).not.toHaveBeenCalled();
+      if (retired) {
+        retirement.resolve();
+      } else {
+        retirement.reject(retirementFailure);
+      }
+      await retirement.promise.catch(() => {});
+      expect(current.settleNative).toHaveBeenCalledExactlyOnceWith(
+        retired ? { kind: "completed" } : { kind: "unknown", error: retirementFailure },
+      );
+      if (outcome === "value") {
+        expect(current.resolve).toHaveBeenCalledExactlyOnceWith(value);
+        expect(current.reject).not.toHaveBeenCalled();
+      } else {
+        expect(current.reject).toHaveBeenCalledExactlyOnceWith(original);
+        expect(current.resolve).not.toHaveBeenCalled();
+      }
+      expect(queued.resolve).not.toHaveBeenCalled();
+      expect(queued.reject).toHaveBeenCalledExactlyOnceWith(
+        retired ? queuedError : expect.objectContaining({ cause: queuedError }),
+      );
+      expect(effects.warnings).toEqual([
+        expect.objectContaining({
+          cause: retired ? cleanup : expect.objectContaining({ cause: cleanup }),
+        }),
+      ]);
+    },
+  );
+
   it.each(["closed", "overloaded", "unavailable", "outcome-unknown"] as const)(
     "retains %s through admission cleanup failures",
     (code) => {

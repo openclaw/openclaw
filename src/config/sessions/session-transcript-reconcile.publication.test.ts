@@ -273,7 +273,7 @@ it("delivers a committed finalization before close permits a physical successor"
                 const result = await worker.execute(command, commandOptions);
                 if (
                   !held &&
-                  command.type === "database.domain.execute" &&
+                  command.type === "database.domain.publish" &&
                   isRecord(command.input) &&
                   isRecord(command.input.command) &&
                   command.input.command.type === "finalize"
