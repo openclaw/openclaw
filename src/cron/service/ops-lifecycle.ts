@@ -243,10 +243,20 @@ export async function start(state: CronServiceState): Promise<void> {
   if (state.stopped || state.lifecycleGeneration !== generation) {
     return;
   }
-  await runMissedJobs(state, {
-    skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
-    deferAgentWork: true,
-  });
+  try {
+    await runMissedJobs(state, {
+      skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
+      deferAgentWork: true,
+    });
+  } catch (err) {
+    // Catch-up releases its timer fence even when a terminal write fails.
+    // Keep future jobs live without hiding that failure from the caller.
+    if (!state.stopped && state.lifecycleGeneration === generation) {
+      armTimer(state);
+      resumeForeignReceiptMonitor(state);
+    }
+    throw err;
+  }
 
   await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true });
