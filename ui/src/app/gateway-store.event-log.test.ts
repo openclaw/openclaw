@@ -26,10 +26,12 @@ const C_URL = "wss://gateway-c.example.test";
 
 describe("application gateway diagnostic history ownership", () => {
   let store: ReturnType<typeof createGatewayStoreTestStore>;
+  let stopDiagnostics: () => void;
 
   beforeEach(() => {
     stubGatewayStoreTestGlobals();
     store = createGatewayStoreTestStore();
+    stopDiagnostics = store.gateway.subscribeEventLog(() => {});
     store.gateway.start();
     store.current().opts.onHello?.(hello("account-a"));
     store.current().opts.onEvent?.(A_EVENT);
@@ -41,6 +43,42 @@ describe("application gateway diagnostic history ownership", () => {
     setAvatarGatewayOrigin(null);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("captures bounded immutable history only while diagnostics is subscribed", () => {
+    const { gateway, current } = store;
+    stopDiagnostics();
+    const idleHistory = gateway.eventLog;
+    const delivered = vi.fn();
+    gateway.subscribeEvents(delivered);
+    current().opts.onEvent?.(A_EVENT);
+    expect(gateway.eventLog).toBe(idleHistory);
+    expect(gateway.eventLog).toEqual([]);
+    expect(delivered).toHaveBeenCalledExactlyOnceWith(A_EVENT);
+
+    const observed = vi.fn();
+    const stopFirst = gateway.subscribeEventLog(observed);
+    const stopSecond = gateway.subscribeEventLog(() => {});
+    current().opts.onEvent?.(A_EVENT);
+    const captured = gateway.eventLog;
+    stopFirst();
+    for (let index = 0; index < 251; index++) {
+      current().opts.onEvent?.(createGatewayEvent("chat", { index }));
+    }
+    expect(observed).toHaveBeenCalledOnce();
+    expect(captured.map((entry) => entry.payload)).toEqual([A_EVENT.payload]);
+    expect(gateway.eventLog).toHaveLength(250);
+    expect(gateway.eventLog[0]?.payload).toEqual({ index: 250 });
+    expect(gateway.eventLog.at(-1)?.payload).toEqual({ index: 1 });
+
+    stopSecond();
+    expect(gateway.eventLog).toEqual([]);
+    expect(gateway.eventLogRevision).toBe(0);
+    const stopReopened = gateway.subscribeEventLog(observed);
+    expect(gateway.eventLog).toEqual([]);
+    current().opts.onEvent?.(B_EVENT);
+    expect(gateway.eventLog.map((entry) => entry.payload)).toEqual([B_EVENT.payload]);
+    stopReopened();
   });
 
   it.each([

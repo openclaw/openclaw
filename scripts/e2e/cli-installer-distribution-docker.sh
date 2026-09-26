@@ -134,6 +134,7 @@ docker_e2e_docker_run_cmd run -d \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
+    rm -f -- /node_modules
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl
     rm -rf /var/lib/apt/lists/*

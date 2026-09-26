@@ -349,7 +349,7 @@ describeControlUiE2e("Board split transcript restore", () => {
     await expect
       .poll(() => terminalPanel.evaluate((element) => element.getBoundingClientRect().width))
       .toBeGreaterThan(widthBeforeExpand);
-    await expectSidePanelTabs(page, ["Dashboard", "Browser", "Chat"], false);
+    await expectSidePanelTabs(page, ["Dashboard", "Browser", "OpenClaw"], false);
     await recordStep("transition-01-expanded");
 
     await page
