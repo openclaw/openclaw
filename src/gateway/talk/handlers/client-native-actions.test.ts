@@ -248,6 +248,8 @@ describe("native Talk action ownership through public plugin registration", () =
         const { socket, result } = await connectNativeSession(fixture);
         socket.serverEvent(nativeTranscript(spoken));
         await flushNativeTranscript(result);
+        // Finish publication before delegation admission rotates the registry generation.
+        await Promise.all(publications);
         socket.serverEvent(nativeDelegation("custody-request", delegated));
         await providerStarted.promise;
         expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
