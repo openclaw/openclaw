@@ -240,6 +240,40 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(panel.renderRoot.querySelector(".bp")).not.toBeNull();
   });
 
+  it("keeps an open dock's reservation while an embedded panel renders and unmounts", async () => {
+    localStorage.setItem(
+      "openclaw.browser.panel.v1",
+      JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
+    );
+    type TestPanel = HTMLElement & {
+      available: boolean;
+      presented: boolean;
+      handleToggleRequest: (event: Event) => void;
+      updateComplete: Promise<unknown>;
+    };
+    const dock = document.createElement("openclaw-browser-panel") as unknown as TestPanel;
+    const embedded = document.createElement("openclaw-browser-panel") as unknown as TestPanel;
+    // Chat side panels mount their Browser with the static `embedded` attribute.
+    embedded.setAttribute("embedded", "");
+    dock.available = embedded.available = true;
+    document.body.append(dock, embedded);
+    await Promise.all([dock.updateComplete, embedded.updateComplete]);
+    const reservation = () =>
+      document.documentElement.style.getPropertyValue("--oc-browser-reserve-right");
+    expect(reservation()).toBe("560px");
+
+    embedded.presented = true;
+    await embedded.updateComplete;
+    expect(reservation()).toBe("560px");
+    embedded.remove();
+    expect(reservation()).toBe("560px");
+
+    dock.handleToggleRequest(
+      new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
+    );
+    expect(reservation()).toBe("0px");
+  });
+
   it("waits for availability before restoring after suppression", async () => {
     localStorage.setItem(
       "openclaw.browser.panel.v1",
