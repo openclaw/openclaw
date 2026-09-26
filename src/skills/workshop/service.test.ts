@@ -1011,12 +1011,32 @@ describe("skill workshop proposals", () => {
     ).resolves.toEqual({ proposalId: rejected.record.id, purged: true });
     expect(await inspectSkillProposal(rejected.record.id)).toBeNull();
     expect(await inspectSkillProposal(pending.record.id)).not.toBeNull();
+    const database = openOpenClawStateDatabase({ env: testEnv });
+    const events = database.db
+      .prepare("SELECT COUNT(*) AS count FROM skill_workshop_proposal_events WHERE proposal_id = ?")
+      .get(rejected.record.id) as { count: number };
+    expect(events.count).toBe(0);
     await expect(
       fs.readFile(path.join(workshopSkillsDir(), "keep-applied", "SKILL.md"), "utf8"),
     ).resolves.toContain("# Applied");
     await expect(
       fs.access(path.join(stateDir, "skill-workshop", "proposals", rejected.record.id)),
     ).rejects.toThrow();
+
+    const interrupted = await proposeCreateSkill({
+      workspaceDir,
+      name: "Interrupted Purge",
+      description: "Retry artifact removal",
+      content: "# Interrupted\n",
+    });
+    await rejectSkillProposal({ workspaceDir, proposalId: interrupted.record.id });
+    await fs.rm(path.join(stateDir, "skill-workshop", "proposals", interrupted.record.id), {
+      recursive: true,
+    });
+    await expect(
+      purgeRejectedSkillProposal({ workspaceDir, proposalId: interrupted.record.id }),
+    ).resolves.toMatchObject({ purged: true });
+    expect(await inspectSkillProposal(interrupted.record.id)).toBeNull();
   });
 
   it("reconciles a create apply interrupted after the live skill write", async () => {
