@@ -266,5 +266,4 @@ describe("msteams group conversation allowlist authorization", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
-
 });

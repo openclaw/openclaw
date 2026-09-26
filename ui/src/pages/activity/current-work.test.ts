@@ -193,9 +193,7 @@ it.each([false, true])(
     await vi.advanceTimersByTimeAsync(5_000);
     expect(controller.result?.sessions).toEqual([]);
     expect(
-      publications
-        .slice(terminalPublication)
-        .some((rows) => rows?.some((row) => row.hasActiveRun)),
+      publications.slice(terminalPublication).some((rows) => rows?.some((row) => row.hasActiveRun)),
     ).toBe(false);
     expect(request).toHaveBeenCalledTimes(3);
   },

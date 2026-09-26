@@ -71,10 +71,8 @@ let createThreadBindingManager: typeof import("./thread-bindings.js").createThre
 let createDiscordMessageDispatcher: typeof import("./message-dispatcher.js").createDiscordMessageDispatcher;
 
 beforeAll(async () => {
-  ({
-    preflightDiscordMessage,
-    shouldIgnoreBoundThreadWebhookMessage,
-  } = await import("./message-handler.preflight.js"));
+  ({ preflightDiscordMessage, shouldIgnoreBoundThreadWebhookMessage } =
+    await import("./message-handler.preflight.js"));
   ({ createThreadBindingManager, createNoopThreadBindingManager } =
     await import("./thread-bindings.js"));
   ({ createDiscordMessageDispatcher } = await import("./message-dispatcher.js"));

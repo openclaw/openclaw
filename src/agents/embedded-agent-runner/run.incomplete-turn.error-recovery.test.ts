@@ -347,5 +347,4 @@ describe("incomplete-turn error recovery", () => {
     expect(incompleteTurnText).toContain("couldn't generate a response");
     expect(incompleteTurnText).toContain("verify before retrying");
   });
-
 });
