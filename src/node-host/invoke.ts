@@ -30,6 +30,7 @@ import {
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 import {
   requestExecHostViaSocket,
+  resolveExecHostResponseTimeoutMs,
   type ExecHostRequest,
   type ExecHostResponse,
 } from "../infra/exec-host.js";
@@ -346,6 +347,7 @@ async function runViaMacAppExecHost(params: {
     socketPath: approvals.socketPath,
     token: approvals.token,
     request,
+    timeoutMs: resolveExecHostResponseTimeoutMs(request.timeoutMs),
     signal: params.signal,
   });
 }
