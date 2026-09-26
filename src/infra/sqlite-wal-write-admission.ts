@@ -90,7 +90,7 @@ export function createSqliteWalMaintenanceScheduler(
         }
       };
       pending = run()
-        .catch((error) => {
+        .catch((error: unknown) => {
           if (prepare(pageBudget)) {
             onError(error);
           }

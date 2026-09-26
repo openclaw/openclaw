@@ -56,7 +56,7 @@ export function createStateDatabaseWalOwner(
       const unregister = asyncResources.register({
         async close(selected) {
           if (selected && selected.key !== identity.key) {
-            return;
+            return undefined;
           }
           cancel();
           // The broker retains native cleanup; this owner joins accepted work before retirement.
