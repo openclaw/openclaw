@@ -12,6 +12,10 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  publishSystemEventStoreResolver,
+  registerSystemEventStoreOwner,
+} from "../infra/system-event-ownership.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -227,6 +231,37 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
         clearRuntimeConfigSnapshot();
       }
     });
+
+    const retireStoreOwner = vi.fn();
+    const storeOwnerKey = Symbol.for("openclaw.test.managedReloadStoreOwner");
+    registerSystemEventStoreOwner(storeOwnerKey, retireStoreOwner);
+    try {
+      const commit = expectDefined(hoisted.onRuntimeConfigCommitted, "runtime config commit");
+      const neutralConfig: OpenClawConfig = {
+        ...initialConfig,
+        ui: { prefs: { sidebarEntries: ["route:usage"] } },
+      };
+      commit(buildGatewayReloadPlan(["ui.prefs.sidebarEntries"]), neutralConfig);
+      commit(buildGatewayReloadPlan(["logging.level"]), {
+        ...neutralConfig,
+        logging: { level: "debug" },
+      });
+      expect(retireStoreOwner).not.toHaveBeenCalled();
+
+      const replacementConfig: OpenClawConfig = {
+        ...neutralConfig,
+        session: { store: "/tmp/replacement-sessions.json" },
+      };
+      commit(buildGatewayReloadPlan(["session.store"]), replacementConfig);
+      expect(retireStoreOwner).toHaveBeenCalledOnce();
+      commit(buildGatewayReloadPlan(["env.OPENCLAW_STATE_DIR"]), replacementConfig);
+      expect(retireStoreOwner).toHaveBeenCalledTimes(2);
+      commit(buildGatewayReloadPlan(["ui.prefs.sidebarEntries"]), replacementConfig);
+      expect(retireStoreOwner).toHaveBeenCalledTimes(2);
+    } finally {
+      registerSystemEventStoreOwner(storeOwnerKey, () => {});
+      publishSystemEventStoreResolver(undefined);
+    }
 
     await reloader.stop();
     expect(hoisted.stop).toHaveBeenCalledOnce();

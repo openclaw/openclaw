@@ -1,5 +1,6 @@
 // Verifies runtime config snapshots preserve normalized public settings.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
@@ -41,6 +42,48 @@ function resetRuntimeConfigState(): void {
 describe("runtime snapshot state", () => {
   afterEach(() => {
     resetRuntimeConfigState();
+  });
+
+  it.each<[string, OpenClawConfig, string]>([
+    [
+      "sidebar preferences",
+      { ui: { prefs: { sidebarEntries: ["sessions"] } } },
+      "config-presentation",
+    ],
+    ["logging", { logging: { level: "debug" } }, "config-presentation"],
+    [
+      "identity scopes",
+      { gateway: { auth: { identityScopes: { "reader@example.test": ["operator.read"] } } } },
+      "config-presentation",
+    ],
+    [
+      "agent identity",
+      { agents: { entries: { main: { identity: { name: "Renamed" } } } } },
+      "config-profiles",
+    ],
+    ["agent addition", { agents: { entries: { main: {}, other: {} } } }, "config"],
+    ["agent removal", { agents: { entries: {} } }, "config"],
+    [
+      "model defaults",
+      { agents: { entries: { main: {} }, defaults: { model: "unit-test/changed" } } },
+      "config",
+    ],
+    ["catalog", { models: { mode: "replace", providers: {} } }, "config"],
+    ["session policy", { session: { scope: "global" } }, "config"],
+    ["store topology", { session: { store: "/tmp/synthetic-session-store.sqlite" } }, "config"],
+    ["visibility", { tools: { sessions: { visibility: "all" } } }, "config"],
+    ["avatar route", { gateway: { controlUi: { basePath: "/changed" } } }, "config"],
+  ])("publishes the projection impact of %s", (_label, change, scope) => {
+    const initial: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(initial);
+    const published = vi.fn();
+    const stop = sessionChanges.subscribe(published);
+    try {
+      setRuntimeConfigSnapshot({ ...initial, ...change });
+      expect(published).toHaveBeenCalledExactlyOnceWith({ all: true, scope });
+    } finally {
+      stop();
+    }
   });
 
   it("pins the first successful load in memory until the snapshot is cleared", () => {

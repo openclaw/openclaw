@@ -209,11 +209,6 @@ export function seedSessionRowEntries(params: {
       const row = create(fields, entry);
       put(row);
       acquisitions.push({ row, entry });
-    } else {
-      const row = rows.get(id)!;
-      if (row.entry?.archivedAt !== undefined) {
-        acquisitions.push({ row, entry });
-      }
     }
   }
   for (const id of rows.keys()) {
