@@ -8,6 +8,10 @@ const quickchatSource = readFileSync(
   new URL("../apps/linux/ui/quickchat.js", import.meta.url),
   "utf8",
 );
+const quickchatHtml = readFileSync(
+  new URL("../apps/linux/ui/quickchat.html", import.meta.url),
+  "utf8",
+);
 const tauriConfig = JSON.parse(
   readFileSync(new URL("../apps/linux/src-tauri/tauri.conf.json", import.meta.url), "utf8"),
 ) as {
@@ -68,11 +72,14 @@ function canvasMessage(role: string, url: string) {
   };
 }
 
-function createFakeElement(tagName = "div") {
+function createFakeElement(
+  tagName = "div",
+  track?: { log: string[]; name: string },
+) {
   const classes = new Set();
   const children: any[] = [];
   const styles = new Map<string, string>();
-  return {
+  const element: Record<string, any> = {
     tagName: tagName.toUpperCase(),
     children,
     dataset: {},
@@ -102,8 +109,6 @@ function createFakeElement(tagName = "div") {
       },
     },
     value: "",
-    textContent: "",
-    hidden: false,
     disabled: false,
     readOnly: false,
     scrollHeight: 0,
@@ -140,12 +145,43 @@ function createFakeElement(tagName = "div") {
     },
     setAttribute() {},
   };
+
+  let textContent = "";
+  let hidden = false;
+  Object.defineProperty(element, "textContent", {
+    enumerable: true,
+    get: () => textContent,
+    set(value: string) {
+      textContent = value;
+      if (track && value !== "") {
+        track.log.push(`${track.name}.textContent=${JSON.stringify(value)}`);
+      }
+    },
+  });
+  Object.defineProperty(element, "hidden", {
+    enumerable: true,
+    get: () => hidden,
+    set(value: boolean) {
+      hidden = value;
+      if (track) {
+        track.log.push(`${track.name}.hidden=${value}`);
+      }
+    },
+  });
+
+  return element;
 }
 
 function createQuickChatHarness(): Record<string, any> {
   const browserBindingsEnd = quickchatSource.indexOf("elements.input.addEventListener");
   assert.notEqual(browserBindingsEnd, -1, "quickchat browser binding boundary");
   const elements = new Map();
+  const mutationLog: string[] = [];
+  elements.set("#reply", createFakeElement("div", { log: mutationLog, name: "reply" }));
+  elements.set(
+    "#reply-state",
+    createFakeElement("span", { log: mutationLog, name: "replyState" }),
+  );
   const sends: Array<{
     resolve: (value: unknown) => void;
     reject: (error: Error) => void;
@@ -338,6 +374,8 @@ this.harness = {
   readOnly() { return elements.input.readOnly; },
   sendDisabled() { return elements.send.disabled; },
   replyVisible() { return !elements.reply.hidden; },
+  replyState() { return elements.replyState.textContent; },
+  replyStateHidden() { return elements.reply.hidden || elements.replyState.hidden; },
   thinking() { return !elements.replyThinking.hidden; },
   draft() { return elements.input.value; },
   error() { return elements.status.textContent; },
@@ -386,6 +424,7 @@ this.harness = {
     syncedHasWidgets: () => syncedHasWidgets,
     syncedExpanded: () => syncedExpanded,
     syncedGeneration: () => syncedGeneration,
+    mutationLog: () => mutationLog.slice(),
     widgetSyncCount: () => widgetSyncCount,
     deferWidgetSync: () => {
       deferWidgetSync = true;
@@ -438,6 +477,130 @@ test("gateway state updates and clears the Quick Chat user accent", () => {
 
   harness.emitGatewayState({ state: "up" });
   assert.equal(harness.accent(), "");
+});
+
+test("the reply state label stays in the accessibility tree so an aborted reply is announced", () => {
+  const replyStateMarkup = quickchatHtml.match(/<span id="reply-state"[^>]*>/u)?.[0];
+  assert.ok(replyStateMarkup, "the #reply-state element exists in quickchat.html");
+  // #reply-state is where applyChatEvent writes "Stopped" for an aborted reply. Its parent
+  // #reply section is aria-live="polite", but aria-hidden on this element itself removes it
+  // from the accessibility tree entirely, so a screen reader never announces that text.
+  assert.doesNotMatch(
+    replyStateMarkup as string,
+    /aria-hidden\s*=\s*"true"/u,
+    "the reply state label must not be hidden from assistive tech, or a stopped/aborted reply is never announced",
+  );
+});
+
+test("an aborted reply while expanded lands the Stopped label in a genuinely visible ancestor chain", async () => {
+  const harness = createQuickChatHarness();
+  harness.setGatewayUp();
+  harness.setMessage("Do the thing");
+  const sending = harness.send(false);
+  const target = { sessionKey: "global", agentId: "work", runId: "expanded-run" };
+  harness.resolveSend(target);
+  await sending;
+  await harness.drain();
+  assert.equal(harness.replyVisible(), true, "reply starts expanded after send");
+
+  const logBeforeEvent = harness.mutationLog().length;
+  harness.handleChatEvent({ ...target, state: "aborted" });
+  await harness.drain();
+
+  // Text alone is not enough: the announcement only reaches assistive tech if no ancestor
+  // (including #reply itself, which the collapse toggle hides via the `hidden` property) is hidden.
+  assert.equal(harness.replyState(), "Stopped");
+  assert.equal(harness.replyStateHidden(), false, "#reply-state's ancestor chain must stay visible");
+  assert.equal(harness.replyVisible(), true, "an already-expanded reply stays expanded");
+
+  // When the reply is already expanded, expandReplyForAnnouncement() must be a no-op: it should
+  // never re-touch #reply's hidden flag, confirming the reorder is safe for the already-visible case.
+  const eventLog = harness.mutationLog().slice(logBeforeEvent);
+  assert.equal(
+    eventLog.some((entry: string) => entry.startsWith("reply.hidden=")),
+    false,
+    "expandReplyForAnnouncement() must not touch #reply.hidden when already expanded",
+  );
+});
+
+test("a reply stopped while the section is collapsed auto-expands so Stopped is still announced", async () => {
+  const harness = createQuickChatHarness();
+  harness.setGatewayUp();
+  harness.setMessage("Do the thing");
+  const sending = harness.send(false);
+  const target = { sessionKey: "global", agentId: "work", runId: "collapsed-run" };
+  harness.resolveSend(target);
+  await sending;
+  await harness.drain();
+
+  harness.handleChatEvent({ ...target, state: "delta", deltaText: "Working…" });
+  await harness.drain();
+  harness.toggleReply();
+  await harness.drain();
+  assert.equal(harness.replyVisible(), false, "user collapsed the reply section mid-stream");
+
+  // Setting #reply-state's text is not sufficient on its own: the ancestor #reply section still
+  // carries `hidden`, which removes the whole subtree (including the live region) from the
+  // accessibility tree regardless of any descendant's own aria-hidden state.
+  const logBeforeEvent = harness.mutationLog().length;
+  harness.handleChatEvent({ ...target, state: "aborted" });
+  await harness.drain();
+
+  assert.equal(harness.replyState(), "Stopped");
+  assert.equal(
+    harness.replyVisible(),
+    true,
+    "a terminal Stopped status must auto-expand the reply section, or the announcement never reaches assistive tech",
+  );
+  assert.equal(harness.replyStateHidden(), false, "#reply-state's ancestor chain must stay visible");
+
+  // The live region must be exposed (hidden=false) before its content changes, so assistive tech
+  // has already registered the region when the new text lands. See MDN's live-region guidance.
+  const eventLog = harness.mutationLog().slice(logBeforeEvent);
+  const exposedAt = eventLog.indexOf("reply.hidden=false");
+  const announcedAt = eventLog.indexOf('replyState.textContent="Stopped"');
+  assert.notEqual(exposedAt, -1, "#reply must be un-hidden while handling the aborted event");
+  assert.notEqual(announcedAt, -1, "#reply-state text must be set to Stopped");
+  assert.ok(
+    exposedAt < announcedAt,
+    `#reply must be exposed before #reply-state's text changes (log: ${JSON.stringify(eventLog)})`,
+  );
+});
+
+test("a connection drop while collapsed auto-expands so Interrupted is still announced", async () => {
+  const harness = createQuickChatHarness();
+  harness.setGatewayUp();
+  harness.setMessage("Do the thing");
+  const sending = harness.send(false);
+  const target = { sessionKey: "global", agentId: "work", runId: "collapsed-disconnect-run" };
+  harness.resolveSend(target);
+  await sending;
+  await harness.drain();
+  harness.toggleReply();
+  await harness.drain();
+  assert.equal(harness.replyVisible(), false);
+
+  const logBeforeEvent = harness.mutationLog().length;
+  harness.emitGatewayState({ state: "down" });
+  await harness.drain();
+
+  assert.equal(harness.replyState(), "Interrupted");
+  assert.equal(
+    harness.replyVisible(),
+    true,
+    "a disconnect-driven Interrupted status must auto-expand the reply section too",
+  );
+
+  // Same live-region contract as the aborted case: exposure must precede the content change.
+  const eventLog = harness.mutationLog().slice(logBeforeEvent);
+  const exposedAt = eventLog.indexOf("reply.hidden=false");
+  const announcedAt = eventLog.indexOf('replyState.textContent="Interrupted"');
+  assert.notEqual(exposedAt, -1, "#reply must be un-hidden while handling the disconnect");
+  assert.notEqual(announcedAt, -1, "#reply-state text must be set to Interrupted");
+  assert.ok(
+    exposedAt < announcedAt,
+    `#reply must be exposed before #reply-state's text changes (log: ${JSON.stringify(eventLog)})`,
+  );
 });
 
 test("widget child webviews inherit no Quick Chat Tauri capability", () => {
