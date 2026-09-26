@@ -720,13 +720,15 @@ suite.define(() => {
     await currentPage.getByText("saved 875.3k tokens", { exact: true }).waitFor();
     await currentPage.locator(".agent-chat__input textarea").fill("keep working");
     // The working timer starts at the send click; pause first so the elapsed
-    // reading is exactly the fastForward below, not inflated by real time.
+    // reading includes only the virtual advancement below, not real time.
     await pauseVirtualClock(currentPage);
     await currentPage.getByRole("button", { name: "Send message" }).click();
     await gateway.waitForRequest("chat.send");
+    // Deliver the pane's pending render frame before waiting on its DOM.
+    await currentPage.clock.runFor(16);
     await currentPage.locator(".chat-working-indicator").waitFor();
 
-    await currentPage.clock.fastForward(177_000);
+    await currentPage.clock.fastForward(177_000 - 16);
 
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())

@@ -169,6 +169,11 @@ export function renderChatComposer(props: ChatComposerProps) {
       ? t("chat.mentions.unsupported")
       : null;
   const commitMenuDraft = (next: string, mentions?: readonly HumanMention[]) => {
+    const textarea = state.composerTextarea;
+    if (textarea && textarea.value !== next) {
+      textarea.value = next;
+      adjustTextareaHeight(textarea, { nativeInput: true });
+    }
     commitComposerDraft(props, next, mentions);
     props.onTypingChange?.(Boolean(next.trim()), next);
   };

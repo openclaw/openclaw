@@ -392,6 +392,8 @@ suite.define(() => {
 
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await composer.focus();
+          // Blur retires the distant focus-retained marker in the next pane commit.
+          await markerForIndex(60).waitFor({ state: "detached" });
           const strokeColors = () =>
             markers.evaluateAll((items) =>
               items.map(

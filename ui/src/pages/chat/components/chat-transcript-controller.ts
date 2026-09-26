@@ -27,6 +27,10 @@ export class ChatTranscriptController implements ReactiveController {
     return this.activeSessionKey;
   }
 
+  get isRestoringReaderPosition(): boolean {
+    return this.sessionVirtualizer?.isRestoringReaderPosition ?? false;
+  }
+
   renderSession(
     sessionKey: string,
     render: (transcript: ChatTranscriptSession) => TemplateResult,

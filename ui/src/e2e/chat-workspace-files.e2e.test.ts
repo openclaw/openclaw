@@ -98,6 +98,7 @@ suite.define(() => {
       ).toBe(0);
 
       await page.getByRole("button", { name: "Close Files" }).click();
+      await page.locator(".chat-workspace-rail").waitFor({ state: "detached" });
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
       await gateway.setMethodResponse("sessions.files.list", {
         files: [

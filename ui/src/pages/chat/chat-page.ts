@@ -253,8 +253,9 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       this.retainedSessions.settleRoute();
     }
     if (data && routeHandoffRendered) {
-      queueMicrotask(() => {
+      void routeHandoffRendered.then((committed) => {
         if (
+          committed &&
           this.isConnected &&
           this.presented &&
           this.paneData === data &&

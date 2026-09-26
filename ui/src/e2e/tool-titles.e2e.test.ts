@@ -124,6 +124,7 @@ suite.define(() => {
         const operation = activity.locator(".chat-tool-row", {
           hasText: "Inspect the workspace guide",
         });
+        await operation.waitFor();
         expect(await activity.locator(".chat-tool-row").count()).toBe(1);
         await operation.click();
         await activity.locator(".chat-tool-children .chat-tool-row--running").waitFor();

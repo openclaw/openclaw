@@ -320,6 +320,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     return this.announcement.text;
   }
 
+  get isRestoringReaderPosition(): boolean {
+    return this.prependAnchor.canRestore(this.offsetState);
+  }
+
   requestUpdate = () => this.host.requestUpdate();
 
   addController(controller: ReactiveController): void {
@@ -379,8 +383,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     const interactionResizePending = this.offsetState.pendingInteractionAnchor !== null;
     this.reconcileInteractionResize();
     if (
-      !this.offsetState.touching &&
-      !this.offsetState.touchScrolling &&
+      this.isRestoringReaderPosition &&
       this.prependAnchor.update(
         this.scrollElement,
         this.virtualizerController.getVirtualizer(),

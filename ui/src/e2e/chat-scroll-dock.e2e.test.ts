@@ -602,7 +602,10 @@ suite.define(() => {
         hasActiveRun: false,
         sessionKey: "agent:main:main",
       });
-      await page.getByText("Workspace checks complete.", { exact: true }).waitFor();
+      await page
+        .locator(".chat-bubble")
+        .getByText("Workspace checks complete.", { exact: true })
+        .waitFor();
       await waitForChatScrollIdle(page);
       report.final = await dockGeometry(page);
       expectDockClear(report);
