@@ -410,7 +410,12 @@ async function createQaLabSuiteResultFixture(params?: {
   };
 }
 
-async function writeEvidenceFixture(evidenceDir: string, id: string, artifactPaths: string[], artifactKind = "log") {
+async function writeEvidenceFixture(
+  evidenceDir: string,
+  id: string,
+  artifactPaths: string[],
+  artifactKind = "log",
+) {
   await writeFile(
     path.join(evidenceDir, "qa-evidence.json"),
     JSON.stringify({

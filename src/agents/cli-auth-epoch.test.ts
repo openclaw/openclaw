@@ -466,7 +466,9 @@ describe("resolveCliAuthEpoch", () => {
       token: "token-a",
       displayName: "Manual token",
     };
-    const store: AuthProfileStore = createAuthProfileStoreFixture({ "anthropic:token-only": credential });
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      "anthropic:token-only": credential,
+    });
     setCliAuthEpochTestDeps({
       readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => store,

@@ -102,7 +102,6 @@ describe("broadcast dispatch", () => {
     });
   }
 
-
   it("keeps the observer adapter isolated from active delivery", async () => {
     const activeDeliver = vi.fn(async () => undefined);
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({

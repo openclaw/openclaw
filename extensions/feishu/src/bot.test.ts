@@ -1,4 +1,7 @@
-import { buildChannelInboundEventContext, type BuiltChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  type BuiltChannelInboundEventContext,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   createPluginRuntimeMock,
   createTestInboundDebounceFlush,

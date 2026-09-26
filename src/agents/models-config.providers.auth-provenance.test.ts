@@ -778,22 +778,18 @@ describe("models-config provider auth provenance", () => {
   });
 
   function configuredVllmAuth(apiKey: string, env: NodeJS.ProcessEnv = {}) {
-    return createProviderApiKeyResolver(
-      env,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey,
-              api: "openai-completions",
-              models: [],
-            },
+    return createProviderApiKeyResolver(env, createAuthProfileStoreFixture({}), {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://127.0.0.1:8000/v1",
+            apiKey,
+            api: "openai-completions",
+            models: [],
           },
         },
       },
-    );
+    });
   }
 
   it("resolves custom configured env markers for catalog discovery", () => {
