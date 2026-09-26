@@ -13,6 +13,7 @@ import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
+import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import {
   clearOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantineFailure,
@@ -191,6 +192,8 @@ export function repairStateSchema(
       () => {
         applied.push(...recoverOrphanTaskDeliveryRows(db, pathname));
         const previousVersion = readStateSchemaMigrationVersion(db);
+        const includeAgentDeletionJournal =
+          tableExists(db, "agent_deletion_journal") || hasPreJournalStateSchema(db);
         const preAuditSchema = previousVersion === 1 && !tableExists(db, "audit_events");
         if (preAuditSchema) {
           assertOpenClawStateDatabaseOwner(db, { pathname });
@@ -253,6 +256,7 @@ export function repairStateSchema(
           }
           executeCanonicalStateSchema(db, {
             includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+            includeAgentDeletionJournal,
           });
           migrateLegacyCronRunLogsToTaskRuns(db);
           if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {

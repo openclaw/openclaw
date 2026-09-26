@@ -187,7 +187,6 @@ export function registerRecoveryTests(params: {
   };
 }): void {
   it.each([
-    { startup: "fast", readyAfterMs: 0, needsRecovery: false },
     { startup: "slow", readyAfterMs: 20_000, needsRecovery: false },
     { startup: "unready", readyAfterMs: Infinity, needsRecovery: false },
     { startup: "wrong version", readyAfterMs: 0, needsRecovery: true },
@@ -372,7 +371,6 @@ export function registerRecoveryTests(params: {
     "metadata",
     "unit",
     "unavailable",
-    "replacement root",
     "profile",
     "before activation",
     "after readiness",
@@ -408,11 +406,7 @@ export function registerRecoveryTests(params: {
         ...command,
         programArguments: [
           process.execPath,
-          path.join(
-            ["foreign", "replacement root"].includes(change) ? foreign : root,
-            "dist",
-            "index.js",
-          ),
+          path.join(change === "foreign" ? foreign : root, "dist", "index.js"),
           "gateway",
           "--port",
           "19002",

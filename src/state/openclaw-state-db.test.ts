@@ -36,6 +36,7 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
+import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
 import {
   readConfigMachineState,
   readConfigMachineStateWithMetadata,
@@ -3446,15 +3447,14 @@ describe("openclaw state database", () => {
           .get(tableName),
       ).toBeUndefined();
     }
-    const expected = createInitialStateSchemaShape("unavailable");
+    // Published v1 state has no deletion history to lose; migration initializes its journal.
+    const expected = createInitialStateSchemaShape();
     expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(migrated.db))).toEqual(
       normalizeSqliteSchemaShapeSql(expected),
     );
-    expect(
-      migrated.db
-        .prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'")
-        .get(),
-    ).toBeUndefined();
+    expect(readRetainedAgentDeletionsFromDatabase(migrated.db, fixture.databasePath)).toEqual({
+      status: "empty",
+    });
     // The fixture's auth_profile_stores row is keyed 'fixture-store', not the
     // production 'shared' key, so the v13 fold drops the table without
     // importing it into the KV.

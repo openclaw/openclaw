@@ -11,6 +11,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -271,6 +272,7 @@ describe("registered session PR subscriptions", () => {
       const load = vi.fn<Load>(async () => snapshot);
       const broadcast = vi.fn();
       const subscriptions = createControlUiSessionPullRequestSubscriptions({
+        scheduler: createTestGatewayScheduler(),
         broadcastToConnIds: broadcast,
         load,
         prepareRead: async (_connId, session) => async () => {
@@ -419,9 +421,6 @@ describe("registered session PR subscriptions", () => {
   ] as const)(
     "keeps a shared load for an unchanged viewer when the other $retired retires (delayed=$delayed)",
     async ({ retired, delayed }) => {
-      if (delayed) {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      }
       try {
         await withFixture("operator.read", async (f) => {
           const entered = createDeferredCore();
@@ -459,7 +458,7 @@ describe("registered session PR subscriptions", () => {
               f.access.abort(new Error("Original access retired"));
             }
             if (delayed) {
-              await vi.advanceTimersByTimeAsync(10_000);
+              await f.clock.advanceBy(10_000);
               await entered.promise;
               expect(
                 frames(peer.socket),
@@ -907,7 +906,6 @@ it.each(["concurrency limit", "earlier refresh", "refresh timer", "publication"]
         const lookedUp: string[] = [];
         const activeLoads = waitingOn === "concurrency limit" ? 4 : 1;
         if (waitingOn === "refresh timer") {
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           release.resolve();
         }
         vi.stubGlobal(
@@ -968,7 +966,7 @@ it.each(["concurrency limit", "earlier refresh", "refresh timer", "publication"]
           release.resolve();
           const settled = Promise.all([f.subscriptions.pollNow(), queuedRefresh]);
           if (waitingOn === "refresh timer") {
-            await vi.advanceTimersByTimeAsync(10_000);
+            await f.clock.advanceBy(10_000);
           }
           await settled;
           await retirement;

@@ -334,8 +334,14 @@ it.each(["present", "missing"] as const)(
       expect(snapshotPath && fs.existsSync(snapshotPath)).toBe(false);
 
       const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
-      expect(runtime.exit, output).not.toHaveBeenCalled();
-      expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+      if (heldPath) {
+        expect(runtime.exit, output).toHaveBeenCalledExactlyOnceWith(1);
+        expect(output).toContain("Failing check agent-deletion-journal");
+        expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+      } else {
+        expect(runtime.exit, output).not.toHaveBeenCalled();
+        expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+      }
       expect(output).toContain(`Warning: Rebuilt corrupt shared-state SQLite indexes: ${index}`);
       const backupLine = runtime.log.mock.calls
         .flat()
@@ -372,10 +378,19 @@ it.each(["present", "missing"] as const)(
           reason: `row 1 missing from index ${index}`,
         }),
       ).toBe(true);
+      runtime.exit.mockClear();
+      runtime.error.mockClear();
       await runCommandWithRuntime(runtime, () =>
         runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
       );
-      expect(runtime.exit, runtime.error.mock.calls.flat().join("\n")).not.toHaveBeenCalled();
+      if (heldPath) {
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+        expect(runtime.error.mock.calls.flat().join("\n")).toContain(
+          "Failing check agent-deletion-journal",
+        );
+      } else {
+        expect(runtime.exit, runtime.error.mock.calls.flat().join("\n")).not.toHaveBeenCalled();
+      }
       expect(
         openOpenClawStateDatabase({ env: state.env })
           .db.prepare("SELECT * FROM audit_events NOT INDEXED")

@@ -618,9 +618,9 @@ export class DiscordVoiceFollowing {
   }
 
   private resolveVoiceResidencyTarget(guildId: string): VoiceChannelResidency | null {
-    const autoJoinTarget = this.params.autoJoinChannels
-      .toReversed()
-      .find((entry) => entry.guildId === guildId);
+    const autoJoinTarget = this.params.autoJoinChannels.findLast(
+      (entry) => entry.guildId === guildId,
+    );
     if (autoJoinTarget?.whenOccupied) {
       return null;
     }

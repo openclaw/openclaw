@@ -153,6 +153,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/crabbox/src/crabbox-worker-project.test.ts",
   "extensions/crabbox/src/crabbox-worker-provider-desktop.test.ts",
   "extensions/crabbox/src/crabbox-worker-provider.test.ts",
+  "extensions/crabbox/src/crabbox-worker-stop.test.ts",
   "extensions/crabbox/src/crabbox-worker-provision-cancellation.test.ts",
   "extensions/crabbox/src/crabbox-worker-stop-lifetime.test.ts",
   "extensions/crabbox/src/crabbox-worker-warm-image-allocation.test.ts",
