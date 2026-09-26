@@ -72,7 +72,7 @@ export function createCliEventHandlers(params: {
     const item = projectAgentToolActivity({
       ...data,
       name: stripOpenClawMcpToolPrefix(data.name),
-      args: execution ? execution.args : data.args,
+      args: execution?.args ?? data.args,
     });
     const activity = { runId: runParams.runId, stream: "item", data: item };
     if (data.phase === "start") {

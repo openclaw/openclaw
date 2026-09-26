@@ -93,7 +93,7 @@ function collectToolEvents(runId: string): {
 } {
   const events: AgentEventRuntimePayload[] = [];
   const dispose = onAgentEvent((event) => {
-    if (event.runId === runId && event.stream === "tool") {
+    if (event.runId === runId && (event.stream === "tool" || event.stream === "item")) {
       events.push(event);
     }
   });
@@ -454,6 +454,10 @@ describe("cli tool result events", () => {
       expect(results[1]?.data.args).toBeUndefined();
       expect(results[1]?.data.isError).toBe(false);
       expect(results[2]?.data.args).toBeUndefined();
+      // Native tools report no executed args; the terminal row keeps the started command.
+      const [started, ended] = events.filter((event) => event.data.itemId === "tool:call-1");
+      expect(started?.data.meta).toEqual(expect.stringContaining("nope-not-a-command"));
+      expect(ended?.data).toMatchObject({ status: "failed", title: started?.data.title });
     } finally {
       dispose();
     }
