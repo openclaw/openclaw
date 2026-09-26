@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { DistArtifactOwnership } from "../../../scripts/lib/runtime-artifact-contract.js";
 import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
@@ -76,6 +77,8 @@ export type UpdateCommandOptions = {
     requesterAuthority?: UpdateRequesterAuthority;
     /** Live local executor only. A child must independently acquire its owner. */
     executorFence?: UpdateRecoveryFence;
+    /** Held by the installed driver until all activation/completion children join. */
+    artifactOwnership?: DistArtifactOwnership;
   };
   acceptCapabilities?: boolean;
   admission?: "auto" | "installed";

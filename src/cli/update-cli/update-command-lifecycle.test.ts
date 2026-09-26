@@ -182,6 +182,7 @@ vi.mock("./update-command-plugins.js", () => ({
 
 // Process fixtures cover runtime generation with real lifecycle ownership.
 vi.mock("./update-command-runtime.js", () => ({
+  prepareSourceUpdateRuntime: vi.fn(async () => undefined),
   completeSourceUpdateRuntime: vi.fn(async () => {
     record("runtime-completion");
     return { changed: false };

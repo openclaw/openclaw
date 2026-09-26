@@ -47,8 +47,15 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
   );
   const dynamicOwners = new Map<string, { expressions: string[]; targets: string[] }>([
     [
-      "scripts/lib/dist-artifact-ownership.mts",
-      { expressions: ["script"], targets: [generatorEntry] },
+      "scripts/lib/dist-artifact-lock.mts",
+      {
+        expressions: ["script", "legacyTarget.href", "target.href"],
+        targets: [
+          generatorEntry,
+          "scripts/stage-bundled-plugin-runtime.mts",
+          "scripts/lib/dist-artifact-ownership.mts",
+        ],
+      },
     ],
     [
       "scripts/lib/local-check-runtime.mts",

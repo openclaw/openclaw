@@ -225,6 +225,17 @@ downtime through convergence and final verification, plus verification
 results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
 
+Source updates also admit build-artifact ownership and runtime staging access in
+the installed checkout before stopping the Gateway. A retained
+`.artifacts/dist-artifacts.lock` refuses the update with the recorded owner,
+timestamp, and exact recovery command while the serving Gateway stays running.
+Verify that all associated build/check processes, including detached descendants,
+have stopped before releasing that lock; a dead owner PID alone is insufficient.
+The repaired updater retains ownership through activation and completion. Older
+updaters that pass the source build-cache location, including 2026.9.6, let a
+candidate containing this fix check pre-existing installed-checkout locks before
+building. That older driver cannot retain this ownership across its later activation.
+
 The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
 This lets validation run while the serving Gateway keeps its configured ports.

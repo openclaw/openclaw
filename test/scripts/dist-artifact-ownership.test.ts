@@ -119,6 +119,8 @@ function installScripts(
   for (const file of [
     "scripts/lib",
     "scripts/windows-cmd-helpers.mjs",
+    "src/infra/windows-process-start.ts",
+    "src/infra/process-env.ts",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
   ]) {

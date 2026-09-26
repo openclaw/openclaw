@@ -50,6 +50,10 @@ import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js"
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../plugins/installed-plugin-index-records.js";
 import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store-write.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import { runExec } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
@@ -70,6 +74,7 @@ const POST_CORE_CONFIG_WRITER_MIN_VERSION = "2026.4.29";
 type PostCoreUpdateFailure = {
   status: "failed";
   error: string;
+  cleanup?: "joined" | "uncertain";
   failureFacts?: UpdateFailureFact[];
 };
 
@@ -109,6 +114,7 @@ export async function writePostCoreUpdateFailureFile(
   error: unknown,
 ): Promise<void> {
   if (filePath) {
+    const cleanup = hasCommandProcessCleanupError(error) ? "uncertain" : "joined";
     const failureFacts = collectUpdateDoctorFailureFacts(error);
     const failure = sanitizeTriageUpdateFailure(
       { error: formatErrorMessage(error) },
@@ -122,6 +128,7 @@ export async function writePostCoreUpdateFailureFile(
       {
         status: "failed",
         error: failure.error,
+        cleanup,
         ...(failureFacts.length ? { failureFacts } : {}),
       },
       { trailingNewline: true, dirMode: 0o700 },
@@ -240,6 +247,9 @@ async function readPostCoreUpdateResultFile(
       return {
         status: "failed",
         error: parsed.error,
+        ...(parsed.cleanup === "joined" || parsed.cleanup === "uncertain"
+          ? { cleanup: parsed.cleanup }
+          : {}),
         ...(facts.success && facts.data.length
           ? { failureFacts: normalizeUpdateFailureFacts(facts.data) }
           : {}),
@@ -271,9 +281,9 @@ async function stopPostCoreUpdateChild(child: ChildProcess): Promise<void> {
         { logOutput: false, timeoutMs: 5000 },
       );
       return;
-    } catch {
+    } catch (cause) {
       child.kill();
-      return;
+      throw new CommandProcessCleanupError({ cause });
     }
   }
   child.kill();
@@ -441,7 +451,10 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       await fs.writeFile(sentinelPath, JSON.stringify(sentinel), { mode: 0o600 });
       handoffEnv[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV] = sentinelPath;
     }
-    const child = spawn(nodeRunner, argv, {
+    await params.opts.run?.artifactOwnership?.assertOwned();
+    const childArgs =
+      (await params.opts.run?.artifactOwnership?.entryArgs(entryPath, argv.slice(1))) ?? argv;
+    const child = spawn(nodeRunner, childArgs, {
       cwd: params.root,
       stdio: childStdio,
       env: {
@@ -461,6 +474,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       child.stderr?.pipe(process.stderr);
     }
 
+    let artifactChildJoined = false;
     const childResult = await new Promise<
       | { kind: "exit"; exitCode: number }
       | { kind: "plugin-update"; pluginUpdate: PostCorePluginUpdateResult }
@@ -530,9 +544,13 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
         // Also join taskkill before handing control to Doctor or checkpoint capture.
         void termination
           .then(async () => {
+            if (terminationError || (childError && child.pid !== undefined)) {
+              params.opts.run?.artifactOwnership?.retainUnjoined();
+            }
             // Close may beat an in-flight poll. Read the final committed result
             // without signaling an exited writer or treating its signal as rollback.
             const finalResult = committed ?? (await readPostCoreUpdateResultFile(resultPath));
+            artifactChildJoined = !terminationError && !childError;
             if (finalResult && finalResult.status !== "failed") {
               tentativePluginIndex = undefined;
               resolve({ kind: "plugin-update", pluginUpdate: finalResult });
@@ -555,6 +573,23 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
         ? childResult.pluginUpdate
         : await readPostCoreUpdateResultFile(resultPath);
     const exitCode = childResult.kind === "exit" ? childResult.exitCode : 0;
+    if (postCoreResult?.status === "failed" && postCoreResult.cleanup !== "joined") {
+      params.opts.run?.artifactOwnership?.retainUnjoined();
+      if (postCoreResult.cleanup === "uncertain") {
+        throw new CommandProcessCleanupError({ cause: new Error(postCoreResult.error) });
+      }
+    }
+    if (
+      params.opts.run?.artifactOwnership &&
+      postCoreResult &&
+      artifactChildJoined &&
+      (postCoreResult.status !== "failed" || postCoreResult.cleanup === "joined")
+    ) {
+      if (child.pid === undefined) {
+        throw new Error("Completed artifact writer has no process identity.");
+      }
+      await params.opts.run.artifactOwnership.completeChild(child.pid);
+    }
     if (postCoreResult?.status === "failed") {
       // A phase exception did not commit plugin convergence. Keep its original
       // rollback behavior and carry the child cause through the existing handoff.
@@ -576,6 +611,9 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     }
     return { resumed: true, ...(pluginUpdate ? { pluginUpdate } : {}) };
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     try {
       await restoreTentativePluginIndex();
     } catch (rollbackError) {

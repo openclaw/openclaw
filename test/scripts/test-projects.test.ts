@@ -1025,6 +1025,10 @@ describe("scripts/test-projects changed-target routing", () => {
     ["scripts/lib/failed-trailer.mts", ["run-oxlint", "run-tsgo", "run-vitest", "changed-lanes"]],
     ["scripts/lib/managed-child-process.mts", ["managed-child-process"]],
     ["scripts/lib/dist-artifact-ownership.mts", ["dist-artifact-ownership"]],
+    [
+      "scripts/lib/dist-artifact-lock.mts",
+      ["dist-artifact-ownership", "worker-deploy-build-plugin"],
+    ],
   ] as const)(
     "routes %s through the lint status boundary and existing owners",
     (source, owners) => {

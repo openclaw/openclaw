@@ -4,6 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import {
+  acquireDistArtifactOwnership,
+  resolveDistArtifactLockPath,
+} from "../../../scripts/lib/dist-artifact-ownership.mts";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/io.js";
@@ -29,6 +33,7 @@ import {
   finishUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import * as childCommands from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
@@ -176,6 +181,7 @@ it.each<{
   backup?: boolean;
   windows?: boolean;
   handback?: boolean;
+  cleanup?: "normal" | "uncertain" | "thrown";
 }>([
   { pending: true, status: "skipped", windows: true },
   { pending: false, status: "error", windows: true },
@@ -185,8 +191,22 @@ it.each<{
   { pending: false, status: "error", backup: true },
   { pending: false, status: "error", candidateStartAttempted: false },
   { pending: false, status: "error", candidateStartAttempted: false, backup: true, windows: true },
+  {
+    pending: false,
+    status: "error",
+    candidateStartAttempted: false,
+    backup: true,
+    cleanup: "uncertain",
+  },
+  {
+    pending: false,
+    status: "error",
+    candidateStartAttempted: false,
+    backup: true,
+    cleanup: "thrown",
+  },
 ])(
-  "retains the backup across migrated finalization (pending=$pending, status=$status, start=$candidateStartAttempted, backup=$backup, windows=$windows)",
+  "retains the backup across migrated finalization (pending=$pending, status=$status, start=$candidateStartAttempted, backup=$backup, windows=$windows, cleanup=$cleanup)",
   async ({
     pending,
     status,
@@ -194,16 +214,23 @@ it.each<{
     backup,
     windows = false,
     handback = false,
+    cleanup = "normal",
   }) => {
     const exitCode = status === "skipped" ? 0 : 1;
     const reason = status === "skipped" ? "gateway-readiness-unverified" : "doctor-failed";
     const base = dirs.make("migrated-readiness-pending-");
     const { transaction, packageRoot } = await createRetainedPackageSwap(base);
+    const artifactOwnership =
+      cleanup === "normal" ? undefined : await acquireDistArtifactOwnership(packageRoot);
+    const artifactLock = resolveDistArtifactLockPath(packageRoot);
+    const ownerPath = path.join(artifactLock, "owner.json");
+    const ownerRecord = artifactOwnership ? await fs.readFile(ownerPath, "utf8") : undefined;
     const env = { OPENCLAW_STATE_DIR: path.join(base, "state") };
     const run = {
       runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
       env,
       activationTimeoutMs: 90_000,
+      artifactOwnership,
     };
     const configSnapshot = await createConfigIO({ env, observe: false }).readConfigFileSnapshot();
     const windowsRecovery = taskRecovery();
@@ -219,6 +246,9 @@ it.each<{
         }
         const input: MigratedUpdateFinalizationInput = JSON.parse(options.input);
         expect(input.params).not.toHaveProperty("databaseBackup");
+        if (cleanup === "thrown") {
+          throw new CommandProcessCleanupError();
+        }
         const result = {
           ...input.params.result,
           status,
@@ -258,12 +288,12 @@ it.each<{
           signal: null,
           killed: false,
           termination: "exit",
-          cleanup: "normal",
+          cleanup,
         };
       },
     );
 
-    const outcome = await continueMigratedUpdateInFreshProcess(
+    const continuation = continueMigratedUpdateInFreshProcess(
       {
         mutationStarted: true,
         result: { status: "ok", mode: "npm", root: packageRoot, steps: [], durationMs: 1 },
@@ -305,6 +335,23 @@ it.each<{
       },
       [],
     );
+    if (artifactOwnership) {
+      try {
+        await expect(continuation).rejects.toThrow(
+          cleanup === "thrown" ? "Command cleanup" : "terminal outcome",
+        );
+        expect((await fs.readdir(artifactLock)).some((entry) => entry.startsWith("child-"))).toBe(
+          false,
+        );
+        expect(complete).not.toHaveBeenCalled();
+        expect(rollback).not.toHaveBeenCalled();
+      } finally {
+        await artifactOwnership.release();
+      }
+      expect(await fs.readFile(ownerPath, "utf8")).toBe(ownerRecord);
+      return;
+    }
+    const outcome = await continuation;
 
     expect(outcome).toMatchObject({
       exitCode,

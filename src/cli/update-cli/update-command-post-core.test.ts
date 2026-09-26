@@ -2,7 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  acquireDistArtifactOwnership,
+  resolveDistArtifactLockPath,
+} from "../../../scripts/lib/dist-artifact-ownership.mts";
 import {
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
@@ -62,6 +67,8 @@ describe("continuePostCoreUpdateInFreshProcess", () => {
       const pidPath = path.join(root, "writer.pid");
       const argvPath = path.join(root, "argv.json");
       const handoffPath = path.join(root, "handoff-observation.json");
+      const artifactLock = resolveDistArtifactLockPath(root);
+      const artifactOwnerPath = path.join(artifactLock, "owner.json");
       const pluginInstallRecords: Record<string, PluginInstallRecord> = {
         demo: { source: "npm", spec: "@openclaw/demo@1.0.0" },
       };
@@ -71,6 +78,37 @@ describe("continuePostCoreUpdateInFreshProcess", () => {
       };
       await fs.mkdir(path.join(root, "dist"));
       await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "9999.0.0" }));
+      if (cooperative) {
+        const sourceRoot = fileURLToPath(new URL("../../../", import.meta.url));
+        // Native direct-run detection compares argv and module paths; this
+        // executable adapter must have its own physical fixture path.
+        for (const relative of [
+          "scripts/lib/dist-artifact-ownership.mts",
+          "scripts/lib/dist-artifact-lock.mts",
+          "scripts/lib/direct-run.mjs",
+          "scripts/lib/managed-child-process.mts",
+          "scripts/lib/repo-root.mjs",
+          "scripts/lib/vitest-resource-ownership.mts",
+          "scripts/lib/windows-taskkill.mjs",
+          "scripts/windows-cmd-helpers.mjs",
+          "src/infra/windows-process-start.ts",
+          "src/infra/process-env.ts",
+        ]) {
+          const destination = path.join(root, relative);
+          await fs.mkdir(path.dirname(destination), { recursive: true });
+          await fs.copyFile(path.join(sourceRoot, relative), destination);
+        }
+        await fs.mkdir(path.join(root, "node_modules", "@openclaw"), { recursive: true });
+        await fs.symlink(
+          path.join(sourceRoot, "node_modules", "@openclaw", "fs-safe"),
+          path.join(root, "node_modules", "@openclaw", "fs-safe"),
+          "dir",
+        );
+        await fs.writeFile(
+          path.join(root, "scripts", "stage-bundled-plugin-runtime.mts"),
+          "export {};\n",
+        );
+      }
       await fs.writeFile(
         path.join(root, "dist", "entry.mjs"),
         `import fs from "node:fs/promises";
@@ -93,6 +131,10 @@ await fs.writeFile(${JSON.stringify(handoffPath)}, JSON.stringify({
   marker: JSON.parse(await fs.readFile(path.join(resultDir, "handoff.json"), "utf8")),
   installRecords: await fs.readFile(process.env.OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH, "utf8"),
   sourceConfig: await fs.readFile(process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH, "utf8"),
+  ...(${JSON.stringify(cooperative)} ? {
+    artifactOwner: await fs.readFile(${JSON.stringify(artifactOwnerPath)}, "utf8"),
+    artifactClaim: (await fs.stat(path.join(${JSON.stringify(artifactLock)}, 'child-' + process.pid))).isFile(),
+  } : {}),
 }));
 await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify(pluginUpdate))});
 `,
@@ -101,12 +143,31 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       let settledAtReturn: string | undefined;
       let aliveAtReturn: boolean | undefined;
       let result: Awaited<ReturnType<typeof continuePostCoreUpdateInFreshProcess>>;
+      const artifactOwnership = cooperative
+        ? await acquireDistArtifactOwnership(root, { runtimeChildren: true })
+        : undefined;
+      const artifactOwnerRecord = artifactOwnership
+        ? await fs.readFile(artifactOwnerPath, "utf8")
+        : undefined;
       try {
         result = await continuePostCoreUpdateInFreshProcess({
           root,
           channel: "stable",
           requestedChannel: null,
-          opts: { json: true, yes: true, timeout: cooperative ? undefined : "3600" },
+          opts: {
+            json: true,
+            yes: true,
+            timeout: cooperative ? undefined : "3600",
+            ...(artifactOwnership
+              ? {
+                  run: {
+                    runId: "post-core-artifact-fixture",
+                    env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+                    artifactOwnership,
+                  },
+                }
+              : {}),
+          },
           pluginInstallRecords,
           preUpdateConfig,
           updateStartedAtMs: Date.now(),
@@ -115,6 +176,13 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         });
         settledAtReturn = await fs.readFile(settledPath, "utf8").catch(() => undefined);
         aliveAtReturn = isPidAlive(await readPidFile(pidPath));
+        if (artifactOwnership) {
+          await artifactOwnership.assertOwned();
+          expect(await fs.readFile(artifactOwnerPath, "utf8")).toBe(artifactOwnerRecord);
+          expect(
+            (await fs.readdir(artifactLock)).filter((entry) => entry.startsWith("child-")),
+          ).toEqual([]);
+        }
       } finally {
         // Join the real fixture even on the unsafe baseline before temp cleanup.
         const pid = await readPidFile(pidPath);
@@ -125,6 +193,10 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         }
         killPidIfAlive(pid);
         expect(await waitForPidToExit(pid)).toBe(true);
+        await artifactOwnership?.release();
+      }
+      if (artifactOwnership) {
+        await expect(fs.stat(artifactOwnerPath)).rejects.toMatchObject({ code: "ENOENT" });
       }
       expect(result).toEqual({ resumed: true, pluginUpdate });
       expect(JSON.parse(await fs.readFile(argvPath, "utf8"))).toEqual([
@@ -150,6 +222,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         },
         installRecords: `${JSON.stringify(pluginInstallRecords)}\n`,
         sourceConfig: `${JSON.stringify(preUpdateConfig)}\n`,
+        ...(artifactOwnership ? { artifactOwner: artifactOwnerRecord, artifactClaim: true } : {}),
       });
       await expect(fs.stat(handoff.resultDir)).rejects.toMatchObject({ code: "ENOENT" });
     },
@@ -176,7 +249,7 @@ describe("post-core result publication", () => {
       expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toEqual(
         outcome === "success"
           ? pluginUpdate
-          : { status: "failed", error: "Plugin finalization failed" },
+          : { status: "failed", error: "Plugin finalization failed", cleanup: "joined" },
       );
     },
   );

@@ -150,13 +150,16 @@ describe("command scope physical settlement", () => {
     async (api) => {
       const fixture = commandFixture();
       const failure = new Error("caller stopped");
+      let commandError: unknown;
       let scopeFinished = false;
       const scope = ownScope(async () => {
         const pending =
           api === "exec"
             ? runExec("fixture", [], { logOutput: false })
             : spawnCommand(["fixture"], { reject: false });
-        void pending.catch(() => {});
+        void pending.catch((error: unknown) => {
+          commandError = error;
+        });
         throw failure;
       }).finally(() => {
         scopeFinished = true;
@@ -167,6 +170,10 @@ describe("command scope physical settlement", () => {
       fixture.open();
       fixture.finish();
       expect(await outcome).toBe(failure);
+      if (api === "exec") {
+        expect(commandError).toMatchObject({ cleanup: "uncertain" });
+        expect(hasCommandProcessCleanupError(commandError)).toBe(true);
+      }
     },
   );
 
@@ -338,7 +345,9 @@ it("recognizes canonical cleanup through aggregates without trusting copied code
   const original = new CommandProcessCleanupError();
   expect(hasCommandProcessCleanupError(new AggregateError([original], "outer"))).toBe(true);
   expect(
-    hasCommandProcessCleanupError(Object.assign(new Error("other"), { code: original.code })),
+    hasCommandProcessCleanupError(
+      Object.assign(new Error("other"), { code: original.code, cleanup: original.cleanup }),
+    ),
   ).toBe(false);
   vi.resetModules();
   const duplicate = await import("./exec-result.js");

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import http, { Agent, createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import * as configFile from "../../config/config.js";
 import * as gatewayService from "../../daemon/service.js";
@@ -13,6 +14,7 @@ import * as gatewayCall from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import * as portInspection from "../../infra/ports-inspect.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import {
   updateRunStepsFromResultStep,
@@ -25,6 +27,8 @@ import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import * as readiness from "./update-command-readiness.js";
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import {
   gatewayServiceCommandUsesRoot,
   inspectManagedGatewayServiceBeforeUpdate,
@@ -34,6 +38,193 @@ const { executionParams, inspectOrStopService, mocks, schemaContext, successfulU
   await import("./update-command-execution.test-support.js");
 
 describe("mutable update validation", () => {
+  it.each([
+    { owner: "dead", stager: "current" },
+    { owner: "live", stager: "current" },
+    { owner: "absent", stager: "current" },
+    { owner: "dead", stager: "missing" },
+    { owner: "live", stager: "legacy" },
+    { owner: "absent", stager: "legacy-replaced" },
+  ] as const)(
+    "admits installed Git artifacts before stopping the Gateway (lock owner: $owner, stager: $stager)",
+    async ({ owner, stager }) =>
+      withTestDir({ prefix: "source-artifact-admission-" }, async (root) => {
+        const scripts = path.join(root, "scripts");
+        await fs.mkdir(scripts);
+        await fs.mkdir(path.join(root, ".git"));
+        await fs.writeFile(
+          path.join(root, "tsconfig.json"),
+          '{"compilerOptions":{"target":"ESNext","module":"ESNext"}}',
+        );
+        await fs.symlink(
+          fileURLToPath(new URL("../../../scripts/lib", import.meta.url)),
+          path.join(scripts, "lib"),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        const stagingFile = path.join(scripts, "stage-bundled-plugin-runtime.mts");
+        if (stager !== "missing") {
+          await fs.writeFile(
+            stagingFile,
+            stager === "legacy" || stager === "legacy-replaced"
+              ? "export function stageBundledPluginRuntime() { throw new Error('legacy stager ran'); }"
+              : `import fs from "node:fs";
+import path from "node:path";
+export function prepareBundledPluginRuntime({ repoRoot }) {
+  const stage = path.join(repoRoot, ".artifacts", "admission-stage");
+  fs.mkdirSync(stage);
+  fs.writeFileSync(path.join(stage, "runtime"), "prepared");
+  return {
+    changed: false,
+    publish: async () => {},
+    cleanup: async () => fs.rmSync(stage, { recursive: true }),
+  };
+}
+`,
+          );
+        }
+        const artifact = path.join(root, "serving-runtime");
+        await fs.writeFile(artifact, "previous runtime");
+        const lock = path.join(root, ".artifacts", "dist-artifacts.lock");
+        const ownerFile = path.join(lock, "owner.json");
+        const pid = owner === "live" ? process.pid : 0x7fff_ffff;
+        const ownerRecord = JSON.stringify({
+          pid,
+          startedAt: "2026-09-20T01:00:00.000Z",
+          startIdentity: "fixture-build-owner",
+          heartbeatAt: "2026-09-20T01:01:00.000Z",
+        });
+        if (owner !== "absent") {
+          await fs.mkdir(lock, { recursive: true });
+          await fs.writeFile(ownerFile, ownerRecord);
+        }
+        vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("git");
+        vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockResolvedValue(true);
+        const env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state") };
+        const context = { ...schemaContext("default"), env, readEnv: env };
+        vi.spyOn(configFile, "readConfigFileSnapshot").mockResolvedValue(context.configSnapshot);
+        mocks.captureSchemaContext.mockResolvedValue(context);
+        mocks.captureManagedPreflight.mockResolvedValue(context);
+        mocks.captureManagedContext.mockResolvedValue({
+          env,
+          configSnapshot: context.configSnapshot,
+          pluginInstallRecords: {},
+        });
+        mocks.nativeSupport.mockResolvedValue(true);
+        mocks.maybeStopService.mockImplementation(async ({ phase }) => ({
+          ...inspectOrStopService(phase),
+          serviceEnv: env,
+          serviceUpdateVerdict: {
+            kind: "owned",
+            root,
+            fingerprint: "serving-generation",
+            refreshDefinition: false,
+          },
+        }));
+        const migrated = vi.fn();
+        mocks.runGitUpdate.mockImplementation(
+          async (
+            options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
+          ) => {
+            const target = { schemaVersions: { state: 15, agent: 19 } };
+            await options.inspectGitTarget(target);
+            await options.validateCandidate?.(path.join(root, "candidate"));
+            expect(params.opts.run?.artifactOwnership).toBeUndefined();
+            await options.beforeGitMutation(target);
+            migrated();
+            await fs.writeFile(artifact, "candidate runtime");
+            if (stager === "legacy-replaced") {
+              await fs.writeFile(
+                stagingFile,
+                `import fs from "node:fs";
+import path from "node:path";
+export function prepareBundledPluginRuntime({ repoRoot }) {
+  fs.writeFileSync(path.join(repoRoot, "completion-generation"), "candidate");
+  return { changed: false, publish: async () => {}, cleanup: async () => {} };
+}
+`,
+              );
+            }
+            return { ...successfulUpdate, mode: "git", root };
+          },
+        );
+        const coordinator = path.join(root, "coordinator");
+        await fs.mkdir(coordinator);
+        vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(coordinator);
+        const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+        const params = executionParams("git");
+        params.root = root;
+        params.timeoutMs = undefined;
+        params.opts.run = { runId, env };
+        params.onActivation = vi.fn();
+        try {
+          await withUpdateCommandExecutor(runId, async (executor) => {
+            mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+              admitExecutor(await executor.enter(root));
+            });
+            const execution = await executeMutableUpdate(params);
+            expect(execution?.result.status, execution?.failure?.detail).toBe(
+              owner === "absent" ? "ok" : "error",
+            );
+            expect(execution?.mutationStarted).toBe(owner === "absent");
+            expect(mocks.serviceStopped).toBe(owner === "absent");
+            expect(params.onActivation).toHaveBeenCalledTimes(owner === "absent" ? 1 : 0);
+            expect(migrated).toHaveBeenCalledTimes(owner === "absent" ? 1 : 0);
+            expect(await fs.readFile(artifact, "utf8")).toBe(
+              owner === "absent" ? "candidate runtime" : "previous runtime",
+            );
+            if (owner === "absent") {
+              if (stager === "legacy-replaced") {
+                const executorFence = params.opts.run?.executorFence;
+                if (!executorFence) {
+                  throw new Error("Runtime completion requires the admitted fixture executor");
+                }
+                await completeSourceUpdateRuntime({
+                  root,
+                  timeoutMs: params.updateStepTimeoutMs,
+                  // This generator touches no state; retain the real executor's
+                  // authority without creating a SQLite host in a test worker.
+                  lease: {
+                    databasePath: path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
+                    signal: new AbortController().signal,
+                    assertOwned: () => executorFence.assertCurrent(),
+                    assertOwnedInTransaction: () => {
+                      throw new Error("Runtime completion fixture must not access state");
+                    },
+                  },
+                  artifactOwnership: params.opts.run?.artifactOwnership,
+                });
+                expect(await fs.readFile(path.join(root, "completion-generation"), "utf8")).toBe(
+                  "candidate",
+                );
+              }
+              expect(params.opts.run?.artifactOwnership).toBeDefined();
+              await params.opts.run?.artifactOwnership?.assertOwned();
+              expect(JSON.parse(await fs.readFile(ownerFile, "utf8"))).toMatchObject({
+                pid: process.pid,
+              });
+              await expect(
+                fs.stat(path.join(root, ".artifacts", "admission-stage")),
+              ).rejects.toMatchObject({
+                code: "ENOENT",
+              });
+            } else {
+              expect(execution?.result.reason).toBe("source-artifact-ownership");
+              expect(execution?.failure?.detail).toContain(lock);
+              expect(execution?.failure?.detail).toContain(`retained by PID ${pid}`);
+              expect(execution?.failure?.detail).toContain("2026-09-20T01:01:00.000Z");
+              expect(execution?.failure?.detail).toContain("to release and retry");
+              expect(await fs.readFile(ownerFile, "utf8")).toBe(ownerRecord);
+            }
+          });
+        } finally {
+          await params.opts.run?.artifactOwnership?.release();
+        }
+        if (owner === "absent") {
+          await expect(fs.stat(ownerFile)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      }),
+  );
+
   it.each(
     (["package", "git"] as const).flatMap((kind) =>
       [false, true].map((changed) => ({ kind, changed })),

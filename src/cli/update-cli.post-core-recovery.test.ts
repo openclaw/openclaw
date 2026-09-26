@@ -5,6 +5,10 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import {
+  acquireDistArtifactOwnership,
+  resolveDistArtifactLockPath,
+} from "../../scripts/lib/dist-artifact-ownership.mts";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -57,6 +61,7 @@ describe("update-cli", () => {
     mockPackageInstallAtCaseDir,
     primeServiceCommand,
     setupUpdatedRootRefresh,
+    tempDirs,
   } = createUpdateCliFixture();
 
   it.each([false, true])(
@@ -395,62 +400,89 @@ describe("update-cli", () => {
     },
   );
 
-  it("joins Windows taskkill after the committed post-core child closes", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
-    readPackageVersion.mockResolvedValueOnce(null);
-    const helperStarted = createDeferred();
-    const releaseHelper = createDeferred();
-    let helperSettled = false;
-    const child = Object.assign(new EventEmitter(), { pid: 4242, kill: vi.fn() });
-    spawn.mockImplementationOnce((_node, _args, options) => {
-      fsSync.writeFileSync(
-        options.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH,
-        JSON.stringify({ status: "ok" }),
+  it.each([false, true])(
+    "joins Windows taskkill after the committed post-core child closes (taskkill failed=%s)",
+    async (taskkillFailed) => {
+      const root = await fs.realpath(tempDirs.make("post-core-windows-custody-"));
+      const artifactOwnership = await acquireDistArtifactOwnership(root);
+      const ownerPath = path.join(resolveDistArtifactLockPath(root), "owner.json");
+      const ownerRecord = await fs.readFile(ownerPath, "utf8");
+      const completeChild = vi.spyOn(artifactOwnership, "completeChild");
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+        FRESH_POST_UPDATE_ENTRYPOINT,
       );
-      return child;
-    });
-    vi.mocked(runExec).mockImplementationOnce(async (command, args) => {
-      expect(command).toMatch(/taskkill\.exe$/);
-      expect(args).toEqual(["/PID", "4242", "/T", "/F"]);
-      child.emit("exit", null, "SIGTERM");
-      child.emit("close", null, "SIGTERM");
-      helperStarted.resolve();
-      await releaseHelper.promise;
-      helperSettled = true;
-      return { stdout: "", stderr: "" };
-    });
-    const updating = continuePostCoreUpdateInFreshProcess({
-      root: "/tmp/openclaw-updated-root",
-      channel: "stable",
-      requestedChannel: null,
-      opts: {},
-      pluginInstallRecords: {},
-      updateStartedAtMs: 123,
-      timeoutMs: 30_000,
-    });
-    const settled = vi.fn();
-    void updating.then(settled, settled);
-    try {
-      await Promise.race([
-        helperStarted.promise,
-        updating.then(() => {
-          throw new Error("post-core returned before stopping its child");
-        }),
-      ]);
-      await nextTurn();
-      expect(settled).not.toHaveBeenCalled();
-      releaseHelper.resolve();
-      const result = await updating;
-      expect(result).toEqual({ resumed: true, pluginUpdate: { status: "ok" } });
-      expect(helperSettled).toBe(true);
-      expect(child.kill).not.toHaveBeenCalled();
-    } finally {
-      releaseHelper.resolve();
-      await Promise.allSettled([updating]);
-      platformSpy.mockRestore();
-    }
-  });
+      readPackageVersion.mockResolvedValueOnce(null);
+      const helperStarted = createDeferred();
+      const releaseHelper = createDeferred();
+      let helperSettled = false;
+      const childPid = process.pid + 1;
+      const child = Object.assign(new EventEmitter(), { pid: childPid, kill: vi.fn() });
+      spawn.mockImplementationOnce((_node, _args, options) => {
+        fsSync.writeFileSync(
+          options.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH,
+          JSON.stringify({ status: "ok" }),
+        );
+        return child;
+      });
+      vi.mocked(runExec).mockImplementationOnce(async (command, args) => {
+        expect(command).toMatch(/taskkill\.exe$/);
+        expect(args).toEqual(["/PID", String(childPid), "/T", "/F"]);
+        child.emit("exit", null, "SIGTERM");
+        child.emit("close", null, "SIGTERM");
+        helperStarted.resolve();
+        await releaseHelper.promise;
+        helperSettled = true;
+        if (taskkillFailed) {
+          throw new Error("taskkill could not confirm descendant termination");
+        }
+        return { stdout: "", stderr: "" };
+      });
+      const updating = continuePostCoreUpdateInFreshProcess({
+        root,
+        channel: "stable",
+        requestedChannel: null,
+        opts: {
+          run: {
+            runId: "windows-stop-fixture",
+            env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+            artifactOwnership,
+          },
+        },
+        pluginInstallRecords: {},
+        updateStartedAtMs: 123,
+        timeoutMs: 30_000,
+      });
+      const settled = vi.fn();
+      void updating.then(settled, settled);
+      try {
+        await Promise.race([
+          helperStarted.promise,
+          updating.then(() => {
+            throw new Error("post-core returned before stopping its child");
+          }),
+        ]);
+        await nextTurn();
+        expect(settled).not.toHaveBeenCalled();
+        releaseHelper.resolve();
+        const result = await updating;
+        expect(result).toEqual({ resumed: true, pluginUpdate: { status: "ok" } });
+        expect(helperSettled).toBe(true);
+        expect(child.kill).toHaveBeenCalledTimes(taskkillFailed ? 1 : 0);
+        expect(completeChild).toHaveBeenCalledTimes(taskkillFailed ? 0 : 1);
+      } finally {
+        releaseHelper.resolve();
+        await Promise.allSettled([updating]);
+        platformSpy.mockRestore();
+        await artifactOwnership.release();
+      }
+      if (taskkillFailed) {
+        expect(await fs.readFile(ownerPath, "utf8")).toBe(ownerRecord);
+      } else {
+        await expect(fs.stat(ownerPath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
 
   it.each(["close-before-read", "termination-error"] as const)(
     "preserves a committed post-core result after writer settlement (%s)",

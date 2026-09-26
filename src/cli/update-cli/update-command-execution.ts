@@ -40,6 +40,7 @@ import {
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
+  admitSourceUpdateArtifacts,
   assertReadableGitTarget,
   recordInspectedGitTarget,
 } from "./update-command-git-admission.js";
@@ -474,6 +475,16 @@ export async function executeMutableUpdate(
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     assertExecutionCurrent();
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
+    if (params.updateInstallKind === "git" && !opts.run?.artifactOwnership) {
+      await admitSourceUpdateArtifacts({
+        root: params.switchToGit ? resolveGitInstallDir() : params.root,
+        timeoutMs: updateStepTimeoutMs,
+        nodeRunner: params.packageUpdateNodeRunner,
+        assertCurrent: assertExecutionCurrent,
+        run: opts.run,
+        progress: params.progress,
+      });
+    }
     const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan, {
       configValidation,
     });
@@ -541,6 +552,7 @@ export async function executeMutableUpdate(
     await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
     await prepareMutableUpdate(env, activationTimeoutMs);
     assertExecutionCurrent();
+    await opts.run?.artifactOwnership?.assertOwned();
     if (opts.run) {
       recordUpdateRunPhase(opts.run.runId, "activating", undefined, { env: opts.run.env });
     }

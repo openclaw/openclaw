@@ -40,6 +40,7 @@ vi.mock("../infra/update-runner-git.js", () => ({
 }));
 // Runtime publication has its own fixture; this suite owns deferred completion and config writes.
 vi.mock("./update-cli/update-command-runtime.js", () => ({
+  prepareSourceUpdateRuntime: vi.fn(async () => undefined),
   completeSourceUpdateRuntime: sourceRuntimeCompletion,
 }));
 vi.mock("../infra/update-check.js", async (importOriginal) => ({

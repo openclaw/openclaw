@@ -223,6 +223,7 @@ export async function convergeUpdatePlugins(params: {
               root: postUpdateRoot,
               timeoutMs: params.updateStepTimeoutMs,
               lease,
+              artifactOwnership: params.opts.run?.artifactOwnership,
               beforePersistentEffect: assertCurrent,
               beforePublication: params.beforeRuntimePublication,
             }),
