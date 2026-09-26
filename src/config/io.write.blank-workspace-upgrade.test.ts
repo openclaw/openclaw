@@ -125,4 +125,35 @@ describe("newly authored blank agent workspace is still rejected", () => {
     expect(message).toContain("workspace");
     expect(message).toContain("blank");
   });
+
+  it("a full write without explicit path metadata rejects a newly supplied blank workspace", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "proof-150929-write-nopaths-"));
+    fs.writeFileSync(
+      path.join(root, "openclaw.json"),
+      JSON.stringify({
+        agents: { entries: { alpha: {} } },
+        gateway: { mode: "local", port: 18799, auth: { mode: "none" } },
+      }),
+    );
+    const ctx = makeContext(root);
+    const base = await readConfigFileSnapshotInternal(ctx, {});
+    const next = JSON.parse(JSON.stringify(base.snapshot.config)) as {
+      agents: { entries: Record<string, { workspace?: string }> };
+    };
+    next.agents.entries.alpha.workspace = " ";
+    let threw = false;
+    let message = "";
+    try {
+      // The public writer contract allows omitting explicitSetPaths; a blank
+      // supplied in that full-config write must still be rejected, not
+      // silently migrated away by the write migration.
+      await writeConfigFileFromContext(ctx, next, {}, async () => base);
+    } catch (e) {
+      threw = true;
+      message = (e as Error).message;
+    }
+    expect(threw).toBe(true);
+    expect(message).toContain("workspace");
+    expect(message).toContain("blank");
+  });
 });

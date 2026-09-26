@@ -256,14 +256,23 @@ export async function writeConfigFileFromContext(
   }
 
   const envForRestore = options.envSnapshotForRestore ?? deps.env;
-  const resolveExplicitSet = () =>
-    new Set([
-      ...(options.explicitSetPaths ?? []).map((p) => p.filter((s) => s.length > 0).join(".")),
+  // Explicit path metadata tells the write migration which blanks the current
+  // write authored (so saved blanks elsewhere can be migrated). Without any
+  // path metadata the whole write is treated as authoring and every blank is
+  // preserved for strict validation; returning undefined triggers that mode.
+  const resolveExplicitSet = (): ReadonlySet<string> | undefined => {
+    const paths = options.explicitSetPaths ?? [];
+    if (paths.length === 0) {
+      return undefined;
+    }
+    return new Set([
+      ...paths.map((p) => p.filter((s) => s.length > 0).join(".")),
       // Canonical roster prep converts an explicit agents.list.N.<field> edit
       // into agents.entries.<id>.<field>; keep the converted path so a
       // converted blank the current write explicitly set stays preserved.
-      ...remapLegacyListExplicitPaths(options.explicitSetPaths, nextConfig),
+      ...remapLegacyListExplicitPaths(paths, nextConfig),
     ]);
+  };
   const resolveValidationCandidate = (candidate: unknown) => {
     // Validate removals now; apply them once to the final authored output after materialization.
     const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);

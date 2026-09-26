@@ -133,6 +133,13 @@ export function migrateBlankAgentWorkspaceForWrite(
   raw: unknown,
   explicitSetPaths?: ReadonlySet<string>,
 ): BlankWorkspaceMigration {
+  // Without explicit path metadata the writer cannot distinguish a saved blank
+  // from new authoring; treat the whole write as explicit authoring and keep
+  // every blank so strict validation reports it instead of silently migrating
+  // a value the operator just supplied.
+  if (explicitSetPaths === undefined || explicitSetPaths.size === 0) {
+    return { config: raw as OpenClawConfig, changed: false, changes: [], warnings: [] };
+  }
   return migrateBlankAgentWorkspaceRaw(raw, explicitSetPaths);
 }
 

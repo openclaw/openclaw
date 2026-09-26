@@ -102,9 +102,13 @@ describe("runtime blank agent workspace migration", () => {
   });
 
   it("reports list entry removals with the writer's dot-notation path", () => {
-    const result = migrateBlankAgentWorkspaceForWrite({
-      agents: { list: [{ id: "main", workspace: " " }] },
-    });
+    // A non-empty explicit set (here an unrelated settings edit) triggers
+    // migration of the saved blank; without path metadata the write treats
+    // everything as authored and preserves every blank instead.
+    const result = migrateBlankAgentWorkspaceForWrite(
+      { agents: { list: [{ id: "main", workspace: " " }] } },
+      new Set(["gateway.port"]),
+    );
 
     expect(result.changed).toBe(true);
     expect(result.changes.some((c) => c.path === "list.0")).toBe(true);
