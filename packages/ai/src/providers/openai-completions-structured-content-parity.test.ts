@@ -25,6 +25,7 @@ const context = {
 
 type StructuredContentScenario = {
   name: string;
+  package?: boolean;
   choice: Record<string, unknown>;
   followupChoice?: Record<string, unknown>;
   expectedContent: Array<Record<string, unknown>>;
@@ -50,6 +51,7 @@ const scenarios: StructuredContentScenario[] = [
   },
   {
     name: "mixed private reasoning and visible text",
+    package: true,
     choice: {
       delta: {
         content: [
@@ -81,6 +83,7 @@ const scenarios: StructuredContentScenario[] = [
   })),
   ...(["reasoning_content", "reasoning", "reasoning_text"] as const).map((field) => ({
     name: `distinct private reasoning in ${field} and structured content`,
+    package: field === "reasoning_content",
     choice: {
       delta: {
         [field]: "Dedicated private thought.",
@@ -101,6 +104,7 @@ const scenarios: StructuredContentScenario[] = [
   })),
   {
     name: "split structured reasoning mirrored in the dedicated field",
+    package: true,
     choice: {
       delta: {
         reasoning_content: "Private thought",
@@ -144,6 +148,7 @@ const scenarios: StructuredContentScenario[] = [
   },
   {
     name: "dedicated and structured mirrored reasoning that is disabled",
+    package: true,
     reasoningEnabled: false,
     choice: {
       delta: {
@@ -171,6 +176,7 @@ const scenarios: StructuredContentScenario[] = [
   },
   {
     name: "pending partial inline reasoning remains private after a structured thought",
+    package: true,
     choice: { delta: { content: "<thi" } },
     followupChoice: {
       delta: {
@@ -187,6 +193,7 @@ const scenarios: StructuredContentScenario[] = [
   },
   {
     name: "dedicated and structured reasoning explicitly disabled on a capable model",
+    package: true,
     reasoningEffort: "none",
     choice: {
       delta: {
@@ -247,6 +254,7 @@ const scenarios: StructuredContentScenario[] = [
   },
   {
     name: "documented mixed assistant text and refusal parts",
+    package: true,
     choice: {
       message: {
         role: "assistant",
@@ -386,8 +394,10 @@ describe.each([
       }),
   },
   { name: "managed", createStream: createManagedFixtureStream },
-])("$name Chat Completions structured content", ({ createStream }) => {
-  it.each(scenarios)("preserves $name", async (scenario) => {
+])("$name Chat Completions structured content", ({ name, createStream }) => {
+  const ownerScenarios =
+    name === "package" ? scenarios.filter((scenario) => scenario.package) : scenarios;
+  it.each(ownerScenarios)("preserves $name", async (scenario) => {
     const model = {
       ...reasoningModel,
       reasoning: scenario.reasoningEnabled ?? true,

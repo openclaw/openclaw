@@ -20,7 +20,6 @@ extension VoiceWakeOverlayController {
         self.activeSource = source
         self.autoSendTask?.cancel()
         self.autoSendTask = nil
-        self.autoSendToken = nil
         self.model.text = transcript
         self.model.isFinal = isFinal
         self.model.forwardEnabled = forwardEnabled
@@ -48,7 +47,6 @@ extension VoiceWakeOverlayController {
         self.logger.log(level: .info, "\(message)")
         self.autoSendTask?.cancel()
         self.autoSendTask = nil
-        self.autoSendToken = nil
         self.model.text = transcript
         self.model.isFinal = false
         self.model.forwardEnabled = false
@@ -75,7 +73,6 @@ extension VoiceWakeOverlayController {
         """
         self.logger.log(level: .info, "\(message)")
         self.autoSendTask?.cancel()
-        self.autoSendToken = token
         self.model.text = transcript
         self.model.isFinal = true
         self.model.forwardEnabled = !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -122,7 +119,6 @@ extension VoiceWakeOverlayController {
     func beginSendUI(token: UUID, sendChime: VoiceWakeChime = .none) {
         guard self.guardToken(token, context: "beginSendUI") else { return }
         self.autoSendTask?.cancel()
-        self.autoSendToken = nil
         let message = """
         overlay beginSendUI token=\(token.uuidString) \
         isSending=\(self.model.isSending) \
@@ -166,7 +162,6 @@ extension VoiceWakeOverlayController {
         """
         self.logger.log(level: .info, "\(message)")
         self.autoSendTask?.cancel()
-        self.autoSendToken = nil
         self.model.isSending = false
         self.model.isEditing = false
 
@@ -259,7 +254,6 @@ extension VoiceWakeOverlayController {
             after=\(delay)
             """)
         self.autoSendTask?.cancel()
-        self.autoSendToken = token
         self.autoSendTask = Task<Void, Never> { [weak self, token] in
             let nanos = UInt64(max(0, delay) * 1_000_000_000)
             try? await Task.sleep(nanoseconds: nanos)

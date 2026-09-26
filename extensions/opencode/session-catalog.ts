@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import type {
@@ -282,13 +283,7 @@ async function queryCachedOpenCodeSessions(
     result,
   };
   openCodeQueryCache.set(key, entry);
-  while (openCodeQueryCache.size > OPENCODE_QUERY_CACHE_MAX_ENTRIES) {
-    const oldest = openCodeQueryCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    openCodeQueryCache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(openCodeQueryCache, OPENCODE_QUERY_CACHE_MAX_ENTRIES);
   try {
     const value = await result;
     entry.resolved = true;

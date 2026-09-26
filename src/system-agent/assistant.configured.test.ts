@@ -401,7 +401,7 @@ describe("OpenClaw configured-model planner", () => {
         ],
       },
     };
-    const runEmbeddedAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
       payloads: [
         { text: "Considering the gateway", isReasoning: true },
         { text: "Checking the gateway", isCommentary: true },
@@ -439,6 +439,13 @@ describe("OpenClaw configured-model planner", () => {
         authProfileId: "openai:ops",
         authProfileIdSource: "user",
         agentHarnessRuntimeOverride: "codex",
+        expectedAgentHarnessRuntimeArtifact: {
+          harnessId: "codex",
+          artifact: {
+            id: "codex-test-artifact",
+            fingerprint: "codex-test-fingerprint",
+          },
+        },
         disableTools: true,
         disableTrajectory: true,
         toolsAllow: [],
@@ -493,17 +500,5 @@ describe("OpenClaw configured-model planner", () => {
     expect(
       resolveRequestStreamTransportOverrides(runEmbeddedAgent.mock.calls[0]?.[0]?.streamParams),
     ).toBeUndefined();
-    expect(runEmbeddedAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentHarnessRuntimeOverride: "codex",
-        expectedAgentHarnessRuntimeArtifact: {
-          harnessId: "codex",
-          artifact: {
-            id: "codex-test-artifact",
-            fingerprint: "codex-test-fingerprint",
-          },
-        },
-      }),
-    );
   });
 });

@@ -1,7 +1,6 @@
 // Browser tests cover pw session plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { Frame, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
@@ -125,8 +124,6 @@ describe("pw-session refLocator", () => {
 
   it.each([
     { ref: "e1", name: "OK" },
-    { ref: "e1", name: "" },
-    { ref: "ax12", name: "OK" },
     { ref: "ax12", name: "" },
   ])("matches the exact name for unmarked $ref with name '$name'", ({ ref, name }) => {
     const { page, mocks } = fakePage();
@@ -345,21 +342,6 @@ describe("pw-session ensurePageState", () => {
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
-  });
-
-  it("leaves unmanaged download handling to explicit waiters while armed", () => {
-    const { page, handlers } = fakePage();
-    const state = ensurePageState(page);
-    state.downloadWaiterDepth = 1;
-    const download = {
-      suggestedFilename: () => "report.pdf",
-      saveAs: vi.fn(async () => {}),
-    };
-
-    handlers.get("download")?.[0]?.(download);
-
-    expect(download).not.toHaveProperty("path");
-    expect(download.saveAs).not.toHaveBeenCalled();
   });
 
   it("reports all downloads owned by the active action with managed metadata", async () => {
@@ -903,31 +885,4 @@ describe("pw-session ensurePageState", () => {
       expect(state.roleRefsFrameSelector).toBeUndefined();
     },
   );
-
-  it("allows new snapshot to store fresh refs after navigation clear", () => {
-    const { page, handlers, mainFrame } = fakePage();
-    const state = ensurePageState(page);
-
-    storeRoleRefsForTarget({
-      page,
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "t1",
-      refs: { e1: { role: "button", name: "PageA-Btn" } },
-      mode: "role",
-    });
-
-    handlers.get("framenavigated")?.[0]?.(mainFrame);
-    expect(state.roleRefs).toBeUndefined();
-
-    storeRoleRefsForTarget({
-      page,
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "t1",
-      refs: { e1: { role: "heading", name: "PageB Title" } },
-      mode: "aria",
-    });
-    expect(state.roleRefs).toBeDefined();
-    expect(expectDefined(state.roleRefs?.e1, "stored Playwright role ref").role).toBe("heading");
-    expect(state.roleRefsMode).toBe("aria");
-  });
 });

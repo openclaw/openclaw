@@ -9,12 +9,8 @@ function importanceMultiplier(importance: number | null | undefined): number {
 export function applyImportanceMultiplier<T extends { score: number; importance?: number }>(
   results: T[],
 ): T[] {
-  return results.map(applyEntryImportance);
-}
-
-function applyEntryImportance<T extends { score: number; importance?: number }>(entry: T): T {
-  return {
+  return results.map((entry) => ({
     ...entry,
     score: entry.score * importanceMultiplier(entry.importance),
-  };
+  }));
 }

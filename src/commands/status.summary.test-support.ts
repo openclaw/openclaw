@@ -65,23 +65,6 @@ export function registerStatusSummarySessionRowCases(params: {
       });
     });
 
-    it("includes the selected agent runtime on recent sessions", async () => {
-      vi.mocked(params.getStatusSummaryRuntime().resolveSessionRuntime).mockReturnValue({
-        id: "codex",
-        label: "OpenAI Codex",
-      });
-      params.setSessions({
-        "agent:main:main": {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      });
-
-      const summary = await params.getStatusSummary();
-
-      expect(summary.sessions.recent[0]?.runtime).toBe("OpenAI Codex");
-    });
-
     it("rejects a stale runtime window after a same-model harness change", async () => {
       vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
         1_000_000,

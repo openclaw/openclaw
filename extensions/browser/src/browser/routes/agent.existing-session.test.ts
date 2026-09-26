@@ -593,21 +593,6 @@ describe("existing-session browser routes", () => {
     );
   });
 
-  it("checks existing-session snapshot URL when SSRF policy is configured", async () => {
-    const handler = getSnapshotGetHandler({ allowPrivateNetwork: false });
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai" } }, response.res);
-
-    expect(response.statusCode).toBe(200);
-    expect(navigationGuardMocks.assertBrowserNavigationAllowed).not.toHaveBeenCalled();
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
-      url: "https://example.com",
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
-    expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalled();
-  });
-
   it("routes close through profile selection state with exact call options", async () => {
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();

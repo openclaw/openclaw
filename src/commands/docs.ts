@@ -60,10 +60,6 @@ function renderRichResults(query: string, results: DocResult[], runtime: Runtime
   }
 }
 
-async function renderMarkdown(markdown: string, runtime: RuntimeEnv) {
-  runtime.log(markdown.trimEnd());
-}
-
 async function fetchDocsSearch(query: string): Promise<DocResult[]> {
   const url = new URL(SEARCH_API);
   url.searchParams.set("q", query);
@@ -168,6 +164,5 @@ export async function docsSearchCommand(
     renderRichResults(query, results, runtime);
     return;
   }
-  const markdown = buildMarkdown(query, results);
-  await renderMarkdown(markdown, runtime);
+  runtime.log(buildMarkdown(query, results).trimEnd());
 }

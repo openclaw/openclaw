@@ -19,6 +19,28 @@ function widget(): BoardWidget {
   };
 }
 
+function hostOptions(
+  frame: HTMLIFrameElement,
+  overrides: Partial<ConstructorParameters<typeof BoardWidgetSandboxHost>[0]> = {},
+): ConstructorParameters<typeof BoardWidgetSandboxHost>[0] {
+  return {
+    frame,
+    widget: widget(),
+    sandboxOrigin: "https://sandbox.example",
+    sandboxUrl: SANDBOX_URL,
+    sourceOrigin: "https://gateway.example",
+    resolveFrameUrl: () => "/widget",
+    confirmPrompt: () => true,
+    onFrameUrl: vi.fn(),
+    onLoadFailed: vi.fn(),
+    onUnauthorized: vi.fn(),
+    onReadyTimeout: vi.fn(),
+    onLoaded: vi.fn(),
+    onError: vi.fn(),
+    ...overrides,
+  };
+}
+
 function notifyProxyReady(
   host: BoardWidgetSandboxHost,
   frame: HTMLIFrameElement,
@@ -105,23 +127,14 @@ describe("BoardWidgetSandboxHost", () => {
     vi.stubGlobal("fetch", fetchMock);
     const onLoaded = vi.fn();
     const onRendered = vi.fn();
-    const host = new BoardWidgetSandboxHost({
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
-      client: { request: vi.fn(async () => ({ ok: true })) },
-      resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
-      onLoaded,
-      onRendered,
-      onError: vi.fn(),
-    });
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        client: { request: vi.fn(async () => ({ ok: true })) },
+        resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
+        onLoaded,
+        onRendered,
+      }),
+    );
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expect(postMessage).not.toHaveBeenCalled();
@@ -177,23 +190,14 @@ describe("BoardWidgetSandboxHost", () => {
     );
     const client = { request: vi.fn(async () => ({ ok: true })) };
     const onLoaded = vi.fn();
-    const host = new BoardWidgetSandboxHost({
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
-      client,
-      bridgeEnabled: false,
-      resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
-      onLoaded,
-      onError: vi.fn(),
-    });
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        client,
+        bridgeEnabled: false,
+        resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
+        onLoaded,
+      }),
+    );
 
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
@@ -221,22 +225,14 @@ describe("BoardWidgetSandboxHost", () => {
     );
     const onLoadFailed = vi.fn();
     const onError = vi.fn();
-    const host = new BoardWidgetSandboxHost({
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
-      client: { request: vi.fn(async () => ({ ok: true })) },
-      resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed,
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
-      onLoaded: vi.fn(),
-      onError,
-    });
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        client: { request: vi.fn(async () => ({ ok: true })) },
+        resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
+        onLoadFailed,
+        onError,
+      }),
+    );
 
     notifyProxyReady(host, frame);
 
@@ -252,22 +248,12 @@ describe("BoardWidgetSandboxHost", () => {
       vi.fn(async () => new Response("<!doctype html><p>weather</p>")),
     );
     const onLoaded = vi.fn();
-    const host = new BoardWidgetSandboxHost({
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
-      controlUiBaseUrl: "https://control.example/openclaw",
-      resolveFrameUrl: () => "/widget",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
-      onLoaded,
-      onError: vi.fn(),
-    });
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        controlUiBaseUrl: "https://control.example/openclaw",
+        onLoaded,
+      }),
+    );
 
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
@@ -310,22 +296,9 @@ describe("BoardWidgetSandboxHost", () => {
           }),
       ),
     };
-    const baseOptions = {
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
+    const baseOptions = hostOptions(frame, {
       client,
-      resolveFrameUrl: () => "/widget",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
-      onLoaded: vi.fn(),
-      onError: vi.fn(),
-    };
+    });
     const host = new BoardWidgetSandboxHost(baseOptions);
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledOnce());
@@ -372,22 +345,11 @@ describe("BoardWidgetSandboxHost", () => {
         method === "board.prompt.authorize" ? { confirmationRequired: false } : { ok: true },
       ),
     };
-    const host = new BoardWidgetSandboxHost({
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
-      client,
-      resolveFrameUrl: () => "/widget",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
-      onLoaded: vi.fn(),
-      onError: vi.fn(),
-    });
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        client,
+      }),
+    );
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     const promptRequest = {
@@ -433,26 +395,18 @@ describe("BoardWidgetSandboxHost", () => {
       frame.checkVisibility = () => true;
       document.body.append(frame);
       const loaded = vi.fn();
-      const host = new BoardWidgetSandboxHost({
-        frame,
-        widget: { ...widget(), viewGeneration },
-        sandboxOrigin: "https://sandbox.example",
-        sandboxUrl: SANDBOX_URL,
-        sourceOrigin: "https://gateway.example",
-        client: {
-          request: vi.fn(async (method: string) =>
-            method === "board.prompt.authorize" ? { confirmationRequired: false } : { ok: true },
-          ),
-        },
-        resolveFrameUrl: () => `/__openclaw__/board/${sessionId}/weather/index.html?bt=ticket`,
-        confirmPrompt: () => true,
-        onFrameUrl: vi.fn(),
-        onLoadFailed: vi.fn(),
-        onUnauthorized: vi.fn(),
-        onReadyTimeout: vi.fn(),
-        onLoaded: loaded,
-        onError: vi.fn(),
-      });
+      const host = new BoardWidgetSandboxHost(
+        hostOptions(frame, {
+          widget: { ...widget(), viewGeneration },
+          client: {
+            request: vi.fn(async (method: string) =>
+              method === "board.prompt.authorize" ? { confirmationRequired: false } : { ok: true },
+            ),
+          },
+          resolveFrameUrl: () => `/__openclaw__/board/${sessionId}/weather/index.html?bt=ticket`,
+          onLoaded: loaded,
+        }),
+      );
       notifyProxyReady(host, frame);
       await vi.waitFor(() => expect(loaded).toHaveBeenCalledOnce());
       return { frame, port: await offerBridgePort(host, frame) };
@@ -515,22 +469,10 @@ describe("BoardWidgetSandboxHost", () => {
         return { ok: true };
       }),
     };
-    const baseOptions = {
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
+    const baseOptions = hostOptions(frame, {
       client,
       resolveFrameUrl: () => "/widget?bt=ticket",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
-      onLoaded: vi.fn(),
-      onError: vi.fn(),
-    };
+    });
     const host = new BoardWidgetSandboxHost(baseOptions);
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledOnce());
@@ -623,22 +565,10 @@ describe("BoardWidgetSandboxHost", () => {
       ),
     };
     const newClient = { request: vi.fn(async () => ({ ok: true })) };
-    const baseOptions = {
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
+    const baseOptions = hostOptions(frame, {
       client: oldClient,
       resolveFrameUrl: () => "/widget?bt=ticket",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
-      onLoaded: vi.fn(),
-      onError: vi.fn(),
-    };
+    });
     const host = new BoardWidgetSandboxHost(baseOptions);
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledOnce());
@@ -697,22 +627,11 @@ describe("BoardWidgetSandboxHost", () => {
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>session</p>"));
     vi.stubGlobal("fetch", fetchMock);
     const onLoaded = vi.fn();
-    const baseOptions = {
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
+    const baseOptions = hostOptions(frame, {
       client: { request: vi.fn(async () => ({ ok: true })) },
       resolveFrameUrl: () => "/__openclaw__/board/session-a/weather/index.html?bt=one",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
       onLoaded,
-      onError: vi.fn(),
-    };
+    });
     const host = new BoardWidgetSandboxHost(baseOptions);
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
@@ -739,21 +658,10 @@ describe("BoardWidgetSandboxHost", () => {
     const narrowSandboxUrl = `${SANDBOX_URL}?csp=narrow`;
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>policy</p>"));
     vi.stubGlobal("fetch", fetchMock);
-    const baseOptions = {
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
+    const baseOptions = hostOptions(frame, {
       sandboxUrl: wideSandboxUrl,
-      sourceOrigin: "https://gateway.example",
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=ticket",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
-      onLoaded: vi.fn(),
-      onError: vi.fn(),
-    };
+    });
     const host = new BoardWidgetSandboxHost(baseOptions);
     const ready = (sandboxUrl: string) => notifyProxyReady(host, frame, sandboxUrl);
 
@@ -793,21 +701,10 @@ describe("BoardWidgetSandboxHost", () => {
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>generation</p>"));
     vi.stubGlobal("fetch", fetchMock);
     const onLoaded = vi.fn();
-    const baseOptions = {
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
+    const baseOptions = hostOptions(frame, {
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=ticket",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
       onLoaded,
-      onError: vi.fn(),
-    };
+    });
     const host = new BoardWidgetSandboxHost(baseOptions);
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
@@ -840,21 +737,12 @@ describe("BoardWidgetSandboxHost", () => {
     vi.stubGlobal("fetch", fetchMock);
     const onReadyTimeout = vi.fn();
     const onLoaded = vi.fn();
-    const host = new BoardWidgetSandboxHost({
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
-      resolveFrameUrl: () => "/widget",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout,
-      onLoaded,
-      onError: vi.fn(),
-    });
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        onReadyTimeout,
+        onLoaded,
+      }),
+    );
     const reloadFrame = vi.spyOn(frame, "src", "set");
 
     host.setActive(false);
@@ -879,22 +767,13 @@ describe("BoardWidgetSandboxHost", () => {
     const client = { request: vi.fn(async () => ({ resumed: true })) };
     const onReadyTimeout = vi.fn();
     const onLoaded = vi.fn();
-    const host = new BoardWidgetSandboxHost({
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
-      client,
-      resolveFrameUrl: () => "/widget",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout,
-      onLoaded,
-      onError: vi.fn(),
-    });
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        client,
+        onReadyTimeout,
+        onLoaded,
+      }),
+    );
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
     const bridgePort = await offerBridgePort(host, frame);
@@ -955,21 +834,11 @@ describe("BoardWidgetSandboxHost", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const onLoaded = vi.fn();
-    const host = new BoardWidgetSandboxHost({
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
-      resolveFrameUrl: () => "/widget",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout: vi.fn(),
-      onLoaded,
-      onError: vi.fn(),
-    });
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        onLoaded,
+      }),
+    );
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(sourceFetches).toBe(1));
 
@@ -989,21 +858,11 @@ describe("BoardWidgetSandboxHost", () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
     const onReadyTimeout = vi.fn();
-    const host = new BoardWidgetSandboxHost({
-      frame,
-      widget: widget(),
-      sandboxOrigin: "https://sandbox.example",
-      sandboxUrl: SANDBOX_URL,
-      sourceOrigin: "https://gateway.example",
-      resolveFrameUrl: () => "/widget",
-      confirmPrompt: () => true,
-      onFrameUrl: vi.fn(),
-      onLoadFailed: vi.fn(),
-      onUnauthorized: vi.fn(),
-      onReadyTimeout,
-      onLoaded: vi.fn(),
-      onError: vi.fn(),
-    });
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        onReadyTimeout,
+      }),
+    );
 
     host.setActive(false);
     await vi.advanceTimersByTimeAsync(20_000);

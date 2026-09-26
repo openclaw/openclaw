@@ -266,18 +266,16 @@ export async function setupAppRecommendations(params: {
       { value: SKIP_VALUE, label: t("common.skipForNow") },
       ...matches.map((match, index) => ({
         value: selectionValue(index),
-        label:
+        label: t(
           match.candidate.source === "clawhub-skill"
-            ? t("wizard.appRecommendations.optionThirdParty", {
-                name: match.candidate.displayName,
-                reason: match.reason,
-                app: match.appLabel,
-              })
-            : t("wizard.appRecommendations.option", {
-                name: match.candidate.displayName,
-                reason: match.reason,
-                app: match.appLabel,
-              }),
+            ? "wizard.appRecommendations.optionThirdParty"
+            : "wizard.appRecommendations.option",
+          {
+            name: match.candidate.displayName,
+            reason: match.reason,
+            app: match.appLabel,
+          },
+        ),
       })),
     ],
     // Supply-chain guard: ClawHub listing text is publisher-controlled and

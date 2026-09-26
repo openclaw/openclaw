@@ -1,4 +1,3 @@
-// Logbook background service: snapshot capture loop, batch analysis, retention.
 import path from "node:path";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type {
@@ -457,9 +456,7 @@ export class LogbookService {
   private async enqueueElapsedWindow(store: LogbookStore): Promise<void> {
     // Windows close on elapsed wall-clock or on a capture gap; both cases are
     // resolved by selectBatchFrames against the oldest unbatched frame.
-    while (!this.stopping && (await this.enqueueNextBatch(store))) {
-      // Continue until all elapsed windows are queued.
-    }
+    while (!this.stopping && (await this.enqueueNextBatch(store))) {}
   }
 
   private async runBatch(store: LogbookStore, batch: LogbookBatch): Promise<void> {

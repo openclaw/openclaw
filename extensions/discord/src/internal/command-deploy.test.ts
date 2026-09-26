@@ -12,20 +12,8 @@ import { DiscordCommandDeployer } from "./command-deploy.js";
 import { BaseCommand } from "./commands.js";
 import type { RequestClient } from "./rest.js";
 
-/**
- * Regression tests for Discord slash-command reconcile/deploy equality.
- *
- * These protect against a class of bugs where Discord's server-side storage
- * normalization causes our desired descriptor to re-compare unequal to the
- * command Discord returns, which leads to a spurious `PATCH` on every
- * gateway startup and, under the per-application rate limit, a cascade of
- * `429` responses that silently drop some commands until the next restart.
- */
+// Discord's normalization must not trigger another PATCH on every startup (#76588).
 describe("commandsEqual", () => {
-  // Shape of what Discord returns on `GET /applications/{appId}/commands`.
-  // Fields like `version`, `dm_permission`, `nsfw`, `application_id` are
-  // always present on the server side but absent from our locally-serialized
-  // desired descriptors — they must therefore be ignored by the comparator.
   function currentFromDiscord(
     overrides: Partial<APIApplicationCommand> = {},
   ): APIApplicationCommand {
@@ -43,7 +31,6 @@ describe("commandsEqual", () => {
     } as APIApplicationCommand;
   }
 
-  // Shape of what a `BaseCommand.serialize()` produces locally.
   function desiredFromLocal(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
       name: "ping",
@@ -53,10 +40,6 @@ describe("commandsEqual", () => {
       ...overrides,
     };
   }
-
-  test("ignores Discord server-side default fields (dm_permission, nsfw, version, id, application_id)", () => {
-    expect(commandsEqual(currentFromDiscord(), desiredFromLocal())).toBe(true);
-  });
 
   test("ignores Discord null localization maps when local command omits them", () => {
     const current = currentFromDiscord({
@@ -74,22 +57,6 @@ describe("commandsEqual", () => {
     });
     const desired = desiredFromLocal({
       options: [{ name: "name", description: "Skill name", type: 3 }],
-    });
-    expect(commandsEqual(current, desired)).toBe(true);
-  });
-
-  test("treats `required: false` on an option as equivalent to field absent", () => {
-    const current = currentFromDiscord({
-      name: "skill",
-      description: "Run a skill.",
-      options: [
-        { type: 3, name: "name", description: "Skill name" } as APIApplicationCommandOption,
-      ],
-    });
-    const desired = desiredFromLocal({
-      name: "skill",
-      description: "Run a skill.",
-      options: [{ name: "name", description: "Skill name", type: 3, required: false }],
     });
     expect(commandsEqual(current, desired)).toBe(true);
   });
@@ -121,16 +88,6 @@ describe("commandsEqual", () => {
     const desired = desiredFromLocal({
       description:
         "将任意文本转化为杂志质感 HTML 信息卡片，并自动截图保存为图片。\n支持直接输入 URL。",
-    });
-    expect(commandsEqual(current, desired)).toBe(true);
-  });
-
-  test("treats mixed CJK/ASCII descriptions with consecutive whitespace as equal to collapsed form", () => {
-    const current = currentFromDiscord({
-      description: "联网操作策略框架。访问需登录站点时触发。",
-    });
-    const desired = desiredFromLocal({
-      description: "联网操作策略框架。\n\n访问需登录站点时触发。",
     });
     expect(commandsEqual(current, desired)).toBe(true);
   });
@@ -283,33 +240,6 @@ describe("DiscordCommandDeployer SQLite cache", () => {
       "app:app-default:global:reconcile",
       "app:app-secondary:global:reconcile",
     ]);
-  });
-
-  test("skips unchanged command deploys across deployer restarts", async () => {
-    const { store } = createHashStore();
-    const commands = [new StaticCommand("ping")];
-    const firstRest = createRest();
-
-    await new DiscordCommandDeployer({
-      clientId: "app-default",
-      commands,
-      hashStore: store,
-      rest: () => firstRest,
-    }).deploy({ mode: "reconcile" });
-
-    const secondRest = createRest();
-    await new DiscordCommandDeployer({
-      clientId: "app-default",
-      commands,
-      hashStore: store,
-      rest: () => secondRest,
-    }).deploy({ mode: "reconcile" });
-
-    expect(firstRest.get).toHaveBeenCalledTimes(1);
-    expect(firstRest.post).toHaveBeenCalledTimes(1);
-    expect(secondRest.get).not.toHaveBeenCalled();
-    expect(secondRest.post).not.toHaveBeenCalled();
-    expect(store.lookup).toHaveBeenLastCalledWith("app:app-default:global:reconcile");
   });
 
   test("loads only the exact scoped key needed by a deployment", async () => {

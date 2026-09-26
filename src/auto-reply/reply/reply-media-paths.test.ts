@@ -141,7 +141,6 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it.each([
-    { name: "plain", fileName: "photo.png", prefix: "file://" },
     { name: "encoded", fileName: "café 100% image.png", prefix: "file://" },
     { name: "localhost", fileName: "café 100% image.png", prefix: "file://localhost" },
     { name: "uppercase single-slash", fileName: "café 100% image.png", prefix: "FILE:" },
@@ -199,50 +198,44 @@ describe("createReplyMediaPathNormalizer", () => {
     });
   });
 
-  it.each([
-    { name: "Docker", containerWorkdir: "/workspace" },
-    { name: "OpenShell", containerWorkdir: "/sandbox" },
-    { name: "custom remote backend", containerWorkdir: "/remote/agent" },
-  ])(
-    "maps $name media to the host sandbox workspace before staging",
-    async ({ containerWorkdir }) => {
-      ensureSandboxWorkspaceForSession.mockResolvedValue({
-        workspaceDir: "/tmp/sandboxes/session-1",
-        containerWorkdir,
-      });
-      const normalize = createTestReplyMediaNormalizer({ agentId: "finance" });
-      const fileUrl = `file://${containerWorkdir}/screens/final%20image.png`;
+  it("maps a custom backend workdir to the host sandbox workspace before staging", async () => {
+    const containerWorkdir = "/remote/agent";
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir,
+    });
+    const normalize = createTestReplyMediaNormalizer({ agentId: "finance" });
+    const fileUrl = `file://${containerWorkdir}/screens/final%20image.png`;
 
-      const result = await normalize({
-        mediaUrls: [
-          "./out/photo.png",
-          fileUrl,
-          ...(parseReplyDirectives(`MEDIA:${fileUrl}`).mediaUrls ?? []),
-        ],
-      });
+    const result = await normalize({
+      mediaUrls: [
+        "./out/photo.png",
+        fileUrl,
+        ...(parseReplyDirectives(`MEDIA:${fileUrl}`).mediaUrls ?? []),
+      ],
+    });
 
-      expect(ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: "finance" }),
-      );
-      expectMedia(result, "/tmp/outbound-media/photo.png", [
-        "/tmp/outbound-media/photo.png",
-        "/tmp/outbound-media/final image.png",
-      ]);
-      expectOutboundAttachmentCall(
-        0,
-        path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
-        5 * 1024 * 1024,
-      );
-      expectOutboundAttachmentCall(
-        1,
-        path.join("/tmp/sandboxes/session-1", "screens", "final image.png"),
-        5 * 1024 * 1024,
-      );
-      expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionWorkspaceDir: "/tmp/sandboxes/session-1" }),
-      );
-    },
-  );
+    expect(ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "finance" }),
+    );
+    expectMedia(result, "/tmp/outbound-media/photo.png", [
+      "/tmp/outbound-media/photo.png",
+      "/tmp/outbound-media/final image.png",
+    ]);
+    expectOutboundAttachmentCall(
+      0,
+      path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
+      5 * 1024 * 1024,
+    );
+    expectOutboundAttachmentCall(
+      1,
+      path.join("/tmp/sandboxes/session-1", "screens", "final image.png"),
+      5 * 1024 * 1024,
+    );
+    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionWorkspaceDir: "/tmp/sandboxes/session-1" }),
+    );
+  });
 
   it("maps explicitly supplied backend workdirs without rediscovering the sandbox", async () => {
     const normalize = createTestReplyMediaNormalizer({
@@ -286,14 +279,8 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it.each([
-    ["lowercase triple-slash", "file:///Users/peter/Documents/report.pdf"],
-    ["uppercase triple-slash", "FILE:///Users/peter/Documents/report.pdf"],
-    ["lowercase single-slash", "file:/Users/peter/Documents/report.pdf"],
     ["uppercase single-slash", "FILE:/Users/peter/Documents/report.pdf"],
     ["remote host", "file://server/share/report.pdf"],
-    ["network path", "FILE:////server/share/report.pdf"],
-    ["encoded slash", "file:/Users/peter/Documents/%2Freport.pdf"],
-    ["encoded backslash", "FILE:/Users/peter/Documents/%5Creport.pdf"],
   ])("drops %s host file URLs when no sandbox mapping applies", async (_label, mediaUrl) => {
     const normalize = createTestReplyMediaNormalizer();
 

@@ -235,9 +235,13 @@ and adds `sessions` to `memory.search.sources` without enabling broader
 cross-conversation recall. Retained session-reset transcripts remain in the
 agent's sessions directory and are indexed from those original artifacts.
 
-When Memory Core finds a retired per-agent QMD workspace under
-`~/.openclaw/agents/<agentId>/qmd/`, Doctor also offers to remove its derived
-indexes, model downloads, collection metadata, and session exports.
+Doctor removes only empty per-agent QMD directories under
+`~/.openclaw/agents/<agentId>/qmd/`. Nonempty directories stay untouched:
+OpenClaw's retired QMD backend used the same layout as standalone QMD, without
+an ownership marker. Retained directories do not block migration or Gateway
+startup. After backing them up, you can remove old indexes, model downloads,
+collection metadata, and session exports manually if you have confirmed that
+no standalone QMD installation uses them.
 
 Canonical memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
 migrated extra paths. Builtin indexes those same Markdown sources on its next

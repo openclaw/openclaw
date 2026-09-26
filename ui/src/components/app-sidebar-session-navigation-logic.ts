@@ -14,7 +14,6 @@ import {
 } from "../lib/session-display.ts";
 import { resolveSessionRenameValue } from "../lib/session-rename.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
-import { collectKnownSessionGroups } from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
@@ -508,31 +507,19 @@ export function findSidebarMainSessionRow(
   return rows.find((row) => areUiSessionKeysEquivalent(row.key, mainKey)) ?? null;
 }
 
-export function collectKnownSidebarSessionGroups(
-  catalog: readonly string[],
-  rows: readonly GatewaySessionRow[],
-): string[] {
-  return collectKnownSessionGroups(catalog, rows);
-}
-
-/** Depth-first search across a projected session tree, including descendants.
- *  Both callers ask "does any row match", so this short-circuits rather than
- *  flattening: the answer usually resolves in the first few rows. */
-export function someSidebarSessionInTree(
+/** Search the projected tree without flattening folded descendant state. */
+export function findSidebarSessionInTree(
   roots: readonly SidebarRecentSession[],
   predicate: (row: SidebarRecentSession) => boolean,
-): boolean {
+): SidebarRecentSession | undefined {
   const pending = [...roots];
-  while (pending.length > 0) {
-    const row = pending.pop();
-    if (row) {
-      if (predicate(row)) {
-        return true;
-      }
-      pending.push(...row.children);
+  for (let row = pending.pop(); row; row = pending.pop()) {
+    if (predicate(row)) {
+      return row;
     }
+    pending.push(...row.children);
   }
-  return false;
+  return undefined;
 }
 
 export function findProjectedSidebarSession(input: {

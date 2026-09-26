@@ -136,6 +136,76 @@ describe("buildStatusText prepared context windows", () => {
     },
   );
 
+  it.each([
+    { name: "selected model on", configured: true, expected: "on" },
+    { name: "selected model off", configured: false, expected: "off" },
+    {
+      name: "selected model auto with a different active fallback cutoff",
+      configured: "auto",
+      activeFallback: true,
+      expected: "auto (120 sec)",
+    },
+    {
+      name: "session off overrides model on",
+      configured: true,
+      sessionFast: false,
+      expected: "off",
+    },
+    {
+      name: "session on overrides model off",
+      configured: false,
+      sessionFast: true,
+      expected: "on",
+    },
+    {
+      name: "prepared off overrides model on",
+      configured: true,
+      preparedFast: false,
+      expected: "off",
+    },
+  ] as const)("renders fast mode for $name", async (scenario) => {
+    const parts = await renderPreparedStatus({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/base-model": {
+                params: { fastMode: !scenario.configured, fastAutoOnSeconds: 30 },
+              },
+              "anthropic/selected-model": {
+                params: { fastMode: scenario.configured, fastAutoOnSeconds: 120 },
+              },
+            },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "status-fast-selected",
+        updatedAt: 0,
+        providerOverride: "anthropic",
+        modelOverride: "selected-model",
+        ...("sessionFast" in scenario ? { fastMode: scenario.sessionFast } : {}),
+        ...("activeFallback" in scenario
+          ? {
+              modelProvider: "openai",
+              model: "base-model",
+              fallbackNotice: {
+                kind: "active" as const,
+                selectedModel: "anthropic/selected-model",
+                activeModel: "openai/base-model",
+                reason: "provider unavailable",
+              },
+            }
+          : {}),
+      },
+      resolvedFastMode: "preparedFast" in scenario ? scenario.preparedFast : undefined,
+      provider: "openai",
+      model: "base-model",
+    });
+
+    expect(parts.text).toContain(`fast ${scenario.expected}`);
+  });
+
   async function renderTerminalFallback(
     params: {
       entry?: Partial<InternalSessionEntry>;

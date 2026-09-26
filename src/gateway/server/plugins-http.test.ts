@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -279,6 +280,48 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(handled).toBe(true);
     expect(exactHandler).toHaveBeenCalledTimes(1);
     expect(prefixHandler).not.toHaveBeenCalled();
+  });
+
+  it("matches current owned registrations after warming, replacement, and removal", async () => {
+    const registry = createGatewayTestRegistry();
+    const calls: string[] = [];
+    const register = (
+      path: string,
+      match: "exact" | "prefix",
+      label: string,
+      replaceExisting = false,
+    ) =>
+      registerPluginHttpRoute({
+        registry,
+        path,
+        match,
+        auth: "plugin",
+        pluginId: "route",
+        source: "route",
+        replaceExisting,
+        throwOnFailure: true,
+        handler: () => {
+          calls.push(label);
+          return true;
+        },
+      });
+    const removePrefix = register("/demo", "prefix", "prefix");
+    const removeOriginal = register("/DEMO/%2569tem", "exact", "original");
+    const routes = registry.httpRoutes;
+    const handler = createGatewayPluginRequestHandler({ registry, log: createPluginLog() });
+    const invoke = () =>
+      handler({ url: "/demo/%69tem" } as IncomingMessage, makeMockHttpResponse().res);
+    expect(await invoke()).toBe(true);
+    const removeReplacement = register("/demo/item", "exact", "replacement", true);
+    expect(registry.httpRoutes).toBe(routes);
+    expect(await invoke()).toBe(true);
+    removeOriginal();
+    expect(await invoke()).toBe(true);
+    removeReplacement();
+    expect(await invoke()).toBe(true);
+    removePrefix();
+    expect(await invoke()).toBe(false);
+    expect(calls).toEqual(["original", "replacement", "replacement", "prefix"]);
   });
 
   it("supports route fallthrough when handler returns false", async () => {
@@ -597,12 +640,14 @@ describe("plugin HTTP route auth checks", () => {
   });
 
   it("matches canonicalized variants of registered route paths", () => {
-    const registry = createGatewayTestRegistry({
-      httpRoutes: [createRoute({ path: "/api/demo" })],
-    });
+    const route = createRoute({ path: "/api/demo" });
+    const registry = createGatewayTestRegistry({ httpRoutes: [route] });
     expect(isRegisteredPluginHttpRoutePath(registry, "/api//demo")).toBe(true);
     expect(isRegisteredPluginHttpRoutePath(registry, "/API/demo")).toBe(true);
     expect(isRegisteredPluginHttpRoutePath(registry, "/api/%2564emo")).toBe(true);
+    route.path = "/api/other";
+    expect(isRegisteredPluginHttpRoutePath(registry, "/api/demo")).toBe(false);
+    expect(isRegisteredPluginHttpRoutePath(registry, "/api/%256fther")).toBe(true);
   });
 
   it("enforces auth for protected and gateway-auth routes", () => {

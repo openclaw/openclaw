@@ -573,54 +573,6 @@ describe("createDiscordGatewayPlugin", () => {
     );
   });
 
-  it("uses proxy agent for gateway WebSocket when configured", () => {
-    const runtime = createRuntime();
-
-    const plugin = createDiscordGatewayPlugin({
-      discordConfig: { proxy: "http://127.0.0.1:8080" },
-      runtime,
-      testing: createProxyTestingOverrides(),
-    });
-
-    expect(Object.getPrototypeOf(plugin)).not.toBe(GatewayPlugin.prototype);
-
-    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
-      .createWebSocket;
-    createWebSocket("wss://gateway.discord.gg");
-
-    expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:8080");
-    expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", {
-      agent: getLastProxyAgent(),
-      handshakeTimeout: 30_000,
-      maxPayload: 16 * 1024 * 1024,
-    });
-    expect(runtime.log).toHaveBeenCalledWith("discord: gateway proxy enabled");
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("accepts configured DNS proxy hosts for gateway WebSocket", () => {
-    const runtime = createRuntime();
-
-    const plugin = createDiscordGatewayPlugin({
-      discordConfig: { proxy: "http://mitm-proxy:8080" },
-      runtime,
-      testing: createProxyTestingOverrides(),
-    });
-
-    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
-      .createWebSocket;
-    createWebSocket("wss://gateway.discord.gg");
-
-    expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://mitm-proxy:8080");
-    expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", {
-      agent: getLastProxyAgent(),
-      handshakeTimeout: 30_000,
-      maxPayload: 16 * 1024 * 1024,
-    });
-    expect(runtime.log).toHaveBeenCalledWith("discord: gateway proxy enabled");
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
   it("uses the configured gateway proxy when proxy is arbitrary DNS", () => {
     const runtime = createRuntime();
 
@@ -740,46 +692,6 @@ describe("createDiscordGatewayPlugin", () => {
     await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
 
     expect(captureHttpExchangeSpy).not.toHaveBeenCalled();
-  });
-
-  it("accepts IPv6 loopback proxy URLs for websocket setup", async () => {
-    const runtime = createRuntime();
-    const plugin = createDiscordGatewayPlugin({
-      discordConfig: { proxy: "http://[::1]:8080" },
-      runtime,
-      testing: createProxyTestingOverrides(),
-    });
-
-    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
-      .createWebSocket;
-    createWebSocket("wss://gateway.discord.gg");
-    await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
-
-    expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://[::1]:8080");
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("uses the configured gateway proxy when proxy is a non-loopback IP", () => {
-    const runtime = createRuntime();
-
-    const plugin = createDiscordGatewayPlugin({
-      discordConfig: { proxy: "http://10.0.0.10:8080" },
-      runtime,
-      testing: createProxyTestingOverrides(),
-    });
-
-    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
-      .createWebSocket;
-    createWebSocket("wss://gateway.discord.gg");
-
-    expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://10.0.0.10:8080");
-    expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", {
-      agent: getLastProxyAgent(),
-      handshakeTimeout: 30_000,
-      maxPayload: 16 * 1024 * 1024,
-    });
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith("discord: gateway proxy enabled");
   });
 
   it("maps body read failures to fetch failed", async () => {

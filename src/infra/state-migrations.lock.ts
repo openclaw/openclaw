@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import { formatGatewayLockFailure } from "./gateway-lock-diagnostics.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 type LegacyMigrationStateLockOptions = {
@@ -29,12 +30,9 @@ export async function withLegacyMigrationStateLock(
       timeoutMs: 250,
     });
   } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : (options.formatAcquireError?.(error) ?? String(error));
+    const detail = options.formatAcquireError?.(error) ?? formatGatewayLockFailure(error);
     const guidance =
-      options.retryGuidance ?? "Stop the Gateway and run `openclaw doctor --fix` again.";
+      options.retryGuidance ?? "Resolve the lock failure, then run `openclaw doctor --fix` again.";
     return {
       changes: [],
       warnings: [`Failed migrating ${options.label}: ${detail}. ${guidance}`],

@@ -1,5 +1,4 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-// Perplexity provider module implements model/runtime integration.
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,

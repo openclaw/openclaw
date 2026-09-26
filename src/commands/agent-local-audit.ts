@@ -7,6 +7,7 @@ import {
 } from "../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 
 /** Own one direct-process writer unless a surrounding runtime already owns it. */
 export function startAgentLocalAuditWriter(
@@ -16,7 +17,9 @@ export function startAgentLocalAuditWriter(
   if (hasExecutionIdentityAdmissionSink()) {
     return undefined;
   }
+  const scheduler = new GatewayScheduler();
   const recorder = createAuditEventRecorder({
+    scheduler,
     getConfig: () => config,
     ...(options.stateDir ? { stateDir: options.stateDir } : {}),
   });
@@ -30,9 +33,14 @@ export function startAgentLocalAuditWriter(
     recorder.recordExecutionDecision,
   );
   return async () => {
+    scheduler.beginClose();
     clearRuntimeActionSink();
     clearDecisionWorkSink();
     clearAdmissionSink();
-    await recorder.stop();
+    try {
+      await recorder.stop();
+    } finally {
+      await scheduler.stop();
+    }
   };
 }

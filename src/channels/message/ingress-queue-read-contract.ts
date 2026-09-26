@@ -18,6 +18,7 @@ export type ChannelIngressPressureHealth = {
 };
 
 type ChannelIngressReadOperations = {
+  "channelIngress.accounts": { input: { channelId: string }; output: string[] };
   "channelIngress.failedHealth": { input: undefined; output: ChannelIngressFailedHealth[] };
   "channelIngress.pressureHealth": {
     input: { now: number };
@@ -39,6 +40,9 @@ export function isChannelIngressReadCommand(value: unknown): value is ChannelIng
   }
   if (value.type === "channelIngress.failedHealth") {
     return value.input === undefined;
+  }
+  if (value.type === "channelIngress.accounts") {
+    return isRecord(value.input) && typeof value.input.channelId === "string";
   }
   return (
     value.type === "channelIngress.pressureHealth" &&

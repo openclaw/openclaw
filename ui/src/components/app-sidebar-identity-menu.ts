@@ -1,6 +1,3 @@
-// Sidebar footer identity menu, split out of app-sidebar-agent-menu.ts to
-// keep that module inside the TS LOC ratchet. Shares the sidebar menu focus
-// helpers and help submenu with the agent menu.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
@@ -25,7 +22,7 @@ import {
   moveSidebarMenuFocus,
   renderSidebarHelpMenu,
 } from "./app-sidebar-agent-menu.ts";
-import { renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarMenuAction, renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
 import { icons } from "./icons.ts";
 import "./sidebar-build-chip.ts";
 import "./viewer-facepile.ts";
@@ -110,19 +107,14 @@ function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
     })}
     ${
       current?.canPromote
-        ? html`<wa-dropdown-item
-            class="sidebar-customize-menu__item"
-            value="command:gateway-set-primary"
-          >
-            <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.star}</span>
-            <span class="sidebar-customize-menu__text">${t("nav.gateway.setPrimary")}</span>
-          </wa-dropdown-item>`
+        ? renderSidebarMenuAction(
+            "command:gateway-set-primary",
+            t("nav.gateway.setPrimary"),
+            "star",
+          )
         : nothing
     }
-    <wa-dropdown-item class="sidebar-customize-menu__item" value="command:gateway-settings">
-      <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.server}</span>
-      <span class="sidebar-customize-menu__text">${t("nav.gateway.openSettings")}</span>
-    </wa-dropdown-item>
+    ${renderSidebarMenuAction("command:gateway-settings", t("nav.gateway.openSettings"), "server")}
     <div class="sidebar-customize-menu__separator" role="separator"></div>
   `;
 }
@@ -241,38 +233,24 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       </wa-dropdown-item>
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       ${renderIdentityGateways(params.onClose)}
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
-        <span class="sidebar-customize-menu__text">${t("nav.settings")}</span>
-        <kbd slot="details" class="session-menu__shortcut" aria-hidden="true"
+      ${renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
+        details: html`<kbd slot="details" class="session-menu__shortcut" aria-hidden="true"
           >${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings)}</kbd
-        >
-      </wa-dropdown-item>
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:usage">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.coins}</span>
-        <span class="sidebar-customize-menu__text">${titleForRoute("usage")}</span>
-      </wa-dropdown-item>
+        >`,
+      })}
+      ${renderSidebarMenuAction("command:usage", titleForRoute("usage"), "coins")}
       <div class="sidebar-customize-menu__separator" role="separator"></div>
-      <wa-dropdown-item
-        class="sidebar-customize-menu__item sidebar-pair-mobile"
-        value="command:pair-mobile"
-        ?disabled=${!params.canPairDevice}
-        title=${params.canPairDevice ? nothing : t("devices.pairing.adminRequired")}
-      >
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
-        <span class="sidebar-customize-menu__text">${t("devices.pairing.button")}</span>
-      </wa-dropdown-item>
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:apps">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.layoutGrid}</span>
-        <span class="sidebar-customize-menu__text">${t("agentChip.getApps")}</span>
-      </wa-dropdown-item>
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:debug-overlay">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.activity}</span>
-        <span class="sidebar-customize-menu__text">${t("debug.overlay.title")}</span>
-        <span slot="details" class="session-menu__shortcut" aria-hidden="true"
+      ${renderSidebarMenuAction("command:pair-mobile", t("devices.pairing.button"), "smartphone", {
+        className: "sidebar-pair-mobile",
+        disabled: !params.canPairDevice,
+        title: params.canPairDevice ? undefined : t("devices.pairing.adminRequired"),
+      })}
+      ${renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid")}
+      ${renderSidebarMenuAction("command:debug-overlay", t("debug.overlay.title"), "activity", {
+        details: html`<span slot="details" class="session-menu__shortcut" aria-hidden="true"
           >${DEBUG_OVERLAY_SHORTCUT_LABEL}</span
-        >
-      </wa-dropdown-item>
+        >`,
+      })}
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       ${renderSidebarHelpMenu()}
       ${

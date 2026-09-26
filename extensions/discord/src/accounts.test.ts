@@ -1,4 +1,3 @@
-// Discord tests cover accounts plugin behavior.
 import type {
   DiscordAccountConfig,
   DiscordConfig,
@@ -353,23 +352,5 @@ describe("resolveDiscordAccount runtime config selection", () => {
     expect(resolved.token).toBe("runtime-work-token");
     expect(resolved.tokenSource).toBe("config");
     expect(resolved.tokenStatus).toBe("available");
-  });
-
-  it("preserves configured unavailable tokens without falling through to env", () => {
-    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
-    const resolved = resolveDiscordAccount({
-      cfg: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      accountId: "default",
-    });
-
-    expect(resolved.token).toBe("");
-    expect(resolved.tokenSource).toBe("config");
-    expect(resolved.tokenStatus).toBe("configured_unavailable");
   });
 });

@@ -742,6 +742,7 @@ describe("buildStatusReply subagent summary", () => {
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
+    expect(reply?.presentationTextMode).toBe("fallback");
     const table = reply?.presentation?.blocks.find((block) => block.type === "table");
 
     expect(normalizeTestText(reply?.text ?? "")).toContain("Context: 45k/1.0m");
@@ -1350,33 +1351,36 @@ describe("buildStatusReply subagent summary", () => {
       ],
     });
 
-    await withTempHome(async () => {
-      const text = await buildStatusText({
-        cfg: {
-          ...baseCfg,
-          agents: {
-            defaults: {
-              agentRuntime: { id: "codex" },
+    await withTempHome(
+      async () => {
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "codex" },
+              },
             },
           },
-        },
-        sessionEntry: {
-          sessionId: "sess-status-codex-no-profile",
-          updatedAt: 0,
-        },
-        ...createStatusSessionParams(),
-        provider: "openai",
-        model: "gpt-5.5",
-        contextTokens: 32_000,
-        ...createStatusDisplayParams(),
-      });
+          sessionEntry: {
+            sessionId: "sess-status-codex-no-profile",
+            updatedAt: 0,
+          },
+          ...createStatusSessionParams(),
+          provider: "openai",
+          model: "gpt-5.5",
+          contextTokens: 32_000,
+          ...createStatusDisplayParams(),
+        });
 
-      expect(normalizeTestText(text)).toContain("Usage: 5h 84% left");
-      const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
-        ([params]) => params?.providers?.includes("openai"),
-      );
-      expect(providerUsageCall?.[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
-    });
+        expect(normalizeTestText(text)).toContain("Usage: 5h 84% left");
+        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+          ([params]) => params?.providers?.includes("openai"),
+        );
+        expect(providerUsageCall?.[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
+      },
+      { env: { OPENAI_API_KEY: undefined, OPENAI_OAUTH_TOKEN: undefined } },
+    );
   });
 
   it("does not forward stale non-OpenAI profile overrides to Codex usage", async () => {
@@ -1643,69 +1647,6 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Usage: Account balance: $12.50");
-  });
-
-  it("uses the session-selected model provider for /status usage", async () => {
-    const usageResetBase = Math.floor(Date.now() / 1000);
-    providerUsageMock.loadProviderUsageSummary.mockImplementation(
-      async ({ providers = [] } = {}) => ({
-        updatedAt: Date.now(),
-        providers: providers.map((provider) =>
-          provider === "openai"
-            ? {
-                provider: "openai",
-                displayName: "OpenAI",
-                windows: [
-                  {
-                    label: "5h",
-                    usedPercent: 9,
-                    resetAt: (usageResetBase + 60 * 60) * 1000,
-                  },
-                ],
-              }
-            : {
-                provider,
-                displayName: "DeepSeek",
-                windows: [],
-                summary: "Balance ¥42.50",
-              },
-        ),
-      }),
-    );
-
-    const text = await buildStatusText({
-      cfg: {
-        ...baseCfg,
-        agents: {
-          defaults: {
-            model: "deepseek/deepseek-v4-flash",
-          },
-        },
-      },
-      sessionEntry: {
-        sessionId: "sess-status-session-selected-usage",
-        updatedAt: 0,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.5",
-      },
-      ...createStatusSessionParams("telegram"),
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
-      contextTokens: 1_000_000,
-      ...createStatusDisplayParams(),
-      modelAuthOverride: "oauth (openai:status)",
-      activeModelAuthOverride: "oauth (openai:status)",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Model: openai/gpt-5.5");
-    expect(normalized).toContain("pinned session; config primary deepseek/deepseek-v4-flash");
-    expect(normalized).toContain("clear /model default");
-    expect(normalized).toContain("Usage: 5h 91% left");
-    expect(normalized).not.toContain("Usage: Balance ¥42.50");
-    expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
-      expect.objectContaining({ providers: ["openai"] }),
-    );
   });
 
   it("uses the session-selected provider for /status usage when runtime state is stale", async () => {

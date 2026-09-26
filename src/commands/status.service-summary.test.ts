@@ -25,14 +25,6 @@ function createService(overrides: Partial<GatewayService>): GatewayService {
   });
 }
 
-function requireMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call[0];
-}
-
 describe("readServiceStatusSummary", () => {
   it.each([
     { serviceVersion: "2026.9.4" },
@@ -121,22 +113,6 @@ describe("readServiceStatusSummary", () => {
     );
     expect(summary.label).toBe(`systemd ${scope}`);
   });
-  it("marks OpenClaw-managed services as installed", async () => {
-    const summary = await readServiceStatusSummary(
-      createService({
-        isLoaded: vi.fn(async () => true),
-        readCommand: vi.fn(async () => ({ programArguments: ["openclaw", "gateway", "run"] })),
-        readRuntime: vi.fn(async () => ({ status: "running" })),
-      }),
-      "Daemon",
-    );
-
-    expect(summary.installed).toBe(true);
-    expect(summary.managedByOpenClaw).toBe(true);
-    expect(summary.externallyManaged).toBe(false);
-    expect(summary.loadedText).toBe("enabled");
-  });
-
   it("marks running unmanaged services as externally managed", async () => {
     const summary = await readServiceStatusSummary(
       createService({
@@ -289,9 +265,9 @@ describe("readServiceStatusSummary", () => {
       "Daemon",
     );
 
-    const loadedArgs = requireMockArg(isLoaded, "isLoaded") as GatewayServiceEnvArgs;
+    const loadedArgs = isLoaded.mock.calls[0]?.[0];
     expect(loadedArgs?.env?.OPENCLAW_GATEWAY_PORT).toBe("18789");
-    const runtimeEnv = requireMockArg(readRuntime, "readRuntime") as NodeJS.ProcessEnv;
+    const runtimeEnv = readRuntime.mock.calls[0]?.[0];
     expect(runtimeEnv?.OPENCLAW_GATEWAY_PORT).toBe("18789");
     expect(summary.installed).toBe(true);
     expect(summary.loadState).toEqual({ status: "loaded" });

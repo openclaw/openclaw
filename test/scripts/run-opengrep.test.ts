@@ -382,16 +382,39 @@ describe("run-opengrep.sh", () => {
           GIT_ALLOW_PROTOCOL: "",
           GIT_TRACE2_EVENT: trace,
         });
-        const fetches = fs
+        const traceEvents = fs
           .readFileSync(trace, "utf8")
           .trim()
           .split("\n")
-          .map((line) => JSON.parse(line))
-          .filter((event) => event.event === "cmd_name" && event.name === "fetch");
+          .map((line) => JSON.parse(line));
+        const fetches = traceEvents.filter(
+          (event) => event.event === "cmd_name" && event.name === "fetch",
+        );
         if (!passes) {
           expect(result.status, result.stderr).not.toBe(0);
           expect(result.stdout).toContain("Base commit still unavailable");
-          expect(fetches).toHaveLength(5);
+          expect(fetches).toHaveLength(6);
+          expect(
+            fetches.map((event) => {
+              const start = traceEvents.find(
+                (candidate) => candidate.event === "start" && candidate.sid === event.sid,
+              );
+              expect(start).toBeDefined();
+              return start.argv.slice(start.argv.indexOf("fetch"));
+            }),
+          ).toEqual([
+            ["fetch", "--filter=blob:none", "--no-tags", "--depth=1", "origin", staleBase],
+            ...[25, 100, 300, 1000].map((deepenBy) => [
+              "fetch",
+              "--filter=blob:none",
+              "--no-tags",
+              `--deepen=${deepenBy}`,
+              "origin",
+              "--",
+              "main",
+            ]),
+            ["fetch", "--filter=blob:none", "--no-tags", "--unshallow", "origin", "--", "main"],
+          ]);
           expect(fs.existsSync(argsPath)).toBe(false);
           return;
         }

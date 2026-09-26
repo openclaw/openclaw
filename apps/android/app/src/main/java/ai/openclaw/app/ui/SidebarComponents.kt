@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -58,7 +59,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerInputChange
@@ -86,9 +86,6 @@ import kotlinx.coroutines.CancellationException
 import kotlin.math.abs
 
 @Composable
-internal fun sidebarSearchLabel(): String = nativeString("Search sessions")
-
-@Composable
 internal fun SidebarSearchField(
   query: String,
   onQueryChange: (String) -> Unit,
@@ -100,7 +97,7 @@ internal fun SidebarSearchField(
     onValueChange = onQueryChange,
     modifier = modifier.fillMaxWidth().testTag("sidebar-search"),
     singleLine = true,
-    label = { Text(sidebarSearchLabel()) },
+    label = { Text(nativeString("Search sessions")) },
     leadingIcon = {
       Icon(
         imageVector = Icons.Default.Search,
@@ -158,10 +155,7 @@ internal fun SidebarCollapsibleHeader(
   palette: SidebarPalette,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
-  icon: ImageVector? = null,
-  iconPainter: Painter? = null,
   iconContent: (@Composable () -> Unit)? = null,
-  iconTint: Color = palette.text,
   trailingContent: (@Composable () -> Unit)? = null,
   attention: SidebarAttention? = null,
 ) {
@@ -189,22 +183,6 @@ internal fun SidebarCollapsibleHeader(
       modifier = Modifier.size(18.dp),
     )
     iconContent?.invoke()
-    icon?.let {
-      Icon(
-        imageVector = it,
-        contentDescription = null,
-        tint = palette.text,
-        modifier = Modifier.size(18.dp),
-      )
-    }
-    iconPainter?.let {
-      Icon(
-        painter = it,
-        contentDescription = null,
-        tint = iconTint,
-        modifier = Modifier.size(18.dp),
-      )
-    }
     Text(
       text = label,
       style = ClawTheme.type.body.copy(fontSize = 13.sp),
@@ -271,18 +249,7 @@ internal fun SidebarNavigationRow(
     }
   }
 
-  Box(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .zIndex(if (visualDragging) 1f else 0f)
-        .graphicsLayer {
-          translationY = if (visualDragging) dragOffset else 0f
-          scaleX = if (visualDragging) 1.015f else 1f
-          scaleY = if (visualDragging) 1.015f else 1f
-          shadowElevation = if (visualDragging) 10.dp.toPx() else 0f
-        },
-  ) {
+  SidebarDragDecoration(visualDragging, dragOffset) {
     NavigationDrawerItem(
       label = {
         Row(
@@ -358,13 +325,6 @@ internal fun SidebarNavigationRow(
           unselectedTextColor = palette.text,
         ),
     )
-    if (visualDragging) {
-      HorizontalDivider(
-        color = ClawTheme.colors.primary,
-        thickness = 2.dp,
-        modifier = Modifier.align(if (dragOffset < 0f) Alignment.TopCenter else Alignment.BottomCenter),
-      )
-    }
   }
 }
 
@@ -485,7 +445,7 @@ internal fun SidebarSessionRow(
   ) {
     Column(modifier = Modifier.weight(1f)) {
       Text(
-        text = sidebarSessionTitle(session),
+        text = sessionPresentationTitle(session) { session.key },
         style = ClawTheme.type.body.copy(fontSize = 13.sp),
         color = palette.text,
         maxLines = 1,
@@ -575,18 +535,7 @@ internal fun SidebarRowSurface(
       }
     }
 
-  Box(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .zIndex(if (visualDragging) 1f else 0f)
-        .graphicsLayer {
-          translationY = if (visualDragging) dragOffset else 0f
-          scaleX = if (visualDragging) 1.015f else 1f
-          scaleY = if (visualDragging) 1.015f else 1f
-          shadowElevation = if (visualDragging) 10.dp.toPx() else 0f
-        },
-  ) {
+  SidebarDragDecoration(visualDragging, dragOffset) {
     Row(
       modifier =
         Modifier
@@ -620,6 +569,28 @@ internal fun SidebarRowSurface(
       horizontalArrangement = Arrangement.spacedBy(10.dp),
       content = content,
     )
+  }
+}
+
+@Composable
+private fun SidebarDragDecoration(
+  visualDragging: Boolean,
+  dragOffset: Float,
+  content: @Composable BoxScope.() -> Unit,
+) {
+  Box(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .zIndex(if (visualDragging) 1f else 0f)
+        .graphicsLayer {
+          translationY = if (visualDragging) dragOffset else 0f
+          scaleX = if (visualDragging) 1.015f else 1f
+          scaleY = if (visualDragging) 1.015f else 1f
+          shadowElevation = if (visualDragging) 10.dp.toPx() else 0f
+        },
+  ) {
+    content()
     if (visualDragging) {
       HorizontalDivider(
         color = ClawTheme.colors.primary,

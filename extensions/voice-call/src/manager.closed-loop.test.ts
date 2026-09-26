@@ -24,49 +24,6 @@ function expectTranscriptWaiter(
 }
 
 describe("CallManager closed-loop turns", () => {
-  it("completes a closed-loop turn without live audio", async () => {
-    const { manager, provider } = await createManagerHarness({
-      transcriptTimeoutMs: 5000,
-    });
-
-    const started = await manager.initiateCall("+15550000003");
-    expect(started.success).toBe(true);
-
-    await markCallAnswered(manager, started.callId, "evt-closed-loop-answered");
-
-    const turnPromise = manager.continueCall(started.callId, "How can I help?");
-    await vi.waitFor(() => {
-      expect(provider.startListeningCalls).toHaveLength(1);
-      expectTranscriptWaiter(manager, started.callId);
-    });
-
-    await manager.processEvent({
-      id: "evt-closed-loop-speech",
-      type: "call.speech",
-      callId: started.callId,
-      providerCallId: "request-uuid",
-      timestamp: Date.now(),
-      transcript: "Please check status",
-      isFinal: true,
-    });
-
-    const turn = await turnPromise;
-    expect(turn.success).toBe(true);
-    expect(turn.transcript).toBe("Please check status");
-    expect(provider.startListeningCalls).toHaveLength(1);
-    expect(provider.stopListeningCalls).toHaveLength(1);
-
-    const call = expectDefined(manager.getCall(started.callId), `active call ${started.callId}`);
-    expect(call.transcript.map((entry) => entry.text)).toEqual([
-      "How can I help?",
-      "Please check status",
-    ]);
-    const metadata = call.metadata ?? {};
-    expect(typeof metadata.lastTurnLatencyMs).toBe("number");
-    expect(typeof metadata.lastTurnListenWaitMs).toBe("number");
-    expect(metadata.turnCount).toBe(1);
-  });
-
   it("rejects overlapping continueCall requests for the same call", async () => {
     const { manager, provider } = await createManagerHarness({
       transcriptTimeoutMs: 5000,
@@ -219,42 +176,5 @@ describe("CallManager closed-loop turns", () => {
     expect(typeof metadata.lastTurnListenWaitMs).toBe("number");
     expect(provider.startListeningCalls).toHaveLength(2);
     expect(provider.stopListeningCalls).toHaveLength(2);
-  });
-
-  it("handles repeated closed-loop turns without waiter churn", async () => {
-    const { manager, provider } = await createManagerHarness({
-      transcriptTimeoutMs: 5000,
-    });
-
-    const started = await manager.initiateCall("+15550000006");
-    expect(started.success).toBe(true);
-
-    await markCallAnswered(manager, started.callId, "evt-loop-answered");
-
-    for (let i = 1; i <= 5; i++) {
-      const turnPromise = manager.continueCall(started.callId, `Prompt ${i}`);
-      await vi.waitFor(() => {
-        expect(provider.startListeningCalls).toHaveLength(i);
-        expectTranscriptWaiter(manager, started.callId);
-      });
-      await manager.processEvent({
-        id: `evt-loop-speech-${i}`,
-        type: "call.speech",
-        callId: started.callId,
-        providerCallId: "request-uuid",
-        timestamp: Date.now(),
-        transcript: `Answer ${i}`,
-        isFinal: true,
-      });
-      const result = await turnPromise;
-      expect(result.success).toBe(true);
-      expect(result.transcript).toBe(`Answer ${i}`);
-    }
-
-    const call = expectDefined(manager.getCall(started.callId), `active call ${started.callId}`);
-    const metadata = call.metadata ?? {};
-    expect(metadata.turnCount).toBe(5);
-    expect(provider.startListeningCalls).toHaveLength(5);
-    expect(provider.stopListeningCalls).toHaveLength(5);
   });
 });

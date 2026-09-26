@@ -34,44 +34,6 @@ function setupRepoFiles(repoRoot: string, files: Readonly<Record<string, string>
   }
 }
 
-function distRuntimeImportPath(pluginId: string, relativePath = "index.js"): string {
-  return `../../../${bundledDistPluginFile(pluginId, relativePath)}`;
-}
-
-function expectRuntimePluginWrapperContains(params: {
-  repoRoot: string;
-  pluginId: string;
-  relativePath?: string;
-  expectedImport: string;
-}) {
-  const runtimePath = path.join(
-    params.repoRoot,
-    "dist-runtime",
-    "extensions",
-    params.pluginId,
-    params.relativePath ?? "index.js",
-  );
-  expect(fs.existsSync(runtimePath)).toBe(true);
-  expect(fs.readFileSync(runtimePath, "utf8")).toContain(params.expectedImport);
-}
-
-function expectRuntimePluginWrapperForwardsDefault(params: {
-  repoRoot: string;
-  pluginId: string;
-  expectedImport: string;
-}) {
-  const runtimePath = path.join(
-    params.repoRoot,
-    "dist-runtime",
-    "extensions",
-    params.pluginId,
-    "index.js",
-  );
-  expect(fs.readFileSync(runtimePath, "utf8")).toContain(
-    `import defaultModule from "${params.expectedImport}";`,
-  );
-}
-
 function expectRuntimeArtifactText(params: {
   repoRoot: string;
   pluginId: string;
@@ -95,7 +57,7 @@ afterEach(() => {
 });
 
 describe("stageBundledPluginRuntime", () => {
-  it("stages bundled dist plugins as runtime wrappers without linking plugin node_modules", () => {
+  it("stages bundled dist plugins as runtime wrappers without linking plugin node_modules", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-");
     const distPluginDir = createDistPluginDir(repoRoot, "diffs");
     fs.mkdirSync(path.join(repoRoot, "dist"), { recursive: true });
@@ -117,16 +79,9 @@ describe("stageBundledPluginRuntime", () => {
     stageBundledPluginRuntime({ repoRoot });
 
     const runtimePluginDir = path.join(repoRoot, "dist-runtime", "extensions", "diffs");
-    expectRuntimePluginWrapperContains({
-      repoRoot,
-      pluginId: "diffs",
-      expectedImport: distRuntimeImportPath("diffs"),
-    });
-    expectRuntimePluginWrapperForwardsDefault({
-      repoRoot,
-      pluginId: "diffs",
-      expectedImport: distRuntimeImportPath("diffs"),
-    });
+    const runtimeModule = await import(pathToFileURL(path.join(runtimePluginDir, "index.js")).href);
+    const canonicalModule = await import(pathToFileURL(path.join(distPluginDir, "index.js")).href);
+    expect(runtimeModule.default).toBe(canonicalModule.default);
     expect(fs.existsSync(path.join(runtimePluginDir, "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(distPluginDir, "node_modules"))).toBe(true);
     expect(
@@ -262,18 +217,13 @@ describe("stageBundledPluginRuntime", () => {
     stageBundledPluginRuntime({ repoRoot });
 
     const runtimeEntryPath = path.join(repoRoot, "dist-runtime", "extensions", "diffs", "index.js");
-    expectRuntimePluginWrapperContains({
-      repoRoot,
-      pluginId: "diffs",
-      expectedImport: distRuntimeImportPath("diffs"),
-    });
     expect(fs.existsSync(path.join(repoRoot, "dist-runtime", "chunk-abc.js"))).toBe(false);
 
     const runtimeModule = await import(`${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`);
     expect(runtimeModule.value).toBe(1);
   });
 
-  it("stages root runtime sidecars that bundled plugin boundaries resolve directly", () => {
+  it("stages root runtime sidecars that bundled plugin boundaries resolve directly", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-sidecars-");
     createDistPluginDir(repoRoot, "whatsapp");
     setupRepoFiles(repoRoot, {
@@ -284,128 +234,43 @@ describe("stageBundledPluginRuntime", () => {
 
     stageBundledPluginRuntime({ repoRoot });
 
-    expectRuntimePluginWrapperContains({
-      repoRoot,
-      pluginId: "whatsapp",
-      relativePath: "light-runtime-api.js",
-      expectedImport: distRuntimeImportPath("whatsapp", "light-runtime-api.js"),
-    });
-    expectRuntimePluginWrapperContains({
-      repoRoot,
-      pluginId: "whatsapp",
-      relativePath: "runtime-api.js",
-      expectedImport: distRuntimeImportPath("whatsapp", "runtime-api.js"),
-    });
+    const runtimeDir = path.join(repoRoot, "dist-runtime", "extensions", "whatsapp");
+    const light = await import(pathToFileURL(path.join(runtimeDir, "light-runtime-api.js")).href);
+    const heavy = await import(pathToFileURL(path.join(runtimeDir, "runtime-api.js")).href);
+    expect(light.light).toBe(true);
+    expect(heavy.heavy).toBe(true);
   });
 
   it("keeps plugin command registration on the canonical dist graph when loaded from dist-runtime", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-commands-");
-    const distPluginDir = path.join(repoRoot, "dist", "extensions", "demo");
-    const distCommandsDir = path.join(repoRoot, "dist", "plugins");
-    fs.mkdirSync(distPluginDir, { recursive: true });
-    fs.mkdirSync(distCommandsDir, { recursive: true });
-    fs.writeFileSync(path.join(repoRoot, "package.json"), '{ "type": "module" }\n', "utf8");
-    fs.writeFileSync(
-      path.join(distCommandsDir, "commands.js"),
-      [
-        "const registry = globalThis.__openclawTestPluginCommands ??= new Map();",
-        "export function registerPluginCommand(pluginId, command) {",
-        "  registry.set(`/${command.name.toLowerCase()}`, { ...command, pluginId });",
-        "}",
-        "export function clearPluginCommands() {",
-        "  registry.clear();",
-        "}",
-        "export function getPluginCommandSpecs(provider) {",
-        "  if (provider && provider !== 'telegram' && provider !== 'discord') return [];",
-        "  return Array.from(registry.values()).map((command) => ({",
-        "    name: command.nativeNames?.[provider] ?? command.nativeNames?.default ?? command.name,",
-        "    description: command.description,",
-        "    acceptsArgs: command.acceptsArgs ?? false,",
-        "  }));",
-        "}",
-        "export function matchPluginCommand(commandBody) {",
-        "  const [commandName, ...rest] = commandBody.trim().split(/\\s+/u);",
-        "  const command = registry.get(commandName.toLowerCase());",
-        "  if (!command) return null;",
-        "  return { command, args: rest.length > 0 ? rest.join(' ') : undefined };",
-        "}",
-        "export async function executePluginCommand(params) {",
-        "  return params.command.handler({ args: params.args });",
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(distPluginDir, "index.js"),
-      [
-        "import { registerPluginCommand } from '../../plugins/commands.js';",
-        "",
-        "export function registerDemoCommand() {",
-        "  registerPluginCommand('demo-plugin', {",
-        "    name: 'pair',",
-        "    description: 'Pair a device',",
-        "    acceptsArgs: true,",
-        "    nativeNames: { telegram: 'pair', discord: 'pair' },",
-        "    handler: async ({ args }) => ({ text: `paired:${args ?? ''}` }),",
-        "  });",
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+    setupRepoFiles(repoRoot, {
+      "package.json": '{ "type": "module" }\n',
+      "dist/plugins/commands.js": `
+export const registry = new Map();
+export function registerPluginCommand(name, handler) { registry.set(name, handler); }
+`,
+      [bundledDistPluginFile("demo", "index.js")]: `
+import { registerPluginCommand } from '../../plugins/commands.js';
+export function registerDemoCommand() {
+  registerPluginCommand('pair', (args) => ({ text: 'paired:' + args }));
+}
+`,
+    });
 
     stageBundledPluginRuntime({ repoRoot });
 
     const runtimeEntryPath = path.join(repoRoot, "dist-runtime", "extensions", "demo", "index.js");
     const canonicalCommandsPath = path.join(repoRoot, "dist", "plugins", "commands.js");
-
     expect(fs.existsSync(path.join(repoRoot, "dist-runtime", "plugins", "commands.js"))).toBe(
       false,
     );
 
-    const runtimeModule = await import(`${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`);
-    const commandsModule = (await import(
-      `${pathToFileURL(canonicalCommandsPath).href}?t=${Date.now()}`
-    )) as {
-      clearPluginCommands: () => void;
-      getPluginCommandSpecs: (provider?: string) => Array<{
-        name: string;
-        description: string;
-        acceptsArgs: boolean;
-      }>;
-      matchPluginCommand: (commandBody: string) => {
-        command: { handler: ({ args }: { args?: string }) => Promise<{ text: string }> };
-        args?: string;
-      } | null;
-      executePluginCommand: (params: {
-        command: { handler: ({ args }: { args?: string }) => Promise<{ text: string }> };
-        args?: string;
-      }) => Promise<{ text: string }>;
-    };
-
-    commandsModule.clearPluginCommands();
+    // Both imports must share module-local state, without a global registry masking duplication.
+    const runtimeModule = await import(pathToFileURL(runtimeEntryPath).href);
+    const commandsModule: { registry: Map<string, (args: string) => { text: string }> } =
+      await import(pathToFileURL(canonicalCommandsPath).href);
     runtimeModule.registerDemoCommand();
-
-    expect(commandsModule.getPluginCommandSpecs("telegram")).toEqual([
-      { name: "pair", description: "Pair a device", acceptsArgs: true },
-    ]);
-    expect(commandsModule.getPluginCommandSpecs("discord")).toEqual([
-      { name: "pair", description: "Pair a device", acceptsArgs: true },
-    ]);
-
-    const match = commandsModule.matchPluginCommand("/pair now");
-    if (match === null) {
-      throw new Error("Expected plugin command match");
-    }
-    expect(match.args).toBe("now");
-    expect(typeof match.command.handler).toBe("function");
-    await expect(
-      commandsModule.executePluginCommand({
-        command: match.command,
-        args: match.args,
-      }),
-    ).resolves.toEqual({ text: "paired:now" });
+    expect(commandsModule.registry.get("pair")?.("now")).toEqual({ text: "paired:now" });
   });
 
   it("copies package metadata files but symlinks other non-js plugin artifacts into the runtime overlay", () => {

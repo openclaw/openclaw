@@ -1,4 +1,3 @@
-// Memory Core tests cover manager targeted sync plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   markMemoryTargetArchiveFilesDirty,
@@ -55,34 +54,17 @@ describe("memory targeted session sync", () => {
     expect(sessionsDirtyFiles.has("/tmp/other-dirty.jsonl")).toBe(true);
   });
 
-  it("preserves the full-retry dirty marker after targeted cleanup", async () => {
-    const syncArchiveFiles = vi.fn(async () => undefined);
-    const sessionsDirtyFiles = new Set(["/tmp/targeted-full-retry.jsonl"]);
-
+  it.each([
+    { marker: "full-retry", dirtyState: { sessionsFullRetryDirty: true } },
+    { marker: "source reconciliation", dirtyState: { sessionsReconcileDirty: true } },
+  ])("preserves the $marker dirty marker after targeted cleanup", async ({ dirtyState }) => {
+    const sessionsDirtyFiles = new Set(["/tmp/targeted-cleanup.jsonl"]);
     const result = await runMemoryTargetedSessionSync({
       hasSessionSource: true,
-      targetArchiveFiles: new Set(["/tmp/targeted-full-retry.jsonl"]),
+      targetArchiveFiles: new Set(sessionsDirtyFiles),
       reason: "post-compaction",
       progress: undefined,
-      sessionsFullRetryDirty: true,
-      sessionsDirtyFiles,
-      syncArchiveFiles,
-      shouldFallbackOnError: () => false,
-      activateFallbackProvider: async () => false,
-    });
-
-    expect(result).toEqual({ handled: true, sessionsDirty: true });
-    expect(sessionsDirtyFiles.size).toBe(0);
-  });
-
-  it("preserves source reconciliation after targeted cleanup", async () => {
-    const sessionsDirtyFiles = new Set(["/tmp/targeted-reconcile.jsonl"]);
-
-    const result = await runMemoryTargetedSessionSync({
-      hasSessionSource: true,
-      targetArchiveFiles: new Set(["/tmp/targeted-reconcile.jsonl"]),
-      reason: "post-compaction",
-      sessionsReconcileDirty: true,
+      ...dirtyState,
       sessionsDirtyFiles,
       syncArchiveFiles: async () => undefined,
       shouldFallbackOnError: () => false,

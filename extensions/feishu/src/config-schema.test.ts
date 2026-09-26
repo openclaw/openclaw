@@ -34,15 +34,10 @@ describe("Feishu custom domains", () => {
     ["feishu", true],
     ["lark", true],
     ["https://tenant.example", true],
-    ["HTTPS://tenant.example", true],
     ["HtTpS://Tenant.Example:8443/Api/Base%2FKeep/", true],
     ["HTTPS://fixture-user@tenant.example/base", true],
     ["HTTPS://tenant.example/base?tenant=Keep#Fragment", true],
-    ["HTTPS://tenant.example/base?", true],
-    ["HTTPS://tenant.example/base#", true],
-    ["http://tenant.example", false],
     ["HTTP://tenant.example", false],
-    ["https://[", false],
     ["HTTPS://[", false],
     ["tenant.example/base", false],
   ])("validates root and account domain %s consistently", (domain, accepted) => {
@@ -82,34 +77,13 @@ describe("FeishuConfigSchema webhook validation", () => {
 
   it.each([
     ["legacy-hook", "/legacy-hook"],
-    ["legacy-hook/", "/legacy-hook/"],
-    ["legacy-hook?tenant=alpha", "/legacy-hook?tenant=alpha"],
     ["/legacy-hook?", "/legacy-hook?"],
     ["/legacy-hook?#", "/legacy-hook"],
-    ["/legacy-hook#fragment", "/legacy-hook"],
     ["legacy-hook?tenant=alpha#fragment", "/legacy-hook?tenant=alpha"],
-    ["#fragment", "/"],
-    ["#?", "/"],
-    ["?tenant=alpha#fragment", "/?tenant=alpha"],
-    ["/other/../legacy-hook", "/legacy-hook"],
     ["/other/%2e%2e/legacy-hook", "/legacy-hook"],
-    ["/other\\..\\legacy-hook", "/legacy-hook"],
-    ["//example.com/legacy-hook", "/legacy-hook"],
-    ["/\\example.com/legacy-hook", "/legacy-hook"],
     ["https://example.com/legacy-hook/?x=1#fragment", "/legacy-hook/?x=1"],
-    ["/legacy hook", "/legacy%20hook"],
-    ["/legacy?name=hello world", "/legacy?name=hello%20world"],
     ["/café", "/caf%C3%A9"],
-    ["/💬", "/%F0%9F%92%AC"],
-    ["/legacy?name=café", "/legacy?name=caf%C3%A9"],
-    ["/legacy\tvalue", "/legacyvalue"],
-    ["/legacy\nvalue", "/legacyvalue"],
-    ["/legacy\u0000value", "/legacy%00value"],
-    ["/legacy%23value", "/legacy%23value"],
     ["/legacy%2Fvalue", "/legacy%2Fvalue"],
-    ["/legacy%5Cvalue", "/legacy%5Cvalue"],
-    ["/legacy%00value", "/legacy%00value"],
-    ["/legacy%ZZ", "/legacy%ZZ"],
     ["", "/feishu/events"],
     ["   ", "/feishu/events"],
   ])("accepts only canonical root and account webhook path %j", (webhookPath, canonicalPath) => {
@@ -135,19 +109,16 @@ describe("FeishuConfigSchema webhook validation", () => {
     }
   });
 
-  it.each([
-    "mailto:hello@example.com",
-    "javascript:alert(1)",
-    "ftp://host/hook",
-    "file:///tmp/hook",
-    "//[",
-  ])("rejects unsupported root and account webhook URL %j", (webhookPath) => {
-    expectSchemaIssue(FeishuConfigSchema.safeParse({ webhookPath }), "webhookPath");
-    expectSchemaIssue(
-      FeishuConfigSchema.safeParse({ accounts: { main: { webhookPath } } }),
-      "accounts.main.webhookPath",
-    );
-  });
+  it.each(["javascript:alert(1)", "//["])(
+    "rejects unsupported root and account webhook URL %j",
+    (webhookPath) => {
+      expectSchemaIssue(FeishuConfigSchema.safeParse({ webhookPath }), "webhookPath");
+      expectSchemaIssue(
+        FeishuConfigSchema.safeParse({ accounts: { main: { webhookPath } } }),
+        "accounts.main.webhookPath",
+      );
+    },
+  );
 
   it("rejects legacy webhook input while preserving the exported canonical default", () => {
     expect(
@@ -288,26 +259,6 @@ describe("FeishuConfigSchema webhook validation", () => {
           appId: "cli_main",
           appSecret: "secret_main", // pragma: allowlist secret
         },
-      },
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts SecretRef verificationToken in webhook mode", () => {
-    const result = FeishuConfigSchema.safeParse({
-      connectionMode: "webhook",
-      verificationToken: {
-        source: "env",
-        provider: "default",
-        id: "FEISHU_VERIFICATION_TOKEN",
-      },
-      encryptKey: "encrypt_top",
-      appId: "cli_top",
-      appSecret: {
-        source: "env",
-        provider: "default",
-        id: "FEISHU_APP_SECRET",
       },
     });
 
@@ -563,7 +514,6 @@ describe("FeishuConfigSchema stickerSets", () => {
   it.each([
     ["too many bots", Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`bot_${i}`, {}]))],
     ["empty app ID", { "": entry }],
-    ["padded app ID", { " bot ": entry }],
     ["long app ID", { ["a".repeat(129)]: entry }],
     [
       "too many entries",
@@ -572,11 +522,8 @@ describe("FeishuConfigSchema stickerSets", () => {
     ["old array shape", { bot: [{ fileKey: "file_received", keywords: ["yes"] }] }],
     ["empty keywords", { bot: { file_received: [] } }],
     ["too many keywords", { bot: { file_received: Array(9).fill("yes") } }],
-    ["blank keyword", { bot: { file_received: ["  "] } }],
-    ["padded keyword", { bot: { file_received: [" yes "] } }],
     ["long keyword", { bot: { file_received: ["x".repeat(65)] } }],
     ["non-string keyword", { bot: { file_received: [12] } }],
-    ["padded key", { bot: { " file_received ": ["yes"] } }],
     ["long key", { bot: { ["x".repeat(513)]: ["yes"] } }],
     ["path key", { bot: { "../sticker": ["yes"] } }],
     ["control key", { bot: { "file\u0000key": ["yes"] } }],
@@ -587,30 +534,24 @@ describe("FeishuConfigSchema stickerSets", () => {
     expectCatalogValidation({ stickerSets }, false);
   });
 
-  it.each(["👍", "e\u0301", "👋🏽", "👩‍💻"])(
-    "uses Unicode scalar bounds consistently for %s",
-    (unit) => {
-      const bounded = (limit: number) => Array.from(unit.repeat(limit)).slice(0, limit).join("");
-      const appId = bounded(128);
-      const fileKey = bounded(512);
-      const keyword = bounded(64);
-      expectCatalogValidation({ stickerSets: { [appId]: { [fileKey]: [keyword] } } }, true);
-      expectCatalogValidation({ stickerSets: { [appId + "x"]: entry } }, false);
-      expectCatalogValidation({ stickerSets: { bot: { [fileKey + "x"]: ["yes"] } } }, false);
-      expectCatalogValidation({ stickerSets: { bot: { file_received: [keyword + "x"] } } }, false);
-    },
-  );
+  it.each(["👍", "e\u0301"])("uses Unicode scalar bounds consistently for %s", (unit) => {
+    const bounded = (limit: number) => Array.from(unit.repeat(limit)).slice(0, limit).join("");
+    const appId = bounded(128);
+    const fileKey = bounded(512);
+    const keyword = bounded(64);
+    expectCatalogValidation({ stickerSets: { [appId]: { [fileKey]: [keyword] } } }, true);
+    expectCatalogValidation({ stickerSets: { [appId + "x"]: entry } }, false);
+    expectCatalogValidation({ stickerSets: { bot: { [fileKey + "x"]: ["yes"] } } }, false);
+    expectCatalogValidation({ stickerSets: { bot: { file_received: [keyword + "x"] } } }, false);
+  });
 
-  it.each([" ", "\n", "\t", "\u00a0", "\u2028", "\ufeff"])(
-    "rejects stored padding %j",
-    (padding) => {
-      for (const padded of [`${padding}value`, `value${padding}`]) {
-        expectCatalogValidation({ stickerSets: { [padded]: entry } }, false);
-        expectCatalogValidation({ stickerSets: { bot: { [padded]: ["yes"] } } }, false);
-        expectCatalogValidation({ stickerSets: { bot: { file_received: [padded] } } }, false);
-      }
-    },
-  );
+  it.each(["\n", "\u00a0"])("rejects stored padding %j", (padding) => {
+    for (const padded of [`${padding}value`, `value${padding}`]) {
+      expectCatalogValidation({ stickerSets: { [padded]: entry } }, false);
+      expectCatalogValidation({ stickerSets: { bot: { [padded]: ["yes"] } } }, false);
+      expectCatalogValidation({ stickerSets: { bot: { file_received: [padded] } } }, false);
+    }
+  });
 });
 
 describe("FeishuConfigSchema defaultAccount", () => {

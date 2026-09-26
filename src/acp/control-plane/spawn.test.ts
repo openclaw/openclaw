@@ -149,6 +149,8 @@ async function withCleanupFixture(
     const socket = vi
       .spyOn(gatewayCall, "callGateway")
       .mockRejectedValue(new Error("Raw WebSocket transport is unavailable"));
+    // Only deadline scenarios advance the RPC clock; filesystem work must not consume it.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
       await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
         run({
@@ -181,6 +183,7 @@ async function withCleanupFixture(
         }),
       );
     } finally {
+      vi.useRealTimers();
       await disposeAcpSessionManagerInstance(manager, "fixture-cleanup");
       managerTesting.resetAcpSessionManagerForTests();
       unregisterAcpRuntimeBackend(backendId);
@@ -366,7 +369,6 @@ describe("failed ACP provisional cleanup", () => {
         await withPluginRuntimeGatewayRequestScope(
           { ...scope, context, resolveGatewayContext: () => context },
           async () => {
-            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
             const settled = vi.fn();
             const cleaning = cleanup({
               ...initialized,
@@ -393,7 +395,6 @@ describe("failed ACP provisional cleanup", () => {
                 boundary === "before admission" ? before : undefined,
               );
             } finally {
-              vi.useRealTimers();
               release.resolve();
               await cleaning;
               await Promise.allSettled(executions);

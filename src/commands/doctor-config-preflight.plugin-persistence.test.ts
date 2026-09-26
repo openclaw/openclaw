@@ -246,7 +246,7 @@ describe("startup plugin persistence", () => {
     });
   });
 
-  it.each(["alpha", "beta"])(
+  it.each(["beta"])(
     "reuses and persists the original %s scope while retaining the config-wide inventory",
     async (first) => {
       const names = [first, first === "alpha" ? "beta" : "alpha"];

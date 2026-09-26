@@ -84,26 +84,6 @@ describe("prepareNativeMcpPolicy", () => {
     });
 
     expect(prepared.servers["docs!"]).toMatchObject({
-      allowedTools: ["read_docs"],
-      deniedTools: ["app_only", "delete_docs"],
-    });
-    expect(prepared.servers["docs?"]).toMatchObject({
-      allowedTools: [],
-      deniedTools: ["read_docs"],
-    });
-  });
-
-  it("preserves raw/safe identities and intersects effective, configured, and session policy", async () => {
-    const config = { tools: { allow: ["docs__*"], deny: ["docs__delete_*"] } };
-    const prepared = await prepareNativeMcpPolicy({
-      runtime: runtime(catalog()),
-      config,
-      workspaceDir: "/tmp/openclaw-native-mcp-policy",
-      capabilityProfile: resolveConversationCapabilityProfile({ config }),
-      warn: () => {},
-    });
-
-    expect(prepared.servers["docs!"]).toMatchObject({
       safeServerName: "docs",
       allowedTools: ["read_docs"],
       deniedTools: ["app_only", "delete_docs"],

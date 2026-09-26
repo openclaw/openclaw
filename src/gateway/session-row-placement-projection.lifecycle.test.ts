@@ -40,6 +40,7 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
     moves: new Map(),
     environments: new Map(),
     workspaceResultReconcilingSessionIds: new Set(reconciling),
+    workspaceRecoveryPendingSessionIds: new Set(),
   };
 }
 

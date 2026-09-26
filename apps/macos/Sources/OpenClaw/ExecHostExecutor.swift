@@ -20,12 +20,13 @@ enum ExecHostExecutor {
         }
 
         let effectiveCwd = approvedCwdSnapshot.path
-        let context = await self.buildContext(
-            request: request,
+        let context = await ExecApprovalEvaluator.evaluate(
             command: validatedRequest.command,
             rawCommand: validatedRequest.evaluationRawCommand,
             displayCommand: validatedRequest.displayCommand,
-            cwd: effectiveCwd)
+            cwd: effectiveCwd,
+            envOverrides: request.env,
+            agentId: request.agentId)
         guard !Task.isCancelled else { return self.cancelledResponse() }
         let approvalSource = validatedRequest.approvalSource
         let security = ExecHostRequestEvaluator.effectiveSecurity(
@@ -175,22 +176,6 @@ enum ExecHostExecutor {
                     ? nil
                     : ExecCommandResolution.approvalCwdDriftDeniedMessage
             })
-    }
-
-    private static func buildContext(
-        request: ExecHostRequest,
-        command: [String],
-        rawCommand: String?,
-        displayCommand: String,
-        cwd: String) async -> ExecApprovalEvaluation
-    {
-        await ExecApprovalEvaluator.evaluate(
-            command: command,
-            rawCommand: rawCommand,
-            displayCommand: displayCommand,
-            cwd: cwd,
-            envOverrides: request.env,
-            agentId: request.agentId)
     }
 
     private static func approvalStoreErrorResponse() -> ExecHostResponse {

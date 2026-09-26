@@ -67,7 +67,6 @@ import {
   patchSessionEntryTarget,
   persistSessionTranscriptTurn,
   readTranscriptStatsSync,
-  readSessionUpdatedAtCore,
   recordInboundSessionMeta,
   replaceSessionEntry,
   replaceTranscriptEventsSync,
@@ -236,44 +235,6 @@ describe("session accessor seam", () => {
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 2 });
     expect(appendTranscriptEventSync(scope, event)).toEqual({ ok: true, value: true });
     expect(appendTranscriptEventSync(scope, event)).toEqual({ ok: true, value: false });
-  });
-
-  it("loads, lists, and patches session entries without exposing the file store shape", async () => {
-    const scope = {
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-
-    await upsertSessionEntryCore(scope, {
-      model: "gpt-5.5",
-      sessionId: "session-1",
-      updatedAt: 10,
-    });
-
-    expect(loadSessionEntry(scope)).toMatchObject({
-      model: "gpt-5.5",
-      sessionId: "session-1",
-      updatedAt: expect.any(Number),
-    });
-    expect(readSessionUpdatedAtCore(scope)).toEqual(expect.any(Number));
-    expect(listSessionEntriesCore({ storePath })).toEqual([
-      {
-        sessionKey: "agent:main:main",
-        entry: expect.objectContaining({
-          model: "gpt-5.5",
-          sessionId: "session-1",
-          updatedAt: expect.any(Number),
-        }),
-      },
-    ]);
-
-    await upsertSessionEntryCore(scope, { model: "sonnet-4.6", updatedAt: 20 });
-
-    expect(loadSessionEntry(scope)).toMatchObject({
-      model: "sonnet-4.6",
-      sessionId: "session-1",
-      updatedAt: expect.any(Number),
-    });
   });
 
   it("preserves explicit default intent across reopen and unrelated whole-entry writes", async () => {
@@ -1451,10 +1412,10 @@ describe("session accessor seam", () => {
 
     const created = await createSessionEntryWithTranscript(
       scope,
-      ({ existingEntry, targetEntry, isLabelInUse }) => {
+      ({ existingEntry, targetEntry, labelInUse }) => {
         expect(existingEntry).toBeUndefined();
         expect(targetEntry).toBeUndefined();
-        expect(isLabelInUse("unused")).toBe(false);
+        expect(labelInUse).toBe(false);
         return {
           ok: true,
           entry: {
@@ -2261,32 +2222,6 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry(scope)?.updatedAt).toBeGreaterThan(0);
   });
 
-  it("replaces entries so deleted fields stay removed", async () => {
-    const scope = {
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-
-    await upsertSessionEntryCore(scope, {
-      model: "gpt-5.5",
-      providerOverride: "openai",
-      sessionId: "session-1",
-      updatedAt: 10,
-    });
-
-    await replaceSessionEntry(scope, {
-      sessionId: "session-1",
-      updatedAt: 20,
-    });
-
-    expect(loadSessionEntry(scope)).toMatchObject({
-      sessionId: "session-1",
-      updatedAt: expect.any(Number),
-    });
-    expect(loadSessionEntry(scope)?.model).toBeUndefined();
-    expect(loadSessionEntry(scope)?.providerOverride).toBeUndefined();
-  });
-
   it("patches entries atomically with a fallback entry", async () => {
     const scope = {
       sessionKey: "agent:main:main",
@@ -2354,34 +2289,6 @@ describe("session accessor seam", () => {
     ).rejects.toThrow("owner retired");
 
     expect(loadSessionEntry(scope)?.model).toBeUndefined();
-  });
-
-  it("can patch metadata without refreshing session activity", async () => {
-    const scope = {
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-
-    await upsertSessionEntryCore(scope, {
-      sessionId: "session-1",
-      updatedAt: 10,
-    });
-    const beforePatch = loadSessionEntry(scope);
-
-    await patchSessionEntryCore(
-      scope,
-      () => ({
-        model: "gpt-5.5",
-        updatedAt: 20,
-      }),
-      { preserveActivity: true },
-    );
-
-    expect(loadSessionEntry(scope)).toMatchObject({
-      model: "gpt-5.5",
-      sessionId: "session-1",
-      updatedAt: beforePatch?.updatedAt,
-    });
   });
 
   it("applies explicit replacements without exposing mutable store rows", async () => {

@@ -32,6 +32,9 @@ const boundary = vi.hoisted(() => ({
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class {
     readonly isOpen = true;
+    location() {
+      return "/synthetic/captured/main.sqlite";
+    }
   },
 }));
 vi.mock("../config/state-dir.js", () => ({

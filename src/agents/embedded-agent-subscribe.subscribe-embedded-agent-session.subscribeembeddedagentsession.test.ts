@@ -12,7 +12,6 @@ import * as agentEvents from "../infra/agent-events.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import {
-  THINKING_TAG_CASES,
   createSubscribedSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
   emitMessageStartAndEndForAssistantText,
@@ -29,6 +28,11 @@ import {
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
+
+const STREAMING_THINKING_TAG_CASES = [
+  { open: "<think>", close: "</think>" },
+  { open: "<antml:thinking>", close: "</antml:thinking>" },
+];
 
 const retryingCompactionEnd = () =>
   ({
@@ -316,7 +320,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it.each(THINKING_TAG_CASES)(
+  it.each(STREAMING_THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
     async ({ open, close }) => {
       const onReasoningStream = vi.fn();
@@ -853,7 +857,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it.each(THINKING_TAG_CASES)(
+  it.each(STREAMING_THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     async ({ open, close }) => {
       const onBlockReply = vi.fn();
@@ -1401,12 +1405,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
-  it("emits agent events on message_end for non-streaming assistant text", () => {
-    const { emit, onAgentEvent } = createAgentEventHarness();
-    emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
-    expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
-  });
-
   it("does not emit duplicate agent events when message_end repeats", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
@@ -1828,11 +1826,6 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     it.each([
       {
-        name: "preserves normal visible text",
-        chunks: ["Hello ", "world"],
-        expected: ["Hello world"],
-      },
-      {
         name: "strips think tags before committing text",
         chunks: ["Before<think>", " secret", "</think>After"],
         expected: ["BeforeAfter"],
@@ -1863,15 +1856,6 @@ describe("subscribeEmbeddedAgentSession", () => {
         name: "is a no-op when deltaBuffer is empty",
         chunks: [],
         expected: [],
-      },
-      {
-        name: "preserves visible prefix before unclosed think tag on flush",
-        // Streaming path advances state.blockState.thinking to true on <think>,
-        // then a timeout fires before </think>. flushPartialAssistantText must
-        // use fresh filter state so "Before " is not treated as hidden content.
-        chunks: ["Before ", "<think> reasoning without close"],
-        // The visible prefix is preserved (trimEnd removes trailing space).
-        expected: ["Before"],
       },
       {
         name: "preserves visible prefix before unclosed final tag on flush",

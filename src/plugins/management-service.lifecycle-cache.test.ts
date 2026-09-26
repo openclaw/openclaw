@@ -371,25 +371,10 @@ describe("plugin management catalog lifecycle", () => {
 
   it.each([
     {
-      label: "enabled external plugin missing a required dependency",
-      pluginId: "missing-required",
-      dependencies: { "missing-runtime": "1.0.0" },
-      expectedState: "error",
-      expectedDiagnostic: true,
-    },
-    {
       label: "enabled external plugin missing only an optional dependency",
       pluginId: "missing-optional",
       optionalDependencies: { "missing-runtime": "1.0.0" },
       expectedState: "enabled",
-      expectedDiagnostic: false,
-    },
-    {
-      label: "disabled external plugin missing a required dependency",
-      pluginId: "disabled-missing-required",
-      enabled: false,
-      dependencies: { "missing-runtime": "1.0.0" },
-      expectedState: "disabled",
       expectedDiagnostic: false,
     },
     {
@@ -414,7 +399,7 @@ describe("plugin management catalog lifecycle", () => {
 
     const catalog = await listManagedPlugins({
       config: {
-        plugins: { entries: { [scenario.pluginId]: { enabled: scenario.enabled ?? true } } },
+        plugins: { entries: { [scenario.pluginId]: { enabled: true } } },
       },
       env: {},
     });

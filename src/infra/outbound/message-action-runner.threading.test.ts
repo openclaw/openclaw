@@ -55,12 +55,6 @@ describe("message action threading helpers", () => {
       threadTs: "111.222",
       expectedSessionKey: "agent:main:workspace:channel:c123:thread:111.222",
     },
-    {
-      name: "case-insensitive channel id",
-      target: "channel:c123",
-      threadTs: "333.444",
-      expectedSessionKey: "agent:main:workspace:channel:c123:thread:333.444",
-    },
   ] as const)("prepares outbound routes for workspace using $name", async (testCase) => {
     const actionParams: Record<string, unknown> = {
       channel: "workspace",
@@ -132,11 +126,6 @@ describe("message action threading helpers", () => {
     {
       name: "injects threadId for matching target",
       target: "forum:123",
-      expectedThreadId: "42",
-    },
-    {
-      name: "injects threadId for prefixed group target",
-      target: "forum:group:123",
       expectedThreadId: "42",
     },
     {

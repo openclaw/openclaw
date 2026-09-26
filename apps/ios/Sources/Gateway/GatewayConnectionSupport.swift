@@ -5,15 +5,6 @@ enum GatewaySetupRouteProbeBudget {
     static let tcpConnectTimeoutSeconds = 2.0
 }
 
-func defaultGatewayTCPReachabilityProbe(
-    host: String,
-    port: Int,
-    timeoutSeconds: Double,
-    queueLabel: String) async -> Bool
-{
-    await TCPProbe.probe(host: host, port: port, timeoutSeconds: timeoutSeconds, queueLabel: queueLabel)
-}
-
 struct GatewayPendingTrustConnect {
     let url: URL
     let stableID: String
@@ -100,32 +91,6 @@ extension GatewayConnectionController {
 
         defaults.set(first.stableID, forKey: "gateway.lastDiscoveredStableID")
         GatewaySettingsStore.saveLastDiscoveredGatewayStableID(first.stableID)
-    }
-
-    func resolveDiscoveredTLSParams(
-        gateway: GatewayDiscoveryModel.DiscoveredGateway) -> GatewayTLSParams?
-    {
-        let stableID = gateway.stableID
-        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-
-        // Never let unauthenticated discovery (TXT) override a stored pin.
-        if let stored {
-            return GatewayTLSParams(
-                required: true,
-                expectedFingerprint: stored,
-                allowTOFU: false,
-                storeKey: stableID)
-        }
-
-        if gateway.tlsEnabled || gateway.tlsFingerprintSha256 != nil {
-            return GatewayTLSParams(
-                required: true,
-                expectedFingerprint: nil,
-                allowTOFU: false,
-                storeKey: stableID)
-        }
-
-        return nil
     }
 
     func tlsProbeFailureProblem(

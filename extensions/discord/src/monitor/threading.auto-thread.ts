@@ -90,20 +90,8 @@ export async function resolveDiscordAutoThreadReplyPlan(
   const targetChannelId = params.threadChannel?.id ?? (messageChannelId || "unknown");
   const originalReplyTarget = `channel:${targetChannelId}`;
   const createdThreadId = await maybeCreateDiscordAutoThread({
-    client: params.client,
-    message: params.message,
+    ...params,
     messageChannelId: messageChannelId || undefined,
-    channel: params.channel,
-    isGuildMessage: params.isGuildMessage,
-    channelConfig: params.channelConfig,
-    threadChannel: params.threadChannel,
-    channelType: params.channelType,
-    channelName: params.channelName,
-    channelDescription: params.channelDescription,
-    baseText: params.baseText,
-    combinedBody: params.combinedBody,
-    cfg: params.cfg,
-    agentId: params.agentId,
   });
   const deliveryPlan = resolveDiscordReplyDeliveryPlan({
     replyTarget: originalReplyTarget,

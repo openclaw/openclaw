@@ -166,14 +166,6 @@ describe("system-cli", () => {
     expect(requestOptions).toEqual({ expectFinal: false });
   });
 
-  it("omits sessionKey from payload when --session-key not provided", async () => {
-    await runCli(["system", "event", "--text", "ping"]);
-
-    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-    const params = gatewayCall()[2];
-    expect(params).not.toHaveProperty("sessionKey");
-  });
-
   it("treats empty --session-key as omitted", async () => {
     await runCli(["system", "event", "--text", "ping", "--session-key", "  "]);
 

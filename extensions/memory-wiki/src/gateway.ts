@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements gateway behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
@@ -22,10 +21,9 @@ import { ingestMemoryWikiSource } from "./ingest.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import {
   probeObsidianCli,
-  runObsidianCommand,
-  runObsidianDaily,
-  runObsidianOpen,
-  runObsidianSearch,
+  OBSIDIAN_ACTIONS,
+  assertOfficialObsidianCliSupported,
+  runObsidianAction,
 } from "./obsidian.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
@@ -181,14 +179,6 @@ export function registerMemoryWikiGatewayMethods(params: {
     return { agentId, appConfig, config, signal };
   };
 
-  const assertOfficialObsidianCliSupported = (config: ResolvedMemoryWikiConfig) => {
-    if (config.vault.scope === "agent") {
-      throw new Error(
-        "Official Obsidian CLI actions do not support memory-wiki vault.scope=agent.",
-      );
-    }
-  };
-
   registerResultMethod("wiki.status", READ_SCOPE, async (requestParams) => {
     const { appConfig, config, signal } = resolveRequestContext(requestParams);
     await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
@@ -327,30 +317,14 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.obsidian.status", READ_SCOPE, () => probeObsidianCli());
 
-  registerResultMethod("wiki.obsidian.search", WRITE_SCOPE, async (requestParams) => {
-    const { config } = resolveRequestContext(requestParams);
-    assertOfficialObsidianCliSupported(config);
-    const query = readStringParam(requestParams, "query", { required: true });
-    return await runObsidianSearch({ config, query });
-  });
-
-  registerResultMethod("wiki.obsidian.open", WRITE_SCOPE, async (requestParams) => {
-    const { config } = resolveRequestContext(requestParams);
-    assertOfficialObsidianCliSupported(config);
-    const vaultPath = readStringParam(requestParams, "path", { required: true });
-    return await runObsidianOpen({ config, vaultPath });
-  });
-
-  registerResultMethod("wiki.obsidian.command", WRITE_SCOPE, async (requestParams) => {
-    const { config } = resolveRequestContext(requestParams);
-    assertOfficialObsidianCliSupported(config);
-    const id = readStringParam(requestParams, "id", { required: true });
-    return await runObsidianCommand({ config, id });
-  });
-
-  registerResultMethod("wiki.obsidian.daily", WRITE_SCOPE, async (requestParams) => {
-    const { config } = resolveRequestContext(requestParams);
-    assertOfficialObsidianCliSupported(config);
-    return await runObsidianDaily({ config });
-  });
+  for (const action of OBSIDIAN_ACTIONS) {
+    registerResultMethod(`wiki.obsidian.${action.command}`, WRITE_SCOPE, async (requestParams) => {
+      const { config } = resolveRequestContext(requestParams);
+      assertOfficialObsidianCliSupported(config);
+      const value = action.argument
+        ? readStringParam(requestParams, action.argument.name, { required: true })
+        : undefined;
+      return await runObsidianAction({ config, action, value });
+    });
+  }
 }

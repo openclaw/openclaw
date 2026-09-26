@@ -143,7 +143,12 @@ describe("Agents API input attachment custody", () => {
     const extra = await saveMediaBuffer(Buffer.from("x"), undefined, "inbound");
     const fact = { path: full.path, sizeBytes: 1 };
     const prepared = await prepareInputs([fact, fact], workspaceDir, () => {}, signal);
-    expect(prepared.files.map((file) => Buffer.from(file.data, "base64"))).toEqual([bytes, bytes]);
+    expect(prepared.files).toHaveLength(2);
+    for (const [index, file] of prepared.files.entries()) {
+      expect(Buffer.from(file.data, "base64").equals(bytes), `attachment ${index + 1} bytes`).toBe(
+        true,
+      );
+    }
 
     await expect(
       prepareInputs([fact, fact, { path: extra.path }], workspaceDir, () => {}, signal),

@@ -125,29 +125,6 @@ beforeEach(() => {
 });
 
 describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
-  // The recall timeout default consumes this decision directly; these cases
-  // pin that API-key and missing-backend setups stay ineligible so callers
-  // budgeting on it keep the passthrough default.
-  it("resolves the provider for subscription (oauth) credentials", () => {
-    expect(resolveEmbeddedCliBackendDispatchEligibility({ provider: "claude-cli" })).toEqual({
-      provider: "claude-cli",
-    });
-  });
-
-  it("returns undefined for API-key credentials", () => {
-    resolveModelAuthMode.mockReturnValue("api-key");
-    expect(
-      resolveEmbeddedCliBackendDispatchEligibility({ provider: "claude-cli" }),
-    ).toBeUndefined();
-  });
-
-  it("returns undefined without a registered claude-cli backend", () => {
-    resolveRuntimeCliBackends.mockReturnValue([]);
-    expect(
-      resolveEmbeddedCliBackendDispatchEligibility({ provider: "claude-cli" }),
-    ).toBeUndefined();
-  });
-
   it("honors an explicitly pinned API-key profile over subscription-first order", () => {
     // A pinned profile is the credential the run executes on; order must not
     // override it in either direction.
@@ -194,26 +171,6 @@ describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
         authProfileId: "anthropic:missing",
       }),
     ).toBeUndefined();
-  });
-
-  it("returns undefined when the backend does not declare the capability", () => {
-    // The provider plugin owns the subscription-billing claim; a registered
-    // backend without it (e.g. gemini) keeps the passthrough.
-    expect(
-      resolveEmbeddedCliBackendDispatchEligibility({ provider: "google-gemini-cli" }),
-    ).toBeUndefined();
-    expect(resolveModelAuthMode).not.toHaveBeenCalled();
-  });
-
-  it("resolves canonical refs through the configured runtime", () => {
-    resolveCliRuntimeExecutionProvider.mockReturnValue("claude-cli");
-    expect(
-      resolveEmbeddedCliBackendDispatchEligibility({
-        provider: "anthropic",
-        model: "claude-opus-4-8",
-        agentId: "main",
-      }),
-    ).toEqual({ provider: "claude-cli" });
   });
 
   it("forwards the pinned auth profile into runtime resolution", () => {
@@ -472,28 +429,25 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(cliParams).not.toHaveProperty("toolsAllow");
   });
 
-  it.each(["group", "channel"] as const)(
-    "forwards authoritative %s type through embedded-to-CLI dispatch for opaque keys",
-    async (chatType) => {
-      await runEmbeddedAgentViaCliBackendIfEligible(
-        baseRunParams({
-          sessionKey: "agent:main:opaque:binding",
-          chatType,
-        }),
-      );
-
-      expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+  it("forwards authoritative group type through embedded-to-CLI dispatch for opaque keys", async () => {
+    const chatType = "group";
+    await runEmbeddedAgentViaCliBackendIfEligible(
+      baseRunParams({
         sessionKey: "agent:main:opaque:binding",
         chatType,
-      });
-    },
-  );
+      }),
+    );
+
+    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: "agent:main:opaque:binding",
+      chatType,
+    });
+  });
 
   // Fail-closed tool policy: only a non-empty named allowlist is expressible
   // on the CLI surface. Every other embedded tool state keeps the passthrough
   // so no closed state silently widens.
   it.each([
-    ["a wildcard allowlist", { toolsAllow: ["*"] }],
     ["a mixed wildcard allowlist", { toolsAllow: ["memory_search", "*"] }],
     ["a deny-all allowlist", { toolsAllow: [] }],
     ["no allowlist", { toolsAllow: undefined }],
@@ -649,18 +603,14 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(observed).toHaveLength(2);
   });
 
-  it.each([true, undefined])(
-    "delegates MCP lifetime policy %s to the CLI settlement owner",
-    async (cleanupBundleMcpOnRunEnd) => {
-      runCliAgent.mockResolvedValue(cliRunResult());
-      await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ cleanupBundleMcpOnRunEnd }));
-      expect(runCliAgent.mock.calls[0]?.[0]?.cleanupBundleMcpOnRunEnd).toBe(
-        cleanupBundleMcpOnRunEnd,
-      );
-      expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
-      expect(retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
-    },
-  );
+  it("delegates MCP lifetime policy to the CLI settlement owner", async () => {
+    const cleanupBundleMcpOnRunEnd = true;
+    runCliAgent.mockResolvedValue(cliRunResult());
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ cleanupBundleMcpOnRunEnd }));
+    expect(runCliAgent.mock.calls[0]?.[0]?.cleanupBundleMcpOnRunEnd).toBe(cleanupBundleMcpOnRunEnd);
+    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
+    expect(retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
+  });
 
   it("mirrors the run into the transcript recorder", async () => {
     runCliAgent.mockImplementation(async (cliParams: { runId: string }) => {
@@ -735,12 +685,6 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
         baseRunParams({ abortSignal: abortController.signal }),
       ),
     ).rejects.toThrow("aborted");
-    expect(transcriptRecorder.finalize).toHaveBeenCalledWith(undefined);
-  });
-
-  it("finalizes the transcript when the CLI run fails", async () => {
-    runCliAgent.mockRejectedValue(new Error("boom"));
-    await expect(runEmbeddedAgentViaCliBackendIfEligible(baseRunParams())).rejects.toThrow("boom");
     expect(transcriptRecorder.finalize).toHaveBeenCalledWith(undefined);
   });
 

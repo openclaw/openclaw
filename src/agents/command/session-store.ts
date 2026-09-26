@@ -127,32 +127,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
           contextTokensSource,
         }),
   };
-  if (preserveRuntimeModel) {
-    // Keep the pre-existing runtime model and context window so a turn-local
-    // model does not bleed into the session's perceived selection.
-    if (entry.model) {
-      // Prior runtime model exists: preserve its contextTokens. When missing,
-      // leave contextTokens unset rather than falling back to the heartbeat
-      // run's context window; status derives it from the preserved model.
-      next.contextTokens = entry.contextTokens;
-      if (entry.modelProvider) {
-        setSessionRuntimeModel(next, {
-          provider: entry.modelProvider,
-          model: entry.model,
-        });
-      } else {
-        // Retain the model-only entry without borrowing the heartbeat provider
-        // to avoid invalid cross-provider pairs (e.g. ollama/claude-opus-4-6).
-        next.model = entry.model;
-      }
-    }
-    // When there is no prior runtime model, do nothing: a heartbeat turn
-    // should not establish initial model state on an empty session.
-  } else {
+  if (!preserveRuntimeModel) {
     setSessionRuntimeModel(next, {
       provider: providerUsed,
       model: modelUsed,
     });
+  } else if (entry.model && entry.modelProvider) {
+    // The entry spread retains partial model state and context; normalize only a complete pair.
+    setSessionRuntimeModel(next, { provider: entry.modelProvider, model: entry.model });
   }
   if (!preserveUserFacingRunState) {
     if (!preserveRuntimeModel) {

@@ -256,6 +256,7 @@ it.each(["exact", "bulk"] as const)(
               moves: new Map(),
               environments: new Map(),
               workspaceResultReconcilingSessionIds: new Set(),
+              workspaceRecoveryPendingSessionIds: new Set(),
             };
           },
         );
@@ -400,7 +401,7 @@ it("reuses the subagent index across a 2,048-session drain with unrelated writes
       expect(projection.snapshot({ agentId: "main", key: "agent:main:legacy-1" }).row?.status).toBe(
         "done",
       );
-      expect(builds).toHaveBeenCalledTimes(2);
+      expect(builds).toHaveBeenCalledTimes(1);
     } finally {
       await Promise.allSettled([producer, drain]);
       projection.dispose();

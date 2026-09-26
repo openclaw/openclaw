@@ -1,4 +1,3 @@
-// Control UI module implements icons behavior.
 import { svg, type TemplateResult } from "lit";
 import { githubMark } from "./github-mark.ts";
 import { strokeIcon, toolIcons } from "./icons-tools.ts";

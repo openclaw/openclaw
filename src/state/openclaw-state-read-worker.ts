@@ -87,11 +87,17 @@ function readPool(): ReadPool {
 }
 
 function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "userProfiles.avatar.read") {
+    return { ...command, expected: { ...command.expected } };
+  }
   if (command.type === "channelIngress.failedHealth") {
     return { type: command.type };
   }
   if (command.type === "channelIngress.pressureHealth") {
     return { type: command.type, input: { now: command.input.now } };
+  }
+  if (command.type === "channelIngress.accounts") {
+    return { type: command.type, input: { channelId: command.input.channelId } };
   }
   if (command.type === "cron.jobNames") {
     return { ...command, jobIds: [...command.jobIds] };
@@ -343,6 +349,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       bytes,
     );
   }
+  if (command.type === "tasks.retentionSource") {
+    return bytes + Buffer.byteLength(command.taskId, "utf8");
+  }
   if (
     command.type === "githubPublication.request" ||
     command.type === "githubRepository.request" ||
@@ -410,10 +419,21 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (
     command.type === "userProfiles.reconcile" ||
+    command.type === "userProfiles.avatar.inspect" ||
     command.type === "userProfiles.channelIdentity.list" ||
     command.type === "userProfiles.authority.resolve"
   ) {
     return bytes + Buffer.byteLength(command.profileId, "utf8");
+  }
+  if (command.type === "userProfiles.avatar.read") {
+    return (
+      bytes +
+      Buffer.byteLength(command.profileId, "utf8") +
+      Object.values(command.expected).reduce(
+        (total, value) => total + Buffer.byteLength(value, "utf8"),
+        0,
+      )
+    );
   }
   if (command.type === "userProfiles.githubIdentity.cached") {
     return bytes + Buffer.byteLength(command.email, "utf8") + 8;

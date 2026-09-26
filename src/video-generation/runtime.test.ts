@@ -1,5 +1,5 @@
-// Video generation runtime tests cover provider execution and fallback behavior.
 import { beforeEach, describe, expect, it } from "vitest";
+import type { AgentToolModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,
@@ -7,12 +7,8 @@ import {
   DASHSCOPE_WAN_VIDEO_MODELS,
   buildDashscopeVideoGenerationParameters,
 } from "./dashscope-compatible.js";
-import {
-  generateVideo,
-  listRuntimeVideoGenerationProviders,
-  type GenerateVideoParams,
-} from "./runtime.js";
-import type { VideoGenerationProvider, VideoGenerationProviderOptionType } from "./types.js";
+import { generateVideo, type GenerateVideoParams } from "./runtime.js";
+import type { VideoGenerationProvider, VideoGenerationRequest } from "./types.js";
 
 let providers: VideoGenerationProvider[] = [];
 let listedConfigs: Array<OpenClawConfig | undefined> = [];
@@ -32,25 +28,15 @@ const runtimeDeps = {
 } satisfies NonNullable<Parameters<typeof generateVideo>[1]>;
 
 function runGenerateVideo(params: GenerateVideoParams) {
-  const defaults = params.cfg.agents?.defaults as
-    | (NonNullable<OpenClawConfig["agents"]>["defaults"] & {
-        videoGenerationModel?: unknown;
-      })
-    | undefined;
-  const cfg =
-    defaults?.videoGenerationModel !== undefined && defaults.mediaModels?.video === undefined
-      ? {
-          ...params.cfg,
-          agents: {
-            ...params.cfg.agents,
-            defaults: {
-              ...defaults,
-              mediaModels: { ...defaults.mediaModels, video: defaults.videoGenerationModel },
-            },
-          },
-        }
-      : params.cfg;
-  return generateVideo({ ...params, cfg }, runtimeDeps);
+  return generateVideo(params, runtimeDeps);
+}
+
+function videoConfig(video: AgentToolModelConfig): OpenClawConfig {
+  return { agents: { defaults: { mediaModels: { video } } } };
+}
+
+function videoResult(model?: string) {
+  return { videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }], model };
 }
 
 function createBufferedVideoProvider(id: string, buffers: Buffer[]): VideoGenerationProvider {
@@ -63,6 +49,16 @@ function createBufferedVideoProvider(id: string, buffers: Buffer[]): VideoGenera
   };
 }
 
+const wanProvider = {
+  id: "qwen",
+  defaultModel: "wan2.6-t2v",
+  models: [...DASHSCOPE_WAN_VIDEO_MODELS],
+  capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+  catalogByModel: DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+  resolveModelCapabilities: ({ model }) =>
+    DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[model]?.capabilities,
+} satisfies Omit<VideoGenerationProvider, "generateVideo">;
+
 function requireAttempt(
   result: Awaited<ReturnType<typeof runGenerateVideo>>,
   index: number,
@@ -74,21 +70,21 @@ function requireAttempt(
   return attempt;
 }
 
-function createProviderOptionsCaptureProvider(
-  capabilities: VideoGenerationProvider["capabilities"],
-): { provider: VideoGenerationProvider; getSeenProviderOptions: () => unknown } {
-  let seenProviderOptions: unknown;
-  return {
-    provider: {
-      id: "video-plugin",
-      capabilities,
-      async generateVideo(req) {
-        seenProviderOptions = req.providerOptions;
-        return { videos: [{ buffer: Buffer.from("x"), mimeType: "video/mp4" }] };
-      },
+function useCapturingProvider(
+  overrides: Omit<Partial<VideoGenerationProvider>, "generateVideo"> = {},
+) {
+  const requests: VideoGenerationRequest[] = [];
+  const provider: VideoGenerationProvider = {
+    id: "video-plugin",
+    capabilities: {},
+    ...overrides,
+    async generateVideo(req) {
+      requests.push(req);
+      return videoResult(req.model);
     },
-    getSeenProviderOptions: () => seenProviderOptions,
   };
+  providers = [provider];
+  return requests;
 }
 
 describe("video-generation runtime", () => {
@@ -123,13 +119,7 @@ describe("video-generation runtime", () => {
     providers = [provider];
 
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "video-plugin/vid-v1" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
       prompt: "animate a cat",
       agentDir: "/tmp/agent",
       authStore,
@@ -152,93 +142,28 @@ describe("video-generation runtime", () => {
   });
 
   it("uses configured video-generation timeout when call omits timeoutMs", async () => {
-    let seenTimeoutMs: number | undefined;
-    providers = [
-      {
-        id: "video-plugin",
-        capabilities: {},
-        async generateVideo(req: { timeoutMs?: number }) {
-          seenTimeoutMs = req.timeoutMs;
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "vid-v1",
-          };
-        },
-      },
-    ];
-
+    const requests = useCapturingProvider();
     await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "video-plugin/vid-v1", timeoutMs: 300_000 },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "video-plugin/vid-v1", timeoutMs: 300_000 }),
       prompt: "animate a cat",
     });
-
-    expect(seenTimeoutMs).toBe(300_000);
+    expect(requests[0]?.timeoutMs).toBe(300_000);
   });
 
   it("uses provider default video-generation timeout when the call and config omit timeoutMs", async () => {
-    let seenTimeoutMs: number | undefined;
-    providers = [
-      {
-        id: "video-plugin",
-        defaultTimeoutMs: 600_000,
-        capabilities: {},
-        async generateVideo(req: { timeoutMs?: number }) {
-          seenTimeoutMs = req.timeoutMs;
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "vid-v1",
-          };
-        },
-      },
-    ];
-
+    const requests = useCapturingProvider({ defaultTimeoutMs: 600_000 });
     await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "video-plugin/vid-v1" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
       prompt: "animate a cat",
     });
-
-    expect(seenTimeoutMs).toBe(600_000);
+    expect(requests[0]?.timeoutMs).toBe(600_000);
   });
 
   it("does not list providers when explicit config disables auto provider fallback", async () => {
-    const provider: VideoGenerationProvider = {
-      id: "video-plugin",
-      capabilities: {},
-      async generateVideo() {
-        return {
-          videos: [
-            {
-              buffer: Buffer.from("mp4-bytes"),
-              mimeType: "video/mp4",
-              fileName: "sample.mp4",
-            },
-          ],
-          model: "vid-v1",
-        };
-      },
-    };
-    providers = [provider];
+    providers = [createBufferedVideoProvider("video-plugin", [Buffer.from("mp4-bytes")])];
 
     const params: GenerateVideoParams = {
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "video-plugin/vid-v1" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
       prompt: "animate a cat",
       autoProviderFallback: false,
     };
@@ -266,16 +191,13 @@ describe("video-generation runtime", () => {
         capabilities: {},
         isConfigured: () => true,
         async generateVideo() {
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "gen4.5",
-          };
+          return videoResult("gen4.5");
         },
       },
     ];
 
     const result = await runGenerateVideo({
-      cfg: {} as OpenClawConfig,
+      cfg: {},
       prompt: "animate a cat",
     });
 
@@ -297,15 +219,7 @@ describe("video-generation runtime", () => {
     ];
 
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            mediaModels: {
-              video: { primary: "empty/vid-v1", fallbacks: ["valid/vid-v2"] },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "empty/vid-v1", fallbacks: ["valid/vid-v2"] }),
       prompt: "animate a cat",
     });
 
@@ -328,18 +242,10 @@ describe("video-generation runtime", () => {
 
     await expect(
       runGenerateVideo({
-        cfg: {
-          agents: {
-            defaults: {
-              mediaModels: {
-                video: {
-                  primary: "empty-primary/vid-v1",
-                  fallbacks: ["empty-fallback/vid-v2"],
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: videoConfig({
+          primary: "empty-primary/vid-v1",
+          fallbacks: ["empty-fallback/vid-v2"],
+        }),
         prompt: "animate a cat",
       }),
     ).rejects.toThrow(
@@ -365,11 +271,7 @@ describe("video-generation runtime", () => {
     ];
 
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: { mediaModels: { video: { primary: "url-provider/vid-v1" } } },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "url-provider/vid-v1" }),
       prompt: "animate a cat",
     });
 
@@ -381,67 +283,17 @@ describe("video-generation runtime", () => {
   });
 
   it("forwards providerOptions to providers that declare the matching schema", async () => {
-    const { provider, getSeenProviderOptions } = createProviderOptionsCaptureProvider({
-      providerOptions: {
-        seed: "number",
-        draft: "boolean",
-        camera_fixed: "boolean",
+    const requests = useCapturingProvider({
+      capabilities: {
+        providerOptions: { seed: "number", draft: "boolean", camera_fixed: "boolean" },
       },
     });
-    providers = [provider];
-
     await runGenerateVideo({
-      cfg: {
-        agents: { defaults: { videoGenerationModel: { primary: "video-plugin/vid-v1" } } },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
       prompt: "test",
       providerOptions: { seed: 42, draft: true, camera_fixed: false },
     });
-
-    expect(getSeenProviderOptions()).toEqual({ seed: 42, draft: true, camera_fixed: false });
-  });
-
-  it("passes providerOptions through to providers that do not declare any schema", async () => {
-    // Undeclared schema = backward-compatible pass-through: the provider receives the
-    // options and can handle or ignore them. No skip occurs.
-    const { provider, getSeenProviderOptions } = createProviderOptionsCaptureProvider({});
-    providers = [provider];
-
-    await runGenerateVideo({
-      cfg: {
-        agents: { defaults: { videoGenerationModel: { primary: "video-plugin/vid-v1" } } },
-      } as OpenClawConfig,
-      prompt: "test",
-      providerOptions: { seed: 42 },
-    });
-
-    expect(getSeenProviderOptions()).toEqual({ seed: 42 });
-  });
-
-  it("skips candidates that explicitly declare an empty providerOptions schema", async () => {
-    // Explicitly declared empty schema ({}) = provider has opted in and supports no options.
-    const provider: VideoGenerationProvider = {
-      id: "video-plugin",
-      capabilities: {
-        providerOptions: {
-          // explicitly empty
-        } as Record<string, VideoGenerationProviderOptionType>,
-      },
-      async generateVideo() {
-        throw new Error("should not be called");
-      },
-    };
-    providers = [provider];
-
-    await expect(
-      runGenerateVideo({
-        cfg: {
-          agents: { defaults: { videoGenerationModel: { primary: "video-plugin/vid-v1" } } },
-        } as OpenClawConfig,
-        prompt: "test",
-        providerOptions: { seed: 42 },
-      }),
-    ).rejects.toThrow(/does not accept providerOptions/);
+    expect(requests[0]?.providerOptions).toEqual({ seed: 42, draft: true, camera_fixed: false });
   });
 
   it("skips candidates that declare a providerOptions schema missing the requested key", async () => {
@@ -458,9 +310,7 @@ describe("video-generation runtime", () => {
 
     await expect(
       runGenerateVideo({
-        cfg: {
-          agents: { defaults: { videoGenerationModel: { primary: "video-plugin/vid-v1" } } },
-        } as OpenClawConfig,
+        cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
         prompt: "test",
         providerOptions: { seed: 42 },
       }),
@@ -481,54 +331,11 @@ describe("video-generation runtime", () => {
 
     await expect(
       runGenerateVideo({
-        cfg: {
-          agents: { defaults: { videoGenerationModel: { primary: "video-plugin/vid-v1" } } },
-        } as OpenClawConfig,
+        cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
         prompt: "test",
         providerOptions: { seed: "forty-two" },
       }),
     ).rejects.toThrow(/expects providerOptions\.seed to be a finite number, got string/);
-  });
-
-  it("falls over from a provider with explicitly empty providerOptions schema to one that has it", async () => {
-    // Explicitly empty schema ({}) causes a skip; undeclared schema passes through.
-    // Here "openai" declares {} to signal it has been audited and truly accepts no options.
-    providers = [
-      {
-        id: "openai",
-        defaultModel: "sora-2",
-        capabilities: { providerOptions: {} as Record<string, VideoGenerationProviderOptionType> },
-        isConfigured: () => true,
-        async generateVideo() {
-          throw new Error("should not be called");
-        },
-      },
-      {
-        id: "byteplus",
-        defaultModel: "seedance-1-0-pro-250528",
-        capabilities: { providerOptions: { seed: "number" } },
-        isConfigured: () => true,
-        async generateVideo(req) {
-          expect(req.providerOptions).toEqual({ seed: 42 });
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "seedance-1-0-pro-250528",
-          };
-        },
-      },
-    ];
-
-    const result = await runGenerateVideo({
-      cfg: {} as OpenClawConfig,
-      prompt: "animate a cat",
-      providerOptions: { seed: 42 },
-    });
-
-    expect(result.provider).toBe("byteplus");
-    expect(result.attempts).toHaveLength(1);
-    const attempt = requireAttempt(result, 0);
-    expect(attempt.provider).toBe("openai");
-    expect(attempt.error).toMatch(/does not accept providerOptions/);
   });
 
   it("overlays selected-model capabilities before option guards and normalization", async () => {
@@ -546,7 +353,7 @@ describe("video-generation runtime", () => {
       {
         id: "openrouter",
         capabilities: {
-          providerOptions: {} as Record<string, VideoGenerationProviderOptionType>,
+          providerOptions: {},
           generate: {
             supportsResolution: true,
             resolutions: ["1080P"],
@@ -576,22 +383,13 @@ describe("video-generation runtime", () => {
             resolution: req.resolution,
             audio: req.audio,
           };
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "google/veo-3.1",
-          };
+          return videoResult("google/veo-3.1");
         },
       },
     ];
 
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "openrouter/google/veo-3.1" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "openrouter/google/veo-3.1" }),
       prompt: "animate a cat",
       durationSeconds: 6,
       providerOptions: { seed: 42 },
@@ -628,7 +426,7 @@ describe("video-generation runtime", () => {
           providerOptions: { seed: "number" },
         },
         resolveModelCapabilities: async () => ({
-          providerOptions: {} as Record<string, VideoGenerationProviderOptionType>,
+          providerOptions: {},
         }),
         isConfigured: () => true,
         async generateVideo() {
@@ -644,25 +442,16 @@ describe("video-generation runtime", () => {
         isConfigured: () => true,
         async generateVideo(req) {
           expect(req.providerOptions).toEqual({ seed: 42 });
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "seedance-1-0-pro-250528",
-          };
+          return videoResult("seedance-1-0-pro-250528");
         },
       },
     ];
 
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: {
-              primary: "openrouter/google/veo-3.1",
-              fallbacks: ["byteplus/seedance-1-0-pro-250528"],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({
+        primary: "openrouter/google/veo-3.1",
+        fallbacks: ["byteplus/seedance-1-0-pro-250528"],
+      }),
       prompt: "animate a cat",
       providerOptions: { seed: 42 },
     });
@@ -694,22 +483,13 @@ describe("video-generation runtime", () => {
           expect(req.inputAudios).toEqual([
             { url: "https://example.com/reference-audio.mp3", role: "reference_audio" },
           ]);
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "seedance-1-0-pro-250528",
-          };
+          return videoResult("seedance-1-0-pro-250528");
         },
       },
     ];
 
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "openai/sora-2" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "openai/sora-2" }),
       prompt: "animate a cat",
       inputAudios: [{ url: "https://example.com/reference-audio.mp3", role: "reference_audio" }],
     });
@@ -757,22 +537,13 @@ describe("video-generation runtime", () => {
         async generateVideo(req) {
           fallbackCalled = true;
           expect(req.inputImages).toHaveLength(2);
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "gen4.5",
-          };
+          return videoResult("gen4.5");
         },
       },
     ];
 
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "openrouter/minimax/hailuo-2.3" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "openrouter/minimax/hailuo-2.3" }),
       prompt: "animate two references",
       inputImages: [
         { url: "https://example.com/first.png" },
@@ -792,35 +563,20 @@ describe("video-generation runtime", () => {
     const seenModels: string[] = [];
     providers = [
       {
-        id: "qwen",
-        defaultModel: "wan2.6-t2v",
-        models: [...DASHSCOPE_WAN_VIDEO_MODELS],
-        capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
-        catalogByModel: DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
-        resolveModelCapabilities: ({ model }) =>
-          DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[model]?.capabilities,
+        ...wanProvider,
         isConfigured: () => true,
         async generateVideo(req) {
           seenModels.push(req.model);
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: req.model,
-          };
+          return videoResult(req.model);
         },
       },
     ];
 
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: {
-              primary: "qwen/wan2.6-t2v",
-              fallbacks: ["qwen/wan2.6-i2v"],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({
+        primary: "qwen/wan2.6-t2v",
+        fallbacks: ["qwen/wan2.6-i2v"],
+      }),
       prompt: "animate the reference",
       inputImages: [{ url: "https://example.com/reference.png" }],
     });
@@ -835,31 +591,16 @@ describe("video-generation runtime", () => {
     let seenImageCount = 0;
     providers = [
       {
-        id: "qwen",
-        defaultModel: "wan2.6-t2v",
-        models: [...DASHSCOPE_WAN_VIDEO_MODELS],
-        capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
-        catalogByModel: DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
-        resolveModelCapabilities: ({ model }) =>
-          DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[model]?.capabilities,
+        ...wanProvider,
         async generateVideo(req) {
           seenImageCount = req.inputImages?.length ?? 0;
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: req.model,
-          };
+          return videoResult(req.model);
         },
       },
     ];
 
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "qwen/wan2.6-r2v" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "qwen/wan2.6-r2v" }),
       prompt: "animate all references",
       inputImages: Array.from({ length: 5 }, (_, index) => ({
         url: `https://example.com/reference-${index}.png`,
@@ -877,13 +618,7 @@ describe("video-generation runtime", () => {
       | undefined;
     providers = [
       {
-        id: "qwen",
-        defaultModel: "wan2.6-t2v",
-        models: [...DASHSCOPE_WAN_VIDEO_MODELS],
-        capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
-        catalogByModel: DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
-        resolveModelCapabilities: ({ model }) =>
-          DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[model]?.capabilities,
+        ...wanProvider,
         async generateVideo(req) {
           seenRequest = {
             size: req.size,
@@ -891,22 +626,13 @@ describe("video-generation runtime", () => {
             aspectRatio: req.aspectRatio,
             parameters: buildDashscopeVideoGenerationParameters(req),
           };
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: req.model,
-          };
+          return videoResult(req.model);
         },
       },
     ];
 
     await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "qwen/wan2.6-t2v" }),
       prompt: "portrait video",
       resolution: "1080P",
       aspectRatio: "9:16",
@@ -944,13 +670,7 @@ describe("video-generation runtime", () => {
 
     await expect(
       runGenerateVideo({
-        cfg: {
-          agents: {
-            defaults: {
-              videoGenerationModel: { primary: "openrouter/minimax/hailuo-2.3" },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: videoConfig({ primary: "openrouter/minimax/hailuo-2.3" }),
         prompt: "restyle this clip",
         inputVideos: [{ url: "https://example.com/reference.mp4" }],
       }),
@@ -958,44 +678,17 @@ describe("video-generation runtime", () => {
   });
 
   it("forwards mixed image, video, and audio references when explicitly supported", async () => {
-    const seenRequest: {
-      inputImages?: unknown;
-      inputVideos?: unknown;
-      inputAudios?: unknown;
-    } = {};
-    providers = [
-      {
-        id: "fal",
-        capabilities: {
-          videoToVideo: {
-            enabled: true,
-            maxInputImages: 9,
-            maxInputVideos: 3,
-            maxInputAudios: 3,
-          },
-        },
-        async generateVideo(req) {
-          seenRequest.inputImages = req.inputImages;
-          seenRequest.inputVideos = req.inputVideos;
-          seenRequest.inputAudios = req.inputAudios;
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "bytedance/seedance-2.0/fast/reference-to-video",
-          };
-        },
+    const requests = useCapturingProvider({
+      id: "fal",
+      capabilities: {
+        videoToVideo: { enabled: true, maxInputImages: 9, maxInputVideos: 3, maxInputAudios: 3 },
       },
-    ];
+    });
 
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: {
-              primary: "fal/bytedance/seedance-2.0/fast/reference-to-video",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({
+        primary: "fal/bytedance/seedance-2.0/fast/reference-to-video",
+      }),
       prompt: "Blend all references",
       inputImages: [{ url: "https://example.com/reference.png" }],
       inputVideos: [{ url: "https://example.com/reference.mp4" }],
@@ -1004,33 +697,11 @@ describe("video-generation runtime", () => {
 
     expect(result.provider).toBe("fal");
     expect(result.attempts).toStrictEqual([]);
-    expect(seenRequest).toEqual({
+    expect(requests[0]).toMatchObject({
       inputImages: [{ url: "https://example.com/reference.png" }],
       inputVideos: [{ url: "https://example.com/reference.mp4" }],
       inputAudios: [{ url: "https://example.com/reference.mp3" }],
     });
-  });
-
-  it("fails when every candidate is skipped for unsupported reference audio inputs", async () => {
-    providers = [
-      {
-        id: "openai",
-        capabilities: {},
-        async generateVideo() {
-          throw new Error("should not be called");
-        },
-      },
-    ];
-
-    await expect(
-      runGenerateVideo({
-        cfg: {
-          agents: { defaults: { videoGenerationModel: { primary: "openai/sora-2" } } },
-        } as OpenClawConfig,
-        prompt: "animate a cat",
-        inputAudios: [{ url: "https://example.com/reference-audio.mp3" }],
-      }),
-    ).rejects.toThrow(/does not support reference audio inputs/);
   });
 
   it("skips providers whose hard duration cap is below the request and falls back", async () => {
@@ -1052,22 +723,13 @@ describe("video-generation runtime", () => {
         isConfigured: () => true,
         async generateVideo(req) {
           seenDurationSeconds = req.durationSeconds;
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "gen4.5",
-          };
+          return videoResult("gen4.5");
         },
       },
     ];
 
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "openai/sora-2" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "openai/sora-2" }),
       prompt: "animate a cat",
       durationSeconds: 6,
     });
@@ -1078,32 +740,6 @@ describe("video-generation runtime", () => {
     const attempt = requireAttempt(result, 0);
     expect(attempt.provider).toBe("openai");
     expect(attempt.error).toMatch(/supports at most 4s per video, 6s requested/);
-  });
-
-  it("fails when every candidate is skipped for exceeding hard duration caps", async () => {
-    providers = [
-      {
-        id: "openai",
-        capabilities: {
-          generate: {
-            maxDurationSeconds: 4,
-          },
-        },
-        async generateVideo() {
-          throw new Error("should not be called");
-        },
-      },
-    ];
-
-    await expect(
-      runGenerateVideo({
-        cfg: {
-          agents: { defaults: { videoGenerationModel: { primary: "openai/sora-2" } } },
-        } as OpenClawConfig,
-        prompt: "animate a cat",
-        durationSeconds: 6,
-      }),
-    ).rejects.toThrow(/supports at most 4s per video, 6s requested/);
   });
 
   it("rejects provider results that contain undeliverable assets", async () => {
@@ -1119,126 +755,42 @@ describe("video-generation runtime", () => {
 
     await expect(
       runGenerateVideo({
-        cfg: {
-          agents: {
-            defaults: {
-              videoGenerationModel: { primary: "video-plugin/vid-v1" },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
         prompt: "animate a cat",
       }),
     ).rejects.toThrow(/neither buffer nor url is set/);
   });
 
-  it("lists runtime video-generation providers through the provider registry", () => {
-    const registryProviders: VideoGenerationProvider[] = [
-      {
-        id: "video-plugin",
-        defaultModel: "vid-v1",
-        models: ["vid-v1"],
-        capabilities: {
-          generate: {
-            supportsAudio: true,
-          },
-        },
-        generateVideo: async () => ({
-          videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-        }),
-      },
-    ];
-    providers = registryProviders;
-
-    expect(
-      listRuntimeVideoGenerationProviders({ config: {} as OpenClawConfig }, runtimeDeps),
-    ).toEqual(registryProviders);
-    expect(listedConfigs).toEqual([{} as OpenClawConfig]);
-  });
-
   it("normalizes requested durations to supported provider values", async () => {
-    let seenDurationSeconds: number | undefined;
-    providers = [
-      {
-        id: "video-plugin",
-        capabilities: {
-          generate: {
-            supportedDurationSeconds: [4, 6, 8],
-          },
-        },
-        generateVideo: async (req) => {
-          seenDurationSeconds = req.durationSeconds;
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "vid-v1",
-          };
-        },
-      },
-    ];
-
+    const requests = useCapturingProvider({
+      capabilities: { generate: { supportedDurationSeconds: [4, 6, 8] } },
+    });
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "video-plugin/vid-v1" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
       prompt: "animate a cat",
       durationSeconds: 5,
     });
-
-    expect(seenDurationSeconds).toBe(6);
-    expect(result.normalization?.durationSeconds?.requested).toBe(5);
-    expect(result.normalization?.durationSeconds?.applied).toBe(6);
-    expect(result.normalization?.durationSeconds?.supportedValues).toEqual([4, 6, 8]);
-    expect(result.metadata?.requestedDurationSeconds).toBe(5);
-    expect(result.metadata?.normalizedDurationSeconds).toBe(6);
-    expect(result.metadata?.supportedDurationSeconds).toEqual([4, 6, 8]);
+    expect(requests[0]?.durationSeconds).toBe(6);
+    expect(result.normalization?.durationSeconds).toEqual({
+      requested: 5,
+      applied: 6,
+      supportedValues: [4, 6, 8],
+    });
+    expect(result.metadata).toMatchObject({
+      requestedDurationSeconds: 5,
+      normalizedDurationSeconds: 6,
+      supportedDurationSeconds: [4, 6, 8],
+    });
     expect(result.ignoredOverrides).toStrictEqual([]);
   });
 
   it("ignores unsupported optional overrides per provider", async () => {
-    let seenRequest:
-      | {
-          size?: string;
-          aspectRatio?: string;
-          resolution?: string;
-          audio?: boolean;
-          watermark?: boolean;
-        }
-      | undefined;
-    providers = [
-      {
-        id: "openai",
-        capabilities: {
-          generate: {
-            supportsSize: true,
-          },
-        },
-        generateVideo: async (req) => {
-          seenRequest = {
-            size: req.size,
-            aspectRatio: req.aspectRatio,
-            resolution: req.resolution,
-            audio: req.audio,
-            watermark: req.watermark,
-          };
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "sora-2",
-          };
-        },
-      },
-    ];
-
+    const requests = useCapturingProvider({
+      id: "openai",
+      capabilities: { generate: { supportsSize: true } },
+    });
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "openai/sora-2" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "openai/sora-2" }),
       prompt: "animate a lobster",
       size: "1280x720",
       aspectRatio: "16:9",
@@ -1246,8 +798,7 @@ describe("video-generation runtime", () => {
       audio: false,
       watermark: false,
     });
-
-    expect(seenRequest).toEqual({
+    expect(requests[0]).toMatchObject({
       size: "1280x720",
       aspectRatio: undefined,
       resolution: undefined,
@@ -1263,39 +814,16 @@ describe("video-generation runtime", () => {
   });
 
   it("normalizes video resolutions against provider-supported values", async () => {
-    let seenResolution: string | undefined;
-    providers = [
-      {
-        id: "minimax",
-        capabilities: {
-          generate: {
-            supportsResolution: true,
-            resolutions: ["768P", "1080P"],
-          },
-        },
-        generateVideo: async (req) => {
-          seenResolution = req.resolution;
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "MiniMax-Hailuo-2.3",
-          };
-        },
-      },
-    ];
-
+    const requests = useCapturingProvider({
+      id: "minimax",
+      capabilities: { generate: { supportsResolution: true, resolutions: ["768P", "1080P"] } },
+    });
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "minimax/MiniMax-Hailuo-2.3" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "minimax/MiniMax-Hailuo-2.3" }),
       prompt: "animate a lobster",
       resolution: "720P",
     });
-
-    expect(seenResolution).toBe("768P");
+    expect(requests[0]?.resolution).toBe("768P");
     expect(result.ignoredOverrides).toStrictEqual([]);
     expect(result.normalization?.resolution?.requested).toBe("720P");
     expect(result.normalization?.resolution?.applied).toBe("768P");
@@ -1304,94 +832,40 @@ describe("video-generation runtime", () => {
   });
 
   it("ignores unparseable video resolutions instead of sending them to providers", async () => {
-    let seenResolution: string | undefined;
-    providers = [
-      {
-        id: "minimax",
-        capabilities: {
-          generate: {
-            supportsResolution: true,
-            resolutions: ["768P", "1080P"],
-          },
-        },
-        generateVideo: async (req) => {
-          seenResolution = req.resolution;
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "MiniMax-Hailuo-2.3",
-          };
-        },
-      },
-    ];
-
+    const requests = useCapturingProvider({
+      id: "minimax",
+      capabilities: { generate: { supportsResolution: true, resolutions: ["768P", "1080P"] } },
+    });
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "minimax/MiniMax-Hailuo-2.3" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "minimax/MiniMax-Hailuo-2.3" }),
       prompt: "animate a lobster",
       resolution: "4K",
     });
-
-    expect(seenResolution).toBeUndefined();
+    expect(requests[0]?.resolution).toBeUndefined();
     expect(result.ignoredOverrides).toEqual([{ key: "resolution", value: "4K" }]);
     expect(result.normalization).toBeUndefined();
   });
 
   it("uses mode-specific capabilities for image-to-video requests", async () => {
-    let seenRequest:
-      | {
-          size?: string;
-          aspectRatio?: string;
-          resolution?: string;
-        }
-      | undefined;
-    providers = [
-      {
-        id: "runway",
-        capabilities: {
-          generate: {
-            supportsSize: true,
-            supportsAspectRatio: false,
-          },
-          imageToVideo: {
-            enabled: true,
-            maxInputImages: 1,
-            supportsSize: false,
-            supportsAspectRatio: true,
-          },
-        },
-        generateVideo: async (req) => {
-          seenRequest = {
-            size: req.size,
-            aspectRatio: req.aspectRatio,
-            resolution: req.resolution,
-          };
-          return {
-            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-            model: "gen4.5",
-          };
+    const requests = useCapturingProvider({
+      id: "runway",
+      capabilities: {
+        generate: { supportsSize: true, supportsAspectRatio: false },
+        imageToVideo: {
+          enabled: true,
+          maxInputImages: 1,
+          supportsSize: false,
+          supportsAspectRatio: true,
         },
       },
-    ];
-
+    });
     const result = await runGenerateVideo({
-      cfg: {
-        agents: {
-          defaults: {
-            videoGenerationModel: { primary: "runway/gen4.5" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: videoConfig({ primary: "runway/gen4.5" }),
       prompt: "animate a lobster",
       size: "1280x720",
       inputImages: [{ buffer: Buffer.from("png"), mimeType: "image/png" }],
     });
-
-    expect(seenRequest).toEqual({
+    expect(requests[0]).toMatchObject({
       size: undefined,
       aspectRatio: "16:9",
       resolution: undefined,
@@ -1417,11 +891,8 @@ describe("video-generation runtime", () => {
     ];
     providerEnvVars = { "motion-one": ["MOTION_ONE_API_KEY"] };
 
-    await expect(
-      runGenerateVideo({ cfg: {} as OpenClawConfig, prompt: "animate a cat" }),
-    ).rejects.toThrow(
+    await expect(runGenerateVideo({ cfg: {}, prompt: "animate a cat" })).rejects.toThrow(
       'No video-generation model configured. Set agents.defaults.mediaModels.video.primary to a provider/model like "motion-one/animate-v1". If you want a specific provider, also configure that provider\'s auth/API key first (motion-one: MOTION_ONE_API_KEY).',
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

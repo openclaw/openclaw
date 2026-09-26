@@ -495,7 +495,6 @@ fun OnboardingFlow(
     var password by rememberSaveable { mutableStateOf("") }
     var setupErrorCode by rememberSaveable(stateSaver = OnboardingErrorCodeSaver) { mutableStateOf(OnboardingErrorCode.None) }
     var setupScanErrorCode by rememberSaveable(stateSaver = OnboardingErrorCodeSaver) { mutableStateOf(OnboardingErrorCode.None) }
-    var attemptedConnect by rememberSaveable { mutableStateOf(false) }
     var attemptedGatewayName by rememberSaveable { mutableStateOf<String?>(null) }
     var lastGatewayInputSource by rememberSaveable { mutableStateOf(OnboardingGatewayInputSource.SetupScanner) }
     var inlineQrScannerActive by rememberSaveable { mutableStateOf(false) }
@@ -680,7 +679,6 @@ fun OnboardingFlow(
       setupErrorCode = OnboardingErrorCode.None
       setupScanErrorCode = OnboardingErrorCode.None
       attemptedGatewayName = attemptedName
-      attemptedConnect = true
       lastGatewayInputSource = inputSource
       viewModel.saveGatewayConfigAndConnect(plan)
       step = OnboardingStep.Recovery
@@ -905,7 +903,6 @@ fun OnboardingFlow(
       OnboardingStep.Gateway -> {
         GatewaySetupScreen(
           modifier = modifier,
-          nearbyGateway = gateways.firstOrNull(),
           onBack = ::goBack,
           onSetupCode = {
             setupErrorCode = OnboardingErrorCode.None
@@ -1250,7 +1247,6 @@ private fun SoftPanel(
 
 @Composable
 internal fun GatewaySetupScreen(
-  nearbyGateway: GatewayEndpoint?,
   onBack: () -> Unit,
   onSetupCode: () -> Unit,
   onManualSetup: () -> Unit,
@@ -1382,13 +1378,11 @@ private fun SetupCodeInstructionsScreen(
               step = nativeString("Step 1"),
               title = nativeString("Start your Gateway."),
               body = "openclaw gateway",
-              monospaceBody = true,
             )
             SetupInstruction(
               step = nativeString("Step 2"),
               title = nativeString("Generate a QR code."),
               body = "openclaw qr",
-              monospaceBody = true,
             )
           }
         }
@@ -1947,22 +1941,17 @@ private fun SetupInstruction(
   title: String,
   body: String,
   modifier: Modifier = Modifier,
-  monospaceBody: Boolean = false,
 ) {
   Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
     Text(text = step, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
     Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
-    if (monospaceBody) {
-      Surface(
-        modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
-        shape = RoundedCornerShape(ClawTheme.radii.control),
-        color = ClawTheme.colors.surfaceRaised,
-        border = BorderStroke(1.dp, ClawTheme.colors.border),
-      ) {
-        Text(text = body, modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp), style = ClawTheme.type.mono, color = ClawTheme.colors.text)
-      }
-    } else {
-      Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    Surface(
+      modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
+      shape = RoundedCornerShape(ClawTheme.radii.control),
+      color = ClawTheme.colors.surfaceRaised,
+      border = BorderStroke(1.dp, ClawTheme.colors.border),
+    ) {
+      Text(text = body, modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp), style = ClawTheme.type.mono, color = ClawTheme.colors.text)
     }
   }
 }
@@ -2547,7 +2536,7 @@ private fun PermissionSetupScreen(
         verticalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         item {
-          PermissionTopBar(onBack = onBack)
+          OnboardingHeader(title = nativeText("Permissions"), onBack = onBack)
         }
         item {
           Box(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
@@ -2588,25 +2577,21 @@ private fun PermissionSetupScreen(
 private fun OnboardingHeader(
   title: NativeText,
   modifier: Modifier = Modifier,
-  subtitle: NativeText? = null,
-  onBack: (() -> Unit)? = null,
-  action: (@Composable () -> Unit)? = null,
+  onBack: () -> Unit,
 ) {
   Surface(modifier = modifier.fillMaxWidth(), color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
     Box(modifier = Modifier.fillMaxWidth().height(ClawTheme.spacing.touchTarget), contentAlignment = Alignment.Center) {
-      onBack?.let {
-        Surface(
-          onClick = it,
-          modifier =
-            Modifier
-              .align(Alignment.CenterStart)
-              .size(ClawTheme.spacing.touchTarget),
-          color = Color.Transparent,
-          contentColor = ClawTheme.colors.text,
-        ) {
-          Box(contentAlignment = Alignment.CenterStart) {
-            Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), modifier = Modifier.size(23.dp))
-          }
+      Surface(
+        onClick = onBack,
+        modifier =
+          Modifier
+            .align(Alignment.CenterStart)
+            .size(ClawTheme.spacing.touchTarget),
+        color = Color.Transparent,
+        contentColor = ClawTheme.colors.text,
+      ) {
+        Box(contentAlignment = Alignment.CenterStart) {
+          Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), modifier = Modifier.size(23.dp))
         }
       }
       Column(
@@ -2617,14 +2602,6 @@ private fun OnboardingHeader(
         val resolvedTitle = title.resolveNativeTextResource()
         if (resolvedTitle.isNotBlank()) {
           Text(text = resolvedTitle, style = ClawTheme.type.title, color = ClawTheme.colors.text, textAlign = TextAlign.Center)
-        }
-        subtitle?.let {
-          Text(text = it.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, textAlign = TextAlign.Center)
-        }
-      }
-      action?.let {
-        Box(modifier = Modifier.align(Alignment.CenterEnd), contentAlignment = Alignment.Center) {
-          it()
         }
       }
     }
@@ -2653,11 +2630,6 @@ private fun TogglePill(
       Text(text = text, style = ClawTheme.type.label)
     }
   }
-}
-
-@Composable
-private fun PermissionTopBar(onBack: () -> Unit) {
-  OnboardingHeader(title = nativeText("Permissions"), onBack = onBack)
 }
 
 @Composable
@@ -2881,7 +2853,6 @@ private fun finishingGatewayProgressItems(
   statusText: String,
 ): List<GatewayRecoveryProgressItem> {
   val gatewayAccessComplete = gatewayStatusLooksLikePartialConnect(statusText)
-  val nodeAccessCurrent = gatewayAccessComplete
   return listOf(
     GatewayRecoveryProgressItem(
       label = nativeText("Opening Gateway connection"),
@@ -2904,7 +2875,7 @@ private fun finishingGatewayProgressItems(
       label = nativeText("Checking node access"),
       status =
         when {
-          nodeAccessCurrent -> GatewayRecoveryProgressStatus.Current
+          gatewayAccessComplete -> GatewayRecoveryProgressStatus.Current
           else -> GatewayRecoveryProgressStatus.Pending
         },
     ),

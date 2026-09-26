@@ -40,7 +40,7 @@ function resolveAcpRuntimeRegistryGlobalState(): AcpRuntimeRegistryGlobalState {
 
 const ACP_BACKENDS_BY_ID = resolveAcpRuntimeRegistryGlobalState().backendsById;
 
-function isBackendHealthy(backend: AcpRuntimeBackend): boolean {
+export function isAcpRuntimeBackendHealthy(backend: AcpRuntimeBackend): boolean {
   if (!backend.healthy) {
     return true;
   }
@@ -85,7 +85,7 @@ export function getAcpRuntimeBackend(id?: string): AcpRuntimeBackend | null {
     return null;
   }
   for (const backend of ACP_BACKENDS_BY_ID.values()) {
-    if (isBackendHealthy(backend)) {
+    if (isAcpRuntimeBackendHealthy(backend)) {
       return backend;
     }
   }
@@ -102,7 +102,7 @@ export function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend {
       "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
     );
   }
-  if (!isBackendHealthy(backend)) {
+  if (!isAcpRuntimeBackendHealthy(backend)) {
     throw new AcpRuntimeError(
       "ACP_BACKEND_UNAVAILABLE",
       "ACP runtime backend is currently unavailable. Try again in a moment.",

@@ -1,7 +1,11 @@
 /**
  * Resolves command queue lane names for embedded-agent sessions and global work.
  */
-import { CommandLane, SUBAGENT_LANE_PREFIX } from "../../process/lanes.js";
+import {
+  CommandLane,
+  SUBAGENT_LANE_PREFIX,
+  type CommandLaneConfiguration,
+} from "../../process/lanes.js";
 
 export function resolveSessionLane(key: string) {
   const cleaned = key.trim() || CommandLane.Main;
@@ -10,7 +14,12 @@ export function resolveSessionLane(key: string) {
 
 export function resolveGlobalLane(
   lane?: string,
-  context?: { spawnedBy?: string | null; sessionKey?: string; sessionId: string },
+  context?: {
+    spawnedBy?: string | null;
+    sessionKey?: string;
+    sessionId: string;
+    swarmExecutionLane?: CommandLaneConfiguration;
+  },
 ) {
   const cleaned = lane?.trim();
   // Cron jobs hold the cron lane slot; inner operations need a dedicated lane
@@ -19,6 +28,9 @@ export function resolveGlobalLane(
     return CommandLane.CronNested;
   }
   if (cleaned === CommandLane.Subagent) {
+    if (context?.swarmExecutionLane) {
+      return context.swarmExecutionLane.lane;
+    }
     // Immediate parents own their children's budget, so an orchestrator can
     // await descendants without holding the capacity those descendants need.
     const owner =

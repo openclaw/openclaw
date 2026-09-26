@@ -4,7 +4,7 @@ import path from "node:path";
 import { listActiveMemoryPublicArtifacts } from "openclaw/plugin-sdk/memory-host-core";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenClawConfig } from "../api.js";
-import { walkMemoryWikiDirectory } from "./bounded-walk.js";
+import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import { filterMemoryWikiBridgeArtifacts, resolveMemoryWikiVaultAgentId } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { toWikiPageSummary, type WikiPageKind } from "./markdown.js";
@@ -72,10 +72,7 @@ type ResolveMemoryWikiStatusDeps = {
   resolveCommand?: (command: string) => Promise<string | null>;
 };
 
-async function collectVaultCounts(vaultPath: string): Promise<{
-  pageCounts: Record<WikiPageKind, number>;
-  sourceCounts: MemoryWikiStatus["sourceCounts"];
-}> {
+function createEmptyVaultCounts() {
   const pageCounts: Record<WikiPageKind, number> = {
     entity: 0,
     concept: 0,
@@ -90,26 +87,25 @@ async function collectVaultCounts(vaultPath: string): Promise<{
     unsafeLocal: 0,
     other: 0,
   };
+  return { pageCounts, sourceCounts };
+}
+
+async function collectVaultCounts(vaultPath: string): Promise<{
+  pageCounts: Record<WikiPageKind, number>;
+  sourceCounts: MemoryWikiStatus["sourceCounts"];
+}> {
+  const { pageCounts, sourceCounts } = createEmptyVaultCounts();
   const dirs = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
   for (const dir of dirs) {
-    const entries = await walkMemoryWikiDirectory(vaultPath, dir);
-    for (const entry of entries) {
-      if (
-        entry.kind !== "file" ||
-        !entry.relativePath.endsWith(".md") ||
-        path.basename(entry.relativePath) === "index.md"
-      ) {
-        continue;
-      }
-      const absolutePath = path.join(vaultPath, entry.relativePath);
-      const relativeToVault = entry.relativePath.split(path.sep).join("/");
+    for (const relativePath of await listMemoryWikiPagePaths(vaultPath, dir)) {
+      const absolutePath = path.join(vaultPath, relativePath);
       const raw = await fs.readFile(absolutePath, "utf8").catch(() => null);
       if (raw === null) {
         continue;
       }
       const page = toWikiPageSummary({
         absolutePath,
-        relativePath: relativeToVault,
+        relativePath,
         raw,
       });
       if (!page) {
@@ -233,22 +229,7 @@ export async function resolveMemoryWikiStatus(
   const obsidianProbe = await probeObsidianCli({ resolveCommand: deps?.resolveCommand });
   const counts = vaultExists
     ? await collectVaultCounts(config.vault.path)
-    : {
-        pageCounts: {
-          entity: 0,
-          concept: 0,
-          source: 0,
-          synthesis: 0,
-          report: 0,
-        },
-        sourceCounts: {
-          native: 0,
-          bridge: 0,
-          bridgeEvents: 0,
-          unsafeLocal: 0,
-          other: 0,
-        },
-      };
+    : createEmptyVaultCounts();
 
   return {
     vaultScope: config.vault.scope,

@@ -1,4 +1,3 @@
-// Session artifact tests cover artifact metadata persistence for sessions.
 import { describe, expect, it } from "vitest";
 import {
   formatSessionArchiveTimestamp,
@@ -8,7 +7,6 @@ import {
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
   isTrajectorySessionArtifactName,
-  isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
   parseSessionArchiveTimestamp,
 } from "./artifacts.js";
@@ -88,119 +86,31 @@ describe("session artifact helpers", () => {
     expect(isCompactionCheckpointTranscriptFileName("abc.checkpoint.not-a-uuid.jsonl")).toBe(false);
   });
 
-  it("classifies usage-counted transcript files", () => {
-    expect(isUsageCountedSessionTranscriptFileName("abc.jsonl")).toBe(true);
-    expect(isUsageCountedSessionTranscriptFileName(".jsonl")).toBe(true);
-    expect(isUsageCountedSessionTranscriptFileName("keep.deleted.keep.jsonl")).toBe(true);
-    expect(
-      isUsageCountedSessionTranscriptFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z"),
-    ).toBe(true);
-    expect(
-      isUsageCountedSessionTranscriptFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z"),
-    ).toBe(true);
-    expect(
-      isUsageCountedSessionTranscriptFileName(
-        `abc.jsonl.deleted.2026-01-01T00-00-00.000Z.${"a".repeat(32)}`,
-      ),
-    ).toBe(true);
-    expect(
-      isUsageCountedSessionTranscriptFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z.zst"),
-    ).toBe(true);
-    expect(
-      isUsageCountedSessionTranscriptFileName(
-        "abc.checkpoint.not-a-uuid.jsonl.deleted.2026-01-01T00-00-00.000Z",
-      ),
-    ).toBe(true);
-    expect(
-      isUsageCountedSessionTranscriptFileName(
-        "abc.trajectory.jsonl.deleted.2026-01-01T00-00-00.000Z",
-      ),
-    ).toBe(false);
-    expect(
-      isUsageCountedSessionTranscriptFileName(
-        "abc.trajectory.jsonl.reset.2026-01-01T00-00-00.000Z.zst",
-      ),
-    ).toBe(false);
-    for (const reason of ["reset", "deleted"] as const) {
-      expect(
-        isUsageCountedSessionTranscriptFileName(
-          `abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.${reason}.2026-01-01T00-00-00.000Z.zst`,
-        ),
-      ).toBe(false);
-    }
-    expect(isUsageCountedSessionTranscriptFileName(".jsonl.reset.2026-01-01T00-00-00.000Z")).toBe(
-      false,
-    );
-    expect(
-      isUsageCountedSessionTranscriptFileName(
-        `abc.jsonl.deleted.2026-01-01T00-00-00.000Z.${"A".repeat(32)}`,
-      ),
-    ).toBe(false);
-    expect(isUsageCountedSessionTranscriptFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
-      false,
-    );
-    expect(
-      isUsageCountedSessionTranscriptFileName(
-        "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
-      ),
-    ).toBe(false);
-    expect(isUsageCountedSessionTranscriptFileName("abc.trajectory.jsonl")).toBe(false);
-  });
-
   it("parses usage-counted session ids from file names", () => {
-    expect(parseUsageCountedSessionIdFromFileName("abc.jsonl")).toBe("abc");
-    expect(parseUsageCountedSessionIdFromFileName(".jsonl")).toBe("");
-    expect(parseUsageCountedSessionIdFromFileName("keep.deleted.keep.jsonl")).toBe(
-      "keep.deleted.keep",
-    );
-    expect(parseUsageCountedSessionIdFromFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z")).toBe(
-      "abc",
-    );
-    expect(
-      parseUsageCountedSessionIdFromFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z"),
-    ).toBe("abc");
-    expect(
-      parseUsageCountedSessionIdFromFileName(
-        `abc.jsonl.deleted.2026-01-01T00-00-00.000Z.${"a".repeat(32)}`,
-      ),
-    ).toBe("abc");
-    expect(
-      parseUsageCountedSessionIdFromFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z.zst"),
-    ).toBe("abc");
-    expect(
-      parseUsageCountedSessionIdFromFileName(
-        "abc.checkpoint.not-a-uuid.jsonl.deleted.2026-01-01T00-00-00.000Z",
-      ),
-    ).toBe("abc.checkpoint.not-a-uuid");
-    expect(parseUsageCountedSessionIdFromFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
-      null,
-    );
-    expect(
-      parseUsageCountedSessionIdFromFileName(
-        "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
-      ),
-    ).toBeNull();
-    expect(parseUsageCountedSessionIdFromFileName("abc.trajectory.jsonl")).toBeNull();
-    expect(
-      parseUsageCountedSessionIdFromFileName(
-        "abc.trajectory.jsonl.deleted.2026-01-01T00-00-00.000Z",
-      ),
-    ).toBeNull();
-    expect(
-      parseUsageCountedSessionIdFromFileName(
-        "abc.trajectory.jsonl.reset.2026-01-01T00-00-00.000Z.zst",
-      ),
-    ).toBeNull();
-    for (const reason of ["reset", "deleted"] as const) {
-      expect(
-        parseUsageCountedSessionIdFromFileName(
-          `abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.${reason}.2026-01-01T00-00-00.000Z.zst`,
-        ),
-      ).toBeNull();
+    const stamp = "2026-01-01T00-00-00.000Z";
+    const checkpoint = "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl";
+    const cases = [
+      ["abc.jsonl", "abc"],
+      [".jsonl", ""],
+      ["keep.deleted.keep.jsonl", "keep.deleted.keep"],
+      [`abc.jsonl.reset.${stamp}`, "abc"],
+      [`abc.jsonl.deleted.${stamp}`, "abc"],
+      [`abc.jsonl.deleted.${stamp}.${"a".repeat(32)}`, "abc"],
+      [`abc.jsonl.reset.${stamp}.zst`, "abc"],
+      [`abc.checkpoint.not-a-uuid.jsonl.deleted.${stamp}`, "abc.checkpoint.not-a-uuid"],
+      [`abc.jsonl.bak.${stamp}`, null],
+      [checkpoint, null],
+      ["abc.trajectory.jsonl", null],
+      [`abc.trajectory.jsonl.deleted.${stamp}`, null],
+      [`abc.trajectory.jsonl.reset.${stamp}.zst`, null],
+      [`${checkpoint}.reset.${stamp}.zst`, null],
+      [`${checkpoint}.deleted.${stamp}.zst`, null],
+      [`.jsonl.reset.${stamp}`, null],
+      [`abc.jsonl.deleted.${stamp}.${"A".repeat(32)}`, null],
+    ] as const;
+    for (const [fileName, sessionId] of cases) {
+      expect(parseUsageCountedSessionIdFromFileName(fileName), fileName).toBe(sessionId);
     }
-    expect(
-      parseUsageCountedSessionIdFromFileName(".jsonl.reset.2026-01-01T00-00-00.000Z"),
-    ).toBeNull();
   });
 
   it("formats and parses archive timestamps", () => {

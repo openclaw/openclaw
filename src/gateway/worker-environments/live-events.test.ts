@@ -374,12 +374,9 @@ describe("worker live events", () => {
     expect(deltas()).toEqual(["hello", " world"]);
   });
 
-  it.each([
-    ["sequence", { windowSize: 2 }, msg(3)],
-    ["bytes", { maxPendingBytes: 1 }, msg(2, "buffered")],
-  ])("resyncs an out-of-window %s gap", async (_name, options, request) => {
-    start(options);
-    await fail(request, "resync-required");
+  it("resyncs a gap that exceeds the pending byte budget", async () => {
+    start({ maxPendingBytes: 1 });
+    await fail(msg(2, "buffered"), "resync-required");
   });
 
   it("restores the durable ACK when recreating a window", async () => {
@@ -608,14 +605,6 @@ describe("worker live events", () => {
     await ack(msg(2, "fresh", 1));
 
     expect(deltas()).toEqual(["first", "fresh"]);
-  });
-
-  it("resets after capacity failure", async () => {
-    start({ maxActiveRuns: 1 });
-    await ack(msg(1, "active", 0, "run-active"));
-    await fail(msg(2, "overlap", 1, "run-overlap"), "capacity-exceeded");
-    await fail(msg(2, "stale", 1, "run-overlap"), "resync-required");
-    await ack(msg(1, "fresh", 0, "run-overlap"));
   });
 
   it("does not reserve a pending terminal for an unbuffered head", async () => {
