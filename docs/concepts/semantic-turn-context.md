@@ -18,6 +18,7 @@ It is off by default. To enable shadow observation:
 {
   agents: {
     defaults: {
+      experimental: { decisionAssistance: true },
       decisionModel: "typesafe/jev-1.13.0",
       turnContextCuration: {
         mode: "shadow",
