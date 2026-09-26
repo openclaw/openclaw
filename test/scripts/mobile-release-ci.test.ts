@@ -95,6 +95,45 @@ describe("mobile release CI tools", () => {
       binaries: ["OpenClaw-phone.aab", "OpenClaw-wear.aab", "OpenClaw.apk", "OpenClaw.aab.sha256"],
     },
   ])("$platform release artifact recovery", ({ platform, workflow, buildDirectory, binaries }) => {
+    it("checks out and verifies the dispatch commit before accessing signing credentials", () => {
+      const config = parse(fs.readFileSync(workflow, "utf8")) as {
+        jobs: {
+          release: {
+            steps: Array<{
+              uses?: string;
+              run?: string;
+              with?: Record<string, unknown>;
+            }>;
+          };
+        };
+      };
+      const steps = config.jobs.release.steps;
+      expect(steps[0]).toMatchObject({
+        uses: expect.stringMatching(/^actions\/checkout@/u),
+        with: { ref: "${{ github.sha }}", "fetch-depth": 0 },
+      });
+      const verification = steps[1]?.run;
+      if (!verification) {
+        throw new Error("Release checkout must be verified before subsequent steps.");
+      }
+      const root = tempRoots.make("openclaw-release-dispatch-");
+      git(root, "init", "--initial-branch=main");
+      git(root, "config", "user.name", "Release Fixture");
+      git(root, "config", "user.email", "release@example.invalid");
+      git(root, "config", "commit.gpgsign", "false");
+      writeFile(root, "README.md", "Synthetic release source\n");
+      const sha = commit(root, "Initial source");
+      git(root, "checkout", "--detach", sha);
+      const verify = (expectedSha: string) =>
+        spawnSync("bash", ["-c", verification], {
+          cwd: root,
+          env: { ...process.env, GITHUB_SHA: expectedSha },
+          encoding: "utf8",
+        });
+      expect(verify(sha).status).toBe(0);
+      expect(verify("0".repeat(40)).status).toBe(1);
+    });
+
     it.each(["collected", "interrupted"])(
       "uploads only the signed binaries and checksums when collection is %s",
       (state) => {

@@ -170,19 +170,31 @@ function retainSummary(artifactPath) {
 
 function prepareAndUpload(root, platform, recovery, releaseArgs) {
   clean(root);
-  if (process.env.GITHUB_ACTIONS === "true" && process.env.GITHUB_RUN_ATTEMPT !== "1") {
+  const isGithubActions = process.env.GITHUB_ACTIONS === "true";
+  if (isGithubActions && process.env.GITHUB_RUN_ATTEMPT !== "1") {
     throw new Error(
       "Do not rerun the upload job. Inspect the original store outcome before starting a new release; iOS metadata staging has a separate recovery command.",
     );
   }
-  if (git(root, "branch", "--show-current") !== "main") {
+  const sourceSha = git(root, "rev-parse", "HEAD");
+  if (isGithubActions) {
+    if (
+      process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+      process.env.GITHUB_REPOSITORY !== "openclaw/openclaw" ||
+      process.env.GITHUB_REF !== "refs/heads/main" ||
+      sourceSha !== process.env.GITHUB_SHA
+    ) {
+      throw new Error(
+        "CI releases require the exact workflow_dispatch commit on openclaw/openclaw main.",
+      );
+    }
+  } else if (git(root, "branch", "--show-current") !== "main") {
     throw new Error(
       "Start a release from a clean, current main checkout. This command never switches your branch.",
     );
   }
   const currentMain = mainSha(root);
-  const sourceSha = git(root, "rev-parse", "HEAD");
-  if (process.env.GITHUB_ACTIONS === "true") {
+  if (isGithubActions) {
     git(root, "merge-base", "--is-ancestor", sourceSha, currentMain);
   } else if (sourceSha !== currentMain) {
     throw new Error("Local main differs from origin/main. Update it before starting the release.");

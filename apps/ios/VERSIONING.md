@@ -51,8 +51,10 @@ point from a clean local `main` checkout that matches `origin/main`:
 pnpm ios:release:upload
 ```
 
-The entry point freezes the live plan and current `main` source, generates and
-reviews release notes from Git history, and saves them in an immutable JSON
+GitHub releases freeze the `main` commit selected when the workflow is dispatched,
+even if `main` advances while the run is queued. Local releases freeze current
+`main`. The entry point freezes the live plan, generates and reviews release
+notes from Git history, and saves them in an immutable JSON
 artifact. It builds that source in an isolated worktree, uploads the IPA, waits
 for processing, then stages the saved notes and selects the processed build on
 the editable App Store version. The release does not edit tracked files, create

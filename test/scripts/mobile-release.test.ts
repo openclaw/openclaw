@@ -173,6 +173,8 @@ $lanes.fetch(:release_upload).call
     FIXTURE_UPLOAD_AUDIT: uploadAudit,
     OPENAI_API_KEY: "synthetic-key",
     GITHUB_ACTIONS: "false",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    GITHUB_REPOSITORY: "openclaw/openclaw",
     GITHUB_REF: "",
     GITHUB_SHA: "",
     GITHUB_RUN_ATTEMPT: "",
@@ -260,15 +262,35 @@ describe("mobile release CLI", () => {
     expect(git(f.root, "status", "--porcelain")).toBe("");
   });
 
-  it("uploads the frozen main source with generated notes and leaves advanced main untouched", () => {
+  it("uploads the detached dispatch source with generated notes and leaves advanced main untouched", () => {
     const f = fixture();
     const advanced = advanceMain(f);
     const stale = f.invoke("run");
     expect(stale.status).toBe(1);
     expect(stale.stderr).toContain("Local main differs from origin/main");
     expect(fs.existsSync(f.uploadAudit)).toBe(false);
-    const result = f.invoke("run", [], { GITHUB_ACTIONS: "true", GITHUB_RUN_ATTEMPT: "1" });
+    git(f.root, "checkout", "--detach", f.base);
+    const ci = {
+      GITHUB_ACTIONS: "true",
+      GITHUB_RUN_ATTEMPT: "1",
+      GITHUB_REF: "refs/heads/main",
+      GITHUB_SHA: f.base,
+    };
+    const result = f.invoke("run", [], ci);
     expect(result.status, result.stderr).toBe(0);
+    const invalidDispatches: Record<string, string>[] = [
+      { GITHUB_SHA: advanced },
+      { GITHUB_REF: "refs/heads/feature" },
+      { GITHUB_REPOSITORY: "example/fork" },
+      { GITHUB_EVENT_NAME: "push" },
+    ];
+    for (const overrides of invalidDispatches) {
+      const rejected = f.invoke("run", [], { ...ci, ...overrides });
+      expect(rejected.status, rejected.stderr).toBe(1);
+      expect(rejected.stderr).toContain("exact workflow_dispatch commit on openclaw/openclaw main");
+      expect(f.audit()).toHaveLength(1);
+      expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+    }
     expect(f.audit()).toEqual([
       expect.objectContaining({
         sha: f.base,

@@ -44,7 +44,7 @@ tracked defaults unchanged.
 
 ## Release Workflow
 
-1. Run the manual **Android Store Release** GitHub Action from `main`. No input parameters are required. The upload uses the `android-store-release` environment.
+1. Run the manual **Android Store Release** GitHub Action from `main`. No input parameters are required. The upload uses the `android-store-release` environment and freezes the commit selected at dispatch, even if `main` advances while the run is queued.
 2. The workflow derives the Gateway version from the root `package.json`, selects the Android revision from source refs and current public releases, and chooses the next sequential phone/Wear codes above the uploaded codes and pinned floor. It refuses a version regression, an exhausted revision or native code range, and uploaded new-format codes whose source refs are missing.
 3. Planning identifies the public releases in `production` and `wear:production`. OpenAI generates separate phone and Wear notes from changes since those releases. Internal uploads do not advance the public baseline. Staged, halted, or ambiguous public releases stop preparation.
 4. The workflow saves the plan and generated notes for the selected clean source commit. Fastlane and Gradle consume those artifacts at runtime. No tracked release files, preparation commits, or follow-up PRs are needed.
