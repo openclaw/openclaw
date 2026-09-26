@@ -70,7 +70,7 @@ export function renderRequiredSessionPlacement(gateway: DraftGatewayState) {
           ? t("newSession.requiredWorkerUnavailable")
           : t(
               profile.inference === "worker"
-                ? "newSession.dedicatedOpenClaw"
+                ? "newSession.openClawWorker"
                 : "newSession.requiredWorker",
             )
     }

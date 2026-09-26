@@ -128,7 +128,7 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "new");
         await gateway.waitForRequest("environments.list");
         if (required) {
-          await page.getByText("Dedicated OpenClaw", { exact: true }).waitFor();
+          await page.getByText("OpenClaw worker", { exact: true }).waitFor();
           expect(await page.locator("#new-session-where-trigger").count()).toBe(0);
           expect(await page.locator("#new-session-project-trigger").count()).toBe(0);
         } else {
