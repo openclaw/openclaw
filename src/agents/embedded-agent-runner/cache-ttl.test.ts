@@ -48,7 +48,37 @@ describe("isCacheTtlEligibleProvider", () => {
   it("rejects unsupported providers and models", () => {
     expect(isCacheTtlEligibleProvider("openai", "gpt-4o")).toBe(false);
     expect(isCacheTtlEligibleProvider("openrouter", "openai/gpt-4o")).toBe(false);
+    expect(
+      isCacheTtlEligibleProvider("openrouter", "model-1", "openai-responses", {
+        supportsPromptCacheKey: true,
+      }),
+    ).toBe(false);
+    expect(
+      isCacheTtlEligibleProvider("myproxy", "model-1", "custom-api", {
+        supportsPromptCacheKey: true,
+      }),
+    ).toBe(false);
   });
+
+  it.each(["openai-responses", "openai-completions", "openai-chatgpt-responses"])(
+    "requires explicit cache support for a custom %s provider",
+    (modelApi) => {
+      const route = { baseUrl: "https://proxy.example/v1" };
+      expect(
+        isCacheTtlEligibleProvider("myproxy", "model-1", modelApi, {
+          ...route,
+          supportsPromptCacheKey: true,
+        }),
+      ).toBe(true);
+      expect(
+        isCacheTtlEligibleProvider("myproxy", "model-1", modelApi, {
+          ...route,
+          supportsPromptCacheKey: false,
+        }),
+      ).toBe(false);
+      expect(isCacheTtlEligibleProvider("myproxy", "model-1", modelApi, route)).toBe(false);
+    },
+  );
 
   it("allows direct Google Gemini cache-ttl models", () => {
     expect(
