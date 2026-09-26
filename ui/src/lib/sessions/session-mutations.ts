@@ -105,19 +105,19 @@ export function createSessionMutations(host: SessionMutationsHost) {
       pinnedAt: names.includes("pinnedAt") ? row.pinnedAt : previous.pinnedAt,
     }),
   });
-  const createTextRowPatches = (field: "category" | "thinkingLevel" | "contextWindow") =>
+  const createFieldRowPatches = <
+    Field extends "category" | "thinkingLevel" | "contextWindow" | "unread",
+  >(
+    field: Field,
+  ) =>
     createOptimisticRowPatches(host, {
       read: (row) => row[field],
       write: (row, next) => (row[field] === next ? row : host.copyRow(row, { [field]: next })),
       observe: (previous, row, names) => (names.includes(field) ? row[field] : previous),
     });
-  const optimisticCategories = createTextRowPatches("category");
-  const optimisticUnread = createOptimisticRowPatches(host, {
-    read: (row) => row.unread,
-    write: (row, unread) => (row.unread === unread ? row : host.copyRow(row, { unread })),
-    observe: (previous, row, names) => (names.includes("unread") ? row.unread : previous),
-  });
-  const optimisticThinking = createTextRowPatches("thinkingLevel");
+  const optimisticCategories = createFieldRowPatches("category");
+  const optimisticUnread = createFieldRowPatches("unread");
+  const optimisticThinking = createFieldRowPatches("thinkingLevel");
   const optimisticFastMode = createOptimisticRowPatches(host, {
     read: (row): Pick<GatewaySessionRow, "fastMode" | "effectiveFastMode"> => ({
       fastMode: row.fastMode,
@@ -136,7 +136,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         : previous.effectiveFastMode,
     }),
   });
-  const optimisticContextWindow = createTextRowPatches("contextWindow");
+  const optimisticContextWindow = createFieldRowPatches("contextWindow");
   const rowPatches = [
     optimisticPins,
     optimisticUnread,

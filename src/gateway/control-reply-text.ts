@@ -2,7 +2,7 @@
 // Suppresses internal auto-reply tokens before they leak to chat surfaces.
 import { isSilentReplyText, SILENT_REPLY_TOKEN, stripSilentToken } from "../auto-reply/tokens.js";
 
-const SUPPRESSED_CONTROL_REPLY_TOKENS = [
+export const SUPPRESSED_CONTROL_REPLY_TOKENS = [
   SILENT_REPLY_TOKEN,
   "ANNOUNCE_SKIP",
   "REPLY_SKIP",

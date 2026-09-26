@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizedString } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { projectSessionResultRows } from "./reconcile.ts";
 
@@ -12,13 +13,7 @@ const MAX_TRACKED_SWARM_CHILDREN = 100_000;
 function setBounded<K, V>(map: Map<K, V>, key: K, value: V, limit: number): void {
   map.delete(key);
   map.set(key, value);
-  while (map.size > limit) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) {
-      return;
-    }
-    map.delete(oldest);
-  }
+  pruneMapToMaxSize(map, limit);
 }
 
 /** Tracks transient, group-scoped Swarm notes across canonical session-list refreshes. */
