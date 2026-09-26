@@ -142,7 +142,11 @@ export function registerTaskSubscriptionOwnershipTests(setup: Setup): void {
         expect(broadcast).toHaveBeenCalledWith(
           "task",
           expect.objectContaining({ task: expect.objectContaining({ status: "completed" }) }),
-          { dropIfSlow: true, sessionKeys: ["global"], agentId: "replacement" },
+          expect.objectContaining({
+            dropIfSlow: true,
+            sessionKeys: ["global"],
+            agentId: "replacement",
+          }),
         );
       }
     } finally {

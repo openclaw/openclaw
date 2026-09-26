@@ -38,6 +38,7 @@ import type { AgentEventHandlerOptions } from "./server-chat.js";
 import { registerActivitySummaryPublicationTests } from "./server-runtime-subscriptions.activity-summary.test-support.js";
 import { registerTaskEventSubscriptionTests } from "./server-runtime-subscriptions.task-events.test-support.js";
 import { registerTaskSubscriptionOwnershipTests } from "./server-runtime-subscriptions.task-ownership.test-support.js";
+import { registerTaskWebPushTests } from "./server-runtime-subscriptions.task-webpush.test-support.js";
 import {
   createSubscriptionTestFixture,
   lifecycleState,
@@ -917,6 +918,11 @@ describe("startGatewayEventSubscriptions", () => {
   });
 
   registerTaskEventSubscriptionTests((overrides) => {
+    unsubs = startGatewayEventSubscriptions({ ...createParams(), ...overrides });
+    return unsubs;
+  }, mockLog);
+
+  registerTaskWebPushTests((overrides) => {
     unsubs = startGatewayEventSubscriptions({ ...createParams(), ...overrides });
     return unsubs;
   }, mockLog);

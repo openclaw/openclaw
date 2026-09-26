@@ -276,11 +276,15 @@ export function registerTaskEventSubscriptionTests(
       throw new Error("expected task records to be created");
     }
     const taskUpsertsById = new Map(readTaskUpserts(broadcast).map(({ task }) => [task.id, task]));
-    expect(broadcast).toHaveBeenCalledWith("task", expect.anything(), {
-      dropIfSlow: true,
-      sessionKeys: ["agent:main:main"],
-      agentId: "main",
-    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "task",
+      expect.anything(),
+      expect.objectContaining({
+        dropIfSlow: true,
+        sessionKeys: ["agent:main:main"],
+        agentId: "main",
+      }),
+    );
     // Runtime registry statuses translate to the public ledger vocabulary.
     expect(taskUpsertsById.get(completed.taskId)?.status).toBe("completed");
     expect(taskUpsertsById.get(lost.taskId)?.status).toBe("failed");

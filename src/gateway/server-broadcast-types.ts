@@ -16,6 +16,12 @@ export type GatewayBroadcastOpts = {
   sessionKeys?: readonly string[];
   /** Target recipients were selected from subscriptions at ingress. */
   sessionSubscriptionVerified?: boolean;
+  /**
+   * Server-side routing metadata for offline task Web Push. Never serialized to
+   * clients. The task subscription sets it only for a genuine non-terminal ->
+   * terminal transition whose spawner did not request silence.
+   */
+  taskNotification?: { notify: boolean };
   /** Question owner authorizes ordinary own-run recipients without a broad question grant. */
   questionRecipient?: (client: GatewayClient) => boolean;
   stateVersion?: GatewayBroadcastStateVersion;
