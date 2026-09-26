@@ -79,6 +79,15 @@ export function createUpdateCliFixture() {
   const fixtureRoot = fsSync.realpathSync(
     fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-tests-")),
   );
+  const checkoutRoot = path.join(fixtureRoot, "checkout");
+  fsSync.mkdirSync(checkoutRoot);
+  for (const directory of [".git", "src", "extensions"]) {
+    fsSync.mkdirSync(path.join(checkoutRoot, directory));
+  }
+  fsSync.writeFileSync(
+    path.join(checkoutRoot, "package.json"),
+    JSON.stringify({ name: "openclaw", version: VERSION }),
+  );
   const globalNpmConfig = path.join(fixtureRoot, "global-npmrc");
   fsSync.writeFileSync(globalNpmConfig, "");
   const profileStateDir = (profile = "default") =>

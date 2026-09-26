@@ -147,6 +147,7 @@ export type SqliteSessionReclamationResult =
   | { kind: "maintenance-pages"; value: SqliteWalReclamationResult }
   | { kind: "maintenance-statistics"; value: true }
   | { kind: "maintenance-preservation-required" }
+  | { kind: "maintenance-plan-stale" }
   | {
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;

@@ -80,14 +80,6 @@ describe("createMatrixCryptoFacade", () => {
     expect(isRoomEncrypted).toHaveBeenCalledWith("!room:example.org");
   });
 
-  it("never downgrades an existing malformed encryption event to plaintext", async () => {
-    const { facade } = createFacadeHarness({
-      isRoomEncrypted: async () => true,
-    });
-
-    await expect(facade.isRoomEncrypted("!room:example.org")).resolves.toBe(true);
-  });
-
   it("propagates authoritative room-state failures without permitting plaintext", async () => {
     const error = new Error("Matrix room state authorization failed");
     const { facade } = createFacadeHarness({

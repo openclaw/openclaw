@@ -16,8 +16,10 @@ import {
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { SpawnProcessAdapter } from "../process/supervisor/types.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
+import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { createProcessTool } from "./bash-tools.process.js";
 
 const mocks = vi.hoisted(() => ({
   getSupervisor: vi.fn(),
@@ -200,6 +202,48 @@ describe("registered exec deadline handoff", () => {
     await aborted;
     expect(child.kill).toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "reports the collection route with notifyOnExit=%s",
+    async (notifyOnExit) => {
+      const child = createAdapter();
+      mocks.createChildAdapter.mockResolvedValueOnce(child.adapter);
+      const scopeKey = "background-followup";
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        allowBackground: true,
+        notifyOnExit,
+        scopeKey,
+      });
+      const result = await tool.execute("background", { command: "build", background: true });
+      expect(result.details.status).toBe("running");
+      if (result.details.status !== "running") {
+        throw new Error("Expected a background process handle");
+      }
+      const followUp = result.details.followUp ?? "";
+      expect(followUp).toContain("Use process");
+      if (!notifyOnExit) {
+        expect(followUp).toContain("Automatic completion wake is disabled");
+        expect(followUp).toContain("poll with a timeout");
+        expect(followUp).toContain("before ending the turn");
+      } else {
+        expect(followUp).not.toContain("Automatic completion wake is disabled");
+      }
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining(followUp),
+      });
+      child.completed.resolve({ code: 0, signal: null });
+      await waitForExecScope(scopeKey);
+      const completed = await createProcessTool({ scopeKey }).execute("collect", {
+        action: "poll",
+        sessionId: result.details.sessionId,
+      });
+      expect(completed.details).toMatchObject({ status: "completed", exitCode: 0 });
+    },
+  );
 
   it("releases foreground liveness when exec backgrounds without removing its process timeout", async () => {
     const child = createAdapter();

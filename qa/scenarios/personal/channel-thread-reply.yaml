@@ -24,7 +24,7 @@ scenario:
     - docs/channels/qa-channel.md
     - docs/channels/group-messages.md
   codeRefs:
-    - extensions/qa-channel/src/protocol.ts
+    - src/plugin-sdk/qa-channel-protocol.ts
     - extensions/qa-lab/src/bus-state.ts
   execution:
     kind: flow

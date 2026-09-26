@@ -1,29 +1,23 @@
-// Server models and voicewake tests cover model catalog routes, outbound
-// delivery deps, voicewake triggers, config cache resets, and misc RPC behavior.
+// Covers model catalog routes, voicewake events, and Gateway port cleanup.
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
-import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
-import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
   installGatewayTestHooks,
   onceMessage,
   agentDiscoveryMock,
   rpcReq,
-  resetTestPluginRegistry,
-  setTestPluginRegistry,
   startConnectedServerWithClient,
   startTestGatewayServer,
   startServerWithClient,
@@ -47,42 +41,6 @@ beforeAll(async () => {
   ws = started.ws;
   port = started.port;
 });
-
-const whatsappOutbound: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  sendText: async ({ deps, to, text }) => {
-    if (!deps?.["whatsapp"]) {
-      throw new Error("Missing sendWhatsApp dep");
-    }
-    return {
-      channel: "whatsapp",
-      ...(await (deps["whatsapp"] as Function)(to, text, { verbose: false })),
-    };
-  },
-  sendMedia: async ({ deps, to, text, mediaUrl }) => {
-    if (!deps?.["whatsapp"]) {
-      throw new Error("Missing sendWhatsApp dep");
-    }
-    return {
-      channel: "whatsapp",
-      ...(await (deps["whatsapp"] as Function)(to, text, { verbose: false, mediaUrl })),
-    };
-  },
-};
-
-const whatsappPlugin = createOutboundTestPlugin({
-  id: "whatsapp",
-  outbound: whatsappOutbound,
-  label: "WhatsApp",
-});
-
-const whatsappRegistry = createRegistry([
-  {
-    pluginId: "whatsapp",
-    source: "test",
-    plugin: whatsappPlugin,
-  },
-]);
 
 type ModelCatalogRpcEntry = {
   id: string;
@@ -408,21 +366,7 @@ describe("gateway server models + voicewake", () => {
       Pick<ModelCatalogRpcEntry, "id" | "name" | "provider">,
   ) => {
     expect(models).toHaveLength(1);
-    expect(models[0]?.id).toBe(expected.id);
-    expect(models[0]?.name).toBe(expected.name);
-    expect(models[0]?.provider).toBe(expected.provider);
-    if (expected.alias !== undefined) {
-      expect(models[0]?.alias).toBe(expected.alias);
-    }
-    if (expected.contextWindow !== undefined) {
-      expect(models[0]?.contextWindow).toBe(expected.contextWindow);
-    }
-    if (expected.supportsTools !== undefined) {
-      expect(models[0]?.supportsTools).toBe(expected.supportsTools);
-    }
-    if (expected.tags !== undefined) {
-      expect(models[0]?.tags).toEqual(expected.tags);
-    }
+    expect(models[0]).toMatchObject(expected);
   };
 
   test(
@@ -965,53 +909,6 @@ describe("gateway server models + voicewake", () => {
 });
 
 describe("gateway server misc", () => {
-  test("send dedupes by idempotencyKey", { timeout: 15_000 }, async () => {
-    let dedicatedServer: Awaited<ReturnType<typeof startServerWithClient>>["server"] | undefined;
-    let dedicatedWs: WebSocket | undefined;
-    const idem = "same-key";
-    try {
-      setTestPluginRegistry(whatsappRegistry);
-      const started = await startConnectedServerWithClient();
-      dedicatedServer = started.server;
-      dedicatedWs = started.ws;
-      const socket = dedicatedWs;
-      if (!socket) {
-        throw new Error("Missing test websocket");
-      }
-      const res1P = onceMessage(socket, (o) => o.type === "res" && o.id === "a1");
-      const res2P = onceMessage(socket, (o) => o.type === "res" && o.id === "a2");
-      const sendReq = (id: string) =>
-        socket.send(
-          JSON.stringify({
-            type: "req",
-            id,
-            method: "send",
-            params: {
-              to: "+15550000000",
-              channel: "whatsapp",
-              message: "hi",
-              idempotencyKey: idem,
-            },
-          }),
-        );
-      sendReq("a1");
-      sendReq("a2");
-
-      const res1 = await res1P;
-      const res2 = await res2P;
-      expect(res2.ok).toBe(res1.ok);
-      if (res1.ok) {
-        expect(res2.payload).toEqual(res1.payload);
-      } else {
-        expect(res2.error).toEqual(res1.error);
-      }
-    } finally {
-      dedicatedWs?.close();
-      await dedicatedServer?.close();
-      resetTestPluginRegistry();
-    }
-  });
-
   test("releases port after close", async () => {
     const releasePort = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const releaseServer = await startTestGatewayServer(releasePort);

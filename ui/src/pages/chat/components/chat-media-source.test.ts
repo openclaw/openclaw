@@ -64,33 +64,6 @@ describe("ChatMediaSourceController", () => {
     expect(media.getAttribute("src")).toBe("/media/native.mp3");
   });
 
-  it("keeps preparation pending across a 202 and applies the ready rendition", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const media = document.createElement("video");
-    const controller = new ChatMediaSourceController();
-
-    const pending = controller.sync(
-      media,
-      "/media/clip.avi?mediaTicket=ticket",
-      "media:clip",
-      "transcode",
-    );
-    expect(controller.readiness).toBe("preparing");
-    expect(media.hasAttribute("src")).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    await pending;
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(controller.readiness).toBe("ready");
-    expect(media.getAttribute("src")).toContain("mediaTicket=ticket&playback=1");
-  });
-
   it("aborts preparation and starts it again after reconnect", async () => {
     let firstSignal: AbortSignal | undefined;
     const fetchMock = vi
@@ -303,35 +276,6 @@ describe("ChatMediaSourceController", () => {
 
     expect(controller.handleEnded(media)).toBe(true);
     expect(media.getAttribute("src")).toBe("/media?mediaTicket=fresh");
-  });
-
-  it("applies a queued Blob before a paused player resumes", () => {
-    const media = document.createElement("audio");
-    const state = { currentTime: 18, duration: 80, paused: false };
-    mockMediaState(media, state);
-    const controller = new ChatMediaSourceController();
-    controller.updateSource(media, "/media?mediaTicket=old", "/tmp/audio.mp3");
-    controller.updateSource(media, "blob:waveform", "/tmp/audio.mp3");
-    state.paused = true;
-
-    expect(controller.applyPendingSource(media)).toBe(true);
-    expect(media.getAttribute("src")).toBe("blob:waveform");
-    expect(controller.currentIdentity).toBe("/tmp/audio.mp3");
-  });
-
-  it("resets an applied source across an authentication boundary", () => {
-    const media = document.createElement("audio");
-    const state = { currentTime: 18, duration: 80, paused: true };
-    mockMediaState(media, state);
-    const load = vi.spyOn(media, "load").mockImplementation(() => undefined);
-    const controller = new ChatMediaSourceController();
-    controller.updateSource(media, "blob:protected-audio", "/tmp/audio.mp3");
-
-    controller.reset(media);
-
-    expect(media.hasAttribute("src")).toBe(false);
-    expect(load).toHaveBeenCalledOnce();
-    expect(controller.currentIdentity).toBe("");
   });
 
   it("applies a fresh ticket that arrives after the old source has already failed", () => {

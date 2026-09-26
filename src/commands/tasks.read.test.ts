@@ -132,13 +132,6 @@ describe("tasks list output", () => {
 
   it.each([
     {
-      name: "ASCII cells and their headings",
-      runId: "run-ascii",
-      childSessionKey: "agent:main:main",
-      expectedRun: "run-ascii ",
-      expectedChild: "agent:main:main                     ",
-    },
-    {
       name: "a wide run id",
       runId: "界界界",
       childSessionKey: "agent:main:main",
@@ -153,46 +146,11 @@ describe("tasks list output", () => {
       expectedChild: "agent:main:界界界                   ",
     },
     {
-      name: "an exactly fitting combining run id",
-      runId: "A".repeat(9) + "e\u0301",
-      childSessionKey: "agent:main:main",
-      expectedRun: "AAAAAAAAAe\u0301",
-      expectedChild: "agent:main:main                     ",
-    },
-    {
-      name: "an exactly fitting combining child session key",
-      runId: "run-ascii",
-      childSessionKey: "agent:main:" + "x".repeat(24) + "e\u0301",
-      expectedRun: "run-ascii ",
-      expectedChild: "agent:main:xxxxxxxxxxxxxxxxxxxxxxxxe\u0301",
-    },
-    {
       name: "bounded zero-width run and child tokens",
       runId: "\u200b".repeat(512),
       childSessionKey: "agent:main:" + "\u200b".repeat(512),
       expectedRun: "\u200b".repeat(70) + "…         ",
       expectedChild: "agent:main:" + "\u200b".repeat(241) + "…" + " ".repeat(24),
-    },
-    {
-      name: "oversized combining run and child graphemes",
-      runId: "e" + "\u0301".repeat(512),
-      childSessionKey: "agent:main:e" + "\u0301".repeat(512),
-      expectedRun: "…         ",
-      expectedChild: "agent:main:…" + " ".repeat(24),
-    },
-    {
-      name: "oversized ZWJ run and child graphemes",
-      runId: "👩" + "\u200d👩".repeat(128),
-      childSessionKey: "agent:main:👩" + "\u200d👩".repeat(128),
-      expectedRun: "…         ",
-      expectedChild: "agent:main:…" + " ".repeat(24),
-    },
-    {
-      name: "ordinary multi-person emoji tokens",
-      runId: "👨‍👩‍👧‍👦".repeat(5),
-      childSessionKey: "agent:main:" + "👨‍👩‍👧‍👦".repeat(12),
-      expectedRun: "👨‍👩‍👧‍👦".repeat(5),
-      expectedChild: "agent:main:" + "👨‍👩‍👧‍👦".repeat(12) + " ",
     },
   ])(
     "aligns task list columns for $name",

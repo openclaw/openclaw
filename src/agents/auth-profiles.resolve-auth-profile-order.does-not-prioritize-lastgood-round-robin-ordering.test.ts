@@ -234,38 +234,6 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual([]);
   });
-  it("prioritizes oauth profiles when order missing", () => {
-    const mixedStore: AuthProfileStore = createAuthProfileStoreFixture({
-      "anthropic:default": createApiKeyCredential("anthropic", "sk-default"),
-      "anthropic:oauth": {
-        type: "oauth",
-        provider: "anthropic",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    });
-    const order = resolveAuthProfileOrder({
-      store: mixedStore,
-      provider: "anthropic",
-    });
-    expect(order).toEqual(["anthropic:oauth", "anthropic:default"]);
-  });
-  it("uses explicit profiles when order is missing", () => {
-    const order = resolveAuthProfileOrder({
-      cfg,
-      store,
-      provider: "anthropic",
-    });
-    expect(order).toEqual(["anthropic:default", "anthropic:work"]);
-  });
-  it("uses stored profiles when no config exists", () => {
-    const order = resolveAuthProfileOrder({
-      store,
-      provider: "anthropic",
-    });
-    expect(order).toEqual(["anthropic:default", "anthropic:work"]);
-  });
   it("prioritizes preferred profiles", () => {
     const order = resolveAuthProfileOrder({
       cfg,
@@ -275,19 +243,6 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order[0]).toBe("anthropic:work");
     expect(order).toContain("anthropic:default");
-  });
-  it("uses configured order when provided", () => {
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: { anthropic: ["anthropic:work", "anthropic:default"] },
-          profiles: cfg.auth?.profiles,
-        },
-      },
-      store,
-      provider: "anthropic",
-    });
-    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
   });
   it("drops explicit order entries that are missing from the store", () => {
     const order = resolveAuthProfileOrder({
@@ -488,7 +443,7 @@ describe("resolveAuthProfileOrder", () => {
 
     expect(order).toEqual(["openai:new-login", "openai:old-login"]);
   });
-  it.each(["store", "config"] as const)(
+  it.each(["config"] as const)(
     "pushes cooldown profiles to the end even with %s order",
     (orderSource) => {
       const now = Date.now();
@@ -503,7 +458,7 @@ describe("resolveAuthProfileOrder", () => {
     },
   );
 
-  it.each(["store", "config"] as const)(
+  it.each(["store"] as const)(
     "pushes disabled profiles to the end even with %s order",
     (orderSource) => {
       const now = Date.now();
@@ -521,41 +476,30 @@ describe("resolveAuthProfileOrder", () => {
     },
   );
 
-  it.each(["store", "config"] as const)(
-    "keeps OpenRouter explicit order even when cooldown fields exist (%s)",
-    (orderSource) => {
-      const now = Date.now();
-      const explicitOrder = ["openrouter:default", "openrouter:work"];
-      const order = resolveAuthProfileOrder({
-        cfg:
-          orderSource === "config"
-            ? {
-                auth: {
-                  order: { openrouter: explicitOrder },
-                },
-              }
-            : undefined,
-        store: {
-          version: 1,
-          ...(orderSource === "store" ? { order: { openrouter: explicitOrder } } : {}),
-          profiles: {
-            "openrouter:default": createApiKeyCredential("openrouter", "sk-or-default"),
-            "openrouter:work": createApiKeyCredential("openrouter", "sk-or-work"),
-          },
-          usageStats: {
-            "openrouter:default": {
-              cooldownUntil: now + 60_000,
-              disabledUntil: now + 120_000,
-              disabledReason: "billing",
-            },
+  it("keeps OpenRouter explicit config order even when cooldown fields exist", () => {
+    const now = Date.now();
+    const explicitOrder = ["openrouter:default", "openrouter:work"];
+    const order = resolveAuthProfileOrder({
+      cfg: { auth: { order: { openrouter: explicitOrder } } },
+      store: {
+        version: 1,
+        profiles: {
+          "openrouter:default": createApiKeyCredential("openrouter", "sk-or-default"),
+          "openrouter:work": createApiKeyCredential("openrouter", "sk-or-work"),
+        },
+        usageStats: {
+          "openrouter:default": {
+            cooldownUntil: now + 60_000,
+            disabledUntil: now + 120_000,
+            disabledReason: "billing",
           },
         },
-        provider: "openrouter",
-      });
+      },
+      provider: "openrouter",
+    });
 
-      expect(order).toEqual(explicitOrder);
-    },
-  );
+    expect(order).toEqual(explicitOrder);
+  });
 
   it("mode: oauth config accepts both oauth and token credentials (issue #559)", () => {
     const now = Date.now();

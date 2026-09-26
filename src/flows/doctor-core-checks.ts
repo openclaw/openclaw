@@ -67,11 +67,11 @@ const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 const SKILL_WORKSHOP_RELOCATION_CHECK_ID = "core/doctor/skill-workshop-relocation";
-const loadDoctorCoreChecksRuntimeModule = async () =>
-  await import("./doctor-core-checks.runtime.js");
 
 export type CoreHealthCheckDeps = {
-  readonly detectUnavailableSkills: typeof detectUnavailableSkillsWithRuntime;
+  readonly detectUnavailableSkills: (
+    ctx: HealthCheckContext,
+  ) => Promise<readonly SkillStatusEntry[]>;
   readonly collectSecurityWarnings: (
     cfg: OpenClawConfig,
     env?: NodeJS.ProcessEnv,
@@ -92,61 +92,6 @@ export type CoreHealthCheckDeps = {
   ) => Promise<readonly HealthFinding[]>;
   readonly listGatewayCronJobs: (ctx: HealthCheckContext) => Promise<readonly CronJob[]>;
 };
-
-async function detectUnavailableSkillsWithRuntime(
-  ctx: HealthCheckContext,
-): Promise<readonly SkillStatusEntry[]> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return ctx.cwd ? runtime.detectUnavailableSkills(ctx.cfg, ctx.cwd) : [];
-}
-
-async function collectSecurityWarningsWithRuntime(
-  cfg: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-): Promise<readonly SecurityAuditFinding[]> {
-  const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
-  return collectSecurityWarnings(cfg, env);
-}
-
-async function collectWorkspaceSuggestionNotesWithRuntime(
-  workspaceDir: string,
-): Promise<readonly string[]> {
-  const { collectWorkspaceSuggestionNotes } =
-    await import("../commands/doctor-workspace-suggestions.js");
-  const notes: string[] = [];
-  for await (const note of collectWorkspaceSuggestionNotes(workspaceDir)) {
-    notes.push(note);
-  }
-  return notes;
-}
-
-async function collectProviderCatalogProjectionFindingsWithRuntime(
-  ctx: HealthCheckContext,
-): Promise<readonly HealthFinding[]> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.collectProviderCatalogProjectionFindings(ctx.cfg, ctx.cwd);
-}
-
-async function collectLocalAudioAccelerationFindingsWithRuntime(): Promise<
-  readonly HealthFinding[]
-> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.collectLocalAudioAccelerationFindings();
-}
-
-async function collectGatewayHealthFindingsWithRuntime(
-  ctx: HealthCheckContext,
-): Promise<readonly HealthFinding[]> {
-  const runtime = await import("../commands/doctor-gateway-health.js");
-  return runtime.collectGatewayHealthFindings(ctx);
-}
-
-async function collectGatewayDaemonFindingsWithRuntime(
-  ctx: HealthCheckContext,
-): Promise<readonly HealthFinding[]> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.collectGatewayDaemonFindings(ctx);
-}
 
 async function listGatewayCronJobsWithRuntime(
   ctx: HealthCheckContext,
@@ -220,14 +165,40 @@ async function listGatewayCronJobsWithRuntime(
 }
 
 const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
-  detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
-  collectSecurityWarnings: collectSecurityWarningsWithRuntime,
-  collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
+  async detectUnavailableSkills(ctx) {
+    const runtime = await import("./doctor-core-checks.runtime.js");
+    return ctx.cwd ? runtime.detectUnavailableSkills(ctx.cfg, ctx.cwd) : [];
+  },
+  async collectSecurityWarnings(cfg, env) {
+    const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
+    return collectSecurityWarnings(cfg, env);
+  },
+  async collectWorkspaceSuggestionNotes(workspaceDir) {
+    const { collectWorkspaceSuggestionNotes } =
+      await import("../commands/doctor-workspace-suggestions.js");
+    const notes: string[] = [];
+    for await (const note of collectWorkspaceSuggestionNotes(workspaceDir)) {
+      notes.push(note);
+    }
+    return notes;
+  },
   collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
-  collectProviderCatalogProjectionFindings: collectProviderCatalogProjectionFindingsWithRuntime,
-  collectLocalAudioAccelerationFindings: collectLocalAudioAccelerationFindingsWithRuntime,
-  collectGatewayHealthFindings: collectGatewayHealthFindingsWithRuntime,
-  collectGatewayDaemonFindings: collectGatewayDaemonFindingsWithRuntime,
+  async collectProviderCatalogProjectionFindings(ctx) {
+    const runtime = await import("./doctor-core-checks.runtime.js");
+    return runtime.collectProviderCatalogProjectionFindings(ctx.cfg, ctx.cwd);
+  },
+  async collectLocalAudioAccelerationFindings() {
+    const runtime = await import("./doctor-core-checks.runtime.js");
+    return runtime.collectLocalAudioAccelerationFindings();
+  },
+  async collectGatewayHealthFindings(ctx) {
+    const runtime = await import("../commands/doctor-gateway-health.js");
+    return runtime.collectGatewayHealthFindings(ctx);
+  },
+  async collectGatewayDaemonFindings(ctx) {
+    const runtime = await import("./doctor-core-checks.runtime.js");
+    return runtime.collectGatewayDaemonFindings(ctx);
+  },
   listGatewayCronJobs: listGatewayCronJobsWithRuntime,
 };
 

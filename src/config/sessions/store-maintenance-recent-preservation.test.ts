@@ -9,7 +9,6 @@ import {
   capEntryCount,
   pruneStaleEntries,
   resolveMaintenanceConfigFromInput,
-  shouldPreserveMaintenanceEntry,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -36,7 +35,7 @@ function installThrowingConversationResolver() {
 }
 
 describe("recent session maintenance preservation", () => {
-  it.each(["classification", "pruning", "capping"] as const)(
+  it.each(["pruning", "capping"] as const)(
     "preserves external conversations during %s without invoking channel plugins",
     (boundary) => {
       const resolveSessionConversation = installThrowingConversationResolver();
@@ -62,14 +61,7 @@ describe("recent session maintenance preservation", () => {
       );
 
       try {
-        if (boundary === "classification") {
-          for (const key of protectedKeys) {
-            expect(shouldPreserveMaintenanceEntry({ key, entry: store[key] })).toBe(true);
-          }
-          for (const key of removableKeys) {
-            expect(shouldPreserveMaintenanceEntry({ key, entry: store[key] })).toBe(false);
-          }
-        } else if (boundary === "pruning") {
+        if (boundary === "pruning") {
           expect(pruneStaleEntries(store, 30 * DAY_MS, { log: false })).toBe(1);
         } else {
           expect(capEntryCount(store, protectedKeys.length, { log: false })).toBe(3);

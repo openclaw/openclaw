@@ -12,6 +12,10 @@ import {
 const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClient, GatewayClientRequestError } = await import("../gateway/client.js");
 
+function createClient() {
+  return new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+}
+
 describe("GatewayChatClient", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -168,10 +172,7 @@ describe("GatewayChatClient", () => {
   );
 
   it("waits for gateway transport teardown on stop", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     let finishStop: (() => void) | undefined;
     const stopAndWait = vi.fn(
       () =>
@@ -347,10 +348,7 @@ describe("GatewayChatClient", () => {
   it("retries startup-unavailable history only while the backend is active", async () => {
     vi.useFakeTimers();
 
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const startupError = new GatewayClientRequestError({
       code: "UNAVAILABLE",
       message: "chat.history unavailable during gateway startup",
@@ -397,10 +395,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("passes selected-agent global scope through chat methods", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi.fn().mockResolvedValue({ messages: [] });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
@@ -437,10 +432,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("resolves a handoff key through the exact sessions.resolve wire contract", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi
       .fn()
       .mockResolvedValue({ ok: true, key: "agent:main:alpha", agentId: "main" });
@@ -463,10 +455,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("preserves side runs for session-scoped TUI aborts", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
@@ -479,10 +468,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("retries session aborts without side-run preservation on older Gateways", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi
       .fn()
       .mockRejectedValueOnce(
@@ -507,10 +493,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("retries session creation without disposition on older Gateways", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi
       .fn()
       .mockRejectedValueOnce(
@@ -543,10 +526,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("retries parallel session creation without parent lifecycle on older Gateways", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi
       .fn()
       .mockRejectedValueOnce(
@@ -580,10 +560,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("returns the actual chat send ack status from the gateway", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi.fn().mockResolvedValue({ runId: "run-gateway", status: "timeout" });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
@@ -597,10 +574,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("lists gateway commands through commands.list", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const command = {
       name: "tts",
       textAliases: ["/tts"],
@@ -623,10 +597,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("lists and resolves plugin approvals through the gateway", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const pending = [{ id: "plugin:skill-1" }];
     const request = vi.fn().mockResolvedValueOnce(pending).mockResolvedValueOnce({ ok: true });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
@@ -644,10 +615,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("requests a new non-worktree session even without mode capabilities", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const suggestion = {
       id: "task_1",
       title: "Investigate a restarting service",
@@ -691,10 +659,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("derives task suggestion actions from negotiated methods and scopes", () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     client.hello = {
       features: {
         methods: ["taskSuggestions.accept", "taskSuggestions.dismiss"],
@@ -720,10 +685,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("skips task suggestion refreshes against older gateways", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi.fn();
     client.hello = { features: { methods: ["chat.history"] } } as never;
     (client as unknown as { client: { request: typeof request } }).client.request = request;

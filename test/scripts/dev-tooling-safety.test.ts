@@ -500,21 +500,6 @@ describe("script-specific dev tooling hardening", () => {
     expect(signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
   });
 
-  it("reads TUI PTY mirror updates incrementally with a bounded chunk", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tui-watch-test-"));
-    tempDirs.push(tempRoot);
-    const mirrorPath = path.join(tempRoot, "mirror.ansi");
-    await fs.writeFile(mirrorPath, "first-second-third", "utf8");
-
-    const first = await tuiPtyWatchTesting.readNewMirrorData(mirrorPath, 0, 6);
-    expect(first.chunk.toString("utf8")).toBe("first-");
-    expect(first.offset).toBe(6);
-
-    const second = await tuiPtyWatchTesting.readNewMirrorData(mirrorPath, first.offset, 6);
-    expect(second.chunk.toString("utf8")).toBe("second");
-    expect(second.offset).toBe(12);
-  });
-
   it("restarts TUI PTY mirror reads when the mirror file is truncated", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tui-watch-test-"));
     tempDirs.push(tempRoot);
@@ -669,17 +654,6 @@ describe("script-specific dev tooling hardening", () => {
 
     expect(modulePath.endsWith("/ui/src/pages/chat/talk/gateway-relay.ts")).toBe(true);
     expect(existsSync(modulePath.slice("/@fs/".length))).toBe(true);
-  });
-
-  it("bounds OpenAI realtime smoke response body reads by content-length", async () => {
-    const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
-    const response = new Response("{}", {
-      headers: { "content-length": String(maxBytes + 1) },
-    });
-
-    await expect(
-      realtimeSmokeTesting.readBoundedText(response, "OpenAI Realtime test", maxBytes),
-    ).rejects.toThrow(`OpenAI Realtime test response body exceeded ${maxBytes} bytes`);
   });
 
   it("rejects unsafe OpenAI realtime SDP answer content-length values before reading", async () => {

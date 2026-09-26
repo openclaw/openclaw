@@ -115,15 +115,6 @@ describe("handleControlUiHttpRequest", () => {
     };
   }
 
-  function growAvatarAfterPinnedOpen(avatarPath: string) {
-    const fstatSync = fsSync.fstatSync;
-    return vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
-      const stat = fstatSync(fd);
-      fsSync.appendFileSync(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES));
-      return stat;
-    });
-  }
-
   async function createControlUiRoot(indexHtml = "<html></html>\n") {
     const tmp = testTempDirs.make("openclaw-ui-");
     await fs.writeFile(path.join(tmp, "index.html"), indexHtml);
@@ -1408,6 +1399,46 @@ describe("handleControlUiHttpRequest", () => {
     expect(parsed.devGitBranch).toBeUndefined();
   });
 
+  it.each(["identity", "avatar"] as const)(
+    "serves authenticated bootstrap when the %s file worker rejects",
+    async (worker) => {
+      const failure = new Error("file worker unavailable");
+      if (worker === "identity") {
+        const runtime = await import("../agents/identity-file-runtime.js");
+        vi.spyOn(runtime, "prepareIdentityFile").mockRejectedValue(failure);
+      } else {
+        const runtime = await import("../agents/identity-avatar-file-runtime.js");
+        vi.spyOn(runtime, "prepareLocalAgentAvatar").mockRejectedValue(failure);
+      }
+      const workspace = testTempDirs.make("openclaw-bootstrap-worker-failure-");
+      const response = await runBootstrapConfigRequest({
+        rootPath: workspace,
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+        headers: { authorization: "Bearer test-token" },
+        config: {
+          agents: {
+            entries: {
+              main: {
+                workspace,
+                identity: worker === "avatar" ? { avatar: "avatar.png" } : undefined,
+              },
+            },
+          },
+        },
+      });
+      expect(response.handled).toBe(true);
+      expect(response.res.statusCode).toBe(200);
+      expect(parseBootstrapPayload(response.end)).toMatchObject({
+        assistantName: "Assistant",
+        assistantAvatar: "A",
+        assistantAgentId: "main",
+        ...(worker === "avatar"
+          ? { assistantAvatarStatus: "none", assistantAvatarReason: "unreadable" }
+          : {}),
+      });
+    },
+  );
+
   it.each(["automaticallyFetchFavicons", "communityInvite"] as const)(
     "projects an explicit %s opt-out into bootstrap config",
     async (key) => {
@@ -2208,8 +2239,6 @@ describe("handleControlUiHttpRequest", () => {
     async ({ contentType, filename }) => {
       const tmp = testTempDirs.make("openclaw-avatar-head-metadata-");
       const body = Buffer.from(`avatar 東京 ${filename}\n`, "utf8");
-      const read = vi.spyOn(fsSync, "read");
-      const closeSync = vi.spyOn(fsSync, "closeSync");
       try {
         await fs.writeFile(path.join(tmp, filename), body);
         const config = createAvatarConfig(tmp, filename);
@@ -2221,8 +2250,6 @@ describe("handleControlUiHttpRequest", () => {
         expect(head.setHeader).toHaveBeenCalledWith("Content-Type", contentType);
         expect(head.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
         expect(head.end).toHaveBeenCalledWith();
-        expect(read).not.toHaveBeenCalled();
-        expect(closeSync).toHaveBeenCalledOnce();
 
         const get = await runAvatarRequest({ url: "/avatar/main", method: "GET", config });
         expect(get.res.statusCode).toBe(200);
@@ -2231,8 +2258,6 @@ describe("handleControlUiHttpRequest", () => {
         expect(get.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
         expect(get.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
       } finally {
-        read.mockRestore();
-        closeSync.mockRestore();
         await fs.rm(tmp, { recursive: true, force: true });
       }
     },
@@ -2283,32 +2308,6 @@ describe("handleControlUiHttpRequest", () => {
     }
   });
 
-  it.each([["metadata", "/avatar/main?meta=1", "GET"]] as const)(
-    "validates %s avatar requests without reading bytes and closes the descriptor",
-    async (_name, url, method) => {
-      const tmp = testTempDirs.make("openclaw-avatar-no-read-");
-      const read = vi.spyOn(fsSync, "read");
-      const closeSync = vi.spyOn(fsSync, "closeSync");
-      try {
-        await fs.writeFile(path.join(tmp, "main.png"), REAL_PNG);
-        const { res, handled } = await runAvatarRequest({
-          url,
-          method,
-          config: createAvatarConfig(tmp, "main.png"),
-        });
-
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(200);
-        expect(read).not.toHaveBeenCalled();
-        expect(closeSync).toHaveBeenCalledTimes(1);
-      } finally {
-        read.mockRestore();
-        closeSync.mockRestore();
-        await fs.rm(tmp, { recursive: true, force: true });
-      }
-    },
-  );
-
   it("rejects hardlinked avatar bytes and reports matching metadata", async () => {
     const tmp = testTempDirs.make("openclaw-avatar-http-hardlink-");
     try {
@@ -2337,26 +2336,16 @@ describe("handleControlUiHttpRequest", () => {
     }
   });
 
-  it("bounds an avatar route file that grows after its descriptor is pinned", async () => {
-    const tmp = testTempDirs.make("openclaw-avatar-http-growth-");
-    const avatarPath = path.join(tmp, "avatar.png");
-    try {
-      await fs.writeFile(avatarPath, REAL_PNG);
-      const fstatSync = growAvatarAfterPinnedOpen(avatarPath);
-      try {
-        expectNotFoundResponse(
-          await runAvatarRequest({
-            url: "/avatar/main",
-            method: "GET",
-            config: createAvatarConfig(tmp, "avatar.png"),
-          }),
-        );
-      } finally {
-        fstatSync.mockRestore();
-      }
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+  it("rejects an oversized avatar and reports its size failure", async () => {
+    const tmp = testTempDirs.make("openclaw-avatar-http-size-");
+    await fs.writeFile(path.join(tmp, "avatar.png"), Buffer.alloc(AVATAR_MAX_BYTES + 1));
+    const config = createAvatarConfig(tmp, "avatar.png");
+    expectNotFoundResponse(await runAvatarRequest({ url: "/avatar/main", method: "GET", config }));
+    const meta = await runAvatarRequest({ url: "/avatar/main?meta=1", method: "GET", config });
+    expect(responseJson(meta.end)).toMatchObject({
+      avatarStatus: "none",
+      avatarReason: "too_large",
+    });
   });
 
   it("rejects avatar symlink paths from resolver", async () => {

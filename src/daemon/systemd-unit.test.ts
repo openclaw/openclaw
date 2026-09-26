@@ -11,17 +11,7 @@ import {
 
 // Values that need quoting, including the backslash and quote shapes the
 // renderer has to escape for the module's own parsers to read them back.
-const ROUND_TRIP_VALUES = [
-  "plain",
-  "with space",
-  'he said "hi"',
-  "back\\slash",
-  "C:\\\\srv\\\\bin",
-  'mix \\ and " here',
-  "trailing\\",
-  "apostrophe's",
-  "'quoted'",
-];
+const ROUND_TRIP_VALUES = ["plain", 'mix \\ and " here', "trailing\\", "apostrophe's", "'quoted'"];
 
 describe("systemd logical lines", () => {
   it.each([

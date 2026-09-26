@@ -4,6 +4,7 @@ import type {
   ChannelIngressQueueClaim,
   ChannelIngressQueueCorruptClaim,
   ChannelIngressQueueCompletedRecord,
+  ChannelIngressQueueDeadLetterRecord,
 } from "./ingress-queue.types.js";
 
 // Failed rows need to distinguish a retained JSON null payload from the "null"
@@ -110,5 +111,38 @@ export function completedRecord<TCompletedMetadata>(
           // SAFETY: Completion metadata round-trips the value supplied by this queue's consumer.
           metadata: metaResult.value as TCompletedMetadata,
         }),
+  };
+}
+
+export function failedRecord<TPayload, TMetadata>(
+  row: ChannelIngressRow,
+): ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata> {
+  const payloadResult = parseFailedPayload(row.payload_json);
+  const metadataResult = row.metadata_json === null ? null : parseJson(row.metadata_json);
+  return {
+    id: row.event_id,
+    channelId: row.channel_id,
+    accountId: row.account_id,
+    queueName: row.queue_name,
+    ...(payloadResult.ok && row.payload_json !== "null"
+      ? {
+          // SAFETY: Retained payloads keep the same channel-owned codec contract after failure.
+          payload: payloadResult.value as TPayload,
+        }
+      : {}),
+    ...(metadataResult?.ok
+      ? {
+          // SAFETY: Failure retains the original channel-owned enqueue metadata unchanged.
+          metadata: metadataResult.value as TMetadata,
+        }
+      : {}),
+    receivedAt: row.received_at,
+    updatedAt: row.updated_at,
+    ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
+    attempts: row.attempts,
+    ...(row.last_attempt_at === null ? {} : { lastAttemptAt: row.last_attempt_at }),
+    failedAt: row.failed_at ?? row.updated_at,
+    reason: row.failed_reason ?? "failed",
+    ...(row.last_error === null ? {} : { message: row.last_error }),
   };
 }

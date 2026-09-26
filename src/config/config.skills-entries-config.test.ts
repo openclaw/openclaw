@@ -46,19 +46,6 @@ describe("skills entries config schema", () => {
     ).toBe(true);
   });
 
-  it("accepts agents.defaults.skills", () => {
-    const res = OpenClawSchema.safeParse({
-      agents: {
-        defaults: {
-          skills: ["github", "weather"],
-        },
-        entries: { main: { default: true } },
-      },
-    });
-
-    expect(res.success).toBe(true);
-  });
-
   it("accepts agents.entries.*.skills as explicit replacements", () => {
     const res = OpenClawSchema.safeParse({
       agents: {

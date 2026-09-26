@@ -20,6 +20,7 @@ import {
 import { resolveLiveManagedGatewayDistFence } from "./lib/live-gateway-dist-fence.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import type { MemoryLimitParams } from "./lib/process-memory.mts";
+import { preflightInstalledSourceArtifacts } from "./lib/source-update-artifact-preflight.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -536,6 +537,7 @@ export async function runBuildAllSteps(
     steps?: BuildAllStep[];
   } = {},
 ): Promise<BuildAllResult> {
+  await preflightInstalledSourceArtifacts(params.env ?? process.env);
   const { env: buildEnv, heapShortfall } = resolveBuildAllTsdownPlan(
     profile,
     resolveBuildAllEnvironment(params.env),

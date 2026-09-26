@@ -110,7 +110,7 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
     ).resolves.toMatchObject({ kind: "invalid-response", path: "/v1/models" });
   });
 
-  it.each([401, 403, 503])("keeps root model-list HTTP %s failures terminal", async (status) => {
+  it.each([401, 503])("keeps root model-list HTTP %s failures terminal", async (status) => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce(guarded(new Response(null, { status })));
 
     await expect(

@@ -6,6 +6,7 @@ import {
   type OpenClawAgentDatabaseOptions,
   type OpenClawAgentDatabaseWriteAdmission,
 } from "../../state/openclaw-agent-db.js";
+import { SqliteReclamationRequestRefusedError } from "./session-accessor.sqlite-reclamation-commit.js";
 
 export function withWorkerWriteAdmission<T>(
   port: MessagePort,
@@ -57,7 +58,9 @@ export function withWorkerWriteAdmission<T>(
     });
     const value = await run(() => {
       if (!admission.allowed) {
-        throw new Error("SQLite reclamation database admission was revoked");
+        throw new SqliteReclamationRequestRefusedError(
+          "SQLite reclamation database admission was revoked",
+        );
       }
     }, admission.validation);
     if (!finalAdmission) {

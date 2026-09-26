@@ -382,7 +382,7 @@ function hasConfiguredDiscordChannels(
 function resolveDiscordChannelConfigEntry(
   entry: DiscordChannelEntry,
 ): DiscordChannelConfigResolved {
-  const resolved: DiscordChannelConfigResolved = {
+  return {
     allowed: entry.enabled !== false,
     requireMention: entry.requireMention,
     ignoreOtherMentions: entry.ignoreOtherMentions,
@@ -396,7 +396,6 @@ function resolveDiscordChannelConfigEntry(
     autoThreadName: entry.autoThreadName,
     autoArchiveDuration: entry.autoArchiveDuration,
   };
-  return resolved;
 }
 
 export function resolveDiscordChannelConfig(params: {

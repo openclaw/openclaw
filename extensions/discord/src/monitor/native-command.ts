@@ -13,15 +13,10 @@ import {
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import {
-  resolveDiscordAccountAllowFrom,
-  resolveDiscordAccountDmPolicy,
-  resolveDiscordMaxLinesPerMessage,
-} from "../accounts.js";
+import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
 import {
   Button,
   Command,
@@ -71,6 +66,7 @@ import {
   DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
   hasRenderableReplyPayload,
+  resolveDiscordInteractionReplyOptions,
   safeDiscordInteractionCall,
   settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
@@ -247,11 +243,7 @@ async function dispatchDiscordCommandInteraction(
       ...(ephemeral !== undefined ? { ephemeral } : {}),
     };
     await safeDiscordInteractionCall("interaction reply", async () => {
-      if (preferFollowUp) {
-        await interaction.followUp(payload);
-        return;
-      }
-      await interaction.reply(payload);
+      await interaction[preferFollowUp ? "followUp" : "reply"](payload);
     });
   };
 
@@ -632,13 +624,9 @@ async function dispatchDiscordCommandInteraction(
     await deliverDiscordInteractionReply({
       interaction,
       payload: pluginReply,
-      textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
-        fallbackLimit: 2000,
-      }),
-      maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+      ...resolveDiscordInteractionReplyOptions({ cfg, discordConfig, accountId }),
       preferFollowUp,
       responseEphemeral,
-      chunkMode: resolveChunkMode(cfg, "discord", accountId),
     });
     return { accepted: true, effectiveRoute };
   }

@@ -77,6 +77,19 @@ internal resource bounds, not configuration settings. These scheduling and budge
 changes preserve database ownership, transaction authority, schemas, and update
 behavior.
 
+Agent publication adapters use `openOpenClawAgentSqliteWorkerStore().execute`
+for a single command. It captures the command before waiting and keeps binding,
+preparation, execution, and cleanup in one broker request. The factory receives
+synchronous admission; asynchronous preparation does not retain that authority.
+Transaction and commit grants still check the live source. A settled result
+survives cleanup failure while the failed native owner retires. Use `run` when
+dependent commands share a binding or host publication must stay inside the
+same FIFO interval.
+
+The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
+contract for existing adapters. The factory's inferred return type additionally
+provides the typed single-command `execute` method.
+
 ## Carry facts, publish after commit
 
 Placement turn claims and releases execute through the shared-state writer,
@@ -353,6 +366,14 @@ prepared facts, so uncertain backing state keeps the task alive for a later pass
 Synchronous operator inspection uses the same selected-row reader. An unavailable
 schema refuses the read rather than reporting missing backing sessions. Canonical
 admission, malformed-row handling, retention, and update behavior are unchanged.
+
+Cron task reconciliation reads durable outcomes and applies recovery or loss in
+the shared-state worker. The final recovery check and lost-task write share one
+transaction, including after a recovery hook yields. The host rechecks the
+selected task and live cron job at transaction and commit admission; committed
+rows use the existing task and linked-flow publication owners. Synchronous
+operator inspection and the deprecated external task SDK retain their existing
+contracts. This changes no schema, retention policy, or update step.
 
 Cron retention discovery uses a separate, single-worker maintenance lane within the
 same session database lifecycle owner. Foreground history and exact-entry reads

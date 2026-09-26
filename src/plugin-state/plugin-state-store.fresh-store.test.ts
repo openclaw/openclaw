@@ -21,18 +21,8 @@ async function expectPluginStateReadFailure(
   promise: Promise<unknown>,
   expected: { operation: "entries" | "lookup" | "count"; path: string },
 ): Promise<void> {
-  let storeError: unknown;
-  try {
-    await promise;
-  } catch (error) {
-    storeError = error;
-  }
-  expect(storeError).toBeInstanceOf(PluginStateStoreError);
-  expect(storeError).toMatchObject({
-    code: "PLUGIN_STATE_READ_FAILED",
-    operation: expected.operation,
-    path: expected.path,
-  });
+  await expect(promise).rejects.toBeInstanceOf(PluginStateStoreError);
+  await expect(promise).rejects.toMatchObject({ code: "PLUGIN_STATE_READ_FAILED", ...expected });
 }
 
 describe("plugin state fresh-store reads", () => {

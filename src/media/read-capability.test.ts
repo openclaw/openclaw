@@ -1,6 +1,5 @@
 // Media read capability tests cover allowed roots and blocked file access.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -501,46 +500,28 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     expect(result.localRoots).toContain("/Users/peter/Pictures");
   });
 
-  it("keeps host reads enabled when no group policy applies", () => {
+  it("enforces the caller byte cap before buffering host media", async () => {
+    const workspaceDir = tempDirs.make("openclaw-media-cap-");
+    const filePath = path.join(workspaceDir, "oversized.bin");
+    await fs.writeFile(filePath, Buffer.alloc(2));
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg: {
         tools: {
           allow: ["read"],
         },
       } as OpenClawConfig,
-      messageProvider: "requestchat",
-      requesterSenderId: "trusted-user",
+      workspaceDir,
     });
 
-    expect(result.readFile).toBeTypeOf("function");
-  });
-
-  it("enforces the caller byte cap before buffering host media", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-cap-"));
-    try {
-      const filePath = path.join(workspaceDir, "oversized.bin");
-      await fs.writeFile(filePath, Buffer.alloc(2));
-      const result = resolveAgentScopedOutboundMediaAccess({
-        cfg: {
-          tools: {
-            allow: ["read"],
-          },
-        } as OpenClawConfig,
-        workspaceDir,
-      });
-
-      await expect(
-        readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1 }),
-      ).rejects.toThrow(/exceeds.*1 byte/i);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    await expect(
+      readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1 }),
+    ).rejects.toThrow(/exceeds.*1 byte/i);
   });
 
   it.runIf(process.platform !== "win32")(
     "rejects owned host reads when an allowed ancestor symlink retargets before open",
     async () => {
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-media-race-"));
+      const base = tempDirs.make("openclaw-host-media-race-");
       const workspaceDir = path.join(base, "workspace");
       const insideDir = path.join(workspaceDir, "inside");
       const outsideDir = path.join(base, "outside");
@@ -566,14 +547,10 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
         },
       });
 
-      try {
-        await expect(
-          readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1024 }),
-          // fs-safe 0.5.2 reports pre-open identity drift as path-mismatch.
-        ).rejects.toMatchObject({ code: "path-mismatch" });
-      } finally {
-        await fs.rm(base, { recursive: true, force: true });
-      }
+      await expect(
+        readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1024 }),
+        // fs-safe 0.5.2 reports pre-open identity drift as path-mismatch.
+      ).rejects.toMatchObject({ code: "path-mismatch" });
     },
   );
 

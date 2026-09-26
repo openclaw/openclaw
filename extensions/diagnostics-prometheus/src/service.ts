@@ -1,4 +1,3 @@
-// Diagnostics Prometheus plugin module implements service behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   isDiagnosticsEnabled,
@@ -46,10 +45,6 @@ function safeErrorMessage(err: unknown): string {
       .replace(/[\r\n\t\u2028\u2029]/gu, " "),
     500,
   );
-}
-
-function shouldRecordDiagnosticEvent(metadata: DiagnosticEventMetadata): boolean {
-  return metadata.trusted || isInternalDiagnosticEventMetadata(metadata);
 }
 
 function renderPrometheusMetrics(store: PrometheusMetricStore): string {
@@ -109,134 +104,6 @@ function renderPrometheusMetrics(store: PrometheusMetricStore): string {
   return lines.join("\n");
 }
 
-function runLabels(evt: {
-  blockedBy?: string;
-  channel?: string;
-  model?: string;
-  outcome?: string;
-  provider?: string;
-  trigger?: string;
-}): LabelSet {
-  return {
-    ...(evt.blockedBy ? { blocked_by: normalizeDiagnosticValue(evt.blockedBy) } : {}),
-    channel: normalizeDiagnosticValue(evt.channel),
-    model: normalizeDiagnosticValue(evt.model),
-    outcome: normalizeDiagnosticValue(evt.outcome, "unknown"),
-    provider: normalizeDiagnosticValue(evt.provider),
-    trigger: normalizeDiagnosticValue(evt.trigger),
-  };
-}
-
-function modelCallLabels(evt: {
-  api?: string;
-  errorCategory?: string;
-  model?: string;
-  observationUnit?: "request" | "turn";
-  provider?: string;
-  transport?: string;
-  type: string;
-}): LabelSet {
-  return {
-    api: normalizeDiagnosticValue(evt.api),
-    error_category:
-      evt.type === "model.call.error"
-        ? normalizeDiagnosticValue(evt.errorCategory, "other")
-        : "none",
-    model: normalizeDiagnosticValue(evt.model),
-    observation_unit: evt.observationUnit === "turn" ? "turn" : "request",
-    outcome: evt.type === "model.call.error" ? "error" : "completed",
-    provider: normalizeDiagnosticValue(evt.provider),
-    transport: normalizeDiagnosticValue(evt.transport),
-  };
-}
-
-function modelFailoverLabels(
-  evt: Extract<DiagnosticEventPayload, { type: "model.failover" }>,
-): LabelSet {
-  return {
-    from_model: normalizeDiagnosticValue(evt.fromModel),
-    from_provider: normalizeDiagnosticValue(evt.fromProvider),
-    lane: normalizeDiagnosticLane(evt.lane),
-    reason: normalizeDiagnosticValue(evt.reason, "other"),
-    suspended: evt.suspended === undefined ? "unknown" : String(evt.suspended),
-    to_model: normalizeDiagnosticValue(evt.toModel),
-    to_provider: normalizeDiagnosticValue(evt.toProvider),
-  };
-}
-
-function toolExecutionLabels(evt: {
-  errorCategory?: string;
-  paramsSummary?: { kind: string };
-  toolName: string;
-  toolOwner?: string;
-  toolSource?: string;
-  type: string;
-}): LabelSet {
-  return {
-    error_category:
-      evt.type === "tool.execution.error"
-        ? normalizeDiagnosticValue(evt.errorCategory, "other")
-        : "none",
-    outcome: evt.type === "tool.execution.error" ? "error" : "completed",
-    params_kind: normalizeDiagnosticValue(evt.paramsSummary?.kind),
-    tool: normalizeDiagnosticValue(evt.toolName, "tool"),
-    tool_owner: normalizeDiagnosticValue(evt.toolOwner, "none"),
-    tool_source: normalizeDiagnosticValue(evt.toolSource, "core"),
-  };
-}
-
-function toolExecutionBlockedLabels(
-  evt: Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }>,
-): LabelSet {
-  return {
-    denied_reason: normalizeDiagnosticValue(evt.deniedReason, "other"),
-    params_kind: normalizeDiagnosticValue(evt.paramsSummary?.kind),
-    tool: normalizeDiagnosticValue(evt.toolName, "tool"),
-    tool_owner: normalizeDiagnosticValue(evt.toolOwner, "none"),
-    tool_source: normalizeDiagnosticValue(evt.toolSource, "core"),
-  };
-}
-
-function skillLabels(evt: {
-  activation: string;
-  agentId?: string;
-  skillName: string;
-  skillSource?: string;
-}): LabelSet {
-  return {
-    activation: normalizeDiagnosticValue(evt.activation, "unknown"),
-    agent: normalizeDiagnosticValue(evt.agentId),
-    skill: normalizeDiagnosticValue(evt.skillName, "skill"),
-    source: normalizeDiagnosticValue(evt.skillSource),
-  };
-}
-
-function harnessLabels(evt: {
-  channel?: string;
-  errorCategory?: string;
-  harnessId: string;
-  model?: string;
-  outcome?: string;
-  phase?: string;
-  pluginId?: string;
-  provider?: string;
-  type: string;
-}): LabelSet {
-  return {
-    channel: normalizeDiagnosticValue(evt.channel),
-    error_category:
-      evt.type === "harness.run.error"
-        ? normalizeDiagnosticValue(evt.errorCategory, "other")
-        : "none",
-    harness: normalizeDiagnosticValue(evt.harnessId),
-    model: normalizeDiagnosticValue(evt.model),
-    outcome: evt.type === "harness.run.error" ? "error" : normalizeDiagnosticValue(evt.outcome),
-    phase: evt.type === "harness.run.error" ? normalizeDiagnosticValue(evt.phase) : "none",
-    plugin: normalizeDiagnosticValue(evt.pluginId),
-    provider: normalizeDiagnosticValue(evt.provider),
-  };
-}
-
 function webhookLabels(
   evt: Extract<
     DiagnosticEventPayload,
@@ -246,64 +113,6 @@ function webhookLabels(
   return {
     channel: normalizeDiagnosticValue(evt.channel),
     webhook: normalizeDiagnosticValue(evt.updateType),
-  };
-}
-
-function sessionStuckLabels(
-  evt: Extract<DiagnosticEventPayload, { type: "session.stuck" }>,
-): LabelSet {
-  return {
-    reason: normalizeDiagnosticValue(evt.reason, "none"),
-    state: evt.state,
-  };
-}
-
-function sessionRecoveryLabels(
-  evt: Extract<
-    DiagnosticEventPayload,
-    { type: "session.recovery.requested" | "session.recovery.completed" }
-  >,
-): LabelSet {
-  return {
-    action:
-      evt.type === "session.recovery.completed"
-        ? normalizeDiagnosticValue(evt.action, "unknown")
-        : evt.allowActiveAbort
-          ? "abort"
-          : "recover",
-    active_work_kind: normalizeDiagnosticValue(evt.activeWorkKind, "none"),
-    state: evt.state,
-    status: evt.type === "session.recovery.completed" ? evt.status : "requested",
-  };
-}
-
-function livenessLabels(
-  evt: Extract<DiagnosticEventPayload, { type: "diagnostic.liveness.warning" }>,
-): LabelSet {
-  return {
-    reason: normalizeDiagnosticValue(evt.reasons.join(":"), "unknown"),
-  };
-}
-
-function payloadLargeLabels(
-  evt: Extract<DiagnosticEventPayload, { type: "payload.large" }>,
-): LabelSet {
-  return {
-    action: evt.action,
-    channel: normalizeDiagnosticValue(evt.channel, "none"),
-    plugin: normalizeDiagnosticValue(evt.pluginId, "none"),
-    reason: normalizeDiagnosticValue(evt.reason, "none"),
-    surface: normalizeDiagnosticValue(evt.surface, "unknown"),
-  };
-}
-
-function talkLabels(evt: Extract<DiagnosticEventPayload, { type: "talk.event" }>): LabelSet {
-  return {
-    brain: normalizeDiagnosticValue(evt.brain),
-    event_type: normalizeDiagnosticValue(evt.talkEventType),
-    mode: normalizeDiagnosticValue(evt.mode),
-    provider: normalizeDiagnosticValue(evt.provider),
-    transport: normalizeDiagnosticValue(evt.transport),
   };
 }
 
@@ -373,7 +182,7 @@ function recordDiagnosticEvent(
   evt: DiagnosticEventPayload,
   metadata: DiagnosticEventMetadata,
 ): void {
-  if (!shouldRecordDiagnosticEvent(metadata)) {
+  if (!metadata.trusted && !isInternalDiagnosticEventMetadata(metadata)) {
     return;
   }
 
@@ -407,78 +216,147 @@ function recordDiagnosticEvent(
     case "model.usage":
       recordModelUsage(store, evt);
       return;
-    case "run.completed":
+    case "run.completed": {
+      const labels = {
+        ...(evt.blockedBy ? { blocked_by: normalizeDiagnosticValue(evt.blockedBy) } : {}),
+        channel: normalizeDiagnosticValue(evt.channel),
+        model: normalizeDiagnosticValue(evt.model),
+        outcome: normalizeDiagnosticValue(evt.outcome, "unknown"),
+        provider: normalizeDiagnosticValue(evt.provider),
+        trigger: normalizeDiagnosticValue(evt.trigger),
+      };
       store.histogram(
         "openclaw_run_duration_seconds",
         "Agent run duration in seconds.",
-        runLabels(evt),
+        labels,
         seconds(evt.durationMs),
       );
-      store.counter(
-        "openclaw_run_completed_total",
-        "Agent runs completed by outcome.",
-        runLabels(evt),
-      );
+      store.counter("openclaw_run_completed_total", "Agent runs completed by outcome.", labels);
       return;
+    }
     case "model.call.completed":
-    case "model.call.error":
+    case "model.call.error": {
+      const labels = {
+        api: normalizeDiagnosticValue(evt.api),
+        error_category:
+          evt.type === "model.call.error"
+            ? normalizeDiagnosticValue(evt.errorCategory, "other")
+            : "none",
+        model: normalizeDiagnosticValue(evt.model),
+        observation_unit: evt.observationUnit === "turn" ? "turn" : "request",
+        outcome: evt.type === "model.call.error" ? "error" : "completed",
+        provider: normalizeDiagnosticValue(evt.provider),
+        transport: normalizeDiagnosticValue(evt.transport),
+      };
       store.histogram(
         "openclaw_model_call_duration_seconds",
         "Model request or synthetic agent-turn duration in seconds.",
-        modelCallLabels(evt),
+        labels,
         seconds(evt.durationMs),
       );
       store.counter(
         "openclaw_model_call_total",
         "Model requests or synthetic agent turns completed by outcome.",
-        modelCallLabels(evt),
+        labels,
       );
       return;
-    case "model.failover":
+    }
+    case "model.failover": {
+      const labels = {
+        from_model: normalizeDiagnosticValue(evt.fromModel),
+        from_provider: normalizeDiagnosticValue(evt.fromProvider),
+        lane: normalizeDiagnosticLane(evt.lane),
+        reason: normalizeDiagnosticValue(evt.reason, "other"),
+        suspended: evt.suspended === undefined ? "unknown" : String(evt.suspended),
+        to_model: normalizeDiagnosticValue(evt.toModel),
+        to_provider: normalizeDiagnosticValue(evt.toProvider),
+      };
       store.counter(
         "openclaw_model_failover_total",
         "Model failovers by source, destination, lane, and reason.",
-        modelFailoverLabels(evt),
+        labels,
       );
       return;
+    }
     case "tool.execution.completed":
-    case "tool.execution.error":
+    case "tool.execution.error": {
+      const labels = {
+        error_category:
+          evt.type === "tool.execution.error"
+            ? normalizeDiagnosticValue(evt.errorCategory, "other")
+            : "none",
+        outcome: evt.type === "tool.execution.error" ? "error" : "completed",
+        params_kind: normalizeDiagnosticValue(evt.paramsSummary?.kind),
+        tool: normalizeDiagnosticValue(evt.toolName, "tool"),
+        tool_owner: normalizeDiagnosticValue(evt.toolOwner, "none"),
+        tool_source: normalizeDiagnosticValue(evt.toolSource, "core"),
+      };
       store.histogram(
         "openclaw_tool_execution_duration_seconds",
         "Tool execution duration in seconds.",
-        toolExecutionLabels(evt),
+        labels,
         seconds(evt.durationMs),
       );
       store.counter(
         "openclaw_tool_execution_total",
         "Tool executions completed by outcome.",
-        toolExecutionLabels(evt),
+        labels,
       );
       return;
-    case "tool.execution.blocked":
+    }
+    case "tool.execution.blocked": {
+      const labels = {
+        denied_reason: normalizeDiagnosticValue(evt.deniedReason, "other"),
+        params_kind: normalizeDiagnosticValue(evt.paramsSummary?.kind),
+        tool: normalizeDiagnosticValue(evt.toolName, "tool"),
+        tool_owner: normalizeDiagnosticValue(evt.toolOwner, "none"),
+        tool_source: normalizeDiagnosticValue(evt.toolSource, "core"),
+      };
       store.counter(
         "openclaw_tool_execution_blocked_total",
         "Tool executions blocked by policy or sandbox diagnostics.",
-        toolExecutionBlockedLabels(evt),
+        labels,
       );
       return;
-    case "skill.used":
-      store.counter("openclaw_skill_used_total", "Skills used by agent runs.", skillLabels(evt));
+    }
+    case "skill.used": {
+      const labels = {
+        activation: normalizeDiagnosticValue(evt.activation, "unknown"),
+        agent: normalizeDiagnosticValue(evt.agentId),
+        skill: normalizeDiagnosticValue(evt.skillName, "skill"),
+        source: normalizeDiagnosticValue(evt.skillSource),
+      };
+      store.counter("openclaw_skill_used_total", "Skills used by agent runs.", labels);
       return;
+    }
     case "harness.run.completed":
-    case "harness.run.error":
+    case "harness.run.error": {
+      const labels = {
+        channel: normalizeDiagnosticValue(evt.channel),
+        error_category:
+          evt.type === "harness.run.error"
+            ? normalizeDiagnosticValue(evt.errorCategory, "other")
+            : "none",
+        harness: normalizeDiagnosticValue(evt.harnessId),
+        model: normalizeDiagnosticValue(evt.model),
+        outcome: evt.type === "harness.run.error" ? "error" : normalizeDiagnosticValue(evt.outcome),
+        phase: evt.type === "harness.run.error" ? normalizeDiagnosticValue(evt.phase) : "none",
+        plugin: normalizeDiagnosticValue(evt.pluginId),
+        provider: normalizeDiagnosticValue(evt.provider),
+      };
       store.histogram(
         "openclaw_harness_run_duration_seconds",
         "Agent harness run duration in seconds.",
-        harnessLabels(evt),
+        labels,
         seconds(evt.durationMs),
       );
       store.counter(
         "openclaw_harness_run_total",
         "Agent harness runs completed by outcome.",
-        harnessLabels(evt),
+        labels,
       );
       return;
+    }
     case "message.processed": {
       const labels = {
         channel: normalizeDiagnosticValue(evt.channel),
@@ -590,36 +468,56 @@ function recordDiagnosticEvent(
       );
       return;
     }
-    case "talk.event":
-      store.counter("openclaw_talk_event_total", "Talk events emitted by type.", talkLabels(evt));
+    case "talk.event": {
+      const labels = {
+        brain: normalizeDiagnosticValue(evt.brain),
+        event_type: normalizeDiagnosticValue(evt.talkEventType),
+        mode: normalizeDiagnosticValue(evt.mode),
+        provider: normalizeDiagnosticValue(evt.provider),
+        transport: normalizeDiagnosticValue(evt.transport),
+      };
+      store.counter("openclaw_talk_event_total", "Talk events emitted by type.", labels);
       store.histogram(
         "openclaw_talk_event_duration_seconds",
         "Talk event duration in seconds when reported.",
-        talkLabels(evt),
+        labels,
         seconds(evt.durationMs),
       );
       store.histogram(
         "openclaw_talk_audio_bytes",
         "Talk audio frame byte lengths.",
-        talkLabels(evt),
+        labels,
         numericValue(evt.byteLength),
         BYTE_BUCKETS,
       );
       return;
+    }
     case "session.recovery.requested":
-    case "session.recovery.completed":
+    case "session.recovery.completed": {
+      const labels = {
+        action:
+          evt.type === "session.recovery.completed"
+            ? normalizeDiagnosticValue(evt.action, "unknown")
+            : evt.allowActiveAbort
+              ? "abort"
+              : "recover",
+        active_work_kind: normalizeDiagnosticValue(evt.activeWorkKind, "none"),
+        state: evt.state,
+        status: evt.type === "session.recovery.completed" ? evt.status : "requested",
+      };
       store.counter(
         "openclaw_session_recovery_total",
         "Session recovery observations by status and action.",
-        sessionRecoveryLabels(evt),
+        labels,
       );
       store.histogram(
         "openclaw_session_recovery_age_seconds",
         "Age of sessions selected for recovery in seconds.",
-        sessionRecoveryLabels(evt),
+        labels,
         seconds(evt.ageMs),
       );
       return;
+    }
     case "queue.lane.enqueue":
     case "queue.lane.dequeue":
       store.gauge(
@@ -655,19 +553,24 @@ function recordDiagnosticEvent(
         );
       }
       return;
-    case "session.stuck":
+    case "session.stuck": {
+      const labels = {
+        reason: normalizeDiagnosticValue(evt.reason, "none"),
+        state: evt.state,
+      };
       store.counter(
         "openclaw_session_stuck_total",
         "Stale session bookkeeping observations with no active work.",
-        sessionStuckLabels(evt),
+        labels,
       );
       store.histogram(
         "openclaw_session_stuck_age_seconds",
         "Age of stale session bookkeeping observations in seconds.",
-        sessionStuckLabels(evt),
+        labels,
         seconds(evt.ageMs),
       );
       return;
+    }
     case "session.turn.created":
       store.counter("openclaw_session_turn_created_total", "Agent session turns created.", {
         agent: normalizeDiagnosticValue(evt.agentId),
@@ -696,11 +599,14 @@ function recordDiagnosticEvent(
         },
       );
       return;
-    case "diagnostic.liveness.warning":
+    case "diagnostic.liveness.warning": {
+      const labels = {
+        reason: normalizeDiagnosticValue(evt.reasons.join(":"), "unknown"),
+      };
       store.counter(
         "openclaw_liveness_warning_total",
         "Diagnostic liveness warning events.",
-        livenessLabels(evt),
+        labels,
       );
       for (const state of ["active", "waiting", "queued"] as const) {
         store.gauge(
@@ -713,30 +619,31 @@ function recordDiagnosticEvent(
       store.histogram(
         "openclaw_liveness_event_loop_delay_p99_seconds",
         "P99 event-loop delay reported by diagnostic liveness warnings in seconds.",
-        livenessLabels(evt),
+        labels,
         seconds(evt.eventLoopDelayP99Ms),
       );
       store.histogram(
         "openclaw_liveness_event_loop_delay_max_seconds",
         "Maximum event-loop delay reported by diagnostic liveness warnings in seconds.",
-        livenessLabels(evt),
+        labels,
         seconds(evt.eventLoopDelayMaxMs),
       );
       store.histogram(
         "openclaw_liveness_event_loop_utilization_ratio",
         "Event-loop utilization reported by diagnostic liveness warnings.",
-        livenessLabels(evt),
+        labels,
         numericValue(evt.eventLoopUtilization),
         RATIO_BUCKETS,
       );
       store.histogram(
         "openclaw_liveness_cpu_core_ratio",
         "Whole-process CPU usage in core equivalents, including worker and native threads; can exceed 1.",
-        livenessLabels(evt),
+        labels,
         numericValue(evt.cpuCoreRatio),
         RATIO_BUCKETS,
       );
       return;
+    }
     case "diagnostic.async_queue.dropped":
       for (const [dropClass, field] of [
         ["total", "droppedEvents"],
@@ -771,19 +678,27 @@ function recordDiagnosticEvent(
         status: evt.status,
       });
       return;
-    case "payload.large":
+    case "payload.large": {
+      const labels = {
+        action: evt.action,
+        channel: normalizeDiagnosticValue(evt.channel, "none"),
+        plugin: normalizeDiagnosticValue(evt.pluginId, "none"),
+        reason: normalizeDiagnosticValue(evt.reason, "none"),
+        surface: normalizeDiagnosticValue(evt.surface, "unknown"),
+      };
       store.counter(
         "openclaw_payload_large_total",
         "Oversized payload diagnostics by surface and action.",
-        payloadLargeLabels(evt),
+        labels,
       );
       store.histogram(
         "openclaw_payload_large_bytes",
         "Oversized payload byte sizes by surface and action.",
-        payloadLargeLabels(evt),
+        labels,
         numericValue(evt.bytes),
         BYTE_BUCKETS,
       );
+    }
     default:
   }
 }

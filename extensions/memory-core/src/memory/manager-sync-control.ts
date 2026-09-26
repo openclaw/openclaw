@@ -136,6 +136,6 @@ function normalizeQueuedMemorySessionSyncTarget(
   };
 }
 
-function memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {
+export function memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {
   return [target.agentId ?? "", target.sessionId, target.sessionKey ?? ""].join("\0");
 }

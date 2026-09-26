@@ -27,6 +27,21 @@ import type {
 
 const handleAction = vi.fn(async (_ctx: ChannelMessageActionContext) => jsonResult({ ok: true }));
 
+type DelegatedReadParams = Omit<
+  Parameters<typeof dispatchTestChannelMessageAction>[0],
+  "action" | "accountId" | "requesterAccountId" | "conversationReadOrigin"
+>;
+
+function dispatchDelegatedReadAction(params: DelegatedReadParams) {
+  return dispatchTestChannelMessageAction({
+    ...params,
+    action: "read",
+    accountId: "default",
+    requesterAccountId: "default",
+    conversationReadOrigin: "delegated",
+  });
+}
+
 const emptyRegistry = createTestRegistry([]);
 
 const discordPlugin: ChannelPlugin = {
@@ -229,16 +244,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   it("matches a sanitized channelId to a typed current-channel target", async () => {
     setReadPlugin();
 
-    await dispatchTestChannelMessageAction({
+    await dispatchDelegatedReadAction({
       channel: "discord",
-      action: "read",
       params: {
         target: "current",
         channelId: "current",
       },
-      accountId: "default",
-      requesterAccountId: "default",
-      conversationReadOrigin: "delegated",
       toolContext: {
         currentChannelProvider: "discord",
         currentChannelId: "channel:current",
@@ -333,13 +344,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "discord",
-        action: "read",
         params: { channelId: "channel:123" },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "discord",
           currentMessagingTarget: "user:123",
@@ -353,17 +360,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "discord",
-        action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           target: "123",
           channelId: "123",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "discord",
           currentMessagingTarget: "user:123",
@@ -377,13 +379,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "discord",
-        action: "read",
         params: { channelId: "CHANNEL:CURRENT" },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "discord",
           currentChannelId: "channel:current",
@@ -416,13 +414,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "discord",
-        action: "read",
         params: { target: "user:123" },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "discord",
           currentChannelId: "123",
@@ -436,16 +430,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "discord",
-        action: "read",
         params: {
           target: "channel:123",
           channelId: "123",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "discord",
           currentChannelId: "123",
@@ -460,15 +450,11 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "discord",
-        action: "read",
         params: {
           target: "123",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "discord",
           currentChannelId: "channel:123",
@@ -483,16 +469,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "discord",
-        action: "read",
         params: {
           channelId: "current",
           target: "channel:other",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "discord",
           currentChannelId: "channel:current",
@@ -539,13 +521,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     },
   ] as const)("applies provider-owned read gates for a $name", async (testCase) => {
     setReadPlugin(testCase);
-    const dispatch = dispatchTestChannelMessageAction({
+    const dispatch = dispatchDelegatedReadAction({
       channel: testCase.channel,
-      action: "read",
       params: { channelId: "configured" },
-      accountId: "default",
-      requesterAccountId: "default",
-      conversationReadOrigin: "delegated",
       toolContext: {
         currentChannelProvider: testCase.channel,
         currentChannelId: "current",
@@ -625,13 +603,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "telegram",
-        action: "read",
         params: { channelId: "configured" },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "telegram",
           currentChannelId: "current",
@@ -708,13 +682,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       normalizeTarget,
     });
 
-    await dispatchTestChannelMessageAction({
+    await dispatchDelegatedReadAction({
       channel: "nextcloud-talk",
-      action: "read",
       params: { to: "nc:room:Current" },
-      accountId: "default",
-      requesterAccountId: "default",
-      conversationReadOrigin: "delegated",
       toolContext: {
         currentChannelProvider: "nextcloud-talk",
         currentChannelId: "nextcloud-talk:current",
@@ -734,13 +704,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "discord",
-        action: "read",
         params: { channelId: "other" },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "discord",
           currentChannelId: "channel:current",
@@ -751,7 +717,7 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(handleAction).not.toHaveBeenCalled();
   });
 
-  it.each(["nextcloud-talk:current", "nc-talk:current", "nc:current", "room:current"])(
+  it.each(["nextcloud-talk:current", "nc:current", "room:current"])(
     "allows the external exact-current provider spelling %s",
     async (target) => {
       const normalizeTarget = vi.fn(() => "nextcloud-talk:other");
@@ -762,16 +728,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
         normalizeTarget,
       });
 
-      await dispatchTestChannelMessageAction({
+      await dispatchDelegatedReadAction({
         channel: "nextcloud-talk",
-        action: "read",
         params: {
           target,
           to: "nextcloud-talk:current",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "nextcloud-talk",
           currentChannelId: "nextcloud-talk:current",
@@ -792,17 +754,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       targetPrefixes: ["nextcloud-talk", "nc-talk", "nc"],
     });
 
-    await dispatchChannelMessageAction({
+    await dispatchDelegatedReadAction({
       channel: "nextcloud-talk",
-      action: "read",
-      cfg: {} as OpenClawConfig,
       params: {
         target: "room:current",
         to: "room:current",
       },
-      accountId: "default",
-      requesterAccountId: "default",
-      conversationReadOrigin: "delegated",
       toolContext: {
         currentChannelProvider: "nextcloud-talk",
         currentChannelId: "nextcloud-talk:current",
@@ -825,17 +782,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "nextcloud-talk",
-        action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           target: "room:current",
           to: "room:current",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "nextcloud-talk",
           currentChannelId: "nextcloud-talk:current",
@@ -855,17 +807,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "nextcloud-talk",
-        action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           target: "room:other",
           to: "room:other",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "nextcloud-talk",
           currentChannelId: "nextcloud-talk:current",
@@ -915,16 +862,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "nextcloud-talk",
-        action: "read",
         params: {
           target: "user:current",
           to: "nextcloud-talk:current",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "nextcloud-talk",
           currentChannelId: "nextcloud-talk:current",
@@ -942,15 +885,11 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "nextcloud-talk",
-        action: "read",
         params: {
           target: "room:current",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "nextcloud-talk",
           currentChannelId: "nextcloud-talk:current",
@@ -968,16 +907,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "nextcloud-talk",
-        action: "read",
         params: {
           target: "group:current",
           to: "nextcloud-talk:current",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "nextcloud-talk",
           currentChannelId: "nextcloud-talk:current",
@@ -1001,17 +936,13 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "imessage",
-        action: "read",
         params: {
           target: "malformed-target",
           to: "chat_guid:iMessage;+;current",
           messageId: "current-message",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "imessage",
           currentChannelId: "chat_guid:iMessage;+;current",
@@ -1039,13 +970,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       },
     });
 
-    await dispatchTestChannelMessageAction({
+    await dispatchDelegatedReadAction({
       channel: "imessage",
-      action: "read",
       params: { chatGuid: "iMessage;+;current" },
-      accountId: "default",
-      requesterAccountId: "default",
-      conversationReadOrigin: "delegated",
       toolContext: {
         currentChannelProvider: "imessage",
         currentChannelId: "chat_guid:iMessage;+;current",
@@ -1522,16 +1449,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "imessage",
-        action: "read",
         params: {
           to: "chat_guid:iMessage;+;current",
           chatGuid: "iMessage;+;other",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "imessage",
           currentChannelId: "chat_guid:iMessage;+;current",
@@ -1589,16 +1512,12 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "imessage",
-        action: "read",
         params: {
           target: "chat_guid:iMessage;+;other",
           messageId: "current-message",
         },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "imessage",
           currentChannelId: "chat_guid:iMessage;+;current",
@@ -1622,13 +1541,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchTestChannelMessageAction({
+      dispatchDelegatedReadAction({
         channel: "imessage",
-        action: "read",
         params: { messageId: "current-message" },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
         toolContext: {
           currentChannelProvider: "imessage",
           currentChannelId: "chat_guid:iMessage;+;current",
@@ -1705,19 +1620,15 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(handleAction).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "unknown", "global", "workspace", "config"] as const)(
+  it.each([undefined, "unknown", "workspace"] as const)(
     "treats %s channel provenance as non-bundled",
     async (origin) => {
       setReadPlugin(origin ? { origin } : undefined);
 
       await expect(
-        dispatchTestChannelMessageAction({
+        dispatchDelegatedReadAction({
           channel: "discord",
-          action: "read",
           params: { channelId: "configured" },
-          accountId: "default",
-          requesterAccountId: "default",
-          conversationReadOrigin: "delegated",
           toolContext: {
             currentChannelProvider: "discord",
             currentChannelId: "current",

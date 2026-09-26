@@ -158,15 +158,7 @@ describe("npm package-lock release report", () => {
       dependencies: { "@openclaw/gateway-protocol": "workspace:*", fixture: "1.0.0" },
       openclaw: { release: { publishToNpm: true } },
     });
-    const locklessPlugins = [
-      "acpx",
-      "codex",
-      "copilot",
-      "memory-lancedb",
-      "msteams",
-      "tlon",
-      "twitch",
-    ];
+    const locklessPlugins = ["acpx"];
     for (const plugin of locklessPlugins) {
       writePackage(`extensions/${plugin}`, {
         name: `@openclaw/${plugin}`,

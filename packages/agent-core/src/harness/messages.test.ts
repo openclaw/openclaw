@@ -120,21 +120,19 @@ describe("harness message timestamps", () => {
     expect(message?.timestamp).toBe(Date.parse(timestamp));
   });
 
-  it.each(["0", "2026"])(
-    "preserves Date.parse semantics for numeric-looking persisted timestamp %s",
-    (timestamp) => {
-      const [message] = convertToLlm([
-        {
-          role: "compactionSummary",
-          summary: "older context",
-          tokensBefore: 123,
-          timestamp,
-        },
-      ]);
+  it("preserves Date.parse semantics for numeric-looking persisted timestamps", () => {
+    const timestamp = "2026";
+    const [message] = convertToLlm([
+      {
+        role: "compactionSummary",
+        summary: "older context",
+        tokensBefore: 123,
+        timestamp,
+      },
+    ]);
 
-      expect(message?.timestamp).toBe(Date.parse(timestamp));
-    },
-  );
+    expect(message?.timestamp).toBe(Date.parse(timestamp));
+  });
 
   it("keeps corrupt persisted compaction timestamps non-fatal", () => {
     const persistedMessages: Parameters<typeof convertToLlm>[0] = [

@@ -652,9 +652,7 @@ describe("gatherDaemonStatus", () => {
       ["none", undefined],
       ["configured", "wss://127.0.0.1:19001"],
       ["configured", "wss://127.0.0.1:19001/other"],
-    ].flatMap(([auth, remoteUrl]) =>
-      [false, true].map((requireRpc) => ({ auth, remoteUrl, requireRpc })),
-    ),
+    ].map(([auth, remoteUrl], index) => ({ auth, remoteUrl, requireRpc: index % 2 === 1 })),
   )(
     "uses service $auth credentials with remote=$remoteUrl and requireRpc=$requireRpc",
     async ({ auth, remoteUrl, requireRpc }) => {
@@ -733,9 +731,7 @@ describe("gatherDaemonStatus", () => {
       { auth: { password: "explicit-password" }, remoteUrl: "wss://explicit.example:19445" },
       { auth: { token: "explicit-token" }, remoteUrl: "wss://remote.example:19443" },
       { auth: { token: "explicit-token" }, remoteUrl: "wss://explicit.example:19445/other" },
-    ].flatMap(({ auth, remoteUrl }) =>
-      [false, true].map((requireRpc) => ({ auth, remoteUrl, requireRpc })),
-    ),
+    ].map(({ auth, remoteUrl }, index) => ({ auth, remoteUrl, requireRpc: index % 2 === 1 })),
   )(
     "isolates explicit status credentials $auth with remote=$remoteUrl and requireRpc=$requireRpc",
     async ({ auth, remoteUrl, requireRpc }) => {

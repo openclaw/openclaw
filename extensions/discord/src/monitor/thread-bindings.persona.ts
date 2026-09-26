@@ -19,8 +19,5 @@ export function resolveThreadBindingPersona(params: { label?: string; agentId?: 
 }
 
 export function resolveThreadBindingPersonaFromRecord(record: ThreadBindingRecord): string {
-  return resolveThreadBindingPersona({
-    label: record.label,
-    agentId: record.agentId,
-  });
+  return resolveThreadBindingPersona(record);
 }

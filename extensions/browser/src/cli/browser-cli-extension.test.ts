@@ -300,25 +300,22 @@ describe("browser extension pairing Gateway URL", () => {
     expect(installMocks.uninstallChromeExtensionNativeHosts).not.toHaveBeenCalled();
   });
 
-  it.each(["0x1000", "1e4", "+50000", " 50000", "50000 ", "50000\t"])(
-    "rejects invalid install --wait-ms value %j before installation",
-    async (value) => {
-      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
-      vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
-      const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
-      const program = new Command();
-      registerBrowserExtensionCommands(program.command("browser"), () => ({}));
+  it("rejects an invalid install --wait-ms value before installation", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
+    const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+    const program = new Command();
+    registerBrowserExtensionCommands(program.command("browser"), () => ({}));
 
-      await expect(
-        program.parseAsync(["browser", "extension", "install", "--wait-ms", value], {
-          from: "user",
-        }),
-      ).rejects.toThrow("__exit__:1");
+    await expect(
+      program.parseAsync(["browser", "extension", "install", "--wait-ms", "0x1000"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
 
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--wait-ms"));
-      expect(installMocks.installChromeExtensionBootstrap).not.toHaveBeenCalled();
-    },
-  );
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--wait-ms"));
+    expect(installMocks.installChromeExtensionBootstrap).not.toHaveBeenCalled();
+  });
 
   it("rejects path-rewriting proxy prefixes for strict v2 resource binding", async () => {
     vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({});

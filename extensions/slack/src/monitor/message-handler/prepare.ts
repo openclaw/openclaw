@@ -1689,13 +1689,7 @@ export async function prepareSlackMessage(params: {
                     ? {
                         ownerRecipient: pinnedMainDmOwner,
                         senderRecipient: normalizeLowercaseStringOrEmpty(message.user),
-                        onSkip: ({
-                          ownerRecipient,
-                          senderRecipient,
-                        }: {
-                          ownerRecipient: string;
-                          senderRecipient: string;
-                        }) => {
+                        onSkip: ({ ownerRecipient, senderRecipient }) => {
                           logVerbose(
                             `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
                           );

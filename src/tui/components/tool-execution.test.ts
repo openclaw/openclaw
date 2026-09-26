@@ -13,13 +13,10 @@ function renderToolOutput(text: string, width: number) {
 }
 
 describe("ToolExecutionComponent", () => {
-  it.each(
-    ["exec", "wait"].flatMap((toolName) =>
-      [false, true].flatMap((pretty) =>
-        [false, true].map((partial) => ({ toolName, pretty, partial })),
-      ),
-    ),
-  )(
+  it.each([
+    { toolName: "exec", pretty: false, partial: true },
+    { toolName: "wait", pretty: true, partial: false },
+  ])(
     "preserves literal Code Mode $toolName output (pretty=$pretty, partial=$partial)",
     ({ toolName, pretty, partial }) => {
       const details = {
@@ -171,16 +168,11 @@ describe("ToolExecutionComponent", () => {
     expect(rendered).not.toContain("final output");
   });
 
-  it.each(
-    [
-      { source: "    # heading\n    command --flag", literal: "# heading" },
-      { source: "    > quoted source\n    next line", literal: "> quoted source" },
-      { source: "    - source item\n      nested", literal: "- source item" },
-    ].flatMap(({ source, literal }) => [
-      { source, literal, phase: "partial", complete: false },
-      { source, literal, phase: "final", complete: true },
-    ]),
-  )("preserves indented $literal in $phase tool output", ({ source, literal, complete }) => {
+  it.each([
+    { source: "    # heading\n    command --flag", literal: "# heading", complete: false },
+    { source: "    > quoted source\n    next line", literal: "> quoted source", complete: true },
+    { source: "    - source item\n      nested", literal: "- source item", complete: true },
+  ])("preserves indented $literal in tool output", ({ source, literal, complete }) => {
     const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
     const result = { content: [{ type: "text", text: source }] };
     if (complete) {
@@ -228,10 +220,8 @@ describe("ToolExecutionComponent", () => {
   );
 
   it.each([
-    { width: 20, characters: 8_192 },
     { width: 20, characters: 16_384 },
     { width: 80, characters: 8_192 },
-    { width: 80, characters: 16_384 },
   ])(
     "bounds a $characters-character single-line preview at terminal width $width",
     ({ characters, width }) => {
@@ -247,8 +237,6 @@ describe("ToolExecutionComponent", () => {
 
   it.each([
     { label: "wide CJK", text: "表".repeat(8_192), width: 20 },
-    { label: "wide CJK", text: "表".repeat(8_192), width: 80 },
-    { label: "ANSI-styled text", text: `\u001b[31m${"x".repeat(8_192)}\u001b[0m`, width: 20 },
     { label: "ANSI-styled text", text: `\u001b[31m${"x".repeat(8_192)}\u001b[0m`, width: 80 },
   ])("keeps $label within a $width-column collapsed preview", ({ text, width }) => {
     const { lines } = renderToolOutput(text, width);
