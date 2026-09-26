@@ -133,7 +133,7 @@ args: ["app-server", "--listen", "stdio://", "-c", "log_dir=/tmp/openclaw\\logs"
 
 The `\\` in JSON5 encodes one backslash. Array entries preserve embedded quotes
 and backslashes, but surrounding whitespace is trimmed and empty entries are
-omitted. Strings also omit empty quoted arguments. Account for these limits
+omitted. Strings preserve quoted empty arguments. Account for these limits
 before converting existing strings to arrays.
 
 `appServer.serviceTier` is used only when no shared Fast-mode run control is

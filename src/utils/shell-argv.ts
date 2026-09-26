@@ -79,14 +79,16 @@ function splitQuotedArgs(
   const backslashEscapes = syntax === "shell";
   const tokens: string[] = [];
   let buf = "";
+  let tokenStarted = false;
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
 
   const pushToken = () => {
-    if (buf.length > 0) {
+    if (tokenStarted) {
       tokens.push(buf);
       buf = "";
+      tokenStarted = false;
     }
   };
 
@@ -94,6 +96,7 @@ function splitQuotedArgs(
     const ch = raw.charAt(i);
     if (escaped) {
       buf += ch;
+      tokenStarted = true;
       escaped = false;
       continue;
     }
@@ -106,6 +109,7 @@ function splitQuotedArgs(
         inSingle = false;
       } else {
         buf += ch;
+        tokenStarted = true;
       }
       continue;
     }
@@ -121,20 +125,23 @@ function splitQuotedArgs(
         inDouble = false;
       } else {
         buf += ch;
+        tokenStarted = true;
       }
       continue;
     }
     if (ch === "'") {
+      tokenStarted = true;
       inSingle = true;
       continue;
     }
     if (ch === '"') {
+      tokenStarted = true;
       inDouble = true;
       continue;
     }
     // In POSIX shells, "#" starts a comment only when it begins a word; keep
     // inline hashes inside tokens so URLs/fragments are not truncated.
-    if (syntax === "shell" && ch === "#" && buf.length === 0) {
+    if (syntax === "shell" && ch === "#" && !tokenStarted) {
       break;
     }
     if (/\s/.test(ch)) {
@@ -142,6 +149,7 @@ function splitQuotedArgs(
       continue;
     }
     buf += ch;
+    tokenStarted = true;
   }
 
   if (escaped || (!allowUnclosedQuotes && (inSingle || inDouble))) {

@@ -155,7 +155,7 @@ Use `splitCommandArgs(raw)` from the same subpath to group quoted process
 arguments. Backslashes and `#` stay literal; there is no shell expansion.
 Unfinished quotes return `null` unless the caller passes
 `{ allowUnclosedQuotes: true }` to preserve an existing permissive input contract.
-Empty quoted arguments are omitted.
+Quoted empty arguments are preserved.
 
 Existing process owners can use `signalProcessTree`. Its `onComplete` callback runs after Unix
 signaling or the bounded Windows `taskkill` attempt, not proof that every process

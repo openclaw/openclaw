@@ -17,6 +17,10 @@ describe.each(["config", "env"] as const)("Codex app-server %s arguments", (sour
       raw: 'app-server --listen "stdio://',
       expected: ["app-server", "--listen", "stdio://"],
     },
+    {
+      raw: 'app-server --cd "" app-server',
+      expected: ["app-server", "--cd", "", "app-server"],
+    },
   ])("preserves shipped string parsing: $raw", ({ raw, expected }) => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {

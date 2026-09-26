@@ -59,6 +59,11 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(`search --foo 'bar baz'`)).toEqual(["search", "--foo", "bar baz"]);
   });
 
+  it("preserves empty quoted arguments and adjacent literal hashes", () => {
+    expect(splitShellArgs(`echo "" '' tail`)).toEqual(["echo", "", "", "tail"]);
+    expect(splitShellArgs(`echo ""#literal`)).toEqual(["echo", "#literal"]);
+  });
+
   it("supports backslash escapes inside double quotes", () => {
     expect(splitShellArgs(String.raw`echo "a\"b"`)).toEqual(["echo", `a"b`]);
     expect(splitShellArgs(String.raw`echo "\$HOME"`)).toEqual(["echo", "$HOME"]);
@@ -85,6 +90,14 @@ describe("splitCommandArgs", () => {
     {
       input: String.raw`program "C:\some path\file.py" \\server\share\ #literal`,
       expected: ["program", String.raw`C:\some path\file.py`, "\\\\server\\share\\", "#literal"],
+    },
+    {
+      input: `program "" '' tail`,
+      expected: ["program", "", "", "tail"],
+    },
+    {
+      input: `program ""#literal`,
+      expected: ["program", "#literal"],
     },
     { input: 'program "unfinished', expected: null },
     { input: "program 'unfinished", expected: null },
