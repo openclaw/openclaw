@@ -289,17 +289,26 @@ describe("iOS Fastlane release upload gates", () => {
       const { outcome, output } = runReleaseReconcileFixture(scenario);
 
       expect(outcome.ok).toBe(true);
-      expect(JSON.parse(output)).toMatchObject({
+      const observation = JSON.parse(output);
+      expect(observation).toMatchObject({
         readOnly: true,
         upload: { state: { state: "COMPLETE" } },
         build: { processingState: "VALID", expired: false },
-        groups: [
-          {
-            containsBuild: true,
-            id: "group-primary",
-          },
-        ],
       });
+      expect(observation.groups).toEqual([
+        {
+          containsBuild: true,
+          hasAccessToAllBuilds: true,
+          id: "group-primary",
+          isInternalGroup: true,
+        },
+        {
+          containsBuild: false,
+          hasAccessToAllBuilds: false,
+          id: "other-group",
+          isInternalGroup: true,
+        },
+      ]);
     }
   });
 

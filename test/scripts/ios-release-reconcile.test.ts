@@ -113,6 +113,17 @@ function storeObservation() {
   };
 }
 
+function storeObservationWithState(state: unknown) {
+  const observation = storeObservation();
+  return {
+    ...observation,
+    upload: {
+      ...observation.upload,
+      state,
+    },
+  };
+}
+
 function evidence(observation = storeObservation()) {
   return createEvidence({
     actor: "vincentkoc",
@@ -326,8 +337,7 @@ describe("iOS release same-build reconciliation", () => {
     ["malformed diagnostic entry", { errors: [{ code: 7 }], state: "COMPLETE" }],
     ["extra state field", { state: "COMPLETE", unexpected: [] }],
   ])("rejects malformed BuildUpload state: %s", (_name, state) => {
-    const observation = storeObservation();
-    observation.upload.state = state as never;
+    const observation = storeObservationWithState(state);
     expect(() => validateStoreObservation(observation)).toThrow("Build upload state");
   });
 
@@ -340,8 +350,7 @@ describe("iOS release same-build reconciliation", () => {
         warnings: [{ code: "notice", description: "retained warning" }],
       },
     ]) {
-      const observation = storeObservation();
-      observation.upload.state = state;
+      const observation = storeObservationWithState(state);
       expect(validateStoreObservation(observation)).toBe(observation);
     }
   });

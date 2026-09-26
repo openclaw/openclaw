@@ -2157,9 +2157,7 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
     expect(afterStore).toBe(storeRead + 1);
     expect(readerSteps[beforeStore]?.run).toContain("prepare-reader");
     expect(readerSteps[afterStore]?.run).toContain("finalize-reader");
-    expect(readerSteps[fetchCandidate]?.run).toContain(
-      "d69752a1c90715e74a36652b2e64c41e9409c5fd",
-    );
+    expect(readerSteps[fetchCandidate]?.run).toContain("d69752a1c90715e74a36652b2e64c41e9409c5fd");
     expect(readerSteps[fetchCandidate]?.run).toContain("--no-write-fetch-head");
     expect(readerSteps[beforeStore]?.run).toContain('--candidate-root "$GITHUB_WORKSPACE"');
     expect(readerSteps[afterStore]?.run).toContain('--candidate-root "$GITHUB_WORKSPACE"');

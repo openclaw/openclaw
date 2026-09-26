@@ -127,8 +127,10 @@ function exactKeys(value, keys, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     fail(`${label} must be an object.`);
   }
-  const actual = Object.keys(value).toSorted();
-  const expected = [...keys].toSorted();
+  const actual = Object.keys(value).toSorted((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  const expected = [...keys].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
     fail(`${label} fields are invalid.`);
   }
