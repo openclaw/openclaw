@@ -133,6 +133,13 @@ To help group policies resolve context, you can optionally set:
 - `x-openclaw-message-to: <target>` (delivery target for message-tool policy)
 - `x-openclaw-thread-id: <threadId>` (thread context for message-tool policy)
 
+Configured MCP tools can be invoked by their provider-safe names when the target
+session already has a warm catalog that matches its current MCP configuration.
+The direct-invoke endpoint does not connect a new MCP server to discover a
+guessed tool name. A missing or stale catalog returns `404`; requester-scoped
+MCP tools also remain unavailable without a trusted sender-bound run. The
+normal Gateway tool policy and `before_tool_call` hooks still apply.
+
 ## Responses
 
 | Status | Meaning                                                                                        |
