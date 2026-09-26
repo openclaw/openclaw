@@ -218,10 +218,7 @@ type ConnectFrame = {
 const REQUEST_FRAME_ID = "2:00000000-0000-4000-8000-000000000000";
 
 function requestFrameBytes(method: string, params?: unknown): number {
-  const frame =
-    params === undefined
-      ? { type: "req", id: REQUEST_FRAME_ID, method }
-      : { type: "req", id: REQUEST_FRAME_ID, method, params };
+  const frame = { type: "req", id: REQUEST_FRAME_ID, method, params };
   return new TextEncoder().encode(JSON.stringify(frame)).byteLength;
 }
 
