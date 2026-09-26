@@ -10,6 +10,7 @@ import {
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { summarizeInStages } from "../compaction.js";
 import { isDecisionAssistanceEligible } from "../decision-assistance.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -193,7 +194,7 @@ describe("compaction semantic observer wiring", () => {
     const controller = new AbortController();
     const abortError = new Error("cancel asymmetric semantic observation");
     let started = 0;
-    const startedBarrier = Promise.withResolvers<void>();
+    const startedBarrier = createDeferredCore<void>();
     let releaseSlowRequest: (() => void) | undefined;
     const slowRequest = new Promise<void>((resolve) => {
       releaseSlowRequest = resolve;
@@ -315,6 +316,7 @@ describe("compaction semantic observer wiring", () => {
       if (consent === "during-preparation") {
         await withPluginRuntimeGatewayRequestScope(
           {
+            isWebchatConnect: () => false,
             resolveGatewayContext: () => {
               queueMicrotask(() => {
                 setRuntimeConfigSnapshot({
