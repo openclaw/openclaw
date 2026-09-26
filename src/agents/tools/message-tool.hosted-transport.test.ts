@@ -447,7 +447,24 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
           request: { sessionKey, sessionId },
         }),
     );
-    expect(mismatched).toMatchObject({ ok: true, messageActionConfig: undefined });
+    expect(mismatched).toMatchObject({
+      ok: true,
+      messageActionConfig: undefined,
+      messageActionAuthorization: { allowNativeChannelNamespace: true },
+    });
+    const inferred = withMessageActionInvocationConfig(
+      "unrelated-host-token",
+      () => configA,
+      () =>
+        resolveTrustedMessageActionToolContext({
+          client,
+          request: { sessionKey, sessionId, allowNativeChannelNamespace: false },
+        }),
+    );
+    expect(inferred).toMatchObject({
+      ok: true,
+      messageActionAuthorization: { allowNativeChannelNamespace: false },
+    });
     await expect(execute("after-publication")).rejects.toThrow(
       /not allowed by the current tool policy/,
     );

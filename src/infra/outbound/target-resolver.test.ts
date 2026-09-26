@@ -190,20 +190,25 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.resolveTarget).not.toHaveBeenCalled();
   });
 
-  it("preserves a plugin-native target that matches its channel id", async () => {
+  it("preserves an explicit plugin-native target over an exact same-name directory entry", async () => {
     const plugin = {
       ...createChannelTestPluginBase({ id: "irc", label: "IRC" }),
+      directory: { listGroups: mocks.listGroups },
       messaging: {
         targetPrefixes: ["irc"],
         normalizeTarget: (raw: string) => raw.trim(),
         targetResolver: { looksLikeId: () => true },
       },
     } satisfies ChannelPlugin;
+    mocks.listGroups.mockResolvedValue([
+      { kind: "group", id: "different-room", name: "irc" } satisfies ChannelDirectoryEntry,
+    ]);
 
     const result = await resolveMessagingTarget({
       cfg,
       channel: "irc",
       input: "irc",
+      preferredKind: "group",
       plugin,
     });
 
@@ -211,6 +216,41 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       ok: true,
       target: { to: "irc", source: "normalized", resolutionSource: "normalized" },
     });
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+  });
+
+  it("revalidates a same-name directory result with the caller's outbound policy", async () => {
+    const outboundResolveTarget = vi.fn(({ to }: { to?: string }) =>
+      to === "denied-room"
+        ? { ok: false as const, error: new Error("denied by outbound policy") }
+        : { ok: true as const, to: to ?? "" },
+    );
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "richchat", label: "Rich Chat" }),
+      directory: { listGroups: mocks.listGroups },
+      outbound: { deliveryMode: "direct", resolveTarget: outboundResolveTarget },
+      messaging: {
+        targetPrefixes: ["rc"],
+        targetResolver: { resolveTarget: mocks.resolveTarget },
+      },
+    } satisfies ChannelPlugin;
+    mocks.listGroups.mockResolvedValue([
+      { kind: "group", id: "denied-room", name: "richchat" } satisfies ChannelDirectoryEntry,
+    ]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "richchat",
+      input: "richchat",
+      preferredKind: "group",
+      nativeTargetMode: "explicit",
+      plugin,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: { message: "denied by outbound policy" } });
+    expect(outboundResolveTarget).toHaveBeenLastCalledWith(
+      expect.objectContaining({ to: "denied-room", mode: "explicit" }),
+    );
   });
 
   it("preserves an explicit plugin-native target after provider normalization", async () => {

@@ -21,6 +21,7 @@ export async function resolveChannelTargetForDelivery(params: {
   agentId: string;
   input: string;
   accountId?: string | null;
+  allowFrom?: string[];
   allowNativeChannelNamespace?: boolean;
   nativeTargetMode?: ChannelOutboundTargetMode;
 }): Promise<{ ok: true; target: ResolvedMessagingTarget } | { ok: false; error: Error }> {
@@ -38,6 +39,7 @@ export async function resolveChannelTargetForDelivery(params: {
       channel: params.channel,
       input: params.input,
       accountId: params.accountId,
+      allowFrom: params.allowFrom,
       unknownTargetMode: "normalized",
       allowNativeChannelNamespace: params.allowNativeChannelNamespace,
       nativeTargetMode: params.nativeTargetMode,

@@ -32,18 +32,17 @@ import {
   resolveNormalizedTargetInput,
   resolveReservedTargetLiteral,
 } from "./target-normalization.js";
+import {
+  buildNormalizedResolveResult,
+  resolvePluginOutboundTarget,
+  stripTargetPrefixes,
+  type ResolvedMessagingTarget,
+} from "./target-resolution-results.js";
+
+export type { ResolvedMessagingTarget } from "./target-resolution-results.js";
 
 /** Directory-backed destination kind used by outbound target resolution. */
 type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
-
-/** Canonical outbound target produced by plugin, directory, or normalized fallback resolution. */
-export type ResolvedMessagingTarget = {
-  to: string;
-  kind: TargetResolveKind;
-  display?: string;
-  source: "normalized" | "directory";
-  resolutionSource: "plugin" | "directory" | "normalized";
-};
 
 /** Result of resolving a user-supplied outbound target. */
 type ResolveMessagingTargetResult =
@@ -76,25 +75,6 @@ export function resetDirectoryCache(params?: {
     }
     return key.startsWith(`${channelKey}:${accountKey}:`);
   }, params.cfg);
-}
-
-function stripTargetPrefixes(value: string, channel?: ChannelId, plugin?: ChannelPlugin): string {
-  const providerPrefixes = [channel, plugin?.id, ...(plugin?.messaging?.targetPrefixes ?? [])]
-    .map((prefix) => prefix?.trim().toLowerCase() ?? "")
-    .filter(Boolean);
-  let target = value.trim();
-  while (target) {
-    const lowered = target.toLowerCase();
-    const prefix = providerPrefixes.find((candidate) => lowered.startsWith(`${candidate}:`));
-    if (!prefix) {
-      break;
-    }
-    target = target.slice(prefix.length + 1).trim();
-  }
-  return target
-    .replace(/^(channel|group|user):/i, "")
-    .replace(/^[@#]/, "")
-    .trim();
 }
 
 /** Formats a resolved target for user-facing summaries. */
@@ -401,39 +381,6 @@ async function getDirectoryEntries(params: {
   return liveEntries;
 }
 
-function buildNormalizedResolveResult(params: {
-  normalized: string;
-  kind: TargetResolveKind;
-}): ResolveMessagingTargetResult {
-  return {
-    ok: true,
-    target: {
-      to: params.normalized,
-      kind: params.kind,
-      display: stripTargetPrefixes(params.normalized),
-      source: "normalized",
-      resolutionSource: "normalized",
-    },
-  };
-}
-
-function resolvePluginOutboundTarget(params: {
-  cfg: OpenClawConfig;
-  resolveTarget: NonNullable<NonNullable<ChannelPlugin["outbound"]>["resolveTarget"]>;
-  input: string;
-  allowFrom?: string[];
-  accountId?: string | null;
-  mode: ChannelOutboundTargetMode;
-}): { ok: true; to: string } | { ok: false; error: Error } {
-  return params.resolveTarget({
-    cfg: params.cfg,
-    to: params.input,
-    allowFrom: params.allowFrom,
-    accountId: params.accountId,
-    mode: params.mode,
-  });
-}
-
 /** Resolves a user target through id-like, directory, plugin, and normalized fallback paths. */
 export async function resolveChannelTarget(params: {
   cfg: OpenClawConfig;
@@ -484,7 +431,13 @@ export async function resolveChannelTarget(params: {
     plugin?.messaging?.normalizeTarget &&
     targetLooksLikeId,
   );
-  if (normalizedInput && !reservedLiteral && !channelNamespace && targetLooksLikeId) {
+  if (
+    normalizedInput &&
+    !reservedLiteral &&
+    (!channelNamespace ||
+      (pluginAcceptsNamespaceAsNativeTarget && params.nativeTargetMode !== "heartbeat")) &&
+    targetLooksLikeId
+  ) {
     const resolvedIdLikeTarget = await maybeResolveIdLikeTarget({
       cfg: params.cfg,
       channel: params.channel,
@@ -494,9 +447,49 @@ export async function resolveChannelTarget(params: {
       plugin,
     });
     if (resolvedIdLikeTarget) {
+      const outboundResolver = plugin?.outbound?.resolveTarget;
+      const resolvedNativeTarget =
+        channelNamespace && params.nativeTargetMode && outboundResolver
+          ? resolvePluginOutboundTarget({
+              cfg: params.cfg,
+              resolveTarget: outboundResolver,
+              input: resolvedIdLikeTarget.to,
+              allowFrom: params.allowFrom,
+              accountId: params.accountId,
+              mode: params.nativeTargetMode,
+            })
+          : undefined;
+      if (resolvedNativeTarget && !resolvedNativeTarget.ok) {
+        return resolvedNativeTarget;
+      }
+      const targetTo = resolvedNativeTarget?.to.trim() ?? resolvedIdLikeTarget.to;
+      if (!targetTo) {
+        return { ok: false, error: missingTargetError(providerLabel, hint) };
+      }
       return {
         ok: true,
-        target: resolvedIdLikeTarget,
+        target: {
+          ...resolvedIdLikeTarget,
+          to: targetTo,
+          kind: classifyPolicyRewrittenTarget({
+            channel: params.channel,
+            originalTo: resolvedIdLikeTarget.to,
+            originalKind: resolvedIdLikeTarget.kind,
+            resolvedTo: targetTo,
+            plugin,
+          }),
+        },
+      };
+    }
+    if (channelNamespace && plugin?.messaging?.targetResolver?.resolveTarget) {
+      return {
+        ok: false,
+        error: missingChannelDestinationError(
+          providerLabel,
+          channelNamespace.namespace,
+          channelNamespace.destinationPrefix,
+          hint,
+        ),
       };
     }
     return buildNormalizedResolveResult({
@@ -530,7 +523,7 @@ export async function resolveChannelTarget(params: {
     const directoryTarget = normalizeDirectoryEntryId(params.channel, entry, plugin);
     const outboundResolver = plugin?.outbound?.resolveTarget;
     const resolvedDirectoryTarget =
-      channelNamespace && params.nativeTargetMode === "heartbeat" && outboundResolver
+      channelNamespace && params.nativeTargetMode && outboundResolver
         ? resolvePluginOutboundTarget({
             cfg: params.cfg,
             resolveTarget: outboundResolver,
@@ -585,8 +578,8 @@ export async function resolveChannelTarget(params: {
       });
       if (resolvedNativeTarget) {
         const outboundResolver = plugin?.outbound?.resolveTarget;
-        const resolvedHeartbeatTarget =
-          params.nativeTargetMode === "heartbeat" && outboundResolver
+        const resolvedPolicyTarget =
+          params.nativeTargetMode && outboundResolver
             ? resolvePluginOutboundTarget({
                 cfg: params.cfg,
                 resolveTarget: outboundResolver,
@@ -596,10 +589,10 @@ export async function resolveChannelTarget(params: {
                 mode: params.nativeTargetMode,
               })
             : undefined;
-        if (resolvedHeartbeatTarget && !resolvedHeartbeatTarget.ok) {
-          return resolvedHeartbeatTarget;
+        if (resolvedPolicyTarget && !resolvedPolicyTarget.ok) {
+          return resolvedPolicyTarget;
         }
-        const targetTo = resolvedHeartbeatTarget?.to.trim() ?? resolvedNativeTarget.to;
+        const targetTo = resolvedPolicyTarget?.to.trim() ?? resolvedNativeTarget.to;
         if (!targetTo) {
           return { ok: false, error: missingTargetError(providerLabel, hint) };
         }

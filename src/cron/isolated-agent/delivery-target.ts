@@ -354,6 +354,7 @@ export async function resolveDeliveryTarget(
     agentId,
     input: toCandidate,
     accountId,
+    allowFrom: effectiveAllowFrom,
     allowNativeChannelNamespace,
     nativeTargetMode: mode,
   });
