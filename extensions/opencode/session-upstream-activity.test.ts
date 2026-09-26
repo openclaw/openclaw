@@ -537,16 +537,16 @@ describe("OpenCode session upstream activity", () => {
       const fixture = await installStatefulOpenCode([session], version);
       const currentProbe = probe({ seq: 1, lastHumanMessageId: null });
 
-    await fixture.writeState({ sessions: [], failDb: true });
-    await expect(checkOpenCodeUpstreamActivity([currentProbe])).resolves.toEqual([]);
+      await fixture.writeState({ sessions: [], failDb: true });
+      await expect(checkOpenCodeUpstreamActivity([currentProbe])).resolves.toEqual([]);
 
-    await fixture.writeState({ sessions: [session], failExports: ["ses_a"] });
-    await expect(checkOpenCodeUpstreamActivity([currentProbe])).resolves.toEqual([]);
+      await fixture.writeState({ sessions: [session], failExports: ["ses_a"] });
+      await expect(checkOpenCodeUpstreamActivity([currentProbe])).resolves.toEqual([]);
 
-    await fixture.writeState({ sessions: [] });
-    await expect(checkOpenCodeUpstreamActivity([currentProbe])).resolves.toEqual([
-      { kind: "missing", sessionKey: "agent:main:ses-a" },
-    ]);
+      await fixture.writeState({ sessions: [] });
+      await expect(checkOpenCodeUpstreamActivity([currentProbe])).resolves.toEqual([
+        { kind: "missing", sessionKey: "agent:main:ses-a" },
+      ]);
     },
   );
 

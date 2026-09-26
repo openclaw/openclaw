@@ -132,7 +132,9 @@ test("discovers groups across more than the handle cap without writable database
     const walSpy = vi.spyOn(sqliteWal, "configureSqliteConnectionPragmas");
 
     try {
-      const targets = new Map((await readSessionGroupMembershipInWorker(config, process.env)).groups);
+      const targets = new Map(
+        (await readSessionGroupMembershipInWorker(config, process.env)).groups,
+      );
 
       expect(targets.get("Shared work")).toEqual(
         agentIds.map((agentId) => ({ agentId, sessionKey: `agent:${agentId}:main` })),

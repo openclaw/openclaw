@@ -624,5 +624,4 @@ describe("setup surface helpers", () => {
       expect(groupAccess.updatePrompt?.({ cfg, accountId: "secondary" })).toBe(updatePrompt);
     });
   });
-
 });
