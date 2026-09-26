@@ -184,7 +184,9 @@ function shouldDescendMemoryEntry(
   if (shouldSkipPath?.(entry.path)) {
     return false;
   }
-  return entry.kind === "directory" && entry.name !== ".openclaw-repair";
+  return (
+    entry.kind === "directory" && entry.name !== ".openclaw-repair" && entry.name !== "node_modules"
+  );
 }
 
 class MemorySourceScanError extends Error {
