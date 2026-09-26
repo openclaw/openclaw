@@ -127,6 +127,7 @@ export async function readBtwTranscriptMessages(params: {
       marker && !completeTarget
         ? listSessionEntriesCore({
             agentId: marker.agentId,
+            projection: "list",
             storePath: marker.storePath,
           }).filter(({ entry }) => entry.sessionId === marker.sessionId)
         : [];

@@ -287,6 +287,7 @@ async function readSessionEntries(params: {
     : undefined;
   const markerMatches = listSessionEntriesCore({
     agentId: marker.agentId,
+    projection: "list",
     storePath: marker.storePath,
   }).filter(({ entry }) => entry.sessionId === marker.sessionId);
   if (suppliedKeyEntry && suppliedKeyEntry.sessionId !== marker.sessionId) {

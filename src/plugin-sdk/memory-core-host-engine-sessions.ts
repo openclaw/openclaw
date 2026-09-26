@@ -106,7 +106,10 @@ export function resolveMemorySessionTargets(params: MemorySessionSelectors): Mem
   const resolvedSelectors = new Set<string>();
   const participantRecords = listSessionParticipantsReadOnly(params);
   const targets = new Map<string, MemorySessionTarget>();
-  const instances = listSessionTranscriptInstances(params, { includeAllWindows: true })
+  const instances = listSessionTranscriptInstances(
+    { ...params, projection: "list" },
+    { includeAllWindows: true },
+  )
     .filter((instance) => instance.agentId === normalizeAgentId(params.agentId))
     .toSorted(
       (left, right) =>

@@ -2,7 +2,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMeta } from "../../../acp/runtime/session-meta.js";
+import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta-store.js";
+import { readAcpSessionMetaForEntry } from "../../../acp/runtime/session-meta.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
@@ -216,8 +217,22 @@ export function validateAcpResumeSessionOwnership(params: {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.targetAgentId,
   });
-  for (const { sessionKey, entry } of listSessionEntriesReadOnly({ storePath, clone: false })) {
-    const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
+  for (const { sessionKey, entry } of listSessionEntriesReadOnly({
+    storePath,
+    clone: false,
+    projection: "list",
+  })) {
+    // Resolve the ACP owner exactly as the keyed read does — the agent id is part of
+    // the ACP database key, so it cannot be assumed to be the target agent — but supply
+    // the already-listed row as the binding instead of decoding one complete stored
+    // entry per session just to read lifecycleRevision/sessionId/sessionStartedAt.
+    const acpOwner = resolveSessionStorePathForAcp({ sessionKey, cfg: params.cfg });
+    const acp = readAcpSessionMetaForEntry({
+      sessionKey: acpOwner.storeSessionKey,
+      agentId: acpOwner.agentId,
+      cfg: params.cfg,
+      entry,
+    });
     // Resume identifiers are backend-local; requester ownership cannot authorize another backend.
     if (
       (configuredBackend && normalizeOptionalLowercaseString(acp?.backend) !== configuredBackend) ||

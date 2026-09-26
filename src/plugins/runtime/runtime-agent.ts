@@ -101,6 +101,7 @@ function listSessionEntries(
     ...(params.hydrateSkillPromptRefs !== undefined
       ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
       : {}),
+    ...(params.projection !== undefined ? { projection: params.projection } : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   });
 }

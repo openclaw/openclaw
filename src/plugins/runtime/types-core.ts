@@ -77,6 +77,8 @@ type RuntimeSessionStoreReadParams = {
   storePath?: string;
 };
 type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
+  /** Listings default to complete entries; "list" omits saved prompt payloads. */
+  projection?: "full" | "list";
   readOnly?: boolean;
 };
 type RuntimeSessionStoreEntrySummary = {

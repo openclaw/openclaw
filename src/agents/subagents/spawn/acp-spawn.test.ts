@@ -140,6 +140,8 @@ vi.mock("../../../acp/control-plane/spawn.js", () => ({
 
 vi.mock("../../../acp/runtime/session-meta.js", () => ({
   readAcpSessionMeta: (params: unknown) => hoisted.readAcpSessionMetaMock(params),
+  // Ownership scans pass the already-listed row instead of re-reading each key.
+  readAcpSessionMetaForEntry: (params: unknown) => hoisted.readAcpSessionMetaMock(params),
 }));
 
 vi.mock("../../../channels/plugins/index.js", () => ({
