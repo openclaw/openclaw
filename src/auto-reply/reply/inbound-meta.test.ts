@@ -235,15 +235,18 @@ describe("buildInboundUserContextPrefix", () => {
     );
   });
 
-  it.each(["paused", "complete"] as const)("does not inject a %s goal", (status) => {
-    expect(
-      buildInboundUserContextPrefix(
-        {} as TemplateContext,
-        undefined,
-        createGoalSessionEntry(status),
-      ),
-    ).toBe("");
-  });
+  it.each(["paused", "blocked", "usage_limited", "budget_limited", "complete"] as const)(
+    "does not inject a %s goal",
+    (status) => {
+      expect(
+        buildInboundUserContextPrefix(
+          {} as TemplateContext,
+          undefined,
+          createGoalSessionEntry(status),
+        ),
+      ).toBe("");
+    },
+  );
 
   it("bounds and normalizes the active goal objective", () => {
     const text = buildInboundUserContextPrefix(

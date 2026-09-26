@@ -224,8 +224,17 @@ describe("redactTranscriptMessage", () => {
     },
   );
 
-  it("sender provenance survives label redaction but not identity redaction", () => {
-    const identity = { type: "profile", id: "person" };
+  it.each([
+    { type: "profile", id: "person" },
+    { type: "remote", pluginId: "chat", domain: "workspace", idKind: "user", id: "person" },
+    {
+      type: "observation",
+      pluginId: "chat",
+      accountId: "account",
+      senderKind: "human",
+      id: "person",
+    },
+  ])("sender provenance survives label redaction but not identity redaction: $type", (identity) => {
     const message = castAgentMessage({
       role: "user",
       content: "private-label",
@@ -253,6 +262,16 @@ describe("redactTranscriptMessage", () => {
         pluginId: "chat",
         domain: "private-domain",
         idKind: "user",
+        id: "person",
+      },
+    },
+    {
+      senderId: "person",
+      senderIdentity: {
+        type: "observation",
+        pluginId: "chat",
+        accountId: "private-account",
+        senderKind: "human",
         id: "person",
       },
     },

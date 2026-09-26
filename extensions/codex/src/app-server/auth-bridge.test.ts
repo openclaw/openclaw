@@ -2944,6 +2944,66 @@ describe("bridgeCodexAppServerStartOptions", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("accepts native ChatGPT auth for subscription routes", async () => {
+    const request = vi.fn(async () => ({
+      account: { type: "chatgpt", email: null, planType: "plus" },
+      requiresOpenaiAuth: true,
+    }));
+
+    await applyCodexAppServerAuthProfile({
+      client: { request } as never,
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: null,
+      authRequirement: "subscription",
+    });
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith(
+      "account/read",
+      { refreshToken: false },
+      { assertCurrent: undefined },
+    );
+  });
+
+  it("rejects native API-key auth for subscription routes", async () => {
+    const request = vi.fn(async () => ({
+      account: { type: "apiKey" },
+      requiresOpenaiAuth: false,
+    }));
+
+    await expect(
+      applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: null,
+        authRequirement: "subscription",
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(request).toHaveBeenCalledWith(
+      "account/read",
+      { refreshToken: false },
+      { assertCurrent: undefined },
+    );
+  });
+
+  it("rejects missing native auth for subscription routes", async () => {
+    const request = vi.fn(async () => ({ account: null, requiresOpenaiAuth: true }));
+
+    await expect(
+      applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: null,
+        authRequirement: "subscription",
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(request).toHaveBeenCalledWith(
+      "account/read",
+      { refreshToken: false },
+      { assertCurrent: undefined },
+    );
+  });
+
   it("falls back to CODEX_API_KEY when no auth profile and no Codex account is available", async () => {
     await withTempDir("openclaw-codex-app-server-", async (agentDir) => {
       const request = vi.fn(async (method: string) => {

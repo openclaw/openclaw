@@ -1481,6 +1481,14 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBe("false");
     });
 
+    it("caps SDK retries from an over-cap millisecond-only hint", async () => {
+      const response = await retryResponse(
+        { status: 503, headers: { "retry-after-ms": "90000" } },
+        openaiRoute,
+      );
+      expect(response.headers.get("x-should-retry")).toBe("false");
+    });
+
     it("ignores partial retry-after numeric headers", async () => {
       const response = await retryResponse(
         { status: 503, headers: { "retry-after-ms": "90000ms", "retry-after": "120 seconds" } },

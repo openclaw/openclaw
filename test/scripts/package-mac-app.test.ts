@@ -469,7 +469,8 @@ function getMergeFrameworkMachOsBlock(): string {
 
 function runSwiftToolchainHarness(options: {
   swiftVersion: string;
-  selectedDeveloperDir: "command-line-tools" | "xcode";
+  selectedDeveloperDir: "command-line-tools" | "custom-xcode" | "invalid" | "xcode";
+  developerDirOverride?: "custom-xcode" | "invalid" | "xcode";
   xcodeVersion?: string;
   xcodebuildFailure?: string;
 }) {
@@ -477,29 +478,35 @@ function runSwiftToolchainHarness(options: {
   const toolsDir = path.join(root, "tools");
   const commandLineToolsDir = path.join(root, "Library", "Developer", "CommandLineTools");
   const xcodeDeveloperDir = path.join(root, "Applications", "Xcode.app", "Contents", "Developer");
+  const customXcodeDeveloperDir = path.join(root, "MountedToolchains", "CustomDeveloper");
+  const invalidDeveloperDir = path.join(root, "InvalidDeveloper");
   const developerDirs = {
     "command-line-tools": commandLineToolsDir,
+    "custom-xcode": customXcodeDeveloperDir,
+    invalid: invalidDeveloperDir,
     xcode: xcodeDeveloperDir,
   } as const;
   const selectedDeveloperDir = developerDirs[options.selectedDeveloperDir];
 
   mkdirSync(toolsDir, { recursive: true });
   mkdirSync(commandLineToolsDir, { recursive: true });
-  const xcodebuild = path.join(xcodeDeveloperDir, "usr", "bin", "xcodebuild");
-  mkdirSync(path.dirname(xcodebuild), { recursive: true });
-  writeFileSync(
-    xcodebuild,
-    [
-      "#!/bin/bash",
-      '[[ "$*" == "-version" ]] || exit 2',
-      ...(options.xcodebuildFailure
-        ? [`printf '%s\\n' ${JSON.stringify(options.xcodebuildFailure)} >&2`, "exit 1"]
-        : [`echo ${JSON.stringify(`Xcode ${options.xcodeVersion ?? "26.4"}`)}`]),
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-  chmodSync(xcodebuild, 0o755);
+  for (const developerDir of [xcodeDeveloperDir, customXcodeDeveloperDir]) {
+    const xcodebuild = path.join(developerDir, "usr", "bin", "xcodebuild");
+    mkdirSync(path.dirname(xcodebuild), { recursive: true });
+    writeFileSync(
+      xcodebuild,
+      [
+        "#!/bin/bash",
+        '[[ "$*" == "-version" ]] || exit 2',
+        ...(options.xcodebuildFailure
+          ? [`printf '%s\\n' ${JSON.stringify(options.xcodebuildFailure)} >&2`, "exit 1"]
+          : [`echo ${JSON.stringify(`Xcode ${options.xcodeVersion ?? "26.4"}`)}`]),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(xcodebuild, 0o755);
+  }
   writeFileSync(
     path.join(toolsDir, "xcrun"),
     [
@@ -529,11 +536,14 @@ function runSwiftToolchainHarness(options: {
     chmodSync(path.join(toolsDir, tool), 0o755);
   }
 
+  const developerDirOverride = options.developerDirOverride
+    ? `export DEVELOPER_DIR=${JSON.stringify(developerDirs[options.developerDirOverride])}`
+    : "unset DEVELOPER_DIR";
   return runHelper(`
     set -euo pipefail
     PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
     export MOCK_SELECTED_DEVELOPER_DIR=${JSON.stringify(selectedDeveloperDir)}
-    unset DEVELOPER_DIR
+    ${developerDirOverride}
     ${readFileSync("scripts/lib/swift-toolchain.sh", "utf8")}
     require_swift_toolchain
   `);
@@ -1796,6 +1806,37 @@ describe("package-mac-app plist stamping", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+  });
+
+  it("honors DEVELOPER_DIR when the global selection is Command Line Tools", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.3.1",
+      selectedDeveloperDir: "command-line-tools",
+      developerDirOverride: "xcode",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("accepts usable full Xcode tooling from a custom developer directory", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.3.1",
+      selectedDeveloperDir: "custom-xcode",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects an unusable selected developer directory", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.3.1",
+      selectedDeveloperDir: "invalid",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requires a full Xcode developer directory");
   });
 
   it("preserves the native Xcode failure before generic selection guidance", () => {
