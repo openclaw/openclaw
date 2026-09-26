@@ -61,4 +61,78 @@ describe("plugin generation source lookup", () => {
     expect(lookup.hasSource(source)).toBe(true);
     expect(lookup.resolve(source)).toBe(source);
   });
+
+  it("resolves a canonical spelling of a captured file beneath an aliased capture root", () => {
+    // Windows safe opens report C:\Users\Sovereign\... while the capture was
+    // created beneath the 8.3 spelling C:\Users\SOVERE~1\... (#152872).
+    const parent = fs.realpathSync(tempDirs.make("plugin-generation-capture-alias-"));
+    const canonicalBoundary = path.join(parent, "capture");
+    const aliasBoundary = path.join(parent, "CAPTUR~1");
+    fs.mkdirSync(path.join(canonicalBoundary, "package-0", "dist"), { recursive: true });
+    fs.symlinkSync(
+      canonicalBoundary,
+      aliasBoundary,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const capturedRoot = path.join(aliasBoundary, "package-0");
+    const capturedCompanion = path.join(capturedRoot, "dist", "channel-plugin-api.js");
+    fs.writeFileSync(capturedCompanion, "export default {};\n");
+    const canonicalCompanion = path.join(
+      canonicalBoundary,
+      "package-0",
+      "dist",
+      "channel-plugin-api.js",
+    );
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const assertModuleAvailable = vi.fn();
+
+    const lookup = createPluginGenerationSourceLookup({
+      rootDir: path.join(parent, "installed"),
+      sourceRoot: path.join(parent, "installed"),
+      capturedRoot,
+      boundaryRoot: aliasBoundary,
+      capturedPaths: new Map([[capturedCompanion, capturedCompanion]]),
+      hardlinkedSources: new Set(),
+      assertModuleAvailable,
+    });
+
+    expect(lookup.hasSource(canonicalCompanion)).toBe(true);
+    expect(lookup.resolve(canonicalCompanion)).toBe(capturedCompanion);
+    expect(assertModuleAvailable).toHaveBeenCalledWith(capturedCompanion);
+  });
+
+  it("does not rebase paths outside the capture root or on other platforms", () => {
+    const parent = fs.realpathSync(tempDirs.make("plugin-generation-capture-outside-"));
+    const canonicalBoundary = path.join(parent, "capture");
+    const aliasBoundary = path.join(parent, "CAPTUR~1");
+    const outside = path.join(parent, "outside", "channel-plugin-api.js");
+    fs.mkdirSync(path.join(canonicalBoundary, "package-0"), { recursive: true });
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    fs.writeFileSync(outside, "export default {};\n");
+    fs.symlinkSync(
+      canonicalBoundary,
+      aliasBoundary,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const capturedRoot = path.join(aliasBoundary, "package-0");
+    const capturedCompanion = path.join(capturedRoot, "channel-plugin-api.js");
+    fs.writeFileSync(capturedCompanion, "export default {};\n");
+    const createLookup = () =>
+      createPluginGenerationSourceLookup({
+        rootDir: path.join(parent, "installed"),
+        sourceRoot: path.join(parent, "installed"),
+        capturedRoot,
+        boundaryRoot: aliasBoundary,
+        capturedPaths: new Map([[capturedCompanion, capturedCompanion]]),
+        hardlinkedSources: new Set(),
+        assertModuleAvailable: vi.fn(),
+      });
+    const canonicalCompanion = path.join(canonicalBoundary, "package-0", "channel-plugin-api.js");
+
+    if (process.platform !== "win32") {
+      expect(createLookup().hasSource(canonicalCompanion)).toBe(false);
+    }
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    expect(createLookup().hasSource(outside)).toBe(false);
+  });
 });
