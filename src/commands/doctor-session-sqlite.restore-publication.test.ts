@@ -19,9 +19,87 @@ vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
 }));
 
-const { createHistoricalRestoreStore } = useDoctorSessionSqliteTestFixture();
+const { createHistoricalRestoreStore, createVerifiedRecoveryStore } =
+  useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
+  it.each([
+    { interrupted: false, changed: false },
+    { interrupted: true, changed: false },
+    { interrupted: false, changed: true },
+    { interrupted: true, changed: true },
+  ])(
+    "checks retained receipts after a device change (interrupted=$interrupted, changed=$changed)",
+    async ({ interrupted, changed }) => {
+      const { store, imported, archivePath } = await createVerifiedRecoveryStore();
+      const manifestPath = expectDefined(imported.migrationRun?.manifestPath, "migration receipt");
+      const original = fs.readFileSync(archivePath, "utf8");
+      const originalIdentity = fs.statSync(archivePath, { bigint: true });
+      if (interrupted) {
+        const unlink = fs.unlinkSync;
+        const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+          if (String(file) === archivePath) {
+            throw new Error("injected restore interruption");
+          }
+          return unlink(file);
+        });
+        try {
+          const first = await runPublicSessionSqlite(store, "restore");
+          expect(first.report.targets[0]?.restore?.conflicts).toEqual([
+            expect.objectContaining({ archivePath, reason: "injected restore interruption" }),
+          ]);
+          expect(fs.statSync(archivePath).nlink).toBe(2);
+        } finally {
+          unlinkSpy.mockRestore();
+        }
+      }
+      const manifest = readMigrationManifest(manifestPath);
+      for (const target of manifest.targets) {
+        for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+          if (move.archivePath !== archivePath) {
+            continue;
+          }
+          const artifact = expectDefined(move.artifact, "recorded original identity");
+          artifact.identity.dev = String(BigInt(artifact.identity.dev) + 1n);
+        }
+      }
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+      const retainedTargets = structuredClone(manifest.targets);
+      const content = changed
+        ? original.replace("preserved history", "different history")
+        : original;
+      if (changed) {
+        expect(content).not.toBe(original);
+        fs.writeFileSync(archivePath, content);
+      }
+
+      if (interrupted && changed) {
+        await expect(runPublicSessionSqlite(store, "restore")).rejects.toThrow(/changed/);
+      } else {
+        const result = await runPublicSessionSqlite(store, "restore");
+        expect(result.report.targets[0]?.restore?.conflicts).toEqual(
+          changed
+            ? [expect.objectContaining({ archivePath, reason: expect.stringContaining("changed") })]
+            : [],
+        );
+        expect(result.exitCode).toBe(changed ? 1 : 0);
+      }
+      const recorded = readMigrationManifest(manifestPath);
+      expect(recorded.targets).toEqual(retainedTargets);
+      if (changed) {
+        expect(fs.readFileSync(archivePath, "utf8")).toBe(content);
+        expect(fs.existsSync(store.transcriptPath)).toBe(interrupted);
+      } else {
+        expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(original);
+        const restored = fs.statSync(store.transcriptPath, { bigint: true });
+        expect(restored.ino).toBe(originalIdentity.ino);
+        expect(restored.nlink).toBe(1n);
+        expect(fs.existsSync(archivePath)).toBe(false);
+        expect(recorded.restore?.consumedArchives).toContain(archivePath);
+      }
+    },
+  );
+
   it.each(
     (
       [

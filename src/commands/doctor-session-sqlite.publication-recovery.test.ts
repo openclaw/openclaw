@@ -144,7 +144,7 @@ describe("runDoctorSessionSqlite", () => {
             sessionSqliteStore: store.storePath,
             json: true,
           }),
-        ).rejects.toThrow(/hard-linked|publication paths changed/);
+        ).rejects.toThrow(/hard-linked|archive identity or contents changed/);
         expect(fs.readFileSync(move.sourcePath)).toEqual(before);
         expect(fs.readFileSync(move.archivePath)).toEqual(before);
         expect(fs.statSync(move.sourcePath).nlink).toBe(fault === "third-link" ? 3 : 2);
