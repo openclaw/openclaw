@@ -16,9 +16,13 @@ export type DiscordAudioWorkerThread = Pick<Worker, "postMessage" | "terminate">
 export function createDiscordAudioWorkerThread(
   options: DiscordAudioWorkerOptions,
 ): DiscordAudioWorkerThread {
-  // DAVE's Rayon pool survives Worker exit. Native getenv reads the parent's
-  // environment, not a Worker's copy; bound its default before the first rekey.
-  if (process.env.RAYON_NUM_THREADS === undefined && process.env.RAYON_RS_NUM_CPUS === undefined) {
+  // Native getenv cannot see a Worker's env copy. DAVE has no pool-init API,
+  // so this default must survive until a lazy rekey (and is inherited by children).
+  if (
+    options.daveEncryption !== false &&
+    process.env.RAYON_NUM_THREADS === undefined &&
+    process.env.RAYON_RS_NUM_CPUS === undefined
+  ) {
     process.env.RAYON_NUM_THREADS = "1";
   }
   const url = resolveRuntimeWorkerUrl({

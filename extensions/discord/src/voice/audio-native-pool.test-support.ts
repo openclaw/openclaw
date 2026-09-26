@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import workerThreads, { isMainThread, parentPort } from "node:worker_threads";
+import workerThreads, { isMainThread, parentPort, workerData } from "node:worker_threads";
 import type { DiscordAudioWorkerOptions } from "./audio-worker-protocol.js";
 
 if (isMainThread) {
@@ -29,6 +30,8 @@ if (isMainThread) {
     reconnectGraceMs: 15_000,
     captureSilenceGraceMs: 2_000,
     realtime: true,
+    // Exercise default-enabled voice unless the test explicitly disables DAVE.
+    daveEncryption: process.argv[2] === "false" ? false : undefined,
   } satisfies DiscordAudioWorkerOptions);
   let completed = false;
   worker.on("message", () => {
@@ -48,15 +51,22 @@ if (isMainThread) {
       });
     });
     assert.ok(completed);
-    console.log(
-      JSON.stringify({ retainedThreads: readdirSync("/proc/self/task").length - before }),
+    const retainedThreads = readdirSync("/proc/self/task").length - before;
+    const childCode =
+      "console.log(JSON.stringify({RAYON_NUM_THREADS:process.env.RAYON_NUM_THREADS,RAYON_RS_NUM_CPUS:process.env.RAYON_RS_NUM_CPUS}))";
+    const directEnv = JSON.parse(
+      execFileSync(process.execPath, ["-e", childCode], { encoding: "utf8" }),
     );
+    console.log(JSON.stringify({ retainedThreads, directEnv }));
   } finally {
     await worker.terminate();
   }
 } else {
-  const { exerciseDaveRekey } = await import("./dave-native-pool.test-support.js");
-  exerciseDaveRekey();
+  const options: DiscordAudioWorkerOptions = workerData;
+  if (options.daveEncryption !== false) {
+    const { exerciseDaveRekey } = await import("./dave-native-pool.test-support.js");
+    exerciseDaveRekey();
+  }
   assert.ok(parentPort);
   // Node Worker has no browser targetOrigin.
   // oxlint-disable-next-line unicorn/require-post-message-target-origin
