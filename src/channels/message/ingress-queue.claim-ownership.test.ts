@@ -1,9 +1,223 @@
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
+import * as workerLifecycle from "../../infra/sqlite-worker-lifecycle-preparation.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createTestIngressQueue, withTempState } from "./ingress-drain.test-helpers.js";
+import { createChannelIngressQueue } from "./ingress-queue.js";
 
 describe("channel ingress claim ownership", () => {
+  it.each(["transaction", "commit"] as const)(
+    "revalidates live lane policy at native %s admission",
+    async (stage) => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ lane: string }>({
+          channelId: "test",
+          accountId: "a",
+          stateDir,
+        });
+        await queue.enqueue(
+          "a",
+          { lane: "chat:123" },
+          { laneKey: "chat:123:topic:7", receivedAt: 1 },
+        );
+        await queue.enqueue(
+          "b",
+          { lane: "chat:456" },
+          { laneKey: "chat:456:topic:9", receivedAt: 2 },
+        );
+        let policyChanged = false;
+        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+        const admission = vi
+          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) =>
+            createAdmission((request, grant) => {
+              if (request.stage === stage) {
+                policyChanged = true;
+              }
+              admit(request, grant);
+            }, attachment),
+          );
+        try {
+          const claimed = await queue.claimNext({
+            ownerId: "worker",
+            blockedLaneKeys: ["chat:123"],
+            deriveLaneKey: (record) => {
+              const laneKey =
+                record.id === "a" && !policyChanged ? record.laneKey : record.payload.lane;
+              record.payload.lane = "callback-local";
+              return laneKey;
+            },
+            reconcileStoredLaneKey: (_record, stored, derived) =>
+              stored === `${derived}:topic:7` || stored === `${derived}:topic:9`,
+          });
+          expect(policyChanged).toBe(true);
+          expect(claimed).toMatchObject({ id: "b", laneKey: "chat:456" });
+          expect((await queue.listClaims()).map((row) => [row.id, row.laneKey])).toEqual([
+            ["b", "chat:456"],
+          ]);
+          expect((await queue.listPending())[0]).toMatchObject({
+            id: "a",
+            laneKey: "chat:123:topic:7",
+            payload: { lane: "chat:123" },
+          });
+        } finally {
+          admission.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each(["policy exception", "owner retirement"] as const)(
+    "does not retry a claim after %s during commit policy evaluation",
+    async (cause) => {
+      await withTempState(async (stateDir) => {
+        const failure = new Error(cause);
+        const options = { channelId: "test", accountId: "a", stateDir };
+        let current = true;
+        const queue = createChannelIngressQueue<{ text: string }>(options, () => {
+          if (!current) {
+            throw failure;
+          }
+        });
+        await queue.enqueue("event-1", { text: "lane" });
+        let committing = false;
+        let failed = false;
+        let transactions = 0;
+        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+        const admission = vi
+          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) =>
+            createAdmission((request, grant) => {
+              if (request.stage === "transaction") {
+                transactions++;
+              }
+              committing = request.stage === "commit";
+              admit(request, grant);
+            }, attachment),
+          );
+        try {
+          await expect(
+            queue.claimNext({
+              deriveLaneKey: (record) => {
+                if (committing && !failed) {
+                  failed = true;
+                  if (cause === "owner retirement") {
+                    current = false;
+                  } else {
+                    throw failure;
+                  }
+                }
+                return record.payload.text;
+              },
+            }),
+          ).rejects.toBe(failure);
+          expect(failed).toBe(true);
+          expect(transactions).toBe(1);
+          const inspector = createChannelIngressQueue(options);
+          expect((await inspector.listPending()).map((row) => [row.id, row.laneKey])).toEqual([
+            ["event-1", undefined],
+          ]);
+          expect(await inspector.listClaims()).toEqual([]);
+        } finally {
+          admission.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("does not retry a policy conflict when the native rollback reply is lost", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      let policyChanged = false;
+      let stopped: Promise<number> | undefined;
+      let stopClaimWorker: (() => Promise<number>) | undefined;
+      let claimRequest: number | undefined;
+      let attempts = 0;
+      // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver below.
+      const originalPost = Worker.prototype.postMessage;
+      const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+        this: Worker,
+        request: SqliteWorkerRequest,
+        transferList,
+      ) {
+        if (request.type === "execute") {
+          const command: unknown = deserialize(request.input);
+          if (
+            command &&
+            typeof command === "object" &&
+            "type" in command &&
+            command.type === "channelIngress.claimNext"
+          ) {
+            stopClaimWorker = () => this.terminate();
+            claimRequest = request.id;
+            attempts++;
+          }
+        }
+        return originalPost.call(this, request, transferList);
+      });
+      const prepareLifecycle = workerLifecycle.createSqliteWorkerLifecyclePreparation;
+      const lifecycle = vi
+        .spyOn(workerLifecycle, "createSqliteWorkerLifecyclePreparation")
+        .mockImplementation((params) =>
+          prepareLifecycle({
+            ...params,
+            receiveResult(reply, pumping) {
+              if (
+                reply &&
+                typeof reply === "object" &&
+                "id" in reply &&
+                reply.id === claimRequest &&
+                "ok" in reply &&
+                reply.ok === false &&
+                stopClaimWorker &&
+                !stopped
+              ) {
+                stopped = stopClaimWorker();
+                return;
+              }
+              params.receiveResult(reply, pumping);
+            },
+          }),
+        );
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      const admission = vi
+        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === "commit" && claimRequest !== undefined) {
+              policyChanged = true;
+            }
+            admit(request, grant);
+          }, attachment),
+        );
+      try {
+        await queue.enqueue("event-1", { text: "lane" });
+        await expect(
+          queue.claimNext({
+            blockedLaneKeys: ["blocked"],
+            deriveLaneKey: (record) => (policyChanged ? "blocked" : record.payload.text),
+          }),
+        ).rejects.toMatchObject({ code: "outcome-unknown" });
+        expect(policyChanged).toBe(true);
+        expect(attempts).toBe(1);
+        expect(stopped).toBeDefined();
+        await stopped;
+        expect((await queue.listPending()).map((row) => [row.id, row.laneKey])).toEqual([
+          ["event-1", undefined],
+        ]);
+        expect(await queue.listClaims()).toEqual([]);
+      } finally {
+        admission.mockRestore();
+        post.mockRestore();
+        lifecycle.mockRestore();
+        await stopped;
+      }
+    });
+  });
+
   it.each(["claim", "claimNext"] as const)(
     "starts a %s lease at custom-clock transaction admission",
     async (method) => {

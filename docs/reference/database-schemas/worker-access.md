@@ -129,8 +129,10 @@ inspection retains its existing-only, noncreating opener inside the broker.
 Only diagnostic failed health, pressure, and account discovery use the read-only
 worker. Channel callbacks retain payload and lane policy on the
 Gateway thread; the writer compares the prepared ordered rows before claiming
-and rejects stale recovery decisions. A conflicting claim snapshot is prepared
-again; an uncertain write is never replayed. Database admission and commit remain
+and rejects stale recovery decisions. The host rechecks lane selection against
+live channel policy at transaction and commit admission. A conflicting claim
+snapshot is prepared again; a policy conflict retries only after confirmed
+rollback, and an uncertain write is never replayed. Database admission and commit remain
 bound to the captured owner, and shutdown joins accepted work. The existing
 `channel_ingress_events` schema, payload encoding, dedupe windows, retention, and
 update behavior are unchanged. Drain inspection reads pending and claimed rows in
