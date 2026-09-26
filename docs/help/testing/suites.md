@@ -30,9 +30,10 @@ When you touch tests or want extra confidence:
 
 Oxlint's `max-lines` rule warns when files exceed the per-scope limits in
 `.oxlintrc.json`; these warnings remain visible in lint logs and do not fail CI.
-PR CI and `pnpm check:changed` separately reject new line-cap violations and
-growth in already over-cap files. The suppression baseline ratchet remains a
-required check. See [surface ratchets](/ci/local-proof#surface-ratchets) for
+Local `pnpm check:changed` rejects over-cap changed files and separately checks
+new violations and growth; untouched overages found by broad lint are warnings.
+PR CI reports numeric ratchet violations as warnings too. The suppression
+baseline ratchet remains strict locally. See [surface ratchets](/ci/local-proof#surface-ratchets) for
 comparison bases and shrink-only maintenance.
 
 ## Test suites (what runs where)

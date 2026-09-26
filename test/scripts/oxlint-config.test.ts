@@ -623,7 +623,7 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("keeps native cap scopes and correctness while making only CI limits advisory", () => {
+  it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-ci-limits-"));
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     fs.writeFileSync(
@@ -661,11 +661,45 @@ describe("oxlint config", () => {
     }
     fs.writeFileSync(path.join(root, "src/correctness.ts"), "export var legacy = 1;\n");
     fs.writeFileSync(path.join(root, "src/globals.js"), "window.console.log(configuredGlobal);\n");
-    for (const { github, correctness } of [
-      { github: false, correctness: false },
-      { github: true, correctness: false },
-      { github: true, correctness: true },
-    ]) {
+    const scenarios: {
+      github: boolean;
+      correctness: boolean;
+      changedPaths?: string[];
+      severity: "error" | "warning";
+    }[] = [
+      { github: false, correctness: false, severity: "error" },
+      { github: true, correctness: false, severity: "warning" },
+      { github: true, correctness: true, severity: "warning" },
+      {
+        github: false,
+        correctness: false,
+        changedPaths: ["src/globals.js"],
+        severity: "warning",
+      },
+      {
+        github: false,
+        correctness: true,
+        changedPaths: ["src/globals.js"],
+        severity: "warning",
+      },
+      ...[
+        [],
+        ["src/oversized.ts"],
+        [".oxlintrc.json"],
+        ["src/.oxlintrc.json"],
+        ["package.json"],
+        ["pnpm-lock.yaml"],
+        ["pnpm-workspace.yaml"],
+        ["patches/oxlint.patch"],
+        ["scripts/run-oxlint.mts"],
+      ].map((changedPaths) => ({
+        github: false,
+        correctness: false,
+        changedPaths,
+        severity: "error" as const,
+      })),
+    ];
+    for (const { github, correctness, changedPaths, severity } of scenarios) {
       const summary = path.join(root, `summary-${github}-${correctness}.md`);
       const result = spawnSync(
         process.execPath,
@@ -687,11 +721,14 @@ describe("oxlint config", () => {
             CI: "true",
             GITHUB_ACTIONS: github ? "true" : "false",
             GITHUB_STEP_SUMMARY: summary,
+            OPENCLAW_OXLINT_CHANGED_PATHS: changedPaths && JSON.stringify(changedPaths),
           },
         },
       );
       expect(result.error).toBeUndefined();
-      expect(result.status, result.stdout + result.stderr).toBe(github && !correctness ? 0 : 1);
+      expect(result.status, JSON.stringify(changedPaths) + result.stdout + result.stderr).toBe(
+        severity === "warning" && !correctness ? 0 : 1,
+      );
       const report = JSON.parse(result.stdout) as {
         diagnostics: Array<{ code: string; severity: string; filename: string; help?: string }>;
       };
@@ -699,7 +736,7 @@ describe("oxlint config", () => {
       expect(
         report.diagnostics.find((diagnostic) => diagnostic.code === "eslint(max-lines)"),
       ).toMatchObject({
-        severity: github ? "warning" : "error",
+        severity,
         help: "Maximum allowed is 700.",
       });
       if (github) {
@@ -710,6 +747,77 @@ describe("oxlint config", () => {
         expect(
           report.diagnostics.find((diagnostic) => diagnostic.code === "eslint(no-var)")?.severity,
         ).toBe("error");
+      }
+    }
+  });
+
+  it("matches changed paths literally and keeps inherited config limits strict", () => {
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-changed-paths-"));
+    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
+    fs.writeFileSync(path.join(root, ".oxlintrc.json"), JSON.stringify(config));
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    const sources = [
+      "!root.ts",
+      "src/!root.ts",
+      "src/special[ab]{x,y}!file.ts",
+      "src/specialax!file.ts",
+      "src/wild-star.ts",
+      "src/wild-question.ts",
+    ];
+    for (const file of sources) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), "export const values = [\n  0,\n  1,\n];\n");
+    }
+    const changedPaths = [
+      "!root.ts",
+      "src/special[ab]{x,y}!file.ts",
+      "src/wild*.ts",
+      "src/wild-questio?.ts",
+    ];
+    for (const inherited of [false, true]) {
+      if (inherited) {
+        fs.writeFileSync(path.join(root, "base.json"), JSON.stringify(config));
+        fs.writeFileSync(
+          path.join(root, ".oxlintrc.json"),
+          JSON.stringify({ extends: ["./base.json"] }),
+        );
+      }
+      const result = spawnSync(
+        process.execPath,
+        [
+          path.resolve("scripts/run-oxlint.mts"),
+          "--openclaw-focused-config",
+          "--threads=1",
+          "--format",
+          "json",
+          ...sources,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GITHUB_ACTIONS: "false",
+            OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(changedPaths),
+          },
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      const report = JSON.parse(result.stdout) as {
+        diagnostics: Array<{ code: string; severity: string; filename: string }>;
+      };
+      expect(report.diagnostics).toHaveLength(sources.length);
+      for (const file of sources) {
+        expect(
+          report.diagnostics.find(
+            (diagnostic) => diagnostic.filename.replaceAll("\\", "/") === file,
+          ),
+          file,
+        ).toMatchObject({
+          code: "eslint(max-lines)",
+          severity: inherited || changedPaths.includes(file) ? "error" : "warning",
+        });
       }
     }
   });
@@ -729,14 +837,22 @@ describe("oxlint config", () => {
     ];
     for (const config of invalidConfigs) {
       fs.writeFileSync(path.join(root, ".oxlintrc.json"), config);
-      for (const github of [false, true]) {
+      for (const { github, changedPaths } of [
+        { github: false, changedPaths: undefined },
+        { github: true, changedPaths: undefined },
+        { github: false, changedPaths: ["src/changed.ts"] },
+      ]) {
         const result = spawnSync(
           process.execPath,
           [path.resolve("scripts/run-oxlint.mts"), "--openclaw-focused-config", "fixture.ts"],
           {
             cwd: root,
             encoding: "utf8",
-            env: { ...process.env, GITHUB_ACTIONS: github ? "true" : "false" },
+            env: {
+              ...process.env,
+              GITHUB_ACTIONS: github ? "true" : "false",
+              OPENCLAW_OXLINT_CHANGED_PATHS: changedPaths && JSON.stringify(changedPaths),
+            },
           },
         );
         expect(result.error).toBeUndefined();
