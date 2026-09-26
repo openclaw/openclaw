@@ -5,6 +5,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainStoreWriterQueuesForTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as databasePathIdentity from "../infra/sqlite-worker-identity.js";
 import { withOpenClawAgentDatabaseWrite } from "../plugin-sdk/sqlite-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -38,11 +39,11 @@ describe("agent database write admission", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
-  function reserveWorkerOperation(start?: () => void) {
+  function reserveWorkerOperation(start?: () => void, workerOptions = options) {
     const entered = createDeferredCore();
     const settled = createDeferredCore();
     releases.push(settled.resolve);
-    const done = runOpenClawAgentWorkerWrite(options, async () => {
+    const done = runOpenClawAgentWorkerWrite(workerOptions, async () => {
       start?.();
       entered.resolve();
       await settled.promise;
@@ -78,38 +79,62 @@ describe("agent database write admission", () => {
     },
   );
 
-  it("queues inherited worker callbacks without borrowing the worker's reentrancy", async () => {
-    const alias = path.join(path.dirname(options.path), "alias");
-    fs.symlinkSync(
-      path.dirname(options.path),
-      alias,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    const aliased = { ...options, path: path.join(alias, path.basename(options.path)) };
-    const calls: number[] = [];
-    const writes: Promise<number>[] = [];
-    const reservation = reserveWorkerOperation(() => {
-      for (const value of [1, 2, 3]) {
-        writes.push(
-          withOpenClawAgentDatabaseWrite(value === 2 ? aliased : options, () => {
-            calls.push(value);
-            return value;
-          }),
-        );
+  it.each(["stable", "retargeted"] as const)(
+    "queues inherited worker callbacks without borrowing reentrancy through a %s alias",
+    async (target) => {
+      const directory = path.dirname(options.path);
+      const alias = path.join(directory, "alias");
+      const successor = path.join(directory, "successor");
+      const linkType = process.platform === "win32" ? "junction" : "dir";
+      fs.symlinkSync(directory, alias, linkType);
+      const aliased = { ...options, path: path.join(alias, path.basename(options.path)) };
+      const capture = databasePathIdentity.readDatabasePathIdentitySync;
+      const identity =
+        target === "retargeted"
+          ? vi
+              .spyOn(databasePathIdentity, "readDatabasePathIdentitySync")
+              .mockImplementationOnce((pathname) => {
+                const observed = capture(pathname);
+                // Move the alias after capture; worker callbacks restore it before writing.
+                fs.mkdirSync(successor);
+                fs.unlinkSync(alias);
+                fs.symlinkSync(successor, alias, linkType);
+                return observed;
+              })
+          : undefined;
+      let observedTarget: string | undefined;
+      const calls: number[] = [];
+      const writes: Promise<number>[] = [];
+      const reservation = reserveWorkerOperation(() => {
+        observedTarget = fs.realpathSync(alias);
+        if (target === "retargeted") {
+          fs.unlinkSync(alias);
+          fs.symlinkSync(directory, alias, linkType);
+        }
+        for (const value of [1, 2, 3]) {
+          writes.push(
+            withOpenClawAgentDatabaseWrite(value === 2 ? aliased : options, () => {
+              calls.push(value);
+              return value;
+            }),
+          );
+        }
+      }, aliased);
+      try {
+        await reservation.entered;
+        expect(observedTarget).toBe(target === "retargeted" ? successor : directory);
+        await setImmediate();
+        expect(calls).toEqual([]);
+      } finally {
+        identity?.mockRestore();
+        reservation.release();
+        await reservation.done;
+        await Promise.all(writes);
       }
-    });
-    try {
-      await reservation.entered;
-      await setImmediate();
-      expect(calls).toEqual([]);
-    } finally {
-      reservation.release();
-      await reservation.done;
-      await Promise.all(writes);
-    }
-    await expect(Promise.all(writes)).resolves.toEqual([1, 2, 3]);
-    expect(calls).toEqual([1, 2, 3]);
-  });
+      await expect(Promise.all(writes)).resolves.toEqual([1, 2, 3]);
+      expect(calls).toEqual([1, 2, 3]);
+    },
+  );
 
   it("retains caller context and lets synchronous mutations reenter the ordinary owner", async () => {
     const caller = new AsyncLocalStorage<string>();
