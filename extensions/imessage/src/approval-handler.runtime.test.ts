@@ -5,6 +5,10 @@ import {
   iMessageApprovalPollTargets,
   maybeResolveIMessageApprovalPollVote,
 } from "./approval-polls.js";
+import {
+  clearIMessageApprovalReactionTargetsForTest,
+  maybeResolveIMessageApprovalReaction,
+} from "./approval-reactions.js";
 
 const sendMock = vi.hoisted(() => ({
   sendMessageIMessage: vi.fn(),
@@ -372,6 +376,7 @@ describe("imessageApprovalNativeRuntime", () => {
 
     beforeEach(() => {
       iMessageApprovalPollTargets.clearForTest();
+      clearIMessageApprovalReactionTargetsForTest();
       approvalGatewayMock.resolveApprovalOverGateway.mockReset();
       approvalGatewayMock.resolveApprovalOverGateway.mockResolvedValue({
         applied: true,
@@ -395,6 +400,112 @@ describe("imessageApprovalNativeRuntime", () => {
       actionsMock.resolveChatGuidForTarget.mockReset();
       actionsMock.resolveChatGuidForTarget.mockResolvedValue(CHAT_GUID);
       timersMock.delay.mockClear();
+    });
+
+    it("resolves native system-agent tapbacks only for an authorized group participant", async () => {
+      const approvalId = "system-agent:native-tapback";
+      const groupChatGuid = "iMessage;+;system-agent-native";
+      const to = `chat_guid:${groupChatGuid}`;
+      const nowMs = Date.now();
+      const expiresAtMs = nowMs + 60_000;
+      const request: PendingPayloadArgs["request"] = {
+        approvalKind: "system-agent",
+        id: approvalId,
+        request: {
+          title: "OpenClaw change",
+          description: "Update the agent display name",
+          command: "config.patch",
+          proposalHash: "synthetic-proposal",
+          sessionId: "synthetic-session",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: nowMs,
+        expiresAtMs,
+      };
+      const view: Extract<PendingPayloadArgs["view"], { approvalKind: "system-agent" }> = {
+        approvalKind: "system-agent",
+        approvalId,
+        phase: "pending",
+        title: "OpenClaw change requires approval",
+        metadata: [],
+        commandText: request.request.description,
+        operationSummary: request.request.description,
+        expiresAtMs,
+        actions: (["allow-once", "deny"] as const).map((decision) => ({
+          decision,
+          label: decision === "deny" ? "Deny" : "Allow Once",
+          command: `/approve ${approvalId} ${decision}`,
+          style: decision === "deny" ? "danger" : "success",
+        })),
+      };
+      const pendingPayload = await buildPendingPayload({
+        request,
+        approvalKind: "system-agent",
+        view,
+        nowMs,
+      });
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(NO_POLL_SELECTOR_STATUS);
+      approvalGatewayMock.resolveApprovalOverGateway.mockResolvedValue({
+        applied: true,
+        approval: { status: "allowed", decision: "allow-once", reason: "user" },
+      });
+
+      const entry = await deliverPoll({
+        request,
+        approvalKind: "system-agent",
+        view,
+        pendingPayload,
+        preparedTarget: { to, accountId: ACCOUNT_ID },
+        plannedTarget: { ...pollDeliverArgs.plannedTarget, target: { to } },
+      });
+
+      expect(entry).toMatchObject({
+        messageId: PROMPT_GUID,
+        conversation: { chatGuid: groupChatGuid },
+      });
+      expect(pendingPayload.text).toContain("React with:");
+      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
+        to,
+        pendingPayload.text,
+        expect.objectContaining({
+          approvalPrompt: {
+            approvalId,
+            approvalKind: "system-agent",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        }),
+      );
+      expect(actionsMock.sendPoll).not.toHaveBeenCalled();
+      const react = (sender: string) =>
+        maybeResolveIMessageApprovalReaction({
+          cfg: pollDeliverArgs.cfg,
+          accountId: ACCOUNT_ID,
+          message: {
+            sender,
+            chat_guid: groupChatGuid,
+            is_group: true,
+            is_reaction: true,
+            reaction_emoji: "👍",
+            reacted_to_guid: PROMPT_GUID,
+          },
+          bodyText: "",
+        });
+
+      await expect(react("+15559999999")).resolves.toBe(true);
+      expect(approvalGatewayMock.resolveApprovalOverGateway).not.toHaveBeenCalled();
+      await expect(react(HANDLE)).resolves.toBe(true);
+      expect(approvalGatewayMock.resolveApprovalOverGateway).toHaveBeenCalledExactlyOnceWith({
+        cfg: pollDeliverArgs.cfg,
+        approvalId,
+        approvalKind: "system-agent",
+        decision: "allow-once",
+        channel: "imessage",
+        accountId: ACCOUNT_ID,
+        senderId: HANDLE,
+        gatewayUrl: undefined,
+      });
+      await expect(react(HANDLE)).resolves.toBe(false);
+      expect(approvalGatewayMock.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
     });
 
     it("attests text fallback sends as host-originated, not delegated", async () => {
