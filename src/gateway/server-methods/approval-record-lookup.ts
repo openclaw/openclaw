@@ -4,7 +4,11 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  GatewayErrorDetailCodes,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type {
@@ -231,6 +235,26 @@ export function respondUnknownOrExpiredApproval(respond: RespondFn): void {
     undefined,
     errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
       details: APPROVAL_NOT_FOUND_DETAILS,
+    }),
+  );
+}
+
+/**
+ * A reviewer the channel will not let decide. This answers who may decide, not whether the
+ * approval still exists: answering not-found instead leaves every channel retiring a control
+ * that a listed approver could still use.
+ */
+export function respondApprovalAuthorityRequired(respond: RespondFn): void {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.FORBIDDEN, "approval decision requires a listed approver", {
+      // FORBIDDEN alone also carries missing-scope failures, which would send an operator
+      // looking at an approver list for a problem that is not one.
+      details: {
+        code: GatewayErrorDetailCodes.APPROVAL_AUTHORITY_REQUIRED,
+        remediation: "List this reviewer as an approver for the channel account.",
+      },
     }),
   );
 }

@@ -267,7 +267,7 @@ Reply in chat:
 /approve <id> deny
 ```
 
-The `/approve` command handles both exec approvals and plugin approvals. If the ID does not match a pending exec approval, it automatically checks plugin approvals instead. This fallback is bounded to "approval not found" failures; a real exec approval denial/error does not silently retry as a plugin approval.
+The `/approve` command handles both exec approvals and plugin approvals. If the ID does not match a pending exec approval, it automatically checks plugin approvals instead. This fallback is bounded to two answers: "approval not found", and a refusal because the channel does not list the sender as an approver for that kind. When both kinds answer that way and one was a refusal, the reply reports the refusal rather than "not found". A real exec approval denial/error does not silently retry as a plugin approval.
 
 ### Plugin approval forwarding
 

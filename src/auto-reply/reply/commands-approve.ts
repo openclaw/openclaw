@@ -6,7 +6,12 @@ import {
   resolveChannelApprovalCapability,
 } from "../../channels/plugins/index.js";
 import { logVerbose } from "../../globals.js";
-import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
+import {
+  APPROVAL_AUTHORITY_REQUIRED_TEXT,
+  isApprovalAuthorityError,
+  isApprovalKindMismatchError,
+  resolveFirstApprovalKind,
+} from "../../infra/approval-errors.js";
 import {
   isPendingSystemAgentApprovalOverGateway,
   resolveApprovalOverGateway,
@@ -96,6 +101,13 @@ function buildResolvedByLabel(params: ApproveCommandParams): string {
   const channel = params.command.channel;
   const sender = params.command.senderId ?? "unknown";
   return `${channel}:${sender}`;
+}
+
+function formatApprovalSubmitError(error: unknown): string {
+  // Buttons already say who may decide; a typed /approve gets the same sentence.
+  return isApprovalAuthorityError(error)
+    ? APPROVAL_AUTHORITY_REQUIRED_TEXT
+    : formatErrorMessage(error);
 }
 
 type ApproveCommandBehavior =
@@ -271,26 +283,20 @@ export async function handleApproveCommandFromContext(
     );
   }
 
-  for (const [index, method] of methods.entries()) {
-    try {
-      await callApprovalMethod(method);
-      break;
-    } catch (error) {
-      if (isApprovalNotFoundError(error)) {
-        if (index < methods.length - 1) {
-          continue;
-        }
-        const blocked = blockedCommandResult();
-        if (blocked) {
-          return blocked;
-        }
-        // Not an exec or plugin approval; it may be a change only the owner can decide.
-        if (systemAgentRefusedForOwner) {
-          return ownerOnlyResult;
-        }
+  try {
+    await resolveFirstApprovalKind(methods, callApprovalMethod);
+  } catch (error) {
+    if (isApprovalKindMismatchError(error)) {
+      const blocked = blockedCommandResult();
+      if (blocked) {
+        return blocked;
       }
-      return commandReply(`❌ Failed to submit approval: ${formatErrorMessage(error)}`);
+      // Not an exec or plugin approval; it may be a change only the owner can decide.
+      if (systemAgentRefusedForOwner) {
+        return ownerOnlyResult;
+      }
     }
+    return commandReply(`❌ Failed to submit approval: ${formatApprovalSubmitError(error)}`);
   }
 
   return commandReply(`✅ Approval ${parsed.decision} submitted for ${parsed.id}.`);

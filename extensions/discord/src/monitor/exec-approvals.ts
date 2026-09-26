@@ -9,6 +9,10 @@ import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import {
+  APPROVAL_AUTHORITY_REQUIRED_TEXT,
+  isApprovalAuthorityError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { parseExecApprovalData } from "../approval-custom-id.js";
 import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
@@ -41,7 +45,7 @@ type ExecApprovalButtonContext = {
 
 type ExecApprovalResolveResult =
   | { ok: true; resolution: ApprovalResolveResult }
-  | { ok: false; reason: "error" | "not-found" };
+  | { ok: false; reason: "error" | "not-found" | "not-authorized" };
 
 function resolveTerminalLabel(approval: ApprovalResolveResult["approval"]): string {
   if (approval.status === "allowed") {
@@ -151,9 +155,11 @@ class ExecApprovalButton extends Button {
       try {
         await interaction.followUp({
           content:
-            result.reason === "not-found"
-              ? `That approval request is no longer pending. It may have expired or already been resolved.`
-              : `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
+            result.reason === "not-authorized"
+              ? APPROVAL_AUTHORITY_REQUIRED_TEXT
+              : result.reason === "not-found"
+                ? `That approval request is no longer pending. It may have expired or already been resolved.`
+                : `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
           ephemeral: true,
         });
       } catch {}
@@ -227,7 +233,11 @@ export function createDiscordExecApprovalButtonContext(params: {
       } catch (err) {
         return {
           ok: false,
-          reason: isStructuredApprovalNotFoundError(err) ? "not-found" : "error",
+          reason: isApprovalAuthorityError(err)
+            ? "not-authorized"
+            : isStructuredApprovalNotFoundError(err)
+              ? "not-found"
+              : "error",
         };
       }
     },

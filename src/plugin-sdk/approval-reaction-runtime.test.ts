@@ -125,6 +125,43 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(onResolved).not.toHaveBeenCalled();
   });
 
+  // A refusal answers who may decide, so the reaction binding stays for a listed approver and
+  // the refusal is not replayed; a missing approval retires it.
+  it.each([
+    ["FORBIDDEN", "denied", { code: "APPROVAL_AUTHORITY_REQUIRED" }, false],
+    ["INVALID_REQUEST", "not-found", { reason: "APPROVAL_NOT_FOUND" }, true],
+  ] as const)(
+    "settles a %s resolve failure as %s",
+    async (gatewayCode, outcome, details, cleared) => {
+      vi.mocked(resolveApprovalOverGateway)
+        .mockReset()
+        .mockRejectedValue(Object.assign(new Error("refused"), { gatewayCode, details }));
+      const clearTarget = vi.fn();
+      const onError = vi.fn();
+      await expect(
+        settleApprovalReaction({
+          request: {
+            cfg: {},
+            channel: "signal",
+            accountId: "default",
+            senderId: "operator",
+            approvalId: "race",
+            approvalKind: "exec",
+            decision: "allow-once",
+          },
+          approvers: ["operator"],
+          authorizeActorAction: () => ({ authorized: true }),
+          loadResolver: async () => resolveApprovalOverGateway,
+          clearTarget,
+          onError,
+          onResolved: vi.fn(),
+        }),
+      ).resolves.toBe(outcome);
+      expect(clearTarget).toHaveBeenCalledTimes(cleared ? 1 : 0);
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
+
   const execRequest: ExecApprovalRequest = {
     id: "exec-approval-123",
     request: {

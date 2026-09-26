@@ -87,6 +87,8 @@ export function createNativeApprovalControlRegistry<
           complete(token);
           return { kind: "not-found", binding };
         }
+        // Anything else, a refusal included, says nothing about whether the approval is still
+        // open: keep the control and release the claim for the next tap.
         resolving.delete(token);
         throw error;
       }

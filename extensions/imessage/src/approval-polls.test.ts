@@ -605,6 +605,24 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     );
   });
 
+  it("keeps the binding without a retry when the Gateway refuses the voter", async () => {
+    await bind();
+    resolverMocks.resolveApprovalOverGateway.mockRejectedValueOnce(
+      Object.assign(new Error("approval decision requires a listed approver"), {
+        gatewayCode: "FORBIDDEN",
+        details: { code: "APPROVAL_AUTHORITY_REQUIRED" },
+      }),
+    );
+
+    await expect(
+      maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message: buildVote() }),
+    ).resolves.toBe(true);
+
+    resolverMocks.resolveApprovalOverGateway.mockResolvedValue({ applied: true, approval: {} });
+    await maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message: buildVote() });
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
+  });
+
   it("does not resolve once the binding expired", async () => {
     // Own poll GUID: sibling tests leave tombstones under POLL_GUID, and the
     // shared keyed store outlives clearForTest. Real polls always have unique

@@ -9,7 +9,7 @@ import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/sche
 import { findChatChannelLabel } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
-import { isApprovalNotFoundError } from "./approval-errors.js";
+import { resolveFirstApprovalKind } from "./approval-errors.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalMethod } from "./approval-gateway-runtime-methods.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
@@ -174,14 +174,11 @@ export async function resolveApprovalOverGateway(
       await requestLegacyResolve("plugin.approval.resolve");
       return undefined;
     }
-    try {
-      await requestLegacyResolve("exec.approval.resolve");
-    } catch (error) {
-      if (allowPluginFallback !== true || !isApprovalNotFoundError(error)) {
-        throw error;
-      }
-      await requestLegacyResolve("plugin.approval.resolve");
-    }
+    const legacyMethods: Array<Parameters<typeof requestLegacyResolve>[0]> =
+      allowPluginFallback === true
+        ? ["exec.approval.resolve", "plugin.approval.resolve"]
+        : ["exec.approval.resolve"];
+    await resolveFirstApprovalKind(legacyMethods, requestLegacyResolve);
     return undefined;
   };
 

@@ -347,6 +347,36 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
     expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a refused card usable and answers the refusal as a refusal", async () => {
+    registerCardBinding("token-refused", "approval-refused");
+    resolveApprovalOverGateway.mockRejectedValueOnce(
+      Object.assign(new Error("approval decision requires a listed approver"), {
+        gatewayCode: "FORBIDDEN",
+        details: { code: "APPROVAL_AUTHORITY_REQUIRED" },
+      }),
+    );
+    const target = createTarget();
+    const event = createCardClickEvent("token-refused");
+
+    await expect(maybeHandleGoogleChatApprovalCardClick({ event, target })).resolves.toBe(true);
+    expect(googleChatApprovalControls.get("token-refused")).not.toBeNull();
+    expect(target.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("approval refused: the account does not list this approver"),
+    );
+
+    resolveApprovalOverGateway.mockResolvedValueOnce(
+      createApprovalResolveResult({
+        applied: true,
+        approvalId: "approval-refused",
+        approvalKind: "exec",
+        decision: "allow-once",
+      }),
+    );
+    await expect(maybeHandleGoogleChatApprovalCardClick({ event, target })).resolves.toBe(true);
+    expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
+    expect(updateGoogleChatMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("consumes stale card tokens for approval-not-found gateway detail and ignores later clicks", async () => {
     const token = "token-stale-nested";
     const error = Object.assign(new Error("invalid approval request"), {

@@ -9,7 +9,7 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { resolveFirstApprovalKind } from "openclaw/plugin-sdk/error-runtime";
 import {
   parseStrictFiniteNumber,
   timestampMsToIsoString,
@@ -56,6 +56,7 @@ import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
 import { resolveSlackListenerEventScope, type SlackEventScope } from "../event-scope.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
+import { describeSlackApprovalResolveFailure } from "./approval-resolve-failure.js";
 import { enqueueSlackInteractionEvent } from "./interaction-event.js";
 import type { ModalInputSummary } from "./modal-input-summary.js";
 
@@ -622,17 +623,13 @@ async function handleSlackApprovalInteraction(params: {
     params.ctx.runtime.log?.(
       `slack:interaction approval resolve failed id=${params.approval.approvalId}: ${String(error)}`,
     );
-    // The clicker must see an outcome: pruned/expired records and gateway
-    // outages otherwise ack the click silently (Discord's sibling responds).
-    if (isApprovalNotFoundError(error)) {
-      await respondEphemeral(params.respond, "This approval is no longer pending.");
-      return true;
+    // Pruned/expired records and Gateway outages otherwise ack the click silently.
+    const failure = describeSlackApprovalResolveFailure(error);
+    await respondEphemeral(params.respond, failure.text);
+    if (failure.unexpected) {
+      throw error;
     }
-    await respondEphemeral(
-      params.respond,
-      "Could not reach the Gateway to resolve this approval. Try again.",
-    );
-    throw error;
+    return true;
   }
   return true;
 }
@@ -674,8 +671,8 @@ async function handleSlackLegacyApprovalInteraction(params: {
     return true;
   }
 
-  for (const [index, resolveMethod] of resolveMethods.entries()) {
-    try {
+  try {
+    await resolveFirstApprovalKind(resolveMethods, async (resolveMethod) => {
       await resolveApprovalOverGateway({
         cfg: params.ctx.cfg,
         approvalId: parsedApproval.approvalId,
@@ -685,28 +682,24 @@ async function handleSlackLegacyApprovalInteraction(params: {
         senderId: resolveMethod === "plugin" ? pluginSenderId : params.parsed.userId,
         resolveMethod,
       });
-      try {
-        await updateSlackInteractionMessage({
-          ctx: params.ctx,
-          eventScope: params.eventScope,
-          channelId: params.parsed.channelId,
-          messageTs: params.parsed.messageTs,
-          text: params.parsed.typedBody.message?.text ?? "",
-          blocks: [],
-        });
-      } catch {
-        // Best-effort cleanup only for historical command-backed controls.
-      }
-      return true;
-    } catch (error) {
-      if (index + 1 < resolveMethods.length && isApprovalNotFoundError(error)) {
-        continue;
-      }
-      params.ctx.runtime.log?.(
-        `slack:interaction legacy approval resolve failed id=${parsedApproval.approvalId}: ${String(error)}`,
-      );
-      throw error;
-    }
+    });
+  } catch (error) {
+    params.ctx.runtime.log?.(
+      `slack:interaction legacy approval resolve failed id=${parsedApproval.approvalId}: ${String(error)}`,
+    );
+    throw error;
+  }
+  try {
+    await updateSlackInteractionMessage({
+      ctx: params.ctx,
+      eventScope: params.eventScope,
+      channelId: params.parsed.channelId,
+      messageTs: params.parsed.messageTs,
+      text: params.parsed.typedBody.message?.text ?? "",
+      blocks: [],
+    });
+  } catch {
+    // Best-effort cleanup only for historical command-backed controls.
   }
   return true;
 }

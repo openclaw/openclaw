@@ -1,4 +1,5 @@
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import { isApprovalAuthorityError } from "openclaw/plugin-sdk/error-runtime";
 import { updateGoogleChatMessage } from "./api.js";
 import { googleChatApprovalAuth } from "./approval-auth.js";
 import {
@@ -61,23 +62,31 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
     return true;
   }
 
-  const outcome = await googleChatApprovalControls.settle(token, async (consumed) => {
-    const result = await resolveApprovalOverGateway({
-      cfg: params.target.config,
-      approvalId: consumed.approvalId,
-      approvalKind: consumed.approvalKind,
-      decision: consumed.decision,
-      channel: "googlechat",
-      accountId: params.target.account.accountId,
-      senderId: actor,
+  const outcome = await googleChatApprovalControls
+    .settle(token, async (consumed) => {
+      const result = await resolveApprovalOverGateway({
+        cfg: params.target.config,
+        approvalId: consumed.approvalId,
+        approvalKind: consumed.approvalKind,
+        decision: consumed.decision,
+        channel: "googlechat",
+        accountId: params.target.account.accountId,
+        senderId: actor,
+      });
+      await updateGoogleChatMessage({
+        account: params.target.account,
+        messageName: consumed.messageName,
+        cardsV2: buildGoogleChatCanonicalApprovalTerminalCards(result),
+      });
+      return result;
+    })
+    .catch((error: unknown): { kind: "refused" } => {
+      // A refusal says who may decide, not that the approval is gone: the card stays usable.
+      if (!isApprovalAuthorityError(error)) {
+        throw error;
+      }
+      return { kind: "refused" };
     });
-    await updateGoogleChatMessage({
-      account: params.target.account,
-      messageName: consumed.messageName,
-      cardsV2: buildGoogleChatCanonicalApprovalTerminalCards(result),
-    });
-    return result;
-  });
   if (outcome.kind !== "settled") {
     logIgnored(
       params.target,
@@ -85,7 +94,9 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
         ? "card token already consumed"
         : outcome.kind === "in-flight"
           ? "card token resolve already in flight"
-          : `approval expired or no longer exists id=${outcome.binding.approvalId}`,
+          : outcome.kind === "refused"
+            ? `approval refused: the account does not list this approver id=${binding.approvalId}`
+            : `approval expired or no longer exists id=${outcome.binding.approvalId}`,
     );
     return true;
   }

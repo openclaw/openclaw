@@ -1,6 +1,9 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  isApprovalAuthorityError,
+  isApprovalNotFoundError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
@@ -160,6 +163,14 @@ async function maybeResolveMatrixApprovalReaction(params: {
       });
       params.logVerboseMessage(
         `matrix: approval reaction ignored for expired approval id=${params.target.approvalId} sender=${params.senderId}`,
+      );
+      return true;
+    }
+    if (isApprovalAuthorityError(err)) {
+      // Refused, not transient: replaying would refuse again. A refusal answers who may
+      // decide, not whether the approval is still open, so the anchors stay.
+      params.logVerboseMessage(
+        `matrix: approval reaction denied id=${params.target.approvalId} sender=${params.senderId}; the account does not list this approver`,
       );
       return true;
     }

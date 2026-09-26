@@ -43,6 +43,8 @@ export const GatewayErrorDetailCodes = {
   SESSION_WORKSPACE_RECOVERY_REQUIRED: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
   TASK_WORKTREE_SOURCE_REQUIRED: "TASK_WORKTREE_SOURCE_REQUIRED",
   TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
+  /** A FORBIDDEN resolve whose reviewer the channel does not let decide this approval. */
+  APPROVAL_AUTHORITY_REQUIRED: "APPROVAL_AUTHORITY_REQUIRED",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */

@@ -2589,7 +2589,6 @@ src/infra/advertised-lan-host.ts	1
 src/infra/agent-event-lifecycle.ts	1
 src/infra/agent-events.ts	2
 src/infra/agent-lifecycle-error.ts	1
-src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
 src/infra/approval-handler-bootstrap.ts	1
 src/infra/approval-handler-runtime.ts	15

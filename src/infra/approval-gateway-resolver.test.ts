@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 // Covers approval resolution over the gateway client.
 import type { ApprovalResolveResult } from "../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
 import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
@@ -395,6 +396,37 @@ describe("resolveApprovalOverGateway", () => {
     expect(hoisted.clientRequest.mock.calls).toEqual([
       ["exec.approval.resolve", { id: "approval-1", decision: "allow-always" }],
       ["plugin.approval.resolve", { id: "approval-1", decision: "allow-always" }],
+    ]);
+  });
+
+  // The Gateway refuses only a named reviewer, and a channel that authorizes one kind refuses
+  // the other; the walk goes on, and when the other kind is missing it ends with the refusal.
+  it("continues the plugin fallback past a refusal and reports it over not-found", async () => {
+    const cfg: OpenClawConfig = {};
+    const refusal = Object.assign(new Error("approval decision requires a listed approver"), {
+      gatewayCode: "FORBIDDEN",
+      details: { code: "APPROVAL_AUTHORITY_REQUIRED" },
+    });
+    const notFound = Object.assign(new Error("unknown or expired approval id"), {
+      gatewayCode: "APPROVAL_NOT_FOUND",
+    });
+    hoisted.clientRequest.mockRejectedValueOnce(refusal).mockRejectedValueOnce(notFound);
+
+    await expect(
+      resolveApprovalOverGateway({
+        cfg,
+        approvalId: "approval-1",
+        decision: "deny",
+        allowPluginFallback: true,
+        channel: "telegram",
+        accountId: "ops",
+        senderId: "owner",
+      }),
+    ).rejects.toBe(refusal);
+    const reviewer = { channel: "telegram", accountId: "ops", senderId: "owner" };
+    expect(hoisted.clientRequest.mock.calls).toEqual([
+      ["exec.approval.resolve", { id: "approval-1", decision: "deny", reviewer }],
+      ["plugin.approval.resolve", { id: "approval-1", decision: "deny", reviewer }],
     ]);
   });
 

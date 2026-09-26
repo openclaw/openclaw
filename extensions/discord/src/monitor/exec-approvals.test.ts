@@ -340,6 +340,22 @@ describe("discord exec approval monitor helpers", () => {
     });
   });
 
+  it("tells a refused reviewer who may decide instead of calling the approval gone", async () => {
+    const interaction = createInteraction();
+    const button = createExecApprovalButton({
+      getApprovers: () => ["123"],
+      resolveApproval: async () => ({ ok: false, reason: "not-authorized" }),
+    });
+
+    await button.run(interaction, { kind: "exec", id: "abc", action: "allow-once" });
+
+    expect(interaction["followUp"]).toHaveBeenCalledWith({
+      content:
+        "That decision needs an approver listed for this channel. Ask a listed approver to decide it.",
+      ephemeral: true,
+    });
+  });
+
   it.each(["exec", "plugin", "system-agent"] as const)(
     "routes %s button resolutions through the canonical gateway method",
     async (approvalKind) => {
@@ -386,6 +402,25 @@ describe("discord exec approval monitor helpers", () => {
     await expect(ctx.resolveApproval("abc", "plugin", "allow-once", "123")).resolves.toEqual({
       ok: false,
       reason: "not-found",
+    });
+  });
+
+  it("classifies a Gateway refusal apart from a missing approval", async () => {
+    resolveApprovalOverGatewayMock.mockRejectedValue(
+      Object.assign(new Error("approval decision requires a listed approver"), {
+        gatewayCode: "FORBIDDEN",
+        details: { code: "APPROVAL_AUTHORITY_REQUIRED" },
+      }),
+    );
+    const ctx = createDiscordExecApprovalButtonContext({
+      cfg: buildConfig({ enabled: true, approvers: ["123"] }),
+      accountId: "default",
+      config: { enabled: true, approvers: ["123"] },
+    });
+
+    await expect(ctx.resolveApproval("abc", "exec", "allow-once", "123")).resolves.toEqual({
+      ok: false,
+      reason: "not-authorized",
     });
   });
 

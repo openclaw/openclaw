@@ -334,6 +334,35 @@ describe("matrix approval reactions", () => {
     ).toBeNull();
   });
 
+  it("retains approval anchors without a replay when the Gateway refuses the reviewer", async () => {
+    const core = buildCore();
+    const cfg = buildConfig();
+    await registerMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$approval-msg",
+      approvalId: "req-123",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once"],
+    });
+    const client = createReactionClient();
+    resolveMatrixApproval.mockRejectedValueOnce(
+      Object.assign(new Error("approval decision requires a listed approver"), {
+        gatewayCode: "FORBIDDEN",
+        details: { code: "APPROVAL_AUTHORITY_REQUIRED" },
+      }),
+    );
+
+    await expect(handleReaction({ client, core, cfg })).resolves.toBeUndefined();
+    expect(
+      await resolveMatrixApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "✅",
+      }),
+    ).not.toBeNull();
+  });
+
   it("retains approval anchors and propagates transient Gateway failures for replay", async () => {
     const core = buildCore();
     const cfg = buildConfig();

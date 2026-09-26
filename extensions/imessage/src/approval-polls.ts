@@ -10,7 +10,10 @@ import {
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  isApprovalAuthorityError,
+  isApprovalNotFoundError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -560,6 +563,15 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
       });
       info("approval poll vote ignored: approval already gone", {
         approvalId: target.approvalId,
+      });
+      return true;
+    }
+    if (isApprovalAuthorityError(error)) {
+      // A refusal answers who may decide, not whether the approval is still open: do not
+      // retry this vote, and keep the binding so a vote from a listed approver can land.
+      info("approval poll vote denied: the account does not list this approver", {
+        approvalId: target.approvalId,
+        senderId: event.actorHandle,
       });
       return true;
     }

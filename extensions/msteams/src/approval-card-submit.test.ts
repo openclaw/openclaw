@@ -321,6 +321,30 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     expect(msTeamsApprovalControls.get(token)).toBeNull();
   });
 
+  it("keeps a refused card usable and answers the refusal without throwing", async () => {
+    const token = "refused";
+    registerBinding({ token });
+    resolveApprovalOverGateway.mockRejectedValueOnce(
+      Object.assign(new Error("approval decision requires a listed approver"), {
+        gatewayCode: "FORBIDDEN",
+        details: { code: "APPROVAL_AUTHORITY_REQUIRED" },
+      }),
+    );
+    const deps = createDeps();
+    const context = createContext({ token });
+
+    await expect(maybeHandleMSTeamsApprovalCardSubmit({ context, deps })).resolves.toBe(true);
+    expect(msTeamsApprovalControls.get(token)).not.toBeNull();
+    expect(context.updateActivity).not.toHaveBeenCalled();
+
+    resolveApprovalOverGateway.mockResolvedValueOnce(
+      createResolution({ approvalId: `approval-${token}`, decision: "allow-once", applied: true }),
+    );
+    await expect(maybeHandleMSTeamsApprovalCardSubmit({ context, deps })).resolves.toBe(true);
+    expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
+    expect(context.updateActivity).toHaveBeenCalledTimes(1);
+  });
+
   it("retires permanently missing approvals and ignores subsequent clicks", async () => {
     const token = "not-found";
     registerBinding({ token });

@@ -22,6 +22,7 @@ import {
   resolvePendingApprovalRecord,
   resolveResolvedApprovalRecord,
   respondPendingApprovalLookupError,
+  respondApprovalAuthorityRequired,
   respondUnknownOrExpiredApproval,
 } from "./approval-record-lookup.js";
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
@@ -518,7 +519,7 @@ export async function handleApprovalResolve<
       })
     : null;
   if (params.reviewer && !custody) {
-    respondUnknownOrExpiredApproval(params.respond);
+    respondApprovalAuthorityRequired(params.respond);
     return;
   }
   const recordFilter = custody

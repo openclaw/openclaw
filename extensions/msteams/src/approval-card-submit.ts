@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import { isApprovalAuthorityError } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import {
@@ -77,29 +78,39 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
     return true;
   }
 
-  const outcome = await msTeamsApprovalControls.settle(token, async (consumed) => {
-    const result = await resolveApprovalOverGateway({
-      cfg: deps.cfg,
-      approvalId: consumed.approvalId,
-      approvalKind: consumed.approvalKind,
-      decision: consumed.decision,
-      channel: "msteams",
-      accountId: DEFAULT_ACCOUNT_ID,
-      senderId,
+  const outcome = await msTeamsApprovalControls
+    .settle(token, async (consumed) => {
+      const result = await resolveApprovalOverGateway({
+        cfg: deps.cfg,
+        approvalId: consumed.approvalId,
+        approvalKind: consumed.approvalKind,
+        decision: consumed.decision,
+        channel: "msteams",
+        accountId: DEFAULT_ACCOUNT_ID,
+        senderId,
+      });
+      await context.updateActivity({
+        ...buildMSTeamsAdaptiveCardActivity(buildMSTeamsCanonicalApprovalTerminalCard(result)),
+        id: consumed.activityId,
+      });
+      return result;
+    })
+    .catch((error: unknown): { kind: "refused" } => {
+      // A refusal says who may decide, not that the approval is gone: the card stays usable.
+      if (!isApprovalAuthorityError(error)) {
+        throw error;
+      }
+      return { kind: "refused" };
     });
-    await context.updateActivity({
-      ...buildMSTeamsAdaptiveCardActivity(buildMSTeamsCanonicalApprovalTerminalCard(result)),
-      id: consumed.activityId,
-    });
-    return result;
-  });
   if (outcome.kind !== "settled") {
     ignored(
       outcome.kind === "missing"
         ? "card token already consumed"
         : outcome.kind === "in-flight"
           ? "card token resolve already in flight"
-          : `approval expired or no longer exists id=${outcome.binding.approvalId}`,
+          : outcome.kind === "refused"
+            ? `approval refused: the account does not list this approver id=${binding.approvalId}`
+            : `approval expired or no longer exists id=${outcome.binding.approvalId}`,
     );
     return true;
   }

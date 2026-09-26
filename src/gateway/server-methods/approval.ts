@@ -37,7 +37,10 @@ import {
   type ExecApprovalIosPushDelivery,
   type PluginApprovalIosPushDelivery,
 } from "./approval-publication.js";
-import { canAccessApprovalSession } from "./approval-record-lookup.js";
+import {
+  canAccessApprovalSession,
+  respondApprovalAuthorityRequired,
+} from "./approval-record-lookup.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { respondApprovalStorageUnavailable } from "./approval-shared.js";
 import { loadVisibleApproval } from "./approval-visible-record.js";
@@ -348,7 +351,14 @@ export function createApprovalHandlers(
           : record.kind === "plugin"
             ? params.pluginApprovalManager.getLiveSnapshot(record.id)
             : params.systemAgentApprovalManager?.getLiveSnapshot(record.id);
-      if (resolveParams?.reviewer && (!custody || !liveRecord || !custody.authorizes(liveRecord))) {
+      if (resolveParams?.reviewer && !custody) {
+        // The channel refused this reviewer; the approval itself is not in question.
+        respondApprovalAuthorityRequired(respond);
+        return;
+      }
+      if (custody && (!liveRecord || !custody.authorizes(liveRecord))) {
+        // Bound to another account: anything but "not found" would tell one account that
+        // another account's approval id exists.
         respondApprovalNotFound(respond);
         return;
       }

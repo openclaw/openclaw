@@ -431,7 +431,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-flags` | `isDiagnosticFlagEnabled` for flag-only consumers without event, trace, or redaction initialization |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, trace-context, and low-cardinality dimension normalization helpers |
-    | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |
+    | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError`, `isApprovalAuthorityError` (a reviewer the channel does not list; says nothing about whether the approval still exists), `resolveFirstApprovalKind` (tries each approval kind in order, moving on only past not-found or a refusal; any other failure ends the walk, and when every kind fails the refusal is rethrown if one refused, otherwise the last not-found), `APPROVAL_AUTHORITY_REQUIRED_TEXT` |
     | `plugin-sdk/fetch-runtime` | Private-local after July 2026; Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/proxy-capture` | Debug proxy capture configuration, SQLite-backed capture storage and read-only access, HTTP/WebSocket capture events, and capture lifecycle helpers |
     | `plugin-sdk/runtime-fetch` | Private-local after July 2026; Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |

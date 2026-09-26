@@ -11,7 +11,11 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  isApprovalAuthorityError,
+  isApprovalNotFoundError,
+  resolveFirstApprovalKind,
+} from "openclaw/plugin-sdk/error-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramApprovalCallback } from "./approval-callback-data.js";
@@ -211,6 +215,11 @@ export function createTelegramCallbackApprovalRuntime(params: {
         });
         return;
       }
+      if (isApprovalAuthorityError(resolveErr)) {
+        // A refusal is an answer, not a transient failure. Replaying it could record this old
+        // click as a decision once someone is listed again. The buttons stay for whoever is.
+        return;
+      }
       throw new TelegramRetryableCallbackError(resolveErr);
     }
   };
@@ -245,7 +254,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
       return;
     }
 
-    for (const approvalKind of approvalKinds) {
+    const resolveLegacyKind = async (approvalKind: ChannelApprovalKind): Promise<void> => {
       const canonicalCallback: TelegramApprovalCallback = {
         type: "approval",
         approvalId: approvalCallback.approvalId,
@@ -268,40 +277,52 @@ export function createTelegramCallbackApprovalRuntime(params: {
           decision: approvalCallback.decision,
           outcome: "resolved-here",
         });
-        return;
       } catch (resolveErr) {
-        if (isApprovalNotFoundError(resolveErr)) {
-          continue;
+        if (!isApprovalAlreadyResolvedError(resolveErr)) {
+          throw resolveErr;
         }
-        if (isApprovalAlreadyResolvedError(resolveErr)) {
-          try {
-            const result = await resolveCanonicalApproval(canonicalCallback);
-            await terminalizeCanonicalApproval(canonicalCallback, result);
-          } catch (canonicalError) {
-            if (
-              !isApprovalNotFoundError(canonicalError) &&
-              !isApprovalAlreadyResolvedError(canonicalError)
-            ) {
-              throw new TelegramRetryableCallbackError(canonicalError);
-            }
-            logVerbose(
-              `telegram: canonical approval lookup failed after stale legacy callback ` +
-                `${approvalCallback.approvalId}: ${String(canonicalError)}`,
-            );
-            await terminalizeLegacyApproval({
-              approvalId: approvalCallback.approvalId,
-              outcome: "no-longer-pending",
-            });
+        try {
+          const result = await resolveCanonicalApproval(canonicalCallback);
+          await terminalizeCanonicalApproval(canonicalCallback, result);
+        } catch (canonicalError) {
+          if (
+            !isApprovalNotFoundError(canonicalError) &&
+            !isApprovalAlreadyResolvedError(canonicalError)
+          ) {
+            throw new TelegramRetryableCallbackError(canonicalError);
           }
-          return;
+          logVerbose(
+            `telegram: canonical approval lookup failed after stale legacy callback ` +
+              `${approvalCallback.approvalId}: ${String(canonicalError)}`,
+          );
+          await terminalizeLegacyApproval({
+            approvalId: approvalCallback.approvalId,
+            outcome: "no-longer-pending",
+          });
         }
+      }
+    };
+
+    try {
+      await resolveFirstApprovalKind(approvalKinds, resolveLegacyKind);
+      return;
+    } catch (resolveErr) {
+      if (isApprovalAuthorityError(resolveErr)) {
+        // The account does not let this reviewer decide. That says nothing about whether the
+        // approval is still open, so leave the buttons for a reviewer the account lists.
+        logVerbose(`telegram: approval callback refused ${approvalCallback.approvalId}`);
+        return;
+      }
+      if (resolveErr instanceof TelegramRetryableCallbackError) {
+        throw resolveErr;
+      }
+      if (!isApprovalNotFoundError(resolveErr)) {
         logVerbose(
           `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${String(resolveErr)}`,
         );
         throw new TelegramRetryableCallbackError(resolveErr);
       }
     }
-
     logVerbose(`telegram: approval callback not found ${approvalCallback.approvalId}`);
     if (!pluginApprovalAuthorizedSender) {
       return;
