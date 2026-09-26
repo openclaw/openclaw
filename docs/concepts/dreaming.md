@@ -11,8 +11,11 @@ read_when:
 Dreaming is the background memory consolidation system in `memory-core`. It moves strong short-term signals into durable memory while keeping the process explainable and reviewable.
 
 <Note>
-Dreaming is enabled by default. Set
+Dreaming is enabled by default. Memory CLI commands use the built-in path: set
 `plugins.entries.memory-core.config.dreaming.enabled: false` to disable it.
+The managed Gateway sidecar instead reads
+`plugins.entries.<memory-slot-owner>.config.dreaming` when the selected memory
+plugin exposes those settings.
 </Note>
 
 When the cron scheduler is disabled (`cron.enabled: false` or
@@ -298,7 +301,11 @@ This selects the execution owner; it does not change any agent's workspace or li
 
 ## Key defaults
 
-All settings live under `plugins.entries.memory-core.config.dreaming`.
+For the built-in `memory-core` memory slot (the default), dreaming settings live under `plugins.entries.memory-core.config.dreaming`.
+
+The defaults below document the built-in `memory-core` path used by Memory CLI commands such as `openclaw memory status`, promote, and REM helpers.
+
+Separately, the managed Gateway dreaming sidecar may read dreaming **settings** from the selected memory-slot owner when that plugin exposes them. That Gateway path does not mean every vector-backed memory plugin implements the built-in Light / REM / Deep dreaming pipeline — see [LanceDB and dreaming](#lancedb-and-dreaming).
 
 <ParamField path="enabled" type="boolean" default="true">
   Enable or disable the dreaming sweep.
@@ -347,6 +354,12 @@ Diary view gains two more sub-tabs next to Dreams:
   full-vault breakdown, and inline page previews
 
 Both sub-tabs show an enable hint instead when `memory-wiki` is off.
+
+## LanceDB and dreaming
+
+The managed Gateway dreaming sidecar may read dreaming **settings** from the selected `plugins.slots.memory` owner when that plugin exposes them. Memory CLI status / promote / REM helpers still follow the built-in `memory-core` config path above.
+
+Slot-owned Gateway settings are separate from consolidating a LanceDB (or other vector) index with a full Light / REM / Deep pipeline and narrative output. The built-in `memory-core` dreaming pipeline remains the documented default. For third-party **vector-native** dreaming implementations, browse community plugins on [ClawHub](https://clawhub.ai/).
 
 ## Related
 
