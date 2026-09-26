@@ -36,6 +36,7 @@ type PluginHookGatewayCronJobState = {
 export type PluginHookGatewayCronJob = {
   id: string;
   declarationKey?: string;
+  owner?: { agentId?: string; sessionKey?: string };
   /** Agent id that owns this cron job. */
   agentId?: string;
   name?: string;
@@ -114,6 +115,12 @@ type PluginHookGatewayCronRemoveResult = {
 
 export type PluginHookGatewayCronService = {
   list: (opts?: { includeDisabled?: boolean }) => Promise<PluginHookGatewayCronJob[]>;
+  getJob: (id: string) => PluginHookGatewayCronJob | undefined;
+  run: (
+    id: string,
+    mode: "force",
+    opts: { evaluateTrigger: true; commitGuard?: () => void },
+  ) => Promise<{ ok: boolean; ran?: boolean }>;
   add: (input: PluginHookGatewayCronCreateInput) => Promise<unknown>;
   update: (id: string, patch: PluginHookGatewayCronUpdateInput) => Promise<unknown>;
   mutateTriggerState: (

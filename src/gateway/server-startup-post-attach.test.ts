@@ -474,6 +474,8 @@ function firstGatewayStartCall(
 function createHookCronHostFixture() {
   return {
     list: vi.fn(),
+    getJob: vi.fn(),
+    run: vi.fn(),
     add: vi.fn(),
     update: vi.fn(),
     updateWithPrecondition: vi.fn(),

@@ -19,6 +19,8 @@ export function isPluginServiceCronHost(value: unknown): value is PluginServiceC
   }
   return [
     "list",
+    "getJob",
+    "run",
     "add",
     "update",
     "updateWithPrecondition",
