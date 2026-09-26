@@ -7,7 +7,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
-import { createCpuTrackedWorker } from "./worker-cpu.js";
+import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -402,6 +402,10 @@ class WorkerTaskPoolCore<Input, Output> {
     this.workersCreated++;
     slot.worker = worker;
     worker.on("message", (message: unknown) => {
+      // Native message events inherit the Worker's detached creation context.
+      if (receiveWorkerMemoryPort(worker, message)) {
+        return;
+      }
       const task = slot.task;
       if (task) {
         task.runInContext(() => this.receive(slot, message));
@@ -460,6 +464,7 @@ class WorkerTaskPoolCore<Input, Output> {
             taskId: task.id,
             interactive: Boolean(task.options.onRequest),
             nativeSections: slot.nativeSections.buffer,
+            sampleMemory: true,
           },
           transferList,
         );

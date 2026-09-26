@@ -329,10 +329,14 @@ their own environment retain an isolated catalog worker for that environment.
 Provider-discovery entries use the exact selected runtime instance's captured
 source when it is already loaded, so discovery does not create a second copy of
 the same plugin package. Standalone discovery keeps its own setup lifetime.
-Each worker retains one prepared catalog generation. Replacement releases the
-previous generation's registrations after its work settles. Successfully disposed
-registrations leave their plugin caches; unchanged registrations remain reusable
-across agent requests within the same inventory.
+Each worker retains the current prepared catalog generation for each loader
+workspace. Alternating unchanged workspaces reuse their captured source; replacing
+one workspace does not evict another. Node retains native ESM module graphs until
+worker retirement even after their capture files are removed, so actual generation
+changes can still retain module memory during that lifetime. Replacement releases
+the previous generation's registrations after its work settles. Successfully
+disposed registrations leave their plugin caches; unchanged registrations remain
+reusable across agent requests within the same inventory.
 Catalog workers use a 512 MiB V8 old-generation limit rather than inheriting the
 Gateway's default heap budget. Explicit process-wide heap flags override this
 limit; native and external allocations are outside it.

@@ -16,6 +16,13 @@ import {
 } from "../infra/errors.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
+import {
+  assignOptionalFields,
+  readObject,
+  readOptionalPositiveInteger,
+  readRequiredNumber,
+} from "./diagnostic-stability-readers.js";
 import {
   getDiagnosticStabilitySnapshot,
   MAX_DIAGNOSTIC_STABILITY_LIMIT,
@@ -271,28 +278,6 @@ function isBundleFile(name: string): boolean {
   return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
 }
 
-function readObject(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Invalid stability bundle: ${label} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function readRequiredNumber(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`Invalid stability bundle: ${label} must be a finite number`);
-  }
-  return value;
-}
-
-function readOptionalPositiveInteger(value: unknown, label: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const parsed = readRequiredNumber(value, label);
-  return parsed >= 0 ? Math.floor(parsed) : undefined;
-}
-
 function readTimestampMs(value: unknown, label: string): number {
   const timestamp = readRequiredNumber(value, label);
   if (Number.isNaN(new Date(timestamp).getTime())) {
@@ -337,33 +322,6 @@ function readOptionalCodeString(value: unknown, label: string): string | undefin
   }
   const code = readRequiredString(value, label);
   return SAFE_REASON_CODE.test(code) ? code : undefined;
-}
-
-function assignOptionalFields<T extends object>(
-  target: T,
-  source: Record<string, unknown>,
-  label: string,
-  fields: readonly (keyof T & string)[],
-  read: (value: unknown, label: string) => string | number | undefined,
-): void {
-  // The fixed order preserves serialized fields and the first failing validation label.
-  for (const key of fields) {
-    const parsed = read(source[key], `${label}.${key}`);
-    if (parsed !== undefined) {
-      (target as Record<string, unknown>)[key] = parsed;
-    }
-  }
-}
-
-function readMemoryUsage(value: unknown, label: string): DiagnosticMemoryUsage {
-  const memory = readObject(value, label);
-  return {
-    rssBytes: readRequiredNumber(memory.rssBytes, `${label}.rssBytes`),
-    heapTotalBytes: readRequiredNumber(memory.heapTotalBytes, `${label}.heapTotalBytes`),
-    heapUsedBytes: readRequiredNumber(memory.heapUsedBytes, `${label}.heapUsedBytes`),
-    externalBytes: readRequiredNumber(memory.externalBytes, `${label}.externalBytes`),
-    arrayBuffersBytes: readRequiredNumber(memory.arrayBuffersBytes, `${label}.arrayBuffersBytes`),
-  };
 }
 
 function readHeapStatistics(value: unknown): DiagnosticHeapStatisticsSummary | undefined {

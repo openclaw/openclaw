@@ -534,7 +534,7 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
 }
 
 // Keep custody outside the request scope: an inline closure also retains `previous`,
-// chaining every superseded generation through the worker's one current entry.
+// chaining every superseded generation through the worker's current entries.
 function retainWorkerGeneration(prepared: WorkerGeneration): () => Promise<void> {
   const releaseBase = ownPreparedPluginGeneration(prepared.pluginGeneration).retain();
   return async () => {
@@ -548,10 +548,12 @@ function retainWorkerGeneration(prepared: WorkerGeneration): () => Promise<void>
 
 if (parentPort) {
   const data = workerData as PreparedModelCatalogWorkerData;
-  // Serial worker tasks share one successful generation, including across fleet changes.
-  let current:
-    | { fingerprint: string; prepared: WorkerGeneration; release: () => Promise<void> }
-    | undefined;
+  // Evicting another workspace recaptures native ESM graphs that Node cannot unload.
+  // Keep each workspace's current generation within this inventory-owned worker lifetime.
+  const contexts = new Map<
+    string | undefined,
+    { fingerprint: string; prepared: WorkerGeneration; release: () => Promise<void> }
+  >();
   serveWorkerTasks(async (input) => {
     // SAFETY: The Gateway pool is the sole producer of this private task envelope.
     const task = data.kind === "gateway" ? (input as PreparedModelCatalogWorkerTask) : undefined;
@@ -563,7 +565,8 @@ if (parentPort) {
     return withPluginSourceCaptureDirectory(
       data.sourceCaptureDirectory,
       async () => {
-        const previous = current;
+        const workspaceDir = value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir;
+        const previous = contexts.get(workspaceDir);
         let attempted: WorkerGeneration | undefined;
         let release: (() => Promise<void>) | undefined;
         try {
@@ -578,11 +581,11 @@ if (parentPort) {
             return prepared;
           });
           if (attempted && release && result.status === "ok") {
-            current = {
+            contexts.set(workspaceDir, {
               fingerprint: value.generationFingerprint,
               prepared: attempted,
               release,
-            };
+            });
             attempted = undefined;
             release = undefined;
             // Acquire the replacement before releasing shared source registrations.
