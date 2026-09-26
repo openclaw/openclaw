@@ -253,17 +253,6 @@ type ConnectTimingPayload = {
 
 const requireRecord = createRequireRecord("record", "expected-label");
 
-function requireFirstMockArg(
-  mock: ReturnType<typeof vi.fn>,
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return requireRecord(call[0], `${label} payload`);
-}
-
 function requireMockCallArg(
   mock: ReturnType<typeof vi.fn>,
   index: number,
@@ -907,7 +896,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     expect(() => client.start()).not.toThrow();
-    const close = requireFirstMockArg(onClose, "close");
+    const close = requireMockCallArg(onClose, 0, "close");
     expect(close.code).toBe(1006);
     expect(close.reason).toBe("security error");
     const closeError = requireRecord(close.error, "close error");
@@ -946,7 +935,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     expect(() => client.start()).not.toThrow();
-    const close = requireFirstMockArg(onClose, "close");
+    const close = requireMockCallArg(onClose, 0, "close");
     expect(close.code).toBe(1006);
     expect(close.reason).toBe("websocket error");
     const closeError = requireRecord(close.error, "close error");
@@ -1199,7 +1188,7 @@ describe("GatewayBrowserClient", () => {
       expect(JSON.stringify(error)).not.toContain("not-for-logs");
     }
     expect(onRequestTiming).toHaveBeenCalledTimes(1);
-    expect(requireFirstMockArg(onRequestTiming, "request timing")).not.toHaveProperty("params");
+    expect(requireMockCallArg(onRequestTiming, 0, "request timing")).not.toHaveProperty("params");
     expect(JSON.stringify(onRequestTiming.mock.calls)).not.toContain("not-for-logs");
     expectLatestRequestTiming(onRequestTiming, {
       id: frame.id,
@@ -2642,7 +2631,7 @@ describe("GatewayBrowserClient", () => {
     await expectSocketClosed(ws);
     ws.emitClose(4008, "connect failed");
 
-    const close = requireFirstMockArg(onClose, "close");
+    const close = requireMockCallArg(onClose, 0, "close");
     expect(close.willRetry).toBe(false);
     expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
       phase: "failed",
