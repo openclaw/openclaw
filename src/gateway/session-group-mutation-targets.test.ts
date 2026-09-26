@@ -7,11 +7,11 @@ import * as sqliteIntegrity from "../infra/sqlite-integrity.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import * as agentDatabaseLeases from "../state/openclaw-agent-db-lease.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { setStateDirEnv, withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { readSessionGroupMembershipInWorker } from "./session-group-catalog.js";
 
@@ -61,6 +61,7 @@ test.each([false, true])(
           await upsertSessionEntryCore(scope, entry);
         }
         if (cold) {
+          await closeOpenClawAgentDatabasesAsync();
           closeOpenClawAgentDatabasesForTest();
         }
         expect(await readTargets()).toEqual(new Map([["Shared work", scopes]]));
@@ -95,8 +96,6 @@ test.each([false, true])(
         });
       } finally {
         parse.mockRestore();
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
       }
     });
   },
@@ -105,8 +104,6 @@ test.each([false, true])(
 test("discovers groups across more than the handle cap without writable database maintenance", async () => {
   await withStateDirEnv("openclaw-session-group-readonly-", async ({ stateDir }) => {
     setStateDirEnv(fs.realpathSync(stateDir));
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
 
     const agentIds = Array.from(
       { length: EXPECTED_OPEN_HANDLE_CAP + 1 },
@@ -124,6 +121,7 @@ test("discovers groups across more than the handle cap without writable database
         { category: "Shared work", sessionId: `group-session-${index}`, updatedAt: index + 1 },
       );
     }
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
 
     const integritySpy = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
@@ -153,8 +151,6 @@ test("discovers groups across more than the handle cap without writable database
       claimSpy.mockRestore();
       releaseSpy.mockRestore();
       walSpy.mockRestore();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
     }
   });
 });
