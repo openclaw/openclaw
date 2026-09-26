@@ -4725,7 +4725,7 @@ describe("google-meet plugin", () => {
       message: "Say exactly: hello.",
     });
 
-    const startCall = requireNodeInvocation(nodesInvoke, {
+    requireNodeInvocation(nodesInvoke, {
       command: "googlemeet.chrome",
       action: "start",
     });
