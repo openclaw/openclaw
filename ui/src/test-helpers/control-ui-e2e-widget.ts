@@ -8,7 +8,7 @@ export async function clickBoardWidgetControl(page: Page, control: Locator): Pro
   if (!target) {
     throw new Error("Board widget control is unavailable.");
   }
-  const elements: ElementHandle<Node>[] = [target];
+  const elements: ElementHandle[] = [target];
   const pointer = await target.evaluateHandle((element) => {
     let event: PointerEvent | undefined;
     const observe = (received: Event) => {
