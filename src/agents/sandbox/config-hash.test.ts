@@ -79,6 +79,30 @@ describe("sandbox config hashes", () => {
     expect(withoutResources).not.toBe(withResources);
   });
 
+  it("preserves browser bind order", () => {
+    const shared = createBrowserHashInput();
+    const binds = ["/tmp/workspace:/workspace:rw", "/tmp/cache:/cache:ro"];
+    const left = computeSandboxBrowserConfigHash({
+      ...shared,
+      docker: { ...shared.docker, binds },
+    });
+    const right = computeSandboxBrowserConfigHash({
+      ...shared,
+      docker: { ...shared.docker, binds: binds.toReversed() },
+    });
+    expect(left).not.toBe(right);
+  });
+
+  it("changes when the browser mount format version changes", () => {
+    const shared = createBrowserHashInput();
+    const left = computeSandboxBrowserConfigHash(shared);
+    const right = computeSandboxBrowserConfigHash({
+      ...shared,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION - 1,
+    });
+    expect(left).not.toBe(right);
+  });
+
   it("changes when the browser security epoch changes", () => {
     const shared = createBrowserHashInput();
     const left = computeSandboxBrowserConfigHash(shared);

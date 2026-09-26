@@ -47,6 +47,7 @@ describe("resolveStoredCredentialReadOnlyAvailability", () => {
 
   it.each<{
     name: string;
+    type?: "api_key" | "token";
     provider: string;
     secrets?: OpenClawConfig["secrets"];
     expected: boolean | undefined;
@@ -86,17 +87,39 @@ describe("resolveStoredCredentialReadOnlyAvailability", () => {
       secrets: { defaults: { store: "shared" } },
       expected: false,
     },
+    {
+      name: "selected token default shadowing a file provider",
+      type: "token",
+      provider: "shared",
+      secrets: {
+        defaults: { store: "shared" },
+        providers: { shared: { source: "file", path: "/tmp/unused.json" } },
+      },
+      expected: undefined,
+    },
+    {
+      name: "missing non-default token provider",
+      type: "token",
+      provider: "shared",
+      expected: false,
+    },
+    {
+      name: "mismatched non-default token provider",
+      type: "token",
+      provider: "shared",
+      secrets: { providers: { shared: { source: "file", path: "/tmp/unused.json" } } },
+      expected: false,
+    },
   ])(
     "classifies store refs with $name without resolving them",
-    ({ provider, secrets, expected }) => {
+    ({ type = "api_key", provider, secrets, expected }) => {
+      const ref = { source: "store", provider, id: "STORED_API_KEY" } as const;
       expect(
         resolveStoredCredentialReadOnlyAvailability({
-          credential: {
-            type: "api_key",
-            provider: "test",
-            key: "retained-inline",
-            keyRef: { source: "store", provider, id: "STORED_API_KEY" },
-          },
+          credential:
+            type === "api_key"
+              ? { type, provider: "test", key: "retained-inline", keyRef: ref }
+              : { type, provider: "test", token: "retained-inline", tokenRef: ref },
           cfg: { secrets },
           env: {},
         }),

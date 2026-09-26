@@ -699,6 +699,8 @@ describe("SystemAgentChatEngine approval", () => {
   it.each([
     "config set gateway.auth..token very-secret",
     "config set gateway.auth.token=very-secret",
+    String.raw`config set gateway.auth.token\=very-secret please`,
+    'config set gateway.auth["token=very-secret"] please',
     "config set plugins.entries.codex.config.appServer.headers.Authorization=Bearer-abc please",
     "config set-ref gateway.auth.tokenabcDEF123 env GATEWAY_TOKEN",
     "config set-ref gateway.auth.token env 123:actual-gateway-token",

@@ -238,6 +238,7 @@ describe("AuthStorage OAuth refresh ownership", () => {
 
   it.each([
     { state: "fresh", expires: Date.now() + 600_000 },
+    { state: "expired", expires: 1 },
     { state: "pending", expires: 1 },
   ])(
     "rejects an initial $state credential owned by another provider",
@@ -431,6 +432,10 @@ describe("AuthStorage OAuth refresh ownership", () => {
     {
       name: "fresh initial credential",
       initial: createCredential({ provider: "provider-b", expires: Date.now() + 600_000 }),
+    },
+    {
+      name: "expired initial credential",
+      initial: createCredential({ provider: "provider-b", expires: 1 }),
     },
     {
       name: "pending initial fence",

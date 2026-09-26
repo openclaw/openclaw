@@ -183,7 +183,8 @@ describe("task-registry maintenance issue #60299", () => {
       sessionStore: { [childSessionKey]: { sessionId: childSessionKey, updatedAt: Date.now() } },
     });
 
-    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
     expectTaskStatus(currentTasks, task.taskId, "lost");
   });
 
