@@ -1,12 +1,10 @@
 import type { SessionEvent } from "@github/copilot-sdk";
-import {
-  captureAgentHarnessTaskAssignment,
-  createAgentHarnessTaskRuntime,
-  matchesAgentHarnessTaskAssignment,
-  type AgentHarnessTaskAssignment,
-  type AgentHarnessTaskRuntime,
-  type AgentHarnessScopedFinalizeTaskRunParams,
-  type AgentHarnessTaskRuntimeScope,
+import * as taskRuntimeSdk from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import type {
+  AgentHarnessTaskAssignment,
+  AgentHarnessTaskRuntime,
+  AgentHarnessScopedFinalizeTaskRunParams,
+  AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 
 const COPILOT_NATIVE_SUBAGENT_TASK_KIND = "copilot-native";
@@ -25,7 +23,11 @@ type TaskLifecycleRuntime = Required<
     | "finalizeTaskRunByRunIdAsync"
     | "prepareTaskRunRead"
   >
->;
+> &
+  Pick<
+    typeof taskRuntimeSdk,
+    "captureAgentHarnessTaskAssignment" | "matchesAgentHarnessTaskAssignment"
+  >;
 
 export function createCopilotNativeSubagentTaskMirror(params: {
   agentId?: string;
@@ -35,28 +37,45 @@ export function createCopilotNativeSubagentTaskMirror(params: {
   if (!params.scope) {
     return undefined;
   }
-  const runtime = createAgentHarnessTaskRuntime({
+  const runtime = taskRuntimeSdk.createAgentHarnessTaskRuntime({
     runtime: "subagent",
     taskKind: COPILOT_NATIVE_SUBAGENT_TASK_KIND,
     scope: params.scope,
     runIdPrefix: COPILOT_NATIVE_SUBAGENT_RUN_ID_PREFIX,
   });
+  const assertTaskAssignmentSupported = runtime.assertTaskAssignmentSupported?.bind(runtime);
   const createRunningTaskRunAsync = runtime.createRunningTaskRunAsync?.bind(runtime);
   const finalizeTaskRunByRunIdAsync = runtime.finalizeTaskRunByRunIdAsync?.bind(runtime);
   const prepareTaskRunRead = runtime.prepareTaskRunRead?.bind(runtime);
-  if (!createRunningTaskRunAsync || !finalizeTaskRunByRunIdAsync || !prepareTaskRunRead) {
-    throw new Error("Copilot native task mirroring requires asynchronous task persistence.");
-  }
+  const captureAgentHarnessTaskAssignment = taskRuntimeSdk.captureAgentHarnessTaskAssignment;
+  const matchesAgentHarnessTaskAssignment = taskRuntimeSdk.matchesAgentHarnessTaskAssignment;
   return new CopilotNativeSubagentTaskMirror(
     {
       agentId: params.agentId,
       now: params.now,
     },
-    {
-      assertTaskAssignmentSupported: runtime.assertTaskAssignmentSupported.bind(runtime),
-      createRunningTaskRunAsync,
-      finalizeTaskRunByRunIdAsync,
-      prepareTaskRunRead,
+    () => {
+      // The advertised host floor predates native async task capabilities.
+      if (
+        !assertTaskAssignmentSupported ||
+        !createRunningTaskRunAsync ||
+        !finalizeTaskRunByRunIdAsync ||
+        !prepareTaskRunRead ||
+        !captureAgentHarnessTaskAssignment ||
+        !matchesAgentHarnessTaskAssignment
+      ) {
+        throw new Error(
+          "Copilot native task mirroring requires asynchronous exact-assignment persistence. Upgrade the OpenClaw host.",
+        );
+      }
+      return {
+        assertTaskAssignmentSupported,
+        createRunningTaskRunAsync,
+        finalizeTaskRunByRunIdAsync,
+        prepareTaskRunRead,
+        captureAgentHarnessTaskAssignment,
+        matchesAgentHarnessTaskAssignment,
+      };
     },
   );
 }
@@ -73,7 +92,7 @@ class CopilotNativeSubagentTaskMirror {
 
   constructor(
     private readonly params: { agentId?: string; now?: () => number },
-    private readonly runtime: TaskLifecycleRuntime,
+    private readonly getRuntime: () => TaskLifecycleRuntime,
   ) {
     this.now = params.now ?? Date.now;
   }
@@ -136,11 +155,12 @@ class CopilotNativeSubagentTaskMirror {
     if (existingRunId) {
       return;
     }
-    this.runtime.assertTaskAssignmentSupported();
+    const runtime = this.getRuntime();
+    runtime.assertTaskAssignmentSupported();
     const eventAt = this.now();
     const label = event.data.agentDisplayName.trim() || event.data.agentName.trim();
     const task = event.data.agentDescription.trim() || `Subagent ${label}`;
-    const taskRecord = await this.runtime.createRunningTaskRunAsync({
+    const taskRecord = await runtime.createRunningTaskRunAsync({
       sourceId: toolCallId,
       agentId: this.params.agentId,
       runId,
@@ -158,7 +178,9 @@ class CopilotNativeSubagentTaskMirror {
     } else {
       this.runIdByToolCallId.set(toolCallId, runId);
     }
-    this.activeRuns.set(runId, { assignment: captureAgentHarnessTaskAssignment(taskRecord) });
+    this.activeRuns.set(runId, {
+      assignment: runtime.captureAgentHarnessTaskAssignment(taskRecord),
+    });
   }
 
   private async handleCompleted(
@@ -199,15 +221,17 @@ class CopilotNativeSubagentTaskMirror {
     }
     // A failed projection keeps its observed result; teardown must not replace it with cancellation.
     run.terminal ??= params;
-    const read = await this.runtime.prepareTaskRunRead(params.runId);
-    const matchesRun = (task: Parameters<typeof matchesAgentHarnessTaskAssignment>[0]) =>
-      matchesAgentHarnessTaskAssignment(task, run.assignment);
+    const runtime = this.getRuntime();
+    const read = await runtime.prepareTaskRunRead(params.runId);
+    const matchesRun = (
+      task: Parameters<TaskLifecycleRuntime["matchesAgentHarnessTaskAssignment"]>[0],
+    ) => runtime.matchesAgentHarnessTaskAssignment(task, run.assignment);
     const before = read().find(matchesRun);
     if (!before || (before.status !== "queued" && before.status !== "running")) {
       this.activeRuns.delete(params.runId);
       return;
     }
-    const updated = await this.runtime.finalizeTaskRunByRunIdAsync({
+    const updated = await runtime.finalizeTaskRunByRunIdAsync({
       ...run.terminal,
       expectedTask: run.assignment,
     });

@@ -7,7 +7,10 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 
-const taskRuntimeMocks = vi.hoisted(() => ({ runtime: undefined as unknown }));
+const taskRuntimeMocks = vi.hoisted(() => ({
+  runtime: undefined as unknown,
+  assignmentHelpersAvailable: true,
+}));
 
 vi.mock("openclaw/plugin-sdk/agent-harness-task-runtime", async (importOriginal) => {
   const actual =
@@ -15,6 +18,16 @@ vi.mock("openclaw/plugin-sdk/agent-harness-task-runtime", async (importOriginal)
   return {
     ...actual,
     createAgentHarnessTaskRuntime: vi.fn(() => taskRuntimeMocks.runtime),
+    get captureAgentHarnessTaskAssignment() {
+      return taskRuntimeMocks.assignmentHelpersAvailable
+        ? actual.captureAgentHarnessTaskAssignment
+        : undefined;
+    },
+    get matchesAgentHarnessTaskAssignment() {
+      return taskRuntimeMocks.assignmentHelpersAvailable
+        ? actual.matchesAgentHarnessTaskAssignment
+        : undefined;
+    },
   };
 });
 
@@ -111,6 +124,29 @@ function createMirror(
 describe("CopilotNativeSubagentTaskMirror", () => {
   it("does not create a mirror without a host-issued task scope", () => {
     expect(createCopilotNativeSubagentTaskMirror({})).toBeUndefined();
+  });
+
+  it("refuses native admission before creation when the host lacks assignment helpers", async () => {
+    const runtime = createRuntime();
+    taskRuntimeMocks.assignmentHelpersAvailable = false;
+    try {
+      const mirror = createMirror(runtime);
+      await mirror.finalizeActiveRuns();
+      await expect(
+        mirror.handleEvent(
+          makeEvent("subagent.started", {
+            agentDescription: "inspect",
+            agentDisplayName: "Worker",
+            agentName: "worker",
+            toolCallId: "call-old-host",
+          }),
+        ),
+      ).rejects.toThrow("Upgrade the OpenClaw host");
+      expect(runtime.createRunningTaskRunAsync).not.toHaveBeenCalled();
+      await expect(mirror.finalizeActiveRuns()).rejects.toThrow("Upgrade the OpenClaw host");
+    } finally {
+      taskRuntimeMocks.assignmentHelpersAvailable = true;
+    }
   });
 
   it("mirrors start and completion using agentId with toolCallId fallback", async () => {

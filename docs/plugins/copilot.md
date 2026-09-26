@@ -269,8 +269,10 @@ Creation and completion use asynchronous task persistence and share the attempt'
 event queue. Cleanup detaches listeners, drains accepted events, and awaits task
 settlement before disconnecting the SDK session, including deferred compaction
 cleanup. Custom task adapters must support exact-assignment transitions before a
-native task is admitted. This check runs on the native start event, so ordinary
-turns without native subagents remain available to legacy adapters.
+native task is admitted. These checks run on the native start event, so ordinary
+turns without native subagents remain available to legacy adapters and supported
+older hosts. A host without asynchronous exact-assignment task capabilities reports
+an upgrade requirement before creating a mirrored task.
 
 ## Side questions (`/btw`)
 

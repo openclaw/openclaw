@@ -23,15 +23,31 @@ export function registerCopilotNativeSubagentCleanupTests({
   }) => Parameters<typeof runCopilotAttempt>[0];
   requireSession: (sdk: FakeSdk) => FakeSession;
 }) {
-  it.each([false, true])(
-    "keeps legacy adapter turns usable and refuses unsupported native admission (child: %s)",
-    async (child) => {
+  it.each([
+    { child: false, owner: "adapter" },
+    { child: true, owner: "adapter" },
+    { child: false, owner: "host" },
+    { child: true, owner: "host" },
+  ] as const)(
+    "keeps legacy $owner turns usable and refuses unsupported native admission (child: $child)",
+    async ({ child, owner }) => {
       const failure = new agentHarnessTaskRuntime.AgentHarnessTaskAssignmentUnsupportedError();
       const runtime = makeFailingNativeTaskRuntime(failure);
       runtime.assertTaskAssignmentSupported = () => {
         throw failure;
       };
       const create = vi.spyOn(runtime, "createRunningTaskRunAsync");
+      if (owner === "host") {
+        // These methods are absent from the advertised 2026.9.6 host SDK.
+        for (const method of [
+          "assertTaskAssignmentSupported",
+          "createRunningTaskRunAsync",
+          "finalizeTaskRunByRunIdAsync",
+          "prepareTaskRunRead",
+        ]) {
+          Reflect.deleteProperty(runtime, method);
+        }
+      }
       vi.spyOn(agentHarnessTaskRuntime, "createAgentHarnessTaskRuntime").mockReturnValue(runtime);
       const sdk = makeFakeSdk((session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
@@ -52,9 +68,14 @@ export function registerCopilotNativeSubagentCleanupTests({
         makeParams({ agentHarnessTaskRuntimeScope: {} as AgentHarnessTaskRuntimeScope }),
         { pool },
       );
-      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(
-        child ? failure : null,
-      );
+      const promptError = projectAgentRunAttemptTerminal(result.terminal).promptError;
+      if (child && owner === "host") {
+        expect(promptError).toMatchObject({
+          message: expect.stringContaining("Upgrade the OpenClaw host"),
+        });
+      } else {
+        expect(promptError).toBe(child ? failure : null);
+      }
       expect(create).not.toHaveBeenCalled();
       expect(requireSession(sdk).sendAndWait).toHaveBeenCalledOnce();
       expect(requireSession(sdk).disconnect).toHaveBeenCalledOnce();
