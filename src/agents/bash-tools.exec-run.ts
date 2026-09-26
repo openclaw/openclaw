@@ -229,10 +229,6 @@ export function createExecTool(
       let execCommandOverride: string | undefined;
       let gatewayApproval: GatewayApprovalResult | undefined;
       let approvalReview: ExecToolApprovalReview | undefined;
-      const foregroundFallbackWarning =
-        !allowBackground && (params.background === true || typeof params.yieldMs === "number")
-          ? "Warning: continuation options are unavailable; running synchronously."
-          : undefined;
       const yieldWindow = allowBackground
         ? params.background === true
           ? 0
@@ -293,6 +289,13 @@ export function createExecTool(
         sandboxRequired: defaults?.sandboxRequired,
       });
       const host = target.effectiveHost;
+      const foregroundFallbackWarning =
+        (host === "node" || !allowBackground) &&
+        (params.background === true || typeof params.yieldMs === "number")
+          ? host === "node"
+            ? "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session."
+            : "Warning: continuation options are unavailable; running synchronously."
+          : undefined;
 
       const explicitSecurity = defaults?.security;
       const configuredSecurity = explicitSecurity ?? (host === "sandbox" ? "deny" : "full");

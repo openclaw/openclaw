@@ -8,7 +8,7 @@ title: "Exec tool"
 
 Run shell commands in the workspace. `exec` is a mutating shell surface: commands can create, edit, or delete files wherever the selected host or sandbox filesystem permits. Disabling OpenClaw filesystem tools such as `write`, `edit`, or `apply_patch` does not make `exec` read-only.
 
-Supports foreground and background execution via `process`. If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped per agent. `process` only sees sessions from the same agent.
+Gateway, sandbox, and worker-local execution support foreground and background execution via `process`. Remote `host=node` execution uses synchronous `system.run` and never creates a `process` session, even when `process` is enabled. If `process` is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped per agent. `process` only sees sessions from the same agent.
 
 Completed calls return command output directly. Use `process` only when `exec` reports that a command is still running and provides a `sessionId`; an identifier printed by the command is ordinary output, not a process handle.
 
@@ -73,7 +73,8 @@ Notes:
 - `elevated` escapes the sandbox onto the configured host path: `gateway` by default, or `node` when `tools.exec.host=node` (or the session default is `host=node`). It is only available when elevated access is enabled for the current session/provider.
 - `gateway`/`node` approvals are controlled by the host approvals file.
 - `node` requires a paired, connected node that supports `system.run` (companion app or headless node host). With no target set, exec selects the sole eligible node. If multiple eligible nodes are connected, set `exec.node`, `tools.exec.node`, or `/exec node=...` to select one. It never uses the active Canvas target. An explicit or bound target must itself be connected and executable. Completed results identify the selected node alongside command output.
-- `exec host=node` is the only shell-execution path for nodes. The legacy `nodes.run` wrapper was removed in 2026.3.31.
+- Remote `host=node` calls ignore `background`/`yieldMs` and return output when `system.run` finishes. Explicit `background: true` or `yieldMs` requests produce a warning with the execution result, not while approval is pending. No process `sessionId` is returned. For background work on a paired device, use an [OpenClaw worker session](/nodes/session-hosting) with worker-local `exec` and `process`; see [Worker environments](/gateway/background-process#worker-environments).
+- `exec host=node` is the remote shell-execution path for nodes. The legacy `nodes.run` wrapper was removed in 2026.3.31.
 - On non-Windows hosts, exec uses `SHELL` when set. If `SHELL` is `fish`, it prefers `bash` (or `sh`) from `PATH` to avoid fish-incompatible bashisms, then falls back to `SHELL` if neither exists.
 - On Windows hosts, exec prefers PowerShell 7 (`pwsh`) discovery: Program Files, ProgramW6432, then PATH. It falls back to Windows PowerShell 5.1.
 - On non-Windows gateway hosts, bash and zsh exec commands use a startup snapshot. OpenClaw captures sourceable aliases/functions and a small safe environment set from shell startup files into `$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each exec command. Secret-looking variables are excluded. Sandbox and node exec do not use this snapshot. Set `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this snapshot path.

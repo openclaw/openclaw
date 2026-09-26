@@ -612,76 +612,45 @@ describe("exec approvals", () => {
     expect(runCwd).toBe(remoteWorkdir);
   });
 
-  it("does not forward the gateway default cwd to node exec when workdir is omitted", async () => {
-    const gatewayWorkspace = "/gateway/workspace";
-    let runHasCwd = false;
-    let runCwd: string | undefined;
+  it.each([undefined, "/remote/node/workspace"])(
+    "uses only the node default cwd %s when node workdir is omitted",
+    async (nodeCwd) => {
+      let runHasCwd = false;
+      let runCwd: string | undefined;
 
-    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
-      if (method === "node.invoke") {
-        const invoke = params as { command?: string; params?: { cwd?: string } };
-        if (invoke.command === "system.run.prepare") {
-          return buildPreparedSystemRunPayload(params);
+      vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+        if (method === "node.invoke") {
+          const invoke = params as { command?: string; params?: { cwd?: string } };
+          if (invoke.command === "system.run.prepare") {
+            return buildPreparedSystemRunPayload(params);
+          }
+          if (invoke.command === "system.run") {
+            runHasCwd = Object.hasOwn(invoke.params ?? {}, "cwd");
+            runCwd = invoke.params?.cwd;
+            return { payload: { success: true, stdout: "ok" } };
+          }
         }
-        if (invoke.command === "system.run") {
-          runHasCwd = Object.hasOwn(invoke.params ?? {}, "cwd");
-          runCwd = invoke.params?.cwd;
-          return { payload: { success: true, stdout: "ok" } };
-        }
-      }
-      return { ok: true };
-    });
+        return { ok: true };
+      });
 
-    const tool = createExecTool({
-      host: "node",
-      ask: "off",
-      security: "full",
-      approvalRunningNoticeMs: 0,
-      cwd: gatewayWorkspace,
-    });
+      const tool = createExecTool({
+        host: "node",
+        ask: "off",
+        security: "full",
+        approvalRunningNoticeMs: 0,
+        cwd: "/gateway/workspace",
+        nodeCwd,
+      });
 
-    const result = await tool.execute("call-node-default-cwd", {
-      command: "/bin/pwd",
-    });
+      const result = await tool.execute("call-node-default-cwd", {
+        command: "/bin/pwd",
+      });
 
-    expect(result.details.status).toBe("completed");
-    expect(runHasCwd).toBe(false);
-    expect(runCwd).toBeUndefined();
-  });
-
-  it("forwards the node-only default cwd when node workdir is omitted", async () => {
-    let runCwd: string | undefined;
-
-    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
-      if (method === "node.invoke") {
-        const invoke = params as { command?: string; params?: { cwd?: string } };
-        if (invoke.command === "system.run.prepare") {
-          return buildPreparedSystemRunPayload(params);
-        }
-        if (invoke.command === "system.run") {
-          runCwd = invoke.params?.cwd;
-          return { payload: { success: true, stdout: "ok" } };
-        }
-      }
-      return { ok: true };
-    });
-
-    const tool = createExecTool({
-      host: "node",
-      ask: "off",
-      security: "full",
-      approvalRunningNoticeMs: 0,
-      cwd: "/gateway/workspace",
-      nodeCwd: "/remote/node/workspace",
-    });
-
-    const result = await tool.execute("call-node-session-cwd", {
-      command: "/bin/pwd",
-    });
-
-    expect(result.details.status).toBe("completed");
-    expect(runCwd).toBe("/remote/node/workspace");
-  });
+      expect(result.details.status).toBe("completed");
+      expect(runHasCwd).toBe(nodeCwd !== undefined);
+      expect(runCwd).toBe(nodeCwd);
+    },
+  );
 
   it("routes explicit host=node to node invoke when elevated default is on under auto host", async () => {
     const calls: string[] = [];
@@ -718,7 +687,12 @@ describe("exec approvals", () => {
     expect(calls).toContain("node.invoke");
   });
 
-  it("keeps the background fallback warning when node exec actually runs inline", async () => {
+  it.each([
+    { allowBackground: false, continuation: { background: true } },
+    { allowBackground: true, continuation: { background: true } },
+    { allowBackground: true, continuation: { yieldMs: 0 } },
+    { allowBackground: true, continuation: { background: false } },
+  ])("reports node continuation limits for %j", async ({ allowBackground, continuation }) => {
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "node.invoke") {
         const invoke = params as { command?: string };
@@ -736,19 +710,23 @@ describe("exec approvals", () => {
       host: "node",
       ask: "off",
       security: "full",
-      allowBackground: false,
+      allowBackground,
       approvalRunningNoticeMs: 0,
     });
 
-    const result = await tool.execute("call-node-background-disabled", {
+    const result = await tool.execute("call-node-continuation", {
       command: "echo ok",
-      background: true,
+      ...continuation,
     });
 
     expect(result.details.status).toBe("completed");
-    expect(getResultText(result)).toContain(
-      "Warning: continuation options are unavailable; running synchronously.",
-    );
+    expect(result.details).not.toHaveProperty("sessionId");
+    if (continuation.background === true || typeof continuation.yieldMs === "number") {
+      expect(getResultText(result)).toContain("continuation options are unavailable");
+      expect(getResultText(result)).toContain("running synchronously");
+    } else {
+      expect(getResultText(result)).not.toContain("continuation options are unavailable");
+    }
     expect(getResultText(result)).toContain("node-ok");
   });
 
@@ -1018,9 +996,13 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.waitDecision");
   });
 
-  it.each(["gateway", "node"] as const)(
-    "keeps unavailable continuation guidance out of pending %s approvals",
-    async (host) => {
+  it.each([
+    { host: "gateway", allowBackground: false },
+    { host: "node", allowBackground: false },
+    { host: "node", allowBackground: true },
+  ] as const)(
+    "keeps unavailable continuation guidance out of pending $host approvals (background=$allowBackground)",
+    async ({ host, allowBackground }) => {
       let approvalRequest: Record<string, unknown> | undefined;
       vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
         if (method === "node.invoke") {
@@ -1046,7 +1028,7 @@ describe("exec approvals", () => {
         host,
         ask: "always",
         security: "full",
-        allowBackground: false,
+        allowBackground,
         approvalFollowupMode: "agent",
         approvalRunningNoticeMs: 0,
       });
@@ -1057,7 +1039,7 @@ describe("exec approvals", () => {
       });
 
       expect(result.details.status).toBe("approval-pending");
-      expect(getResultText(result)).not.toMatch(/process|background|yieldMs|poll/i);
+      expect(getResultText(result)).not.toMatch(/process|background|yieldMs|poll|synchronously/i);
       expect(approvalRequest?.warningText).toBeUndefined();
     },
   );
