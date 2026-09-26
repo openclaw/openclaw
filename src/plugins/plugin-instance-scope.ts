@@ -109,6 +109,27 @@ export function wrapCurrentPluginInstance<T>(value: T, host?: (value: T) => T): 
   return owner ? owner.wrap(value) : host ? host(value) : value;
 }
 
+/** Host callback records retain their plugin owner without taking ownership of caller data. */
+export function bindCurrentPluginInstanceCallbacks<T extends object | undefined>(callbacks: T): T {
+  const owner = pluginInstanceInvocation.getStore()?.instance;
+  if (!owner || !callbacks) {
+    return callbacks;
+  }
+  const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(callbacks);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptor = descriptors[key]!;
+    if (typeof descriptor.value !== "function") {
+      continue;
+    }
+    descriptor.value = new Proxy(descriptor.value, {
+      apply: (target, receiver, args) => owner.run(() => Reflect.apply(target, receiver, args)),
+    });
+  }
+  // Unlike plugin value views, payloads and results keep their exact identities:
+  // channel admission and delivery custody are held in host-owned WeakMaps.
+  return Object.create(Object.getPrototypeOf(callbacks), descriptors);
+}
+
 /** Teardown admission comes from the host owner, never a plugin method name. */
 export function runPluginCleanup<T>(value: object, run: () => T): T {
   const instance = pluginInstanceState.values.get(value);

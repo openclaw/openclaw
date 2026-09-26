@@ -3,10 +3,55 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { bindCurrentPluginInstanceCallbacks } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
+
+describe("host callback records", () => {
+  it("preserves receivers, data, result identity and async owner continuations", async () => {
+    const owner = new PluginInstance("channel");
+    const provider = new PluginInstance("provider");
+    const runtime = createPluginRuntimeStore<string>("uninitialized callback owner");
+    owner.run(() => runtime.setRuntime("channel"));
+    const receiver = {};
+    const data = {};
+    const result = {};
+    const symbol = Symbol("callback");
+    const source = Object.freeze({
+      data,
+      [symbol](this: object, input: object) {
+        expect(this).toBe(receiver);
+        expect(input).toBe(data);
+        expect(runtime.getRuntime()).toBe("channel");
+        return result;
+      },
+      async progress() {
+        await Promise.resolve();
+        expect(runtime.getRuntime()).toBe("channel");
+        return result;
+      },
+    });
+    try {
+      const bound = owner.run(() => bindCurrentPluginInstanceCallbacks(source));
+      expect(bound.data).toBe(data);
+      expect(provider.run(() => bound[symbol].call(receiver, data))).toBe(result);
+      expect(await provider.run(() => bound.progress())).toBe(result);
+      expect(provider.run(() => runtime.tryGetRuntime())).toBeNull();
+      owner.quiesce();
+      expect(() => bound.progress()).toThrow("reloaded or disabled");
+    } finally {
+      await Promise.all([owner.dispose(), provider.dispose()]);
+    }
+  });
+
+  it("leaves host-only callback records and absent records unchanged", () => {
+    const callbacks = { deliver: () => "host" };
+    expect(bindCurrentPluginInstanceCallbacks(callbacks)).toBe(callbacks);
+    expect(bindCurrentPluginInstanceCallbacks(undefined)).toBeUndefined();
+  });
+});
 
 describe("plugin value invocation ownership", () => {
   it.each(["function", "iterator"] as const)(

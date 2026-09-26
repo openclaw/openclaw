@@ -71,6 +71,12 @@ replacement. Accepted control and close results still settle after revocation;
 revocation blocks the next effect. The optional callback preserves existing
 callers that do not carry channel-request authority.
 
+The shared reply delivery pipeline binds delivery, dispatcher, and reply-option
+callbacks to the managed channel instance that admits the turn. Provider or
+harness execution can invoke them without changing which channel runtime they
+use. Callback arguments and results keep their original identities, and plugin
+retirement still stops new callback calls.
+
 For intentional skips, `logInboundDrop({ log, channel, reason, target?, onceKey?, hint? })`
 formats a diagnostic through the supplied logger. Use a default-level logger and
 an actionable `hint` for mention-gated groups. Set `onceKey` to an account/conversation
