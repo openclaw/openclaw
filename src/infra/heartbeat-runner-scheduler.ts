@@ -25,6 +25,7 @@ import {
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
   type HeartbeatWakeIntent,
+  type HeartbeatWakeSource,
   isRetryableHeartbeatSkipReason,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
@@ -41,6 +42,8 @@ type HeartbeatAgentState = {
   lastRunStartedAtMs?: number;
   /** Bounded ring buffer of recent run-start timestamps for flood detection. */
   recentRunStarts: number[];
+  /** Completion-driven runs since the last run admitted from another source. */
+  consecutiveExecEventRuns: number;
   /** Set true after a flood-defer is logged to avoid log spam. Reset when a run actually fires. */
   floodLoggedSinceLastRun: boolean;
 };
@@ -81,6 +84,7 @@ export function startHeartbeatRunner(opts: {
       agentId,
       cooldownUntilMs: now,
       recentRunStarts: [],
+      consecutiveExecEventRuns: 0,
       floodLoggedSinceLastRun: false,
     };
     agent.heartbeat = heartbeat;
@@ -99,15 +103,21 @@ export function startHeartbeatRunner(opts: {
     now: number,
     reason?: string,
     intent: HeartbeatWakeIntent = "event",
-    options: { authoritativeScheduledTick?: boolean; retainedWork?: boolean } = {},
+    options: {
+      authoritativeScheduledTick?: boolean;
+      retainedWork?: boolean;
+      source?: HeartbeatWakeSource;
+    } = {},
   ): DeferDecision => {
     const decision = shouldDeferWake({
       intent,
+      source: options.source,
       reason,
       now,
       nextDueMs: options.authoritativeScheduledTick ? now : agent.cooldownUntilMs,
       lastRunStartedAtMs: agent.lastRunStartedAtMs,
       recentRunStarts: agent.recentRunStarts,
+      consecutiveExecEventRuns: agent.consecutiveExecEventRuns,
       retainedWork: options.retainedWork,
     });
     if (decision.defer && decision.reason === "flood") {
@@ -125,10 +135,16 @@ export function startHeartbeatRunner(opts: {
 
   // Called immediately before `runOnce` actually executes. Updates the
   // bookkeeping that the cooldown gate consults on the next wake.
-  const recordRunBookkeeping = (agent: HeartbeatAgentState, now: number) => {
+  const recordRunBookkeeping = (
+    agent: HeartbeatAgentState,
+    now: number,
+    source?: HeartbeatWakeSource,
+  ) => {
     agent.lastRunStartedAtMs = now;
     agent.cooldownUntilMs = now + (agent.intervalMs ?? 0);
     recordRunStart(agent.recentRunStarts, now);
+    agent.consecutiveExecEventRuns =
+      source === "exec-event" ? agent.consecutiveExecEventRuns + 1 : 0;
     agent.floodLoggedSinceLastRun = false;
   };
 
@@ -224,6 +240,7 @@ export function startHeartbeatRunner(opts: {
       const deferral = evaluateWakeDeferral(agent, now, reason, intent, {
         authoritativeScheduledTick,
         retainedWork,
+        source: params.source,
       });
       if (deferral.defer) {
         // Retained exec work never owns cadence unless a scheduled tick joined it.
@@ -289,12 +306,12 @@ export function startHeartbeatRunner(opts: {
           error: errMsg,
           agentId,
         });
-        recordRunBookkeeping(agent, now);
+        recordRunBookkeeping(agent, now, params.source);
         return { ran: false, result: { status: "failed", reason: errMsg } };
       }
       if (res.status === "skipped" && isSessionEventWakePollDeferred()) {
         // This occurrence ended before admission; the next persisted poll owns the next turn.
-        recordRunBookkeeping(agent, now);
+        recordRunBookkeeping(agent, now, params.source);
         return { ran: false, result: res };
       }
       if (res.status === "skipped" && isRetryableHeartbeatSkipReason(res.reason)) {
@@ -309,7 +326,7 @@ export function startHeartbeatRunner(opts: {
         // An acknowledged exec completion owns neither cooldown nor retry.
         return { ran: false, result: res };
       }
-      recordRunBookkeeping(agent, now);
+      recordRunBookkeeping(agent, now, params.source);
       return { ran: res.status === "ran", result: res };
     };
 

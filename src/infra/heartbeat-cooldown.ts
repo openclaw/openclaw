@@ -25,6 +25,10 @@ const DEFAULT_MIN_WAKE_SPACING_MS = 30_000;
 // `manual` retry doesn't trip it but a feedback loop does.
 const DEFAULT_FLOOD_WINDOW_MS = 60_000;
 const DEFAULT_FLOOD_THRESHOLD = 5;
+// A completion-driven turn may start another background command. Increase the
+// spacing for each consecutive completion-driven run, up to the monitor cadence.
+// Ordinary serial commands that take longer than the backoff still wake promptly.
+const MAX_EXEC_BACKOFF_DOUBLINGS = 10;
 
 export type DeferDecision =
   | { defer: false }
@@ -50,6 +54,8 @@ type ShouldDeferInput = {
   lastRunStartedAtMs?: number;
   /** Recent wake timestamps for flood detection. */
   recentRunStarts?: readonly number[];
+  /** Consecutive runs admitted from exec completions since another wake source ran. */
+  consecutiveExecEventRuns?: number;
   /** Override the minimum spacing floor. */
   minSpacingMs?: number;
   /** Override the flood-window length. */
@@ -72,6 +78,11 @@ type ShouldDeferInput = {
  * | scheduled     | Defer if now < nextDueMs   | Defer if now < nextDueMs                |
  * | task          | Run                        | Defer only within floor or on flood      |
  * | event         | Run (bootstrap responsive) | Defer if now < nextDueMs OR within floor |
+ *
+ * An `exec-event` is an event-intent exception: a completed background command
+ * has pending task work, so it may bypass the monitor cadence after the
+ * spacing floor. Repeated completion-driven turns use increasing spacing,
+ * capped at the monitor cadence, to bound a command/heartbeat feedback loop.
  *
  * Immediate is for documented wake-now delivery paths such as `openclaw system
  * event --mode now`, task completion follow-ups, cron `--wake now`, and
@@ -117,7 +128,19 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
     return { defer: false };
   }
 
-  if (input.intent !== "task" && !input.retainedWork && input.now < input.nextDueMs) {
+  const execBackoffRetryAtMs = resolveExecBackoffRetryAtMs(input);
+  if (execBackoffRetryAtMs !== undefined) {
+    return { defer: true, reason: "min-spacing", retryAtMs: execBackoffRetryAtMs };
+  }
+
+  // A completed background exec is pending task work. Admit it after the
+  // spacing floor instead of holding it until the next monitor interval.
+  if (
+    input.intent !== "task" &&
+    input.source !== "exec-event" &&
+    !input.retainedWork &&
+    input.now < input.nextDueMs
+  ) {
     const spacingRetryAtMs = resolveMinSpacingRetryAtMs(input);
     return {
       defer: true,
@@ -132,6 +155,26 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
   }
 
   return { defer: false };
+}
+
+function resolveExecBackoffRetryAtMs(input: ShouldDeferInput): number | undefined {
+  if (
+    input.source !== "exec-event" ||
+    (input.consecutiveExecEventRuns ?? 0) < 2 ||
+    input.lastRunStartedAtMs === undefined ||
+    input.now >= input.nextDueMs
+  ) {
+    return undefined;
+  }
+  const baseSpacingMs = input.minSpacingMs ?? DEFAULT_MIN_WAKE_SPACING_MS;
+  if (baseSpacingMs <= 0) {
+    return undefined;
+  }
+  const doublings = Math.min((input.consecutiveExecEventRuns ?? 0) - 1, MAX_EXEC_BACKOFF_DOUBLINGS);
+  const monitorSpacingMs = Math.max(baseSpacingMs, input.nextDueMs - input.lastRunStartedAtMs);
+  const retryAtMs =
+    input.lastRunStartedAtMs + Math.min(baseSpacingMs * 2 ** doublings, monitorSpacingMs);
+  return input.now < retryAtMs ? retryAtMs : undefined;
 }
 
 function resolveMinSpacingRetryAtMs(input: ShouldDeferInput): number | undefined {

@@ -123,6 +123,7 @@ async function handleChatSendWithOptions(
     interruptedActiveRun,
     lifecycleGeneration,
     messageInjectionTarget,
+    expectedActiveReplyOperation,
     restartSafeAdmission,
   } = admitted.value;
   const preparedAttachments = await prepareChatSendAttachments({
@@ -537,6 +538,15 @@ async function handleChatSendWithOptions(
       return;
     }
     messageInjectionAttempt = preAckInjection.attempt;
+    if (
+      isProgressCardRefreshInputProvenance(systemInputProvenance) &&
+      expectedActiveReplyOperation &&
+      !messageInjectionAttempt
+    ) {
+      throw new Error(
+        "The active run cannot accept a progress card refresh. Retry when it finishes.",
+      );
+    }
     // The admitted turn owns authoring after creating a session; the request's
     // absent-target authorization expires when that session is materialized.
     const skillLibraryAuthoring = prepareGatewaySkillAuthoring(

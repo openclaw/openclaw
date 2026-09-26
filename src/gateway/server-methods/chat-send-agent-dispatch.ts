@@ -307,6 +307,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               };
             }
           }
+          if (progressRefresh && admission.expectedActiveReplyOperation) {
+            throw new Error(
+              "The active run could not accept a progress card refresh. Retry when it finishes.",
+            );
+          }
           const pluginBoundMedia = await pluginBoundMediaPromise;
           assertWorkspaceRunOwnership?.();
           applyChatSendManagedMedia(ctx, pluginBoundMedia, managedMediaApplyMode);

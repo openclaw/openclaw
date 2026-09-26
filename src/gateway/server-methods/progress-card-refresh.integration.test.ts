@@ -266,7 +266,7 @@ describe("registered progress refresh admission", () => {
     },
   );
   it.each([false, true])(
-    "starts a hidden status-only turn when idle or steering is unavailable (active=%s)",
+    "refreshes when idle without interrupting active work (active=%s)",
     async (active) => {
       const f = await createFixture({ active, preserveContent: true });
       try {
@@ -289,6 +289,21 @@ describe("registered progress refresh admission", () => {
           isWebchatConnect: () => true,
           extraHandlers: createProgressCardHandlers(),
         });
+        if (active) {
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ details: { code: "PROGRESS_CARD_REFRESH_TERMINAL" } }),
+            expect.anything(),
+          );
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+          expect(f.activeRun?.result).toBeNull();
+          expect(f.activeRun?.abortSignal.aborted).toBe(false);
+          expect((await progressCardStore.get(f.scope.sessionKey, f.scope.agentId))?.markdown).toBe(
+            "Previous status",
+          );
+          return;
+        }
         expect(respond).toHaveBeenCalledWith(
           true,
           expect.objectContaining({ status: "accepted", revision: 1 }),
