@@ -549,6 +549,7 @@ it("reads the system template instance while a separate user Gateway is installe
     KillMode: property("s", "control-group"),
     TasksCurrent: property("t", 1),
     MemoryCurrent: property("t", 0),
+    ControlGroup: property("s", `/system.slice/${instanceName}`),
   };
   exec.mockReset().mockImplementation(async (command, args) => {
     if (command === "systemctl" && args[0] === "is-enabled") {
