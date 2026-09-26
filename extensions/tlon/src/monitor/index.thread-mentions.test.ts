@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { describe, expect, it, vi } from "vitest";
 import { useTlonMonitorFixture } from "./monitor.test-harness.js";
@@ -107,6 +108,60 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       admitted: false,
     },
     {
+      name: "bot thread exemption revoked during ingress despite a mention in history",
+      policy: false,
+      rootAuthor: "~zod",
+      pauseAt: "ingress",
+      latePolicy: true,
+      historyMention: true,
+      admitted: false,
+    },
+    {
+      name: "bot thread exemption retained during ingress",
+      policy: false,
+      rootAuthor: "~zod",
+      pauseAt: "ingress",
+      latePolicy: false,
+      admitted: true,
+    },
+    {
+      name: "raw explicit mention admitted after a strict ingress update",
+      policy: false,
+      rootAuthor: "~zod",
+      pauseAt: "ingress",
+      latePolicy: true,
+      mentioned: true,
+      admitted: true,
+    },
+    {
+      name: "omitted thread policy becomes strict during ingress after participation",
+      rootAuthor: "~zod",
+      participate: true,
+      pauseAt: "ingress",
+      latePolicy: true,
+      admitted: false,
+    },
+    {
+      name: "empty-history response suppressed after exemption revocation",
+      policy: false,
+      rootAuthor: "~zod",
+      pauseAt: "summary",
+      latePolicy: true,
+      summary: true,
+      admitted: false,
+      directReply: false,
+    },
+    {
+      name: "empty-history response admitted while exemption remains",
+      policy: false,
+      rootAuthor: "~zod",
+      pauseAt: "summary",
+      latePolicy: false,
+      summary: true,
+      admitted: false,
+      directReply: true,
+    },
+    {
       name: "top-level post",
       policy: false,
       rootAuthor: "~zod",
@@ -128,6 +183,8 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
     const parentId = row.parentId ?? "1234";
     const botShip = row.accountPolicy !== undefined ? "~bus" : "~zod";
     const rootPath = `/channels/v4/${channelNest}/posts/post/id/1.234.json`;
+    const paused = createDeferred<void>();
+    const resume = createDeferred<void>();
     realUrbitFixture.config = {
       channels: {
         tlon: {
@@ -156,6 +213,14 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
     );
     ingressMock.receive.mockResolvedValue({ kind: "ignored" });
     sseClientMock.scry.mockImplementation(async (path) => {
+      if (row.pauseAt === "summary" && path.endsWith("/posts/newest/50/outline.json")) {
+        paused.resolve();
+        await resume.promise;
+        return [];
+      }
+      if (row.historyMention && path.endsWith("/replies/newest/20.json")) {
+        return [{ memo: { author: "~nec", content: [{ inline: ["~zod earlier message"] }] } }];
+      }
       if (path !== rootPath) {
         return {};
       }
@@ -211,15 +276,46 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
         delivery.onDelivered(reply, {}, result);
         inboundRuntimeMock.dispatch.mockClear();
       }
-      await subscription.event(
-        replyEvent(row.mentioned ? `${botShip} follow up` : "follow up without a mention"),
+      if (row.pauseAt === "ingress") {
+        const resolveStable = inboundRuntimeMock.resolveStable.getMockImplementation();
+        if (!resolveStable) {
+          throw new Error("expected ingress resolver");
+        }
+        inboundRuntimeMock.resolveStable.mockImplementationOnce(async (params) => {
+          const access = await resolveStable(params);
+          paused.resolve();
+          await resume.promise;
+          return access;
+        });
+      }
+      const followupText = row.summary ? "summarize this channel" : "follow up without a mention";
+      const handling = subscription.event(
+        replyEvent(row.mentioned ? `${botShip} ${followupText}` : followupText),
       );
+      if (row.pauseAt) {
+        await paused.promise;
+        expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+        settingsManagerMock.onChange.mock.calls[0]?.[0]({
+          channelRules: {
+            [channelNest]: { mode: "open", requireMentionInBotThreads: row.latePolicy },
+          },
+        });
+        resume.resolve();
+      }
+      await handling;
 
       expect(inboundRuntimeMock.dispatch).toHaveBeenCalledTimes(row.admitted ? 1 : 0);
+      if (row.summary) {
+        const replies = sseClientMock.poke.mock.calls.filter(
+          ([value]) => value.mark === "channel-action-1",
+        );
+        expect(replies).toHaveLength(row.directReply ? 1 : 0);
+      }
       const shouldReadRoot =
         (row.policy !== undefined ||
           row.accountPolicy !== undefined ||
-          row.channelPolicy !== undefined) &&
+          row.channelPolicy !== undefined ||
+          row.latePolicy !== undefined) &&
         !row.mentioned &&
         !row.topLevel &&
         !row.parentId;

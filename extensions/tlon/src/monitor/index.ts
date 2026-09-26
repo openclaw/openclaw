@@ -54,6 +54,7 @@ import {
 } from "./settings-helpers.js";
 import { createActiveSnapshotTracker, createParticipatedThreadTracker } from "./tracking.js";
 import {
+  extractDmPartnerShip,
   extractMessageText,
   formatModelName,
   formatSummarizationHistoryText,
@@ -287,18 +288,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
    * This is the canonical source for DM routing (more reliable than essay.author).
    * Returns empty string if whom doesn't contain a valid patp-like value.
    */
-  function extractDmPartnerShip(whom: unknown): string {
-    const raw =
-      typeof whom === "string"
-        ? whom
-        : whom && typeof whom === "object" && "ship" in whom && typeof whom.ship === "string"
-          ? whom.ship
-          : "";
-    const normalized = normalizeShip(raw);
-    // Keep DM routing strict: accept only patp-like values.
-    return /^~?[a-z-]+$/i.test(normalized) ? normalized : "";
-  }
-
   const processMessage = async (params: {
     messageId: string;
     senderShip: string;
@@ -309,6 +298,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     timestamp: number;
     parentId?: string | null;
     isThreadReply?: boolean;
+    isMentionAllowed?: () => boolean;
     turnAdoptionLifecycle?: TlonIngressLifecycle;
     resolveChannelIngress: (
       contextBinding: ChannelIngressContextBinding,
@@ -322,6 +312,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       timestamp,
       parentId,
       isThreadReply,
+      isMentionAllowed,
       messageContent,
       turnAdoptionLifecycle,
       resolveChannelIngress,
@@ -376,7 +367,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           const noHistoryMsg =
             "I couldn't fetch any messages for this channel. It might be empty or there might be a permissions issue.";
           const parsed = parseChannelNest(channelNest);
-          if (parsed) {
+          if (parsed && isMentionAllowed?.() !== false) {
             await sendGroupMessage({
               api,
               fromShip: botShipName,
@@ -400,7 +391,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       } catch (error: unknown) {
         const errorMsg = `Sorry, I encountered an error while fetching the channel history: ${formatErrorMessage(error)}`;
         const parsed = parseChannelNest(channelNest);
-        if (parsed) {
+        if (parsed && isMentionAllowed?.() !== false) {
           await sendGroupMessage({
             api,
             fromShip: botShipName,
@@ -598,6 +589,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       ...(turnAdoptionLifecycle ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) : {}),
       ...(promptMedia.media.length > 0 ? { media: promptMedia.media } : {}),
     };
+    if (isMentionAllowed?.() === false) {
+      return;
+    }
     await core.channel.inbound.dispatch({
       channel: "tlon",
       accountId: route.accountId,
@@ -806,20 +800,21 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         id: messageId,
       });
 
-      const { mode, allowedShips, mentionDecision, parentId } = await prepareTlonGroupAdmission({
-        cfg,
-        account,
-        api,
-        channelNest: nest,
-        botShipName,
-        botNickname,
-        rawText,
-        messageSeal: isThreadReply ? asRecord(replySet?.seal) : asRecord(set?.seal),
-        isThreadReply,
-        hasParticipatedInThread: participatedThreads.has,
-        getSettings: () => currentSettings,
-        runtime,
-      });
+      const { mode, allowedShips, mentionDecision, parentId, isMentionAllowed } =
+        await prepareTlonGroupAdmission({
+          cfg,
+          account,
+          api,
+          channelNest: nest,
+          botShipName,
+          botNickname,
+          rawText,
+          messageSeal: isThreadReply ? asRecord(replySet?.seal) : asRecord(set?.seal),
+          isThreadReply,
+          hasParticipatedInThread: participatedThreads.has,
+          getSettings: () => currentSettings,
+          runtime,
+        });
 
       if (mentionDecision.shouldSkip) {
         return;
@@ -875,6 +870,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         parentId,
         isThreadReply,
         turnAdoptionLifecycle,
+        isMentionAllowed,
         resolveChannelIngress: async (contextBinding) =>
           await resolveTlonMessageIngress({
             senderShip,

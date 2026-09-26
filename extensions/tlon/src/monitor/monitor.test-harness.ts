@@ -37,6 +37,10 @@ const {
     stop: vi.fn().mockResolvedValue(undefined),
   },
   inboundRuntimeMock: {
+    resolveStable:
+      vi.fn<
+        ReturnType<typeof createPluginRuntimeMock>["channel"]["inbound"]["ingress"]["resolveStable"]
+      >(),
     buildContext: vi.fn(),
     dispatch: vi.fn().mockResolvedValue(undefined),
     resolveAgentRoute: vi.fn(() => ({
@@ -111,7 +115,10 @@ vi.mock("../runtime.js", () => ({
         shouldComputeCommandAuthorized: inboundRuntimeMock.shouldComputeCommandAuthorized,
       },
       inbound: {
-        ingress: createPluginRuntimeMock().channel.inbound.ingress,
+        ingress: {
+          ...createPluginRuntimeMock().channel.inbound.ingress,
+          resolveStable: inboundRuntimeMock.resolveStable,
+        },
         buildContext: inboundRuntimeMock.buildContext,
         dispatch: inboundRuntimeMock.dispatch,
       },
@@ -157,6 +164,10 @@ import { monitorTlonProvider } from "./index.js";
 
 export function useTlonMonitorFixture() {
   beforeEach(() => {
+    const ingress = createPluginRuntimeMock().channel.inbound.ingress;
+    inboundRuntimeMock.resolveStable
+      .mockReset()
+      .mockImplementation((params) => ingress.resolveStable(params));
     createChannelInboundEnvelopeBuilderMock.mockReturnValue(buildChannelInboundEnvelopeMock);
     buildChannelInboundEnvelopeMock.mockReturnValue("tlon-envelope");
     formatInboundMediaUnavailableTextMock.mockReturnValue("formatted-inbound-body");
