@@ -16,6 +16,7 @@ import {
   type PluginLoadConfig,
   type PluginRegistry,
   useNoBundledPlugins,
+  writeMultiEntryPluginPack,
   writePlugin,
 } from "./loader.test-fixtures.js";
 import {
@@ -53,32 +54,7 @@ describe("loadOpenClawPlugins", () => {
     useNoBundledPlugins();
     const stateDir = makePluginLoaderTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
-      const packageDir = path.join(stateDir, "extensions", "pack");
-      mkdirSafe(packageDir);
-      fs.writeFileSync(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({
-          name: "pack",
-          version: "1.0.0",
-          openclaw: { extensions: ["./one.cjs", "./two.cjs"] },
-        }),
-        "utf8",
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "openclaw.plugin.json"),
-        JSON.stringify({ id: "pack", configSchema: EMPTY_PLUGIN_SCHEMA }),
-        "utf8",
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "one.cjs"),
-        'module.exports = { id: "pack/one", register() {} };',
-        "utf8",
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "two.cjs"),
-        'module.exports = { id: "pack/two", register() {} };',
-        "utf8",
-      );
+      writeMultiEntryPluginPack(path.join(stateDir, "extensions", "pack"));
 
       const registry = loadOpenClawPlugins({
         cache: false,

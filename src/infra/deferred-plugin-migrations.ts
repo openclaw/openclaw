@@ -346,7 +346,7 @@ export async function recordDeferredPluginMigrations(
             ...input,
           },
         }),
-      { assertCurrent: lease.assertCurrent },
+      { assertCurrent: () => lease.assertCurrent() },
     );
     if (result.kind === "conflict") {
       throw new DeferredPluginMigrationConflictError(result.pending);

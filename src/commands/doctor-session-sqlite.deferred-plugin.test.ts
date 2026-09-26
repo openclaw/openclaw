@@ -20,7 +20,6 @@ import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration
 import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
 import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
-import { recordLegacyMigrationRun } from "../infra/state-migrations.receipts.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   beginAgentDeletionJournal,
@@ -36,7 +35,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import {
+  seedConcurrentDeferredPluginMigration,
+  seedDeferredPluginSessionSource,
+} from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
@@ -403,27 +405,9 @@ describe("session sources needed by deferred plugin migrations", () => {
         let pendingChanged = false;
         const changePending = () => {
           pendingChanged = true;
-          const pluginId = pendingChange === "plugin" ? "fixture-plugin" : "new-plugin";
-          const previous = readDeferredPluginMigrations({ env: state.env }).find(
-            (pending) => pending.pluginId === pluginId,
-          );
-          runOpenClawStateWriteTransaction(
-            ({ db }) =>
-              recordLegacyMigrationRun(db, {
-                runId: `deferred-plugin-migration:${pluginId}`,
-                startedAt: 1,
-                finishedAt: null,
-                status: "pending",
-                reportJson: JSON.stringify({
-                  ...previous,
-                  pluginId,
-                  reason: "A concurrent Doctor found additional migration work.",
-                  command: "openclaw doctor --fix",
-                  requiresStateMigration: true,
-                }),
-                upsert: true,
-              }),
-            { env: state.env },
+          seedConcurrentDeferredPluginMigration(
+            state,
+            pendingChange === "plugin" ? "fixture-plugin" : "new-plugin",
           );
         };
         if (pendingChange === "plugin") {

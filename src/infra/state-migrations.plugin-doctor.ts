@@ -489,7 +489,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
       await params.beforeCompletion?.(result.completedPluginIds, assertCompletionCurrent);
       assertCompletionCurrent();
       await withPluginLifecycleLease(
-        { env: params.env, assertCurrent: maintenance.assertCurrent },
+        { env: params.env, assertCurrent: () => maintenance.assertCurrent() },
         async () =>
           recordDeferredPluginMigrations({
             env: params.env,
