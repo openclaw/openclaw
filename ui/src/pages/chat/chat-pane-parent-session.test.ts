@@ -124,7 +124,7 @@ describe("mounted pane parent session", () => {
       parentSessionKey: parent.key,
     };
     const oldParent = createDeferred<{ session: GatewaySessionRow }>();
-    const parentRequested = createDeferred<void>();
+    const parentRequested = createDeferred();
     const { sessions, mount, emitGatewayEvent } = createMountedPanes([child], "main", undefined, {
       "sessions.describe": async (_method, raw) => {
         const key = asOptionalRecord(raw)?.key;
@@ -170,7 +170,7 @@ describe("mounted pane parent session", () => {
       parentSessionKey: parent.key,
     };
     const firstParent = createDeferred<{ session: GatewaySessionRow }>();
-    const parentRequested = createDeferred<void>();
+    const parentRequested = createDeferred();
     let parentReads = 0;
     const { sessions, mount } = createMountedPanes([child], "main", undefined, {
       "sessions.describe": async (_method, raw) => {
