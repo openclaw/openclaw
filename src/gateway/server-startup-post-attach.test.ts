@@ -1103,12 +1103,12 @@ describe("startGatewayPostAttachRuntime", () => {
       );
       await runtime.startupSettled;
       const lifecycle = currentUpdateCheckLifecycle();
-      const signal = await lifecycle.run(async (signal) => signal);
-      expect(signal.aborted).toBe(false);
+      const updateSignal = await lifecycle.run(async (signal) => signal);
+      expect(updateSignal.aborted).toBe(false);
       expect(runtimeDeps.createGatewayUpdateCheck).not.toHaveBeenCalled();
 
       await stopTrackedSidecars(publishedGatewayLifetimeSidecars);
-      expect(signal.aborted).toBe(true);
+      expect(updateSignal.aborted).toBe(true);
     },
   );
 
