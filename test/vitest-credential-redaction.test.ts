@@ -38,6 +38,102 @@ describe("public test diagnostic redaction", () => {
     }
   });
 
+  it.each([
+    "    at /workspace/model-fallback.session-identity.test.ts:48:40",
+    "    at test/session.test.ts:76:58",
+    "    at session.test.ts:48:40",
+    "    at async session.test.ts:48:40",
+    "    at Object.run (/workspace/token.test.mts:12:3)",
+    "    at Object.run(/workspace/token.test.mts:12:3)",
+    "    at run (C:\\workspace\\api_key.spec.cts:3:5)",
+    "    at C:\\workspace\\password.test.cjs:12:4",
+    "    at run (file:///workspace/(tests)/cookie.test.mjs:2:6)",
+    " \u276f test/model-fallback.session-identity.test.ts:48:40",
+    " \u276f Object.run test/session.test.ts:76:58",
+    " \u276f Object.run session.test.ts:76:58",
+    " \u276f /workspace/private_key.test.jsx:10:12",
+    " \u276f /workspace/authorization.test.tsx:10:12",
+    "    at /workspace/secret.js:12:3",
+    "    at /workspace/PASSWD.test.ts:12:3",
+  ])("preserves the source location in %s", (frame) => {
+    expect(redactCredentialText(frame)).toBe(frame);
+    expect(redactCredentialText(redactCredentialText(frame))).toBe(frame);
+  });
+
+  it("preserves colored, CRLF and JSON-encoded source locations", () => {
+    const frame = " \u276f test/session.test.ts:48:40\r\n    at /workspace/token.test.ts:76:58";
+    expect(redactCredentialText(frame.replace("48:40", "\u001b[2m48:40\u001b[22m"))).toBe(frame);
+    let encoded = frame;
+    for (let depth = 0; depth < 3; depth += 1) {
+      encoded = JSON.stringify({ message: encoded });
+      expect(redactCredentialText(encoded)).toBe(encoded);
+    }
+    const error = { stack: frame, cause: { stack: frame } };
+    redactDiagnostic(error);
+    expect(error).toEqual({ stack: frame, cause: { stack: frame } });
+  });
+
+  it.each([
+    "SESSION=48:40",
+    "SESSION:48:40",
+    "settings.SESSION:48:40",
+    "at SESSION:48:40",
+    "at settings.SESSION:48:40",
+    " \u276f settings.SESSION:48:40",
+    "session.test.ts:48:40",
+    '"session.test.ts":48:40',
+    "'session.test.ts':48:40",
+    'at "session.test.ts":48:40',
+    ' \u276f "session.test.ts":48:40',
+    "at session.test.ts=48:40",
+    "at session.test.ts :48:40",
+    "at session.txt:48:40",
+    "at session.test.ts:48:40)",
+    "at run (session.test.ts:48:40",
+    "at session.test.ts:48:40 trailing text",
+    "prefix at session.test.ts:48:40",
+  ])("does not exempt the credential assignment in %s", (input) => {
+    const output = redactCredentialText(input);
+    expect(output).toContain("<redacted len=");
+    expect(output).not.toContain("48:40");
+    expect(redactCredentialText(output)).toBe(output);
+  });
+
+  it.each([
+    "SESSION=synthetic\n    at /workspace/session.test.ts:48:40",
+    "SESSION: 'synthetic' at /workspace/session.test.ts:48:40",
+    "    at run (TOKEN=synthetic/session.test.ts:48:40)",
+    "    at run (/TOKEN:synthetic/session.test.ts:48:40)",
+    "    at run (https://SESSION:synthetic@example.test/session.test.ts:48:40)",
+    "    at run (file:///workspace/session.test.ts?TOKEN=synthetic:48:40)",
+    "    at run (/workspace/session.test.ts:48:40) TOKEN=synthetic",
+    " \u276f session.test.ts:48:40 TOKEN=synthetic",
+  ])("redacts real credentials beside source locations in %s", (input) => {
+    const output = redactCredentialText(input);
+    expect(output).toContain("<redacted len=");
+    expect(output).not.toContain("synthetic");
+    expect(redactCredentialText(output)).toBe(output);
+  });
+
+  it("does not exempt stack-looking values of credential fields or entry pairs", () => {
+    const frame = "    at /workspace/session.test.ts:48:40";
+    const marker = `<redacted len=${frame.length}>`;
+    for (const key of ["SESSION", "session.test.ts"]) {
+      expect(redactCredentialText(`${key}: ${JSON.stringify(frame)}`)).toBe(`${key}: "${marker}"`);
+      expect(redactCredentialText(`${key}=${frame}`)).toBe(`${key}=${marker}`);
+      const diagnostic = { [key]: frame, cause: { entries: [[key, frame]], stack: frame } };
+      redactDiagnostic(diagnostic);
+      expect(diagnostic).toEqual({
+        [key]: marker,
+        cause: { entries: [[key, marker]], stack: frame },
+      });
+      const encoded = JSON.stringify({ payload: JSON.stringify({ [key]: frame }) });
+      expect(JSON.parse(redactCredentialText(encoded))).toEqual({
+        payload: JSON.stringify({ [key]: marker }),
+      });
+    }
+  });
+
   it("scrubs nested credential entry pairs while preserving keys and ordinary entries", () => {
     const diagnostic = {
       actual: { env: Object.entries({ EXAMPLE_TOKEN: "synthetic", NORMAL: "visible" }) },
