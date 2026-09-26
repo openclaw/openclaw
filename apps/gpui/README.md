@@ -412,6 +412,9 @@ to expose each inactive window's internally focused element. The matching
 on the same crate identities; their versions and source behavior are unchanged.
 The `gpui-pre-macos` patch at `~/Projects/oss/gpui-pre-macos` attaches the adapter
 to the rendering view that serves as AppKit's first responder.
+The Wry patch at `~/Projects/oss/wry` prevents hidden, unfocused macOS webviews
+from activating the app when the panel catalog is created. The upstream change
+is tracked in [tauri-apps/wry#1866](https://github.com/tauri-apps/wry/pull/1866).
 These absolute Cargo paths are local proof wiring and must be replaced with
 released dependencies before shipping the app.
 
