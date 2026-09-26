@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
+import { resolveWorkspaceBootstrapRouting } from "../../bootstrap-routing.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { limitHistoryTurns } from "../history.js";
 import {
@@ -17,6 +18,7 @@ async function resolveBootstrapContext(params: {
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   bootstrapMode?: "full" | "limited" | "none";
+  deliversCompleteWorkspaceContext?: boolean;
   completed?: boolean;
   resolver?: () => Promise<{ bootstrapFiles: unknown[]; contextFiles: unknown[] }>;
 }) {
@@ -35,6 +37,7 @@ async function resolveBootstrapContext(params: {
     bootstrapContextMode: params.bootstrapContextMode ?? "full",
     bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
     bootstrapMode: params.bootstrapMode ?? "none",
+    deliversCompleteWorkspaceContext: params.deliversCompleteWorkspaceContext ?? false,
     hasCompletedBootstrapTurn,
     resolveBootstrapContextForRun,
   });
@@ -145,11 +148,84 @@ describe("embedded attempt context injection", () => {
       bootstrapContextMode: "full",
       bootstrapContextRunKind: "default",
       bootstrapMode: "full",
+      deliversCompleteWorkspaceContext: true,
       resolver,
     });
 
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(true);
     expect(result.bootstrapFiles).toEqual([{ name: "AGENTS.md", content: "bootstrap context" }]);
+  });
+
+  it("records completion for a workspace whose onboarding is already done", async () => {
+    // A completed workspace resolves bootstrapMode "none" on every turn, which on
+    // its own would make the continuation-skip marker impossible to earn.
+    const { result } = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      bootstrapMode: "none",
+      deliversCompleteWorkspaceContext: true,
+      resolver: async () => ({
+        bootstrapFiles: [{ name: "AGENTS.md", content: "workspace rules" }],
+        contextFiles: [{ path: "AGENTS.md", content: "workspace rules" }],
+      }),
+    });
+
+    expect(result.isContinuationTurn).toBe(false);
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(true);
+  });
+
+  it("does not record a completion marker for the default always-injection mode", async () => {
+    // "always" never reads the marker back, so a setup-complete workspace must not
+    // start appending one transcript entry per session under it.
+    const { result } = await resolveBootstrapContext({
+      contextInjectionMode: "always",
+      bootstrapMode: "none",
+      deliversCompleteWorkspaceContext: true,
+    });
+
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+  });
+
+  it("does not let a cron maintenance turn record bootstrap completion", async () => {
+    const { result } = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      bootstrapContextRunKind: "cron",
+      bootstrapMode: "none",
+      deliversCompleteWorkspaceContext: true,
+    });
+
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+  });
+
+  it("carries a completed workspace routing decision into marker eligibility", async () => {
+    // The same inputs attempt preparation supplies once workspace setup is done:
+    // nothing pending, a primary interactive run, canonical workspace.
+    const routing = await resolveWorkspaceBootstrapRouting({
+      isWorkspaceBootstrapPending: async () => false,
+      trigger: "user",
+      isPrimaryRun: true,
+      isCanonicalWorkspace: true,
+      effectiveWorkspace: "/tmp/openclaw-workspace",
+      resolvedWorkspace: "/tmp/openclaw-workspace",
+      hasBootstrapFileAccess: true,
+    });
+
+    const resolver = vi.fn(async () => ({
+      bootstrapFiles: [{ name: "AGENTS.md", content: "workspace instructions" }],
+      contextFiles: [{ path: "AGENTS.md", content: "workspace instructions" }],
+    }));
+
+    const { result } = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      bootstrapMode: routing.bootstrapMode,
+      deliversCompleteWorkspaceContext: routing.deliversCompleteWorkspaceContext,
+      resolver,
+    });
+
+    expect(routing.bootstrapMode).toBe("none");
+    // The turn really did carry the workspace files, and now it earns the marker
+    // that lets the next continuation skip them.
+    expect(result.contextFiles).toEqual([{ path: "AGENTS.md", content: "workspace instructions" }]);
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(true);
   });
 
   it.each(["heartbeat"] as const)(

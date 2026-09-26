@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../workspace-bootstrap-read.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -14,8 +15,16 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+async function makeWorkspace(label: string): Promise<string> {
+  return await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`)));
+}
+
 describe("prepareEmbeddedAttemptBootstrap", () => {
-  async function prepare(params: { agentWorkspace: string; sessionWorkspace: string }) {
+  async function prepare(params: {
+    agentWorkspace: string;
+    sessionWorkspace: string;
+    contextInjection?: "always" | "continuation-skip" | "never";
+  }) {
     return await prepareEmbeddedAttemptBootstrap({
       attempt: {
         sessionId: "session-1",
@@ -23,7 +32,14 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         trigger: "user",
         bootstrapWorkspaceDir: params.agentWorkspace,
         isCanonicalWorkspace: params.agentWorkspace === params.sessionWorkspace,
-        config: { agents: { defaults: { workspace: params.agentWorkspace } } },
+        config: {
+          agents: {
+            defaults: {
+              workspace: params.agentWorkspace,
+              ...(params.contextInjection ? { contextInjection: params.contextInjection } : {}),
+            },
+          },
+        },
       } as EmbeddedRunAttemptParams,
       setup: createAttemptSetupFixture({
         effectiveWorkspace: params.sessionWorkspace,
@@ -71,6 +87,51 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     expect(result.contextFiles).not.toContainEqual(
       expect.objectContaining({ path: path.join(sessionWorkspace, "SOUL.md") }),
     );
+  });
+
+  it("withholds the completion marker when the execution project AGENTS.md was unreadable", async () => {
+    const agentWorkspace = await makeWorkspace("agent-workspace");
+    const sessionWorkspace = await makeWorkspace("session-workspace");
+    tempDirs.push(agentWorkspace, sessionWorkspace);
+    await fs.writeFile(path.join(agentWorkspace, "AGENTS.md"), "Canonical agent instructions");
+    await fs.writeFile(
+      path.join(sessionWorkspace, "AGENTS.md"),
+      "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1),
+    );
+
+    const result = await prepare({
+      agentWorkspace,
+      sessionWorkspace,
+      contextInjection: "continuation-skip",
+    });
+
+    expect(result.bootstrapMode).toBe("none");
+    expect(result.contextFiles).toContainEqual(
+      expect.objectContaining({
+        path: path.join(sessionWorkspace, "AGENTS.md"),
+        content: expect.stringMatching(/^\[UNREADABLE: File exceeds/),
+      }),
+    );
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+  });
+
+  it("withholds the completion marker when a full bootstrap turn carried an unreadable file", async () => {
+    const workspace = await makeWorkspace("onboarding-workspace");
+    tempDirs.push(workspace);
+    await fs.writeFile(path.join(workspace, "BOOTSTRAP.md"), "Finish the workspace setup.");
+    await fs.writeFile(
+      path.join(workspace, "AGENTS.md"),
+      "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1),
+    );
+
+    const result = await prepare({
+      agentWorkspace: workspace,
+      sessionWorkspace: workspace,
+      contextInjection: "continuation-skip",
+    });
+
+    expect(result.bootstrapMode).toBe("full");
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
   });
 
   it("remaps injected paths into the prompt workspace while accounting keeps source paths", async () => {

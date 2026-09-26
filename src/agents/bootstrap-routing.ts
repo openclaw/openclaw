@@ -6,6 +6,7 @@
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import type { BootstrapContextRunKind, BootstrapMode } from "./bootstrap-mode.js";
 import { resolveBootstrapMode } from "./bootstrap-mode.js";
+import { isUnreadableWorkspaceBootstrapFile } from "./workspace-bootstrap-read.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
 
 /**
@@ -28,18 +29,21 @@ type BootstrapRoutingInput = {
   effectiveWorkspace: string;
   resolvedWorkspace: string;
   hasBootstrapFileAccess: boolean;
+  /** Bootstrap files loaded for this run, when the run has read them already. */
+  bootstrapFiles?: readonly WorkspaceBootstrapFile[];
 };
 
 /** Bootstrap placement decision consumed by system/runtime context assembly. */
 type WorkspaceBootstrapRouting = {
   bootstrapMode: BootstrapMode;
+  /** Every workspace bootstrap file reached the prompt, so a continuation can skip re-injection. */
+  deliversCompleteWorkspaceContext: boolean;
   includeBootstrapInSystemContext: boolean;
   includeBootstrapInRuntimeContext: boolean;
 };
 
 type WorkspaceBootstrapRoutingInput = Omit<BootstrapRoutingInput, "workspaceBootstrapPending"> & {
   isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
-  bootstrapFiles?: readonly WorkspaceBootstrapFile[];
   bootstrapFilesProvideAccess?: boolean;
 };
 
@@ -57,6 +61,11 @@ function resolveBootstrapRouting(params: BootstrapRoutingInput): WorkspaceBootst
 
   return {
     bootstrapMode,
+    // "none" with nothing pending means no BOOTSTRAP.md content was withheld, and a guarded-read
+    // placeholder means what reached the prompt was the fault report rather than the file.
+    deliversCompleteWorkspaceContext:
+      (bootstrapMode === "full" || !params.workspaceBootstrapPending) &&
+      !(params.bootstrapFiles ?? []).some(isUnreadableWorkspaceBootstrapFile),
     includeBootstrapInSystemContext: bootstrapMode === "full",
     includeBootstrapInRuntimeContext: false,
   };
