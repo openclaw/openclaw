@@ -66,6 +66,7 @@ import {
 } from "./in-process-gateway.js";
 import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
+import { resolveVisibleSpawnThinkingLevel } from "./sessions-spawn-visible-thinking.js";
 
 const SessionsSpawnPlacementSchema = Type.Union([
   Type.Object({ kind: Type.Literal("local") }, { additionalProperties: false }),
@@ -81,7 +82,7 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Persistent sidebar session only when the user requests a separate session or needs to revisit and steer it independently. Internal QA/coding/review/test workers: omit or false. Subagent runtime only; default run mode and empty attachments accepted; no thread/thinking/lightContext or attachment staging.",
+        "Persistent sidebar session only when the user requests a separate session or needs to revisit and steer it independently. Internal QA/coding/review/test workers: omit or false. Subagent runtime only; default run mode and empty attachments accepted; thinking is supported with visible=true; no thread/lightContext or attachment staging.",
     }),
   ),
   group: Type.Optional(
@@ -184,12 +185,13 @@ export async function maybeSpawnVisibleSession(params: {
     if (providedVisibleOnlyParams.length > 0) {
       throw new ToolInputError(
         `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}. ` +
-          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, thinking, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
+          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
       );
     }
     return undefined;
   }
   const modelOverride = normalizeToolModelOverride(readToolStringParam(params.raw, "model"));
+  const thinkingOverrideRaw = readToolStringParam(params.raw, "thinking");
   const requestedCwd = readToolStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
   // A visible session starts one run; empty attachment fields request no staging.
@@ -199,11 +201,6 @@ export async function maybeSpawnVisibleSession(params: {
       "runtime",
       params.runtime === "subagent" ? undefined : params.runtime,
       'supports runtime="subagent" only',
-    ],
-    [
-      "thinking",
-      readToolStringParam(params.raw, "thinking"),
-      "thinking overrides are not wired to the sessions.create path",
     ],
     [
       "thread",
@@ -403,6 +400,10 @@ export async function maybeSpawnVisibleSession(params: {
           hasFallbackOrigin: initialSessionPatch.modelOverrideFallbackOriginModel !== undefined,
         }
       : undefined;
+  const resolvedThinkingLevel = resolveVisibleSpawnThinkingLevel({
+    resolvedModel,
+    thinkingOverrideRaw,
+  });
   const reservation = reserveChildAdmissionSlot({
     controllerSessionKey: requesterKey,
     resolveAdmission: (pendingChildren) => {
@@ -472,6 +473,7 @@ export async function maybeSpawnVisibleSession(params: {
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
+        ...(resolvedThinkingLevel ? { thinkingLevel: resolvedThinkingLevel } : {}),
         ...(placement ? { titleSource: params.task } : { task: taskMessage }),
         timeoutMs:
           runTimeoutSeconds === 0

@@ -23,6 +23,7 @@ import {
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { registerSessionsSpawnCompletionTests } from "./sessions-spawn-tool.completion.test-support.js";
+import { registerSessionsSpawnVisibleThinkingTests } from "./sessions-spawn-visible-thinking.test-support.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -186,6 +187,11 @@ describe("sessions_spawn tool", () => {
     createTool: (options) => createSessionsSpawnTool(options),
     registerAcpBackendForTest,
     mocks: hoisted,
+    mockCallArg,
+  });
+  registerSessionsSpawnVisibleThinkingTests({
+    createTool: (options) => createSessionsSpawnTool(options),
+    inProcessCreationMock: hoisted.inProcessCreationMock,
     mockCallArg,
   });
 
@@ -557,7 +563,7 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "Persistent sidebar session only when the user requests a separate session or needs to revisit and steer it independently. Internal QA/coding/review/test workers: omit or false. Subagent runtime only; default run mode and empty attachments accepted; no thread/thinking/lightContext or attachment staging.",
+      "Persistent sidebar session only when the user requests a separate session or needs to revisit and steer it independently. Internal QA/coding/review/test workers: omit or false. Subagent runtime only; default run mode and empty attachments accepted; thinking is supported with visible=true; no thread/lightContext or attachment staging.",
     );
     expect(schema.properties?.projectId?.description).toContain("Registered project");
     expect(schema.properties?.projectGitUrl?.description).toContain("managed clone");
@@ -583,6 +589,9 @@ describe("sessions_spawn tool", () => {
     expect(tool.description).toContain("`Owner: <label>` on the second line");
     expect(tool.description).toContain("`tools.sessions.visibility`");
     expect(schema.properties?.runtime?.description).toContain("visible=true");
+    expect(schema.properties?.thinking?.description).toContain(
+      "supported with visible=true for subagents",
+    );
     expect(schema.properties?.mode?.description).toContain('accept omitted/default "run"');
     expect(schema.properties?.lightContext?.description).toContain("unavailable with visible=true");
     expect(schema.properties?.attachments?.description).toContain("accepts only an empty array");
@@ -633,6 +642,7 @@ describe("sessions_spawn tool", () => {
             label: "Issue review",
             group: "P1 issues from beta feedback",
             model: "anthropic/claude-sonnet-4-6",
+            thinking: "HIGH",
             cwd: dir,
             context: "fork",
             visible: true,
@@ -654,6 +664,7 @@ describe("sessions_spawn tool", () => {
         label: "Issue review",
         category: "P1 issues from beta feedback",
         model: "anthropic/claude-sonnet-4-6",
+        thinkingLevel: "high",
         task: expect.stringContaining("[Subagent Task]\n\ninspect issue"),
         timeoutMs: 120000,
         parentSessionKey: "agent:main:main",
@@ -936,7 +947,7 @@ describe("sessions_spawn tool", () => {
         }),
       ).rejects.toThrow(
         `Parameters require visible=true: ${Object.keys(options).join(", ")}. ` +
-          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, thinking, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
+          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
       );
       expect(spawn).not.toHaveBeenCalled();
       expect(other).not.toHaveBeenCalled();
@@ -1201,11 +1212,6 @@ describe("sessions_spawn tool", () => {
   });
 
   it.each([
-    [
-      "thinking",
-      { thinking: "high" },
-      "Parameters unavailable with visible=true: thinking: thinking overrides are not wired to the sessions.create path",
-    ],
     [
       "thread",
       { thread: true },
