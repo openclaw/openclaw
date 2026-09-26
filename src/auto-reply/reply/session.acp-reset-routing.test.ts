@@ -7,7 +7,7 @@ import {
   getSessionBindingService,
   testing as sessionBindingTesting,
 } from "../../infra/outbound/session-binding-service.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   initSessionState,
   writeSessionStore as writeSessionStoreFast,
@@ -21,8 +21,8 @@ async function createStorePath(prefix: string) {
   return path.join(root, "sessions.json");
 }
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  await closeOpenClawStateDatabaseAsync();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 describe("bound ACP reset routing", () => {

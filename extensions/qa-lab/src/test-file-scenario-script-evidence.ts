@@ -2,12 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  isRepoRootRelativeRef,
-  resolveQaArtifactPath,
-  toRepoArtifactPath,
-  toRepoRelativePath,
-} from "./cli-paths.js";
+import { resolveQaArtifactPath, toRepoArtifactPath, toRepoRelativePath } from "./cli-paths.js";
 import {
   QA_EVIDENCE_FILENAME,
   type projectQaEvidenceScenarioOutcomes,
@@ -15,6 +10,7 @@ import {
   type QaEvidenceSummaryJson,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
+import { isRepoRootRelativeRef } from "./repo-path.js";
 
 async function readJsonBytesIfExists(filePath: string) {
   let bytes: Buffer;

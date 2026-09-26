@@ -18,12 +18,6 @@ import {
   type AnyAgentTool,
   type SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import * as agentHarnessTaskRuntime from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import type {
-  AgentHarnessTaskRecord,
-  AgentHarnessTaskRuntime,
-  AgentHarnessTaskRuntimeScope,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -34,6 +28,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
+import { registerCopilotNativeSubagentCleanupTests } from "./attempt.native-subagents.test-support.js";
 import {
   makeAssistantMessageEvent,
   makeFakePool,
@@ -3038,82 +3033,7 @@ describe("runCopilotAttempt", () => {
     expect(pool["release"]).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])(
-    "cleans up after native task finalization fails (deferred: %s)",
-    async (deferred) => {
-      const failure = new Error("native task persistence failed");
-      const task: AgentHarnessTaskRecord = {
-        taskId: "native-task",
-        runId: "copilot-agent:call-1",
-        runtime: "subagent",
-        taskKind: "copilot-native",
-        requesterSessionKey: "agent:main:main",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        task: "inspect",
-        status: "running",
-        notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
-        createdAt: 0,
-      };
-      const runtime: AgentHarnessTaskRuntime = {
-        createRunningTaskRun: () => task,
-        tryCreateRunningTaskRun: () => task,
-        recordTaskRunProgressByRunId: () => [],
-        finalizeTaskRunByRunId: () => {
-          throw failure;
-        },
-        setDetachedTaskDeliveryStatusByRunId: () => [],
-        listTaskRecords: () => [task],
-      };
-      vi.spyOn(agentHarnessTaskRuntime, "createAgentHarnessTaskRuntime").mockReturnValue(runtime);
-      const sdk = makeFakeSdk((session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { content: "hello" });
-          session.emit("subagent.started", {
-            agentDescription: "inspect",
-            agentDisplayName: "Worker",
-            agentName: "worker",
-            toolCallId: "call-1",
-          });
-          if (deferred) {
-            session.emit("session.compaction_start", {});
-          }
-          return makeAssistantMessageEvent("done");
-        });
-      });
-      const pool = makeFakePool(sdk);
-      const onDeferredCompaction = vi.fn<(params: { cleanup: Promise<unknown> }) => void>();
-      const outcome = await runCopilotAttempt(
-        makeParams({
-          agentHarnessTaskRuntimeScope: {} as AgentHarnessTaskRuntimeScope,
-        }),
-        { pool, onDeferredCompaction },
-      ).then(
-        (result) => ({ result, error: undefined }),
-        (error: unknown) => ({ result: undefined, error }),
-      );
-      const session = requireSession(sdk);
-      if (deferred) {
-        const cleanup = expectDefined(
-          onDeferredCompaction.mock.calls[0]?.[0].cleanup,
-          "deferred cleanup",
-        );
-        session.emit("session.compaction_complete", { success: true });
-        session.emit("session.idle", {});
-        await expect(cleanup).rejects.toBe(failure);
-      } else {
-        expect(outcome.error).toBeUndefined();
-        expect(
-          projectAgentRunAttemptTerminal(expectDefined(outcome.result, "attempt result").terminal)
-            .promptError,
-        ).toBe(failure);
-      }
-      expect(session.disconnect).toHaveBeenCalledOnce();
-      expect(pool.release).toHaveBeenCalledOnce();
-      expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
-    },
-  );
+  registerCopilotNativeSubagentCleanupTests({ makeParams, requireSession });
 
   it("cleanup on disconnect throw", async () => {
     const primaryError = new Error("send failed");

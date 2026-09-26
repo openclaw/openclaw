@@ -7,12 +7,17 @@ import {
   createInMemoryTaskRegistryStore,
 } from "../test-utils/task-registry-store.js";
 import * as executionOwner from "./task-execution-owner.js";
-import { getTaskFlowById, reloadTaskFlowRegistryFromStoreAsync } from "./task-flow-registry.js";
+import {
+  getTaskFlowById,
+  readResidentTaskFlow,
+  reloadTaskFlowRegistryFromStoreAsync,
+} from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskById } from "./task-registry-query.js";
 import {
   bumpTaskRegistryRevision,
   reloadTaskRegistryFromStoreAsync,
+  tasks,
 } from "./task-registry-state.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
@@ -127,7 +132,6 @@ function fixture(kind: "task" | "flow") {
             return snapshot;
           },
         },
-        observers: { onEvent: (event) => events.push(event.kind) },
       });
     }
   };
@@ -138,6 +142,7 @@ function fixture(kind: "task" | "flow") {
     configure,
     replace: (label: string) => replace(label),
     read: () => (kind === "task" ? getTaskById(id)?.task : getTaskFlowById(id)?.goal),
+    readResident: () => (kind === "task" ? tasks.get(id)?.task : readResidentTaskFlow(id)?.goal),
     afterRead(callback: () => void) {
       afterRead = callback;
     },
@@ -149,19 +154,21 @@ function fixture(kind: "task" | "flow") {
 }
 
 describe.each(["task", "flow"] as const)("synchronous %s restore admission", (kind) => {
+  const restoredEvents = kind === "task" ? ["restored"] : [];
+
   it("rereads once after admission changes without publishing the discarded snapshot", () => {
     const owner = fixture(kind);
     owner.afterRead(() => {
-      owner.afterRead(() => {});
+      owner.afterRead(() => expect(owner.readResident()).toBeUndefined());
       owner.replace("fresh");
       generation += 1;
     });
     expect(owner.read()).toBe("fresh");
     expect(owner.loads).toEqual(["old", "fresh"]);
-    expect(owner.events).toEqual(["restored"]);
+    expect(owner.events).toEqual(restoredEvents);
     expect(owner.read()).toBe("fresh");
     expect(owner.loads).toEqual(["old", "fresh"]);
-    expect(owner.events).toEqual(["restored"]);
+    expect(owner.events).toEqual(restoredEvents);
   });
 
   it("propagates a second admission change and permits a later fresh read", () => {
@@ -170,13 +177,14 @@ describe.each(["task", "flow"] as const)("synchronous %s restore admission", (ki
       generation += 1;
     });
     expect(owner.read).toThrow(retirement);
+    expect(owner.readResident()).toBeUndefined();
     expect(owner.loads).toEqual(["old", "old"]);
     expect(owner.events).toEqual([]);
     owner.afterRead(() => {});
     owner.replace("fresh");
     expect(owner.read()).toBe("fresh");
     expect(owner.loads).toEqual(["old", "old", "fresh"]);
-    expect(owner.events).toEqual(["restored"]);
+    expect(owner.events).toEqual(restoredEvents);
   });
 
   it("preserves the actual read error after reacquiring admission", () => {
@@ -190,6 +198,7 @@ describe.each(["task", "flow"] as const)("synchronous %s restore admission", (ki
     });
     expect(owner.read).toThrow(expect.objectContaining({ cause: failure }));
     expect(owner.read).toThrow(expect.objectContaining({ cause: failure }));
+    expect(owner.readResident()).toBeUndefined();
     expect(owner.loads).toEqual(["old", "old"]);
     expect(owner.events).toEqual([]);
   });
@@ -206,10 +215,11 @@ describe.each(["task", "flow"] as const)("synchronous %s restore admission", (ki
       }
     });
     expect(owner.read).toThrow();
+    expect(owner.readResident()).toBeUndefined();
     expect(owner.events).toEqual([]);
     expect(owner.read()).toBe("fresh");
     expect(owner.loads).toEqual(["old", "fresh"]);
-    expect(owner.events).toEqual(["restored"]);
+    expect(owner.events).toEqual(restoredEvents);
   });
 
   it("preserves a newer synchronous restore reached through reload reentry", async () => {
@@ -223,7 +233,8 @@ describe.each(["task", "flow"] as const)("synchronous %s restore admission", (ki
     });
     try {
       expect(owner.read).toThrow();
-      expect(owner.events).toEqual(["restored"]);
+      expect(owner.readResident()).toBe("newer");
+      expect(owner.events).toEqual(restoredEvents);
       expect(owner.read()).toBe("newer");
       expect(owner.loads).toEqual(["old", "newer"]);
     } finally {
@@ -239,6 +250,7 @@ describe.each(["task", "flow"] as const)("synchronous %s restore admission", (ki
     });
     expect(owner.read).toThrow(expect.objectContaining({ cause: failure }));
     expect(owner.read).toThrow(expect.objectContaining({ cause: failure }));
+    expect(owner.readResident()).toBeUndefined();
     expect(owner.loads).toEqual(["old"]);
     expect(owner.events).toEqual([]);
   });

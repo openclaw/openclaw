@@ -16,6 +16,12 @@ import {
   parseClawHubPackageSecurityResponse,
   type ClawHubPackageSecurityResponse,
 } from "./clawhub-packages.js";
+import {
+  parseClawHubPluginCapabilities,
+  parseClawHubPluginCompatibility,
+  type ClawHubPluginCompatibility,
+  type ClawHubPluginCapabilities,
+} from "./clawhub-plugin-manifest.js";
 
 export type ClawHubPluginCatalogEntry = {
   packageName: string;
@@ -37,29 +43,23 @@ export type ClawHubPluginCatalogEntry = {
   trendingRank?: number;
 };
 
-export type ClawHubPluginDetail = ClawHubPluginCatalogEntry & {
-  owner?: { handle?: string; displayName?: string; imageUrl?: string; official?: boolean };
-  topics: string[];
-  createdAt?: number;
-  updatedAt?: number;
-  readme?: string;
-  repositoryUrl?: string;
-  documentationUrl?: string;
-  compatibility?: ClawHubPluginCompatibility;
-  configFields: ClawHubPluginConfigField[];
-  mcpServers: string[];
-  skills: Array<{ name: string; description?: string }>;
-  versions: ClawHubPluginVersion[];
-  verification?: ClawHubPluginVerification;
-  security?: ClawHubPluginSecurity;
-};
-
-type ClawHubPluginCompatibility = {
-  pluginApiRange?: string;
-  builtWithOpenClawVersion?: string;
-  pluginSdkVersion?: string;
-  minGatewayVersion?: string;
-};
+export type ClawHubPluginDetail = ClawHubPluginCatalogEntry &
+  ClawHubPluginCapabilities & {
+    owner?: { handle?: string; displayName?: string; imageUrl?: string; official?: boolean };
+    topics: string[];
+    createdAt?: number;
+    updatedAt?: number;
+    readme?: string;
+    repositoryUrl?: string;
+    documentationUrl?: string;
+    compatibility?: ClawHubPluginCompatibility;
+    configFields: ClawHubPluginConfigField[];
+    mcpServers: string[];
+    skills: Array<{ name: string; description?: string }>;
+    versions: ClawHubPluginVersion[];
+    verification?: ClawHubPluginVerification;
+    security?: ClawHubPluginSecurity;
+  };
 
 type ClawHubPluginConfigField = {
   name: string;
@@ -99,6 +99,7 @@ export type ClawHubPluginCategory = {
   description: string;
   icon: string;
   order: number;
+  pinnedPackages?: string[];
 };
 
 export type ClawHubPluginVersionCategories = {
@@ -126,6 +127,8 @@ const PLUGIN_CATEGORY_ICON_KEYS = new Set([
   "globe",
   "message-circle",
   "message-square",
+  "mic",
+  "monitor",
   "package",
   "palette",
   "shield",
@@ -199,7 +202,9 @@ function parseCatalogPackage(
   const ownerHandle = readClawHubStringField(value, "ownerHandle", context);
   const latestVersion = readClawHubStringField(value, "latestVersion", context);
   const runtimeId = readClawHubStringField(value, "runtimeId", context);
-  const icon = readClawHubStringField(value, "icon", context);
+  const icon =
+    readClawHubStringField(value, "icon", context) ??
+    readClawHubStringField(value, "ownerImage", context);
   // Registry-owned icons are relative; published packages may also use external URLs.
   const iconUrl = resolveClawHubImageUrl(icon, baseUrl) ?? icon;
   const verificationTier = readClawHubStringField(value, "verificationTier", context);
@@ -255,6 +260,20 @@ function parsePluginCategories(value: unknown): ClawHubPluginCategory[] {
     if (!Number.isInteger(order) || order < 0 || seenSlugs.has(slug) || seenOrders.has(order)) {
       throw new Error(`Malformed ClawHub plugin category ${slug}: duplicate or invalid ordering.`);
     }
+    const pinnedPackages = readClawHubStringArrayField(
+      entry,
+      "pinnedPackages",
+      `plugin category ${slug}`,
+    );
+    if (
+      pinnedPackages &&
+      (new Set(pinnedPackages).size !== pinnedPackages.length ||
+        pinnedPackages.some((name) => !name.trim() || name !== name.trim()))
+    ) {
+      throw new Error(
+        `Malformed ClawHub plugin category ${slug}: duplicate or invalid pinned package.`,
+      );
+    }
     seenSlugs.add(slug);
     seenOrders.add(order);
     return {
@@ -263,6 +282,7 @@ function parsePluginCategories(value: unknown): ClawHubPluginCategory[] {
       description: readRequiredClawHubStringField(entry, "description", `plugin category ${slug}`),
       icon: PLUGIN_CATEGORY_ICON_KEYS.has(icon) ? icon : "package",
       order,
+      ...(pinnedPackages ? { pinnedPackages } : {}),
     };
   });
   return categories.toSorted((left, right) => left.order - right.order);
@@ -278,6 +298,7 @@ function parseCatalogList(value: unknown, baseUrl?: string) {
       parseCatalogPackage(item, `plugin catalog item ${index}`, baseUrl),
     ),
     ...(nextCursor ? { nextCursor } : {}),
+    ...(value.categories !== undefined ? { categories: parsePluginCategories(value) } : {}),
   };
 }
 
@@ -310,46 +331,26 @@ function readOptionalRecord(
   return value;
 }
 
-function parseCompatibility(
+function parseManifest(
   value: Record<string, unknown> | undefined,
-  context: string,
-): ClawHubPluginCompatibility | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const compatibility = {
-    pluginApiRange: readClawHubStringField(value, "pluginApiRange", context),
-    builtWithOpenClawVersion: readClawHubStringField(value, "builtWithOpenClawVersion", context),
-    pluginSdkVersion: readClawHubStringField(value, "pluginSdkVersion", context),
-    minGatewayVersion: readClawHubStringField(value, "minGatewayVersion", context),
-  };
-  const entries = Object.entries(compatibility).filter((entry): entry is [string, string] =>
-    Boolean(entry[1]),
-  );
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-}
-
-function parseManifest(value: Record<string, unknown> | undefined): {
-  compatibility?: ClawHubPluginCompatibility;
-  configFields: ClawHubPluginConfigField[];
-  mcpServers: string[];
-  skills: Array<{ name: string; description?: string }>;
-} {
+): Pick<
+  ClawHubPluginDetail,
+  "compatibility" | "configFields" | "mcpServers" | "skills" | keyof ClawHubPluginCapabilities
+> {
   if (!value) {
     return { configFields: [], mcpServers: [], skills: [] };
   }
-  const configFields = value.configFields;
-  const mcpServers = value.mcpServers;
-  const bundledSkills = value.bundledSkills;
+  const { configFields, mcpServers, bundledSkills } = value;
   if (!Array.isArray(configFields) || !Array.isArray(mcpServers) || !Array.isArray(bundledSkills)) {
     throw new Error("Malformed ClawHub plugin manifest summary: expected capability arrays.");
   }
-  const compatibility = parseCompatibility(
+  const compatibility = parseClawHubPluginCompatibility(
     readOptionalRecord(value, "compatibility", "plugin manifest summary"),
     "plugin manifest compatibility",
   );
   return {
     ...(compatibility ? { compatibility } : {}),
+    ...parseClawHubPluginCapabilities(value),
     configFields: configFields.map((entry, index) => {
       if (!isRecord(entry)) {
         throw new Error(`Malformed ClawHub plugin config field ${index}: expected an object.`);
@@ -460,7 +461,11 @@ export async function fetchClawHubPluginCatalog(
     cursor?: string;
     limit?: number;
   },
-): Promise<{ items: ClawHubPluginCatalogEntry[]; nextCursor?: string }> {
+): Promise<{
+  items: ClawHubPluginCatalogEntry[];
+  categories?: ClawHubPluginCategory[];
+  nextCursor?: string;
+}> {
   const query = params.query?.trim();
   const shared = {
     baseUrl: params.baseUrl,
@@ -493,8 +498,7 @@ export async function fetchClawHubPluginCatalog(
       cursor: params.cursor,
       featured: params.intent === "featured" ? "true" : undefined,
       isOfficial: params.intent === "official" ? "true" : undefined,
-      officialFirst:
-        params.intent === "featured" || params.intent === "trending" ? undefined : "true",
+      curated: (params.intent ?? "all") === "all" && params.category ? "true" : undefined,
       sort:
         params.intent === "featured"
           ? undefined
@@ -613,7 +617,7 @@ export async function fetchClawHubPluginDetail(
   const topics = readClawHubStringArrayField(value.package, "topics", "plugin detail") ?? [];
   const createdAt = readOptionalNonNegativeNumber(value.package, "createdAt", "plugin detail");
   const updatedAt = readOptionalNonNegativeNumber(value.package, "updatedAt", "plugin detail");
-  const packageCompatibility = parseCompatibility(
+  const packageCompatibility = parseClawHubPluginCompatibility(
     readOptionalRecord(value.package, "compatibility", "plugin detail"),
     "plugin compatibility",
   );
@@ -666,12 +670,8 @@ export async function fetchClawHubPluginDetail(
     ...(updatedAt !== undefined ? { updatedAt } : {}),
     ...(readme ? { readme } : {}),
     ...(verification?.sourceRepo ? { repositoryUrl: verification.sourceRepo } : {}),
-    ...((manifest.compatibility ?? packageCompatibility)
-      ? { compatibility: manifest.compatibility ?? packageCompatibility }
-      : {}),
-    configFields: manifest.configFields,
-    mcpServers: manifest.mcpServers,
-    skills: manifest.skills,
+    ...(packageCompatibility ? { compatibility: packageCompatibility } : {}),
+    ...manifest,
     versions: parseVersions(value.versions),
     ...(verification ? { verification } : {}),
     ...(security ? { security } : {}),

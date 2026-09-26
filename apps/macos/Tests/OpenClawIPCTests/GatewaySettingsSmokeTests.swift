@@ -13,11 +13,15 @@ struct GatewaySettingsSmokeTests {
                 name: "Project Gateway",
                 url: #require(URL(string: "wss://gateway.example.test:8443/control/")))
             try await withHostedSettings(GatewaySettings(profiles: [profile])) { hosting, window in
+                var requestOrdinal = 0
                 for (action, reconnecting) in [("Reconnect", true), ("Add Gateway", false)] {
-                    let buttons = try await AppKitTestSupport.accessibilityElements(in: hosting)
+                    requestOrdinal += 1
+                    let buttons = try await AppKitTestSupport.accessibilityElements(
+                        in: hosting,
+                        diagnosticContext: "action=\(action) phase=buttons request=\(requestOrdinal)")
                     let button = try #require(buttons.first {
                         $0.accessibilityRole?() == .button &&
-                            [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains(action)
+                            [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains(action)
                     })
                     #expect(button.accessibilityPerformPress?() == true)
                     let deadline = ContinuousClock.now + .seconds(3)
@@ -29,14 +33,19 @@ struct GatewaySettingsSmokeTests {
                     var connectEnabled: Bool?
                     repeat {
                         sheet.layoutSubtreeIfNeeded()
-                        let elements = try await AppKitTestSupport.accessibilityElements(in: sheet)
+                        requestOrdinal += 1
+                        let elements = try await AppKitTestSupport.accessibilityElements(
+                            in: sheet,
+                            diagnosticContext: "action=\(action) phase=fields request=\(requestOrdinal)")
                         values = elements.filter { $0.accessibilityRole?() == .textField }.map {
                             let value: Any? = $0.accessibilityValue?()
                             return value as? String ?? ""
                         }
+                        let submitAction = reconnecting ? "Reconnect" : "Connect"
                         connectEnabled = elements.first {
                             $0.accessibilityRole?() == .button &&
-                                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Connect")
+                                [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)]
+                                .contains(submitAction)
                         }?.isAccessibilityEnabled?()
                         let populated = values.contains(profile.name) && values.contains(profile.url.absoluteString)
                         if values.count >= 2, connectEnabled == reconnecting,
@@ -52,9 +61,12 @@ struct GatewaySettingsSmokeTests {
                         let hasOnlyEmptyFields = values.allSatisfy(\.isEmpty)
                         #expect(hasOnlyEmptyFields)
                     }
-                    let cancel = try #require(try await AppKitTestSupport.accessibilityElements(in: sheet).first {
+                    requestOrdinal += 1
+                    let cancel = try #require(try await AppKitTestSupport.accessibilityElements(
+                        in: sheet,
+                        diagnosticContext: "action=\(action) phase=Cancel request=\(requestOrdinal)").first {
                         $0.accessibilityRole?() == .button &&
-                            [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Cancel")
+                            [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains("Cancel")
                     })
                     #expect(cancel.accessibilityPerformPress?() == true)
                     let dismissedDeadline = ContinuousClock.now + .seconds(3)

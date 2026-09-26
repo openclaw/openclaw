@@ -188,19 +188,6 @@ export function countDiscordVoiceHumanParticipants(params: {
   return count;
 }
 
-async function resolveDiscordVoiceParticipantLine(params: {
-  participant: DiscordVoiceParticipantState;
-  guildId: string;
-  speakerContext: DiscordVoiceSpeakerContextResolver;
-}): Promise<string> {
-  const { userId, state } = params.participant;
-  const label =
-    (state ? memberLabel(state) : undefined) ??
-    normalizeLabel((await params.speakerContext.resolveContext(params.guildId, userId)).label) ??
-    userId;
-  return formatDiscordVoiceParticipantLine({ userId, displayName: label });
-}
-
 function formatDiscordVoiceParticipantLine(params: {
   userId: string;
   displayName?: string;
@@ -236,14 +223,15 @@ export async function resolveDiscordVoiceParticipantLines(params: {
 }): Promise<string[]> {
   const participants = params.roster.participants.slice(0, MAX_PARTICIPANTS);
   const lines = await Promise.all(
-    participants.map(
-      async (participant) =>
-        await resolveDiscordVoiceParticipantLine({
-          participant,
-          guildId: params.guildId,
-          speakerContext: params.speakerContext,
-        }),
-    ),
+    participants.map(async ({ userId, state }) => {
+      const label =
+        (state ? memberLabel(state) : undefined) ??
+        normalizeLabel(
+          (await params.speakerContext.resolveContext(params.guildId, userId)).label,
+        ) ??
+        userId;
+      return formatDiscordVoiceParticipantLine({ userId, displayName: label });
+    }),
   );
   if (params.roster.totalCount > participants.length) {
     lines.push(`- ${params.roster.totalCount - participants.length} more participant(s)`);

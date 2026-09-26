@@ -1,6 +1,6 @@
 // Core runtime types define system, config, and task helper contracts for plugins.
 import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
-import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.js";
+import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
@@ -24,6 +24,8 @@ type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "s
   Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
 
 type RuntimeWriteConfigOptions = {
+  /** Revalidate caller authority at guarded publication; accepted writes still settle. */
+  assertCurrent?: () => void;
   envSnapshotForRestore?: Record<string, string | undefined>;
   expectedConfigPath?: string;
   unsetPaths?: string[][];
@@ -524,7 +526,7 @@ export type PluginRuntimeCore = {
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
-    ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+    ) => import("../../channels/message/ingress-queue.types.js").ChannelIngressQueue<
       TPayload,
       TMetadata,
       TCompletedMetadata
@@ -534,7 +536,7 @@ export type PluginRuntimeCore = {
         CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
         "queue"
       > & {
-        queue?: import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+        queue?: import("../../channels/message/ingress-queue.types.js").ChannelIngressQueue<
           TPayload,
           TMetadata,
           TCompletedMetadata

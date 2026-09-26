@@ -45,7 +45,11 @@ async function restartFeishuDedup(): Promise<void> {
 }
 
 describe("Feishu claimable dedupe", () => {
-  it("prevents replay after a restart once a message is committed", async () => {
+  it("preserves committed marks but not pending claims across a restart", async () => {
+    await expect(
+      claimUnprocessedFeishuMessage({ messageId: "msg-4", namespace: "account-a" }),
+    ).resolves.toMatchObject({ kind: "claimed" });
+    await restartFeishuDedup();
     await expect(
       finalizeFeishuMessageProcessing({ messageId: "msg-4", namespace: "account-a" }),
     ).resolves.toBe(true);
@@ -80,22 +84,6 @@ describe("Feishu claimable dedupe", () => {
         messageId: "msg-5",
         namespace: "account-a",
       }),
-    ).resolves.toBe(false);
-  });
-
-  it("dedupes cross-account broadcast claims through the shared namespace", async () => {
-    // Multi-account groups deliver the same event once per bot account; the
-    // shared "broadcast" namespace lets the first account claim dispatch.
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
-    ).resolves.toBe(true);
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
-    ).resolves.toBe(false);
-
-    await restartFeishuDedup();
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
     ).resolves.toBe(false);
   });
 

@@ -45,12 +45,11 @@ it.each([
   { supported: false, destination: "same" },
   { supported: "legacy", destination: "same" },
   { supported: "without-backup", destination: "same" },
-  { supported: "without-backup", destination: "same", deferred: true },
   { supported: true, destination: "changed" },
   { supported: true, destination: "foreign" },
 ])(
-  "native command admits only the bound receiver: $supported / $destination / deferred=$deferred",
-  async ({ supported, destination, deferred }) => {
+  "native command admits only the bound receiver: $supported / $destination",
+  async ({ supported, destination }) => {
     const scratch = dirs.make("native-command-custody-");
     const receiverRoot = await fs.realpath(process.cwd());
     const root = destination === "same" ? receiverRoot : scratch;
@@ -70,7 +69,6 @@ it.each([
     const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor).href)});
     const {execFileUtf8}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href)});
     const fs=await import("node:fs");
-    if(process.argv.includes("--defer-activation")) fs.writeFileSync(${JSON.stringify(effect)},"unguarded deferred installation");
     const mode=process.argv[process.argv.indexOf("--update-executor")+1];
     const action=process.argv[3];
     if(mode==="check") {
@@ -131,7 +129,6 @@ it.each([
       if (supported === "without-backup") {
         const recovery: UpdateServiceDefinitionRecovery = {};
         const warnings: string[] = [];
-        const seal = vi.fn(async () => {});
         const failure = await runUpdatedInstallGatewayCommand(
           {
             result: { root: targetRoot },
@@ -139,9 +136,6 @@ it.each([
             invocationEnv: process.env,
             timeoutMs: 20_000,
             definitionRecovery: recovery,
-            ...(deferred
-              ? { serviceLoadBoundary: { assertCurrent: fence.assertCurrent, seal } }
-              : {}),
             onWarnings: (messages) => warnings.push(...messages),
           },
           "install",
@@ -150,7 +144,6 @@ it.each([
           (error: unknown) => error,
         );
         await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(seal).not.toHaveBeenCalled();
         expect(failure).toMatchObject({
           message: expect.stringContaining("SERVICE_DEFINITION_UNKNOWN"),
         });

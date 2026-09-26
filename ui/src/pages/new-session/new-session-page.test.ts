@@ -109,7 +109,7 @@ describe("new session draft route ownership", () => {
       expect(paste.defaultPrevented).toBe(true);
       await settle(page);
       await expect
-        .poll(() => page.querySelector("openclaw-chat-pasted-text [role=button]"))
+        .poll(() => page.querySelector("openclaw-chat-pasted-text .chat-attachment-file__open"))
         .not.toBeNull();
       if (transition === "finish dictation") {
         dictating = true;
@@ -117,7 +117,9 @@ describe("new session draft route ownership", () => {
         await settle(page);
         expect(page.querySelector<HTMLTextAreaElement>("textarea")?.readOnly).toBe(true);
       }
-      page.querySelector<HTMLElement>("openclaw-chat-pasted-text [role=button]")?.click();
+      page
+        .querySelector<HTMLElement>("openclaw-chat-pasted-text .chat-attachment-file__open")
+        ?.click();
       await expect.poll(() => page.querySelector("openclaw-chat-detail-panel")).not.toBeNull();
       await expect
         .poll(() => {

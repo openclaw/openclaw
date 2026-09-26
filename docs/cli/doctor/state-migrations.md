@@ -9,19 +9,49 @@ read_when:
 `openclaw doctor --fix` owns the persistent file-to-SQLite migrations. This page
 describes each migration source and what to do when one stays blocked.
 
+Pre-June Telegram and iMessage caches, Active Memory session toggles, Nostr bus
+and profile state, and Microsoft Teams conversations, polls, SSO tokens, and
+feedback learnings are no longer imported from JSON files. If those sources
+remain, Doctor preserves them and directs you to [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+and run its migrations first. Existing SQLite state remains authoritative.
+Retired `subagents/runs.json` files are also ignored and left untouched;
+transient runs are never restored from them.
+
 ## Legacy state migration
 
-`openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
+`openclaw doctor --fix` owns general persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Gateway, node-host, and local CLI startup leave general legacy repair to Doctor. Normal versioned database opening, native initialization, and recovery of valid current config remain available. The narrow [restart-notice importer](/gateway/restart-recovery#agent-requested-restarts) also serves the late update notices written by shipped June updaters, through the same migration owner and receipts.
 
-When a refused step blocks later work, each blocked execution receipt keeps
+The container image entrypoint automatically runs `openclaw doctor --fix --non-interactive`
+against the mounted state and config before starting the Gateway. If you override
+that entrypoint, run Doctor explicitly against the same mounts. Doctor performs
+the required legacy repairs under exclusive maintenance ownership and preserves
+verified SQLite copies before schema upgrades, along with its normal config
+backups and legacy-file archives. Gateway startup then checks runtime readiness.
+An unsafe required store exits with code 78 and its specific reason. Refused default
+or system agents never produce a healthy readiness response. Unused legacy stores,
+including loose `agent/settings.json` files without an agent owner, remain untouched
+and deferred. Doctor reports the retained source and continues independent migrations;
+startup reports remaining readiness advisories. An advisory never hides a separate
+required-store refusal.
+
+A step blocked solely by an earlier refusal keeps
 `refusal.code: "blocked-by-prior-refusal"` and includes `originatingRefusal` with
 the first refusal's `stepId`, reason `code`, and human-readable `message`.
 Resolve that originating failure before retrying the blocked steps. These fields
 travel with `stepReceipts`, including Doctor refusal errors; they are separate
 from the persisted import receipts in `migration_runs` and `migration_sources`.
 Older execution receipts may omit `originatingRefusal`.
+If a blocked owner can independently validate its input without writing, a
+verified input error keeps its own `step-refused` receipt and warnings. The
+earlier failure remains attached as `originatingRefusal`. Doctor applies this to
+legacy TUI last-session JSON: malformed input stays explicit even when an earlier
+maintenance heartbeat exits. Valid or absent input remains blocked by the prior
+failure. This diagnostic inspection does not authorize later migrations or writes.
+
 `doctor --fix` includes the failing check, refusal code, and reason in its halt
 message and health warnings, using the same failure facts as `openclaw update repair`.
+Its bounded summary lists observed refusals before derivative blocked steps;
+the full receipt list retains the complete chain.
 
 Doctor imports recognized legacy workspace setup files during preflight, before
 Workshop migration accesses workspace state. An existing canonical SQLite setup record wins,
@@ -42,6 +72,52 @@ legacy workspace files it left untouched; it does not retire their files or
 proposal history. After the candidate is installed, the real Doctor runs the
 normal import, archival, and relocation against the operator's state.
 
+Completed agent deletions that intentionally kept their files are held back during
+update and migration discovery. Doctor records a recoverable warning naming the
+agent, database path, and `openclaw doctor --fix` guidance. These stores do not
+block active agents' migrations or update rehearsals. If the shared auth source
+is held, its migration records a skip and dependent auth repairs wait; unrelated
+Doctor repairs continue. Restore an intended agent before migrating its retained
+store. Pending file deletion keeps the deletion owner's existing safety checks.
+
+When deletion history is missing, Doctor reports the number of unverified stores
+held back from repair. Ordinary session creation and database leases record unknown
+deletion history and continue; a missing row or reconstruction receipt does not
+make an agent deleted or unusable. Runtime does not recreate an empty journal on existing state.
+A surviving quarantine/integrity database is evidence of prior state even when the
+shared database and its registry are gone. Reopening shared state without an agent
+path preserves unknown deletion history; retained external stores still need Doctor
+reconstruction before maintenance.
+Verified fresh SQLite setup initializes the journal normally, without a missing-history
+warning. Legacy JSON session files alone do not require journal reconstruction.
+Session SQLite import also admits ordinary historical agent databases when deletion
+history is unavailable. Recorded deletion and reconstruction holds, orphaned SQLite
+sidecars, and retained plugin inputs with import receipts remain protected.
+Unreadable history does not erase readable deletion identities or recorded holds.
+`openclaw doctor --fix` reconstructs the journal and records a receipt listing the
+held database paths in the existing migration tables. Reconstruction preserves
+those stores; it does not migrate or retire them. Runtime admission remains separate
+from Doctor's repair holds. Review the paths and use the
+noninteractive `openclaw agents add` command printed by Doctor to restore the
+intended agent, or `openclaw agents delete` to confirm deletion. An unconfigured
+agent must be restored before deletion. For a custom database filename, restore
+the original `session.store` configuration first; `agents add` refuses to create
+an empty replacement when it cannot select a held store. If Doctor cannot verify
+a custom store's owner, it leaves the journal unavailable and reports the path
+as a failing `agent-deletion-journal` check. Rerun Doctor after resolving the holds.
+
+Invalid configuration also leaves the journal unavailable: Doctor cannot record
+a complete recovery inventory until it can validate configured ownership paths.
+Repair the configuration, then rerun `openclaw doctor --fix` to discover and hold
+external stores before reconstruction.
+
+The intact historical shared schema written by `2026.7.35` predates the deletion
+journal. Doctor recognizes that schema and initializes the journal during the
+shared-schema migration, before migrating the agent databases in the same pass.
+This does not apply to modern databases with a missing journal or to recorded
+recovery holds. Explicit repair exits nonzero while deletion-history recovery
+leaves stores unverified; the failing check names the reason and restoration steps.
+
 Doctor reports interrupted auth-profile archive recovery even when no new migration remains or you decline another migration. If recovery cannot finish, its warning includes the failure cause and leaves the pending source for recovery; do not delete it to silence the warning.
 
 `doctor --fix` also repairs an inconsistent completed auth migration only when its old receipt has no credential fingerprints, none of the migrated credentials remain in the current canonical store, and the preserved archive still matches the recorded source hash. Doctor reimports through the normal verified migration flow. Completed receipts with fingerprints, surviving migrated credentials, or no archive remain untouched, so removing credentials after a verified migration does not restore them from backup.
@@ -54,6 +130,17 @@ Repair the preserved file locally, then rerun `openclaw doctor --fix` with the s
 
 Agent database schema upgrades are reported with the database path and the observed before and after versions, independently of media rewrites. The media persistence message appears only when transcript sessions or trajectory rows were rewritten and includes both counts. A run that does both reports both; an unchanged rerun reports neither.
 
+Doctor resolves configured agent databases and custom session stores before its
+media/schema migration step. That prerequisite runs before auth-profile imports,
+session repairs, and post-session plugin repairs, including when preflight inspected
+a custom store that has not yet been registered.
+
+Media repair detection stops at the first event that needs repair. The repair
+transaction still validates every transcript and trajectory row before committing;
+invalid JSON later in either store rolls back the media changes. Databases with
+no media repairs still receive a complete validation scan, including after imports
+or restores.
+
 Doctor shares its initial fleet schema and ownership inspection across the update
 guard and admission checks. Database readers use a bounded worker pool, including
 private snapshots for closed WAL databases, so large fleets do not launch a new
@@ -61,9 +148,11 @@ process for every agent at every check. Repairs still verify the resulting schem
 before reporting completion; only successful recovery of a misplaced copy clears
 that copy's ownership refusal.
 
-Device Pair and Active Memory legacy JSON imports check namespace capacity before writing. If the missing entries do not fit, doctor warns and leaves the source unchanged. These imports also verify that source keys and pre-existing destination keys remain in SQLite before reporting completion and archiving the source. A retention warning keeps the source available for inspection and retry; do not delete it to silence the warning, because it may contain state that SQLite did not retain. Resolve the capacity problem before rerunning `openclaw doctor --fix`.
+Device Pair's legacy JSON import checks namespace capacity before writing. If the missing entries do not fit, doctor warns and leaves the source unchanged. The import also verifies that source keys and pre-existing destination keys remain in SQLite before reporting completion and archiving the source. A retention warning keeps the source available for inspection and retry; do not delete it to silence the warning, because it may contain state that SQLite did not retain. Resolve the capacity problem before rerunning `openclaw doctor --fix`.
 
-Microsoft Teams conversation, poll, and SSO token imports also verify that selected legacy keys and pre-existing destination keys remain in SQLite before archiving. Poll imports check both metadata and vote buckets; existing conversation and poll retention rules still select which legacy rows to import. If any required keys are missing, doctor warns and leaves the legacy file in place without reporting completion. Existing SQLite conversations, poll metadata, voter selections, and SSO tokens still take precedence over matching legacy values. These checks do not roll back rows already evicted during import.
+Microsoft Teams delegated OAuth tokens still migrate from `msteams-delegated.json`,
+which supported June releases wrote. Doctor verifies the imported credentials
+before archiving the source and preserves a differing existing SQLite token.
 
 Doctor also reports when shared auth still uses the legacy `agents/main/agent/openclaw-agent.sqlite` owner. `openclaw doctor --fix` copies its auth profile and runtime-state rows into `state/openclaw.sqlite`, verifies the exact payloads, removes the source rows, and records the new ownership only after the transaction succeeds. Auth resolution has no dual-read fallback: before migration the legacy database is complete; after migration the shared state database is complete. Once relocated, deleting `main` no longer risks fleet credentials.
 

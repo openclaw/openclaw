@@ -31,14 +31,10 @@ import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
+import { resolveReplySourceTurnId } from "./source-turn-id.js";
 type ExecutePreparedReplyAgentRunInput = Omit<
   FinalizeReplyAgentRunInput,
-  | "activeIsNewSession"
-  | "activeSessionEntry"
-  | "preflightCompactionApplied"
-  | "execution"
-  | "runId"
-  | "runStartedAt"
+  "activeSessionEntry" | "preflightCompactionApplied" | "execution" | "runId" | "runStartedAt"
 > &
   Pick<
     RunReplyAgentParams,
@@ -53,10 +49,8 @@ type ExecutePreparedReplyAgentRunInput = Omit<
       typeof createReplyRestartRecoveryClaimController
     >["checkpointBeforeAgentReply"];
     resolveVisibleReplyDelivery: () => Promise<boolean>;
-    getActiveIsNewSession: () => boolean;
     getActiveSessionEntry: () => SessionEntry | undefined;
-    isRestartRecoveryArmed: () => boolean;
-    resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
+    isRestartRecoveryArmed: () => Promise<boolean>;
     sendDirectCompactionNotice: ((phase: CompactionNoticePhase) => Promise<void>) | undefined;
     setRunFollowupTurn: (runner: FinalizeReplyAgentRunInput["runFollowupTurn"]) => void;
     setActiveSessionEntry: (entry: SessionEntry | undefined) => void;
@@ -93,7 +87,6 @@ export async function executePreparedReplyAgentRun(
     checkpointBeforeAgentReply: checkpointBeforeAgentReplyWithRecovery,
     defaultModel,
     followupRun,
-    getActiveIsNewSession,
     getActiveSessionEntry,
     opts,
     replyOperation,
@@ -232,6 +225,7 @@ export async function executePreparedReplyAgentRun(
             const pendingFinalDeliveryDeliveryId = crypto.randomUUID();
             setReplyPayloadMetadata(hookReply, {
               pendingFinalDeliveryCompletion: {
+                agentId: followupRun.run.agentId,
                 deliveryId: pendingFinalDeliveryDeliveryId,
                 intentId: pendingFinalDeliveryIntentId,
                 ...(activeSessionEntry?.restartRecoveryDeliveryRunId
@@ -284,7 +278,6 @@ export async function executePreparedReplyAgentRun(
     runOutcome.outcome,
   );
   activeSessionEntry = getActiveSessionEntry();
-  const activeIsNewSession = getActiveIsNewSession();
 
   if (runOutcome.outcome.kind !== "settled") {
     // Only captured facts cross cancellation; no successor adoption, hooks, or reply work.
@@ -313,7 +306,6 @@ export async function executePreparedReplyAgentRun(
 
   const result = await finalizeReplyAgentRun({
     ...context,
-    activeIsNewSession,
     activeSessionEntry,
     preflightCompactionApplied,
     runFollowupTurn,
@@ -359,6 +351,9 @@ export function createReplyAgentRestartRecoveryController(
         hasRepliedRef: undefined,
       }).sameChannelThreadRequired
     : undefined;
+  const admissionRunId =
+    normalizeOptionalString(sessionCtx.MessageSid) ??
+    normalizeOptionalString(sessionCtx.MessageSidFull);
   const {
     admitUserTurn,
     beginBeforeAgentReply,
@@ -366,10 +361,9 @@ export function createReplyAgentRestartRecoveryController(
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
   } = createReplyRestartRecoveryClaimController({
+    agentId: followupRun.run.agentId,
     lifecycleGeneration: replyOperation.lifecycleGeneration,
-    admissionRunId:
-      normalizeOptionalString(sessionCtx.MessageSid) ??
-      normalizeOptionalString(sessionCtx.MessageSidFull),
+    admissionRunId,
     getEntry: () =>
       sessionKey
         ? (activeSessionStore?.[sessionKey] ?? getActiveSessionEntry())
@@ -430,8 +424,16 @@ export function createReplyAgentRestartRecoveryController(
   });
   const admitUserTurnWithSourceBinding: typeof admitUserTurn = async (...args) => {
     const result = await admitUserTurn(...args);
-    if (result === "admitted" && restartRecoverySourceTurnId) {
-      replyRunRegistry.bindSourceTurnId(replyOperation, restartRecoverySourceTurnId);
+    if (result === "admitted") {
+      const sourceTurnId = resolveReplySourceTurnId({
+        sourceTurnId: restartRecoverySourceTurnId,
+        admissionRunId,
+        ingressProvider: sessionCtx.Provider ?? sessionCtx.Surface,
+        entry: getActiveSessionEntry(),
+      });
+      if (sourceTurnId) {
+        replyRunRegistry.bindSourceTurnId(replyOperation, sourceTurnId);
+      }
     }
     return result;
   };

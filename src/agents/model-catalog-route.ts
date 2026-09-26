@@ -66,15 +66,16 @@ export function createConfiguredModelCatalogOverridesResolver(params: {
 ) => ModelCatalogLogicalOverrides | undefined {
   const modelsByProvider = new Map<
     string,
-    (modelId: string) => ModelDefinitionConfig | undefined
+    ((modelId: string) => ModelDefinitionConfig | undefined) | null
   >();
   return (entry) => {
     const providerId = entry.provider;
     let findModel = modelsByProvider.get(providerId);
-    if (!findModel) {
+    if (findModel === undefined) {
       const provider = normalizeProviderId(providerId);
       const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
       if (!providerConfig?.models?.length) {
+        modelsByProvider.set(providerId, null);
         return undefined;
       }
       const surface = resolveProviderModelPolicySurface(provider);
@@ -90,6 +91,9 @@ export function createConfiguredModelCatalogOverridesResolver(params: {
       findModel = (modelId) => resolveModel(normalizeConfiguredModelId(modelId));
       // Policy callbacks receive the original spelling, even when config keys normalize alike.
       modelsByProvider.set(providerId, findModel);
+    }
+    if (findModel === null) {
+      return undefined;
     }
     const model = findModel(entry.id);
     const overrides: ModelCatalogLogicalOverrides = {

@@ -3,13 +3,16 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
 import { getStatusSummary } from "../../status/summary.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
+import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
+import type { GatewayShutdownStatus } from "../server-public.js";
 import { formatError } from "../server-utils.js";
 import { shouldScheduleBackgroundHealthRefresh } from "../server/health-refresh-admission.js";
 import { readGatewayProcessVitals, readGatewayWorkerPoolFacts } from "../server/process-vitals.js";
@@ -89,12 +92,13 @@ function cachedHealthDiffersFromRuntime(
 /** Merges cheap live runtime facts into a cached health summary before responding. */
 async function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
-  eventLoop?: HealthSummary["eventLoop"];
+  getEventLoopHealth?: () => HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
 }): Promise<HealthSummary> {
   const {
     contextEngines: _cachedContextEngines,
     deliveryQueues: _cachedDeliveryQueues,
+    eventLoop: _cachedEventLoop,
     ...cached
   } = params.cached;
   // Dead-letter counts are cheap live reads. Preserve the grouped pressure
@@ -103,10 +107,12 @@ async function mergeCachedHealthRuntimeState(params: {
     _cachedDeliveryQueues?.ingressPressure ?? [],
   );
   const contextEngines = buildContextEngineHealthSummary();
+  // A reset sampler has no current window; never revive the cached reading.
+  const eventLoop = params.getEventLoopHealth?.();
   return {
     ...cached,
     modelRuntime: getPreparedModelRuntimeStartupStatus(),
-    ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
+    ...(eventLoop ? { eventLoop } : {}),
     ...(contextEngines ? { contextEngines } : {}),
     ...(deliveryQueues ? { deliveryQueues } : {}),
     ...(params.configReloadHotReloadStatus
@@ -146,7 +152,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         true,
         await mergeCachedHealthRuntimeState({
           cached,
-          eventLoop: context.getEventLoopHealth?.(),
+          getEventLoopHealth: context.getEventLoopHealth,
           configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
         }),
         undefined,
@@ -174,13 +180,28 @@ export const healthHandlers: GatewayRequestHandlers = {
       sessionRowProjection: getSessionRowProjection(context),
       ...(hostDesktopStatus ? { hostDesktopStatus } : {}),
     });
+    const workerPools = await readGatewayWorkerPoolFacts();
+    const shutdownBudget = context.hostLifecycle?.getShutdownBudget?.();
+    const activeWork = shutdownBudget
+      ? readGatewayMaintenanceWork(createGatewayServerActiveWorkInspectors(context))
+      : undefined;
+    const shutdownStatus: GatewayShutdownStatus | undefined =
+      shutdownBudget && activeWork
+        ? {
+            ...shutdownBudget,
+            activeWork: activeWork.counts,
+            writeCustody: activeWork.writeCustody,
+          }
+        : undefined;
     respond(
       true,
       {
         ...status,
         modelRuntime: getPreparedModelRuntimeStartupStatus(),
         ...readGatewayProcessVitals(context.getEventLoopHealth),
-        workerPools: await readGatewayWorkerPoolFacts(),
+        workerPools,
+        pid: process.pid,
+        shutdownBudget: shutdownStatus,
       },
       undefined,
     );

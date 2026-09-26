@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getSlackWebApiErrorData } from "./errors.js";
 import type {
   SlackBasePostMessagePayload,
   SlackPostMessagePayload,
@@ -16,21 +17,15 @@ export type SlackPostMessageIdentity = {
   iconEmoji?: string;
 };
 
-type SlackWebApiErrorData = {
-  error?: unknown;
-  needed?: unknown;
-  response_metadata?: {
-    scopes?: unknown;
-    acceptedScopes?: unknown;
+export function buildSlackMessageIdentityPayload(identity?: SlackPostMessageIdentity) {
+  return {
+    ...(identity?.username ? { username: identity.username } : {}),
+    ...(identity?.iconUrl
+      ? { icon_url: identity.iconUrl }
+      : identity?.iconEmoji
+        ? { icon_emoji: identity.iconEmoji }
+        : {}),
   };
-};
-
-function getSlackWebApiErrorData(err: unknown): SlackWebApiErrorData | undefined {
-  if (!(err instanceof Error)) {
-    return undefined;
-  }
-  const data = (err as Error & { data?: SlackWebApiErrorData }).data;
-  return data && typeof data === "object" ? data : undefined;
 }
 
 function isSlackCustomizeScopeError(err: unknown): boolean {
@@ -74,33 +69,7 @@ export async function postSlackMessageWithIdentityFallback<T>(params: {
     if (!identity) {
       return await post(basePayload);
     }
-    if (identity?.iconUrl) {
-      return await post(
-        {
-          ...basePayload,
-          ...(identity.username ? { username: identity.username } : {}),
-          icon_url: identity.iconUrl,
-        },
-        identity,
-      );
-    }
-    if (identity?.iconEmoji) {
-      return await post(
-        {
-          ...basePayload,
-          ...(identity.username ? { username: identity.username } : {}),
-          icon_emoji: identity.iconEmoji,
-        },
-        identity,
-      );
-    }
-    return await post(
-      {
-        ...basePayload,
-        ...(identity?.username ? { username: identity.username } : {}),
-      },
-      identity,
-    );
+    return await post({ ...basePayload, ...buildSlackMessageIdentityPayload(identity) }, identity);
   } catch (err) {
     if (!identity || !hasCustomIdentity(identity) || !isSlackCustomIdentityRejectedError(err)) {
       throw err;

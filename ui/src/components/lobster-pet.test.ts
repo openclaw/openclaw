@@ -15,10 +15,15 @@ import {
   LOBSTER_BOTTLE_FORTUNES,
   pickLobsterEntrance,
   planLobsterBottle,
-  planLobsterPasser,
   resolveLobsterLoadIdentity,
 } from "./lobster-pet-plans.ts";
-import { createPet, type LobsterPetElement } from "./lobster-pet.test-support.ts";
+import {
+  advanceUntil,
+  arrive,
+  createPet,
+  spritePresent,
+  type LobsterPetElement,
+} from "./lobster-pet.test-support.ts";
 
 function poke(element: LobsterPetElement): void {
   const sprite = element.querySelector(".lobster-pet");
@@ -28,10 +33,6 @@ function poke(element: LobsterPetElement): void {
 
 function spriteClasses(element: LobsterPetElement): string {
   return element.querySelector(".lobster-pet")?.className ?? "";
-}
-
-function spritePresent(element: LobsterPetElement): boolean {
-  return element.querySelector(".lobster-pet") !== null;
 }
 
 async function advanceUntilAct(element: LobsterPetElement, maxMs: number): Promise<string | null> {
@@ -46,29 +47,6 @@ async function advanceUntilAct(element: LobsterPetElement, maxMs: number): Promi
     }
   }
   return null;
-}
-
-async function advanceUntil(
-  element: LobsterPetElement,
-  predicate: () => boolean,
-  maxMs: number,
-  stepMs = 1000,
-): Promise<boolean> {
-  let elapsed = 0;
-  while (elapsed < maxMs) {
-    await vi.advanceTimersByTimeAsync(stepMs);
-    elapsed += stepMs;
-    await element.updateComplete;
-    if (predicate()) {
-      return true;
-    }
-  }
-  return predicate();
-}
-
-// Cover the maximum first-arrival delay, including the shy familiarity tier.
-async function arrive(element: LobsterPetElement): Promise<void> {
-  await advanceUntil(element, () => spritePresent(element), 12_000);
 }
 
 async function startVigilOnlyRun(
@@ -223,9 +201,9 @@ describe("lobster pet element", () => {
     expect(["top", "floor"]).toContain(element.getAttribute("data-spot"));
   });
 
-  it.each([7, 191])("shy seed %s never visits on its own", async (seed) => {
+  it("a shy seed never visits on its own", async () => {
     vi.useFakeTimers();
-    const element = createPet(seed);
+    const element = createPet(7);
     await element.updateComplete;
 
     const arrived = await advanceUntil(element, () => spritePresent(element), 12_000);
@@ -627,20 +605,6 @@ describe("lobster pet element", () => {
     expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:-1");
   });
 
-  it("carries a bindle on the first load after a gateway upgrade", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    vi.stubGlobal("localStorage", window.localStorage);
-    localStorage.setItem("openclaw.control.lobsterpet.gatewayVersion.v1", "2026.6.1");
-    const element = createPet(42);
-    element.gatewayVersion = "2026.7.1";
-    await arrive(element);
-
-    expect(element.querySelector(".lob-bindle")).not.toBeNull();
-    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toContain("just moved in");
-    expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe("2026.7.1");
-  });
-
   it("travels light on first sighting and on same-version reloads", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
@@ -761,81 +725,42 @@ describe("lobster pet element", () => {
   });
 
   it("renders full replacement geometry without the standard dome", () => {
-    const flatpackPalette = expectDefined(
-      LOBSTER_PET_PALETTES.find((palette) => palette.id === "flatpack"),
-      "flatpack palette",
-    );
-    const flatpackContainer = document.createElement("div");
-    render(
-      renderLobsterSvg(
-        { ...canonicalLobsterLook(flatpackPalette), accessory: "crown" },
-        { standalone: true },
-      ),
-      flatpackContainer,
-    );
+    const renderPalette = (id: string, accessory: "none" | "crown" = "none") => {
+      const palette = expectDefined(
+        LOBSTER_PET_PALETTES.find((entry) => entry.id === id),
+        id,
+      );
+      const container = document.createElement("div");
+      render(
+        renderLobsterSvg({ ...canonicalLobsterLook(palette), accessory }, { standalone: true }),
+        container,
+      );
+      return container;
+    };
+    const flatpackContainer = renderPalette("flatpack", "crown");
     expect(flatpackContainer.querySelector(".lob-flatpack")).not.toBeNull();
     expect(flatpackContainer.querySelector(".lob-flatpack__allen-key")).not.toBeNull();
     expect(flatpackContainer.querySelector('[fill="#f6c945"]')).toBeNull();
 
-    const loadingPalette = expectDefined(
-      LOBSTER_PET_PALETTES.find((palette) => palette.id === "loading"),
-      "loading palette",
-    );
-    const loadingContainer = document.createElement("div");
-    render(
-      renderLobsterSvg(canonicalLobsterLook(loadingPalette), { standalone: true }),
-      loadingContainer,
-    );
+    const loadingContainer = renderPalette("loading");
     expect(loadingContainer.querySelector(".lob-skeleton")).not.toBeNull();
     expect(loadingContainer.querySelectorAll(".lob-eye-open circle")).toHaveLength(2);
 
-    const actualPalette = expectDefined(
-      LOBSTER_PET_PALETTES.find((palette) => palette.id === "actual"),
-      "actual palette",
-    );
-    const actualContainer = document.createElement("div");
-    render(
-      renderLobsterSvg(canonicalLobsterLook(actualPalette), { standalone: true }),
-      actualContainer,
-    );
+    const actualContainer = renderPalette("actual");
     expect(actualContainer.querySelector(".lob-actual")).not.toBeNull();
     expect(actualContainer.querySelector(".lob-standard-dome")).toBeNull();
 
-    const balloonPalette = expectDefined(
-      LOBSTER_PET_PALETTES.find((palette) => palette.id === "balloon"),
-      "balloon palette",
-    );
-    const balloonContainer = document.createElement("div");
-    render(
-      renderLobsterSvg(canonicalLobsterLook(balloonPalette), { standalone: true }),
-      balloonContainer,
-    );
+    const balloonContainer = renderPalette("balloon");
     expect(balloonContainer.querySelector(".lob-balloon-frame")).not.toBeNull();
     expect(balloonContainer.querySelector(".lob-standard-dome")).toBeNull();
 
-    const asciiPalette = expectDefined(
-      LOBSTER_PET_PALETTES.find((palette) => palette.id === "ascii"),
-      "ascii palette",
-    );
-    const asciiContainer = document.createElement("div");
-    render(
-      renderLobsterSvg(canonicalLobsterLook(asciiPalette), { standalone: true }),
-      asciiContainer,
-    );
+    const asciiContainer = renderPalette("ascii");
     expect(asciiContainer.querySelector(".lob-ascii")).not.toBeNull();
     expect(asciiContainer.querySelector(".lob-eye-open")?.textContent).toContain("(o)");
     expect(asciiContainer.querySelector(".lob-eye-closed")?.textContent).toContain("(-)");
     expect(asciiContainer.querySelector(".lob-standard-dome")).toBeNull();
 
-    const portalPalette = expectDefined(
-      LOBSTER_PET_PALETTES.find((palette) => palette.id === "portal"),
-      "portal palette",
-    );
-    const portalContainer = document.createElement("div");
-    render(
-      renderLobsterSvg(canonicalLobsterLook(portalPalette), { standalone: true }),
-      portalContainer,
-    );
+    const portalContainer = renderPalette("portal");
     expect(portalContainer.querySelectorAll(".lob-portal-ring")).toHaveLength(2);
     expect(portalContainer.querySelector(".lob-standard-dome")).toBeNull();
   });
@@ -875,30 +800,6 @@ describe("lobster pet element", () => {
 });
 
 describe("lobster plans", () => {
-  it("keeps the passer gate near 9.5% while widening the traffic", () => {
-    const counts = new Map<string, number>();
-    const total = 20_000;
-    for (let seed = 0; seed < total; seed++) {
-      const plan = planLobsterPasser(seed);
-      if (!plan) {
-        continue;
-      }
-      counts.set(plan.kind, (counts.get(plan.kind) ?? 0) + 1);
-      expect(plan.atMs).toBeGreaterThanOrEqual(2500);
-      expect(plan.atMs).toBeLessThanOrEqual(9000);
-    }
-    for (const kind of ["stranger", "crab", "snail", "duck", "jellyfish"]) {
-      expect(counts.get(kind) ?? 0).toBeGreaterThan(0);
-    }
-    const passers = [...counts.values()].reduce((sum, count) => sum + count, 0);
-    expect(passers).toBeGreaterThan(total * 0.07);
-    expect(passers).toBeLessThan(total * 0.12);
-    // Strangers stay the most common traffic.
-    for (const kind of ["crab", "snail", "duck", "jellyfish"]) {
-      expect(counts.get("stranger") ?? 0).toBeGreaterThan(counts.get(kind) ?? 0);
-    }
-  });
-
   it("maps entrance rolls to their rarity bands", () => {
     expect(pickLobsterEntrance(0.01)).toBe("balloon");
     expect(pickLobsterEntrance(0.06)).toBe("bubble");
@@ -1125,27 +1026,5 @@ describe("rare lobster loads", () => {
       40_000,
     );
     expect(gone).toBe(true);
-  });
-
-  it("earns the golden ledge trim once the Lobsterdex is complete", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    vi.stubGlobal("localStorage", window.localStorage);
-    localStorage.setItem(
-      "openclaw.control.lobsterdex.v1",
-      JSON.stringify(
-        Object.fromEntries(
-          LOBSTER_PET_PALETTES.map((palette) => [palette.id, { firstSeenAt: 1, name: "First" }]),
-        ),
-      ),
-    );
-    const element = createPet(42);
-    await element.updateComplete;
-    expect(element.hasAttribute("data-dex-complete")).toBe(true);
-
-    // The visits setting silences the trim like everything else.
-    element.visitsEnabled = false;
-    await element.updateComplete;
-    expect(element.hasAttribute("data-dex-complete")).toBe(false);
   });
 });

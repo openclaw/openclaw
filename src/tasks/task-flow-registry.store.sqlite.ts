@@ -1,20 +1,17 @@
 // Persists task-flow records through the global shared-state database owner.
-import type { DatabaseSync } from "node:sqlite";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import {
   executionOwnerBindingFromAdmission,
   type ExecutionOwnerBindingResult,
 } from "../audit/execution-owner-binding.js";
-import {
-  deferSqlitePostCommitPublication,
-  stageSqliteTransactionState,
-} from "../infra/sqlite-post-commit.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -40,31 +37,8 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
 const log = createSubsystemLogger("tasks/task-flow-registry");
 
-type FlowRegistryDatabase = {
-  db: DatabaseSync;
-  path: string;
-};
-
-let cachedDatabase: FlowRegistryDatabase | null = null;
-
-function openFlowRegistryDatabase(): FlowRegistryDatabase {
+function withWriteTransaction(write: (database: OpenClawStateDatabase) => void) {
   const database = openOpenClawStateDatabase();
-  const pathname = database.path;
-  if (cachedDatabase && cachedDatabase.path === pathname && cachedDatabase.db.isOpen) {
-    return cachedDatabase;
-  }
-  if (cachedDatabase && !cachedDatabase.db.isOpen) {
-    cachedDatabase = null;
-  }
-  cachedDatabase = {
-    db: database.db,
-    path: pathname,
-  };
-  return cachedDatabase;
-}
-
-function withWriteTransaction(write: (database: FlowRegistryDatabase) => void) {
-  const database = openFlowRegistryDatabase();
   runOpenClawStateWriteTransaction(() => {
     write(database);
   });
@@ -73,7 +47,7 @@ function withWriteTransaction(write: (database: FlowRegistryDatabase) => void) {
 export function loadTaskFlowRegistryStateFromSqlite(
   flowIds?: readonly string[],
 ): TaskFlowRegistryStoreSnapshot {
-  return readTaskFlowRegistrySnapshot(openFlowRegistryDatabase().db, flowIds);
+  return readTaskFlowRegistrySnapshot(openOpenClawStateDatabase().db, flowIds);
 }
 
 /** Loads task flows without creating or migrating shared state. */
@@ -108,7 +82,6 @@ export function syncTaskMirroredFlowInSqlite(
           publication.commit();
         },
       });
-      deferSqlitePostCommitPublication(db, publication.publish);
       return result;
     });
   } catch (error) {
@@ -137,7 +110,6 @@ export function updateTaskFlowRegistryRecordInSqlite(
         rollback: publication.rollback,
         commit: publication.commit,
       });
-      deferSqlitePostCommitPublication(db, publication.publish);
     }
     return result;
   });
@@ -184,6 +156,5 @@ export function deleteTaskFlowRegistryRecordFromSqlite(flowId: string) {
 }
 
 export function closeTaskFlowRegistryDatabase() {
-  cachedDatabase = null;
   closeOpenClawStateDatabase();
 }

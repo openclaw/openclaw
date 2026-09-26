@@ -21,14 +21,32 @@ export function projectSessionPatchRowFields(
         : {}),
     });
   }
+  for (const [key, choices] of [
+    ["thinkingLevel", "thinkingLevels"],
+    ["contextWindow", "contextWindows"],
+  ] as const) {
+    if (patch[key] !== undefined) {
+      fields.push({
+        [key]:
+          result.resolved && Object.hasOwn(result.resolved, key)
+            ? result.resolved[key]
+            : entry[key],
+        ...(result.resolved?.[choices] !== undefined
+          ? { [choices]: result.resolved[choices] }
+          : {}),
+      });
+    }
+  }
+  if (patch.fastMode !== undefined) {
+    fields.push({ fastMode: entry.fastMode });
+  }
   if (typeof patch.archived === "boolean") {
     fields.push(projectSessionArchiveFields(patch.archived, entry));
   }
-  if (patch.category !== undefined) {
-    fields.push({ category: entry.category });
-  }
-  if (patch.boardPresentation !== undefined) {
-    fields.push({ boardPresentation: entry.boardPresentation });
+  for (const key of ["category", "boardPresentation", "boardFace"] as const) {
+    if (patch[key] !== undefined) {
+      fields.push({ [key]: entry[key] });
+    }
   }
   if (patch.pinned !== undefined || patch.unread === false) {
     const pin = { pinned: entry.pinnedAt !== undefined, pinnedAt: entry.pinnedAt };

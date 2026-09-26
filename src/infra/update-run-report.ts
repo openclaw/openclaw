@@ -4,10 +4,12 @@ import {
   formatUpdateActivationTimeoutGuidance,
   isVerifiedUpdateRollback,
   UPDATE_ACTIVATION_TIMEOUT_REASON,
+  UPDATE_FOREIGN_DESTINATION_REASON,
   UPDATE_INSTALL_SKIP_GUIDANCE,
 } from "../shared/update-outcome.js";
 import { formatDurationPrecise } from "./format-time/format-duration.ts";
 import type { RestartSentinelPayload } from "./restart-sentinel-store.js";
+import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
 import { formatUpdateDoctorConfigWriteRefusal } from "./update-doctor-config.js";
 import {
   formatUpdateFailureFact,
@@ -24,6 +26,14 @@ import type { UpdateRunResult } from "./update-runner-types.js";
 import { formatUpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };
+
+const IN_PROGRESS_REPORT_PREFIX = "⬆️ OpenClaw update in progress: ";
+
+/** Recognizes pending projections written by this renderer, including shipped reports. */
+export function isUpdateRunReportInProgress(markdown: string): boolean {
+  return markdown.startsWith(IN_PROGRESS_REPORT_PREFIX);
+}
+
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type ReportInput = Pick<
   UpdateRunRecord,
@@ -37,7 +47,8 @@ type ReportInput = Pick<
   | "verification"
   | "repair"
   | "downtimeMs"
->;
+> &
+  Partial<Pick<UpdateRunRecord, "target">>;
 const PHASES = new Set<string>(UPDATE_RUN_PHASES);
 
 type UpdateRunIdentity =
@@ -168,6 +179,9 @@ function bounded(text: string, limit: number): string {
 }
 
 function recoveryHints(run: ReportInput, nextAction?: string): string[] {
+  if (run.target?.installationMethod === "ocm") {
+    return nextAction ? [] : run.origin.nextAction ? [run.origin.nextAction] : [];
+  }
   if (run.status === "running") {
     return ["Check progress with openclaw update status."];
   }
@@ -179,6 +193,9 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   }
   if (run.reason === UPDATE_ACTIVATION_TIMEOUT_REASON) {
     return nextAction ? [] : [formatUpdateActivationTimeoutGuidance()];
+  }
+  if (run.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
+    return nextAction ? [] : [`Next step: ${UPDATE_DESTINATION_RECOVERY}`];
   }
   const hints: string[] = [];
   if (run.reason === "preflight-insufficient-space") {
@@ -221,7 +238,10 @@ export function renderUpdateRunReport(
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
   const currentHealth: UpdateRunReportHealth | undefined =
     opts.currentHealth ??
-    (run.status !== "running" && opts.nextAction === undefined && run.origin.nextAction
+    (run.target?.installationMethod !== "ocm" &&
+    run.status !== "running" &&
+    opts.nextAction === undefined &&
+    run.origin.nextAction
       ? { kind: "unavailable" }
       : undefined);
   // Git updates can change commits without changing the package version.
@@ -264,7 +284,7 @@ export function renderUpdateRunReport(
       headline = `↩️ OpenClaw update rolled back to ${after ?? running ?? before ?? "the previous version"}: ${reason}.`;
       break;
     case "running":
-      headline = `⬆️ OpenClaw update in progress: ${run.phase}.`;
+      headline = `${IN_PROGRESS_REPORT_PREFIX}${run.target?.installationMethod === "ocm" ? "managed by OCM" : run.phase}.`;
       break;
   }
   headline = bounded(headline, 500);
@@ -272,9 +292,37 @@ export function renderUpdateRunReport(
   if (opts.mode && opts.mode !== "unknown") {
     lines.push(`Update mode: ${opts.mode}`);
   }
+  const admission = run.origin.admission;
+  if (admission) {
+    const candidateVersion = admission.candidateVersion
+      ? ` (${bounded(admission.candidateVersion, 120)})`
+      : "";
+    lines.push(`Admission: ${admission.owner}${candidateVersion}.`);
+    if (admission.checks?.length) {
+      lines.push(
+        `Admission checks: ${admission.checks.map((check) => `${bounded(check.name, 120)}: ${check.status}`).join(", ")}.`,
+      );
+    }
+    if (admission.fallbackReason) {
+      lines.push(`Admission fallback: ${bounded(admission.fallbackReason, 500)}`);
+    }
+  }
   for (const step of run.steps) {
+    if (run.status === "running" && step.status === "in_progress" && step.detail) {
+      lines.push(
+        `Waiting: ${step.step}${step.startedAtMs !== undefined ? ` (started ${new Date(step.startedAtMs).toISOString()})` : ""} — ${step.detail}`,
+      );
+    }
     if (step.snapshotCapacity) {
       lines.push(formatUpdateSnapshotCapacity(step.snapshotCapacity));
+    }
+    if (
+      step.detail &&
+      (step.step.startsWith("diagnostic:database snapshot") ||
+        step.step.startsWith("diagnostic:database migration writes") ||
+        step.step.startsWith("diagnostic:database rollback"))
+    ) {
+      lines.push(step.detail);
     }
     if (step.configWriteRefusal) {
       lines.push(formatUpdateDoctorConfigWriteRefusal(step.configWriteRefusal));
@@ -307,10 +355,21 @@ export function renderUpdateRunReport(
   for (const step of selectUpdateFailureReportSteps(
     run.steps.filter((item) => item.status === "failed"),
   )) {
-    lines.push(bounded(`Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`, 300));
-    lines.push(...(step.failureFacts ?? []).slice(0, 5).map(formatUpdateFailureFact));
+    const failure = `Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`;
+    lines.push(bounded(failure, 300));
+    lines.push(
+      ...(step.failureFacts ?? []).slice(0, 5).map((fact) =>
+        formatUpdateFailureFact({
+          ...fact,
+          message:
+            failure.length <= 300 && fact.message && step.detail?.includes(fact.message)
+              ? undefined
+              : fact.message,
+        }),
+      ),
+    );
   }
-  for (const message of updateRunWarningMessages(run.steps).slice(-3)) {
+  for (const message of updateRunWarningMessages(run.steps, 3)) {
     lines.push(`Warning: ${bounded(message, 500)}`);
   }
   const verification: string[] = [];
@@ -391,7 +450,9 @@ export function renderUpdateRunReport(
   const hints = reconciled
     ? []
     : run.status === "running"
-      ? recoveryHints(run)
+      ? opts.nextAction
+        ? [opts.nextAction]
+        : recoveryHints(run)
       : repairHint
         ? [repairHint, ...(nextAction ? [nextAction] : [])]
         : [

@@ -1,5 +1,5 @@
-import { AsyncResource } from "node:async_hooks";
 import { fork } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -11,6 +11,8 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertNoOpenClawAgentDatabaseLeases,
+  prepareOpenClawAgentDatabaseWorkerLease,
+  releaseOpenClawAgentDatabaseLease,
   runWithAgentDatabaseMaintenanceAuthority,
 } from "./openclaw-agent-db-lease.js";
 import { getOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
@@ -18,16 +20,14 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   migrateOpenClawAgentDatabaseForMaintenance,
+  getOpenClawAgentDatabaseIfOpen,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
   withAgentDatabaseMaintenanceLease,
-  withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
@@ -207,158 +207,75 @@ describe("asynchronous agent database maintenance admission", () => {
     expect(readIndexState(f.options.pathname)).toEqual(before);
   });
 
-  it.each([false, true])(
-    "admits only the live mutation owner and revokes inherited callbacks (cached=%s)",
-    async (cached) => {
-      const f = fixture();
-      const before = readIndexState(f.options.pathname);
-      const ready = createDeferred();
-      const release = createDeferred();
-      const open = () => openOpenClawAgentDatabase({ agentId: "worker", env: f.env });
-      let late: (() => ReturnType<typeof open>) | undefined;
-      const running = withAgentDatabaseMaintenanceLease({ env: f.env }, async (maintenance) => {
-        const mutation = maintenance.withDatabaseFileMutation;
-        if (!mutation) {
-          throw new Error("Missing live mutation owner");
-        }
-        await mutation({
-          assertCurrent: () => maintenance.assertOwned(),
-          async mutate() {
-            late = AsyncResource.bind(open);
-            try {
-              expect(open().db.prepare("SELECT value_json FROM cache_entries").all()).toEqual(
-                before.retained,
-              );
-              if (!cached) {
-                await closeOpenClawAgentDatabasesAsync();
-              }
-              ready.resolve();
-              await release.promise;
-            } finally {
-              await closeOpenClawAgentDatabasesAsync();
-            }
-          },
-          async capture() {
-            expect(() => late?.()).toThrow(/scope is (closed|no longer current)/);
-          },
-          bind() {
-            return undefined;
-          },
-        });
-      });
-      void running.catch((error: unknown) => ready.reject(error));
-      try {
-        await ready.promise;
-        expect(open).toThrow(
-          cached
-            ? /another maintenance mutation scope/
-            : /another OpenClaw process owns state-handles/,
-        );
-      } finally {
-        release.resolve();
-        await running;
-      }
-      expect(() => late?.()).toThrow(/scope is (closed|no longer current)/);
-      expect(readIndexState(f.options.pathname)).toEqual(before);
-    },
-  );
-
-  it("refuses a foreign caller coalesced onto the mutation owner's real async admission", async () => {
+  it("refuses a prepared Worker claim during plain maintenance", async () => {
     const f = fixture();
-    clearOpenClawAgentIntegrityVerification(f.options.pathname, f.env);
-    const ready = createDeferred();
-    const release = createDeferred();
-    const inspect = integrityWorker.assertSqliteIntegrityInWorker;
-    vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
-      async (...args) => {
-        ready.resolve();
-        await release.promise;
-        return inspect(...args);
-      },
-    );
-    const ownerOperation = vi.fn();
-    const foreignOperation = vi.fn();
-    const options = { agentId: "worker", env: f.env };
-    const running = withAgentDatabaseMaintenanceLease({ env: f.env }, async (maintenance) => {
-      const mutation = maintenance.withDatabaseFileMutation;
-      if (!mutation) {
-        throw new Error("Missing live mutation owner");
-      }
-      await mutation({
-        assertCurrent: () => maintenance.assertOwned(),
-        async mutate() {
-          try {
-            await withOpenClawAgentDatabaseAsync(options, ownerOperation);
-          } finally {
-            await closeOpenClawAgentDatabasesAsync();
-          }
-        },
-        async capture() {},
-        bind() {
-          return undefined;
-        },
-      });
+    const before = readIndexState(f.options.pathname);
+    await withAgentDatabaseMaintenanceLease({ env: f.env }, async () => {
+      const shared = openOpenClawStateDatabase({ env: f.env });
+      const prepared = prepareOpenClawAgentDatabaseWorkerLease(
+        { agentId: "worker", path: f.options.pathname, env: f.env },
+        shared,
+        randomUUID(),
+      );
+      expect(() => prepared.claim()).toThrow(/maintenance is in progress/);
+      expect(shared.db.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
     });
-    void running.catch((error: unknown) => ready.reject(error));
-    try {
-      await ready.promise;
-      const foreign = withOpenClawAgentDatabaseAsync(options, foreignOperation);
-      const refused = expect(foreign).rejects.toThrow(/another maintenance mutation scope/);
-      release.resolve();
-      await refused;
-      await running;
-      expect(ownerOperation).toHaveBeenCalledOnce();
-      expect(foreignOperation).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await running;
-    }
+    expect(readIndexState(f.options.pathname)).toEqual(before);
   });
 
-  it.each(["expiry", "replacement"] as const)(
-    "refuses ordinary agent admission after the mutation owner's %s",
-    async (loss) => {
-      const f = fixture();
-      const before = readIndexState(f.options.pathname);
-      await expect(
-        withAgentDatabaseMaintenanceLease({ env: f.env }, async (maintenance) => {
-          const mutation = maintenance.withDatabaseFileMutation;
-          if (!mutation) {
-            throw new Error("Missing live mutation owner");
-          }
-          await mutation({
-            assertCurrent: () => maintenance.assertOwned(),
-            async mutate() {
-              runOpenClawStateWriteTransaction(
-                (database) => {
-                  database.db
-                    .prepare(
-                      `UPDATE state_leases SET ${loss === "expiry" ? "expires_at=0" : "owner='successor'"}
-                    WHERE scope=? AND lease_key=?`,
-                    )
-                    .run(
-                      AGENT_DATABASE_MAINTENANCE_LEASE.scope,
-                      AGENT_DATABASE_MAINTENANCE_LEASE.key,
-                    );
-                },
-                { env: f.env },
-              );
-              expect(() => openOpenClawAgentDatabase({ agentId: "worker", env: f.env })).toThrow(
-                /lost/i,
-              );
+  it("refuses a delegated prepared open before publishing a native handle during maintenance", async () => {
+    const f = fixture();
+    const options = { agentId: "worker", env: f.env };
+    const prepared = prepareOpenClawAgentDatabaseWorkerLease(
+      { agentId: "worker", path: f.options.pathname, env: f.env },
+      f.state,
+      randomUUID(),
+    );
+    const leaseId = prepared.claim();
+    const registered = vi.fn();
+    const open = sqlite.openNodeSqliteDatabase;
+    let native: ReturnType<typeof open> | undefined;
+    vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
+      const database = open(pathname, openOptions);
+      if (pathname === f.options.pathname && openOptions?.readOnly !== true) {
+        native = database;
+      }
+      return database;
+    });
+    try {
+      // The Worker receives an admitted claim independently of its native open.
+      await withOpenClawStateLease(
+        {
+          ...AGENT_DATABASE_MAINTENANCE_LEASE,
+          database: { scope: "shared", options: { env: f.env } },
+          leaseMs: 60_000,
+          waitMs: 5_000,
+        },
+        (maintenance) =>
+          runWithAgentDatabaseMaintenanceAuthority(
+            maintenance,
+            resolveOpenClawStateSqlitePath(f.env),
+            async () => {
+              expect(() =>
+                openOpenClawAgentDatabase(
+                  options,
+                  { ...prepared, claim: () => leaseId },
+                  registered,
+                ),
+              ).toThrow(/maintenance is in progress/);
+              expect(native?.isOpen).toBe(false);
+              expect(registered).not.toHaveBeenCalled();
+              expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+              expect(
+                f.state.db.prepare("SELECT lease_id FROM agent_database_leases").all(),
+              ).toEqual([]);
             },
-            async capture() {
-              throw new Error("Capture must not run after ownership loss");
-            },
-            bind() {
-              return undefined;
-            },
-          });
-        }),
-      ).rejects.toThrow(/lost/i);
-      expect(readIndexState(f.options.pathname)).toEqual(before);
-    },
-  );
+          ),
+      );
+    } finally {
+      releaseOpenClawAgentDatabaseLease(leaseId, { env: f.env });
+    }
+  });
 
   it.each(
     [false, true].flatMap((corrupt) =>

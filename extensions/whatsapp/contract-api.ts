@@ -1,3 +1,4 @@
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 // Whatsapp API module exposes the plugin public contract.
 import { whatsappCommandPolicy as whatsappCommandPolicyImpl } from "./src/command-policy.js";
 import { resolveLegacyGroupSessionKey as resolveLegacyGroupSessionKeyImpl } from "./src/group-session-contract.js";
@@ -5,7 +6,6 @@ import {
   isWhatsAppGroupJid as isWhatsAppGroupJidImpl,
   normalizeWhatsAppTarget as normalizeWhatsAppTargetImpl,
 } from "./src/normalize-target.js";
-import { resolveWhatsAppRuntimeGroupPolicy as resolveWhatsAppRuntimeGroupPolicyImpl } from "./src/runtime-group-policy.js";
 import {
   canonicalizeLegacySessionKey as canonicalizeLegacySessionKeyImpl,
   isLegacyGroupSessionKey as isLegacyGroupSessionKeyImpl,
@@ -16,5 +16,5 @@ export const isLegacyGroupSessionKey = isLegacyGroupSessionKeyImpl;
 export const isWhatsAppGroupJid = isWhatsAppGroupJidImpl;
 export const normalizeWhatsAppTarget = normalizeWhatsAppTargetImpl;
 export const resolveLegacyGroupSessionKey = resolveLegacyGroupSessionKeyImpl;
-export const resolveWhatsAppRuntimeGroupPolicy = resolveWhatsAppRuntimeGroupPolicyImpl;
+export const resolveWhatsAppRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
 export const whatsappCommandPolicy = whatsappCommandPolicyImpl;

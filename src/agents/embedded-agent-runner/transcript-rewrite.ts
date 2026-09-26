@@ -53,12 +53,12 @@ function remapEntryId(
   return rewrittenEntryIds.get(entryId) ?? entryId;
 }
 
-function appendBranchEntry(params: {
+async function appendBranchEntry(params: {
   sessionManager: SessionManagerLike;
   entry: SessionBranchEntry;
   rewrittenEntryIds: ReadonlyMap<string, string>;
   appendMessage: SessionManagerLike["appendMessage"];
-}): string {
+}): Promise<string> {
   const { sessionManager, entry, rewrittenEntryIds, appendMessage } = params;
   if (entry.type === "message") {
     const message = stripStalePrefixReplay(entry.message) as Parameters<
@@ -128,12 +128,12 @@ function appendBranchEntry(params: {
  * Safely rewrites transcript message entries on the active branch by branching
  * from the first rewritten message's parent and re-appending the suffix.
  */
-export function rewriteTranscriptEntriesInSessionManager(params: {
+export async function rewriteTranscriptEntriesInSessionManager(params: {
   sessionManager: SessionManagerLike;
   replacements: TranscriptRewriteReplacement[];
   /** Preserve a checkpoint freshly captured on an explicit replacement. */
   preserveReplacementCompactionReplay?: boolean;
-}): TranscriptRewriteResult {
+}): Promise<TranscriptRewriteResult> {
   const replacementsById = new Map(
     params.replacements
       .filter((replacement) => replacement.entryId.trim().length > 0)
@@ -218,7 +218,7 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
     const newEntryId =
       replacement === undefined
-        ? appendBranchEntry({
+        ? await appendBranchEntry({
             sessionManager: rewriteManager,
             entry,
             rewrittenEntryIds,

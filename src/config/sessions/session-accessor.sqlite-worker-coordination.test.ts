@@ -3,10 +3,17 @@ import { Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { beginDoctorMaintenance } from "../../commands/doctor-maintenance.js";
 import * as coordinator from "../../infra/state-database-coordinator.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { withSqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
+import {
+  withSqliteMutationWorkerCoordination,
+  withSqliteWorkerLifecycleCoordination,
+} from "./session-accessor.sqlite-worker-coordination.js";
 
 function createWaitingWorker() {
   return new Worker(
@@ -20,6 +27,42 @@ function createWaitingWorker() {
 }
 
 describe("SQLite mutation worker coordinator custody", () => {
+  it("drains retained lifecycle custody after the close owner revokes new reads", async () => {
+    await withOpenClawTestState(
+      { scenario: "external-service", label: "mutation-worker-retained-close" },
+      async () => {
+        openOpenClawStateDatabase();
+        const context = captureOpenClawStateWorkerContext();
+        const close = vi.fn(async () => "closed");
+        let attempted = false;
+        const unregister = registerOpenClawStateDatabaseAsyncResource({
+          close: async () => {
+            // A failed assertion must not strand the test's own close resource.
+            if (attempted) {
+              return;
+            }
+            attempted = true;
+            expect(() => context.admission.assertCurrent()).toThrow(/read admission is closed/);
+            await expect(
+              withSqliteWorkerLifecycleCoordination(
+                context,
+                "retained-close",
+                close,
+                async () => {},
+              ),
+            ).resolves.toBe("closed");
+          },
+        });
+        try {
+          await closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+          expect(close).toHaveBeenCalledOnce();
+        } finally {
+          unregister();
+        }
+      },
+    );
+  });
+
   it("admits another agent lease while a sibling worker retains lifecycle custody", async () => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "mutation-worker-parallel-leases" },

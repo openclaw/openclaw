@@ -308,7 +308,10 @@ function registerBundledWorkerProviderHealthChecks(
 }
 
 function shouldRegisterCodexManagedHealth(cfg: OpenClawConfig): boolean {
-  if (!collectConfiguredAgentHarnessRuntimes(cfg).includes("codex")) {
+  if (
+    cfg.plugins?.entries?.codex?.enabled !== true &&
+    !collectConfiguredAgentHarnessRuntimes(cfg).includes("codex")
+  ) {
     return false;
   }
   return passesManifestOwnerBasePolicy({

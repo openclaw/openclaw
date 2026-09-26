@@ -45,7 +45,7 @@ type CronModelSelectionOwner = Pick<
 type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
   owner?: CronModelSelectionOwner;
-  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
+  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents" | "runtime">;
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
   isGmailHook: boolean;

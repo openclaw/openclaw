@@ -139,6 +139,7 @@ export function createRepositoryWorkspaceMutationService(options: {
             }
             placements.acceptWorkspaceResult(claim);
             await settleStagedWorkspaceResult({
+              assertCurrent,
               placements,
               turnClaim: claim,
               workspace,

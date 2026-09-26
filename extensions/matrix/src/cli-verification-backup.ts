@@ -256,26 +256,9 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
             cli.printAccountLabel(accountId);
             if (!result.success) {
               console.error(`Verification failed: ${cli.formatMatrixCliText(result.error)}`);
-              cli.printVerificationIdentity(result);
-              console.log(`Recovery key accepted: ${result.recoveryKeyAccepted ? "yes" : "no"}`);
-              console.log(`Backup usable: ${result.backupUsable ? "yes" : "no"}`);
-              console.log(`Device verified by owner: ${result.deviceOwnerVerified ? "yes" : "no"}`);
-              cli.printVerificationBackupSummary(result);
-              if (verbose) {
-                cli.printVerificationTrustDiagnostics(result);
-                cli.printVerificationBackupStatus(result);
-                cli.printTimestamp("Recovery key created at", result.recoveryKeyCreatedAt);
-              }
-              cli.printVerificationGuidance(
-                {
-                  ...result,
-                  pendingVerifications: 0,
-                },
-                accountId,
-              );
-              return;
+            } else {
+              console.log("Device verification completed successfully.");
             }
-            console.log("Device verification completed successfully.");
             cli.printVerificationIdentity(result);
             console.log(`Recovery key accepted: ${result.recoveryKeyAccepted ? "yes" : "no"}`);
             console.log(`Backup usable: ${result.backupUsable ? "yes" : "no"}`);
@@ -285,7 +268,9 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
               cli.printVerificationTrustDiagnostics(result);
               cli.printVerificationBackupStatus(result);
               cli.printTimestamp("Recovery key created at", result.recoveryKeyCreatedAt);
-              cli.printTimestamp("Verified at", result.verifiedAt);
+              if (result.success) {
+                cli.printTimestamp("Verified at", result.verifiedAt);
+              }
             }
             cli.printVerificationGuidance(
               {

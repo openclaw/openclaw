@@ -134,9 +134,6 @@ describe("registered progress cards at the final channel renderer", () => {
         deliveryRest: rest,
         deliverChannelId: "test-channel",
         replyReference: { peek: () => undefined },
-        tableMode: "off",
-        maxLinesPerMessage: undefined,
-        chunkMode: "length",
         log: () => {},
       });
       try {

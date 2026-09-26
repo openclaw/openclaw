@@ -9,7 +9,8 @@ import {
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
+import type { PrepareGatewaySessionLifecycle } from "./session-create-service.types.js";
 import { writeSessionStore } from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
@@ -30,11 +31,11 @@ vi.mock("../agents/model-runtime-choice.js", () => ({
   ),
 }));
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   closeOpenClawStateDatabaseForTest();
 });
 
-// Register after the reset so stacked teardown drains fixture stores first.
 const { createSelectedGlobalSessionStore } = setupGatewaySessionsHandlerTestHarness();
 
 const mainModel = { id: "main-only", name: "Main Model", provider: "main-provider" };
@@ -134,19 +135,6 @@ const cases: ModelSelectionCase[] = [
     error:
       'Model work-provider/work-only requires agent harness "fixture-harness", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.',
   })),
-  {
-    label: "loads the explicit agent model catalog",
-    explicitAgent: true,
-    globalAllow: [],
-    model: workRef,
-    expectedModel: workRef,
-  },
-  {
-    label: "loads the agent-qualified session model catalog",
-    globalAllow: [],
-    model: workRef,
-    expectedModel: workRef,
-  },
   {
     label: "rejects outside agent policy despite unrestricted global policy",
     explicitAgent: true,

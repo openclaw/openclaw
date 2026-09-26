@@ -13,7 +13,7 @@ import type {
   BundledChannelConfigCollector,
   PluginManifestRecord,
 } from "./manifest-registry.types.js";
-import { loadManifestThemeDefinitions } from "./manifest-themes.js";
+import { loadManifestThemeDefinitions } from "./manifest-theme-definitions.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   type OpenClawPackageManifest,
@@ -210,10 +210,6 @@ function resolvePortablePluginIcons(params: {
   };
 }
 
-function normalizePreferredPluginIds(raw: unknown): string[] | undefined {
-  return normalizeOptionalTrimmedStringList(raw);
-}
-
 function mergePackageChannelMetaIntoChannelConfigs(params: {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   packageChannel?: OpenClawPackageManifest["channel"];
@@ -236,7 +232,7 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   const description =
     existing.description ?? normalizeOptionalString(params.packageChannel?.blurb) ?? "";
   const preferOver =
-    existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
+    existing.preferOver ?? normalizeOptionalTrimmedStringList(params.packageChannel?.preferOver);
   const commands =
     existing.commands ?? normalizeManifestChannelCommandDefaults(params.packageChannel?.commands);
 
@@ -368,13 +364,20 @@ export function buildPluginManifestRecord(params: {
   trust: PluginTrust;
 }): PluginManifestRecord {
   const pluginId = params.candidate.effectivePluginId ?? params.manifest.id;
-  const providerSourceEntry =
-    params.manifest.providerCatalogEntry !== undefined
-      ? {
-          entryName: "providerCatalogEntry" as const,
-          entry: params.manifest.providerCatalogEntry,
-        }
-      : undefined;
+  const resolveCatalogEntry = (entryName: "providerCatalogEntry" | "capabilityCatalogEntry") => {
+    const entry = params.manifest[entryName];
+    return entry === undefined
+      ? undefined
+      : resolveManifestPluginSourcePath({
+          rootDir: params.candidate.rootDir,
+          manifestPath: params.manifestPath,
+          pluginId,
+          entryName,
+          entry,
+          rejectHardlinks: params.rejectHardlinks,
+          diagnostics: params.diagnostics,
+        });
+  };
   const manifestChannelConfigs =
     params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
       ? params.bundledChannelConfigCollector({
@@ -428,29 +431,11 @@ export function buildPluginManifestRecord(params: {
     channels: params.manifest.channels ?? [],
     channelAccountKeyPolicies: params.manifest.channelAccountKeyPolicies,
     providers: params.manifest.providers ?? [],
-    providerDiscoverySource: providerSourceEntry
-      ? resolveManifestPluginSourcePath({
-          rootDir: params.candidate.rootDir,
-          manifestPath: params.manifestPath,
-          pluginId,
-          entryName: providerSourceEntry.entryName,
-          entry: providerSourceEntry.entry,
-          rejectHardlinks: params.rejectHardlinks,
-          diagnostics: params.diagnostics,
-        })
-      : undefined,
+    providerDiscoverySource: resolveCatalogEntry("providerCatalogEntry"),
     capabilityCatalogSource:
       params.manifest.capabilityCatalogEntry === undefined
         ? undefined
-        : (resolveManifestPluginSourcePath({
-            rootDir: params.candidate.rootDir,
-            manifestPath: params.manifestPath,
-            pluginId,
-            entryName: "capabilityCatalogEntry",
-            entry: params.manifest.capabilityCatalogEntry,
-            rejectHardlinks: params.rejectHardlinks,
-            diagnostics: params.diagnostics,
-          }) ?? null),
+        : (resolveCatalogEntry("capabilityCatalogEntry") ?? null),
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
     modelPricing: params.manifest.modelPricing,
@@ -478,6 +463,7 @@ export function buildPluginManifestRecord(params: {
     qaRunners: params.manifest.qaRunners,
     dashboard: params.manifest.dashboard,
     controlUi: params.manifest.controlUi,
+    uiCapabilities: params.manifest.uiCapabilities,
     themes: params.manifest.themes,
     themeDefinitions: loadManifestThemeDefinitions({
       pluginId,

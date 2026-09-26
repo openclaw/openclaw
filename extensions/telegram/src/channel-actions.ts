@@ -239,7 +239,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
   providerOwnedReadGates: ["react", "edit", "delete", "emoji-list", "read"],
   readAuthorityActions: ["read"],
-  writeAuthorityActions: ["edit"],
+  writeAuthorityActions: ["delete", "edit"],
   resolveExecutionMode: () => "gateway",
   messageActionTargetAliases: {
     read: { aliases: ["messageId"], deliveryTargetAliases: [] },

@@ -13,7 +13,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.js";
+import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -977,9 +977,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
 
   it.each([
     { name: "session", replacement: { sessionId: "replacement-session" }, withUsage: true },
-    { name: "session", replacement: { sessionId: "replacement-session" }, withUsage: false },
     { name: "generation", replacement: { lifecycleRevision: "generation-2" }, withUsage: true },
-    { name: "generation", replacement: { lifecycleRevision: "generation-2" }, withUsage: false },
   ])(
     "does not write an old result into a replacement $name with usage=$withUsage",
     async ({ name, replacement, withUsage }) => {

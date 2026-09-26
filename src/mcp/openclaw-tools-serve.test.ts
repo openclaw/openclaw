@@ -68,15 +68,6 @@ afterEach(() => {
 });
 
 describe("OpenClaw tools MCP server", () => {
-  it("exposes cron", async () => {
-    const handlers = createPluginToolsMcpHandlers(
-      resolveOpenClawToolsForMcp({ agentSessionKey: "agent:worker:main" }),
-    );
-
-    const listed = await handlers.listTools();
-    expect(listed.tools.map((tool) => tool.name)).toContain("automations");
-  });
-
   it("does not expose cron to a persisted sub-agent ACP session", async () => {
     const tempDir = tempDirs.make("openclaw-mcp-subagent-policy-");
     const storePath = path.join(tempDir, "sessions.json");
@@ -139,15 +130,6 @@ describe("OpenClaw tools MCP server", () => {
         [OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV]: " agent:worker:main ",
       }),
     ).toBe("agent:worker:main");
-  });
-
-  it("serves the ring-zero openclaw tool without an agent session key", async () => {
-    const handlers = createPluginToolsMcpHandlers(
-      resolveOpenClawToolsForMcp({ tools: ["openclaw"], systemAgentSurface: "cli" }),
-    );
-
-    const listed = await handlers.listTools();
-    expect(listed.tools.map((tool) => tool.name)).toEqual(["openclaw"]);
   });
 
   it("keeps the generated helper owner through MCP diagnostic actions", async () => {

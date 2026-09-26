@@ -1,6 +1,8 @@
 // Gateway request scope tracks request-local plugin runtime context across async work.
-import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+} from "../../gateway/server-methods/types.js";
 import {
   getPluginExecutionFrame,
   pluginInstanceInvocation,
@@ -15,16 +17,22 @@ import { getPluginRuntimeExecutionFrame, PluginRuntimeExecutionFrame } from "./e
 import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.types.js";
 import { getPluginRuntimeLoadContextState } from "./load-context-state.js";
 
+export {
+  bindGatewayContextResolver,
+  clearGatewayContextResolver,
+  getCanonicalGatewayContextResolver,
+  getGatewayContextLifetime,
+  getGatewayContextResolver,
+  getSharedGatewayContextResolver,
+  hasGatewayContextOwner,
+} from "./gateway-context-binding.js";
+
 type PluginRuntimePluginScope = {
   pluginId: string;
   pluginSource?: string;
   pluginOrigin?: PluginOrigin;
   pluginTrustedOfficialInstall?: boolean;
 };
-
-function getPluginGatewayScope(): PluginRuntimeGatewayRequestScope | undefined {
-  return getPluginRuntimeExecutionFrame()?.gatewayScope;
-}
 
 function runWithPluginGatewayScope<T>(
   gatewayScope: PluginRuntimeGatewayRequestScope,
@@ -47,116 +55,13 @@ function runWithPluginGatewayScope<T>(
 
 const isNotWebchatConnect = () => false;
 
-const GATEWAY_CONTEXT_RESOLVERS_KEY: unique symbol = Symbol.for("openclaw.gatewayContextResolvers");
-
-// Built plugin chunks and source Gateway code must redeem the same host-issued owner bindings.
-const gatewayContextResolvers = resolveGlobalSingleton<WeakMap<object, GatewayContextResolver>>(
-  GATEWAY_CONTEXT_RESOLVERS_KEY,
-  () => new WeakMap(),
-);
-
-// A closed resolver stays closed even if a late scoped loader borrows it again.
-const gatewayContextLifetimes = resolveGlobalSingleton(
-  Symbol.for("openclaw.gatewayContextLifetimes"),
-  () => new WeakMap<GatewayContextResolver, AbortController>(),
-);
-
-export function getGatewayContextLifetime(resolver: GatewayContextResolver): AbortController {
-  let lifetime = gatewayContextLifetimes.get(resolver);
-  if (!lifetime) {
-    lifetime = new AbortController();
-    gatewayContextLifetimes.set(resolver, lifetime);
-  }
-  return lifetime;
-}
-
-export function bindGatewayContextResolver(
-  owner: object,
-  resolver: GatewayContextResolver | undefined,
-): void {
-  if (resolver) {
-    gatewayContextResolvers.set(owner, resolver);
-  }
-}
-
-export const getGatewayContextResolver = (owner: object) => gatewayContextResolvers.get(owner);
-
-/** Follows explicit wrapper ownership without invoking any execution resolver. */
-export function getCanonicalGatewayContextResolver(
-  resolver: GatewayContextResolver,
-): GatewayContextResolver | undefined {
-  const seen = new Set<GatewayContextResolver>();
-  let current = resolver;
-  while (!seen.has(current)) {
-    seen.add(current);
-    const parent = gatewayContextResolvers.get(current);
-    if (!parent) {
-      return current;
-    }
-    current = parent;
-  }
-  return undefined;
-}
-
-/** Match the host owner without invoking a possibly retired execution resolver. */
-export function hasGatewayContextOwner(
-  owner: object,
-  gatewayOwner: GatewayContextResolver,
-): boolean {
-  const resolver = gatewayContextResolvers.get(owner);
-  // A lifetime wrapper records one canonical host owner; it remains the execution binding.
-  return (
-    resolver !== undefined && (gatewayContextResolvers.get(resolver) ?? resolver) === gatewayOwner
-  );
-}
-
-export const clearGatewayContextResolver = (owner: object) => gatewayContextResolvers.delete(owner);
-
 /** Carry only closure-bound node authorities into a nested request scope. */
 export function getPluginRuntimeGatewayNodeAuthorities() {
-  const scope = getPluginGatewayScope();
+  const scope = getPluginRuntimeGatewayRequestScope();
   return {
     invokeWithSessionNodeAuthority: scope?.invokeWithSessionNodeAuthority,
     nodePlacementGrantAuthority: scope?.nodePlacementGrantAuthority,
   };
-}
-
-export function getSharedGatewayContextResolver(
-  owners: readonly object[],
-): GatewayContextResolver | undefined {
-  const resolvers = owners.map(getGatewayContextResolver);
-  if (resolvers.every((resolve) => !resolve)) {
-    return undefined;
-  }
-  // Separate caller wrappers may own one instance. Recheck every captured fence;
-  // never replace it with a current global resolver or permit mixed ambient routing.
-  const shared = () => {
-    const contexts = resolvers.map((resolve) => {
-      try {
-        return resolve?.();
-      } catch {
-        return undefined;
-      }
-    });
-    if (resolvers.some((resolve) => !resolve)) {
-      throw new Error("incompatible Gateway bindings: bound and unbound owners");
-    }
-    if (contexts.some((context) => !context)) {
-      return undefined;
-    }
-    if (contexts.some((context) => context !== contexts[0])) {
-      throw new Error("incompatible Gateway instances");
-    }
-    return contexts[0];
-  };
-  const canonical = resolvers.map((resolve) =>
-    resolve ? getCanonicalGatewayContextResolver(resolve) : undefined,
-  );
-  const owner = canonical[0];
-  if (owner && canonical.every((candidate) => candidate === owner)) {
-    bindGatewayContextResolver(shared, owner);
-  }
-  return shared;
 }
 
 /**
@@ -177,7 +82,8 @@ export function withPluginRuntimeGatewayContextResolver<T>(
 ): T {
   // Scheduler-owned work must not retain the request-local client or context
   // that happened to exist when its timer was armed.
-  const current = options?.inheritRequestScope === false ? undefined : getPluginGatewayScope();
+  const current =
+    options?.inheritRequestScope === false ? undefined : getPluginRuntimeGatewayRequestScope();
   const scoped: PluginRuntimeGatewayRequestScope = {
     ...current,
     isWebchatConnect: current?.isWebchatConnect ?? isNotWebchatConnect,
@@ -196,7 +102,7 @@ export function withPluginRuntimeRegistryScope<T>(
   if (!registry) {
     return run();
   }
-  const current = getPluginGatewayScope();
+  const current = getPluginRuntimeGatewayRequestScope();
   return runWithPluginGatewayScope(
     createRegistryScope(registry, current, declaredProviderOwners),
     run,
@@ -251,7 +157,7 @@ export function withPluginRuntimePluginScope<T>(
   registry?: PluginRegistry,
   invocation?: PluginInstanceInvocation,
 ): T {
-  const current = getPluginGatewayScope();
+  const current = getPluginRuntimeGatewayRequestScope();
   // Instance calls combine registry and identity without adding a second async frame.
   const scoped: PluginRuntimeGatewayRequestScope = registry
     ? createRegistryScope(registry, current)
@@ -264,7 +170,7 @@ export function withPluginRuntimePluginScope<T>(
 
 /** Drops only generation selection; authenticated Gateway caller and authority stay attached. */
 export function runOutsidePluginRuntimeRegistryScope<T>(run: () => T): T {
-  const current = getPluginGatewayScope();
+  const current = getPluginRuntimeGatewayRequestScope();
   if (!current) {
     return run();
   }
@@ -275,13 +181,10 @@ export function runOutsidePluginRuntimeRegistryScope<T>(run: () => T): T {
   );
 }
 
-/**
- * Returns the current plugin gateway request scope when called from a plugin request handler.
- */
 export function getPluginRuntimeGatewayRequestScope():
   | PluginRuntimeGatewayRequestScope
   | undefined {
-  return getPluginGatewayScope();
+  return getPluginRuntimeExecutionFrame()?.gatewayScope;
 }
 
 /** Reads registration/request/active registry precedence without initializing a cold runtime. */
@@ -293,4 +196,15 @@ export function getPluginRegistryForContext(): PluginRegistry | null {
     state?.activeRegistry ??
     null
   );
+}
+
+/** Live request context for trusted built-in tools that need direct runtime state. */
+export function getInProcessGatewayRequestContext(
+  resolveGatewayContext?: GatewayContextResolver,
+): GatewayRequestContext | undefined {
+  if (resolveGatewayContext) {
+    return resolveGatewayContext();
+  }
+  const scope = getPluginRuntimeGatewayRequestScope();
+  return scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
 }

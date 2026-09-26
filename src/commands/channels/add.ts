@@ -7,7 +7,10 @@ import {
   prepareChannelAccountConfiguration,
 } from "../../channels/plugins/account-config-mutation.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
-import { resolveChannelSetupCliOptionMetadata } from "../../channels/plugins/cli-add-options.js";
+import {
+  channelOmitsEnvBackedSetupOption,
+  resolveChannelSetupCliOptionMetadata,
+} from "../../channels/plugins/cli-add-options.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
@@ -29,7 +32,7 @@ import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
 import { withCommandPluginMetadata, type ConfigWriteSnapshot } from "../config-validation.js";
 import { parseAccountSelector } from "./account-selector.js";
 import { channelLabel } from "./runtime-label.js";
-import { requireValidConfigForWrite, shouldUseWizard } from "./shared.js";
+import { requireValidConfigForWrite } from "./shared.js";
 
 const loadChannelSetupPluginInstall = createLazyPromise(
   () => import("../channel-setup/plugin-install.js"),
@@ -53,21 +56,8 @@ async function resolveCatalogChannelEntry(
   if (!trimmed) {
     return undefined;
   }
-  const entries = await import("../channel-setup/trusted-catalog.js").then(
-    ({ listTrustedChannelPluginCatalogEntries }) =>
-      listTrustedChannelPluginCatalogEntries({
-        cfg,
-        workspaceDir: resolveWorkspaceDir(),
-      }),
-  );
-  return entries.find((entry) => {
-    if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
-      return true;
-    }
-    return (entry.meta.aliases ?? []).some(
-      (alias) => normalizeOptionalLowercaseString(alias) === trimmed,
-    );
-  });
+  const { resolveTrustedChannelCatalogInput } = await import("../channel-setup/trusted-catalog.js");
+  return resolveTrustedChannelCatalogInput(trimmed, { cfg, workspaceDir: resolveWorkspaceDir() });
 }
 
 function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
@@ -118,7 +108,12 @@ export async function channelsAddCommand(
   params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
   try {
-    return await channelsAddCommandImpl(opts, runtime, params);
+    parseAccountSelector(opts.account);
+    const writeSnapshot = await requireValidConfigForWrite(runtime);
+    if (!writeSnapshot) {
+      return;
+    }
+    return await configureChannelAccount(writeSnapshot, opts, runtime, params);
   } catch (err) {
     if (err instanceof WizardCancelledError) {
       runtime.exit(1);
@@ -126,19 +121,6 @@ export async function channelsAddCommand(
     }
     throw err;
   }
-}
-
-async function channelsAddCommandImpl(
-  opts: ChannelsAddOptions,
-  runtime: RuntimeEnv,
-  params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
-) {
-  parseAccountSelector(opts.account);
-  const writeSnapshot = await requireValidConfigForWrite(runtime);
-  if (!writeSnapshot) {
-    return;
-  }
-  return configureChannelAccount(writeSnapshot, opts, runtime, params);
 }
 
 async function configureChannelAccount(
@@ -151,14 +133,16 @@ async function configureChannelAccount(
   let nextConfig = cfg;
   let pluginRegistrySourceChanged = false;
 
-  const useWizard = shouldUseWizard(params);
+  const useWizard = params?.hasFlags === false;
   if (useWizard) {
     const { resolveInitialWizardChannelTarget, runChannelsAddWizardFlow, selectChannelSetupOwner } =
       await import("./add-wizard.js");
     const prompter = createClackPrompter();
     if (!isTerminalInteractive()) {
       runtime.error(
-        "Interactive channel setup requires a TTY. Use `openclaw channels add --channel <id> --use-env` or pass the channel's credential flags for non-interactive setup.",
+        channelOmitsEnvBackedSetupOption(opts.channel)
+          ? `Interactive channel setup requires a TTY. Run ${formatCliCommand(`openclaw channels add --channel ${opts.channel?.trim() || "<id>"} --help`)} to list the setup flags this channel accepts, then pass them for non-interactive setup.`
+          : "Interactive channel setup requires a TTY. Use `openclaw channels add --channel <id> --use-env` or pass the channel's credential flags for non-interactive setup.",
       );
       runtime.exit(1);
       return;

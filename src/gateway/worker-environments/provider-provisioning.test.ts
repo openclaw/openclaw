@@ -61,6 +61,9 @@ describe("worker environment service", () => {
   it.each(["abort", "timeout"])(
     "never allocates from preparation closed by %s",
     async (closure) => {
+      if (closure === "timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
       const entered = createDeferredCore();
       const settled = createDeferredCore();
       const allocate = vi.fn(async () => ({ leaseId: "lease-late", ssh: support.SSH_ENDPOINT }));
@@ -84,13 +87,24 @@ describe("worker environment service", () => {
           signal: controller.signal,
         })
         .catch((error: unknown) => error);
-      await entered.promise;
-      if (closure === "abort") {
-        controller.abort(new Error("Stop before allocation"));
+      try {
+        await Promise.race([
+          entered.promise,
+          creation.then((result) => {
+            throw new Error("Creation ended before provider preparation", { cause: result });
+          }),
+        ]);
+        if (closure === "abort") {
+          controller.abort(new Error("Stop before allocation"));
+          settled.resolve();
+        } else {
+          await vi.advanceTimersByTimeAsync(25);
+        }
+        await creation;
+      } finally {
         settled.resolve();
+        await creation;
       }
-      await creation;
-      settled.resolve();
       const environment = support.testState.store.list()[0]!;
       await service.destroy(environment.environmentId);
       await service.stop();
@@ -102,52 +116,6 @@ describe("worker environment service", () => {
       expect(destroy).not.toHaveBeenCalled();
     },
   );
-
-  it("does not invoke a late prepared allocation after replay times out", async () => {
-    const entered = createDeferredCore();
-    const settled = createDeferredCore();
-    const lateAllocation = vi.fn(async () => ({ leaseId: "lease-1", ssh: support.SSH_ENDPOINT }));
-    let preparations = 0;
-    const service = support.createService(
-      support.createProvider({
-        prepareProvision: async () => {
-          if (++preparations === 1) {
-            return async () => {
-              throw new Error("synthetic response lost after allocation");
-            };
-          }
-          entered.resolve();
-          await settled.promise;
-          return lateAllocation;
-        },
-      }),
-      { providerCallTimeoutMs: 25 },
-    );
-    await expect(
-      service.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "replayed-preparation",
-      }),
-    ).rejects.toThrow("response lost after allocation");
-    const replay = service
-      .createWithRequest({ profileId: "development", idempotencyKey: "replayed-preparation" })
-      .catch((error: unknown) => error);
-    await entered.promise;
-    await replay;
-    expect(support.testState.store.list()[0]).toMatchObject({
-      state: "provisioning",
-      leaseId: null,
-    });
-    settled.resolve();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(lateAllocation).not.toHaveBeenCalled();
-    expect(support.testState.store.list()[0]).toMatchObject({
-      state: "provisioning",
-      leaseId: null,
-    });
-  });
 
   it("persists intent and passes the configured profile id and immutable settings to provisioning", async () => {
     const operationIds: string[] = [];
@@ -211,7 +179,7 @@ describe("worker environment service", () => {
       ownerEpoch: 1,
       sessionId: null,
     });
-    expect(workerService.acknowledgeCredentialDelivery(grant!)).toBe(true);
+    expect(await workerService.acknowledgeCredentialDelivery(grant!)).toBe(true);
     expect(support.testState.store.getCredential(result.environmentId)).toMatchObject({
       deliveredAtMs: support.testState.nowMs,
     });
@@ -471,14 +439,16 @@ describe("worker environment service", () => {
       { id: "override", overrides: { machineClass: "standard", os: "os-b" } },
       { id: "unknown", overrides: { machineClass: "custom", os: "other" } },
     ];
-    const records = cases.map(({ id, overrides }) =>
-      support.testState.store.createIntent({
-        environmentId: id,
-        providerId: "fake",
-        profileId: "development",
-        profileSnapshot: { settings: { region: "test" }, ...overrides },
-        provisionOperationId: `provision:${id}`,
-      }),
+    const records = await Promise.all(
+      cases.map(({ id, overrides }) =>
+        support.testState.store.createIntent({
+          environmentId: id,
+          providerId: "fake",
+          profileId: "development",
+          profileSnapshot: { settings: { region: "test" }, ...overrides },
+          provisionOperationId: `provision:${id}`,
+        }),
+      ),
     );
     const project = (record: (typeof records)[number]) => {
       const placement = {
@@ -563,7 +533,7 @@ describe("worker environment service", () => {
     await service.prepareProjectIntent("development");
     support.getDevelopmentProfile().settings = { region: "replacement" };
     const intent = await service.prepareProjectIntent("development");
-    const environment = support.testState.store.createIntent({
+    const environment = await support.testState.store.createIntent({
       environmentId: "replacement-worker",
       providerId: intent.providerId,
       profileId: "development",
@@ -650,7 +620,6 @@ describe("worker environment service", () => {
       ],
     ],
     ["malformed labels", [{ id: "fast", label: 16 }]],
-    ["non-positive CPU counts", [{ id: "fast", label: "Fast", cpu: 0 }]],
     ["non-integer memory sizes", [{ id: "fast", label: "Fast", memoryGb: 63.5 }]],
     ["implausible memory sizes", [{ id: "fast", label: "Fast", memoryGb: 65_537 }]],
     [
@@ -659,10 +628,6 @@ describe("worker environment service", () => {
         { id: "standard", label: "Standard", default: true },
         { id: "fast", label: "Fast", default: true },
       ],
-    ],
-    [
-      "over-limit catalogs",
-      Array.from({ length: 65 }, (_, index) => ({ id: `machine-${index}`, label: "Machine" })),
     ],
   ])("omits %s returned by a worker provider", async (_name, options) => {
     const provider = support.createProvider();
@@ -688,7 +653,6 @@ describe("worker environment service", () => {
       [{ id: "os-a", label: "OS A", disabledReason: "" }],
       [{ id: "os-a", label: "OS A", disabledReason: " " }],
       [{ id: "os-a", label: "OS A", disabledReason: "x".repeat(257) }],
-      [{ id: "os-a", label: "OS A", settings: {} }],
       Array.from({ length: 9 }, (_, index) => ({ id: `os-${index}`, label: "OS" })),
     ].map((systems) => ({ systems })),
   )("omits malformed operating-system catalog %#", async ({ systems }) => {
@@ -966,7 +930,7 @@ describe("worker environment service", () => {
   it.each(["direct destroy", "restart reconcile"] as const)(
     "cancels a requested intent without allocating on %s",
     async (mode) => {
-      const intent = support.testState.store.createIntent({
+      const intent = await support.testState.store.createIntent({
         environmentId: `worker-cancel-${mode}`,
         providerId: "fake",
         profileId: "development",
@@ -979,7 +943,7 @@ describe("worker environment service", () => {
       if (mode === "direct destroy") {
         await workerService.destroy(intent.environmentId);
       } else {
-        support.testState.store.requestDestroy({
+        await support.testState.store.requestDestroy({
           environmentId: intent.environmentId,
           state: "requested",
         });

@@ -18,7 +18,7 @@ import {
 import type { GatewayServiceState } from "../../daemon/service.js";
 import * as integrity from "../../infra/package-update-integrity.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -26,9 +26,10 @@ import {
   observeOriginalManagedServiceRuntime,
   revalidateOriginalManagedServiceRuntime,
 } from "./update-command-original-service.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { restartRetainedUpdateGatewayService } from "./update-command-service-command.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   compensateOriginalManagedService,
@@ -218,7 +219,18 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     "revoked",
     "schema-newer",
   ] as const)("retained own-rebind compensation: %s", async (scenario) => {
-    const { state, rootB, before, serviceState, mocks } = fixture();
+    const { state, rootA, rootB, before, serviceState, mocks } = fixture();
+    const managedDefinition = structuredClone(serviceState.command!);
+    serviceState.command = {
+      ...managedDefinition,
+      workingDirectory: state.home,
+      managedDefinition,
+      managedOverrides: {},
+    };
+    before.serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
+      state: serviceState,
+      root: rootA,
+    });
     const pinScope = { kind: "gateway" as const, env: state.env };
     const pinScenario = scenario === "own-pin-rebind" || scenario === "foreign-pin";
     if (pinScenario) {
@@ -258,6 +270,10 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
                       path.join(rootB, "dist/index.js"),
                       "gateway",
                     ],
+                  };
+                  serviceState.command.managedDefinition = {
+                    ...managedDefinition,
+                    programArguments: serviceState.command.programArguments,
                   };
                   if (pinScenario) {
                     commitDaemonRuntimePin(
@@ -304,6 +320,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         await args.beforeMutation();
         args.assertCurrent();
         expect(args.programArguments).toEqual(originalCommand.programArguments);
+        expect(args.workingDirectory).toBe(managedDefinition.workingDirectory);
         expect(args.preserveAutoStart).toBe(true);
         serviceState.command = structuredClone(originalCommand);
         commitDaemonRuntimePin(pinScope, args.runtimePinUpdate, serviceState.command);

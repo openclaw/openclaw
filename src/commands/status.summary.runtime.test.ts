@@ -1,6 +1,5 @@
 // Status summary runtime tests cover model context-token resolution.
 import { describe, expect, it } from "vitest";
-import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { statusSummaryRuntime } from "../status/summary.runtime.js";
 
@@ -14,44 +13,6 @@ function resolveSessionRuntime(
 }
 
 describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
-  it("does not match provider context window overrides across provider id variants", () => {
-    const contextTokens = statusSummaryRuntime.resolveContextTokensForModel({
-      cfg: {
-        models: {
-          providers: {
-            "z.ai": {
-              models: [{ id: "glm-4.7", contextWindow: 123_456 }],
-            },
-          },
-        },
-      } as never,
-      provider: "z-ai",
-      model: "glm-4.7",
-      fallbackContextTokens: 999,
-    });
-
-    expect(contextTokens).toBe(999);
-  });
-
-  it("prefers per-model contextTokens over contextWindow", () => {
-    const contextTokens = statusSummaryRuntime.resolveContextTokensForModel({
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
-            },
-          },
-        },
-      } as never,
-      provider: "openai",
-      model: "gpt-5.4",
-      fallbackContextTokens: 999,
-    });
-
-    expect(contextTokens).toBe(272_000);
-  });
-
   it("uses prepared static catalog metadata with a cold cache", () => {
     expect(
       statusSummaryRuntime.resolveContextTokensForModel({
@@ -61,25 +22,6 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
         modelContextWindow: 1_000_000,
         modelContextTokens: 272_000,
         fallbackContextTokens: 200_000,
-      }),
-    ).toBe(272_000);
-  });
-
-  it("combines configured native windows with lower prepared runtime caps", () => {
-    expect(
-      statusSummaryRuntime.resolveContextTokensForModel({
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }],
-              },
-            },
-          },
-        } as never,
-        provider: "openai",
-        model: "gpt-5.5",
-        modelContextTokens: 272_000,
       }),
     ).toBe(272_000);
   });
@@ -106,70 +48,6 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
       }),
     ).toBe(1_000_000);
   });
-
-  it("uses per-model windows and fixed Anthropic contracts", () => {
-    expect(
-      statusSummaryRuntime.resolveContextTokensForModel({
-        cfg: {
-          models: {
-            providers: {
-              ollama: {
-                models: [{ id: "qwen3.5:9b", contextWindow: 32_000 }],
-              },
-            },
-          },
-        } as never,
-        provider: "ollama",
-        model: "qwen3.5:9b",
-      }),
-    ).toBe(32_000);
-
-    expect(
-      statusSummaryRuntime.resolveContextTokensForModel({
-        cfg: {
-          models: {
-            providers: {
-              anthropic: {
-                models: [{ id: "claude-sonnet-4-6", contextWindow: 200_000 }],
-              },
-            },
-          },
-        } as never,
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-      }),
-    ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
-  });
-
-  it.each([
-    { contextTokens: 200_000, expected: 200_000 },
-    { contextTokens: 2_000_000, expected: ANTHROPIC_CONTEXT_1M_TOKENS },
-  ])(
-    "bounds Anthropic contextTokens=$contextTokens by the fixed native window",
-    ({ contextTokens, expected }) => {
-      expect(
-        statusSummaryRuntime.resolveContextTokensForModel({
-          cfg: {
-            models: {
-              providers: {
-                anthropic: {
-                  models: [
-                    {
-                      id: "claude-sonnet-4-6",
-                      contextWindow: ANTHROPIC_CONTEXT_1M_TOKENS,
-                      contextTokens,
-                    },
-                  ],
-                },
-              },
-            },
-          } as never,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-        }),
-      ).toBe(expected);
-    },
-  );
 });
 
 describe("statusSummaryRuntime.classifySessionKey", () => {

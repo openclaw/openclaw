@@ -1,10 +1,51 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ReplyExpectation } from "../reply-completion.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import type { AgentCommandOpts } from "./types.js";
 
 const SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY = "agent:main:subagent:child";
 const SUBAGENT_ANNOUNCE_REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
+
+export const COMMAND_REPLY_EXPECTATION_CASES: ReadonlyArray<{
+  name: string;
+  opts: Partial<AgentCommandOpts>;
+  expected: ReplyExpectation;
+}> = [
+  { name: "user", opts: {}, expected: "required" },
+  {
+    name: "external-user-with-completion-label",
+    opts: { inputProvenance: { kind: "external_user", sourceTool: "subagent_announce" } },
+    expected: "required",
+  },
+  { name: "subagent-lane", opts: { lane: "subagent" }, expected: "optional" },
+  {
+    name: "child-report-without-tool-handoff",
+    opts: {
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "subagent_announce",
+        sourceRole: "subagent",
+      },
+    },
+    expected: "optional",
+  },
+  {
+    name: "settlement-wake",
+    opts: { inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" } },
+    expected: "optional",
+  },
+  {
+    name: "peer-result",
+    opts: { inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" } },
+    expected: "optional",
+  },
+  {
+    name: "internal-notification",
+    opts: { inputProvenance: { kind: "internal_system" } },
+    expected: "optional",
+  },
+];
 
 export function createSubagentAnnounceHandoffOptions(params: {
   sourceReplyDeliveryMode: "automatic" | "message_tool_only";

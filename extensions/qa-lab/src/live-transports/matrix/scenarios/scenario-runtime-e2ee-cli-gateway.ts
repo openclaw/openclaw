@@ -17,10 +17,9 @@ import {
 } from "./scenario-runtime-e2ee-cli-runtime.js";
 import {
   buildMatrixQaPluginActivationConfig,
-  parseMatrixQaCliJson,
   registerMatrixQaCliE2eeAccount,
+  runMatrixQaSetupCliJson,
   type MatrixQaCliEncryptionSetupStatus,
-  writeMatrixQaCliOutputArtifacts,
 } from "./scenario-runtime-e2ee-cli-shared.js";
 import { buildMatrixE2eeReplyArtifact } from "./scenario-runtime-e2ee-room.js";
 import {
@@ -98,20 +97,12 @@ export async function runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario(
     },
   });
   try {
-    const setupResult = await cli.run([
-      "matrix",
-      "encryption",
-      "setup",
-      "--account",
-      accountId,
-      "--json",
-    ]);
-    const setupArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "encryption-setup-multi-account",
-      result: setupResult,
-      rootDir: cli.rootDir,
-    });
-    const setup = parseMatrixQaCliJson(setupResult) as MatrixQaCliEncryptionSetupStatus;
+    const { artifacts: setupArtifacts, payload: setupPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "encryption-setup-multi-account",
+      ["matrix", "encryption", "setup", "--account", accountId, "--json"],
+    );
+    const setup = setupPayload as MatrixQaCliEncryptionSetupStatus;
     if (
       setup.accountId !== accountId ||
       setup.success !== true ||
@@ -257,20 +248,12 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
     context,
   });
   try {
-    const setupResult = await cli.run([
-      "matrix",
-      "encryption",
-      "setup",
-      "--account",
-      accountId,
-      "--json",
-    ]);
-    const setupArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "encryption-setup",
-      result: setupResult,
-      rootDir: cli.rootDir,
-    });
-    const setup = parseMatrixQaCliJson(setupResult) as MatrixQaCliEncryptionSetupStatus;
+    const { artifacts: setupArtifacts, payload: setupPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "encryption-setup",
+      ["matrix", "encryption", "setup", "--account", accountId, "--json"],
+    );
+    const setup = setupPayload as MatrixQaCliEncryptionSetupStatus;
     if (
       setup.accountId !== accountId ||
       setup.success !== true ||

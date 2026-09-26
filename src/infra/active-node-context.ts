@@ -6,6 +6,7 @@ type ActiveNodeContext = {
 
 type ActiveNodeContextState = ActiveNodeContext & {
   isCurrent?: () => boolean;
+  prepare?: () => Promise<unknown>;
 };
 
 let activeNodeContext: ActiveNodeContextState | null = null;
@@ -20,9 +21,21 @@ function snapshotActiveNodeContext(context: ActiveNodeContextState): ActiveNodeC
 /** Publishes the gateway's current active-node choice without volatile timestamps. */
 export function setActiveNodeContext(
   next: ActiveNodeContext | null,
-  options?: { isCurrent?: () => boolean },
+  options?: { isCurrent?: () => boolean; prepare?: () => Promise<unknown> },
 ): void {
   activeNodeContext = next ? { ...next, ...options } : null;
+}
+
+/** Refresh the keyed pairing fact at the existing asynchronous prompt preparation boundary. */
+export async function prepareActiveNodeContext(): Promise<void> {
+  const captured = activeNodeContext;
+  try {
+    await captured?.prepare?.();
+  } catch {
+    if (activeNodeContext === captured) {
+      activeNodeContext = null;
+    }
+  }
 }
 
 /** Revalidates the published node before projecting it into an agent prompt. */

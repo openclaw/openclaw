@@ -18,8 +18,8 @@ import {
   type NodeInvokePlacementGrantAuthorization,
 } from "./node-invoke-placement-grant.js";
 import type { NodeSession } from "./node-registry.js";
+import { handlePendingApprovalRequestWithDelivery } from "./server-methods/approval-request-delivery.js";
 import { bindApprovalRequesterMetadata } from "./server-methods/approval-shared.js";
-import { handlePendingPluginApprovalRequest } from "./server-methods/plugin-approval-request-delivery.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
 function sanitizeOptionalMeta(value?: string | null): string | null {
@@ -196,8 +196,9 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       }
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
-      const decisionPromise = manager.register(record, timeoutMs);
-      await handlePendingPluginApprovalRequest({
+      const { decision: decisionPromise } = await manager.register(record, timeoutMs);
+      await handlePendingApprovalRequestWithDelivery({
+        approvalKind: "plugin",
         manager,
         record,
         respond,
@@ -215,7 +216,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       }
       if (
         decision === "allow-once" &&
-        !manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`)
+        !(await manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`))
       ) {
         return { id: record.id, decision: null };
       }

@@ -305,6 +305,56 @@ describe("Browser dashboard lifetime", () => {
     expect(browser.open).not.toHaveBeenCalled();
   });
 
+  it.each(["active tab", "Stop intent"] as const)(
+    "preserves a dashboard %s and successor tabs when cleanup becomes stale during a board read",
+    async (state) => {
+      if (state === "active tab") {
+        await requestBrowserDashboard(request);
+      } else {
+        await stopBrowserDashboard(request);
+      }
+      fixture.widgets = [];
+      const reading = createDeferred<void>();
+      const finish = createDeferred<void>();
+      fixture.readBoard.mockImplementationOnce(async () => {
+        reading.resolve();
+        await finish.promise;
+        return { sessionKey, widgets: [] };
+      });
+      let current = true;
+      const closeTab = vi.fn(async () => {});
+      const cleanup = closeTrackedBrowserTabsForSessions({
+        sessionKeys: [sessionKey],
+        isCurrent: () => current,
+        closeTab,
+      });
+      try {
+        await reading.promise;
+        current = false;
+        trackSessionBrowserTab({
+          sessionKey,
+          targetId: "successor-tab",
+          profile: "openclaw",
+          ownership: durableOwnership("successor-tab"),
+        });
+        const retained = getBrowserSessionTabStore().entries();
+        finish.resolve();
+        await expect(cleanup).resolves.toBe(0);
+        expect(getBrowserSessionTabStore().entries()).toEqual(retained);
+        expect(closeTab).not.toHaveBeenCalled();
+        expect(browser.closeOwned).not.toHaveBeenCalled();
+
+        await expect(
+          closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], closeTab }),
+        ).resolves.toBe(state === "active tab" ? 2 : 1);
+        expect(getBrowserSessionTabStore().entries()).toEqual([]);
+      } finally {
+        finish.resolve();
+        await cleanup;
+      }
+    },
+  );
+
   it.each(["removed", "invalid URL", "invalid profile"] as const)(
     "reconciles %s definitions even when ordinary tab cleanup is disabled",
     async (condition) => {

@@ -45,6 +45,7 @@ type SubagentRunReadSqliteRow = Pick<
   | "created_at"
 > & {
   model: string | null;
+  task_run_id: string | null;
   swarm_run_id: string | null;
   run_timeout_seconds: number | null;
   execution_status: SubagentRunRecord["execution"]["status"];
@@ -120,7 +121,7 @@ function subagentControllerFilter(controllerSessionKeys: readonly string[]) {
 
 function readSubagentRegistryRows(
   scope?: SubagentRegistryReadScope,
-  database = openOpenClawStateDatabase(),
+  database: Pick<OpenClawStateDatabase, "db"> = openOpenClawStateDatabase(),
   projection: "full" | "maintenance" = "full",
 ): SubagentRunSqliteRow[] {
   const { db } = database;
@@ -215,7 +216,7 @@ const subagentMaintenancePayload =
     ELSE payload_json END`;
 
 function readSubagentSessionListRows(
-  scope?: { controllerSessionKeys?: readonly string[]; runIds?: readonly string[] },
+  scope?: { controllerSessionKeys?: readonly string[] },
   database: Pick<OpenClawStateDatabase, "db"> = openOpenClawStateDatabase(),
 ): SubagentRunReadSqliteRow[] {
   const { db } = database;
@@ -236,9 +237,6 @@ function readSubagentSessionListRows(
             // Materialize compact metadata once; an inline CTE repeats retained JSON work per field.
             subagentMetadataPayload.as("payload_json"),
           ]);
-          if (scope?.runIds) {
-            return selected.where("run_id", "in", sqliteStringSet(scope.runIds));
-          }
           return scope?.controllerSessionKeys
             ? selected.where(subagentControllerFilter(scope.controllerSessionKeys))
             : selected;
@@ -254,6 +252,7 @@ function readSubagentSessionListRows(
         "controller_store_path",
         "created_at",
         subagentPayloadJsonValue<string | null>("$.swarmRunId").as("swarm_run_id"),
+        subagentPayloadJsonValue<string | null>("$.taskRunId").as("task_run_id"),
         subagentPayloadJsonValue<string | null>("$.model").as("model"),
         subagentPayloadJsonValue<number | null>("$.collect").as("collect"),
         subagentPayloadJsonValue<string | null>("$.groupId").as("group_id"),
@@ -313,6 +312,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
   return Object.fromEntries(
     Object.entries({
       runId,
+      taskRunId: row.task_run_id ?? undefined,
       swarmRunId: row.swarm_run_id || undefined,
       childSessionKey,
       controllerSessionKey: row.controller_session_key?.trim() || undefined,
@@ -352,7 +352,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
 
 function loadScopedSubagentRuns(
   scope: SubagentRegistryReadScope,
-  database?: OpenClawStateDatabase,
+  database?: Pick<OpenClawStateDatabase, "db">,
 ): SubagentRunRecord[] {
   const normalizedScope =
     scope.kind === "runs" ? scope : { ...scope, sessionKey: scope.sessionKey.trim() };
@@ -377,21 +377,27 @@ export function loadSubagentRunsForControllerFromSqlite(
 }
 
 /** Loads all generations readable by one requester or controller session. */
-export function loadSubagentRunsForSessionFromSqlite(sessionKey: string): SubagentRunRecord[] {
-  return loadScopedSubagentRuns({ kind: "session", sessionKey });
+export function loadSubagentRunsForSessionFromSqlite(
+  sessionKey: string,
+  database?: Pick<OpenClawStateDatabase, "db">,
+): SubagentRunRecord[] {
+  return loadScopedSubagentRuns({ kind: "session", sessionKey }, database);
 }
 
 /** Loads all persisted generations for one child session through its existing index. */
 export function loadSubagentRunsForChildSessionFromSqlite(
   childSessionKey: string,
-  database?: OpenClawStateDatabase,
+  database?: Pick<OpenClawStateDatabase, "db">,
 ): SubagentRunRecord[] {
   return loadScopedSubagentRuns({ kind: "child", sessionKey: childSessionKey }, database);
 }
 
 /** Hydrates exact physical rows selected by the shared registry read projection. */
-export function loadSubagentRunsByRunIdsFromSqlite(runIds: readonly string[]): SubagentRunRecord[] {
-  return loadScopedSubagentRuns({ kind: "runs", runIds });
+export function loadSubagentRunsByRunIdsFromSqlite(
+  runIds: readonly string[],
+  database?: Pick<OpenClawStateDatabase, "db">,
+): SubagentRunRecord[] {
+  return loadScopedSubagentRuns({ kind: "runs", runIds }, database);
 }
 
 /** Loads the canonical subagent registry from shared SQLite state. */
@@ -439,22 +445,11 @@ export function loadSubagentSessionListRunsFromSqlite(
   return runs;
 }
 
-export function loadSubagentRunsForSessionsFromSqlite(
-  sessionKeys: readonly string[],
-  inMemoryRuns: Iterable<SubagentRunReadRecord>,
-  projection: "full",
-): { sessionKeys: Set<string>; runs: Map<string, SubagentRunRecord>; complete: boolean };
-export function loadSubagentRunsForSessionsFromSqlite(
-  sessionKeys: readonly string[],
-  inMemoryRuns: Iterable<SubagentRunReadRecord>,
-  projection: "session-list",
-): { sessionKeys: Set<string>; runs: Map<string, SubagentRunReadRecord>; complete: boolean };
 /** Select identities and their records from the same persisted read snapshot. */
 export function loadSubagentRunsForSessionsFromSqlite(
   sessionKeys: readonly string[],
   inMemoryRuns: Iterable<SubagentRunReadRecord>,
-  projection: "full" | "session-list",
-): { sessionKeys: Set<string>; runs: Map<string, SubagentRunReadRecord>; complete: boolean } {
+): { sessionKeys: Set<string>; runs: Map<string, SubagentRunRecord>; complete: boolean } {
   const database = openOpenClawStateDatabase();
   const { db } = database;
   return runSqliteDeferredTransactionSync(db, () => {
@@ -468,10 +463,7 @@ export function loadSubagentRunsForSessionsFromSqlite(
       sessionKeys,
       identities.map((row) => ({
         childSessionKey: row.child_session_key,
-        requesterSessionKey:
-          projection === "session-list"
-            ? row.requester_session_key.trim()
-            : row.requester_session_key,
+        requesterSessionKey: row.requester_session_key,
       })),
       inMemoryRuns,
     );
@@ -485,26 +477,17 @@ export function loadSubagentRunsForSessionsFromSqlite(
     const runIds = identities
       .filter((row) => selectedRunIds.has(row.run_id.trim()))
       .map((row) => row.run_id);
-    const runs = new Map<string, SubagentRunReadRecord>();
-    // Each projection has its own cache; only complete physical coverage may seed it.
+    const runs = new Map<string, SubagentRunRecord>();
+    // Only complete physical coverage may seed the full-record cache.
     const complete = runIds.length === identities.length;
     if (runIds.length) {
-      if (projection === "full") {
-        for (const row of readSubagentRegistryRows(
-          complete ? undefined : { kind: "runs", runIds },
-          database,
-        )) {
-          const entry = rowToSubagentRunRecord(row);
-          if (entry) {
-            runs.set(entry.runId, entry);
-          }
-        }
-      } else {
-        for (const row of readSubagentSessionListRows({ runIds }, database)) {
-          const entry = rowToSubagentRunReadRecord(row);
-          if (entry) {
-            runs.set(entry.runId, entry);
-          }
+      for (const row of readSubagentRegistryRows(
+        complete ? undefined : { kind: "runs", runIds },
+        database,
+      )) {
+        const entry = rowToSubagentRunRecord(row);
+        if (entry) {
+          runs.set(entry.runId, entry);
         }
       }
     }

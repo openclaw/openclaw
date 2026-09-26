@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import {
   asFiniteNumber,
   normalizeOptionalString,
@@ -11,12 +12,45 @@ const BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX =
 export type CodexProviderRefusal = {
   category: "bio" | "cyber" | "misalignment";
   message: string;
+  review?: ReturnType<typeof readCodexMisalignmentReview>;
+  nativeThreadId?: string;
+  nativeTurnId?: string;
 };
+
+/** Decode app-server v2 findings with the Codex UI's UTF-8 limits; never truncate a steer. */
+function readCodexMisalignmentReview(value: unknown) {
+  if (!isJsonObject(value)) {
+    return undefined;
+  }
+  const explanation = value.detailedExplanation;
+  if (
+    typeof explanation !== "string" ||
+    !explanation.trim() ||
+    Buffer.byteLength(explanation, "utf8") > 64 * 1024
+  ) {
+    return undefined;
+  }
+  const message = isJsonObject(value.steer) ? value.steer.message : undefined;
+  return {
+    explanation,
+    ...(typeof message === "string" && message.trim() && Buffer.byteLength(message, "utf8") <= 1024
+      ? { continuation: { message } }
+      : {}),
+    ...(typeof value.errorType === "string" && value.errorType.trim()
+      ? { errorType: value.errorType }
+      : {}),
+  };
+}
 
 /** Project only Codex's explicit refusal contracts; other policy errors retain their own paths. */
 export function readCodexProviderRefusal(
   message: string | undefined,
   codexErrorInfo: JsonValue | null | undefined,
+  options?: {
+    misalignment?: unknown;
+    nativeThreadId?: string;
+    nativeTurnId?: string;
+  },
 ): CodexProviderRefusal | undefined {
   if (!message) {
     return undefined;
@@ -25,32 +59,34 @@ export function readCodexProviderRefusal(
     return { category: "cyber", message };
   }
   if (codexErrorInfo === "misalignmentPolicyViolation") {
-    return { category: "misalignment", message };
+    const review = readCodexMisalignmentReview(options?.misalignment);
+    return {
+      category: "misalignment",
+      message,
+      ...(review ? { review } : {}),
+      ...(options?.nativeThreadId ? { nativeThreadId: options.nativeThreadId } : {}),
+      ...(options?.nativeTurnId ? { nativeTurnId: options.nativeTurnId } : {}),
+    };
   }
   return message.startsWith(BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX)
     ? { category: "bio", message }
     : undefined;
 }
 
+export function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
+  return {
+    provider: "openai",
+    category: refusal.category,
+    ...(refusal.review ? { review: refusal.review } : {}),
+    ...(refusal.nativeThreadId ? { nativeThreadId: refusal.nativeThreadId } : {}),
+    ...(refusal.nativeTurnId ? { nativeTurnId: refusal.nativeTurnId } : {}),
+  };
+}
+
 export { normalizeOptionalString as normalizeNonEmptyString };
 
 export function readNonEmptyString(record: JsonObject, key: string): string | undefined {
   return normalizeOptionalString(record[key]);
-}
-
-export function readNonEmptyStringArray(record: JsonObject, key: string): string[] {
-  const value = record[key];
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const entries: string[] = [];
-  for (const entry of value) {
-    const normalized = normalizeOptionalString(entry);
-    if (normalized) {
-      entries.push(normalized);
-    }
-  }
-  return entries;
 }
 
 export function readNullableString(record: JsonObject, key: string): string | null | undefined {
@@ -111,11 +147,6 @@ export function extractRawAssistantText(item: JsonObject): string | undefined {
     return value === undefined ? [] : [value];
   });
   return parts.length > 0 ? parts.join("").trim() : undefined;
-}
-
-export function readItemString(item: CodexThreadItem, key: string): string | undefined {
-  const value = (item as Record<string, unknown>)[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 export function readItem(value: JsonValue | undefined): CodexThreadItem | undefined {

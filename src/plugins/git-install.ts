@@ -1,5 +1,4 @@
 /** Parses, clones, verifies, and installs plugin packages from Git specs. */
-import "../infra/fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
@@ -270,7 +269,7 @@ async function withGitStagingDir<T>(
   }
   const targetParent = path.dirname(persistentRepoDir);
   try {
-    await fs.mkdir(targetParent, { recursive: true });
+    await fs.mkdir(targetParent, { recursive: true, mode: 0o700 });
   } catch {
     return await withInstallWorkspace("openclaw-git-plugin-", fn);
   }

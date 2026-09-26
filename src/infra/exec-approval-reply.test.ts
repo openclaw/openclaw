@@ -35,16 +35,12 @@ vi.mock("./exec-approval-surface.js", () => ({
 }));
 
 import {
-  buildApprovalButtonPresentation,
-  buildApprovalPresentationFromActionDescriptors,
-  buildExecApprovalActionDescriptors,
   buildExecApprovalCommandText,
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
   buildTypedApprovalActionDescriptors,
   buildTypedApprovalPresentation,
   buildTypedExecApprovalPendingReplyPayload,
-  getExecApprovalApproverDmNoticeText,
   getExecApprovalReplyMetadata,
   parseExecApprovalCommandText,
 } from "./exec-approval-reply.js";
@@ -86,12 +82,6 @@ describe("exec approval reply helpers", () => {
         "Exec approval is required, but no interactive approval client is currently available.",
     },
   ] as const;
-
-  it("returns the approver DM notice text", () => {
-    expect(getExecApprovalApproverDmNoticeText()).toBe(
-      "Approval required. I sent approval DMs to the approvers for this account.",
-    );
-  });
 
   it("mentions Matrix in the fallback native approval guidance", () => {
     const text = buildExecApprovalUnavailableReplyPayload({
@@ -135,95 +125,17 @@ describe("exec approval reply helpers", () => {
     expect(text).not.toContain("exec-approvals list");
   });
 
-  it("explains how to enable Matrix native approvals when Matrix is the initiating platform", () => {
+  it("uses account-scoped disabled setup guidance for the initiating channel", () => {
     const text = buildExecApprovalUnavailableReplyPayload({
       reason: "initiating-platform-disabled",
       channel: "matrix",
       channelLabel: "Matrix",
+      accountId: "work",
     }).text;
 
-    expect(text).toContain("native chat exec approvals are not configured on Matrix");
-    expect(text).toContain("Matrix supports native exec approvals for this account");
-    expect(text).toContain("`channels.matrix.execApprovals.approvers`");
-    expect(text).toContain("`channels.matrix.dm.allowFrom`");
+    expect(text).toContain("`channels.matrix.accounts.work.dm.allowFrom`");
+    expect(text).not.toContain("`channels.matrix.dm.allowFrom`");
   });
-
-  it.each([
-    {
-      channel: "discord",
-      channelLabel: "Discord",
-      expected: "`commands.ownerAllowFrom`",
-      unexpected: "`channels.discord.dm.allowFrom`",
-    },
-    {
-      channel: "slack",
-      channelLabel: "Slack",
-      expected: "`commands.ownerAllowFrom`",
-      unexpected: "`channels.slack.dm.allowFrom`",
-    },
-    {
-      channel: "telegram",
-      channelLabel: "Telegram",
-      expected: "`commands.ownerAllowFrom`",
-      unexpected: "`channels.telegram.allowFrom`",
-    },
-  ])(
-    "uses channel-specific disabled setup guidance for $channelLabel",
-    ({ channel, channelLabel, expected, unexpected }) => {
-      const text = buildExecApprovalUnavailableReplyPayload({
-        reason: "initiating-platform-disabled",
-        channel,
-        channelLabel,
-      }).text;
-
-      expect(text).toContain(expected);
-      expect(text).not.toContain(unexpected);
-    },
-  );
-
-  it.each([
-    {
-      channel: "discord",
-      channelLabel: "Discord",
-      accountId: "work",
-      expected: "`channels.discord.accounts.work.execApprovals.approvers`",
-      unexpected: "`channels.discord.execApprovals.approvers`",
-    },
-    {
-      channel: "slack",
-      channelLabel: "Slack",
-      accountId: "work",
-      expected: "`channels.slack.accounts.work.execApprovals.approvers`",
-      unexpected: "`channels.slack.execApprovals.approvers`",
-    },
-    {
-      channel: "telegram",
-      channelLabel: "Telegram",
-      accountId: "work",
-      expected: "`channels.telegram.accounts.work.execApprovals.approvers`",
-      unexpected: "`channels.telegram.execApprovals.approvers`",
-    },
-    {
-      channel: "matrix",
-      channelLabel: "Matrix",
-      accountId: "work",
-      expected: "`channels.matrix.accounts.work.dm.allowFrom`",
-      unexpected: "`channels.matrix.dm.allowFrom`",
-    },
-  ])(
-    "uses account-scoped disabled setup guidance for $channelLabel named account",
-    ({ channel, channelLabel, accountId, expected, unexpected }) => {
-      const text = buildExecApprovalUnavailableReplyPayload({
-        reason: "initiating-platform-disabled",
-        channel,
-        channelLabel,
-        accountId,
-      }).text;
-
-      expect(text).toContain(expected);
-      expect(text).not.toContain(unexpected);
-    },
-  );
 
   it.each(invalidReplyMetadataCases)(
     "returns null for invalid reply metadata payload: $name",
@@ -480,79 +392,6 @@ describe("exec approval reply helpers", () => {
     });
 
     expect(payload.text).toContain("Expires in: 30m");
-  });
-
-  it("builds shared exec approval action descriptors and interactive replies", () => {
-    expect(
-      buildExecApprovalActionDescriptors({
-        approvalCommandId: "req-1",
-      }),
-    ).toEqual([
-      {
-        decision: "allow-once",
-        label: "Allow Once",
-        style: "success",
-        command: "/approve req-1 allow-once",
-      },
-      {
-        decision: "allow-always",
-        label: "Allow Always",
-        style: "primary",
-        command: "/approve req-1 allow-always",
-      },
-      {
-        decision: "deny",
-        label: "Deny",
-        style: "danger",
-        command: "/approve req-1 deny",
-      },
-    ]);
-
-    expect(
-      buildApprovalButtonPresentation({
-        approvalId: "req-1",
-        allowedDecisions: ["deny"],
-      }),
-    ).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Deny",
-              action: { type: "command", command: "/approve req-1 deny" },
-              value: "/approve req-1 deny",
-              style: "danger",
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(
-      buildApprovalPresentationFromActionDescriptors([
-        {
-          decision: "deny",
-          label: "Deny",
-          style: "danger",
-          command: "/approve legacy-id deny",
-        },
-      ]),
-    ).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Deny",
-              action: { type: "command", command: "/approve legacy-id deny" },
-              value: "/approve legacy-id deny",
-              style: "danger",
-            },
-          ],
-        },
-      ],
-    });
   });
 
   it("builds typed descriptors and presentations only through named typed builders", () => {

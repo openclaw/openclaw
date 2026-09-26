@@ -16,13 +16,22 @@ import {
 const spawnSync = vi.hoisted(() =>
   vi.fn<(exe: string, args?: readonly string[]) => SpawnSyncReturns<string>>(),
 );
+const timeState = vi.hoisted(() => ({ now: 0 }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync,
 }));
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
+  sleep: async (ms: number) => {
+    timeState.now += ms;
+  },
+}));
 
 beforeEach(() => {
   resetSchtasksBaseMocks();
+  timeState.now = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
   spawnSync.mockReset();
   spawnSync.mockImplementation((exe: string) => ({
     pid: 0,
@@ -66,6 +75,8 @@ it.each([
         (err: unknown) => err,
       );
 
+      expect(timeState.now).toBe(5_000);
+      expect(inspectPortUsageMock).toHaveBeenCalledWith(18789, { probeHosts: ["127.0.0.1"] });
       expect(spawnSync.mock.calls.filter(([exe]) => /taskkill\.exe$/i.test(exe))).toEqual([]);
       expect(killProcessTreeMock).not.toHaveBeenCalled();
       expect(String(failure)).toContain("remaining listener ownership could not be verified");

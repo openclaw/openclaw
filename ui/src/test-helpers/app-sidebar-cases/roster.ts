@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  BUILTIN_THEMES,
+  type ThemeDescriptor,
+} from "../../../../packages/gateway-protocol/src/theme.ts";
+import { createThemeDefinitionFixture } from "../../../../test/helpers/theme-fixture.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "../../components/app-sidebar-session-types.ts";
@@ -14,6 +19,43 @@ import {
 } from "./roster.test-support.ts";
 
 describe("AppSidebar agent roster", () => {
+  it("updates the workspace mark when switching to and from a theme without a mascot", async () => {
+    const { sidebar, context, request } = await mountRoster();
+    await toggleRoster(sidebar);
+    const theme: ThemeDescriptor = {
+      id: "example/quiet",
+      name: "Quiet",
+      description: "Quiet workspace",
+      source: "plugin",
+      modes: ["dark"],
+      mascot: "none",
+    };
+    const original = request.getMockImplementation();
+    request.mockImplementation((...args) =>
+      args[0] === "themes.list"
+        ? {
+            themes: [...BUILTIN_THEMES, theme],
+            theme,
+            definition: { ...createThemeDefinitionFixture(), mascot: "none" },
+            current: { id: theme.id, mode: "dark", scope: "profile", overrides: {} },
+          }
+        : original?.(...args),
+    );
+    patchSettings({ theme: theme.id });
+    context.theme.refresh();
+    await vi.waitFor(() =>
+      expect(sidebar.querySelector(".sidebar-workspace-header__mark--neutral svg")).not.toBeNull(),
+    );
+    const header = sidebar.querySelector(".sidebar-workspace-header");
+    expect(header?.querySelector(".sidebar-workspace-header__mark--neutral svg")).not.toBeNull();
+    expect(header?.querySelector("img")).toBeNull();
+    expect(header?.textContent).toContain("OpenClaw");
+    patchSettings({ theme: "claw" });
+    context.theme.refresh();
+    await sidebar.updateComplete;
+    expect(header?.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
+  });
+
   it.each([undefined, "Studio workspace", "   "])(
     "shows workspace identity for configured name %s and restores the agent chip",
     async (name) => {

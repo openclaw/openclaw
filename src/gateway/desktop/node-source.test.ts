@@ -113,6 +113,7 @@ function createFixture(boundary: "activation" | "pairing" | "attachment") {
   return {
     service,
     nodeRegistry,
+    desktopRegistry,
     reached: reached.promise,
     release: release.resolve,
     attached,
@@ -191,6 +192,47 @@ describe("node desktop runtime policy", () => {
       }
     },
   );
+
+  it.each([false, true])("expires only unclaimed streams (claimed=%s)", async (claimed) => {
+    vi.useFakeTimers();
+    const fixture = createFixture("attachment");
+    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+    const invoke = vi.spyOn(fixture.nodeRegistry, "invoke");
+    const stream = new PassThrough();
+    try {
+      const observing = fixture.service.observe({
+        nodeId: "node",
+        control: false,
+        credentials: { password: "synthetic-password" },
+      });
+      await fixture.reached;
+      fixture.attached.resolve({ stream, auth: "vnc-password" });
+      const observed = await observing;
+      const token = mint.mock.calls[0]![0];
+      if (claimed) {
+        if (token.attachment.kind !== "stream") {
+          throw new Error("expected a streamed node desktop");
+        }
+        expect(fixture.desktopRegistry.claimStream(token.sourceKey, token.attachment)).toBe(stream);
+        expect(
+          fixture.desktopRegistry.attachObserver(token.sourceKey, {
+            ownerEpoch: token.ownerEpoch,
+            control: false,
+            close: () => {},
+          }),
+        ).toBeDefined();
+      }
+      await vi.advanceTimersByTimeAsync(observed.expiresAtMs - Date.now());
+      expect(stream.destroyed).toBe(!claimed);
+      expect(fixture.desktopRegistry.hasActivity(token.sourceKey, token.ownerEpoch)).toBe(claimed);
+      if (!claimed) {
+        await expect(invoke.mock.results[0]!.value).resolves.toMatchObject({ ok: false });
+      }
+    } finally {
+      await fixture.service.stopNode("node");
+      vi.useRealTimers();
+    }
+  });
 
   it.each(["activation", "pairing"] as const)(
     "does not dispatch after the requesting connection closes during %s",

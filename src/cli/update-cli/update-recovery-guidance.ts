@@ -2,7 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
   formatUpdateActivationTimeoutGuidance,
   UPDATE_ACTIVATION_TIMEOUT_REASON,
@@ -37,6 +37,8 @@ export function resolveUpdateResultNextAction(params: {
   runningVersion?: string;
   verificationFailure?: string;
   env: NodeJS.ProcessEnv;
+  /** Prepared before ledger writes so formatting performs no filesystem discovery. */
+  environment?: { container: boolean; stateDir: string };
 }): string | undefined {
   const { result, env } = params;
   if (isUpdateGatewayReadinessPending(result)) {
@@ -53,6 +55,14 @@ export function resolveUpdateResultNextAction(params: {
     return UPDATE_INSTALL_SKIP_GUIDANCE[result.reason];
   }
   if (result.status === "error") {
+    if (
+      result.reason === "update-failed" &&
+      !result.recovery &&
+      (result.failedStep?.name === "requested" ||
+        result.failedStep?.name === "installation-inspection")
+    ) {
+      return `Update stopped before staging. Retry the same update command. If the failure persists, run \`${formatCliCommand("openclaw triage", env)}\` to inspect the recorded failure.`;
+    }
     if (result.reason === UPDATE_ACTIVATION_TIMEOUT_REASON) {
       return formatUpdateActivationTimeoutGuidance((command) => formatCliCommand(command, env));
     }
@@ -92,7 +102,7 @@ export function resolveUpdateResultNextAction(params: {
                 failedStep.name,
               ) &&
               /\beacces\b/i.test(failedStep.stderrTail ?? ""))))) &&
-      isContainerEnvironment();
+      (params.environment?.container ?? isContainerEnvironment());
     // Record deployment-specific advice here so CLI output and later reports agree.
     // Keep the recovery constraints: an image change must not roll back migrated state.
     const deployment = containerPackageFailure
@@ -116,7 +126,7 @@ export function resolveUpdateResultNextAction(params: {
     if (params.restart === false && result.postUpdate?.plugins?.changed) {
       return `Plugins updated; Gateway restart skipped (--no-restart). Run \`${command("openclaw gateway restart")}\` to activate them in the running Gateway.`;
     }
-    return `After verifying your history, preview recovery rollback retirement with ${command("openclaw update cleanup --dry-run")} for state ${resolveStateDir(env)}. Keep the same state/config overrides.`;
+    return `After verifying your history, preview recovery rollback retirement with ${command("openclaw update cleanup --dry-run")} for state ${params.environment?.stateDir ?? resolveStateDir(env)}. Keep the same state/config overrides.`;
   }
   return undefined;
 }

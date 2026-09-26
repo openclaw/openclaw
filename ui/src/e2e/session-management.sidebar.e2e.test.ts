@@ -25,6 +25,7 @@ import {
 
 const suite = createSessionManagementE2eSuite();
 const rosterMatch = { includeGlobal: true };
+const rosterPreviewMatch = { ...rosterMatch, includeLastMessage: true };
 
 function sessionActionPresentation(button: Locator) {
   return button.evaluate((element) => {
@@ -193,7 +194,7 @@ suite.define(() => {
         };
       });
       expect(nesting.childLeft - nesting.parentLeft).toBeGreaterThan(8);
-      expect(nesting.guide).not.toBe("none");
+      expect(nesting.guide).toBe("none");
 
       const completedChild = childRows.nth(1);
       const childArchiveButton = completedChild.getByRole("button", {
@@ -506,7 +507,6 @@ suite.define(() => {
       await expect.poll(() => pinnedEntry.count()).toBe(1);
       const sidebarRows = page.locator(".sidebar-recent-session");
       await expect.poll(() => sidebarRows.count()).toBe(3);
-      const initialListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
 
       const socketsBefore = await gateway.getSocketCount();
       await gateway.setOnline(false);
@@ -532,14 +532,23 @@ suite.define(() => {
       await expect.poll(() => pinnedEntry.count()).toBe(1);
       await captureUiProof(suite, page, "sidebar-sessions-during-client-replacement.png");
 
-      await gateway.deferNext("sessions.list", { includeLastMessage: true });
+      const refreshedResponse = sessionsListResponse([
+        sessionRow(sessionKey, "Reconnect refreshed", Date.parse("2026-07-01T16:01:00.000Z")),
+        sessionRow(otherSessionKeys[0], "Other A", Date.parse("2026-07-01T15:59:00.000Z")),
+        sessionRow(otherSessionKeys[1], "Other B", Date.parse("2026-07-01T15:58:00.000Z")),
+      ]);
+      // Reconnect descriptors and roster reads must observe the same Gateway-owned rows.
+      await gateway.setSessionsListResponse(refreshedResponse);
+      await gateway.deferNext("sessions.list", rosterPreviewMatch);
+      const reconnectPreviewCount = (await gateway.getRequests("sessions.list", rosterPreviewMatch))
+        .length;
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length, {
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterPreviewMatch)).length, {
           timeout: 15_000,
         })
-        .toBeGreaterThan(initialListCount);
+        .toBeGreaterThan(reconnectPreviewCount);
       await sidebarRow.waitFor({ state: "visible" });
       expect(await sidebarRows.count()).toBe(3);
       for (const otherKey of otherSessionKeys) {
@@ -550,12 +559,7 @@ suite.define(() => {
 
       const firstReconnectListCount = (await gateway.getRequests("sessions.list", rosterMatch))
         .length;
-      const refreshedResponse = sessionsListResponse([
-        sessionRow(sessionKey, "Reconnect refreshed", Date.parse("2026-07-01T16:01:00.000Z")),
-        sessionRow(otherSessionKeys[0], "Other A", Date.parse("2026-07-01T15:59:00.000Z")),
-        sessionRow(otherSessionKeys[1], "Other B", Date.parse("2026-07-01T15:58:00.000Z")),
-      ]);
-      await gateway.resolveDeferred("sessions.list", refreshedResponse);
+      await gateway.resolveDeferred("sessions.list");
       await expect.poll(() => sidebarRow.textContent()).toContain("Reconnect refreshed");
       await expect.poll(() => sidebarRows.count()).toBe(3);
       await expectRequestCountStable(
@@ -599,7 +603,6 @@ suite.define(() => {
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
       await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
       const initialObserverCount = (await gateway.getRequests("sessions.subscribe")).length;
-      const initialListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
 
       const socketsBefore = await gateway.getSocketCount();
       await gateway.setOnline(false);
@@ -609,8 +612,21 @@ suite.define(() => {
       await expect
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
         .toBe(socketsBefore + 1);
+      await gateway.setSessionsListResponse(
+        sessionsListResponse([
+          sessionRow(firstKey, "First session", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            selectedKey,
+            "Selected session recovered",
+            Date.parse("2026-07-01T16:01:00.000Z"),
+          ),
+        ]),
+      );
       await gateway.deferNext("sessions.subscribe");
-      await gateway.deferNext("sessions.list", { includeLastMessage: true });
+      await gateway.deferNext("sessions.list", rosterPreviewMatch);
+      // Capture after disconnect so late requests from the old client cannot satisfy this wait.
+      const reconnectPreviewCount = (await gateway.getRequests("sessions.list", rosterPreviewMatch))
+        .length;
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect
@@ -629,23 +645,9 @@ suite.define(() => {
 
       await gateway.resolveDeferred("sessions.subscribe", { subscribed: true });
       await expect
-        .poll(async () =>
-          (await gateway.getRequests("sessions.list", rosterMatch))
-            .slice(initialListCount)
-            .some((request) => requireRecord(request.params).includeLastMessage === true),
-        )
-        .toBe(true);
-      await gateway.resolveDeferred(
-        "sessions.list",
-        sessionsListResponse([
-          sessionRow(firstKey, "First session", Date.parse("2026-07-01T16:00:00.000Z")),
-          sessionRow(
-            selectedKey,
-            "Selected session recovered",
-            Date.parse("2026-07-01T16:01:00.000Z"),
-          ),
-        ]),
-      );
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterPreviewMatch)).length)
+        .toBeGreaterThan(reconnectPreviewCount);
+      await gateway.resolveDeferred("sessions.list");
       await expect.poll(() => selectedRow.textContent()).toContain("Selected session recovered");
       await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
       await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);

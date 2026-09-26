@@ -7,12 +7,16 @@ export type TaskCancellationTarget = Readonly<
   Pick<TaskRecord, "taskId" | "scopeKind" | "ownerKey" | "requesterAgentId">
 >;
 
-export type TaskCancellationControl = { assertCurrent: () => void };
+export type TaskCancellationControl = {
+  prepareRead?: () => Promise<void> | undefined;
+  assertCurrent: () => void;
+};
 
 type TaskCancellationContext = {
   isActive: () => boolean;
   assertSelected: (task: TaskRecord | undefined) => void;
   assertCurrent: (task: TaskCancellationTarget) => void;
+  prepareRead: () => Promise<void> | undefined;
 };
 
 function captureTaskSelection(task: TaskRecord) {
@@ -38,16 +42,28 @@ const contexts = resolveGlobalSingleton(Symbol.for("openclaw.taskCancellationCon
 export async function withTaskCancellationContext<T>(
   assertCurrent: (task: TaskCancellationTarget) => void,
   operation: () => Promise<T>,
-  selectedTask?: TaskRecord,
+  options: {
+    selectedTask?: TaskRecord;
+    prepareRead?: () => Promise<void> | undefined;
+  } = {},
 ): Promise<T> {
   const parent = contexts.caller.getStore();
   const inherited = parent?.isActive() ? parent : undefined;
   const inheritedControl = inherited ? contexts.prepared.getStore() : undefined;
-  const selected = selectedTask && captureTaskSelection(selectedTask);
-  const selectedBacking = selectedTask && readTaskBackingInstance(selectedTask.detail);
+  const selected = options.selectedTask && captureTaskSelection(options.selectedTask);
+  const selectedBacking =
+    options.selectedTask && readTaskBackingInstance(options.selectedTask.detail);
   let active = true;
   const context: TaskCancellationContext = {
     isActive: () => active,
+    prepareRead: () => {
+      if (!active) {
+        throw new Error("Cancellation is no longer authorized.");
+      }
+      return (
+        inheritedControl?.prepareRead?.() ?? inherited?.prepareRead() ?? options.prepareRead?.()
+      );
+    },
     assertSelected: (task) => {
       inherited?.assertSelected(task);
       if (!selected) {
@@ -88,6 +104,12 @@ export async function withTaskCancellationContext<T>(
   }
 }
 
+/** Undefined keeps ready callers in the current frame; consumers recheck after a pending read. */
+export function prepareTaskCancellationRead(): Promise<void> | undefined {
+  const prepared = contexts.prepared.getStore();
+  return prepared ? prepared.prepareRead?.() : contexts.caller.getStore()?.prepareRead();
+}
+
 /** Bind the assertion to the cancellation owner's task snapshot before it yields. */
 export function prepareTaskCancellationControl(
   task: TaskRecord | undefined,
@@ -104,6 +126,7 @@ export function prepareTaskCancellationControl(
     requesterAgentId: task.requesterAgentId,
   };
   return {
+    prepareRead: context.prepareRead,
     assertCurrent: () => {
       if (!target) {
         throw new Error("Task is no longer available for cancellation.");

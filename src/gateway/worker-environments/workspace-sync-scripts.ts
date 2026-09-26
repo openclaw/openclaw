@@ -2,8 +2,7 @@ import { STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
 import {
   MAX_WORKSPACE_HASH_MEMO_BYTES,
   MAX_WORKSPACE_HASH_MEMO_ENTRIES,
-  selectWorkerWorkspaceHashMemoEntries,
-  workspaceStatIdentity,
+  WORKSPACE_HASH_MEMO_JS,
 } from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_GIT_CANDIDATES,
@@ -80,8 +79,7 @@ const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 ${WORKSPACE_PATH_EXCLUSIONS_JS}
-const workspaceStatIdentity = ${workspaceStatIdentity.toString()};
-const selectWorkerWorkspaceHashMemoEntries = ${selectWorkerWorkspaceHashMemoEntries.toString()};
+${WORKSPACE_HASH_MEMO_JS}
 const MAX_WORKSPACE_HASH_MEMO_ENTRIES = ${MAX_WORKSPACE_HASH_MEMO_ENTRIES};
 const MAX_WORKSPACE_HASH_MEMO_BYTES = ${maxHashMemoBytes};
 const root = fs.realpathSync(process.argv[1]);

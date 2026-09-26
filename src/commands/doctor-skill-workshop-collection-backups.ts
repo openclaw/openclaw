@@ -9,7 +9,6 @@ import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identit
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pathExists } from "../infra/fs-safe.js";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { isPathStrictlyInside } from "../infra/path-guards.js";
 import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
 import { resolveSkillManifestMetadata } from "../skills/loading/frontmatter.js";
@@ -19,8 +18,10 @@ import type { CollectionBackupManifest } from "../skills/workshop/collection-bac
 import { resolveSkillCollectionBackupRoot } from "../skills/workshop/collection-paths.js";
 import { readSkillCollectionBackupDrops } from "../skills/workshop/collection-review-state.js";
 import { readSkillProposalTargetTreeSha256 } from "../skills/workshop/proposal-bundle.js";
-import { parseSkillProposalRow } from "../skills/workshop/store-sqlite-record.js";
-import { openSkillWorkshopStore } from "../skills/workshop/store-sqlite-schema.js";
+import {
+  captureSkillWorkshopStoreOptions,
+  executeSkillWorkshopOperation,
+} from "../skills/workshop/store-client.js";
 import { resolveSkillProposalTarget } from "../skills/workshop/store.js";
 
 const LEGACY_COLLECTION_BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
@@ -429,19 +430,20 @@ async function findUnownedLegacyCollectionBackupDirs(
   const unownedDirs = new Set(backup.sourceDirs.values());
   const backedUpDirs = new Set(backup.manifest.skillDirs);
   const resultDirs = new Set(backup.manifest.resultSkillDirs);
-  const droppedNames = readSkillCollectionBackupDrops(ownerAgentId, backup.manifest.id, { env });
-  const { database, kysely } = openSkillWorkshopStore({ env });
-  const appliedCreates = executeSqliteQuerySync(
-    database.db,
-    kysely
-      .selectFrom("skill_workshop_proposals")
-      .selectAll()
-      .where("owner_agent_id", "=", ownerAgentId)
-      .where("kind", "=", "create"),
-  ).rows.flatMap((row) => {
-    const record = parseSkillProposalRow(row);
-    return record?.appliedAt !== undefined ? [record] : [];
-  });
+  const store = captureSkillWorkshopStoreOptions({ env });
+  const droppedNames = await readSkillCollectionBackupDrops(
+    ownerAgentId,
+    backup.manifest.id,
+    store,
+  );
+  const stored = await executeSkillWorkshopOperation(
+    "workshop.proposals.list",
+    { agentId: ownerAgentId, kind: "create" },
+    store,
+  );
+  const appliedCreates = stored.flatMap(({ record }) =>
+    record.appliedAt !== undefined ? [record] : [],
+  );
   const maxSkillFileBytes = resolveSkillDiscoveryLimits(config).maxSkillFileBytes;
   for (const [relativeDir, sourceDir] of backup.sourceDirs) {
     const legacyPath = path.resolve(backup.workspaceDir, sourceDir);

@@ -8,12 +8,14 @@ import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   releaseSnapshotTempDirectory,
   removeTempDirectory,
   removeTempDirectoryAsync,
 } from "./sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
+import { sqliteSnapshotStagingEntrypoints } from "./sqlite-snapshot-staging-runtime.test-support.js";
 import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
@@ -36,10 +38,15 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     }
   });
 });
-const nodeArguments = ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e"];
-const snapshotModule = new URL("./sqlite-readonly-location.ts", import.meta.url).href;
-const stagingModule = new URL("./sqlite-snapshot-staging.ts", import.meta.url).href;
-const loggerModule = new URL("../logging/logger.ts", import.meta.url).href;
+const snapshotUrl = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.snapshot);
+const nodeArguments = [
+  ...resolveRuntimeWorkerArgv(snapshotUrl).slice(0, -1),
+  "--input-type=module",
+  "-e",
+];
+const snapshotModule = snapshotUrl.href;
+const stagingModule = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.staging).href;
+const loggerModule = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.logger).href;
 
 beforeAll(async () => {
   // Prepare worker artifacts before measuring the reclamation operation.
@@ -152,7 +159,8 @@ it("reconciles a released fresh token without waiting for idle reclamation", () 
     expect(() =>
       openOpenClawStateReadConnection(source, location, undefined, owned.directory),
     ).toThrow("parent retired");
-    expect(fs.readFileSync(location)).toEqual(fs.readFileSync(source));
+    // Reconciliation owns payload cleanup after the staging worker has exited.
+    expect(fs.existsSync(location)).toBe(false);
   } finally {
     owned.release();
     removeTempDirectory(owned.directory);

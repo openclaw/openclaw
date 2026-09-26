@@ -21,7 +21,10 @@ import type {
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 export function completeConfiguredRuntimeModels(
-  agentFacts: PreparedModelRuntimeAgentFacts,
+  agentFacts: Pick<
+    PreparedModelRuntimeAgentFacts,
+    "input" | "env" | "configuredModelRefs" | "configuredRuntimeModels"
+  >,
   pluginGeneration: PreparedModelRuntimePluginGeneration,
   modelRegistry: ModelRegistry,
 ): readonly PreparedConfiguredRuntimeModel[] {

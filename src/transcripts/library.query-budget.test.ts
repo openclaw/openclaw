@@ -29,6 +29,10 @@ import {
   readTranscriptEntry,
   readTranscriptLibraryEntry,
 } from "./store-read.js";
+import {
+  readTranscriptSessionMatches,
+  readTranscriptSummarySnapshot,
+} from "./store-sqlite-read.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -60,9 +64,13 @@ function observeArchiveReads(
   vi.spyOn(store, "readLibraryEntry").mockImplementation(async (params) =>
     readTranscriptLibraryEntry(database, params),
   );
+  vi.spyOn(store, "readSummarySnapshot").mockImplementation(async (descriptor, maxUtterances) =>
+    readTranscriptSummarySnapshot(database, descriptor, maxUtterances),
+  );
   clearNodeSqliteKyselyCacheForDatabase(database);
   const queries: Array<{
     sql: string;
+    executions: number;
     rows: number;
     bytes: number;
     maxRowBytes: number;
@@ -82,7 +90,7 @@ function observeArchiveReads(
     ) {
       return statement;
     }
-    const record = { sql, rows: 0, bytes: 0, maxRowBytes: 0, closed: false };
+    const record = { sql, executions: 0, rows: 0, bytes: 0, maxRowBytes: 0, closed: false };
     queries.push(record);
     const observeRow = (row: Record<string, unknown>) => {
       const bytes = Object.values(row).reduce<number>(
@@ -93,10 +101,22 @@ function observeArchiveReads(
       record.bytes += bytes;
       record.maxRowBytes = Math.max(record.maxRowBytes, bytes);
     };
+    const nativeAll = statement.all.bind(statement);
+    vi.spyOn(statement, "all").mockImplementation((...parameters) => {
+      record.executions++;
+      try {
+        const rows = nativeAll(...parameters);
+        rows.forEach(observeRow);
+        return rows;
+      } finally {
+        record.closed = true;
+      }
+    });
     const nativeGet = statement.get.bind(statement);
     vi.spyOn(statement, "get").mockImplementation(
       new Proxy(nativeGet, {
         apply(get, _receiver, parameters) {
+          record.executions++;
           try {
             const row = get(...parameters);
             if (row) {
@@ -111,6 +131,7 @@ function observeArchiveReads(
     );
     const iterate = statement.iterate.bind(statement);
     vi.spyOn(statement, "iterate").mockImplementation((...parameters) => {
+      record.executions++;
       const iterator = iterate(...parameters);
       const next = iterator.next.bind(iterator);
       vi.spyOn(iterator, "next").mockImplementation(() => {
@@ -137,6 +158,73 @@ function observeArchiveReads(
 }
 
 describe("transcript library SQLite query budgets", () => {
+  it("matches identities and summary presence without per-match reads or export bookkeeping", async () => {
+    const { store, database } = fixture();
+    const first = session("review");
+    const later = session("review", { startedAt: "2026-08-21T10:00:00.000Z" });
+    const collision = session("review?", { startedAt: "2026-08-22T10:00:00.000Z" });
+    for (const target of [first, later, collision]) {
+      await store.writeSession(target);
+    }
+    const db = database();
+    executeSqliteQuerySync(
+      db,
+      meetingTranscriptDb(db)
+        .updateTable("meeting_transcript_sessions")
+        .set({
+          export_manifest_json: JSON.stringify({ "retained-export.md": "x".repeat(16_384) }),
+          export_pending_json: JSON.stringify(["x".repeat(16_384)]),
+        }),
+    );
+    executeSqliteQuerySync(
+      db,
+      meetingTranscriptDb(db)
+        .insertInto("meeting_transcript_summaries")
+        .values(
+          [first, collision].map((target) => ({
+            session_id: target.sessionId,
+            session_started_at: target.startedAt,
+            summary_json: "{malformed",
+            utterance_count: 0,
+          })),
+        ),
+    );
+    const reads = observeArchiveReads(store, db);
+    const matches = readTranscriptSessionMatches(db, "review");
+    expect(matches.qualified).toEqual([]);
+    expect(matches.unqualified).toMatchObject([
+      { session: later, hasSummary: false },
+      { session: first, hasSummary: true },
+      { session: collision, hasSummary: true },
+    ]);
+    expect(reads.reduce((count, read) => count + read.executions, 0)).toBeLessThanOrEqual(3);
+    expect(reads.reduce((bytes, read) => bytes + read.bytes, 0)).toBeLessThan(2_048);
+  });
+
+  it("keeps export bookkeeping out of summary snapshot reads", async () => {
+    const { store, database } = fixture();
+    const target = session("summary-snapshot");
+    await store.writeSession(target);
+    await store.appendUtteranceForSession(target, { text: "Summarize this speech" });
+    const db = database();
+    executeSqliteQuerySync(
+      db,
+      meetingTranscriptDb(db)
+        .updateTable("meeting_transcript_sessions")
+        .set({
+          export_manifest_json: JSON.stringify({ "retained-export.md": "x".repeat(16_384) }),
+          export_pending_json: JSON.stringify(["x".repeat(16_384)]),
+        }),
+    );
+    const reads = observeArchiveReads(store, db);
+    expect(await store.readSummarySnapshot(target, 20)).toMatchObject({
+      nextSequence: 1,
+      summaryRevision: "",
+      utterances: [{ text: "Summarize this speech" }],
+    });
+    expect(reads.some((read) => read.rows > 0)).toBe(true);
+    expect(reads.reduce((bytes, read) => bytes + read.bytes, 0)).toBeLessThan(2_048);
+  });
   it("stops active status descriptor reads when the public result budget is consumed", async () => {
     const { store, database } = fixture();
     for (let index = 0; index < 6; index++) {
@@ -148,7 +236,10 @@ describe("transcript library SQLite query budgets", () => {
         appends: createTranscriptCaptureAppends(() => {}),
         session: target,
         providerId: target.source.providerId,
-        provider: {},
+        stopProvider: async () => {
+          throw new Error("Reading transcript status must not stop capture");
+        },
+        releaseProvider: async () => {},
         phase: "active",
       });
     }

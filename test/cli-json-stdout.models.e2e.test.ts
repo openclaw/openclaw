@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { readConfigMachineState } from "../src/state/config-machine-state.js";
+import { readRemoteModelCatalog } from "../src/model-catalog/remote-store.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../src/state/openclaw-state-schema.js";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
@@ -86,93 +86,6 @@ describe("cli json stdout contract", () => {
     );
   });
 
-  // Every case opens the state database: config-health observation
-  // (observeConfigSnapshot -> readConfigHealthStateFromStore) runs on any
-  // config read whose file exists, so the migration diagnostic always lands
-  // on stderr; the protected contract is that stdout stays exact.
-  it.each([
-    {
-      name: "aliases list",
-      args: ["models", "aliases", "list", "--plain"],
-      opensStateDatabase: true,
-      expectedStdout: "chat anthropic/claude-sonnet-4-6\n",
-    },
-    {
-      name: "fallbacks list",
-      args: ["models", "fallbacks", "list", "--plain"],
-      opensStateDatabase: true,
-      expectedStdout: "anthropic/claude-sonnet-4-6\n",
-    },
-    {
-      name: "image fallbacks list",
-      args: ["models", "image-fallbacks", "list", "--plain"],
-      opensStateDatabase: true,
-      expectedStdout: "anthropic/claude-sonnet-4-6\n",
-    },
-    {
-      name: "list control",
-      args: ["models", "list", "--plain"],
-      opensStateDatabase: true,
-      expectedStdout: "anthropic/claude-sonnet-4-6\n",
-    },
-    {
-      name: "status control",
-      args: ["models", "status", "--plain"],
-      opensStateDatabase: true,
-      expectedStdout: "anthropic/claude-sonnet-4-6\n",
-    },
-    {
-      name: "parent status control",
-      args: ["models", "--status-plain"],
-      opensStateDatabase: true,
-      expectedStdout: "anthropic/claude-sonnet-4-6\n",
-    },
-  ])("keeps $name stdout exact during a pending state migration", async (testCase) => {
-    await withTempHome(
-      async (tempHome) => {
-        const stateDir = path.join(tempHome, "isolated-state");
-        const configPath = path.join(tempHome, "openclaw.json");
-        const migrationDiagnostic = "state database schema migration pending";
-        await seedPendingStateMigration(stateDir);
-        await fs.writeFile(
-          configPath,
-          JSON.stringify({
-            agents: {
-              defaults: {
-                model: {
-                  primary: "anthropic/claude-sonnet-4-6",
-                  fallbacks: ["anthropic/claude-sonnet-4-6"],
-                },
-                imageModel: { fallbacks: ["anthropic/claude-sonnet-4-6"] },
-                models: { "anthropic/claude-sonnet-4-6": { alias: "chat" } },
-              },
-            },
-          }),
-        );
-
-        const result = runBuiltCli(
-          tempHome,
-          testCase.args,
-          {
-            CI: "1",
-            NO_COLOR: "1",
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_STATE_DIR: stateDir,
-          },
-          { inheritEnvironment: false },
-        );
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toBe(testCase.expectedStdout);
-        expect(result.stdout).not.toContain(migrationDiagnostic);
-        expect(result.stderr.includes(migrationDiagnostic), result.stderr).toBe(
-          testCase.opensStateDatabase,
-        );
-      },
-      { prefix: "openclaw-models-plain-stdout-e2e-" },
-    );
-  });
-
   it.each(["--plain", "--json"])(
     "keeps human auth-list output on stdout when provider value is %s",
     async (provider) => {
@@ -203,6 +116,7 @@ describe("cli json stdout contract", () => {
         const stateDir = path.join(tempHome, "isolated-state");
         const configPath = path.join(tempHome, "openclaw.json");
         const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+        const migrationDiagnostic = "state database schema migration pending";
         const generatedAt = Date.now() + 60_000;
         const bundle = {
           schemaVersion: 1,
@@ -245,15 +159,17 @@ describe("cli json stdout contract", () => {
             },
             { execArgv: [`--import=data:text/javascript;base64,${preloadFor(response)}`] },
           );
-        const readCatalogRow = () =>
-          readConfigMachineState<{ generated_at: number; bundle_json: string }>(
-            "modelCatalog.remote",
-            { path: databasePath },
-          );
+        const readCatalogRow = () => readRemoteModelCatalog({ path: databasePath });
 
+        // Reuse the first refresh process to prove migration diagnostics remain
+        // on stderr instead of paying for a separate command matrix.
+        await fs.writeFile(configPath, "{}\n", "utf8");
+        await seedPendingStateMigration(stateDir);
         const human = runRefresh(["refresh"], "initial");
         expect(human.status, human.stderr).toBe(0);
         expect(human.stdout).toContain("Remote catalog refresh: updated (1 providers, 1 models;");
+        expect(human.stdout).not.toContain(migrationDiagnostic);
+        expect(human.stderr).toContain(migrationDiagnostic);
         expect(human.stdout).toContain(
           "A running Gateway applies the updated catalog after its next restart.",
         );

@@ -141,7 +141,7 @@ describe("conversation-owned preview processes", () => {
         sequence: 1,
         retain: [],
       },
-      () => [],
+      async () => [],
     );
     expect(fs.existsSync(launched.workspaceDir)).toBe(true);
     expect((await fetch(url)).ok).toBe(true);
@@ -156,7 +156,7 @@ describe("conversation-owned preview processes", () => {
         sequence: 2,
         retain: [],
       },
-      () => [],
+      async () => [],
     );
     expect(fs.existsSync(launched.workspaceDir)).toBe(false);
   });

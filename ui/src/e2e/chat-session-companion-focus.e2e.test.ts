@@ -1,4 +1,6 @@
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import {
@@ -186,7 +188,8 @@ suite.define(() => {
         await mainInput.press("Enter");
         const request = await gateway.waitForRequest("sessions.companion.ask");
         expect(request.params).toMatchObject({ question: "what is this?" });
-        await expect.poll(() => input.isDisabled()).toBe(true);
+        await page.locator(".chat-session-rail__exchange--pending").waitFor();
+        expect(await input.isDisabled()).toBe(false);
         await gateway.resolveDeferred("sessions.companion.ask", {
           answer: "A side conversation.",
           ts: 1,
@@ -222,7 +225,8 @@ suite.define(() => {
         const sideInput = panes
           .first()
           .getByRole("textbox", { name: "Ask in side chat", exact: true });
-        await expect.poll(() => sideInput.isDisabled()).toBe(true);
+        await page.locator(".chat-session-rail__exchange--pending").waitFor();
+        expect(await sideInput.isDisabled()).toBe(false);
         await secondInput.fill("Keep typing here");
         const foregroundInput = returnToFirstPane ? firstInput : secondInput;
         if (returnToFirstPane) {
@@ -275,7 +279,9 @@ suite.define(() => {
       await mainInput.press("Enter");
       const request = await gateway.waitForRequest("sessions.companion.ask");
       expect(request.params).toMatchObject({ agentId: "main", sessionKey: "global" });
-      await expect.poll(() => sideInput.isDisabled()).toBe(true);
+      await page.locator(".chat-session-rail__exchange--pending").waitFor();
+      expect(await sideInput.isDisabled()).toBe(false);
+      await mainInput.focus();
       // The shared selection owner also publishes background roster reconciliation.
       await page.evaluate(() => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -335,11 +341,12 @@ suite.define(() => {
           await held.request;
           expect(await sideInput.count()).toBe(0);
         } else {
-          await expect.poll(() => sideInput.isDisabled()).toBe(true);
+          await page.locator(".chat-session-rail__exchange--pending").waitFor();
+          expect(await sideInput.isDisabled()).toBe(false);
         }
-        expect(await mainInput.evaluate((element) => document.activeElement === element)).toBe(
-          true,
-        );
+        // Side chat is now editable and can receive the initial focus handoff.
+        // Reclaim the main composer before testing newer foreground intent.
+        await mainInput.focus();
         let foregroundInput = mainInput;
         if (intent === "click") {
           await mainInput.click();
@@ -393,27 +400,42 @@ suite.define(() => {
     });
   });
 
-  it("does not steal focus back when the side-chat history finishes loading", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.companion.state"],
+  it.each(["main", "side"])(
+    "preserves the %s draft and focus when side-chat history loads",
+    async (target) => {
+      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          deferredMethods: ["sessions.companion.state"],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("sessions.companion.state");
+        await openChatSidePanelType(page, "Side chat");
+        const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
+        await expect
+          .poll(() => input.evaluate((element) => document.activeElement === element))
+          .toBe(true);
+        const mainInput = page.locator(".agent-chat__composer-shell textarea");
+        const draftInput = target === "main" ? mainInput : input;
+        await draftInput.fill("Keep typing here");
+        await gateway.resolveDeferred("sessions.companion.state", {
+          exchanges: [{ question: "What changed?", answer: "The introduction is ready.", ts: 1 }],
+        });
+        await page.getByText("The introduction is ready.", { exact: true }).waitFor();
+        expect(await draftInput.evaluate((element) => document.activeElement === element)).toBe(
+          true,
+        );
+        await page.keyboard.type(".");
+        expect(await draftInput.inputValue()).toBe("Keep typing here.");
+        if (target === "side" && process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+          await page.screenshot({
+            path: path.join(
+              createControlUiE2eArtifactDir("side-chat-history"),
+              "history-after.png",
+            ),
+            animations: "disabled",
+          });
+        }
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("sessions.companion.state");
-      await openChatSidePanelType(page, "Side chat");
-      const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
-      await expect
-        .poll(() => input.evaluate((element) => document.activeElement === element))
-        .toBe(true);
-      const mainInput = page.locator(".agent-chat__composer-shell textarea");
-      await mainInput.fill("Keep typing here");
-      await gateway.resolveDeferred("sessions.companion.state", {
-        exchanges: [{ question: "What changed?", answer: "The introduction is ready.", ts: 1 }],
-      });
-      await page.getByText("The introduction is ready.", { exact: true }).waitFor();
-      expect(await mainInput.evaluate((element) => document.activeElement === element)).toBe(true);
-      await page.keyboard.type(".");
-      expect(await mainInput.inputValue()).toBe("Keep typing here.");
-    });
-  });
+    },
+  );
 });

@@ -6,7 +6,7 @@ import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import { i18n } from "../../i18n/index.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
-import { renderAgentFiles } from "./panels-status-files.ts";
+import { renderAgentFiles } from "./panels-files.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;

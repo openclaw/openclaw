@@ -21,7 +21,6 @@ final class ScreenRecordService: @unchecked Sendable {
         var writer: AVAssetWriter?
         var videoInput: AVAssetWriterInput?
         var audioInput: AVAssetWriterInput?
-        var started = false
         var sawVideo = false
         var lastVideoTime: CMTime?
         var handlerError: Error?
@@ -395,9 +394,7 @@ final class ScreenRecordService: @unchecked Sendable {
             self.prepareWriter(sample: sample, state: state, config: config, pts: pts)
         }
 
-        let vInput = state.withLock { $0.videoInput }
-        let isStarted = state.withLock { $0.started }
-        guard let vInput, isStarted else { return }
+        guard let vInput = state.withLock({ $0.videoInput }) else { return }
         if vInput.isReadyForMoreMediaData {
             if vInput.append(sample) {
                 state.withLock { state in
@@ -466,7 +463,6 @@ final class ScreenRecordService: @unchecked Sendable {
             state.withLock { state in
                 state.writer = writer
                 state.videoInput = vInput
-                state.started = true
             }
         } catch {
             state.withLock { state in
@@ -482,9 +478,8 @@ final class ScreenRecordService: @unchecked Sendable {
         state: CaptureState,
         includeAudio: Bool)
     {
-        let aInput = state.withLock { $0.audioInput }
-        let isStarted = state.withLock { $0.started }
-        guard includeAudio, let aInput, isStarted else { return }
+        let (aInput, writer) = state.withLock { ($0.audioInput, $0.writer) }
+        guard includeAudio, let aInput, writer != nil else { return }
         if aInput.isReadyForMoreMediaData {
             _ = aInput.append(sample)
         }
@@ -552,7 +547,6 @@ final class ScreenRecordService: @unchecked Sendable {
                         state.writer = nil
                         state.videoInput = nil
                         state.audioInput = nil
-                        state.started = false
                         return writer
                     }
                     writer?.cancelWriting()

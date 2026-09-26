@@ -3,9 +3,14 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
+  readSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -1303,7 +1308,37 @@ export function resolveLaunchAgentExitTimeoutSeconds(value) {
 
 function isLaunchctlServiceMissing(result) {
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-  return result.status !== 0 && /could not find service|no such process|not found/iu.test(output);
+  // Partial output from a killed or failed query cannot establish absence.
+  return (
+    Number.isInteger(result.status) &&
+    result.status !== 0 &&
+    !result.error &&
+    !result.signal &&
+    /could not find service|no such process|not found/iu.test(output)
+  );
+}
+
+function readLaunchDaemonPlistBytes(plistPath) {
+  const limit = 1024 * 1024;
+  const fd = openSync(plistPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > limit) {
+      throw new Error("LaunchDaemon plist must be a regular file of at most 1 MiB");
+    }
+    const bytes = Buffer.alloc(limit + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(fd, bytes, length, bytes.length - length, null);
+      if (count === 0) {
+        return bytes.subarray(0, length);
+      }
+      length += count;
+    }
+    throw new Error("LaunchDaemon plist exceeds 1 MiB");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export function assertNoSystemLaunchDaemonOwnership(label, dependencies = {}) {
@@ -1346,27 +1381,42 @@ export function assertNoSystemLaunchDaemonOwnership(label, dependencies = {}) {
   }
   for (const entry of entries.filter((candidate) => candidate.endsWith(".plist")).toSorted()) {
     const plistPath = path.join(SYSTEM_LAUNCH_DAEMON_DIR, entry);
+    let bytes;
+    try {
+      bytes = readLaunchDaemonPlistBytes(plistPath);
+    } catch (error) {
+      // Same unreadable-file policy as the CLI: actual read errno, never a
+      // parser diagnostic or filename, admits this visibility exception.
+      if (["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(error?.code)) {
+        continue;
+      }
+      throw new UpdateInvariantError(
+        "gateway_system_launchdaemon_unverifiable",
+        `could not read system LaunchDaemon plist ${plistPath}`,
+      );
+    }
+    // Extract only the exact string Label: valid vendor metadata can contain
+    // date/data scalars that whole-plist JSON cannot represent.
+    const options = boundedSyncOptions({ encoding: "utf8", input: bytes, maxBuffer: 1024 * 1024 });
     const result = run(
       "/usr/bin/plutil",
-      ["-convert", "json", "-o", "-", "--", plistPath],
-      boundedSyncOptions({ encoding: "utf8" }),
+      ["-extract", "Label", "raw", "-expect", "string", "-n", "-o", "-", "--", "-"],
+      options,
     );
-    if (result.status !== 0) {
+    if (result.status !== 0 || result.error || result.signal) {
+      const lint =
+        Number.isInteger(result.status) && !result.error && !result.signal
+          ? run("/usr/bin/plutil", ["-lint", "--", "-"], options)
+          : undefined;
+      if (lint?.status === 0 && !lint.error && !lint.signal) {
+        continue;
+      }
       throw new UpdateInvariantError(
         "gateway_system_launchdaemon_unverifiable",
         `could not inspect system LaunchDaemon plist ${plistPath}`,
       );
     }
-    let plist;
-    try {
-      plist = JSON.parse(String(result.stdout));
-    } catch {
-      throw new UpdateInvariantError(
-        "gateway_system_launchdaemon_unverifiable",
-        `could not inspect system LaunchDaemon plist ${plistPath}`,
-      );
-    }
-    if (plist?.Label === label) {
+    if (result.stdout === label) {
       throw new UpdateInvariantError(
         "gateway_system_launchdaemon_conflict",
         `System LaunchDaemon plist ${plistPath} already owns the managed Gateway label`,
@@ -1474,7 +1524,10 @@ function readManagedGatewayLaunchAgent(checkout) {
 
 function inspectManagedGatewayDeployment(checkout) {
   if (process.platform !== "darwin") {
-    return null;
+    throw new UpdateInvariantError(
+      "unsupported_gateway_control_platform",
+      "live updater managed Gateway control requires macOS LaunchAgent inspection; Linux systemd installs must use the standard update CLI instead of this helper",
+    );
   }
   const home = process.env.HOME;
   if (!home || !existsSync(path.join(home, "Library/LaunchAgents/ai.openclaw.gateway.plist"))) {

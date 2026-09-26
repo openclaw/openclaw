@@ -154,6 +154,43 @@ describe("executeWebSearchCandidates", () => {
     ).rejects.toBe(reason);
   });
 
+  it.each(["result", "failure", "cancelled"] as const)(
+    "does not fall back or return stale work after authority ends during a provider %s",
+    async (completion) => {
+      const controller = new AbortController();
+      const denial = new Error("search caller no longer authorized");
+      const cancellation = new Error("search caller cancelled");
+      let current = true;
+      const fallback = vi.fn(async () => ({ results: [] }));
+      const pending = executeWebSearchCandidates({
+        candidates: [
+          candidate("first", async () => {
+            await Promise.resolve();
+            current = false;
+            if (completion === "cancelled") {
+              controller.abort(cancellation);
+            }
+            if (completion !== "result") {
+              throw new Error("provider cleanup failed");
+            }
+            return { results: [] };
+          }),
+          candidate("fallback", fallback),
+        ],
+        args: {},
+        signal: controller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw denial;
+          }
+        },
+        allowFallback: true,
+      });
+      await expect(pending).rejects.toBe(completion === "cancelled" ? cancellation : denial);
+      expect(fallback).not.toHaveBeenCalled();
+    },
+  );
+
   it("starts no provider factory when the caller is already cancelled", async () => {
     const controller = new AbortController();
     const reason = new Error("caller cancelled before search");

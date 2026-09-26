@@ -182,28 +182,6 @@ export function applyToolSendReceiptForExtraction(
   };
 }
 
-export function isAsyncStartedToolResult(result: unknown): boolean {
-  const details = readToolResultDetails(result);
-  return details?.async === true && details.status === "started";
-}
-
-export function readAsyncStartedTaskIds(result: unknown): {
-  asyncTaskRunId?: string;
-  asyncTaskId?: string;
-} {
-  const details = readToolResultDetails(result);
-  if (!details) {
-    return {};
-  }
-  const nestedTask = readRecordField(details.task);
-  const asyncTaskRunId = readStringValue(details.runId) ?? readStringValue(nestedTask?.runId);
-  const asyncTaskId = readStringValue(details.taskId) ?? readStringValue(nestedTask?.taskId);
-  return {
-    ...(asyncTaskRunId ? { asyncTaskRunId } : {}),
-    ...(asyncTaskId ? { asyncTaskId } : {}),
-  };
-}
-
 export function readExecToolDetails(result: unknown): ExecToolDetails | null {
   const details = readToolResultDetails(result);
   if (!details || typeof details.status !== "string") {
@@ -350,22 +328,6 @@ export function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null
     modified: filterStringEntries(summary.modified),
     deleted: filterStringEntries(summary.deleted),
   };
-}
-
-function shouldSuppressStructuredMediaToolOutput(params: {
-  toolName: string;
-  rawToolName: string;
-  isToolError: boolean;
-  hasDeliverableStructuredMedia: boolean;
-  builtinToolNames?: ReadonlySet<string>;
-}): boolean {
-  return (
-    params.toolName === "tts" &&
-    params.rawToolName.trim() === "tts" &&
-    params.builtinToolNames?.has("tts") === true &&
-    !params.isToolError &&
-    params.hasDeliverableStructuredMedia
-  );
 }
 
 export function buildPatchSummaryText(summary: ApplyPatchSummary): string {
@@ -597,14 +559,14 @@ export async function emitToolResultOutput(params: {
         ctx.trustedLocalMediaToolNames,
       )
     : [];
-  const shouldEmitOutput =
-    !shouldSuppressStructuredMediaToolOutput({
-      toolName,
-      rawToolName,
-      isToolError,
-      hasDeliverableStructuredMedia: hasStructuredMedia && mediaUrls.length > 0,
-      builtinToolNames: ctx.builtinToolNames,
-    }) && ctx.shouldEmitToolOutput();
+  const suppressStructuredTtsOutput =
+    toolName === "tts" &&
+    rawToolName.trim() === "tts" &&
+    ctx.builtinToolNames?.has("tts") === true &&
+    !isToolError &&
+    hasStructuredMedia &&
+    mediaUrls.length > 0;
+  const shouldEmitOutput = !suppressStructuredTtsOutput && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
@@ -615,14 +577,7 @@ export async function emitToolResultOutput(params: {
     }
   }
 
-  if (isToolError) {
-    return;
-  }
-
-  if (!mediaReply) {
-    return;
-  }
-  if (mediaUrls.length === 0) {
+  if (isToolError || !mediaReply || mediaUrls.length === 0) {
     return;
   }
   const autoDeliveryMediaUrls = new Set(

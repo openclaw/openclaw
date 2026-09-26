@@ -2,14 +2,18 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi, type MockInstance } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createManagedTaskFlow, getTaskFlowById } from "./task-flow-registry.js";
 import { resetTaskFlowRegistryForTests } from "./task-flow-registry.test-support.js";
+import { getTaskById } from "./task-registry.js";
 import {
   startTaskRegistryMaintenance,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryMaintenanceRuntimeForTest } from "./task-registry.maintenance.test-support.js";
 import {
+  createTaskFixture,
+  flushAsyncWork,
   resetTaskRegistryForTests,
   withTaskRegistryTempDir,
 } from "./task-registry.test-support.js";
@@ -26,6 +30,31 @@ async function waitForScheduledMaintenance(
 }
 
 export function registerTaskRegistryScheduledMaintenanceTests() {
+  it("cancels the deferred maintenance sweep during test teardown", async () => {
+    await withTaskRegistryTempDir(async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+
+      const task = createTaskFixture("acp", {
+        childSessionKey: "agent:main:acp:missing",
+        runId: "run-deferred-maintenance-stop",
+        task: "Missing child",
+        deliveryStatus: "pending",
+        lastEventAt: now - 10 * 60_000,
+      });
+
+      startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
+      await stopTaskRegistryMaintenance();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flushAsyncWork();
+
+      expect(getTaskById(task.taskId)).toMatchObject({
+        status: "running",
+      });
+    });
+  });
+
   it("prunes expired ended TaskFlows during scheduled maintenance", async () => {
     await withTaskRegistryTempDir(
       async () => {
@@ -50,12 +79,12 @@ export function registerTaskRegistryScheduledMaintenanceTests() {
           "runWithGatewayIndependentRootWorkAdmission",
         );
         try {
-          startTaskRegistryMaintenance();
+          startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
           await vi.advanceTimersByTimeAsync(5_000);
           await waitForScheduledMaintenance(admissions);
           expect(getTaskFlowById(flow.flowId)).toBeUndefined();
         } finally {
-          stopTaskRegistryMaintenance();
+          await stopTaskRegistryMaintenance();
         }
       },
       { durableStore: true },
@@ -79,7 +108,7 @@ export function registerTaskRegistryScheduledMaintenanceTests() {
         "runWithGatewayIndependentRootWorkAdmission",
       );
       try {
-        startTaskRegistryMaintenance();
+        startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
         await vi.advanceTimersByTimeAsync(5_000);
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(1);
 
@@ -88,7 +117,7 @@ export function registerTaskRegistryScheduledMaintenanceTests() {
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
       } finally {
         releaseInspection([]);
-        stopTaskRegistryMaintenance();
+        await stopTaskRegistryMaintenance();
       }
     });
   });

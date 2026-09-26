@@ -5,6 +5,7 @@ import { resolveRealpathOrAbsolute } from "../../infra/boundary-path.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { tryRealpath } from "../loading/symlink-targets.js";
 import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
+import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import { resolveSkillsWatchSourceRoots } from "./refresh-source-roots.js";
 import {
   DEFAULT_SKILLS_WATCH_IGNORED,
@@ -20,6 +21,37 @@ export type WatchTarget = {
   depth: number;
   executionOnly?: true;
 };
+
+function skillsWatchTargetsMatch(previous: WatchTarget, next: WatchTarget): boolean {
+  return (
+    previous.path === next.path &&
+    previous.watchRoot === next.watchRoot &&
+    previous.depth === next.depth &&
+    previous.executionOnly === next.executionOnly
+  );
+}
+
+export function compareSkillsWatchTargets(
+  previous: readonly WatchTarget[],
+  next: readonly WatchTarget[],
+  covered: readonly WatchTarget[],
+): { targetsUnchanged: boolean; sharedTargetsChanged: boolean } {
+  // Resolved targets have stable sorted order, so positional equality is intentional.
+  const targetsUnchanged = areOrderedArraysEqual(previous, next, skillsWatchTargetsMatch);
+  if (targetsUnchanged) {
+    return { targetsUnchanged, sharedTargetsChanged: false };
+  }
+  const sharedTargetsChanged =
+    next.some(
+      (target) =>
+        !target.executionOnly && !covered.some((prior) => skillsWatchTargetsMatch(prior, target)),
+    ) ||
+    previous.some(
+      (prior) =>
+        !prior.executionOnly && !next.some((target) => skillsWatchTargetsMatch(prior, target)),
+    );
+  return { targetsUnchanged, sharedTargetsChanged };
+}
 
 export type SkillsWatchTargetCacheEntry = {
   signature: string;
@@ -179,17 +211,13 @@ function addTrustedSymlinkSkillWatchTargets(
   let watched = 0;
   let directoryScans = 0;
   let rawEntries = 0;
-  for (const queued of queue) {
+  for (const current of queue) {
     if (
       watched >= MAX_SYMLINK_WATCH_TARGETS_PER_ROOT ||
       directoryScans >= MAX_SYMLINK_WATCH_DIRECTORY_SCANS_PER_ROOT ||
       rawEntries >= MAX_SYMLINK_WATCH_RAW_ENTRIES_PER_ROOT
     ) {
       break;
-    }
-    const current = queued;
-    if (!current) {
-      continue;
     }
     const scan = readBudgetedDirEntries(
       current.dir,

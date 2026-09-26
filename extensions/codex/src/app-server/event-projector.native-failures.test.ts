@@ -21,6 +21,17 @@ import { codexApprovalTimeoutText } from "./plugin-approval-roundtrip.js";
 
 registerCodexEventProjectorTestLifecycle();
 
+const nativeCommand = {
+  type: "commandExecution" as const,
+  command: "pnpm test extensions/codex",
+  cwd: "/workspace",
+  processId: null,
+  source: "agent" as const,
+  commandActions: [],
+  aggregatedOutput: null,
+  exitCode: null,
+};
+
 describe("CodexAppServerEventProjector native tool failure recovery", () => {
   it("orders declined native tool diagnostics after their start event", async () => {
     const onAgentEvent = vi.fn();
@@ -39,16 +50,9 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       await projector.handleNotification(
         forCurrentTurn("item/started", {
           item: {
-            type: "commandExecution",
+            ...nativeCommand,
             id: "cmd-declined",
-            command: "pnpm test extensions/codex",
-            cwd: "/workspace",
-            processId: null,
-            source: "agent",
             status: "inProgress",
-            commandActions: [],
-            aggregatedOutput: null,
-            exitCode: null,
             durationMs: null,
           },
         }),
@@ -56,16 +60,9 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       await projector.handleNotification(
         forCurrentTurn("item/completed", {
           item: {
-            type: "commandExecution",
+            ...nativeCommand,
             id: "cmd-declined",
-            command: "pnpm test extensions/codex",
-            cwd: "/workspace",
-            processId: null,
-            source: "agent",
             status: "declined",
-            commandActions: [],
-            aggregatedOutput: null,
-            exitCode: null,
             durationMs: 1,
           },
         }),
@@ -108,9 +105,21 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       },
     ]);
     expect(
-      findAgentEvent(onAgentEvent, { stream: "item", phase: "end", itemId: "cmd-declined" }).data
-        .status,
-    ).toBe("blocked");
+      findAgentEvent(onAgentEvent, { stream: "item", phase: "end", itemId: "cmd-declined" }).data,
+    ).toMatchObject({
+      kind: "command",
+      name: "bash",
+      status: "blocked",
+      suppressChannelProgress: true,
+    });
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "tool",
+        phase: "result",
+        itemId: "cmd-declined",
+        name: "bash",
+      }).data,
+    ).toMatchObject({ toolCallId: "cmd-declined", status: "blocked", isError: true });
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
       toolName: "bash",
       meta: "run tests (workspace)",
@@ -127,68 +136,52 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     );
   });
 
-  it.each(["failed", "cancelled", "timed_out"] as const)(
-    "projects a declined native approval with %s disposition as one terminal error",
-    async (disposition) => {
-      const projector = await createProjector();
-      const diagnosticEvents: DiagnosticEventPayload[] = [];
-      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+  it("projects a cancelled native approval as one terminal error", async () => {
+    const disposition = "cancelled";
+    const projector = await createProjector();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
 
-      try {
-        await projector.handleNotification(
-          forCurrentTurn("item/started", {
-            item: {
-              type: "commandExecution",
-              id: "cmd-approval-failure",
-              command: "pnpm test extensions/codex",
-              cwd: "/workspace",
-              processId: null,
-              source: "agent",
-              status: "inProgress",
-              commandActions: [],
-              aggregatedOutput: null,
-              exitCode: null,
-              durationMs: null,
-            },
-          }),
-        );
-        projector.recordNativeToolApprovalFailure("cmd-approval-failure", disposition);
-        await projector.handleNotification(
-          forCurrentTurn("item/completed", {
-            item: {
-              type: "commandExecution",
-              id: "cmd-approval-failure",
-              command: "pnpm test extensions/codex",
-              cwd: "/workspace",
-              processId: null,
-              source: "agent",
-              status: "declined",
-              commandActions: [],
-              aggregatedOutput: null,
-              exitCode: null,
-              durationMs: 1,
-            },
-          }),
-        );
-        await flushDiagnosticEvents();
-      } finally {
-        unsubscribe();
-      }
+    try {
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: {
+            ...nativeCommand,
+            id: "cmd-approval-failure",
+            status: "inProgress",
+            durationMs: null,
+          },
+        }),
+      );
+      projector.recordNativeToolApprovalFailure("cmd-approval-failure", disposition);
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            ...nativeCommand,
+            id: "cmd-approval-failure",
+            status: "declined",
+            durationMs: 1,
+          },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
 
-      expect(
-        diagnosticEvents
-          .filter((event) => event.type.startsWith("tool.execution."))
-          .map((event) =>
-            "terminalReason" in event
-              ? { type: event.type, terminalReason: event.terminalReason }
-              : { type: event.type },
-          ),
-      ).toEqual([
-        { type: "tool.execution.started" },
-        { type: "tool.execution.error", terminalReason: disposition },
-      ]);
-    },
-  );
+    expect(
+      diagnosticEvents
+        .filter((event) => event.type.startsWith("tool.execution."))
+        .map((event) =>
+          "terminalReason" in event
+            ? { type: event.type, terminalReason: event.terminalReason }
+            : { type: event.type },
+        ),
+    ).toEqual([
+      { type: "tool.execution.started" },
+      { type: "tool.execution.error", terminalReason: disposition },
+    ]);
+  });
 
   it("persists an approval timeout as failed tool evidence without aborting the turn", async () => {
     const afterToolCall = vi.fn();
@@ -200,15 +193,8 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       trajectoryRecorder: { recordEvent: recordTrajectoryEvent, flush: vi.fn() },
     });
     const item = {
-      type: "commandExecution" as const,
+      ...nativeCommand,
       id: "cmd-approval-timeout",
-      command: "pnpm test extensions/codex",
-      cwd: "/workspace",
-      processId: null,
-      source: "agent" as const,
-      commandActions: [],
-      aggregatedOutput: null,
-      exitCode: null,
     };
     const timeoutExplanation = codexApprovalTimeoutText("command");
 
@@ -258,15 +244,8 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
     const item = {
-      type: "commandExecution" as const,
+      ...nativeCommand,
       id: "cmd-pre-tool-failure",
-      command: "pnpm test extensions/codex",
-      cwd: "/workspace",
-      processId: null,
-      source: "agent" as const,
-      commandActions: [],
-      aggregatedOutput: null,
-      exitCode: null,
     };
 
     try {
@@ -380,24 +359,15 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     ]);
   });
 
-  it("clears a recovered declined native tool error", async () => {
+  it.each([
+    ["the same action recovers", nativeCommand.command],
+    ["an unrelated action succeeds", "pnpm test src/foo.test.ts"],
+  ])("clears a declined pre-execution error when %s", async (_scenario, command) => {
     const projector = await createProjector();
 
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-declined",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "declined",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: null,
-          durationMs: 1,
-        },
+        item: { ...nativeCommand, id: "cmd-declined", status: "declined", durationMs: 1 },
       }),
     );
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
@@ -410,14 +380,10 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
         item: {
-          type: "commandExecution",
+          ...nativeCommand,
           id: "cmd-recovered",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
+          command,
           status: "completed",
-          commandActions: [],
           aggregatedOutput: "ok",
           exitCode: 0,
           durationMs: 42,
@@ -443,14 +409,10 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       output: string,
       exitCode: number,
     ) => ({
-      type: "commandExecution",
+      ...nativeCommand,
       id,
       command,
-      cwd: "/workspace",
-      processId: null,
-      source: "agent",
       status,
-      commandActions: [],
       aggregatedOutput: output,
       exitCode,
       durationMs: 1,
@@ -487,46 +449,5 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
     expect(observeToolTerminal).toHaveBeenCalledTimes(4);
-  });
-
-  it("clears a declined pre-execution error after a later successful action", async () => {
-    const projector = await createProjector();
-
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-declined",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "declined",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: null,
-          durationMs: 1,
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-unrelated-success",
-          command: "pnpm test src/foo.test.ts",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: "ok",
-          exitCode: 0,
-          durationMs: 42,
-        },
-      }),
-    );
-
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
   });
 });

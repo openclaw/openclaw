@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { endianness } from "node:os";
 import { constants, DatabaseSync } from "node:sqlite";
 import {
+  encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -64,7 +65,10 @@ function replacement(
 
 function write(database: MemoryIndexDatabase, value: MemorySourceIndexReplacement) {
   return runSqliteImmediateTransactionSync(database.db, () =>
-    new MemorySourceIndexKernel(database.db, database).replace(value),
+    new MemorySourceIndexKernel(database.db, database).replaceRows(
+      value,
+      value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index] ?? [] })),
+    ),
   );
 }
 
@@ -106,7 +110,7 @@ describe("memory source index native kernel", () => {
         expect(
           prepared.filter((value) => value === table),
           table,
-        ).toHaveLength(chunks ? 1 : 0);
+        ).toHaveLength(chunks && table !== "memory_index_chunks_fts" ? 1 : 0);
       }
     } finally {
       prepare.mockRestore();
@@ -168,6 +172,13 @@ describe("memory source index native kernel", () => {
           .prepare("SELECT id FROM memory_index_chunks WHERE hash = 'original' ORDER BY id")
           .all(),
       ).toEqual(siblings);
+      expect(
+        database.db.prepare("SELECT rowid, id FROM memory_index_chunks_fts ORDER BY rowid").all(),
+      ).toEqual(
+        database.db
+          .prepare("SELECT chunk_rowid AS rowid, id FROM memory_index_chunks ORDER BY chunk_rowid")
+          .all(),
+      );
     }
   });
 
@@ -387,7 +398,7 @@ describe("memory source index native kernel", () => {
             start_line: chunk.startLine,
             end_line: chunk.endLine,
             text: chunk.text,
-            embedding: JSON.stringify(embedding),
+            embedding: encodeMemoryEmbedding(embedding),
             importance: chunk.importance,
             triggers: chunk.triggers,
             project_key: chunk.projectKey,

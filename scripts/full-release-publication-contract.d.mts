@@ -20,6 +20,7 @@ export interface PublicationIntent {
 }
 export interface PublicationDispatchEnvelope extends PublicationIntent {
   trustedWorkflow: { ref: string; fullRef: string; sha: string } | null;
+  laneInputs?: { extension_test_exclude_patterns_json?: string };
 }
 export interface PublicationSourceRequest extends PublicationIntent {
   repository: string;
@@ -50,9 +51,13 @@ export function publicationIntentInputs(intent: PublicationIntent): {
   publicationSelectionJson: string;
 };
 export function decodePublicationDispatchEnvelope(raw: unknown): PublicationDispatchEnvelope;
+export function normalizePublicationLaneInputs(
+  value: unknown,
+): NonNullable<PublicationDispatchEnvelope["laneInputs"]>;
 export function publicationDispatchEnvelope(
   trustedWorkflow: PublicationDispatchEnvelope["trustedWorkflow"],
   intent: PublicationIntent,
+  laneInputs?: PublicationDispatchEnvelope["laneInputs"],
 ): string;
 export function publicationSourceRequest(
   env: Record<string, string | undefined>,

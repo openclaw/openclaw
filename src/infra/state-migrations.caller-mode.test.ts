@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -21,10 +24,6 @@ import {
   autoMigrateLegacyState,
   planLegacyStateMigrationsReadOnly,
 } from "./state-migrations.doctor.js";
-import {
-  resolveLegacyFlowRunsSidecarPath,
-  resolveLegacyTaskRunsSidecarPath,
-} from "./state-migrations.storage.js";
 import type { LegacyStateMigrationPlan } from "./state-migrations.types.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -305,51 +304,6 @@ describe("legacy state migration caller mode", () => {
     });
   });
 
-  it("binds task sidecar databases as SQLite plan inputs", async () => {
-    const fixture = await makeFixture();
-    fs.writeFileSync(fixture.configPath, "{}\n");
-    const taskRunsPath = resolveLegacyTaskRunsSidecarPath(fixture.stateDir);
-    const flowRunsPath = resolveLegacyFlowRunsSidecarPath(fixture.stateDir);
-    const databases = [taskRunsPath, flowRunsPath].map((databasePath) => {
-      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-      const database = new DatabaseSync(databasePath);
-      database.exec(
-        "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; CREATE TABLE marker (value TEXT); INSERT INTO marker VALUES ('pending');",
-      );
-      return database;
-    });
-
-    try {
-      const plan = await planLegacyStateMigrationsReadOnly({
-        mode: "doctor",
-        candidate: candidateAt(fixture.root),
-        snapshot: createCallerModeSnapshot(fixture),
-        env: fixture.env,
-      });
-
-      expect(plan.steps.find((step) => step.id === "task-state-sidecars")).toMatchObject({
-        source: [
-          { kind: "sqlite", path: taskRunsPath },
-          { kind: "sqlite", path: flowRunsPath },
-        ],
-        target: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(fixture.env) }],
-        requiredness: "required",
-        outcome: "planned",
-      });
-
-      databases[0]?.exec("INSERT INTO marker VALUES ('later-wal-row')");
-      const updatedPlan = await planLegacyStateMigrationsReadOnly({
-        mode: "doctor",
-        candidate: candidateAt(fixture.root),
-        snapshot: createCallerModeSnapshot(fixture),
-        env: fixture.env,
-      });
-      expect(updatedPlan.snapshot.stateDigest).not.toBe(plan.snapshot.stateDigest);
-    } finally {
-      databases.forEach((database) => database.close());
-    }
-  });
-
   it("defers an absent named-profile workspace until its external path is bound", async () => {
     const fixture = await makeFixture();
     fixture.env.OPENCLAW_PROFILE = "work";
@@ -619,9 +573,12 @@ describe("legacy state migration caller mode", () => {
       },
       receipts: result.stepReceipts,
     });
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "legacy-main-session-keys"),
-    ).toMatchObject({
+    const legacyKeys = result.stepReceipts.find(
+      (receipt) => receipt.id === "legacy-main-session-keys",
+    );
+    // Report the origin before a subset match can strip it from the failure.
+    expect(legacyKeys?.refusal, JSON.stringify(legacyKeys?.originatingRefusal)).toBeUndefined();
+    expect(legacyKeys).toMatchObject({
       source: [
         { kind: "path", path: legacySessionStorePath },
         { kind: "sqlite", path: agentDatabasePath },
@@ -633,9 +590,6 @@ describe("legacy state migration caller mode", () => {
       requiredness: "conditional",
       outcome: "skipped",
     });
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "legacy-main-session-keys")?.refusal,
-    ).toBeUndefined();
     expect(result.stepReceipts.find((receipt) => receipt.id === "shared-auth-store")).toMatchObject(
       {
         outcome: "skipped",
@@ -651,6 +605,7 @@ describe("legacy state migration caller mode", () => {
       const fixture = await makeFixture();
       const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
       fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
+      openOpenClawStateDatabase({ env: fixture.env });
       const sources = writeAgentScopedLegacySources(fixture.stateDir);
       const externalAgentDir = path.join(fixture.root, `custom-${overrideKey.toLowerCase()}`);
       const externalDatabasePath = path.join(externalAgentDir, "openclaw-agent.sqlite");
@@ -806,22 +761,23 @@ describe("legacy state migration caller mode", () => {
       // oxlint-disable-next-line typescript/unbound-method
       const originalPrepare = DatabaseSync.prototype.prepare;
       const externalQueries: string[] = [];
-      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(
-        function (this: DatabaseSync, sql) {
-          const databases = originalPrepare.call(this, "PRAGMA database_list").all() as Array<{
-            file?: unknown;
-          }>;
-          if (
-            databases.some(
-              (entry) =>
-                typeof entry.file === "string" && path.resolve(entry.file) === externalDatabasePath,
-            )
-          ) {
-            externalQueries.push(sql);
-          }
-          return originalPrepare.call(this, sql);
-        },
-      );
+      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        const databases = originalPrepare.call(this, "PRAGMA database_list").all() as Array<{
+          file?: unknown;
+        }>;
+        if (
+          databases.some(
+            (entry) =>
+              typeof entry.file === "string" && path.resolve(entry.file) === externalDatabasePath,
+          )
+        ) {
+          externalQueries.push(sql);
+        }
+        return originalPrepare.call(this, sql);
+      });
       const plan = await planLegacyStateMigrationsReadOnly({
         mode: "doctor",
         candidate: candidateAt(fixture.root),

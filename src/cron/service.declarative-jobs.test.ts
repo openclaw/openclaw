@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { resolveCronSession } from "./isolated-agent/session.js";
 import { toPublicCronJob } from "./public-job.js";
@@ -21,6 +22,8 @@ installCronTestHooks({ logger });
 
 function createCronService(storePath: string, cronEnabled = true) {
   return new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled,
     log: logger,
@@ -371,6 +374,7 @@ describe("CronService declarative jobs", () => {
       store: {},
       skillLibrarySelections: job.skillLibrarySelections,
       forceNew: true,
+      lifecycleTimestamps: {},
     });
     expect(first.sessionEntry.skillLibrarySelections).toEqual(selections);
     const restarted = resolveCronSession({
@@ -381,6 +385,7 @@ describe("CronService declarative jobs", () => {
       store: { "agent:ops:cron:test": first.sessionEntry },
       skillLibrarySelections: [],
       forceNew: true,
+      lifecycleTimestamps: {},
     });
     expect(restarted.sessionEntry.skillLibrarySelections).toEqual(selections);
   });
@@ -773,7 +778,7 @@ describe("CronService declarative jobs", () => {
     );
     for (const id of ["nested/job", "..\\job", "nul\0job"]) {
       await expect(writer.add(declaration({ declarationKey: undefined, id }))).rejects.toThrow(
-        "invalid cron task run job id",
+        "invalid cron run job id",
       );
     }
     writer.stop();

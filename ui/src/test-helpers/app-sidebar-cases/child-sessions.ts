@@ -177,12 +177,14 @@ describe("AppSidebar agent chip", () => {
     });
     await sidebar.updateComplete;
     expect(harness.list).toHaveBeenCalledOnce();
+    vi.useFakeTimers();
     gatewayHarness.publishEvent("sessions.changed", {
       sessionKey: "agent:main:child-one",
       agentId: "main",
       reason: "patch",
       spawnedBy: "agent:main:parent",
     });
+    await vi.advanceTimersByTimeAsync(5_000);
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     await waitForFast(() =>
       expect(

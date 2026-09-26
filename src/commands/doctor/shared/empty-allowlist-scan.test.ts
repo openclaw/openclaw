@@ -40,8 +40,8 @@ vi.mock("./channel-doctor.js", () => ({
 }));
 
 describe("doctor empty allowlist policy scan", () => {
-  it("scans top-level and account-scoped channel warnings", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+  it("scans top-level and account-scoped channel warnings", async () => {
+    const warnings = await scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
           signal: {
@@ -61,8 +61,8 @@ describe("doctor empty allowlist policy scan", () => {
     ]);
   });
 
-  it("does not warn on empty parent groupAllowFrom when active accounts have effective group allowlists", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+  it("does not warn on empty parent groupAllowFrom when active accounts have effective group allowlists", async () => {
+    const warnings = await scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
           telegram: {
@@ -81,8 +81,8 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("keeps parent groupAllowFrom warning when any active account lacks an effective allowlist", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+  it("keeps parent groupAllowFrom warning when any active account lacks an effective allowlist", async () => {
+    const warnings = await scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
           telegram: {
@@ -103,8 +103,8 @@ describe("doctor empty allowlist policy scan", () => {
     );
   });
 
-  it("keeps parent groupAllowFrom warning when an implicit default account is active", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+  it("keeps parent groupAllowFrom warning when an implicit default account is active", async () => {
+    const warnings = await scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
           "qa-channel": {
@@ -125,8 +125,8 @@ describe("doctor empty allowlist policy scan", () => {
     );
   });
 
-  it("matches canonical runtime account ids to mixed-case config keys", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+  it("matches canonical runtime account ids to mixed-case config keys", async () => {
+    const warnings = await scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
           matrix: {
@@ -144,8 +144,8 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("matches raw runtime account ids to canonical config keys", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+  it("matches raw runtime account ids to canonical config keys", async () => {
+    const warnings = await scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
           signal: {
@@ -163,8 +163,8 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("keeps parent warning for a distinct case-sensitive implicit default account", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+  it("keeps parent warning for a distinct case-sensitive implicit default account", async () => {
+    const warnings = await scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
           qqbot: {
@@ -185,8 +185,8 @@ describe("doctor empty allowlist policy scan", () => {
     );
   });
 
-  it("allows provider-specific extra warnings without importing providers", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+  it("allows provider-specific extra warnings without importing providers", async () => {
+    const warnings = await scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
           telegram: {
@@ -207,10 +207,10 @@ describe("doctor empty allowlist policy scan", () => {
     ]);
   });
 
-  it("skips disabled channel and account entries", () => {
+  it("skips disabled channel and account entries", async () => {
     const extraWarningsForAccount = vi.fn(({ prefix }) => [`extra:${prefix}`]);
 
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+    const warnings = await scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
           telegram: {

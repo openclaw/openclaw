@@ -31,6 +31,7 @@ import {
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../../infra/update-check.js";
+import { UPDATE_NETWORK_TIMEOUT_MS } from "../../infra/update-network-budget.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
@@ -38,6 +39,26 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
+
+async function readUpdateRecoverySetStatus() {
+  try {
+    const { inspectUpdateRecoveryBackups } =
+      await import("../../infra/update-recovery-backup-status.js");
+    const sets = await inspectUpdateRecoveryBackups();
+    return {
+      recoverySets: sets.map(({ ref, runId, status, message, nextAction }) => ({
+        runId,
+        manifestPath: ref.manifestPath,
+        status,
+        message,
+        nextAction,
+      })),
+    };
+  } catch (error) {
+    return { recoverySetsError: formatErrorMessage(error) };
+  }
+}
 
 async function readChannelStatusIssues(
   config: OpenClawConfig,
@@ -74,6 +95,12 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     collectNodeRuntimeFindings(),
   ]);
   const configChannel = normalizeUpdateChannel(config.update?.channel);
+  const gitTargetChannel =
+    opts.json && (configChannel === "stable" || configChannel === "beta")
+      ? await readUpdateChannelConfig(false)
+          .then(({ storedChannel }) => storedChannel)
+          .catch(() => null)
+      : null;
 
   const [update, channelIssues] = await Promise.all([
     checkUpdateStatus({
@@ -91,6 +118,25 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     }),
     readChannelStatusIssues(config, timeoutMs),
   ]);
+  const git = update.git;
+  const currentSha = git?.sha;
+  const preferredTarget =
+    update.installKind === "git" &&
+    git &&
+    currentSha &&
+    git.dirty === false &&
+    (gitTargetChannel === "stable" || gitTargetChannel === "beta")
+      ? await import("../../infra/update-runner-git-target.js")
+          .then(({ readPreferredGitChannelTarget }) =>
+            readPreferredGitChannelTarget({
+              root: git.root,
+              sha: currentSha,
+              channel: gitTargetChannel,
+              timeoutMs: timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS,
+            }),
+          )
+          .catch(() => undefined)
+      : undefined;
 
   const channelInfo = resolveUpdateChannelDisplay({
     configChannel,
@@ -104,6 +150,11 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const updateAvailability = resolveUpdateAvailability(update);
 
   const runStatus = readUpdateRunStatus();
+  const recoveryStatus = await readUpdateRecoverySetStatus();
+  const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
+  const updateInProgress =
+    !("runStatusError" in runStatus) && activeRun && !runStatus.staleRun && !runStatus.abandonedRun;
+
   const safeMessage = (message: string) =>
     sanitizeTerminalText(redactSensitiveText(message, { mode: "tools" }));
   const replacement =
@@ -152,7 +203,13 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const migrationWarnings: string[] = [];
   const migrationWarningErrors: string[] = [];
   for (const readWarnings of [
-    () => readDeferredPluginMigrations().map((pending) => formatDeferredPluginMigration(pending)),
+    () =>
+      readDeferredPluginMigrations().map((pending) =>
+        formatDeferredPluginMigration(
+          pending,
+          updateInProgress ? { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" } : process.env,
+        ),
+      ),
     () => readSessionSqliteMigrationWarnings(),
   ]) {
     try {
@@ -165,7 +222,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   if (opts.json) {
     defaultRuntime.writeJson({
-      update,
+      update: preferredTarget ? { ...update, git: { ...update.git, preferredTarget } } : update,
       channel: {
         value: channelInfo.channel,
         source: channelInfo.source,
@@ -180,6 +237,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       ...(migrationWarnings.length > 0 ? { migrationWarnings } : {}),
       ...(migrationWarningsError ? { migrationWarningsError } : {}),
       ...runStatus,
+      ...recoveryStatus,
     });
     return;
   }
@@ -200,7 +258,13 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
-      Value: updateAvailability.available ? theme.warn(`available · ${updateLine}`) : updateLine,
+      Value: activeRun
+        ? updateInProgress
+          ? `in progress · ${activeRun.phase}`
+          : "needs attention · see run details below"
+        : updateAvailability.available
+          ? theme.warn(`available · ${updateLine}`)
+          : updateLine,
     },
   ];
 
@@ -273,7 +337,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     defaultRuntime.log(theme.warn(`Update run status unavailable: ${runStatus.runStatusError}`));
     defaultRuntime.log("");
   } else {
-    const { activeRun, lastRun, staleRun, abandonedRun, advisories } = runStatus;
+    const { lastRun, staleRun, abandonedRun, advisories } = runStatus;
     const run = activeRun ?? lastRun;
     for (const advisory of advisories ?? []) {
       if (advisory.runId !== run?.runId) {
@@ -281,6 +345,9 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       }
     }
     if (run) {
+      if (!activeRun) {
+        defaultRuntime.log(`Last recorded update (${new Date(run.createdAtMs).toISOString()}):`);
+      }
       if (staleRun) {
         defaultRuntime.log(`Update ${run.runId}: ${staleRun.guidance}`);
       }
@@ -305,7 +372,24 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     }
   }
 
-  const updateHint = formatUpdateAvailableHint(update);
+  if ("recoverySetsError" in recoveryStatus) {
+    defaultRuntime.log(
+      theme.warn(
+        safeMessage(`Update recovery sets unavailable: ${recoveryStatus.recoverySetsError}`),
+      ),
+    );
+    defaultRuntime.log("");
+  } else {
+    for (const set of recoveryStatus.recoverySets) {
+      defaultRuntime.log(safeMessage(`Update recovery set ${set.runId}: ${set.status}`));
+      defaultRuntime.log(safeMessage(set.manifestPath));
+      defaultRuntime.log(safeMessage(set.message));
+      defaultRuntime.log(safeMessage(`Next action: ${set.nextAction}`));
+      defaultRuntime.log("");
+    }
+  }
+
+  const updateHint = activeRun ? null : formatUpdateAvailableHint(update);
   if (updateHint) {
     defaultRuntime.log(theme.warn(updateHint));
   }

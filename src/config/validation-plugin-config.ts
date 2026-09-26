@@ -56,7 +56,7 @@ export function resolveDeferredChannelConfigWarning(params: {
   return pluginId && params.deferredPluginIds.has(normalizePluginId(pluginId))
     ? {
         path: `channels.${params.channelId}`,
-        message: `Plugin "${pluginId}" channel config validation is deferred while its state migration is pending; existing settings are preserved.`,
+        message: `Plugin "${pluginId}" channel settings cannot be checked until its data/settings upgrade finishes. Your existing settings have been kept. Run "openclaw update status" for repair details.`,
       }
     : undefined;
 }
@@ -207,7 +207,7 @@ export function validateExplicitPluginConfig(params: {
       deferredPluginWarningIds.add(normalized);
       warnings.push({
         path: issuePath,
-        message: `Plugin "${pluginId}" config validation is deferred while its state migration is pending; existing settings are preserved.`,
+        message: `Plugin "${pluginId}" settings cannot be checked until its data/settings upgrade finishes. Your existing settings have been kept. Run "openclaw update status" for repair details.`,
       });
     }
     return true;

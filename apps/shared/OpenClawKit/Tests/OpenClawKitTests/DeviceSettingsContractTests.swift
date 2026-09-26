@@ -31,11 +31,23 @@ struct DeviceSettingsContractTests {
         ])
     }
 
-    @Test func `Chrome extension status and setup accept only their exact action payloads`() {
+    @Test func `Chrome extension setup accepts only the exact action payload`() {
+        for action in ChromeExtensionSetupAction.allCases {
+            #expect(DeviceSettingsRequest(body: [
+                "type": "chrome-extension-setup", "action": action.rawValue,
+            ]) == .chromeExtensionSetup(action))
+        }
         #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-status"]) == .chromeExtensionStatus)
         #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-status", "command": "other"]) == nil)
         #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension"]) == .installChromeExtension)
-        #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension", "command": "other"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension", "profile": "other"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-setup"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-setup", "action": "pair"]) == nil)
+        for field in ["command", "profile", "url", "host"] {
+            #expect(DeviceSettingsRequest(body: [
+                "type": "chrome-extension-setup", "action": "install", field: "other",
+            ]) == nil)
+        }
     }
 
     @Test(arguments: ["macos", "ios"])

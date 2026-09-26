@@ -1,4 +1,3 @@
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -24,6 +23,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import {
@@ -147,11 +147,7 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
         ).toMatchObject(expected),
       );
       expect(loadSessionEntry(scope)).toEqual(originalEntry);
-      const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const execs = vi.spyOn(DatabaseSync.prototype, "exec");
-      const nativeCalls = (["all", "get", "iterate", "run"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      );
+      const nativeCalls = observeMainThreadSql();
       const healed = await listSessions({ context, client, request: options });
       expect(healed.sessions).toEqual([expect.objectContaining(expected)]);
       const respond = vi.fn();
@@ -169,11 +165,7 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
       expect(
         projection.snapshot({ agentId: scope.agentId, key: scope.sessionKey }, options).row,
       ).toMatchObject(expected);
-      expect(prepares).not.toHaveBeenCalled();
-      expect(execs).not.toHaveBeenCalled();
-      for (const calls of nativeCalls) {
-        expect(calls).not.toHaveBeenCalled();
-      }
+      nativeCalls.expectIdle();
     } finally {
       stop();
       getSessionRowProjection(context)?.dispose();

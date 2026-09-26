@@ -5,6 +5,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
+type WizardProps = Parameters<typeof renderChannelWizard>[0];
+
+function wizardProps(
+  wizard: WizardProps["wizard"],
+  overrides: Partial<WizardProps> = {},
+): WizardProps {
+  return {
+    wizard,
+    channelLabel: (channelId) => channelId,
+    multiselectValues: [],
+    onToggleMultiselect: vi.fn(),
+    textValue: "",
+    secretVisible: false,
+    onTextInput: vi.fn(),
+    onToggleSecretVisibility: vi.fn(),
+    onAnswer: vi.fn(),
+    onClose: vi.fn(),
+    whatsappQrDataUrl: null,
+    whatsappMessage: null,
+    whatsappConnected: null,
+    whatsappBusy: false,
+    onWhatsAppStart: vi.fn(),
+    onWhatsAppWait: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe("renderChannelWizard", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
@@ -24,43 +51,30 @@ describe("renderChannelWizard", () => {
     { sensitive: false, expectedType: "text" },
     { sensitive: true, expectedType: "password" },
   ])(
-    "labels a $expectedType input with the visible text-step message",
+    "labels a $expectedType input and associates validation errors until recovery",
     ({ sensitive, expectedType }) => {
       const container = document.createElement("div");
       document.body.append(container);
-      render(
-        renderChannelWizard({
-          wizard: {
-            phase: "step",
-            channel: "matrix",
-            step: {
-              id: "account-id",
-              type: "text",
-              message: "New Matrix account id",
-              sensitive,
-            },
-            stepIndex: 1,
-            busy: false,
-            validationError: null,
-          },
-          channelLabel: (channelId) => channelId,
-          multiselectValues: [],
-          onToggleMultiselect: vi.fn(),
-          textValue: "",
-          secretVisible: false,
-          onTextInput: vi.fn(),
-          onToggleSecretVisibility: vi.fn(),
-          onAnswer: vi.fn(),
-          onClose: vi.fn(),
-          whatsappQrDataUrl: null,
-          whatsappMessage: null,
-          whatsappConnected: null,
-          whatsappBusy: false,
-          onWhatsAppStart: vi.fn(),
-          onWhatsAppWait: vi.fn(),
-        }),
-        container,
-      );
+      const renderStep = (validationError: string | null) =>
+        render(
+          renderChannelWizard(
+            wizardProps({
+              phase: "step",
+              channel: "matrix",
+              step: {
+                id: "account-id",
+                type: "text",
+                message: "New Matrix account id",
+                sensitive,
+              },
+              stepIndex: 1,
+              busy: false,
+              validationError,
+            }),
+          ),
+          container,
+        );
+      renderStep(null);
 
       const input = container.querySelector<HTMLInputElement>("#channel-wizard-text-input");
       const label = container.querySelector<HTMLLabelElement>(
@@ -74,6 +88,15 @@ describe("renderChannelWizard", () => {
       } else {
         expect(container.querySelector(".oc-sensitive-toggle")).toBeNull();
       }
+      renderStep("That account id is not valid.");
+      const errorId = input?.getAttribute("aria-describedby");
+      expect(input?.getAttribute("aria-invalid")).toBe("true");
+      expect(document.getElementById(errorId ?? "")?.textContent).toContain(
+        "That account id is not valid.",
+      );
+      renderStep(null);
+      expect(input?.hasAttribute("aria-invalid")).toBe(false);
+      expect(input?.hasAttribute("aria-describedby")).toBe(false);
     },
   );
 
@@ -84,36 +107,24 @@ describe("renderChannelWizard", () => {
     document.body.append(container);
     const renderSensitiveStep = (secretVisible: boolean, textValue: string) =>
       render(
-        renderChannelWizard({
-          wizard: {
-            phase: "step",
-            channel: "twitch",
-            step: {
-              id: "client-secret",
-              type: "text",
-              message: "Twitch Client Secret",
-              sensitive: true,
+        renderChannelWizard(
+          wizardProps(
+            {
+              phase: "step",
+              channel: "twitch",
+              step: {
+                id: "client-secret",
+                type: "text",
+                message: "Twitch Client Secret",
+                sensitive: true,
+              },
+              stepIndex: 1,
+              busy: false,
+              validationError: null,
             },
-            stepIndex: 1,
-            busy: false,
-            validationError: null,
-          },
-          channelLabel: (channelId) => channelId,
-          multiselectValues: [],
-          onToggleMultiselect: vi.fn(),
-          textValue,
-          secretVisible,
-          onTextInput,
-          onToggleSecretVisibility,
-          onAnswer: vi.fn(),
-          onClose: vi.fn(),
-          whatsappQrDataUrl: null,
-          whatsappMessage: null,
-          whatsappConnected: null,
-          whatsappBusy: false,
-          onWhatsAppStart: vi.fn(),
-          onWhatsAppWait: vi.fn(),
-        }),
+            { textValue, secretVisible, onTextInput, onToggleSecretVisibility },
+          ),
+        ),
         container,
       );
 
@@ -146,36 +157,24 @@ describe("renderChannelWizard", () => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
-      renderChannelWizard({
-        wizard: {
-          phase: "step",
-          channel: "imessage",
-          step: {
-            id: "selected-channels",
-            type: "note",
-            title: "Selected channels",
-            message: "iMessage — Local iMessage/SMS through the imsg bridge.",
+      renderChannelWizard(
+        wizardProps(
+          {
+            phase: "step",
+            channel: "imessage",
+            step: {
+              id: "selected-channels",
+              type: "note",
+              title: "Selected channels",
+              message: "iMessage — Local iMessage/SMS through the imsg bridge.",
+            },
+            stepIndex: 1,
+            busy: false,
+            validationError: null,
           },
-          stepIndex: 1,
-          busy: false,
-          validationError: null,
-        },
-        channelLabel: () => "iMessage",
-        multiselectValues: [],
-        onToggleMultiselect: vi.fn(),
-        textValue: "",
-        secretVisible: false,
-        onTextInput: vi.fn(),
-        onToggleSecretVisibility: vi.fn(),
-        onAnswer: vi.fn(),
-        onClose: vi.fn(),
-        whatsappQrDataUrl: null,
-        whatsappMessage: null,
-        whatsappConnected: null,
-        whatsappBusy: false,
-        onWhatsAppStart: vi.fn(),
-        onWhatsAppWait: vi.fn(),
-      }),
+          { channelLabel: () => "iMessage" },
+        ),
+      ),
       container,
     );
 
@@ -189,28 +188,16 @@ describe("renderChannelWizard", () => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
-      renderChannelWizard({
-        wizard: {
-          phase: "error",
-          channel: "slack",
-          message: "Setup failed",
-        },
-        channelLabel: () => "Slack",
-        multiselectValues: [],
-        onToggleMultiselect: vi.fn(),
-        textValue: "",
-        secretVisible: false,
-        onTextInput: vi.fn(),
-        onToggleSecretVisibility: vi.fn(),
-        onAnswer: vi.fn(),
-        onClose: vi.fn(),
-        whatsappQrDataUrl: null,
-        whatsappMessage: null,
-        whatsappConnected: null,
-        whatsappBusy: false,
-        onWhatsAppStart: vi.fn(),
-        onWhatsAppWait: vi.fn(),
-      }),
+      renderChannelWizard(
+        wizardProps(
+          {
+            phase: "error",
+            channel: "slack",
+            message: "Setup failed",
+          },
+          { channelLabel: () => "Slack" },
+        ),
+      ),
       container,
     );
 

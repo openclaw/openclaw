@@ -244,7 +244,7 @@ export class DraftPreferenceState {
       }
       // Model controls share persistence, but do not replace the submitted checkout intent.
       const changesPlacement = Object.keys(patch).some(
-        (field) => !["model", "agentRuntime", "thinkingLevel"].includes(field),
+        (field) => !["model", "agentRuntime", "thinkingLevel", "fastMode"].includes(field),
       );
       const selection = changesPlacement ? {} : writer.selection;
       writer.selection = selection;

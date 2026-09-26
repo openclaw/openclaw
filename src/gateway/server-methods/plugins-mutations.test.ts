@@ -6,13 +6,18 @@ import {
   readCapabilityConsentErrorDetails,
   type CapabilityConsentErrorDetails,
 } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { buildPluginCapabilityConsentReview } from "../../plugins/capability-summary.js";
 import {
   PluginInstallPersistedError,
   PluginRuntimeApplicationError,
   type PluginLifecycleRuntimeApply,
+  type PluginRuntimeApplication,
 } from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
+import type { installManagedPlugin } from "../../plugins/management-mutations.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
+import type { GatewayRequestHandler } from "./types.js";
 
 const managementMocks = vi.hoisted(() => ({
   install: vi.fn(),
@@ -41,6 +46,10 @@ async function callHandler(
   runtimeConfig: Record<string, unknown> = {},
   applyRuntime: PluginLifecycleRuntimeApply = async () => application,
   localClient = false,
+  authority: Pick<
+    Parameters<GatewayRequestHandler>[0],
+    "signal" | "sessionMutationCommitGuard"
+  > = {},
 ) {
   let ok: boolean | null = null;
   let response: unknown;
@@ -49,10 +58,16 @@ async function callHandler(
     pluginMutationHandlers[method],
     "pluginMutationHandlers[method] test invariant",
   )({
+    ...authority,
     params,
     req: {} as never,
-    // Minimal transport fixture: only the host-attested ingress marker is read here.
-    client: (localClient ? { internal: { isLocalClient: true } } : null) as never,
+    // Local RPCs carry both admitted administrator authority and host-attested ingress.
+    client: (localClient
+      ? {
+          connect: { role: "operator", scopes: ["operator.admin"] },
+          internal: { isLocalClient: true },
+        }
+      : null) as never,
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig: () => runtimeConfig,
@@ -95,6 +110,96 @@ describe("plugin management Gateway mutation handlers", () => {
     }
   });
 
+  it.each(["completed", "failed"] as const)(
+    "targets installer and runtime activity to the initiating request (%s)",
+    async (status) => {
+      const broadcastToConnIds = vi.fn();
+      const respond = vi.fn();
+      const applying = createDeferred<PluginRuntimeApplication>();
+      const enteredRuntime = createDeferred();
+      const activity = {
+        activityId: "dependency-install",
+        stage: "dependencies",
+        status: "completed",
+      } as const;
+      managementMocks.install.mockImplementation(
+        async (params: Parameters<typeof installManagedPlugin>[0]) => {
+          params.logger?.activity?.(activity);
+          return {
+            plugin: workboard,
+            application: await params.applyRuntime!({
+              config: {},
+              pluginIds: [workboard.id],
+              reason: "install",
+            }),
+          };
+        },
+      );
+      const pending = pluginMutationHandlers["plugins.install"]!({
+        req: { type: "req", id: "install-one", method: "plugins.install" },
+        params: { source: "npm", spec: "workboard" },
+        client: {
+          connId: "owner-connection",
+          connect: { role: "operator", scopes: ["operator.admin"] },
+        } as never,
+        context: {
+          applyPluginLifecycleChange: () => {
+            enteredRuntime.resolve();
+            return applying.promise;
+          },
+          broadcastToConnIds,
+        } as never,
+        isWebchatConnect: () => false,
+        respond,
+      });
+      try {
+        await enteredRuntime.promise;
+        expect(broadcastToConnIds).toHaveBeenNthCalledWith(
+          1,
+          "plugins.install.progress",
+          { ...activity, requestId: "install-one" },
+          new Set(["owner-connection"]),
+        );
+        expect(broadcastToConnIds).toHaveBeenNthCalledWith(
+          2,
+          "plugins.install.progress",
+          {
+            activityId: expect.any(String),
+            stage: "runtime",
+            status: "started",
+            requestId: "install-one",
+          },
+          new Set(["owner-connection"]),
+        );
+        expect(respond).not.toHaveBeenCalled();
+        expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+        if (status === "completed") {
+          applying.resolve(application);
+        } else {
+          applying.reject(
+            new PluginRuntimeApplicationError("Service startup failed", {
+              ...application,
+              phase: "activate",
+              committed: false,
+            }),
+          );
+        }
+        await pending;
+        expect(broadcastToConnIds).toHaveBeenNthCalledWith(
+          3,
+          "plugins.install.progress",
+          { ...broadcastToConnIds.mock.calls[1]![1], status },
+          new Set(["owner-connection"]),
+        );
+        expect(broadcastToConnIds).toHaveBeenCalledTimes(3);
+        expect(respond.mock.calls[0]?.[0]).toBe(status === "completed");
+      } finally {
+        applying.resolve(application);
+        await pending;
+      }
+    },
+  );
+
   it.each([
     { source: "local", path: "/tmp/demo.tgz" },
     { source: "npm-pack", archivePath: "/tmp/demo.tgz" },
@@ -129,6 +234,66 @@ describe("plugin management Gateway mutation handlers", () => {
     );
   });
 
+  it.each(["current", "cancelled", "revoked"] as const)(
+    "binds initial installation acceptance to the staged surface and a %s request",
+    async (state) => {
+      const config = {
+        plugins: { entries: { workboard: { hooks: { allowPromptInjection: false } } } },
+      };
+      const originalConfig = structuredClone(config);
+      const review = buildPluginCapabilityConsentReview({
+        pluginId: "workboard",
+        manifest: { contracts: { tools: ["workboard_read"] } },
+        record: { source: "clawhub", clawhubPackage: "community/workboard" },
+        config,
+      });
+      const abort = new AbortController();
+      let owned = true;
+      managementMocks.install.mockImplementation(
+        async (options: Parameters<typeof installManagedPlugin>[0]) => {
+          if (state === "cancelled") {
+            abort.abort(new Error("Install request cancelled"));
+          }
+          owned = state !== "revoked";
+          const acknowledge = expectDefined(
+            options.onCapabilityConsent,
+            "staged install acceptance",
+          );
+          expect(await acknowledge(review)).toEqual({ reviewToken: review.reviewToken });
+          return { plugin: workboard, application };
+        },
+      );
+      const result = await callHandler(
+        "plugins.install",
+        { source: "clawhub", packageName: "community/workboard" },
+        config,
+        undefined,
+        false,
+        {
+          signal: abort.signal,
+          sessionMutationCommitGuard: () => {
+            if (!owned) {
+              throw new Error("Install request owner changed");
+            }
+          },
+        },
+      );
+      expect(result.ok).toBe(state === "current");
+      if (state !== "current") {
+        expect(result.error).toHaveProperty(
+          "message",
+          state === "cancelled" ? "Install request cancelled" : "Install request owner changed",
+        );
+      }
+      expect(managementMocks.install).toHaveBeenCalledOnce();
+      expect(config).toEqual(originalConfig);
+      expect(review.grants.hooks).toEqual({
+        allowPromptInjection: { configured: false, effective: false },
+        allowConversationAccess: { effective: false },
+      });
+    },
+  );
+
   it.each([undefined, ["Plugin cleanup did not finish; inspect the Gateway log."]])(
     "returns the completed runtime application and cleanup warnings %j from refresh",
     async (warnings) => {
@@ -148,35 +313,38 @@ describe("plugin management Gateway mutation handlers", () => {
     },
   );
 
-  it("forwards exact batch owners and reports one applied reload receipt", async () => {
-    const plugins = [
-      {
-        pluginId: "workboard",
-        installHash: "a".repeat(64),
-        sourceDigests: { workboard: "b".repeat(64) },
-      },
-      { pluginId: "diffs", installHash: "c".repeat(64) },
-    ];
-    const pluginIds = plugins.map((plugin) => plugin.pluginId);
-    const runtime = { ...application, pluginIds };
-    const warning = "Previous plugin service could not close.";
-    managementMocks.reload.mockResolvedValue({
-      pluginIds,
-      application: { ...runtime, warnings: [warning] },
-      warnings: [warning],
-    });
+  it.each([false, true])(
+    "reports the owner's restart requirement (%s) for one applied reload receipt",
+    async (restartRequired) => {
+      const plugins = [
+        {
+          pluginId: "workboard",
+          installHash: "a".repeat(64),
+          sourceDigests: { workboard: "b".repeat(64) },
+        },
+        { pluginId: "diffs", installHash: "c".repeat(64) },
+      ];
+      const pluginIds = plugins.map((plugin) => plugin.pluginId);
+      const runtime = { ...application, pluginIds };
+      const warning = "Previous plugin service could not close.";
+      managementMocks.reload.mockResolvedValue({
+        pluginIds,
+        application: { ...runtime, restartRequired, warnings: [warning] },
+        warnings: [warning],
+      });
 
-    expect(await callHandler("plugins.reload", { plugins })).toEqual({
-      ok: true,
-      response: { ok: true, pluginIds, restartRequired: false, runtime, warnings: [warning] },
-      error: undefined,
-    });
-    expect(managementMocks.reload).toHaveBeenCalledExactlyOnceWith({
-      plugins,
-      applyRuntime: expect.any(Function),
-      beforePersistentApply: expect.any(Function),
-    });
-  });
+      expect(await callHandler("plugins.reload", { plugins })).toEqual({
+        ok: true,
+        response: { ok: true, pluginIds, restartRequired, runtime, warnings: [warning] },
+        error: undefined,
+      });
+      expect(managementMocks.reload).toHaveBeenCalledExactlyOnceWith({
+        plugins,
+        applyRuntime: expect.any(Function),
+        beforePersistentApply: expect.any(Function),
+      });
+    },
+  );
 
   it.each([
     { label: "cleanup", error: new Error("file cleanup failed") },
@@ -356,7 +524,7 @@ describe("plugin management Gateway mutation handlers", () => {
       application,
       plugin: { ...workboard, enabled: true, state: "enabled" },
       changedPaths: ["plugins.entries.workboard.enabled"],
-      warnings: ['Exclusive slot "memory" switched to "workboard".'],
+      warnings: ['Disabled other "memory" slot plugins: memory-core.'],
     });
 
     const result = await callHandler("plugins.setEnabled", {
@@ -373,7 +541,7 @@ describe("plugin management Gateway mutation handlers", () => {
     expect(result.response).toMatchObject({
       ok: true,
       restartRequired: false,
-      warnings: ['Exclusive slot "memory" switched to "workboard".'],
+      warnings: ['Disabled other "memory" slot plugins: memory-core.'],
     });
   });
 

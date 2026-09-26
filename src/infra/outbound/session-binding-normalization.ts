@@ -5,16 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAccountId } from "../../routing/session-key.js";
-
-/**
- * Minimal conversation shape normalized before binding lookup or storage.
- */
-type ConversationRefShape = {
-  channel: string;
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-};
+import type { ConversationRef } from "./session-binding.types.js";
 
 type ConversationTargetRefShape = {
   conversationId: string;
@@ -40,7 +31,7 @@ export function normalizeConversationTargetRef<T extends ConversationTargetRefSh
 /**
  * Normalizes a full conversation reference for stable binding keys.
  */
-export function normalizeConversationRef<T extends ConversationRefShape>(ref: T): T {
+export function normalizeConversationRef<T extends ConversationRef>(ref: T): T {
   const normalizedTarget = normalizeConversationTargetRef(ref);
   return {
     ...normalizedTarget,
@@ -54,4 +45,25 @@ export function normalizeConversationRef<T extends ConversationRefShape>(ref: T)
  */
 export function buildChannelAccountKey(params: { channel: string; accountId: string }): string {
   return `${normalizeLowercaseStringOrEmpty(params.channel)}:${normalizeAccountId(params.accountId)}`;
+}
+
+// The public inspection shape stays unchanged; private request scope survives
+// prepared-result copies even when the selected record belongs to a parent.
+const INSPECTED_CONVERSATION = Symbol.for("openclaw.sessionBinding.inspectedConversation");
+type ScopedBindingInspection = {
+  status: "available" | "unavailable";
+  [INSPECTED_CONVERSATION]?: Readonly<ConversationRef>;
+};
+
+export function withSessionBindingInspectionConversation<T extends ScopedBindingInspection>(
+  inspection: T,
+  conversation: ConversationRef,
+): T {
+  return Object.assign(inspection, {
+    [INSPECTED_CONVERSATION]: Object.freeze({ ...conversation }),
+  });
+}
+
+export function readSessionBindingInspectionConversation(inspection: ScopedBindingInspection) {
+  return inspection[INSPECTED_CONVERSATION];
 }

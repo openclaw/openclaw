@@ -115,6 +115,7 @@ export function resolvePluginRootPublicSurfacePath(params: {
     artifactBasename,
     ...sourceArtifacts.filter((artifact) => !isTypeScriptPackageEntry(artifact)),
   ];
+  const checkedPaths = new Set<string>();
   for (const [directory, artifacts] of [
     [entryDir, entryArtifacts],
     [pluginRoot, [...preferredArtifacts, artifactBasename, path.join("dist", artifactBasename)]],
@@ -126,6 +127,10 @@ export function resolvePluginRootPublicSurfacePath(params: {
     }
     for (const artifact of artifacts) {
       const candidate = path.join(directory, artifact);
+      if (checkedPaths.has(candidate)) {
+        continue;
+      }
+      checkedPaths.add(candidate);
       if (exists(candidate)) {
         return candidate;
       }

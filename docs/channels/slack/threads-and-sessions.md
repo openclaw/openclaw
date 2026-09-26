@@ -63,6 +63,17 @@ The marker is durable and keyed by account, workspace, and Slack app ID, so Agen
 Admitted channel and group turns fetch a recent window from Slack, including after
 a Gateway restart. `channels.slack.historyLimit` bounds the window (default `50`,
 with `messages.groupChat.historyLimit` as a fallback). Account overrides apply.
+Automatic observed-message windows are capped at 200 messages; the JSON integer
+maximum (`9007199254740991`) selects the 50-message default.
+
+For observed DM context, `dmHistoryLimit` and `dms.<userId>.historyLimit` use a
+default of `0` (disabled) and a maximum of 200 messages. The JSON integer maximum
+selects that disabled default, including for a per-DM override.
+
+These saved fields also control embedded session transcript trimming in user
+turns, where `0` means no trimming and the existing eviction cushion still
+applies. Doctor preserves the configured values; the observed-message ceiling
+does not impose a new transcript-turn ceiling.
 With `requireMention: true`, messages that do not satisfy the configured mention
 or implicit-mention gates do not start agent turns or automatic history reads.
 

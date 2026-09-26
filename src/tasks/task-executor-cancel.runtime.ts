@@ -7,13 +7,23 @@ import {
   cancelTaskById,
   getTaskById,
 } from "./runtime-internal.js";
-import { prepareTaskCancellationControl } from "./task-cancellation-context.js";
+import {
+  prepareTaskCancellationControl,
+  prepareTaskCancellationRead,
+} from "./task-cancellation-context.js";
 
 export async function cancelDetachedTaskRunByIdCore(params: {
   cfg: OpenClawConfig;
   taskId: string;
   reason?: string;
 }) {
+  for (
+    let pending = prepareTaskCancellationRead();
+    pending;
+    pending = prepareTaskCancellationRead()
+  ) {
+    await pending;
+  }
   const task = getTaskById(params.taskId);
   const registeredRuntime = getRegisteredDetachedTaskLifecycleRuntime();
   try {

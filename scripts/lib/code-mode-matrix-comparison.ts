@@ -212,3 +212,270 @@ export async function compareCodeModeMatrixResultsFile(
     .map((line) => JSON.parse(line));
   return compareCodeModeMatrixResults(rows, candidate);
 }
+
+const modeResult = comparableResult.extend({
+  mode: z.enum(["direct", "code"]),
+  buildSha256: z.string(),
+  sourceDirty: z.boolean(),
+  sourcePatchSha256: z.string().nullable(),
+  accounting: z
+    .object({
+      complete: z.boolean(),
+      costComplete: z.boolean(),
+      totalTokens: z.number().finite().nonnegative().nullable(),
+      costUsd: z.number().finite().nonnegative().nullable(),
+      knownTotalTokens: z.number().finite().nonnegative(),
+      knownCostUsd: z.number().finite().nonnegative(),
+      toolFailures: z.number().int().nonnegative(),
+      modelErrors: z.number().int().nonnegative(),
+    })
+    .passthrough()
+    .optional(),
+});
+
+type ModeResult = z.infer<typeof modeResult>;
+type ModePair = { direct: ModeResult; code: ModeResult };
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value)
+      .toSorted(([a], [b]) => a.localeCompare(b))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function completedTask(row: ModeResult): boolean {
+  return row.passed && row.oracle?.identity === true;
+}
+
+function tokens(row: ModeResult): number | null {
+  return row.accounting?.complete ? (row.accounting.totalTokens ?? null) : null;
+}
+
+function price(row: ModeResult): number | null {
+  return row.accounting?.costComplete ? (row.accounting.costUsd ?? null) : null;
+}
+
+function percentile(sorted: readonly number[], quantile: number): number | null {
+  if (sorted.length === 0) {
+    return null;
+  }
+  const index = (sorted.length - 1) * quantile;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  return sorted[lower]! + (sorted[upper]! - sorted[lower]!) * (index - lower);
+}
+
+/** These deliberately selected workloads support descriptive pilot statistics only. */
+function distribution(values: readonly number[]) {
+  const sorted = values.toSorted((a, b) => a - b);
+  const mean =
+    values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  return {
+    samples: values.length,
+    mean,
+    p50: percentile(sorted, 0.5),
+    min: sorted[0] ?? null,
+    max: sorted.at(-1) ?? null,
+  };
+}
+
+function modeTotals(rows: readonly ModeResult[]) {
+  const completed = rows.filter(completedTask).length;
+  const tokenValues = rows.map(tokens);
+  const costValues = rows.map(price);
+  const tokenTotal = tokenValues.every((value) => value !== null)
+    ? tokenValues.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+    : null;
+  const costTotal = costValues.every((value) => value !== null)
+    ? costValues.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+    : null;
+  return {
+    attempts: rows.length,
+    completed,
+    failed: rows.length - completed,
+    successRate: rows.length > 0 ? completed / rows.length : null,
+    completedWithObservedErrors: rows.filter(
+      (row) =>
+        completedTask(row) &&
+        row.accounting &&
+        row.accounting.toolFailures + row.accounting.modelErrors > 0,
+    ).length,
+    usageMissing: tokenValues.filter((value) => value === null).length,
+    costMissing: costValues.filter((value) => value === null).length,
+    knownTotalTokens: rows.reduce((sum, row) => sum + (row.accounting?.knownTotalTokens ?? 0), 0),
+    knownCostUsd: rows.reduce((sum, row) => sum + (row.accounting?.knownCostUsd ?? 0), 0),
+    totalTokens: tokenTotal,
+    costUsd: costTotal,
+    // Failed attempts stay in the numerator, even when no task completes.
+    tokensPerCompletedTask: completed > 0 && tokenTotal !== null ? tokenTotal / completed : null,
+    costPerCompletedTask: completed > 0 && costTotal !== null ? costTotal / completed : null,
+  };
+}
+
+function pairMeasurement(pair: ModePair, measure: (row: ModeResult) => number | null) {
+  const direct = measure(pair.direct);
+  const code = measure(pair.code);
+  return completedTask(pair.direct) && completedTask(pair.code) && direct !== null && code !== null
+    ? { direct, code, delta: code - direct, ratio: direct > 0 ? code / direct : null }
+    : null;
+}
+
+function summarizeModeGroup(rows: readonly ModeResult[], pairs: readonly ModePair[]) {
+  const direct = modeTotals(rows.filter((row) => row.mode === "direct"));
+  const code = modeTotals(rows.filter((row) => row.mode === "code"));
+  const unmatched = rows.length - pairs.length * 2;
+  const successfulPairs = pairs.filter(
+    (pair) => completedTask(pair.direct) && completedTask(pair.code),
+  );
+  const usageComplete = unmatched === 0 && direct.usageMissing === 0 && code.usageMissing === 0;
+  const costComplete = usageComplete && direct.costMissing === 0 && code.costMissing === 0;
+  const tokenDeltas = successfulPairs.flatMap((pair) => {
+    const observation = pairMeasurement(pair, tokens);
+    return observation ? [observation.delta] : [];
+  });
+  const costDeltas = successfulPairs.flatMap((pair) => {
+    const observation = pairMeasurement(pair, price);
+    return observation ? [observation.delta] : [];
+  });
+  const latenciesComplete = successfulPairs.every(
+    (pair) =>
+      pair.direct.gateway?.taskElapsedMs !== undefined &&
+      pair.code.gateway?.taskElapsedMs !== undefined,
+  );
+  const successDeltas = pairs.map(
+    (pair) => Number(completedTask(pair.code)) - Number(completedTask(pair.direct)),
+  );
+  return {
+    models: [...new Set(rows.map((row) => row.model))],
+    tasks: [...new Set(rows.map((row) => row.task))],
+    pairs: pairs.length,
+    unmatched,
+    successfulPairs: successfulPairs.length,
+    direct,
+    code,
+    pairedSuccessDifference: distribution(successDeltas),
+    pairedSuccessfulDeltas: {
+      totalTokens: usageComplete ? distribution(tokenDeltas) : null,
+      costUsd: costComplete ? distribution(costDeltas) : null,
+      taskElapsedMs:
+        unmatched === 0 && latenciesComplete
+          ? distribution(
+              successfulPairs.map(
+                (pair) => pair.code.gateway!.taskElapsedMs! - pair.direct.gateway!.taskElapsedMs!,
+              ),
+            )
+          : null,
+    },
+    operationalRatios: {
+      totalTokensPerCompletedTask:
+        usageComplete &&
+        direct.tokensPerCompletedTask !== null &&
+        direct.tokensPerCompletedTask > 0 &&
+        code.tokensPerCompletedTask !== null
+          ? code.tokensPerCompletedTask / direct.tokensPerCompletedTask
+          : null,
+      costPerCompletedTask:
+        costComplete &&
+        direct.costPerCompletedTask !== null &&
+        direct.costPerCompletedTask > 0 &&
+        code.costPerCompletedTask !== null
+          ? code.costPerCompletedTask / direct.costPerCompletedTask
+          : null,
+    },
+  };
+}
+
+/** Same-source treatment comparison; the existing revision comparator remains unchanged. */
+export function compareCodeModeMatrixModes(values: readonly unknown[]) {
+  if (values.length > 10_000) {
+    throw new Error("Mode comparison exceeds the 10,000-observation bound.");
+  }
+  const rows = values.map((value) => modeResult.parse(value));
+  const groups = new Map<string, Partial<Record<"direct" | "code", ModeResult>>>();
+  for (const row of rows) {
+    if (!row.workload) {
+      throw new Error("Mode comparison requires workload fingerprints on every attempt.");
+    }
+    const identity = canonicalJson({
+      model: row.model,
+      task: row.task,
+      repetition: row.repetition,
+      gitSha: row.gitSha,
+      buildSha256: row.buildSha256,
+      sourceDirty: row.sourceDirty,
+      sourcePatchSha256: row.sourcePatchSha256,
+      workload: row.workload,
+    });
+    const group = groups.get(identity) ?? {};
+    if (group[row.mode]) {
+      throw new Error(`Duplicate mode-comparison observation: ${row.id}`);
+    }
+    group[row.mode] = row;
+    groups.set(identity, group);
+  }
+  const pairs: ModePair[] = [];
+  const incompletePairs: string[] = [];
+  for (const group of groups.values()) {
+    if (group.direct && group.code) {
+      pairs.push({ direct: group.direct, code: group.code });
+    } else {
+      incompletePairs.push((group.direct ?? group.code)!.id);
+    }
+  }
+  const grouped = (includeTask: boolean) => {
+    const subsets = new Map<string, ModeResult[]>();
+    for (const row of rows) {
+      const settings = row.workload!.settings;
+      const identity = canonicalJson({
+        model: row.model,
+        ...(includeTask
+          ? { task: row.task, settings }
+          : { thinking: settings.thinking, fast: settings.fast, runtime: settings.runtime }),
+        gitSha: row.gitSha,
+        buildSha256: row.buildSha256,
+        sourcePatchSha256: row.sourcePatchSha256,
+      });
+      const subset = subsets.get(identity) ?? [];
+      subset.push(row);
+      subsets.set(identity, subset);
+    }
+    return [...subsets]
+      .toSorted(([a], [b]) => a.localeCompare(b))
+      .map(([identity, subset]) => {
+        const members = new Set(subset);
+        return Object.assign(
+          { identity: JSON.parse(identity) as unknown },
+          summarizeModeGroup(
+            subset,
+            pairs.filter((pair) => members.has(pair.direct) && members.has(pair.code)),
+          ),
+        );
+      });
+  };
+  return {
+    interpretation:
+      "Code minus direct, paired on model/task/seed, exact source/build, prompt/fixture and all settings. Completion means automated artifact/effect checks passed; final-response correctness and independent-task integrity require separate adjudication. All scheduled attempts contribute to operational totals; missing usage suppresses token savings for the entire group. Completed-with-observed-errors counts successful cells containing tool or model errors, including expected probes; it does not measure repair turns. Cost placeholders remain unavailable. Task latency excludes startup/interview. No comparison mixes models or reasoning settings.",
+    uncertainty:
+      "Exploratory pilot of deliberately selected heterogeneous tasks, not a random population sample. Counts, means, medians and ranges describe these observations only; there are no inferential intervals or statistical readiness gates. Ratios use the observed schedule's task frequencies; inspect task groups before aggregating. Unattempted or entirely absent pairs are not represented by results alone; consult the retained schedule.",
+    incompletePairs,
+    byModel: grouped(false),
+    byTask: grouped(true),
+    pairs: pairs.map((pair) => ({
+      directId: pair.direct.id,
+      codeId: pair.code.id,
+      model: pair.direct.model,
+      task: pair.direct.task,
+      repetition: pair.direct.repetition,
+      bothCompleted: completedTask(pair.direct) && completedTask(pair.code),
+      usageComplete: tokens(pair.direct) !== null && tokens(pair.code) !== null,
+      totalTokens: pairMeasurement(pair, tokens),
+      costUsd: pairMeasurement(pair, price),
+    })),
+  };
+}

@@ -1,10 +1,44 @@
 import { expect, it } from "vitest";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
-import { executionParams, mocks } from "./update-command-execution.test-support.js";
+import {
+  executionParams,
+  inspectOrStopService,
+  mocks,
+} from "./update-command-execution.test-support.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 
 export function registerExecutionFailureTests() {
+  it.each(["service-definition-not-writable", "service-context-changed"] as const)(
+    "names the managed-service refusal before package mutation: %s",
+    async (code) => {
+      const params = executionParams("package");
+      if (code === "service-definition-not-writable") {
+        params.managedServiceRoot = "/serving/install";
+      } else {
+        params.managedServiceRootRedirect = { root: params.root, previousRoot: "/other/install" };
+        mocks.maybeStopService.mockImplementation(async () => ({
+          ...inspectOrStopService("inspect"),
+          serviceEnv: undefined,
+        }));
+      }
+
+      const execution = await executeMutableUpdate(params);
+
+      expect(execution).toMatchObject({
+        mutationStarted: false,
+        result: {
+          status: "error",
+          reason: "managed-service-preflight",
+          steps: [{ failureFacts: [{ check: "managed-service-preflight", code }] }],
+        },
+      });
+      expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+      expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+      expect(mocks.serviceStopped).toBe(false);
+    },
+  );
+
   it.each(["activation", "requester revocation", "service ownership"])(
     "reports %s exceptions without retrying a fallback package updater",
     async (kind) => {
@@ -36,7 +70,9 @@ export function registerExecutionFailureTests() {
           {
             check: "managed-service",
             code: "service-manager-access-denied",
-            message: "Service manager returned EACCES.",
+            message: expect.stringContaining(
+              "The service-manager probe could not start (EACCES/EPERM).",
+            ),
           },
         ]);
       }

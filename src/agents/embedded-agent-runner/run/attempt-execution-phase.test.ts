@@ -28,7 +28,6 @@ import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 
 const mocks = vi.hoisted(() => ({
   abortable: vi.fn(),
-  bindOwnedSessionTranscriptWrites: vi.fn(),
   createRunAbort: vi.fn(),
   flushPendingToolResultsAfterIdle: vi.fn(),
   installStreamGuards: vi.fn(),
@@ -36,13 +35,8 @@ const mocks = vi.hoisted(() => ({
   prepareStream: vi.fn(),
   prepareTimeout: vi.fn(),
   runSettledPhase: vi.fn(),
-  withOwnedSessionTranscriptWrites: vi.fn(),
 }));
 
-vi.mock("../../../config/sessions/transcript-write-context.js", () => ({
-  bindOwnedSessionTranscriptWrites: mocks.bindOwnedSessionTranscriptWrites,
-  withOwnedSessionTranscriptWrites: mocks.withOwnedSessionTranscriptWrites,
-}));
 vi.mock("../wait-for-idle-before-flush.js", () => ({
   flushPendingToolResultsAfterIdle: mocks.flushPendingToolResultsAfterIdle,
 }));
@@ -195,7 +189,9 @@ async function createFixture(
     },
     sessionLock: {
       compactionTimeoutMs: 1_000,
-      ownedTranscriptWriteContext: {},
+      ownedTranscriptWriteContext: {
+        withTranscriptWrite: async <T>(operation: () => T | Promise<T>) => await operation(),
+      },
       withOwnedTranscriptWrite: vi.fn(),
     },
     setup: {
@@ -220,10 +216,6 @@ async function createFixture(
   } as unknown as ExecutionInput;
 
   mocks.abortable.mockImplementation((_signal, promise) => promise);
-  mocks.bindOwnedSessionTranscriptWrites.mockImplementation((_context, operation) => operation);
-  mocks.withOwnedSessionTranscriptWrites.mockImplementation(
-    async (_context, operation) => await operation(),
-  );
   mocks.installStreamGuards.mockImplementation(() => {
     order.push("guards");
     return {
@@ -345,7 +337,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           {
             type: "openai_responses_terminal",
             timestamp: 1,
-            details: { eventType: "response.incomplete", incompleteReason: "max_output_tokens" },
+            details: {
+              eventType: "response.incomplete",
+              stopReason: "length",
+              incompleteReason: "max_output_tokens",
+            },
           },
         ];
       }
@@ -680,8 +676,8 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     const abortInput = mocks.createRunAbort.mock.calls[0]?.[0];
     expect(abortInput.abortActiveSession).toBe(fixture.abortActiveSession);
     const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
-    expect(streamInput.activeSession).toBe(fixture.activeSession);
-    expect(streamInput.trustedLocalMediaToolNames).toEqual(new Set(["read"]));
+    expect(streamInput.agentSession.activeSession).toBe(fixture.activeSession);
+    expect(streamInput.agentSession.trustedLocalMediaToolNames).toEqual(new Set(["read"]));
     expect(streamInput.onModelUsage).toBe(
       mocks.installStreamGuards.mock.results[0]?.value.onModelUsage,
     );
@@ -706,7 +702,6 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     await settledInput.preparedStreamRuntime.promptActiveSession("hello");
     expect(fixture.activeSession.prompt).toHaveBeenCalledWith("hello", undefined);
     expect(fixture.trackPromptSettlePromise).toHaveBeenCalledOnce();
-    expect(mocks.withOwnedSessionTranscriptWrites).toHaveBeenCalledOnce();
   });
 
   it("publishes the replacement fact and invalidates the skill cache before attempt cleanup throws", async () => {

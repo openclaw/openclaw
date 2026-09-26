@@ -8,17 +8,14 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
-import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
+import type {
+  AgentDatabasePreflightStats,
+  OpenClawDatabaseSchemaPreflight,
+} from "./openclaw-database-preflight.types.js";
 
 // Snapshot preparation can be disk-heavy; overlap one additional agent
 // without fanning out across every registered database.
 export const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
-
-export type AgentDatabasePreflightStats = {
-  schemaProcessCount: number;
-  schemaInspectionCount: number;
-  schemaSnapshotCount: number;
-};
 
 export async function preflightAgentDatabasesBounded<T>(
   targets: readonly T[],

@@ -50,7 +50,7 @@ vi.mock("../infra/sqlite-post-commit.js", async (importOriginal) => ({
 vi.mock("../tasks/task-flow-registry.store.kernel.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../tasks/task-flow-registry.store.kernel.js")>()),
   readTaskFlowRecord: mocks.readFlow,
-  updateTaskFlowRecordInDatabase: mocks.updateFlow,
+  updateSelectedTaskFlowRecordInDatabase: mocks.updateFlow,
   upsertTaskFlowRowInDatabase: mocks.insertFlow,
 }));
 vi.mock("../tasks/task-flow-managed-run-task.kernel.js", () => ({

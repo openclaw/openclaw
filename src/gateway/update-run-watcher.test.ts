@@ -1,20 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { gatewayUpdateCampaign } from "../infra/update-campaign.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { startUpdateRunWatcher, wakeUpdateRunWatcher } from "./update-run-watcher.js";
 
 const ledger = vi.hoisted(() => ({
   run: undefined as
-    | Pick<UpdateRunRecord, "runId" | "phase" | "status" | "updatedAtMs" | "steps">
+    | Pick<UpdateRunRecord, "runId" | "phase" | "status" | "updatedAtMs" | "steps" | "origin">
     | undefined,
   reads: vi.fn(),
+  reconcile: vi.fn<() => Promise<UpdateRunRecord[]>>(),
   notice: vi.fn(async (_run: UpdateRunRecord) => {}),
 }));
-vi.mock("../state/openclaw-state-db.js", () => ({
+vi.mock("../state/openclaw-state-db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db.js")>()),
   reconcileOpenClawStateSchemaPublication: () => undefined,
 }));
 vi.mock("../infra/update-run-interruption.js", () => ({
-  reconcileInterruptedUpdateRuns: async () => [],
+  reconcileInterruptedUpdateRuns: ledger.reconcile,
 }));
 vi.mock("./update-run-notice.runtime.js", () => ({ notifyUpdateRunPhase: ledger.notice }));
 vi.mock("../infra/update-run-ledger.js", () => ({
@@ -34,11 +37,13 @@ beforeEach(() => {
   vi.useFakeTimers();
   ledger.run = undefined;
   ledger.reads.mockClear();
+  ledger.reconcile.mockReset().mockResolvedValue([]);
   ledger.notice.mockClear();
 });
 afterEach(async () => {
   await watcher?.stop();
   watcher = undefined;
+  gatewayUpdateCampaign.clear();
   vi.useRealTimers();
 });
 
@@ -49,6 +54,7 @@ function beginRun() {
     status: "running",
     updatedAtMs: 1,
     steps: [],
+    origin: {},
   };
 }
 
@@ -58,6 +64,29 @@ function currentRunEvent() {
 }
 
 describe("Gateway update run watcher", () => {
+  it("clears the matching campaign before publishing a terminal run", async () => {
+    beginRun();
+    const onChange = vi.fn();
+    gatewayUpdateCampaign.announce({
+      target: { kind: "package", version: "2026.9.6" },
+      apply: async () => "applied",
+      onChange,
+    });
+    gatewayUpdateCampaign.adopt();
+    ledger.run!.origin = { campaignId: gatewayUpdateCampaign.getState()!.id };
+    const broadcast = vi.fn(() => {
+      if (ledger.run!.status === "failed") {
+        expect(gatewayUpdateCampaign.getState()).toBeUndefined();
+      }
+    });
+    watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
+    await vi.advanceTimersByTimeAsync(0);
+    ledger.run = { ...ledger.run!, status: "failed", phase: "finished", updatedAtMs: 2 };
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(onChange).toHaveBeenLastCalledWith(undefined);
+    expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+  });
+
   it("joins an entered notice during shutdown and retires queued notices", async () => {
     beginRun();
     const notice = createDeferredCore();
@@ -92,19 +121,31 @@ describe("Gateway update run watcher", () => {
     }
   });
 
-  it("notifies only activating and terminal phase changes, not detail revisions", async () => {
+  it("keeps phase notices and terminal scans responsive while candidate verification is pending", async () => {
     beginRun();
     ledger.run!.steps = [{ step: "notice:ack", status: "completed" }];
-    watcher = startUpdateRunWatcher({ broadcast: vi.fn(), log: { warn: vi.fn() } });
-    ledger.run = { ...ledger.run!, phase: "activating", updatedAtMs: 2 };
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(ledger.notice).toHaveBeenCalledOnce();
-    ledger.run = { ...ledger.run!, updatedAtMs: 3 };
-    await vi.advanceTimersByTimeAsync(4_000);
-    expect(ledger.notice).toHaveBeenCalledOnce();
-    ledger.run = { ...ledger.run!, phase: "finished", status: "succeeded", updatedAtMs: 4 };
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(ledger.notice.mock.calls.map(([run]) => run.phase)).toEqual(["activating", "finished"]);
+    const verification = createDeferredCore<UpdateRunRecord[]>();
+    ledger.reconcile.mockReturnValueOnce(verification.promise);
+    const broadcast = vi.fn();
+    watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
+    try {
+      ledger.run = { ...ledger.run!, phase: "activating", updatedAtMs: 2 };
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(ledger.notice).toHaveBeenCalledOnce();
+      ledger.run = { ...ledger.run!, updatedAtMs: 3 };
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(ledger.notice).toHaveBeenCalledOnce();
+      ledger.run = { ...ledger.run!, phase: "finished", status: "succeeded", updatedAtMs: 4 };
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(ledger.notice.mock.calls.map(([run]) => run.phase)).toEqual([
+        "activating",
+        "finished",
+      ]);
+      expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+      expect(ledger.reconcile).toHaveBeenCalledOnce();
+    } finally {
+      verification.resolve([]);
+    }
   });
 
   it("leaves pre-acknowledgement refusal reporting to the command", async () => {

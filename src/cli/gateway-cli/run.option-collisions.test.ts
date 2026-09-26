@@ -96,10 +96,6 @@ const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { config: {}, exists: false, sourceConfig: {}, valid: true } as Record<string, unknown>,
 }));
-const pristineStartupMigrationPlan = vi.hoisted(() => ({
-  config: vi.fn(),
-  state: vi.fn(),
-}));
 const readBestEffortConfig = vi.fn(async () => configState.cfg);
 type ConfigSnapshotReadOptionsStub = {
   isolateEnv?: boolean;
@@ -174,13 +170,6 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: async () => configState.snapshot,
   readConfigFileSnapshotWithPluginMetadata: (options?: ConfigSnapshotReadOptionsStub) =>
     readConfigFileSnapshotWithPluginMetadata(options),
-}));
-
-vi.mock("../../commands/doctor/shared/pristine-startup-state.js", () => ({
-  planPristineStartupConfigMigrations: (config: unknown, env?: NodeJS.ProcessEnv) =>
-    pristineStartupMigrationPlan.config(config, env),
-  planPristineStartupStateMigrations: (env?: NodeJS.ProcessEnv) =>
-    pristineStartupMigrationPlan.state(env),
 }));
 
 vi.mock("../../config/paths.js", async (importOriginal) => ({
@@ -419,16 +408,6 @@ describe("gateway run option collisions", () => {
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { config: {}, exists: false, sourceConfig: {}, valid: true };
-    pristineStartupMigrationPlan.config.mockReset();
-    pristineStartupMigrationPlan.config.mockReturnValue({
-      skipAllStateMigrations: false,
-      skipCoreStateMigrations: false,
-    });
-    pristineStartupMigrationPlan.state.mockReset();
-    pristineStartupMigrationPlan.state.mockReturnValue({
-      skipAllStateMigrations: false,
-      skipCoreStateMigrations: false,
-    });
     netState.autoBindHost = "127.0.0.1";
     netState.container = false;
     detectRespawnSupervisor.mockReset().mockReturnValue(null);
@@ -565,50 +544,6 @@ describe("gateway run option collisions", () => {
     await runGatewayCli(argv);
 
     expect(gatewayStartOptions().ambientEnvTriggers).toBe("allow");
-  });
-
-  it("drops the pristine core fact when guarded config becomes stateful", async () => {
-    const initialConfig = {
-      gateway: { mode: "local" },
-      plugins: { load: { paths: ["/plugins/example"] } },
-    };
-    configState.snapshot = {
-      config: initialConfig,
-      exists: true,
-      hash: "initial",
-      parsed: initialConfig,
-      path: "/tmp/openclaw.json",
-      sourceConfig: initialConfig,
-      valid: true,
-    };
-    pristineStartupMigrationPlan.state.mockReturnValue({
-      skipAllStateMigrations: false,
-      skipCoreStateMigrations: true,
-    });
-    const {
-      prepareGatewayRunBootstrap,
-      selectGatewayRunEnvironment,
-      wasPreparedGatewayRunCoreStatePristine,
-    } = await import("./pre-bootstrap.js");
-
-    expect(await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime })).toBe(true);
-    const recoveredConfig = {
-      gateway: { mode: "local" },
-      session: { store: "/tmp/sessions.json" },
-    };
-    configState.snapshot = {
-      config: recoveredConfig,
-      exists: true,
-      hash: "recovered",
-      parsed: recoveredConfig,
-      path: "/tmp/openclaw.json",
-      sourceConfig: recoveredConfig,
-      valid: true,
-    };
-
-    expect(await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime })).toBe(true);
-    expect(wasPreparedGatewayRunCoreStatePristine()).toBe(false);
-    expect(pristineStartupMigrationPlan.config).toHaveBeenCalledWith(recoveredConfig, process.env);
   });
 
   it("refreshes the managed proxy from the final accepted config before gateway startup", async () => {
@@ -922,7 +857,7 @@ describe("gateway run option collisions", () => {
     );
   });
 
-  it("admits deterministic legacy repairs to gateway preflight and rejects unrelated drift", async () => {
+  it("leaves legacy config environment inactive and requires fresh selection after repair", async () => {
     const selectedStateDir = "/tmp/openclaw-stable-upgrade-state";
     await withEnvAsync({ OPENCLAW_STATE_DIR: undefined }, async () => {
       const stableConfig = {
@@ -964,7 +899,7 @@ describe("gateway run option collisions", () => {
 
       expect(await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime })).toBe(true);
       expect(await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime })).toBe(true);
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(selectedStateDir);
+      expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
 
       const repairedConfig = {
         agents: { defaults: {}, entries: { main: {} } },
@@ -990,6 +925,17 @@ describe("gateway run option collisions", () => {
         valid: true,
         warnings: [],
       } satisfies ConfigFileSnapshot;
+      await expect(
+        recheckGatewayRunBootstrap({
+          opts: {},
+          runtime: defaultRuntime,
+          snapshot: repairedSnapshot,
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+      configState.snapshot = repairedSnapshot;
+      expect(await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime })).toBe(true);
+      expect(await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime })).toBe(true);
+      expect(process.env.OPENCLAW_STATE_DIR).toBe(selectedStateDir);
       expect(
         await recheckGatewayRunBootstrap({
           opts: {},
@@ -1746,14 +1692,13 @@ describe("gateway run option collisions", () => {
     );
   });
 
-  it("keeps managed keys referenced by shorthand when startup repairs the config", async () => {
+  it("leaves service environment unchanged until Doctor repairs invalid config", async () => {
     detectRespawnSupervisor.mockReturnValue("systemd");
     const { createConfigResolutionFacts, setConfigResolutionFacts } =
       await import("../../config/resolution-facts.js");
-    // A repairable legacy key sends this boot through startup repair, which rebuilds sourceConfig
-    // as a clone. Reading the preserve set off the rebuilt object alone loses the recorded name.
     const sourceConfig = {
       session: { idleMinutes: 45 },
+      env: { vars: { CONFIG_UNTRUSTED_KEY: "must-not-apply" } },
       models: { providers: { minimax: { apiKey: "substituted-not-a-real-key" } } },
     };
     setConfigResolutionFacts(
@@ -1790,12 +1735,16 @@ describe("gateway run option collisions", () => {
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "SHORTHAND_KEY,REMOVED_KEY",
           SHORTHAND_KEY: "environment-file-value",
           REMOVED_KEY: "stale-service-value",
+          CONFIG_UNTRUSTED_KEY: undefined,
         },
         async () => {
           const { selectGatewayRunEnvironment } = await import("./pre-bootstrap.js");
-          await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
+          expect(await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime })).toBe(
+            true,
+          );
           expect(process.env.SHORTHAND_KEY).toBe("environment-file-value");
-          expect(process.env.REMOVED_KEY).toBeUndefined();
+          expect(process.env.REMOVED_KEY).toBe("stale-service-value");
+          expect(process.env.CONFIG_UNTRUSTED_KEY).toBeUndefined();
         },
       ),
     );

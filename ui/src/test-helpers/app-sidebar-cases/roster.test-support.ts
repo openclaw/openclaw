@@ -118,9 +118,18 @@ export async function mountRoster(
   gateway.connection.gatewayUrl = gatewayUrl;
   patchSettings({ gatewayUrl });
   const sessions = createSessionsHarness("main", ["agent:main:main"]);
-  if (childRows) {
-    sessions.list.mockResolvedValue({ ...result, sessions: childRows, count: childRows.length });
-  }
+  sessions.list.mockImplementation((options) => {
+    const children =
+      childRows ??
+      (options?.spawnedBy
+        ? result.sessions.filter((row) => row.spawnedBy === options.spawnedBy)
+        : undefined);
+    return Promise.resolve(
+      children
+        ? { ...result, sessions: children, count: children.length }
+        : sessions.sessions.state.result,
+    );
+  });
   const mainRows = fixtureRows.filter((row) => row.agentId === "main");
   sessions.publish({ result: { ...result, count: mainRows.length, sessions: mainRows } });
   const mounted = await mountSidebar(gateway, sessions.sessions, "panel", agents, approvalQueue);

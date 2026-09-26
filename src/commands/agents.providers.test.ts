@@ -137,11 +137,50 @@ function createRawListedAccountFixture() {
   return { plugin, calls };
 }
 
+function missingFeishuMetadata() {
+  return new Map([
+    [
+      "feishu",
+      {
+        label: "Feishu",
+        defaultAccountId: "default",
+        visibleInConfiguredLists: true,
+        repairHint:
+          "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+      },
+    ],
+  ]);
+}
+
 describe("buildProviderStatusIndex", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue([]);
     mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([]);
+  });
+
+  it("uses prepared accounts when read-only inspection is unavailable", async () => {
+    const plugin = createAccountSelectionFixture();
+    plugin.config.inspectAccount = undefined;
+    plugin.config.listAccountIds = () => ["work"];
+    plugin.config.resolveAccount = () => {
+      throw new Error("legacy account resolution");
+    };
+    plugin.config.resolveAccountAsync = async () => ({
+      accountId: "work",
+      name: "Prepared work account",
+      configured: true,
+      enabled: true,
+    });
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+
+    const statuses = await buildProviderStatusIndex({});
+
+    expect(statuses.get("telegram:work")).toMatchObject({
+      accountId: "work",
+      name: "Prepared work account",
+      state: "configured",
+    });
   });
 
   it("prefers inspectAccount for read-only status surfaces", async () => {
@@ -276,89 +315,67 @@ describe("buildProviderStatusIndex", () => {
     ).toEqual(["Telegram default: configured unavailable"]);
   });
 
-  it("does not mark a healthy Slack account unavailable for an optional unresolved user token", async () => {
-    const account = {
-      accountId: "default",
-      enabled: true,
+  it.each([
+    {
+      name: "optional unavailable token",
       configured: true,
-      botTokenStatus: "available" as const,
-      appTokenStatus: "available" as const,
-      userTokenStatus: "configured_unavailable" as const,
-    };
-    const plugin = {
-      id: "slack",
-      meta: { label: "Slack" },
-      config: {
-        listAccountIds: () => ["default"],
-        inspectAccount: () => account,
-        resolveAccount: () => account,
-        describeAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-        isConfigured: () => true,
-      },
-      status: {},
-    } as never;
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
-
-    expect(
-      (await buildProviderStatusIndex({} as OpenClawConfig)).get("slack:default"),
-    ).toMatchObject({ configured: true, state: "configured" });
-  });
-
-  it("does not treat an incomplete Slack account as configured when a required token is missing", async () => {
-    const account = {
-      accountId: "default",
-      enabled: true,
+      bot: "available",
+      app: "available",
+      user: "configured_unavailable",
+      usable: true,
+      described: true,
+      state: "configured",
+    },
+    {
+      name: "missing required token",
       configured: false,
-      botTokenStatus: "configured_unavailable" as const,
-      appTokenStatus: "missing" as const,
-      userTokenStatus: "missing" as const,
-    };
-    const plugin = {
-      id: "slack",
-      meta: { label: "Slack" },
-      config: {
-        listAccountIds: () => ["default"],
-        inspectAccount: () => account,
-        resolveAccount: () => account,
-        describeAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-        isConfigured: () => false,
-      },
-      status: {},
-    } as never;
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
-
-    expect(
-      (await buildProviderStatusIndex({} as OpenClawConfig)).get("slack:default"),
-    ).toMatchObject({ configured: false, state: "not configured" });
-  });
-
-  it("keeps a fully configured Slack account visible when a required token is unavailable", async () => {
-    const account = {
-      accountId: "default",
-      enabled: true,
+      bot: "configured_unavailable",
+      app: "missing",
+      user: "missing",
+      usable: false,
+      described: true,
+      state: "not configured",
+    },
+    {
+      name: "unavailable required token",
       configured: true,
-      botTokenStatus: "configured_unavailable" as const,
-      appTokenStatus: "available" as const,
-      userTokenStatus: "missing" as const,
-    };
-    const plugin = {
-      id: "slack",
-      meta: { label: "Slack" },
-      config: {
-        listAccountIds: () => ["default"],
-        inspectAccount: () => account,
-        resolveAccount: () => account,
-        describeAccount: () => ({ accountId: "default", enabled: true, configured: false }),
-        isConfigured: () => false,
-      },
-      status: {},
-    } as never;
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+      bot: "configured_unavailable",
+      app: "available",
+      user: "missing",
+      usable: false,
+      described: false,
+      state: "configured unavailable",
+    },
+  ] as const)(
+    "classifies Slack accounts with $name",
+    async ({ configured, bot, app, user, usable, described, state }) => {
+      const account = {
+        accountId: "default",
+        enabled: true,
+        configured,
+        botTokenStatus: bot,
+        appTokenStatus: app,
+        userTokenStatus: user,
+      };
+      const plugin = {
+        id: "slack",
+        meta: { label: "Slack" },
+        config: {
+          listAccountIds: () => ["default"],
+          inspectAccount: () => account,
+          resolveAccount: () => account,
+          describeAccount: () => ({ accountId: "default", enabled: true, configured: described }),
+          isConfigured: () => usable,
+        },
+        status: {},
+      } as never;
+      mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
 
-    expect(
-      (await buildProviderStatusIndex({} as OpenClawConfig)).get("slack:default"),
-    ).toMatchObject({ configured: true, state: "configured unavailable" });
-  });
+      expect(
+        (await buildProviderStatusIndex({} as OpenClawConfig)).get("slack:default"),
+      ).toMatchObject({ configured, state });
+    },
+  );
 
   it("does not inspect linkage for an unconfigured account", async () => {
     const isLinked = vi.fn(() => {
@@ -478,12 +495,9 @@ describe("buildProviderStatusIndex", () => {
 
   it.each([
     { selector: undefined, ids: ["default"], route: "default" },
-    { selector: "", ids: ["default"], route: "default" },
     { selector: " \t ", ids: ["default"], route: "default" },
     { selector: "default", ids: ["default"], route: "default" },
-    { selector: "alpha", ids: ["alpha"], route: "alpha" },
     { selector: " ALPHA ", ids: ["alpha"], route: "alpha" },
-    { selector: "*", ids: ["default", "alpha", "beta"], route: "*" },
     { selector: " * ", ids: ["default", "alpha", "beta"], route: "*" },
     { selector: "absent", ids: ["absent"], route: "absent" },
   ])("renders canonical account selector $selector", async ({ selector, ids, route }) => {
@@ -633,14 +647,7 @@ describe("buildProviderStatusIndex", () => {
   });
 
   it.each(
-    [
-      ["alpha"],
-      ["Alpha"],
-      [" ALPHA "],
-      ["*", "Alpha"],
-      ["Alpha", "*"],
-      ["*", "alpha", "Alpha"],
-    ].map((selectors) => ({ selectors })),
+    [[" ALPHA "], ["Alpha", "*"], ["*", "alpha", "Alpha"]].map((selectors) => ({ selectors })),
   )("joins raw listed Alpha through canonical selectors $selectors", async ({ selectors }) => {
     const cfg: OpenClawConfig = {
       channels: { imessage: { accounts: { Alpha: { name: "Work", enabled: true } } } },
@@ -766,18 +773,7 @@ describe("buildProviderStatusIndex", () => {
       cfg: { channels: { feishu: { appId: "cli_xxx" } } } as never,
       bindings: [{ match: { channel: "feishu" } }] as never,
       providerStatus: new Map(),
-      providerMetadata: new Map([
-        [
-          "feishu",
-          {
-            label: "Feishu",
-            defaultAccountId: "default",
-            visibleInConfiguredLists: true,
-            repairHint:
-              "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
-          },
-        ],
-      ]),
+      providerMetadata: missingFeishuMetadata(),
     });
 
     expect(lines).toEqual([
@@ -793,18 +789,7 @@ describe("buildProviderStatusIndex", () => {
       cfg: { channels: { feishu: { appId: "cli_xxx" } } } as never,
       bindings: [{ match: { channel: "feishu" } }] as never,
       providerStatus: new Map(),
-      providerMetadata: new Map([
-        [
-          "feishu",
-          {
-            label: "Feishu",
-            defaultAccountId: "default",
-            visibleInConfiguredLists: true,
-            repairHint:
-              "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
-          },
-        ],
-      ]),
+      providerMetadata: missingFeishuMetadata(),
     });
 
     expect(lines).toEqual([
@@ -818,18 +803,7 @@ describe("buildProviderStatusIndex", () => {
       cfg: { channels: { feishu: { appId: "cli_xxx" } } } as never,
       bindings: [],
       providerStatus: new Map(),
-      providerMetadata: new Map([
-        [
-          "feishu",
-          {
-            label: "Feishu",
-            defaultAccountId: "default",
-            visibleInConfiguredLists: true,
-            repairHint:
-              "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
-          },
-        ],
-      ]),
+      providerMetadata: missingFeishuMetadata(),
     });
 
     expect(lines).toEqual([

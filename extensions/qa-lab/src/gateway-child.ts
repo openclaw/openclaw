@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import { QaGatewayChildLifecycle, type QaGatewayStopOptions } from "./gateway-child-lifecycle.js";
 import {
@@ -298,6 +299,8 @@ async function startOwnedGatewayChild(
         throwActiveChildFailure();
         await stopAttempt();
         await mutateState({ configPath, runtimeEnv: runningEnv, stateDir, tempRoot });
+        // Mutation can reopen parent stores; release them before child startup maintenance.
+        await closeQaRuntimeStores(tempRoot);
         const replacementLogMark = output.mark();
         try {
           await launchReady(false);

@@ -24,6 +24,7 @@ const sourceImportArgs = exitFinalizationUrl.pathname.endsWith(".ts")
   : [];
 
 const mocks = vi.hoisted(() => ({
+  servicePid: process.pid + 100_000,
   captureManagedPreflight:
     vi.fn<
       typeof import("./update-command-managed-context.js").captureOwnedManagedUpdatePreflightContext
@@ -38,6 +39,11 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../../infra/update-candidate-canary.js").validateUpdateCandidateCanary>(),
 }));
 
+vi.mock("../../daemon/service-process-membership.js", () => ({
+  // The simulated running service has no corresponding native host process.
+  inspectServiceProcessMembershipSync: (pid: number) =>
+    pid === mocks.servicePid ? "outside" : "unknown",
+}));
 vi.mock("../../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: mocks.validateCanary,
 }));
@@ -68,7 +74,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("keeps successful candidate repair separate from a failed update and its process exit", async () => {
+it("settles a failed candidate without inference repair and preserves its process exit", async () => {
   const base = dirs.make("candidate-repair-exit-");
   const stateDir = path.join(base, "state");
   const configPath = path.join(stateDir, "openclaw.json");
@@ -123,20 +129,13 @@ it("keeps successful candidate repair separate from a failed update and its proc
     durationMs: 1,
     logTail: ["ENOSPC: no space left on device"],
   });
-  mocks.validateCanary.mockImplementation(
-    async ({ root: candidateRoot, rehearsal }: { root: string; rehearsal?: unknown }) => {
-      events.push(rehearsal ? "rehearsal passes" : "fresh snapshot fails");
-      return rehearsal
-        ? { status: "ok", phase: "readiness", steps: [], durationMs: 1, logTail: [] }
-        : failure(candidateRoot);
-    },
-  );
-  vi.spyOn(repairAgent, "prepareUnattendedUpdateRepair").mockImplementation(async (repair) => {
-    const validation = await repair.validate(new AbortController().signal);
-    expect(validation.ok).toBe(true);
-    repair.onEvent?.({ type: "stopped", status: "repaired" });
-    return { status: "repaired", attempts: [], finalValidation: validation };
+  mocks.validateCanary.mockImplementation(async ({ root: candidateRoot }) => {
+    events.push("fresh snapshot fails");
+    return failure(candidateRoot);
   });
+  const repair = vi
+    .spyOn(repairAgent, "runUpdateRepairLoop")
+    .mockRejectedValue(new Error("Inference must not run inside an update."));
   const configSnapshot = await readConfigFileSnapshot({
     pluginValidation: "core-only",
     observe: false,
@@ -149,6 +148,7 @@ it("keeps successful candidate repair separate from a failed update and its proc
     inspected: true,
     runtimeInspected: true,
     running: true,
+    servicePid: mocks.servicePid,
     serviceEnv: env,
   });
   const execution = await executeMutableUpdate({
@@ -177,11 +177,8 @@ it("keeps successful candidate repair separate from a failed update and its proc
   if (!execution) {
     throw new Error("Missing execution result");
   }
-  expect(events, JSON.stringify(execution.result)).toEqual([
-    "fresh snapshot fails",
-    "rehearsal passes",
-    "fresh snapshot fails",
-  ]);
+  expect(events, JSON.stringify(execution.result)).toEqual(["fresh snapshot fails"]);
+  expect(repair).not.toHaveBeenCalled();
   expect(execution.result).toMatchObject({
     status: "error",
     reason: "runtime-verification-failed",
@@ -220,7 +217,7 @@ it("keeps successful candidate repair separate from a failed update and its proc
   expect(getUpdateRun(run.runId, { env })).toMatchObject({
     status: "failed",
     reason: "runtime-verification-failed",
-    repair: [expect.objectContaining({ status: "succeeded" })],
+    repair: [],
   });
   const childSource = path.join(base, "exit-proof.mjs");
   await fs.writeFile(

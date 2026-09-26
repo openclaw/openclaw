@@ -190,10 +190,12 @@ export {
   verifyDurableFinalCapabilityProofs,
 } from "../channels/message/contracts.js";
 export {
+  createLivePreviewLifecycle,
   createPreviewMessageReceipt,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
 } from "../channels/message/live.js";
+export type { LivePreviewDeliveryResult, LivePreviewLifecycle } from "../channels/message/live.js";
 export {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,

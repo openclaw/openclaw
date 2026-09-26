@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as hostRootResolver from "../infra/openclaw-root.js";
 import {
+  buildManagedPluginDependencyStatus,
   buildPluginDependencyStatus,
   findMissingRequiredPluginDependencies,
   normalizePluginDependencySpecs,
@@ -308,6 +309,9 @@ describe("findMissingRequiredPluginDependencies", () => {
 
     expect(await findMissingRequiredPluginDependencies(params)).toEqual(
       layout === "canonical" ? [] : ["openclaw"],
+    );
+    expect(buildManagedPluginDependencyStatus(params).requiredInstalled).toBe(
+      layout === "canonical",
     );
     // A package manifest alone is sufficient for generic status, not for host identity.
     expect(buildPluginDependencyStatus(params).requiredInstalled).toBe(layout === "copy");

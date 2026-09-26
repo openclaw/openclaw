@@ -24,7 +24,7 @@ const IDLE_CHECK_INTERVAL_MS = 30_000;
 const MIN_ACTIVATION_INTERVAL_MS = 12 * CHECK_INTERVAL_MS;
 
 type NodeUpdateRuntime = {
-  tryPauseForUpdate(): boolean;
+  tryPauseForUpdate(): Promise<boolean>;
   resumeAfterUpdate(): void;
 };
 
@@ -93,7 +93,7 @@ export function startNodeHostAutoUpdate(params: {
       return CHECK_INTERVAL_MS;
     }
     signal.throwIfAborted();
-    if (!params.runtime.tryPauseForUpdate()) {
+    if (!(await params.runtime.tryPauseForUpdate())) {
       if (!waitingLogged) {
         params.log(
           `node auto-update ${candidate.version} is ready; waiting for active work to finish`,

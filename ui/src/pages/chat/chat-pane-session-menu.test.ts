@@ -1,27 +1,190 @@
 /* @vitest-environment jsdom */
 
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
+import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
+  type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
+beforeEach(installTranscriptDomMocks);
+
 afterEach(() => {
-  document.body.replaceChildren();
+  resetTranscriptTestDom();
   vi.clearAllMocks();
 });
 
 describe("chat pane session menu boundary", () => {
+  it("keeps observed pane titles and renames with their conversations when agent selection changes", async () => {
+    const primary: GatewaySessionRow = {
+      key: "agent:main:dashboard:ledger",
+      agentId: "main",
+      sessionId: "ledger-session",
+      kind: "direct",
+      updatedAt: 1,
+      derivedTitle: "Ledger reconciliation",
+    };
+    const retained: GatewaySessionRow = {
+      key: "agent:research:dashboard:verifier",
+      agentId: "research",
+      sessionId: "verifier-session",
+      kind: "direct",
+      updatedAt: 1,
+      derivedTitle: "Fresh pane isolation check",
+    };
+    const rows = [primary, retained];
+    const { sessions, context, mount, emitGatewayEvent } = createMountedPanes(
+      rows,
+      "main",
+      undefined,
+      {
+        "sessions.list": (_method, params) =>
+          sessionsResult(
+            rows.filter((row) => row.agentId === asOptionalRecord(params)?.agentId),
+            1,
+          ),
+        "sessions.patch": (_method, params) => {
+          const request = asOptionalRecord(params);
+          expect(request?.key).toBe(primary.key);
+          expect(request?.expectedSessionId).toBe(primary.sessionId);
+          expect(request?.label).toBe("Reviewed ledger");
+          rows[0] = { ...primary, label: "Reviewed ledger", updatedAt: 2 };
+          return { ok: true, key: primary.key, entry: rows[0] };
+        },
+      },
+    );
+    await sessions.refresh({ agentId: "main", force: true });
+    const ledger = mount(primary.key, "main");
+    const verifier = mount(retained.key, "research");
+    await Promise.all([ledger, verifier].map(refreshPane));
+    const container = document.body.appendChild(document.createElement("div"));
+    const title = (pane: TestChatPane) => {
+      const presentation = sessions.presentation.result?.sessions.find(
+        (row) => row.key === pane.sessionKey,
+      );
+      pane.presentationTitle = presentation
+        ? resolveSessionDisplayName(pane.sessionKey, presentation)
+        : undefined;
+      render(
+        pane.renderPaneHeader(
+          createSessionWorkspaceProps(pane.state),
+          createBackgroundTasksProps(pane.state),
+          selectedChatSessionRow(pane.state),
+          false,
+          undefined,
+          false,
+          null,
+        ),
+        container,
+      );
+      return container.querySelector(".chat-pane__session-title-text")?.textContent?.trim();
+    };
+    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([primary.key]);
+    expect.soft(title(verifier)).toBe("Fresh pane isolation check");
+
+    context.agentSelection.set("research");
+    await sessions.refresh({ agentId: "research", force: true });
+    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([retained.key]);
+    expect.soft(title(ledger)).toBe("Ledger reconciliation");
+    expect.soft(title(verifier)).toBe("Fresh pane isolation check");
+
+    context.agentSelection.set("main");
+    await sessions.refresh({ agentId: "main", force: true });
+    const redraw = vi.spyOn(verifier, "requestUpdate");
+    emitGatewayEvent("sessions.changed", {
+      sessionKey: retained.key,
+      agentId: "research",
+      reason: "label",
+      session: { ...retained, label: "Reviewed conversation", updatedAt: 2 },
+    });
+    expect(redraw).toHaveBeenCalled();
+    expect.soft(title(verifier)).toBe("Reviewed conversation");
+    container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button")?.click();
+    expect(verifier.headerRenameValue).toBe("Reviewed conversation");
+    verifier.cancelHeaderRename();
+    expect(title(ledger)).toBe("Ledger reconciliation");
+
+    const patch = vi.spyOn(sessions, "patch");
+    container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button")?.click();
+    ledger.headerRenameValue = "Reviewed ledger";
+    ledger.commitHeaderRename();
+    expect(patch).toHaveBeenCalledOnce();
+    await patch.mock.results[0]?.value;
+    expect(sessions.presentation.result?.sessions[0]?.label).toBe("Reviewed ledger");
+    expect(title(ledger)).toBe("Reviewed ledger");
+    const menu = container.querySelector<HTMLElement & { session: { label: string } }>(
+      "openclaw-chat-header-session-menu",
+    );
+    expect(menu?.session.label).toBe("Reviewed ledger");
+  });
+
+  it("keeps reconnect presentation and catalog names ahead of incomplete pane metadata", () => {
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    state.connected = false;
+    pane.presentationTitle = "Retained conversation";
+    const container = document.createElement("div");
+    const row = {
+      key: "agent:main:dashboard:retained",
+      kind: "direct",
+      derivedTitle: "Partial reconnect metadata",
+    } satisfies GatewaySessionRow;
+    const draw = (session: GatewaySessionRow | undefined, catalog = false) => {
+      render(
+        pane.renderPaneHeader(
+          createSessionWorkspaceProps(state),
+          createBackgroundTasksProps(state),
+          session,
+          catalog,
+          undefined,
+          false,
+          null,
+        ),
+        container,
+      );
+      return container.querySelector(".chat-pane__session-title-text")?.textContent?.trim();
+    };
+    expect(draw(undefined)).toBe("Retained conversation");
+    expect(draw(row)).toBe("Retained conversation");
+    expect(draw({ ...row, label: "Older scoped label" })).toBe("Retained conversation");
+    const menu = container.querySelector<HTMLElement & { session: { label: string } }>(
+      "openclaw-chat-header-session-menu",
+    );
+    expect(menu?.session.label).toBe("Retained conversation");
+    pane.catalogSession = {
+      threadId: "catalog",
+      name: "Imported conversation",
+      status: "idle",
+      archived: false,
+      canContinue: true,
+      canArchive: true,
+    };
+    expect(draw(row, true)).toBe("Imported conversation");
+    pane.presentationTitle = undefined;
+    expect(draw(row)).toBe("Partial reconnect metadata");
+  });
+
   it.each([false, true])(
     "keeps the header archive/restore action enabled (archived=%s)",
     async (archived) => {

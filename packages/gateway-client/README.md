@@ -163,9 +163,12 @@ transport timeouts return `false`. Both entries use the same implementation.
 ## Defaults and reconnect behavior
 
 The Node client starts with a 30 second request timeout, a 15 second
-connect-challenge timeout, and exponential reconnect delays from 1 second to 30
-seconds with a multiplier of 2. Server-provided startup retry hints may override
-the next delay.
+connect-challenge timeout, and exponential reconnect backoff from 1 second to 30
+seconds with a multiplier of 2. Reconnects use randomized delays: the first waits
+1–1.2 seconds, and sustained failures spread retries across 25–30 seconds.
+Retryable server hints remain minimum waits and can extend beyond the normal cap,
+with up to 20% additional spread. Adapter-owned startup retry hints retain their
+exact next delay without advancing normal backoff.
 
 The canonical defaults table and the server policy fields that can replace
 pre-handshake values are documented in the

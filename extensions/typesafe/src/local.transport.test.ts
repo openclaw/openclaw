@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
 import type { DecisionProviderV1 } from "openclaw/plugin-sdk/decisions";
-import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
@@ -20,6 +20,7 @@ vi.mock("node:dns/promises", async (importOriginal) => {
 
 const baseUrl = "http://127.0.0.1:8009";
 const input = {
+  model: "kev-latest",
   state: { message: "Synthetic outage" },
   questions: {
     c: { type: "choice", criteria: { support: "Service outages", sales: null } },
@@ -59,7 +60,7 @@ afterEach(() => {
   vi.mocked(lookup).mockReset();
 });
 
-it("runs the registered tool and decision provider locally without reading hosted credentials", async () => {
+it("runs the registered decision provider locally without reading hosted credentials", async () => {
   const fetch = vi.fn(
     async (_url: RequestInfo | URL, _init?: RequestInit) =>
       new Response(JSON.stringify(localAnswer)),
@@ -69,7 +70,6 @@ it("runs the registered tool and decision provider locally without reading hoste
   vi.stubEnv("HTTPS_PROXY", "http://proxy.invalid:3128");
   vi.stubEnv("ALL_PROXY", "http://proxy.invalid:3128");
   vi.stubEnv("NO_PROXY", "");
-  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
   plugin.register({
     runtime: {
@@ -81,26 +81,10 @@ it("runs the registered tool and decision provider locally without reading hoste
         }),
       },
     },
-    registerTool,
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
-  const tool = registerTool.mock.calls[0]?.[0] as AnyAgentTool;
   const provider = registerDecisionProvider.mock.calls[0]?.[0] as DecisionProviderV1;
   expect(provider.isReady?.()).toBe(true);
-  const result = await tool.execute("local-test", input);
-  expect(result.details).toEqual({
-    evaluation: {
-      model: "kev-latest",
-      usage: localAnswer.usage,
-      answers: {
-        ...localAnswer.answers,
-        s: {
-          ...localAnswer.answers.s,
-          legend: { 0: null, 1: input.questions.s.criteria[1] },
-        },
-      },
-    },
-  });
   await expect(
     provider.evaluate(
       {
@@ -124,7 +108,7 @@ it("runs the registered tool and decision provider locally without reading hoste
     },
   });
   expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
-  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch).toHaveBeenCalledOnce();
   for (const [url, init] of fetch.mock.calls) {
     expect(url).toBe(`${baseUrl}/v1/systemone`);
     expect(new Headers(init?.headers).has("authorization")).toBe(false);
@@ -157,11 +141,9 @@ it("refuses to send the local Kev selection to hosted inference through register
       ),
   );
   vi.stubGlobal("fetch", fetch);
-  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
   plugin.register({
     runtime: { config: { current: () => ({}) } },
-    registerTool,
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]?.[0];
@@ -176,14 +158,6 @@ it("refuses to send the local Kev selection to hosted inference through register
       },
     ),
   ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
-  const tool = registerTool.mock.calls[0]?.[0] as AnyAgentTool;
-  await expect(
-    tool.execute("local-test", {
-      state: "local-only evidence",
-      questions: { q: { type: "noul" } },
-      model: "kev-latest",
-    }),
-  ).rejects.toThrow("baseUrl");
   expect(fetch).not.toHaveBeenCalled();
 });
 
@@ -195,8 +169,7 @@ it.each([
 ])("accepts an explicit loopback origin %s", (url) => {
   expect(runtimeConfig({ baseUrl: url, apiKey: "ignored-secret" })).toEqual({
     baseUrl: new URL(url).origin,
-    model: "kev-latest",
-    timeoutMs: 10000,
+    timeoutMs: 30000,
   });
 });
 
@@ -258,6 +231,7 @@ it("keeps hosted response validation strict and ignores stale keys even on direc
   expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).has("authorization")).toBe(false);
   const hostedInput = {
     ...input,
+    model: "jev-latest",
     questions: {
       ...input.questions,
       s: {

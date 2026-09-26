@@ -63,7 +63,8 @@ describe("host-owned update notices", () => {
       channelProbeErrors: [],
     });
 
-    expect(await createUpdateRunNotifier(initial, () => ({}), {})(finished, "finished")).toEqual({
+    const notify = await createUpdateRunNotifier(initial, () => ({}), {});
+    expect(await notify(finished, "finished")).toEqual({
       delivered: true,
       owned: true,
     });
@@ -92,7 +93,7 @@ describe("host-owned update notices", () => {
         updatedAt: 1,
       });
       const run = createUpdateRun({ trigger: "chat", origin: { sessionKey: target.sessionKey } });
-      const notify = createUpdateRunNotifier(run, () => ({}), {});
+      const notify = await createUpdateRunNotifier(run, () => ({}), {});
       if (replaced) {
         await upsertSessionEntryCore(target, {
           sessionId: target.sessionId,

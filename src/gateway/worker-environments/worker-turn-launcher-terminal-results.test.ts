@@ -23,6 +23,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -63,15 +64,15 @@ import {
 describe("worker finishing admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("revalidates a credential replaced during synchronous live publication before terminal ACK", async () => {
+  it("revalidates a credential replaced during live publication before terminal ACK", async () => {
     const { apply, liveEvents } = support.sequencedLiveEvents();
-    const { identity, placementStore, workerService } = support.placementHarness(
+    const { identity, placementStore, workerService } = await support.placementHarness(
       "worker-live-reentrant-credential",
       "session-live-reentrant-credential",
       { liveEvents },
     );
     apply.mockImplementationOnce(async () => {
-      support.testState.store.renewCredential({
+      await support.testState.store.renewCredential({
         environmentId: identity.environmentId,
         expectedOwnerEpoch: identity.ownerEpoch,
         sessionId: identity.sessionId,
@@ -116,22 +117,17 @@ describe("worker turn launcher terminal results", () => {
     "retains the ACKed finishing outcome after assistant $stopReason (reconciliation fails: $reconciliationFails; cleanup: $cleanupFailure; provider fallback: $providerFailure)",
     async ({ stopReason, reconciliationFails, cleanupFailure, providerFailure }) => {
       const outerFallback = cleanupFailure !== undefined || providerFailure === true;
-      seedActivePlacement();
+      await seedActivePlacement();
       const grant = credential();
       const environment = attachedEnvironment();
       const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       const gate = createWorkerSessionPlacementGate(placements);
       const getConfig = () => ({ session: { store: sessionTarget.storePath } });
-      const liveEvents = createWorkerLiveEventReceiver({
-        getConfig,
-        startupBindings: [
-          { environmentId: ENVIRONMENT_ID, runEpoch: OWNER_EPOCH, sessionId: SESSION_ID },
-        ],
-        startupOwners: new Map([[ENVIRONMENT_ID, OWNER_EPOCH]]),
-      });
+      const liveEvents = createWorkerLiveEventReceiver();
       const service = createWorkerEnvironmentService({
+        scheduler: createTestGatewayScheduler(),
         store: {
-          ...createWorkerEnvironmentStore({ database }),
+          ...(await createWorkerEnvironmentStore({ database })),
           get: () => environment,
           getCredential: () => ({
             environmentId: ENVIRONMENT_ID,
@@ -149,7 +145,7 @@ describe("worker turn launcher terminal results", () => {
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
         executeInference: vi.fn(),
-        inferenceStore: createWorkerInferenceStore({ database }),
+        inferenceStore: createWorkerInferenceStore({ path: database.path }),
         placementStore: gate,
         liveEvents,
       });
@@ -301,7 +297,7 @@ describe("worker turn launcher terminal results", () => {
           grant.deliveryId = hashWorkerCredential(grant.credential, claim);
           return grant;
         }),
-        acknowledgeCredentialDelivery: vi.fn(() => true),
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
         startTunnel: vi.fn(async () => tunnel),
         destroy: vi.fn(async () => environment),
       };
@@ -467,7 +463,7 @@ describe("worker turn launcher terminal results", () => {
   );
 
   it("requests immediate recovery when reconciliation fails after worker finishing", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const destroy = vi.fn(async () => attachedEnvironment());
     const tunnelFailure = new NodeWorkerWorkspaceTransferError(
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
@@ -520,7 +516,7 @@ describe("worker turn launcher terminal results", () => {
       ...unusedEnvironments(),
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () => tunnel),
       destroy,
     };
@@ -626,11 +622,11 @@ describe("worker turn launcher terminal results", () => {
       terminalReply,
       costs = { first: 0, last: 0, total: 0 },
     }) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const environments: WorkerTurnEnvironmentService = {
         get: vi.fn(() => attachedEnvironment()),
         acquireTurnCredential: vi.fn(async () => credential()),
-        acknowledgeCredentialDelivery: vi.fn(() => true),
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
         startTunnel: vi.fn(async () => ({
           environmentId: ENVIRONMENT_ID,
           ownerEpoch: OWNER_EPOCH,

@@ -2,7 +2,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import {
   createNodeWorkerSupervisorFixture,
@@ -15,11 +19,16 @@ import {
 } from "./node-worker-supervisor.test-support.js";
 import * as workerTreeControl from "./node-worker-tree-control.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 afterEach(() => {
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
 });
 
 it.skipIf(process.platform === "win32").each(["uncertain", "confirmed"] as const)(
@@ -31,7 +40,7 @@ it.skipIf(process.platform === "win32").each(["uncertain", "confirmed"] as const
       { capacity: 1, capacityWaitMs: 0, onCapacityChanged: (value) => capacities.push(value) },
     );
     const input = testWorkerLaunchInput(workspaceDir, "uncertain-owner");
-    const store = new NodeWorkerLaunchStore({ env });
+    const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
     const reported = createDeferred();
     vi.spyOn(workerTreeControl, "inspectOwnedNodeWorkerTree").mockReturnValue("unknown");
     let restoreConfirmation: (() => void) | undefined;
@@ -58,17 +67,17 @@ it.skipIf(process.platform === "win32").each(["uncertain", "confirmed"] as const
       await withTestTimeout(reported.promise, 5_000, "Worker cleanup did not report its outcome");
       if (cleanupStatus === "confirmed") {
         await supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(input));
-        expect(store.get(input.launchId)?.state).toBe("completed");
+        expect((await store.get(input.launchId))?.state).toBe("completed");
         expect(capacities.at(-1)).toEqual({ total: 1, available: 1 });
-        expect(supervisor.hasActiveWork()).toBe(false);
+        expect(await supervisor.hasActiveWork()).toBe(false);
         return;
       }
       await expect(
         supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(input)),
       ).rejects.toThrow("cleanup remains unconfirmed");
-      expect(store.get(input.launchId)?.state).toBe("running");
+      expect((await store.get(input.launchId))?.state).toBe("running");
       expect(capacities.at(-1)).toEqual({ total: 1, available: 0 });
-      expect(supervisor.hasActiveWork()).toBe(true);
+      expect(await supervisor.hasActiveWork()).toBe(true);
 
       const replacement = testWorkerLaunchInput(workspaceDir, "replacement-owner");
       replacement.descriptor.admission.environmentId = "replacement-environment";

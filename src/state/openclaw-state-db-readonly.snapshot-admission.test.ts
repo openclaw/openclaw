@@ -60,7 +60,6 @@ vi.mock("./openclaw-state-db-read-connection.js", () => ({
 }));
 vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/state-database-coordinator.js")>()),
-  prepareStateDatabaseCanonicalMutation: () => undefined,
   hasStateDatabaseSourceExclusion: () => false,
 }));
 vi.mock("./openclaw-state-read-worker.js", () => ({
@@ -79,7 +78,13 @@ import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
   withOpenClawStateDatabaseReadSnapshot,
+  withSynchronousArtifactPreservingStateSnapshot,
 } from "./openclaw-state-db-readonly.js";
+import {
+  getExistingOpenClawStateSchemaPath,
+  withExistingOpenClawStateSchema,
+} from "./openclaw-state-db-schema-policy.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 beforeEach(() => {
   mocks.forbiddenNative.mockClear();
@@ -89,7 +94,11 @@ beforeEach(() => {
   mocks.assertCurrent.mockReset();
   mocks.assertFresh.mockReset();
   mocks.cleanup.mockReset().mockResolvedValue(true);
-  mocks.capture.mockReset().mockReturnValue({ identity: {}, assertCurrent: mocks.assertCurrent });
+  mocks.capture.mockReset().mockImplementation((databasePath: string) => ({
+    databasePath,
+    identity: {},
+    assertCurrent: mocks.assertCurrent,
+  }));
   mocks.prepare.mockReset().mockResolvedValue({
     location: "/fixture/private.sqlite",
     cleanupAsync: mocks.cleanup,
@@ -146,6 +155,8 @@ async function probeRetiredAdmission(source: string) {
     getter: () => getActiveOpenClawStateDatabaseReadSnapshot(options),
     native: () => withExistingOpenClawStateDatabaseReadOnly(() => "read", options),
     currentRows: () => withExistingOpenClawStateDatabaseCurrentReadOnly(() => "read", options),
+    currentSnapshot: () =>
+      withSynchronousArtifactPreservingStateSnapshot(() => "read", { current: options }),
     nestedSnapshot: () => withOpenClawStateDatabaseReadSnapshot(async () => "nested", options),
     nestedDisposable: () => withDisposableOpenClawStateReads(source, async () => "nested"),
     worker: () => executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
@@ -168,6 +179,7 @@ const rejectedAdmissions = {
   getter: true,
   native: true,
   currentRows: true,
+  currentSnapshot: true,
   nestedSnapshot: true,
   nestedDisposable: true,
   worker: true,
@@ -266,6 +278,40 @@ it.each(["snapshot", "disposable"] as const)(
       expect(await escape(() => probeRetiredAdmission(source))).toEqual(rejectedAdmissions);
       expect(mocks.forbiddenNative).not.toHaveBeenCalled();
       expect(mocks.cleanup).toHaveBeenCalledTimes(kind === "snapshot" ? 1 : 0);
+    });
+  },
+);
+
+it.each([false, true])(
+  "keeps captured schema authority while selecting current=%s rows",
+  async (current) => {
+    await withTempDir("openclaw-current-captured-read-", async (root) => {
+      const source = path.join(root, "source");
+      fs.writeFileSync(source, "mock source; never opened as SQLite");
+      await withExistingOpenClawStateSchema({ path: source }, () =>
+        withOpenClawStateDatabaseReadSnapshot(
+          async () => {
+            const context = captureOpenClawStateWorkerContext({ path: source });
+            mocks.read.mockImplementation(async (location) => {
+              expect(location.context).toBe(context);
+              expect(getExistingOpenClawStateSchemaPath()).toBe(source);
+              expect(location.location).toBe(current ? source : "/fixture/private.sqlite");
+              return { value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] } };
+            });
+            await expect(
+              executeExistingOpenClawStateRead(
+                { path: source },
+                { type: "fleet.list" },
+                { current, context },
+              ),
+            ).resolves.toMatchObject({ ok: true, cells: [] });
+            expect(mocks.read).toHaveBeenCalledOnce();
+          },
+          { path: source },
+        ),
+      );
+      expect(mocks.forbiddenNative).not.toHaveBeenCalled();
+      expect(mocks.cleanup).toHaveBeenCalledOnce();
     });
   },
 );

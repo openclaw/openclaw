@@ -229,6 +229,12 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
         ),
       );
     };
+    const file = {
+      path: browserPath,
+      name: path.basename(browserPath),
+      size: read.stat.size,
+      updatedAtMs: toUpdatedAtMs(read.stat.mtimeMs),
+    };
     // The extension only picks the byte cap; content decides what leaves the
     // gateway. Magic-byte sniffing (no filename hints) keeps renamed binaries
     // from riding the image path past the UTF-8 text gate.
@@ -241,10 +247,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       respond(true, {
         agentId,
         file: {
-          path: browserPath,
-          name: path.basename(browserPath),
-          size: read.stat.size,
-          updatedAtMs: toUpdatedAtMs(read.stat.mtimeMs),
+          ...file,
           mimeType: sniffedMime,
           encoding: "base64" as const,
           content: read.buffer.toString("base64"),
@@ -260,10 +263,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     respond(true, {
       agentId,
       file: {
-        path: browserPath,
-        name: path.basename(browserPath),
-        size: read.stat.size,
-        updatedAtMs: toUpdatedAtMs(read.stat.mtimeMs),
+        ...file,
         mimeType: "text/plain",
         encoding: "utf8" as const,
         content: text,

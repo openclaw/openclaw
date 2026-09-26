@@ -18,6 +18,10 @@ import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { logWarn } from "../logger.js";
+import {
+  renderFileAttachmentOutcome,
+  resolveFileExtractionOutcome,
+} from "../media-understanding/file-attachment-outcomes.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -30,7 +34,6 @@ import {
   resolveInputFileLimits,
   type InputFileLimits,
   type InputImageLimits,
-  type InputImageSource,
 } from "../media/input-files.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
@@ -42,18 +45,20 @@ import {
   resolveAssistantTextStreamDelta,
   type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   parseGatewayJsonRequest,
+  retainGatewayHttpResponseWork,
   sendInvalidRequest,
   sendJson,
   sendMissingScopeForbidden,
+  sendUnauthorized,
   setSseHeaders,
   watchClientDisconnect,
   writeDone,
 } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
+import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
 import {
   type AuthorizedGatewayHttpRequest,
   authorizeOpenAiCompatibleHttpModelOverride,
@@ -67,7 +72,7 @@ import {
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
@@ -85,28 +90,18 @@ import {
   type OpenAiCompatiblePendingToolCall,
   readOpenAiHttpRunTerminal,
   runOpenAiCompatibleAgentCommand,
+  type OpenAiCompatibleHttpOptions,
 } from "./openai-compatible-agent-run.js";
 import {
   applyToolChoice,
   isToolChoiceConstraintSatisfied,
+  resolveResponsesToolChoice,
   resolveUnsatisfiedToolChoiceMessage,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
-import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
-import type { GatewayContextResolver } from "./server-methods/types.js";
-
-type OpenResponsesHttpOptions = {
-  auth: ResolvedGatewayAuth;
-  maxBodyBytes?: number;
-  config?: GatewayHttpResponsesConfig;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-  resolveGatewayContext?: GatewayContextResolver;
-};
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
@@ -179,12 +174,7 @@ function matchesResponseSessionScope(
 }
 
 function pruneExpiredResponseSessions(now: number) {
-  while (responseSessionMap.size > 0) {
-    const oldest = responseSessionMap.entries().next().value;
-    if (!oldest) {
-      return;
-    }
-    const [oldestKey, oldestValue] = oldest;
+  for (const [oldestKey, oldestValue] of responseSessionMap) {
     if (now - oldestValue.ts <= RESPONSE_SESSION_TTL_MS) {
       return;
     }
@@ -231,7 +221,6 @@ export const testing = {
   resetResponseSessionState() {
     responseSessionMap.clear();
   },
-  wrapUntrustedFileContent,
   storeResponseSessionAt(
     responseId: string,
     sessionKey: string,
@@ -301,34 +290,6 @@ function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
   }));
 }
 
-function resolveToolChoice(
-  toolChoice: CreateResponseBody["tool_choice"],
-): ToolChoiceConstraint | "none" | undefined {
-  if (!toolChoice) {
-    return undefined;
-  }
-
-  if (toolChoice === "none") {
-    return "none";
-  }
-
-  if (toolChoice === "required") {
-    return { type: "required" };
-  }
-
-  if (typeof toolChoice === "object" && toolChoice.type === "function") {
-    const targetName = ("name" in toolChoice ? toolChoice.name : toolChoice.function.name).trim();
-    if (!targetName) {
-      throw new Error("tool_choice.name is required");
-    }
-    return { type: "function", name: targetName };
-  }
-
-  return undefined;
-}
-
-export { buildAgentPrompt } from "./openresponses-prompt.js";
-
 function createEmptyUsage(): Usage {
   return toOpenAiResponsesUsage(undefined);
 }
@@ -364,22 +325,19 @@ function createResponseResource(params: {
 export async function handleOpenResponsesHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: OpenResponsesHttpOptions,
+  opts: OpenAiCompatibleHttpOptions<GatewayHttpResponsesConfig>,
 ): Promise<boolean> {
   const limits = resolveResponsesLimits(opts.config);
   const maxBodyBytes =
     opts.maxBodyBytes ??
     Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
+    ...opts,
     pathname: "/v1/responses",
     requiredOperatorMethod: "chat.send",
     // Compat HTTP uses a different scope model from generic HTTP helpers:
     // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
+    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes,
   });
   if (handled === false) {
@@ -465,24 +423,26 @@ export async function handleOpenResponsesHttpRequest(
             if (part.type !== "input_image" && part.type !== "input_file") {
               continue;
             }
+            assertGatewayHttpRequestCurrent(handled.requestAuth);
             if (part.source.type === "url") {
               markUrlPart();
             }
             if (item !== prompt.activeUserMessage) {
               continue;
             }
+            const source = part.source;
+            const inputSource =
+              source.type === "url"
+                ? source
+                : {
+                    type: source.type,
+                    data: source.data,
+                    mediaType: source.media_type,
+                    filename: "filename" in source ? source.filename : undefined,
+                  };
             if (part.type === "input_image") {
-              const source = part.source;
-              const imageSource: InputImageSource =
-                source.type === "url"
-                  ? { type: "url", url: source.url }
-                  : {
-                      type: "base64",
-                      data: source.data,
-                      mediaType: source.media_type,
-                    };
               const image = await extractImageContentFromSource(
-                imageSource,
+                inputSource,
                 limits.images,
                 abortController.signal,
               );
@@ -490,42 +450,19 @@ export async function handleOpenResponsesHttpRequest(
               continue;
             }
 
-            const source = part.source;
             const file = await extractFileContentFromSource({
-              source:
-                source.type === "url"
-                  ? { type: "url", url: source.url }
-                  : {
-                      type: "base64",
-                      data: source.data,
-                      mediaType: source.media_type,
-                      filename: source.filename,
-                    },
+              source: inputSource,
               limits: limits.files,
               signal: abortController.signal,
             });
-            const rawText = file.text;
-            if (rawText?.trim()) {
+            const outcome = resolveFileExtractionOutcome(file);
+            const content = renderFileAttachmentOutcome(outcome);
+            if (content !== null) {
               fileContexts.push(
                 renderFileContextBlock({
                   filename: file.filename,
-                  content: wrapUntrustedFileContent(rawText),
-                }),
-              );
-            } else if (file.images && file.images.length > 0) {
-              fileContexts.push(
-                renderFileContextBlock({
-                  filename: file.filename,
-                  content: "[PDF content rendered to images]",
-                  surroundContentWithNewlines: false,
-                }),
-              );
-            } else {
-              fileContexts.push(
-                renderFileContextBlock({
-                  filename: file.filename,
-                  content: "[No extractable text]",
-                  surroundContentWithNewlines: false,
+                  content,
+                  surroundContentWithNewlines: outcome.kind === "extracted",
                 }),
               );
             }
@@ -540,6 +477,10 @@ export async function handleOpenResponsesHttpRequest(
     if (abortController.signal.aborted) {
       return true;
     }
+    if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
+      sendUnauthorized(res);
+      return true;
+    }
     logWarn(`openresponses: request parsing failed: ${String(err)}`);
     sendInvalidRequest(res, "invalid request");
     return true;
@@ -550,7 +491,10 @@ export async function handleOpenResponsesHttpRequest(
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;
   let resolvedClientTools = clientTools;
   try {
-    const toolChoiceResult = applyToolChoice(clientTools, resolveToolChoice(payload.tool_choice));
+    const toolChoiceResult = applyToolChoice(
+      clientTools,
+      resolveResponsesToolChoice(payload.tool_choice),
+    );
     resolvedClientTools = toolChoiceResult.tools;
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
     toolChoiceConstraint = toolChoiceResult.constraint;
@@ -641,11 +585,9 @@ export async function handleOpenResponsesHttpRequest(
   const rememberResponseSession = () =>
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
-  const streamMaxTokens =
-    typeof payload.max_output_tokens === "number" ? payload.max_output_tokens : undefined;
-  const streamTemperature =
-    typeof payload.temperature === "number" ? payload.temperature : undefined;
-  const streamTopP = typeof payload.top_p === "number" ? payload.top_p : undefined;
+  const streamMaxTokens = payload.max_output_tokens;
+  const streamTemperature = payload.temperature;
+  const streamTopP = payload.top_p;
   const streamParams =
     streamMaxTokens !== undefined || streamTemperature !== undefined || streamTopP !== undefined
       ? {
@@ -666,8 +608,11 @@ export async function handleOpenResponsesHttpRequest(
       runId: responseId,
       messageChannel,
       senderIsOwner,
+      requestAuth: handled.requestAuth,
+      operatorScopes: handled.operatorScopes,
       resolveGatewayContext: opts.resolveGatewayContext,
       abortSignal: abortController.signal,
+      hasCurrentClientAuthority: handled.requestAuth.hasCurrentClientAuthority,
     });
 
   if (!stream) {
@@ -709,54 +654,35 @@ export async function handleOpenResponsesHttpRequest(
       // model produced before the tool calls. Pre-#52288 only the first
       // pending call was emitted, so multi-tool turns lost every call but
       // the leading one.
-      if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        const output: OutputItem[] = [];
-        if (assistantText) {
-          output.push(
-            createAssistantOutputItem({
-              id: outputItemId,
-              text: assistantText,
-              phase: "commentary",
-              status: "completed",
-            }),
-          );
-        }
-        for (const functionCall of pendingToolCalls) {
-          output.push(
-            createFunctionCallOutputItem({
-              id: `call_${randomUUID()}`,
-              callId: functionCall.id,
-              name: functionCall.name,
-              arguments: functionCall.arguments,
-            }),
-          );
-        }
-
-        const response = createResponseResource({
-          ...responseIdentity,
-          model,
-          status: "completed",
-          output,
-          usage,
-        });
-        rememberResponseSession();
-        sendJson(res, 200, response);
-        return true;
-      }
-
+      const toolCalls =
+        stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       const status = stopReason === "length" ? "incomplete" : "completed";
+      const output: OutputItem[] = [];
+      if (assistantText || !toolCalls) {
+        output.push(
+          createAssistantOutputItem({
+            id: outputItemId,
+            text: assistantText || "No response from OpenClaw.",
+            phase: toolCalls ? "commentary" : "final_answer",
+            status,
+          }),
+        );
+      }
+      for (const functionCall of toolCalls ?? []) {
+        output.push(
+          createFunctionCallOutputItem({
+            id: `call_${randomUUID()}`,
+            callId: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+          }),
+        );
+      }
       const response = createResponseResource({
         ...responseIdentity,
         model,
         status,
-        output: [
-          createAssistantOutputItem({
-            id: outputItemId,
-            text: assistantText || "No response from OpenClaw.",
-            phase: "final_answer",
-            status,
-          }),
-        ],
+        output,
         usage,
       });
 
@@ -1009,9 +935,6 @@ export async function handleOpenResponsesHttpRequest(
   });
 
   unsubscribe = onAgentEventForRun(responseId, (evt) => {
-    if (evt.runId !== responseId) {
-      return;
-    }
     if (closed) {
       return;
     }
@@ -1085,14 +1008,7 @@ export async function handleOpenResponsesHttpRequest(
   // Agent cleanup and deferred SSE delivery have independent lifetimes;
   // shutdown must wait until both have settled, whichever finishes last.
   const releaseAgentRootWork = retainGatewayRootWorkAdmissionContinuation();
-  const releaseResponseRootWork = retainGatewayRootWorkAdmissionContinuation();
-  const releaseStreamRootWork = () => {
-    res.off("finish", releaseStreamRootWork);
-    res.off("close", releaseStreamRootWork);
-    releaseResponseRootWork?.();
-  };
-  res.once("finish", releaseStreamRootWork);
-  res.once("close", releaseStreamRootWork);
+  const releaseStreamRootWork = retainGatewayHttpResponseWork(res);
 
   onDisconnect = () => {
     closed = true;
@@ -1131,7 +1047,6 @@ export async function handleOpenResponsesHttpRequest(
       // buffered prose is flushed, mirroring the non-streaming path and
       // /v1/chat/completions. Closes the stream with a `response.failed` event.
       if (
-        !closed &&
         toolChoiceConstraint &&
         !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
       ) {
@@ -1140,7 +1055,7 @@ export async function handleOpenResponsesHttpRequest(
             code: "api_error",
             message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
           },
-          finalUsage ?? createEmptyUsage(),
+          finalUsage,
         );
         rememberResponseSession();
         finalizeFailedResponse(failed);

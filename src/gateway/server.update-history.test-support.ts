@@ -1,8 +1,13 @@
 import { existsSync } from "node:fs";
 import { describe, expect, test, vi } from "vitest";
 import { createRetainedUpdateRecovery } from "../infra/update-retained-recovery.test-support.js";
-import { createUpdateRun } from "../infra/update-run-ledger.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { createUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
+import {
+  beginGatewayRestartSignalAdmission,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
@@ -18,6 +23,40 @@ export function registerGatewayUpdateHistoryTests(
   },
 ) {
   describe("gateway update history", () => {
+    test.each(["signal", "drain", "service-stop"] as const)(
+      "reads progress on an existing authenticated connection during %s",
+      async (phase) => {
+        const client = await connectGatewayClient({
+          url: `ws://127.0.0.1:${getPort()}`,
+          token: "secret",
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+          clientVersion: "1.0.0",
+          scopes: ["operator.admin"],
+        });
+        try {
+          const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 25 * 60 * 60_000);
+          const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+          clock.mockRestore();
+          if (phase === "signal") {
+            expect(beginGatewayRestartSignalAdmission()).not.toBeNull();
+          } else {
+            markGatewayRestartDraining(phase === "service-stop" ? "stop (SIGTERM)" : "restart");
+          }
+          const read = client.request("update.runs.get", { runId: run.runId });
+          if (phase === "signal") {
+            await expect(read).rejects.toThrow("unavailable during gateway restart");
+          } else {
+            expect(await read).toEqual({ run });
+          }
+          expect(getUpdateRun(run.runId)).toEqual(run);
+        } finally {
+          resetGatewayWorkAdmission();
+          await client.stopAndWait();
+        }
+      },
+    );
+
     test.each(["fresh", "expired", "retained"] as const)(
       "keeps authenticated update history responsive (%s)",
       async (shape) => {
@@ -57,7 +96,7 @@ export function registerGatewayUpdateHistoryTests(
             for (const cache of ["closed", "warm"] as const) {
               openOpenClawStateDatabase();
               if (cache === "closed") {
-                expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+                expect(await closeOpenClawStateDatabaseByPathAsync(databasePath)).toBe(true);
               }
               expect(isOpenClawStateDatabaseOpen(databasePath)).toBe(cache === "warm");
               const before = readonlyPreparation.prepared.length;

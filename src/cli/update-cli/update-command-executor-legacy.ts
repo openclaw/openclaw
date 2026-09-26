@@ -5,7 +5,7 @@ import type {
   ManagedHandoffParent,
 } from "../../infra/update-managed-service-handoff-lease.js";
 import type { HandoffProcessIdentity } from "../../infra/update-managed-service-handoff-schema.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 export type LegacyUpdateExecutorParent =
   | { kind: "managed"; runId: string; handoffId: string; root: string }

@@ -1,5 +1,4 @@
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,
@@ -8,7 +7,6 @@ import {
   PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT,
   PROJECTS_LIST_MAX_IDENTITY_PROBES,
   type ProjectRecord,
-  type ProjectRecent,
   validateProjectsAddParams,
   type ProjectSummary,
   validateProjectsListParams,
@@ -19,7 +17,6 @@ import {
 import { listRegistryWorktrees } from "../../agents/worktrees/registry.js";
 import { managedWorktrees, type ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway.js";
-import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { ProjectCloneError } from "../../projects/project-clone-runtime.js";
@@ -35,10 +32,9 @@ import {
   removeProjectRegistry,
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
-import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { readCurrentUserProfileAliases } from "../../state/user-profile-list.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
@@ -47,12 +43,14 @@ import {
 } from "../github-public-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { searchRemoteProjects } from "../project-github-search.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
+import { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
+import { listProjectRecents } from "./projects-recents.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type ProjectRegistryEntry = Awaited<ReturnType<typeof listProjectRegistry>>[number];
 type ProjectWorktreeService = Pick<
   ManagedWorktreeService,
   "listRegistryRecords" | "resolveRepositoryIdentity"
@@ -90,11 +88,6 @@ const PROJECTS_LIST_MAX_RAW_CANDIDATES = Math.max(
   PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT,
   PROJECTS_LIST_MAX_IDENTITY_PROBES,
 );
-
-function folderDisplayName(folder: string): string {
-  const trimmed = folder.replace(/[\\/]+$/u, "");
-  return trimmed.split(/[\\/]/u).at(-1) || folder;
-}
 
 function checkoutName(checkoutPath: string): string {
   const trimmed = checkoutPath.replace(/[\\/]+$/u, "");
@@ -159,109 +152,6 @@ function sanitizeProjectRecord(project: ProjectRecord): ProjectRecord {
   };
 }
 
-function indexPathProjects(projects: readonly ProjectRegistryEntry[]) {
-  const byPath = new Map<string, ProjectRegistryEntry>();
-  const byAgent = new Map<string | undefined, ProjectRegistryEntry>();
-  for (const project of projects) {
-    // The registry emits one workspace per unique configured agent.
-    if (project.source === "workspace") {
-      byAgent.set(project.agentId, project);
-    }
-    const previous = byPath.get(project.repoRoot);
-    if (
-      !previous ||
-      (Number(project.source === "workspace") - Number(previous.source === "workspace") ||
-        project.id.localeCompare(previous.id)) < 0
-    ) {
-      byPath.set(project.repoRoot, project);
-    }
-  }
-  return { byPath, byAgent };
-}
-
-function listProjectRecents(
-  store: ReturnType<typeof loadCombinedSessionStoreForGatewayCore>["store"],
-  profileIds: ReadonlySet<string>,
-  projects: readonly ProjectRegistryEntry[],
-): ProjectRecent[] {
-  const candidates = Object.entries(store)
-    .filter(
-      ([, entry]) =>
-        Boolean(sessionCreatorProfileId(entry.createdActor)) &&
-        Boolean(entry.createdActor?.id && profileIds.has(entry.createdActor.id)),
-    )
-    .toSorted(
-      ([leftKey, left], [rightKey, right]) =>
-        (right.updatedAt ?? 0) - (left.updatedAt ?? 0) || leftKey.localeCompare(rightKey),
-    );
-  const projectsById = new Map(projects.map((project) => [project.id, project]));
-  const seen = new Set<string>();
-  const recents: ProjectRecent[] = [];
-  let pathProjects: ReturnType<typeof indexPathProjects> | undefined;
-  for (const [sessionKey, entry] of candidates) {
-    if (entry.repositoryWorkspaceId) {
-      const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
-      const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
-      if (
-        !repository ||
-        repository.sessionKey !== sessionKey ||
-        (sessionAgentId && repository.agentId !== sessionAgentId) ||
-        seen.has(repository.url)
-      ) {
-        continue;
-      }
-      seen.add(repository.url);
-      recents.push({
-        kind: "repository",
-        url: repository.url,
-        displayName: path.posix.basename(repository.url, ".git"),
-      });
-      if (recents.length === 8) {
-        break;
-      }
-      continue;
-    }
-    const projectId = normalizeOptionalString(entry.projectId);
-    const explicitProject = projectId ? projectsById.get(projectId) : undefined;
-    const worktreeRoot = normalizeOptionalString(entry.worktree?.repoRoot);
-    const spawnedCwd = normalizeOptionalString(entry.spawnedCwd);
-    const execCwd = normalizeOptionalString(entry.execCwd);
-    const folder = worktreeRoot ?? spawnedCwd ?? execCwd;
-    let project = explicitProject;
-    if (!project && folder) {
-      const agentId = parseAgentSessionKey(sessionKey)?.agentId;
-      const indexed = (pathProjects ??= indexPathProjects(projects));
-      const workspace = indexed.byAgent.get(agentId);
-      project = workspace?.repoRoot === folder ? workspace : indexed.byPath.get(folder);
-    }
-    const key = project
-      ? `project:${project.id}`
-      : folder
-        ? `folder:${normalizeOptionalString(entry.execNode) ?? ""}\0${folder}`
-        : undefined;
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    recents.push(
-      project
-        ? { kind: "project", projectId: project.id, displayName: project.displayName }
-        : {
-            kind: "folder",
-            folder: folder!,
-            displayName: folderDisplayName(folder!),
-            ...(normalizeOptionalString(entry.execNode)
-              ? { execNode: normalizeOptionalString(entry.execNode) }
-              : {}),
-          },
-    );
-    if (recents.length === 8) {
-      break;
-    }
-  }
-  return recents;
-}
-
 function projectCandidatesToSummaries(candidates: readonly ProjectCandidate[]): ProjectSummary[] {
   const groups = new Map<string, ProjectGroup>();
   for (const candidate of candidates) {
@@ -320,8 +210,11 @@ async function listObservedProjects(
   context: Parameters<GatewayRequestHandlers["projects.list"]>[0]["context"],
   client: Parameters<GatewayRequestHandlers["projects.list"]>[0]["client"],
   store: ReturnType<typeof loadCombinedSessionStoreForGatewayCore>["store"],
+  diagnostics?: ReturnType<typeof startProjectsListDiagnostics>,
 ): Promise<ProjectSummary[]> {
+  diagnostics?.mark("worktreeRegistry");
   const worktrees = await service.listRegistryRecords();
+  diagnostics?.mark("sessionCandidates");
   const cfg = context.getRuntimeConfig();
   const rawCandidates: RawProjectCandidate[] = [];
   const visibilityFilter = createSessionListEntryFilter({ client, cfg });
@@ -339,6 +232,7 @@ async function listObservedProjects(
       });
     }
   }
+  diagnostics?.mark("worktreeCandidates");
   for (const worktree of worktrees) {
     if (worktree.removedAt !== undefined) {
       continue;
@@ -361,60 +255,43 @@ async function listObservedProjects(
     });
   }
 
-  const candidates: ProjectCandidate[] = [];
-  type RepositoryIdentity = Awaited<
-    ReturnType<ProjectWorktreeService["resolveRepositoryIdentity"]>
-  >;
-  const identities = new Map<string, Promise<RepositoryIdentity>>();
-  let identityProbeCount = 0;
-  const resolveIdentity = (checkoutPath: string) => {
-    const existing = identities.get(checkoutPath);
-    if (existing) {
-      return existing;
-    }
-    if (identityProbeCount >= PROJECTS_LIST_MAX_IDENTITY_PROBES) {
-      return undefined;
-    }
-    identityProbeCount += 1;
-    const identity = Promise.resolve().then(() => service.resolveRepositoryIdentity(checkoutPath));
-    identities.set(checkoutPath, identity);
-    return identity;
-  };
+  // Admit the same newest-first distinct paths before overlapping Git work. Keep facts
+  // request-local: session/registry revisions cannot detect external Git metadata edits.
+  diagnostics?.mark("identityProbes");
+  const probePaths = [
+    ...new Set(
+      rawCandidates.map((raw) => (raw.kind === "worktree" ? raw.repoRoot : raw.checkoutPath)),
+    ),
+  ].slice(0, PROJECTS_LIST_MAX_IDENTITY_PROBES);
+  const { results } = await runTasksWithConcurrency({
+    tasks: probePaths.map((checkoutPath) => () => service.resolveRepositoryIdentity(checkoutPath)),
+    limit: 4,
+  });
+  const identities = new Map(
+    probePaths.map((checkoutPath, index) => [checkoutPath, results[index]]),
+  );
 
-  // The buffer is already newest-first, so probes always go to the retained top-K candidates.
+  diagnostics?.mark("candidateProcessing");
+  const candidates: ProjectCandidate[] = [];
   for (const raw of rawCandidates) {
+    const identity = identities.get(raw.kind === "worktree" ? raw.repoRoot : raw.checkoutPath);
     if (raw.kind === "worktree") {
-      let originUrl: string | undefined;
-      const pendingIdentity = resolveIdentity(raw.repoRoot);
-      try {
-        const identity = pendingIdentity ? await pendingIdentity : undefined;
-        originUrl = identity?.originUrl || undefined;
-      } catch {
-        // The registry fingerprint and checkout path remain authoritative if the source checkout
-        // disappears after the managed worktree record was written.
-      }
+      // Registry facts survive a missing source checkout or exhausted probe budget.
       candidates.push({
         checkoutPath: raw.checkoutPath,
         fingerprint: raw.fingerprint,
         lastUsedAt: raw.lastUsedAt,
-        ...(originUrl ? { originUrl } : {}),
+        ...(identity?.originUrl ? { originUrl: identity.originUrl } : {}),
       });
       continue;
     }
-    const pendingIdentity = resolveIdentity(raw.checkoutPath);
-    if (!pendingIdentity) {
-      continue;
-    }
-    try {
-      const identity = await pendingIdentity;
+    if (identity) {
       candidates.push({
         checkoutPath: identity.checkoutRoot,
         fingerprint: identity.fingerprint,
         lastUsedAt: raw.lastUsedAt,
         ...(identity.originUrl ? { originUrl: identity.originUrl } : {}),
       });
-    } catch {
-      // Plain folders remain available through the existing folder picker.
     }
   }
 
@@ -464,83 +341,124 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       if (!assertValidParams(params, validateProjectsListParams, "projects.list", respond)) {
         return;
       }
-      const registryProjects = await listProjectRegistry(context.getRuntimeConfig());
-      const projects = registryProjects.map(sanitizeProjectRecord);
-      const cfg = context.getRuntimeConfig();
-      const requesterProfileId = client?.authenticatedUserProfile?.profileId;
-      const requesterUserId = client?.authenticatedUserId;
-      const accessRevision = readGatewayAccessRevision();
-      const assertCurrent = () => {
-        if (
-          client?.authenticatedUserProfile?.profileId !== requesterProfileId ||
-          client?.authenticatedUserId !== requesterUserId ||
-          readGatewayAccessRevision() !== accessRevision ||
-          context.getRuntimeConfig() !== cfg
-        ) {
-          throw new Error("Project access changed while preparing the listing. Retry the request.");
-        }
-      };
-      const canWrite = () =>
-        authorizeOperatorScopesForRequiredScope(
-          WRITE_SCOPE,
-          Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
-        ).allowed;
-      let store: ReturnType<typeof loadCombinedSessionStoreForGatewayCore>["store"] = {};
-      let observedProjects: ProjectSummary[] | undefined;
+      const diagnostics = startProjectsListDiagnostics(context);
       try {
-        if (client?.authenticatedUserProfile?.profileId || (params.includeObserved && canWrite())) {
-          store = (await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { projection: "list" }))
-            .store;
-          assertCurrent();
+        const registryProjects = await listProjectRegistry(context.getRuntimeConfig());
+        diagnostics?.mark("sessions");
+        const projects = registryProjects.map(sanitizeProjectRecord);
+        const cfg = context.getRuntimeConfig();
+        const requesterProfileId = client?.authenticatedUserProfile?.profileId;
+        const requesterUserId = client?.authenticatedUserId;
+        const accessRevision = readGatewayAccessRevision();
+        const assertCurrent = () => {
+          if (
+            client?.authenticatedUserProfile?.profileId !== requesterProfileId ||
+            client?.authenticatedUserId !== requesterUserId ||
+            readGatewayAccessRevision() !== accessRevision ||
+            context.getRuntimeConfig() !== cfg
+          ) {
+            throw new Error(
+              "Project access changed while preparing the listing. Retry the request.",
+            );
+          }
+        };
+        const canWrite = () =>
+          authorizeOperatorScopesForRequiredScope(
+            WRITE_SCOPE,
+            Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
+          ).allowed;
+        let store: ReturnType<typeof loadCombinedSessionStoreForGatewayCore>["store"] = {};
+        let observedProjects: ProjectSummary[] | undefined;
+        try {
+          if (
+            client?.authenticatedUserProfile?.profileId ||
+            (params.includeObserved && canWrite())
+          ) {
+            if (params.includeObserved) {
+              store = (
+                await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { projection: "list" })
+              ).store;
+            } else {
+              const projection = getSessionRowProjection(context);
+              if (!projection) {
+                throw new Error(
+                  "Session projection is unavailable before Gateway startup completes",
+                );
+              }
+              do {
+                await projection.ensureMaterialized();
+              } while (projection.needsMaterialization);
+              assertCurrent();
+              if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
+                throw new Error(
+                  "Session projection changed while preparing the listing. Retry the request.",
+                );
+              }
+              store = loadCombinedSessionStoreForGatewayCore(cfg, {
+                projection: "list",
+                // Federation and process-local incognito stores retain the existing loader.
+                loadEntries: (target) =>
+                  projection
+                    .selectEntries({ storePath: target.storePath, sortBy: null })
+                    .map((row) => ({
+                      sessionKey: row.key,
+                      entry: row.storedEntry ?? row.entry,
+                      keyBytes: Buffer.from(row.key),
+                    }))
+                    // SQLite's binary key order breaks locale-equal recency ties.
+                    .toSorted((left, right) => Buffer.compare(left.keyBytes, right.keyBytes)),
+              }).store;
+            }
+            assertCurrent();
+          }
+          if (params.includeObserved && canWrite()) {
+            observedProjects = await listObservedProjects(
+              service,
+              context,
+              client,
+              store,
+              diagnostics,
+            );
+            assertCurrent();
+          }
+        } catch (error) {
+          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+          return;
         }
-        if (params.includeObserved && canWrite()) {
-          observedProjects = await listObservedProjects(service, context, client, store);
-          assertCurrent();
+        diagnostics?.mark("recents");
+        const profileId = client?.authenticatedUserProfile?.profileId;
+        const recentProfileIds = profileId ? readCurrentUserProfileAliases(profileId) : undefined;
+        const recents = recentProfileIds
+          ? listProjectRecents(store, recentProfileIds, registryProjects)
+          : undefined;
+        diagnostics?.mark("response");
+        if (canWrite()) {
+          respond(
+            true,
+            {
+              projects,
+              ...(recents ? { recents } : {}),
+              ...(observedProjects ? { observedProjects } : {}),
+            },
+            undefined,
+          );
+          return;
         }
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-        return;
-      }
-      const profileId = client?.authenticatedUserProfile?.profileId;
-      const recentProfileIds = profileId ? readCurrentUserProfileAliases(profileId) : undefined;
-      const recents = recentProfileIds
-        ? listProjectRecents(store, recentProfileIds, registryProjects)
-        : undefined;
-      if (canWrite()) {
+        // Project identity is read-safe; host paths, origins, folders, and observed checkouts are
+        // placement details reserved for clients that can create sessions.
         respond(
           true,
           {
-            projects,
-            ...(recents ? { recents } : {}),
-            ...(observedProjects ? { observedProjects } : {}),
+            projects: projects.map(({ id, displayName, source, agentId }) =>
+              agentId ? { id, displayName, source, agentId } : { id, displayName, source },
+            ),
+            ...(recents ? { recents: recents.filter((recent) => recent.kind === "project") } : {}),
           },
           undefined,
         );
-        return;
+      } finally {
+        diagnostics?.finish();
       }
-      // Project identity is read-safe; host paths, origins, folders, and observed checkouts are
-      // placement details reserved for clients that can create sessions.
-      respond(
-        true,
-        {
-          projects: projects.map((project) =>
-            project.agentId
-              ? {
-                  id: project.id,
-                  displayName: project.displayName,
-                  source: project.source,
-                  agentId: project.agentId,
-                }
-              : {
-                  id: project.id,
-                  displayName: project.displayName,
-                  source: project.source,
-                },
-          ),
-          ...(recents ? { recents: recents.filter((recent) => recent.kind === "project") } : {}),
-        },
-        undefined,
-      );
     },
     "projects.register": async ({ params, respond }) => {
       if (

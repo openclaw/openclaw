@@ -10,7 +10,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { updateDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
+import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { failDurableDelivery, type DurableDeliveryCompletion } from "./delivery-completion.js";
 import * as mediaSpool from "./delivery-queue-media-spool.js";
@@ -73,10 +73,15 @@ describe("exhausted delivery producer recovery", () => {
   }
 
   function setProducerExpiry(id: string, availableAt: number) {
-    updateDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir(), (entry) => ({
-      ...entry,
-      availableAt,
-    }));
+    updateDeliveryQueueEntryInDatabase(
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() } }),
+      OUTBOUND_DELIVERY_QUEUE_NAME,
+      id,
+      (entry) => ({
+        ...entry,
+        availableAt,
+      }),
+    );
   }
 
   function queueStatus(id: string) {
@@ -208,7 +213,7 @@ describe("exhausted delivery producer recovery", () => {
 
       await recover(mode);
       expect(readQueuedEntry(tmpDir(), id)).toMatchObject({ deliveryCompletion: completion });
-      expect(queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
+      expect(await queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
         status: "failed",
         settlementPending: true,
       });
@@ -380,7 +385,7 @@ describe("exhausted delivery producer recovery", () => {
       throw new Error("Expected settlement owner");
     }
     await failDurableDelivery(completion, tmpDir());
-    expect(queueStorage.finalizeDeliveryFailureSettlement(staged, tmpDir())).toBe(true);
+    expect(await queueStorage.finalizeDeliveryFailureSettlement(staged, tmpDir())).toBe(true);
     expect(
       await queueStorage.stageDeliveryFailureSettlement(staged, staged.settlement!, tmpDir()),
     ).toBeUndefined();
@@ -469,7 +474,7 @@ describe("exhausted delivery producer recovery", () => {
       const log = await recover("startup");
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("terminal cleanup failed"));
       expect(audits).toEqual(["failed"]);
-      expect(queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
+      expect(await queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
         status: "failed",
       });
       expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("settlement");

@@ -22,6 +22,8 @@ import {
   resolveClosedResetInterval,
   type ClosedResetInterval,
 } from "./session-accessor.sqlite-reset-window.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 
 export function isVisibleHistoryNonMessageEvent(event: Record<string, unknown>): boolean {
   return (
@@ -106,7 +108,7 @@ function selectHistoricalDisplayEvents(
         eb("active.message_position", "is not", null),
         isVisibleHistoryNonMessageEventSql(
           eb.ref("identity.event_type"),
-          eb.ref("event.event_json"),
+          transcriptEventNavigationSql("event"),
           eb.ref("active.event_seq"),
           eb.ref("event.seq"),
         ),
@@ -152,11 +154,11 @@ export function readDisplayableActiveEventById(
       ])
       .select((eb) =>
         maxBytes === undefined
-          ? eb.ref("event.event_json").as("event_json")
+          ? transcriptEventJsonSql(projection.database.db, "event").as("event_json")
           : eb
               .case()
-              .when(eb(eb.fn<number>("octet_length", ["event.event_json"]), "<=", maxBytes))
-              .then(eb.ref("event.event_json"))
+              .when(eb(transcriptEventReadBytesSql("event"), "<=", maxBytes))
+              .then(transcriptEventJsonSql(projection.database.db, "event"))
               .else(null)
               .end()
               .as("event_json"),
@@ -168,7 +170,7 @@ export function readDisplayableActiveEventById(
           eb("active.message_position", "is not", null),
           isVisibleHistoryNonMessageEventSql(
             eb.ref("identity.event_type"),
-            eb.ref("event.event_json"),
+            transcriptEventNavigationSql("event"),
             eb.ref("active.event_seq"),
             eb.ref("event.seq"),
           ),
@@ -190,7 +192,7 @@ export function readDisplayableActiveEventById(
     projection.database.db,
     db
       .selectFrom("transcript_events")
-      .select("event_json")
+      .select(transcriptEventJsonSql(projection.database.db).as("event_json"))
       .where("session_id", "=", projection.resolved.sessionId)
       .where("seq", "=", unindexed.event_seq),
   );
@@ -230,7 +232,7 @@ function readHistoricalDisplayEventRange(
   }
   const query = selectHistoricalDisplayEvents(projection, interval).select([
     "active.event_seq",
-    "event.event_json",
+    transcriptEventJsonSql(projection.database.db, "event").as("event_json"),
   ]);
   const olderCount = anchor.displayPosition - start;
   // The anchor already identifies the physical position; visit only its selected neighbors.

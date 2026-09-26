@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { createGatewayRequestContext } from "../../../gateway/server-request-context.js";
 import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
 import { resetHeartbeatEventsForTest } from "../../../infra/heartbeat-events.js";
@@ -31,16 +32,16 @@ import {
   initSubagentRegistry,
   leasePendingAgentSteeringItems,
   resetSubagentRegistryForTests,
-  testing,
 } from "./subagent-registry.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("../../../config/config.js", { spy: true });
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-child-store-replaced-"));
   resetSubagentRegistryForTests({ persist: false });
-  testing.setDepsForTest({ getRuntimeConfig: () => ({}) });
+  vi.mocked(getRuntimeConfig).mockReturnValue({});
   publishSystemEventStoreResolver(() => "original-store");
 });
 
@@ -49,7 +50,7 @@ afterEach(() => {
   resetTaskRegistryForTests({ persist: false });
   publishSystemEventStoreResolver(undefined);
   resetHeartbeatEventsForTest();
-  testing.setDepsForTest();
+  vi.mocked(getRuntimeConfig).mockReset();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.useRealTimers();

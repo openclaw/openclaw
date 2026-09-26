@@ -23,6 +23,8 @@ import {
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
 export type VisibleHistoryBoundary = {
   displayPosition: number;
@@ -109,7 +111,7 @@ function selectVisibleHistoryBoundaries(
     .where("active.session_id", "=", sessionId)
     .where((eb) => {
       const type = eb.ref("identity.event_type");
-      const event = eb.ref("event.event_json");
+      const event = transcriptEventNavigationSql("event");
       const activeEventSeq = eb.ref("active.event_seq");
       const eventSeq = eb.ref("event.seq");
       if (boundaryActivePosition === undefined) {
@@ -222,7 +224,7 @@ export function resolveVisibleHistoryProjection(
         "identity.event_id",
         "identity.seq",
         /* kysely-allow-raw: history byte caps include each event's JSONL newline. */
-        sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
+        sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
       ])
       .orderBy("active.active_position", "asc"),
   ).rows;

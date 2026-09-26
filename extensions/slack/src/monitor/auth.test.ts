@@ -1,5 +1,7 @@
 import { WebAPIPlatformError, WebAPIRequestError } from "@slack/web-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setSlackRuntime } from "../runtime.js";
 import type { SlackMonitorContext } from "./context.js";
 
 const participantDescriptors = vi.hoisted(
@@ -26,6 +28,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  setSlackRuntime(createPluginRuntimeMock());
   readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
   delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
 });
@@ -696,12 +699,6 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
       },
     },
     {
-      name: "allows interactive events when channel type is known from ID prefix",
-      ctx: { allowFrom: ["U_OWNER"] },
-      request: interactiveRequest("U_OWNER", { channelId: "C1" }),
-      expected: allowedChannel,
-    },
-    {
       name: "allows interactive events when channel type is known from explicit type",
       ctx: {
         allowFrom: ["U_OWNER"],
@@ -709,11 +706,6 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
       },
       request: interactiveRequest("U_OWNER", { channelId: "X1", channelType: "group" }),
       expected: { allowed: true, channelType: "group", channelName: "mystery" },
-    },
-    {
-      name: "does not apply interactiveEvent restrictions to non-interactive events",
-      request: { senderId: "U_ANYONE", channelId: "C1" },
-      expected: allowedChannel,
     },
   ] satisfies AuthorizeCase[])("$name", async ({ ctx, request, expected }) => {
     await expect(

@@ -1,8 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import {
   lobsterPetSeed,
   resolveLobsterPetMode,
@@ -10,18 +8,15 @@ import {
 } from "../../components/lobster-pet-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { refreshSlashCommands } from "../chat/chat-commands.ts";
-import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
-import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import type { NewSessionComposerOptions } from "./composer-types.ts";
 import { renderNewSessionComposer } from "./composer.ts";
-import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
+import { isWorktreeNameValid } from "./create-params.ts";
 import { renderDraftError } from "./draft-body.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
 registerNewSessionSetupEnglish();
@@ -69,81 +64,54 @@ export function renderNewSessionDraftErrors(
   `;
 }
 
-export function renderNewSessionDraftComposer(options: {
-  agent?: GatewayAgentRow;
-  agentId: string;
-  attachmentDraft: NewSessionAttachmentDraft;
-  canSubmit: boolean;
-  context: ApplicationContext | undefined;
-  draftOwnerKey: string;
-  isCatalogTarget: boolean;
-  message: string;
-  mentions?: readonly HumanMention[];
-  getMentions?: () => readonly HumanMention[];
-  visibility?: NewSessionVisibility;
-  draftAvailable?: boolean;
-  capabilityMenu?: CapabilityMenuProps;
-  toolOverrides?: SessionToolOverrides | null;
-  modelControl: NewSessionModelControl;
-  permissionControl?: TemplateResult;
-  textareaController: NewSessionComposerTextareaController;
-  voiceControl?: TemplateResult | typeof nothing;
-  requiresModifier: boolean;
-  requestUpdate: () => void;
-  submitDisabledReason?: string;
-  blockedSubmitNotice?: string;
-  dictationActive?: boolean;
-  dictationPreview?: string;
-  dictationStatus?: TemplateResult | typeof nothing;
-  nativeTerminal?: boolean;
-  onUnsupportedAttachment?: () => void;
-  submitting: boolean;
-  messageLocked?: boolean;
-  onInput: (message: string, mentions?: readonly HumanMention[]) => void;
-  onOpenImage?: (item: ImageLightboxItem) => void;
-  onOpenSidebar?: (content: SidebarContent) => void;
-  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
-  onSubmit: () => void;
-  onBackgroundSubmit?: () => void;
-}) {
+export function renderNewSessionDraftComposer(
+  options: Omit<
+    NewSessionComposerOptions,
+    | "renderCritters"
+    | "attachmentLimits"
+    | "attachmentReads"
+    | "attachments"
+    | "getAttachments"
+    | "mentionDirectory"
+    | "modelControl"
+    | "permissionControl"
+    | "pendingAttachmentReads"
+    | "readSignal"
+    | "refreshCommands"
+    | "onAttachmentsChange"
+    | "onPendingReadsChange"
+  > & {
+    agent?: GatewayAgentRow;
+    agentId: string;
+    attachmentDraft: NewSessionAttachmentDraft;
+    context: ApplicationContext | undefined;
+    draftOwnerKey: string;
+    isCatalogTarget: boolean;
+    modelControl: NewSessionModelControl;
+    permissionControl?: TemplateResult;
+  },
+) {
   const readSignal = options.attachmentDraft.readSignal;
   const commandClient = options.nativeTerminal
     ? null
     : (options.context?.gateway.snapshot.client ?? null);
   const gateway = options.context?.gateway;
-  const profile = gateway?.snapshot.selfUser?.identity;
-  const mentionDirectory =
-    commandClient &&
-    gateway?.snapshot.phase === "connected" &&
-    profile?.type === "profile" &&
-    hasOperatorWriteAccess(gateway.snapshot.hello?.auth ?? null) &&
-    !options.isCatalogTarget &&
-    options.visibility !== "incognito"
-      ? {
-          client: commandClient,
-          ownerKey: JSON.stringify([
-            gateway.connectionRevision,
-            commandClient.recoveryScope,
-            profile.id,
-            options.draftOwnerKey,
-          ]),
-          params: {
-            agentId: options.agentId,
-            ...(options.visibility === "draft" ? { visibility: "draft" as const } : {}),
-          },
-        }
-      : undefined;
+  const mentionDirectory = resolveNewSessionMentionDirectory(options);
   options.textareaController.syncSkillCommandOwner(
     commandClient,
     options.agentId,
     options.draftOwnerKey,
   );
   return renderNewSessionComposer({
+    ...options,
     renderCritters: (floorEnabled) => html`<openclaw-lobster-pet
       .seed=${lobsterPetSeed(`${options.textareaController.critterVisit}:${options.draftOwnerKey}`)}
       .mode=${resolveLobsterPetMode(!gateway?.snapshot.offlineStable, options.context?.sessions.state.result?.sessions)}
       .runOutcome=${resolveLobsterRunOutcome(options.context?.sessions.state.result?.sessions)}
       .visitsEnabled=${options.context?.theme.settings.lobsterPetVisits !== false}
+      .residentEnabled=${options.context?.theme.branding.mascot !== "none"}
+      .critters=${options.context?.theme.branding.critters}
+      .critterArtwork=${options.context?.theme.branding.artwork?.critters}
       .soundsEnabled=${options.context?.theme.settings.lobsterPetSounds === true}
       .gatewayVersion=${options.context?.config.current.serverVersion ?? gateway?.snapshot.hello?.server?.version ?? null}
       .onVisitsDisabled=${() => options.context?.theme.refresh()}
@@ -151,18 +119,11 @@ export function renderNewSessionDraftComposer(options: {
     ></openclaw-lobster-pet>`,
     attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
     attachments: options.attachmentDraft.attachments,
-    canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,
     get message() {
       return options.message;
     },
-    mentions: options.mentions,
-    getMentions: options.getMentions,
     mentionDirectory,
-    visibility: options.visibility,
-    draftAvailable: options.draftAvailable,
-    capabilityMenu: options.capabilityMenu,
-    toolOverrides: options.toolOverrides,
     modelControl: options.isCatalogTarget
       ? nothing
       : options.modelControl.render({
@@ -171,12 +132,9 @@ export function renderNewSessionDraftComposer(options: {
           context: options.context,
           sending: options.submitting,
         }),
-    permissionControl: options.permissionControl,
     pendingAttachmentReads: options.attachmentDraft.pendingReads,
     attachmentReads: options.attachmentDraft.reads,
     readSignal,
-    requiresModifier: options.requiresModifier,
-    requestUpdate: options.requestUpdate,
     refreshCommands: commandClient
       ? () =>
           refreshSlashCommands({
@@ -190,20 +148,12 @@ export function renderNewSessionDraftComposer(options: {
               ),
           })
       : undefined,
-    submitDisabledReason: options.submitDisabledReason,
-    blockedSubmitNotice: options.blockedSubmitNotice,
     get dictationActive() {
       return options.dictationActive;
     },
-    dictationPreview: options.dictationPreview,
-    dictationStatus: options.dictationStatus,
-    nativeTerminal: options.nativeTerminal,
-    onUnsupportedAttachment: options.onUnsupportedAttachment,
     get submitting() {
       return options.submitting;
     },
-    textareaController: options.textareaController,
-    voiceControl: options.voiceControl,
     get messageLocked() {
       return options.messageLocked;
     },
@@ -213,11 +163,5 @@ export function renderNewSessionDraftComposer(options: {
       }
     },
     onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
-    onInput: options.onInput,
-    onOpenImage: options.onOpenImage,
-    onOpenSidebar: options.onOpenSidebar,
-    onVisibilityChange: options.onVisibilityChange,
-    onSubmit: options.onSubmit,
-    onBackgroundSubmit: options.onBackgroundSubmit,
   });
 }

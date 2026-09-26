@@ -227,7 +227,7 @@ Declaration files are virtual, not written under the workspace or state
 directory. For each code-mode `exec` call, OpenClaw builds the run-scoped tool
 catalog, keeps the visible MCP entries, renders `mcp/index.d.ts` plus one
 `mcp/<server>.d.ts` per visible server, and injects that small read-only table
-into the QuickJS worker. Guest code sees only the `API` object:
+into the selected executor's worker. Guest code sees only the `API` object:
 `API.list(prefix?)` returns file metadata and `API.read(path)` returns the
 selected declaration content. Unknown paths and `.`/`..` segments are
 rejected.
@@ -353,8 +353,8 @@ retaining tool data; these control replies are bounded by pending-call slots.
 Cancellation and expiry close admission and release undelivered replies.
 
 This is an additional logical host-data allowance, not a total RSS limit or a
-guarantee that large data can be suspended. Guest heap and whole-VM snapshot
-limits remain unchanged; worker handoff and JSON conversion can temporarily
+guarantee that large data can be suspended. Executor memory limits and QuickJS
+whole-VM snapshot limits still apply; worker handoff and JSON conversion can temporarily
 retain additional copies. Narrow or paginate requests after an admission error.
 
 Output order matches guest calls. Cumulative guest output and the final value

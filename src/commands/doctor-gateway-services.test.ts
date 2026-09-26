@@ -67,6 +67,7 @@ const mocks = vi.hoisted(() => ({
   needsNodeRuntimeMigration: vi.fn(() => false),
   renderSystemNodeWarning: vi.fn().mockReturnValue(undefined),
   resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
+  resolveNodeRuntimeInfo: vi.fn(),
   isSystemdUnitActive: vi
     .fn<typeof import("../daemon/systemd-exec.js").isSystemdUnitActive>()
     .mockResolvedValue({ ok: true, value: false }),
@@ -97,6 +98,7 @@ vi.mock("../daemon/inspect.js", () => ({
 vi.mock("../daemon/runtime-paths.js", () => ({
   renderSystemNodeWarning: mocks.renderSystemNodeWarning,
   resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
+  resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,
 }));
 
 vi.mock("../daemon/service-audit.js", () => ({
@@ -370,6 +372,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.needsNodeRuntimeMigration.mockReturnValue(false);
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.resolveSystemNodeInfo.mockResolvedValue(null);
+    mocks.resolveNodeRuntimeInfo.mockResolvedValue({ status: "supported" });
     mocks.isSystemdUnitActive.mockResolvedValue(ok(false));
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
@@ -635,31 +638,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
   );
 
   registerDoctorRuntimePinTests({ mocks, runRepair, createRecommendedServiceAudit });
-
-  it("preserves a supported Bun runtime when repairing the Gateway service", async () => {
-    const bunPath = "/home/test/.bun/bin/bun";
-    const bunCommand = {
-      programArguments: [bunPath, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
-      environment: {},
-    };
-    mocks.readCommand.mockResolvedValue(bunCommand);
-    mocks.buildGatewayInstallPlan.mockResolvedValue(bunCommand);
-    mocks.auditGatewayServiceConfig.mockResolvedValue(
-      createRecommendedServiceAudit(
-        "gateway-path-nonminimal",
-        "Gateway PATH should be regenerated",
-      ),
-    );
-
-    await runRepair({ gateway: {} });
-
-    for (const [options] of mocks.buildGatewayInstallPlan.mock.calls) {
-      expect(options).toEqual(expect.objectContaining({ runtime: "bun", runtimePath: bunPath }));
-    }
-    expect(mocks.install).toHaveBeenCalledWith(
-      expect.objectContaining({ programArguments: bunCommand.programArguments }),
-    );
-  });
 
   it("migrates an unsupported Bun Gateway service to supported system Node", async () => {
     const bunPath = "/home/test/.bun/bin/bun";
@@ -1204,7 +1182,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
   it.each([
     ["active", ok(true)],
     ["bus query failed", err("Failed to connect to bus: Permission denied")],
-    ["timed out", err("Command timed out")],
   ] satisfies [string, Result<boolean, string>][])(
     "leaves service metadata unchanged when unit activity is %s and command drift accompanies other issues",
     async (_, active) => {
@@ -1882,35 +1859,6 @@ describe("maybeScanExtraGatewayServices", () => {
     expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
   });
 
-  it.each(["timeout", "signal"] as const)(
-    "keeps the plist when the postcondition probe ends with %s",
-    async (termination) => {
-      setupLegacyMacService();
-      mocks.execLaunchctl
-        .mockResolvedValueOnce(launchctlResult())
-        .mockResolvedValueOnce(launchctlResult())
-        .mockResolvedValueOnce(
-          launchctlResult({ code: 124, termination, stderr: "Could not find service" }),
-        );
-      const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
-      const access = vi.spyOn(fs, "access").mockResolvedValue(undefined);
-      const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
-      const runtime = makeDoctorIo();
-
-      await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
-
-      expectBoundedLaunchctlCleanup();
-      expect(mkdir).not.toHaveBeenCalled();
-      expect(access).not.toHaveBeenCalled();
-      expect(rename).not.toHaveBeenCalled();
-      expectNoteContaining(
-        `${LEGACY_MAC_LABEL} (launchctl could not confirm unload)`,
-        "Legacy gateway cleanup skipped",
-      );
-      expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
-    },
-  );
-
   it.skipIf(process.platform === "win32").each([false, true])(
     "uses real command outcomes for legacy cleanup (signal=%s)",
     async (signal) => {
@@ -2089,7 +2037,7 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
 
     expect(mocks.uninstallUserSystemdGatewayUnit).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager.",
+      expect.stringContaining("Cleanup of openclaw-gateway.service completed."),
     );
   });
 

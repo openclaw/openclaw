@@ -5,24 +5,14 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  createWriteStream,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { join } from "node:path";
-import { Readable, Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
+import { root as fsRoot, type Root, walkDirectorySync } from "../../infra/fs-safe.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { getBinDir } from "../config.js";
@@ -178,7 +168,7 @@ async function getLatestVersion(repo: string): Promise<string> {
   }
 }
 
-async function downloadFile(url: string, dest: string, maxBytes: number): Promise<void> {
+async function downloadFile(url: string, destination: Root, assetName: string): Promise<void> {
   const guarded = await fetchWithSsrFGuard({
     url,
     timeoutMs: DOWNLOAD_TIMEOUT_MS,
@@ -197,70 +187,32 @@ async function downloadFile(url: string, dest: string, maxBytes: number): Promis
     }
 
     const rawContentLength = response.headers.get("content-length");
-    if (rawContentLength !== null) {
+    const contentEncoding = response.headers.get("content-encoding")?.trim().toLowerCase();
+    if (rawContentLength !== null && (!contentEncoding || contentEncoding === "identity")) {
       const contentLength = rawContentLength.trim();
       if (CONTENT_LENGTH_RE.test(contentLength)) {
         const declaredBytes = Number(contentLength);
-        if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maxBytes) {
+        if (!Number.isSafeInteger(declaredBytes) || declaredBytes > MAX_ARCHIVE_BYTES) {
           await cancelUnreadResponseBody(response);
-          throw new Error(`Download exceeds the ${maxBytes}-byte archive limit`);
+          throw new Error(`Download exceeds the ${MAX_ARCHIVE_BYTES}-byte archive limit`);
         }
       }
     }
 
-    const fileStream = createWriteStream(dest);
-
-    let downloadCompleted = false;
-    try {
-      let downloadedBytes = 0;
-      const byteCap = new Transform({
-        transform(chunk: Uint8Array, _encoding, callback) {
-          downloadedBytes += chunk.byteLength;
-          if (downloadedBytes > maxBytes) {
-            callback(new Error(`Download exceeded the ${maxBytes}-byte archive limit`));
-            return;
-          }
-          callback(null, chunk);
-        },
-      });
-      await pipeline(
-        Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>),
-        byteCap,
-        fileStream,
-      );
-      downloadCompleted = true;
-    } finally {
-      if (!downloadCompleted) {
-        rmSync(dest, { force: true });
-      }
+    const body = response.body;
+    async function* chunks() {
+      // Admit the destination before acquiring a reader; the fetch guard owns cancellation.
+      yield* body.values({ preventCancel: true });
     }
+    await destination.create(join(destination.rootReal, assetName), chunks(), {
+      maxBytes: MAX_ARCHIVE_BYTES,
+      mkdir: false,
+      durable: false,
+      mode: 0o666 & ~process.umask(),
+    });
   } finally {
     await guarded.release();
   }
-}
-
-function findBinaryRecursively(rootDir: string, binaryFileName: string): string | null {
-  const stack: string[] = [rootDir];
-
-  while (stack.length > 0) {
-    const currentDir = stack.pop();
-    if (!currentDir) {
-      continue;
-    }
-
-    const entries = readdirSync(currentDir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = join(currentDir, entry.name);
-      if (entry.isFile() && entry.name === binaryFileName) {
-        return fullPath;
-      }
-      if (entry.isDirectory()) {
-        stack.push(fullPath);
-      }
-    }
-  }
-
-  return null;
 }
 
 async function extractArchiveSafe(
@@ -323,9 +275,8 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
   mkdirSync(extractDir, { recursive: true });
 
   try {
-    // Download with byte cap so oversized archives are rejected before
-    // hitting disk, not just during extraction.
-    await downloadFile(downloadUrl, archivePath, MAX_ARCHIVE_BYTES);
+    const stagingRoot = await fsRoot(stagingDir);
+    await downloadFile(downloadUrl, stagingRoot, assetName);
 
     if (assetName.endsWith(".tar.gz") || assetName.endsWith(".zip")) {
       await extractArchiveSafe(archivePath, extractDir, assetName);
@@ -344,7 +295,15 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
     let extractedBinary = extractedBinaryCandidates.find((candidate) => existsSync(candidate));
 
     if (!extractedBinary) {
-      extractedBinary = findBinaryRecursively(extractDir, binaryFileName) ?? undefined;
+      const { entries, failedDirs } = walkDirectorySync(extractDir, {
+        symlinks: "skip",
+        include: (entry) => entry.kind === "file" && entry.name === binaryFileName,
+      });
+      extractedBinary = entries[0]?.path;
+      const failure = failedDirs[0];
+      if (!extractedBinary && failure) {
+        throw failure.error;
+      }
     }
 
     if (extractedBinary) {
@@ -463,14 +422,4 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
     }
     return undefined;
   }
-}
-
-const testing = {
-  downloadFile,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolsManagerTestApi")] = {
-    testing,
-  };
 }

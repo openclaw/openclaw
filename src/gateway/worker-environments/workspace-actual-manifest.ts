@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+import { sha256File } from "../../infra/directory-durability.js";
 import {
+  FsSafeError,
   isPathInside,
   resolveOpenedFileRealPathForHandle,
   root as fsRoot,
@@ -37,7 +40,6 @@ type WorkspaceFileRead = {
   maxBytes: number | ((openedSize: number) => number);
   root?: string;
   signal?: AbortSignal;
-  readBuffers?: Buffer[];
 };
 
 function localPath(root: string, relative: string): string {
@@ -66,14 +68,12 @@ export async function readWorkspaceFileSnapshotWithLimit(
   maxBytes: number | ((openedSize: number) => number),
   root?: string,
   signal?: AbortSignal,
-  readBuffers?: Buffer[],
 ): Promise<WorkspaceFileSnapshot> {
   return await readWorkspaceFile({
     expectedPath,
     maxBytes,
     root,
     signal,
-    readBuffers,
     contents: false,
   });
 }
@@ -94,7 +94,7 @@ function readWorkspaceFile(
 async function readWorkspaceFile(
   params: WorkspaceFileRead & { contents: boolean },
 ): Promise<WorkspaceFileSnapshot | WorkspaceFileContents> {
-  const { expectedPath, maxBytes, root, signal, readBuffers } = params;
+  const { expectedPath, maxBytes, root, signal } = params;
   signal?.throwIfAborted();
   const handle = await fs.open(
     expectedPath,
@@ -124,33 +124,32 @@ async function readWorkspaceFile(
       }
     } else {
       const hashStartedAt = performance.now();
-      const hash = createHash("sha256");
-      buffer = params.contents
-        ? Buffer.allocUnsafe(Number(before.size) + 1)
-        : (readBuffers?.pop() ?? Buffer.allocUnsafe(readBuffers ? 256 * 1024 : 64 * 1024));
-      size = 0;
-      for (;;) {
-        signal?.throwIfAborted();
-        const offset = params.contents ? size : 0;
-        const { bytesRead } = await handle.read(
-          buffer,
-          offset,
-          Math.min(buffer.length - offset, byteLimit - size + 1),
-          size,
-        );
-        if (bytesRead === 0) {
-          break;
-        }
-        size += bytesRead;
+      if (params.contents) {
+        buffer = Buffer.allocUnsafe(Number(before.size) + 1);
+        size = await readFileWindowFully(handle, buffer, 0, { signal });
         if (size > byteLimit) {
+          return { type: "unsupported" };
+        }
+        sha256 = createHash("sha256").update(buffer.subarray(0, size)).digest("hex");
+      } else {
+        try {
+          ({ bytes: size, digest: sha256 } = await sha256File(handle, {
+            maxBytes: byteLimit,
+            signal,
+          }));
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (!(error instanceof FsSafeError) || error.code !== "too-large") {
+            throw error;
+          }
           if (typeof maxBytes !== "number") {
-            throw new Error("Gateway workspace file changed while it was being read");
+            throw new Error("Gateway workspace file changed while it was being read", {
+              cause: error,
+            });
           }
           return { type: "unsupported" };
         }
-        hash.update(buffer.subarray(offset, offset + bytesRead));
       }
-      sha256 = hash.digest("hex");
       if (metrics) {
         metrics.contentHashCount += 1;
         metrics.contentHashDurationMs += performance.now() - hashStartedAt;
@@ -172,9 +171,6 @@ async function readWorkspaceFile(
       ? { ...snapshot, content: buffer.subarray(0, size) }
       : snapshot;
   } finally {
-    if (buffer && readBuffers && !params.contents) {
-      readBuffers.push(buffer);
-    }
     await handle.close();
   }
 }
@@ -236,9 +232,6 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
   };
   const filePaths: string[] = [];
-  // A buffer is borrowed only on a hash miss and returned after its reads settle.
-  // The scan's bounded admission limits the pool to its active file readers.
-  const readBuffers: Buffer[] = [];
   const runScans = async (
     start: number,
     end: number,
@@ -281,7 +274,6 @@ export async function readActualWorkspaceManifestImpl(params: {
       },
       root,
       scanSignal,
-      readBuffers,
     );
     if (snapshot.type === "file") {
       addEntry({

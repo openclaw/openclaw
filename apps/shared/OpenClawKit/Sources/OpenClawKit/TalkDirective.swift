@@ -92,22 +92,14 @@ public enum TalkVoiceAliases {
 public enum TalkDirectiveParser {
     public static func parse(_ text: String) -> TalkDirectiveParseResult {
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
-        var lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
-        guard !lines.isEmpty else { return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: []) }
-
+        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
         guard let firstNonEmptyIndex =
             lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         else {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
         }
 
-        var firstNonEmpty = firstNonEmptyIndex
-        if firstNonEmpty > 0 {
-            lines.removeSubrange(0..<firstNonEmpty)
-            firstNonEmpty = 0
-        }
-
-        let head = lines[firstNonEmpty].trimmingCharacters(in: .whitespacesAndNewlines)
+        let head = lines[firstNonEmptyIndex].trimmingCharacters(in: .whitespacesAndNewlines)
         guard head.hasPrefix("{"), head.hasSuffix("}") else {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
         }
@@ -137,24 +129,7 @@ public enum TalkDirectiveParser {
             latencyTier: intValue(json, keys: ["latency", "latency_tier", "latencyTier"]),
             once: boolValue(json, keys: ["once"]))
 
-        let hasDirective = [
-            directive.voiceId,
-            directive.modelId,
-            directive.speed.map { "\($0)" },
-            directive.rateWPM.map { "\($0)" },
-            directive.stability.map { "\($0)" },
-            directive.similarity.map { "\($0)" },
-            directive.style.map { "\($0)" },
-            directive.speakerBoost.map { "\($0)" },
-            directive.seed.map { "\($0)" },
-            directive.normalize,
-            directive.language,
-            directive.outputFormat,
-            directive.latencyTier.map { "\($0)" },
-            directive.once.map { "\($0)" },
-        ].contains { $0 != nil }
-
-        guard hasDirective else {
+        guard directive != TalkDirective() else {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
         }
 
@@ -175,15 +150,12 @@ public enum TalkDirectiveParser {
         ])
         let unknownKeys = json.keys.filter { !knownKeys.contains($0.lowercased()) }.sorted()
 
-        lines.remove(at: firstNonEmpty)
-        if firstNonEmpty < lines.count {
-            let next = lines[firstNonEmpty].trimmingCharacters(in: .whitespacesAndNewlines)
-            if next.isEmpty {
-                lines.remove(at: firstNonEmpty)
-            }
+        var body = lines.dropFirst(firstNonEmptyIndex + 1)
+        if body.first?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+            body = body.dropFirst()
         }
 
-        let stripped = lines.joined(separator: "\n")
+        let stripped = body.joined(separator: "\n")
         return TalkDirectiveParseResult(directive: directive, stripped: stripped, unknownKeys: unknownKeys)
     }
 

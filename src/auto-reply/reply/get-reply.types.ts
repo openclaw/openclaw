@@ -1,4 +1,8 @@
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import type { ReplyDeliveryObserver } from "../../agents/reply-completion.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -6,12 +10,14 @@ import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/t
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DashboardMessageReadAdmission } from "../../gateway/message-action-turn-capability.js";
+import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
+import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import type { FollowupQueueDisposition, QueuedFollowupReplyDelivery } from "./queue/types.js";
 import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
@@ -35,7 +41,11 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
-  extractedFileImages?: import("../../media-understanding/extracted-file-images.js").ExtractedFileImage[];
+  /** One accepted request owns this monotonic custody budget across dispatch attempts. */
+  stateAcquisitionDeadline?: () => number;
+  /** Host-minted original operator authority; never restored from session metadata. */
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  extractedFileImages?: ExtractedFileImage[];
   /** Rechecks the live Gateway caller before a chat login has a durable effect. */
   assertProviderLoginAuthority?: () => void;
   getProviderLoginConfig?: () => OpenClawConfig;
@@ -63,6 +73,7 @@ type InternalReplySessionOptions = {
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   /** Publishes each executing turn's preferences without persisting them to its session. */
   onRunVerbosityResolved?: (settings: ReplyRunVerbosity) => void;
   /** Prevent implicit rollover after a caller has durably admitted this exact session. */
@@ -89,6 +100,34 @@ export type InternalGetReplyOptions = GetReplyOptions &
   InternalReplySessionOptions &
   ReplyOptionsWithOperationRunState &
   ReplyOptionsWithAdmissionTicket;
+
+/** Pin the host-issued source before public options cross asynchronous preparation. */
+export function prepareInternalGetReplyOptions(
+  opts: GetReplyOptions | undefined,
+): InternalGetReplyOptions | undefined {
+  if (!opts) {
+    return undefined;
+  }
+  const { operatorAuthority, ...options }: InternalGetReplyOptions = opts;
+  if (operatorAuthority !== undefined) {
+    assertAdmittedRunOperatorAuthority(operatorAuthority);
+    operatorAuthority.assertCurrent();
+  }
+  return { ...options, operatorAuthority };
+}
+
+export function withExtractedFileImages(
+  opts: InternalGetReplyOptions | undefined,
+  extractedFileImages: ExtractedFileImage[] | undefined,
+): InternalGetReplyOptions | undefined {
+  if (!extractedFileImages || extractedFileImages.length === 0) {
+    return opts;
+  }
+  return {
+    ...opts,
+    extractedFileImages: [...(opts?.extractedFileImages ?? []), ...extractedFileImages],
+  };
+}
 
 export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | undefined): boolean {
   return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;

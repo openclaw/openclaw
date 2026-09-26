@@ -131,6 +131,11 @@ account retains its browser preferences. Changing accounts or removing a
 browser-authenticated profile clears its isolated dashboard browser data;
 removing any profile also removes its saved credentials.
 
+If images or files prompt you to **Sign in to continue loading content**, choose
+**Sign in** in the Mac app. The app renews the affected Gateway's session and
+returns to the open conversation. Signing in to an ordinary browser tab alone
+does not refresh the Mac app's separate browser session.
+
 Choose **File → New Gateway Window…** or press Cmd-N, then select a Gateway.
 The picker includes the primary Gateway, **This Mac** when it also hosts a local
 Gateway, and saved profiles. It remembers the selected Gateway. Every selection

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import {
-  captureWsEvent,
+  captureWsEventAsync,
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
@@ -76,7 +76,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     if (this.lifecycle.phase() === "terminal") {
       return;
     }
-    if (!this.canSubmitInput()) {
+    if (!this.isConnected()) {
       if (this.pendingUserMessages.length < XAI_REALTIME_MAX_PENDING_USER_MESSAGES) {
         this.pendingUserMessages.push(text);
       } else {
@@ -103,7 +103,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     if (this.lifecycle.phase() === "terminal" || options?.willContinue === true) {
       return;
     }
-    if (!this.canSubmitInput()) {
+    if (!this.isConnected()) {
       let serialized: string;
       try {
         serialized = serializeXaiRealtimeToolResult(result);
@@ -208,13 +208,14 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
           preserveToolCallState:
             this.config.sessionResumption === true && this.conversationId !== null,
         });
-        captureWsEvent({
+        // Finalization retains capture failures; observe Promises returned by the SDK view.
+        void captureWsEventAsync({
           url,
           direction: "local",
           kind: "ws-open",
           flowId: this.flowId,
           meta: { provider: "xai", capability: "realtime-voice" },
-        });
+        }).catch(() => {});
         this.sendEvent(this.buildSessionUpdate());
       });
 
@@ -225,14 +226,14 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         if (attempt.settled && !attempt.ready) {
           return;
         }
-        captureWsEvent({
+        void captureWsEventAsync({
           url,
           direction: "inbound",
           kind: "ws-frame",
           flowId: this.flowId,
           payload: data,
           meta: { provider: "xai", capability: "realtime-voice" },
-        });
+        }).catch(() => {});
         try {
           const event = JSON.parse(data.toString()) as XaiRealtimeEvent;
           if (event.type === "error" && !attempt.ready) {
@@ -264,14 +265,14 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         if (!this.lifecycle.acceptsEvents(connection) || this.ws !== ws) {
           return;
         }
-        captureWsEvent({
+        void captureWsEventAsync({
           url,
           direction: "local",
           kind: "error",
           flowId: this.flowId,
           errorText: error instanceof Error ? error.message : String(error),
           meta: { provider: "xai", capability: "realtime-voice" },
-        });
+        }).catch(() => {});
         if (!attempt.ready) {
           rejectStartup(toStringifiedError(error));
           return;
@@ -280,7 +281,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       });
 
       ws.on("close", (code, reasonBuffer) => {
-        captureWsEvent({
+        void captureWsEventAsync({
           url,
           direction: "local",
           kind: "ws-close",
@@ -294,7 +295,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
                 ? reasonBuffer.toString("utf8")
                 : undefined,
           },
-        });
+        }).catch(() => {});
         if (!this.lifecycle.isCurrent(connection)) {
           return;
         }
@@ -472,21 +473,17 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         ? (event as { type: string }).type
         : "unknown";
     const payload = JSON.stringify(event);
-    captureWsEvent({
+    void captureWsEventAsync({
       url: this.connectionUrl,
       direction: "outbound",
       kind: "ws-frame",
       flowId: this.flowId,
       payload,
       meta: { provider: "xai", capability: "realtime-voice" },
-    });
+    }).catch(() => {});
     ws.send(payload);
     // Observers report a sent frame, so nested control cannot overtake it.
     this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
-  }
-
-  private canSubmitInput(): boolean {
-    return this.isConnected();
   }
 
   private failConnection(

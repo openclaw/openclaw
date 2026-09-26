@@ -8,19 +8,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import * as backoff from "../../infra/backoff.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
+import * as worktreeCapacity from "./capacity.js";
 import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
 import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
+import { managedWorktreeGcEntrypoint } from "./service-gc-runtime.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
   useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixture,
+  materializeManagedWorktreeFixtures,
 } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
@@ -332,13 +340,11 @@ describe("ManagedWorktreeService garbage collection", () => {
     // Gateway cleanup runs on Node's main thread, whose stack limit differs from Vitest workers.
     const collected = await runNodeScript(
       [
-        "--import",
-        path.resolve("scripts/tsx.mjs"),
-        "--input-type=module",
-        "--eval",
-        `import { ManagedWorktreeService } from ${JSON.stringify(new URL("./service.ts", import.meta.url).href)};
-         const service = new ManagedWorktreeService({ now: () => ${now} });
-         console.log(JSON.stringify(await service.gc()));`,
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(managedWorktreeGcEntrypoint),
+          resolveTestNodeExecPath(),
+        ),
+        String(now),
       ],
       env,
       60_000,
@@ -548,7 +554,19 @@ describe("ManagedWorktreeService garbage collection", () => {
 
     const warnLogs = createWarnLogCapture("openclaw-worktree-gc-nested-visible");
     try {
-      expect((await service.gc()).removed).toEqual([removable.id]);
+      const result = await service.gc();
+      expect(result.removed).toEqual([removable.id]);
+      expect(result).toMatchObject({
+        outcome: "deferred",
+        issues: [
+          {
+            id: nestedRecord.id,
+            stage: "idle",
+            outcome: "deferred",
+            reason: "worktree contains a nested repository",
+          },
+        ],
+      });
       expect(await warnLogs.findText(`idle cleanup failed for ${nestedRecord.id}`)).toBeUndefined();
       expect(getRegistryWorktree(env, nestedRecord.id)?.removedAt).toBeUndefined();
       expect(await fs.readFile(path.join(nested, "local.txt"), "utf8")).toBe(
@@ -560,7 +578,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
   });
 
-  it("continues garbage collection when one repository control path is missing", async () => {
+  it("reports a failed record once and does not retry it during limit enforcement", async () => {
     const otherRepo = await initializeRepository(path.join(root, "other"));
     const removable = await materializeDownstreamFixture("other-removable", {
       repoRoot: otherRepo,
@@ -572,10 +590,22 @@ describe("ManagedWorktreeService garbage collection", () => {
     });
     await fs.rename(repo, path.join(root, "moved-repo"));
     now += IDLE_GC_MS + 1;
-
-    const result = await service.gc();
+    const result = await service.gc({ limits: { maxCount: 0 } });
 
     expect(result.removed).toEqual([removable.id]);
+    expect(result).toMatchObject({
+      outcome: "partial",
+      issueCount: 1,
+      issues: [
+        {
+          id: broken.id,
+          stage: "idle",
+          outcome: "failed",
+          reason: expect.stringContaining("cleanup-failed"),
+        },
+      ],
+      limitsSatisfied: false,
+    });
     expect(getRegistryWorktree(env, broken.id)?.removedAt).toBeUndefined();
   });
 
@@ -680,9 +710,78 @@ describe("ManagedWorktreeService garbage collection", () => {
       // The failed measurement excludes the record from the size total, so the
       // limit pass does not evict against a bogus zero-byte reading.
       expect(result.removed).toEqual([]);
+      expect(result.limitsSatisfied).toBeNull();
       expect(getRegistryWorktree(env, unreadable.id)?.removedAt).toBeUndefined();
     } finally {
       await fs.chmod(locked, 0o755);
+    }
+  });
+
+  it("reports false when the count cap is exceeded despite unknown current size", async () => {
+    if (process.getuid?.() === 0) {
+      return;
+    }
+    const unreadable = await materializeDownstreamFixture("manual-size-unreadable");
+    const locked = path.join(unreadable.path, "locked");
+    await fs.mkdir(locked);
+    await fs.chmod(locked, 0o000);
+    try {
+      const result = await service.gc({ limits: { maxCount: 0, maxTotalSizeBytes: 6_000 } });
+      expect(result.limitsSatisfied).toBe(false);
+      expect(result.removed).toEqual([]);
+    } finally {
+      await fs.chmod(locked, 0o755);
+    }
+  });
+
+  it("reports unknown size compliance for worktrees created during enforcement", async () => {
+    const oversized = await materializeRunOwnedFixture("size-race-oldest", "session");
+    await fs.writeFile(path.join(oversized.path, "blob.bin"), Buffer.alloc(10_000));
+    let concurrentId = "";
+    const realRemove = service.remove.bind(service);
+    vi.spyOn(service, "remove").mockImplementationOnce(async (params) => {
+      const concurrent = await materializeRunOwnedFixture("size-race-created", "session");
+      concurrentId = concurrent.id;
+      return await realRemove(params);
+    });
+
+    const result = await service.gc({ limits: { maxTotalSizeBytes: 6_000 } });
+
+    expect(result.limitsSatisfied).toBeNull();
+    expect(result.issues).toContainEqual({
+      id: concurrentId,
+      stage: "limits",
+      outcome: "deferred",
+      reason: "created during cleanup; run cleanup again",
+    });
+  });
+
+  it("refreshes a below-limit inventory before reporting compliance", async () => {
+    await materializeRunOwnedFixture("size-race-within-limit", "session");
+    let concurrentId = "";
+    const readSize = worktreeCapacity.directorySizeBytes;
+    const directorySize = vi
+      .spyOn(worktreeCapacity, "directorySizeBytes")
+      .mockImplementationOnce(async (worktreePath) => {
+        const bytes = await readSize(worktreePath);
+        const concurrent = await materializeRunOwnedFixture("size-race-cap-breach", "session");
+        concurrentId = concurrent.id;
+        return bytes;
+      });
+    try {
+      const result = await service.gc({
+        limits: { maxCount: 2, maxTotalSizeBytes: 1024 ** 3 },
+      });
+      expect(result.limitsSatisfied).toBeNull();
+      expect(result.outcome).toBe("deferred");
+      expect(result.issues).toContainEqual({
+        id: concurrentId,
+        stage: "limits",
+        outcome: "deferred",
+        reason: "created during cleanup; run cleanup again",
+      });
+    } finally {
+      directorySize.mockRestore();
     }
   });
 
@@ -760,9 +859,13 @@ describe("ManagedWorktreeService garbage collection", () => {
   });
 
   it("enforces one hundred live checkouts by default without evicting manual work", async () => {
-    for (let index = 0; index < 99; index += 1) {
-      await materializeDownstreamFixture(`manual-${index}`);
-    }
+    await materializeManagedWorktreeFixtures({
+      env,
+      names: Array.from({ length: 99 }, (_, index) => `manual-${index}`),
+      now,
+      repoRoot: repo,
+      stateDir,
+    });
     const oldest = await materializeRunOwnedFixture("default-oldest", "session");
     now += 1;
     const newest = await materializeRunOwnedFixture("default-newest", "session");
@@ -865,7 +968,12 @@ describe("ManagedWorktreeService garbage collection", () => {
       });
     const collection = service.gc();
     let restoration: ReturnType<typeof service.restore> | undefined;
-    const waits = vi.spyOn(backoff, "sleepWithAbort");
+    const waiting = createDeferred();
+    const sleep = backoff.sleepWithAbort;
+    const waits = vi.spyOn(backoff, "sleepWithAbort").mockImplementation((...args) => {
+      waiting.resolve();
+      return sleep(...args);
+    });
     try {
       await Promise.race([
         deleting.promise,
@@ -880,7 +988,8 @@ describe("ManagedWorktreeService garbage collection", () => {
         .finally(() => {
           settled = true;
         });
-      await vi.waitFor(() => expect(waits.mock.calls.length > 0 || settled).toBe(true));
+      await Promise.race([waiting.promise, outcome]);
+      expect(waits.mock.calls.length > 0 || settled).toBe(true);
       resume.resolve();
       expect((await collection).snapshotsPruned).toBe(1);
       await expect(outcome).resolves.toMatchObject({

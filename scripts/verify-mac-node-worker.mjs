@@ -225,6 +225,61 @@ async function proveGitWorkerRuntime(home) {
   }
 }
 
+function proveBrowserSetupRuntime(home) {
+  const proofHome = path.join(home, "browser-setup");
+  const stateDir = path.join(proofHome, "state");
+  const configPath = path.join(stateDir, "openclaw.json");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(path.join(proofHome, "Library/Application Support/Google/Chrome"), {
+    recursive: true,
+    mode: 0o700,
+  });
+  const config = JSON.stringify({
+    browser: { profiles: { chrome: { driver: "extension", cdpPort: 18999 } } },
+  });
+  fs.writeFileSync(configPath, config);
+  assert(
+    !fs.existsSync(path.join(packageRoot, "dist/entry.js")),
+    "Private runtime restored the full CLI",
+  );
+  for (const action of ["inspect", "install", "verify"]) {
+    const result = JSON.parse(
+      execFileSync(
+        node,
+        [
+          path.join(packageRoot, "dist/extensions/browser/setup-entry.js"),
+          "--action",
+          action,
+          "--wait-ms",
+          "1000",
+        ],
+        {
+          cwd: proofHome,
+          env: {
+            HOME: proofHome,
+            TMPDIR: proofHome,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_PROFILE: "mac-browser-proof",
+            OPENCLAW_NO_RESPAWN: "1",
+            PATH: `${path.dirname(node)}:/usr/bin:/bin:/usr/sbin:/sbin`,
+          },
+          encoding: "utf8",
+          timeout: 60_000,
+        },
+      ),
+    );
+    assert.equal(result.action, action);
+    assert.equal(result.target.platform, "darwin");
+    assert.equal(result.target.kind, "local-host");
+    assert.equal(result.target.profile, "chrome");
+    assert.equal(result.target.relayPort, 18999);
+    assert.equal(result.installation.nativeHostRegistered, action !== "inspect");
+    assert.notEqual(result.connection.state, "connected");
+    assert.equal(fs.readFileSync(configPath, "utf8"), config, "Browser setup rewrote local config");
+  }
+}
+
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-worker-proof-")));
 try {
   // Ready manifests do not load lazy native capabilities. Exercise their real
@@ -241,6 +296,9 @@ try {
       stdio: "inherit",
     },
   );
+  // Browser setup consumes native file operations; prove that prerequisite first.
+  // Its plugin-owned entry must survive pruning without reopening the sealed worker CLI.
+  proveBrowserSetupRuntime(home);
   const database = new DatabaseSync(":memory:", { allowExtension: true });
   try {
     require("sqlite-vec").load(database);
@@ -335,9 +393,17 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
   // a present-but-incomplete closure fails before the app is signed.
   await proveServiceChildRuntime(home);
   await proveGitWorkerRuntime(home);
-  for (const nativeFirst of [false, true]) {
+  for (const { nativeFirst, desktopSharingEnabled } of [false, true].flatMap((nativeFirstEnabled) =>
+    [undefined, true, false].map((sharingEnabled) => ({
+      nativeFirst: nativeFirstEnabled,
+      desktopSharingEnabled: sharingEnabled,
+    })),
+  )) {
     const appGatedComputer = !nativeFirst;
-    const proofHome = path.join(home, nativeFirst ? "native-first" : "absent");
+    const proofHome = path.join(
+      home,
+      `${nativeFirst ? "native-first" : "absent"}-${desktopSharingEnabled ?? "default"}`,
+    );
     const stateDir = path.join(proofHome, "state");
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     fs.mkdirSync(proofHome, { recursive: true });
@@ -362,7 +428,15 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
     let diagnostic = "";
     const exitCode = await runManagedCommand({
       bin: node,
-      args: [path.join(packageRoot, "dist/mac-node-worker.js"), "node", "worker"],
+      args: [
+        path.join(packageRoot, "dist/mac-node-worker.js"),
+        ...(nativeFirst ? ["--profile", "mac-worker-proof"] : []),
+        "node",
+        "worker",
+        ...(desktopSharingEnabled === undefined
+          ? []
+          : [desktopSharingEnabled ? "--desktop-sharing" : "--no-desktop-sharing"]),
+      ],
       cwd: proofHome,
       env: {
         HOME: proofHome,
@@ -412,6 +486,8 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
             !message.manifest?.commands?.includes("browser.proxy") ||
             !message.manifest?.commands?.includes("browser.proxy.upload.v1") ||
             !message.manifest?.commands?.includes("mcp.tools.call.v1") ||
+            (desktopSharingEnabled !== undefined &&
+              message.manifest?.commands?.includes("desktop.stream") !== desktopSharingEnabled) ||
             (appGatedComputer &&
               (!message.manifest?.commands?.includes("screen.snapshot") ||
                 !message.manifest?.commands?.includes("computer.act")))
@@ -424,7 +500,7 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
           }
           ready = true;
           process.stdout.write(
-            `${JSON.stringify({ architecture: process.arch, nativeFirst, build: actual, nativeFiles, databasePath, manifest: message.manifest })}\n`,
+            `${JSON.stringify({ architecture: process.arch, nativeFirst, desktopSharingEnabled, build: actual, nativeFiles, databasePath, manifest: message.manifest })}\n`,
           );
           if (appGatedComputer) {
             // The readiness lease uses a harmless executable, not a live MCP

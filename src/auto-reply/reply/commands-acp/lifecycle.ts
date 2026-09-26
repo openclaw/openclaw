@@ -12,6 +12,7 @@ import {
   resolveAcpDispatchPolicyError,
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
+import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import {
   closeAdmittedRunDelegatedAuthority,
@@ -42,7 +43,6 @@ import {
 } from "./bindings.js";
 import {
   ACP_STEER_OUTPUT_LIMIT,
-  collectAcpErrorText,
   parseSpawnInput,
   parseSteerInput,
   resolveCommandRequestId,
@@ -70,6 +70,7 @@ async function persistSpawnedSessionLabel(params: {
   });
 
   // Only the requester store has an in-memory snapshot to keep coherent.
+  params.commandParams.command.assertOwnerCurrent?.();
   if (params.commandParams.sessionStore && params.commandParams.storePath === storePath) {
     const existing = params.commandParams.sessionStore[params.sessionKey];
     if (existing) {
@@ -86,10 +87,10 @@ async function persistSpawnedSessionLabel(params: {
       agentId,
       sessionKey: params.sessionKey,
     },
-    () => ({
-      label,
-      updatedAt: now,
-    }),
+    () => {
+      params.commandParams.command.assertOwnerCurrent?.();
+      return { label, updatedAt: now };
+    },
   );
 }
 
@@ -118,7 +119,7 @@ export async function handleAcpSpawnAction(
   const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, spawn.agentId);
   if (agentPolicyError) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error: agentPolicyError,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "ACP target agent is not allowed by policy.",
@@ -142,7 +143,7 @@ export async function handleAcpSpawnAction(
     });
   } catch (error) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not resolve ACP session workspace.",
@@ -156,6 +157,7 @@ export async function handleAcpSpawnAction(
   let closeRuntimeOnFailure: () => Promise<void>;
   try {
     const initialized = await acpManager.initializeSession({
+      assertActive: params.command.assertOwnerCurrent,
       cfg: params.cfg,
       sessionKey,
       agentId: spawn.agentId,
@@ -169,7 +171,7 @@ export async function handleAcpSpawnAction(
     initializedMeta = initialized.meta;
   } catch (err) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error: err,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not initialize ACP session runtime.",
@@ -278,7 +280,7 @@ function resolveAcpSessionForCommandOrStop(params: {
   const error = resolveAcpSessionResolutionError(resolved);
   if (error) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: error.message,
@@ -345,6 +347,7 @@ export async function handleAcpCancelAction(
       await withAcpCommandErrorBoundary({
         run: async () =>
           await acpManager.cancelSession({
+            assertActive: params.command.assertOwnerCurrent,
             cfg: params.cfg,
             sessionKey,
             agentId,
@@ -358,6 +361,7 @@ export async function handleAcpCancelAction(
 }
 
 async function runAcpSteer(params: {
+  assertOwnerCurrent?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -369,6 +373,7 @@ async function runAcpSteer(params: {
   let output = "";
   const channelAdmission = consumeChannelRunAdmission(params.channelAdmissionEvidence);
   const admittedRunContext = await prepareAgentRunAdmission({
+    assertSourceCurrent: params.assertOwnerCurrent,
     cfg: params.cfg,
     operationalRunInstance: createOperationalRunInstanceRef(params.requestId),
     facts: {
@@ -422,7 +427,7 @@ export async function handleAcpSteerAction(
   const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
   if (dispatchPolicyError) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error: dispatchPolicyError,
         fallbackCode: "ACP_DISPATCH_DISABLED",
         fallbackMessage: dispatchPolicyError.message,
@@ -456,6 +461,7 @@ export async function handleAcpSteerAction(
   return await withAcpCommandErrorBoundary({
     run: async () =>
       await runAcpSteer({
+        assertOwnerCurrent: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         instruction: parsed.value.instruction,
@@ -484,6 +490,7 @@ export async function handleAcpCloseAction(
       let runtimeNotice;
       try {
         const closed = await acpManager.closeSession({
+          assertActive: params.command.assertOwnerCurrent,
           cfg: params.cfg,
           sessionKey,
           agentId,
@@ -494,7 +501,7 @@ export async function handleAcpCloseAction(
         runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
       } catch (error) {
         return commandReply(
-          collectAcpErrorText({
+          toAcpRuntimeErrorText({
             error,
             fallbackCode: "ACP_TURN_FAILED",
             fallbackMessage: "ACP close failed before completion.",

@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
+import { syncPopoverLabel } from "../../../components/web-awesome-popover.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatSourcePreview } from "../../../lib/chat/source-previews.ts";
@@ -20,6 +21,7 @@ function bindSourcePopover(element: Element | undefined) {
     element.id ||= `${trigger.id}-preview`;
     element.for = trigger.id;
     trigger.setAttribute("aria-controls", element.id);
+    syncPopoverLabel(element);
   }
 }
 

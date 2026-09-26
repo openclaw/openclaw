@@ -5,6 +5,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { resolveTaskCleanupAfter } from "../tasks/task-retention.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import {
@@ -77,6 +78,8 @@ export function expectedTaskIds(
 
 export function createTaskSnapshot(): Map<string, TaskRecord> {
   const tasks = new Map<string, TaskRecord>();
+  // Keep synthetic ordering timestamps independent of real maintenance retention.
+  const cleanupAfter = resolveTaskCleanupAfter({ status: "succeeded", createdAt: Date.now() });
   for (let index = 0; index < TASK_COUNT; index += 1) {
     const taskId = `task-${String(index).padStart(5, "0")}`;
     const requesterSessionKey = index % 2 === 0 ? OWNED_SESSION_KEY : FOREIGN_SESSION_KEY;
@@ -92,6 +95,7 @@ export function createTaskSnapshot(): Map<string, TaskRecord> {
       status: "succeeded",
       deliveryStatus: "not_applicable",
       notifyPolicy: "done_only",
+      cleanupAfter,
       createdAt: 0,
       startedAt: 0,
       lastEventAt: Math.floor(((index * 7_919) % TASK_COUNT) / 4),
@@ -150,6 +154,8 @@ export async function withAuthenticatedTaskGateway(
   });
 
   try {
+    // Registry reset closes shared state; finish it before the Gateway captures its source.
+    initializeTasks();
     await withGatewayServer(async ({ port }) => {
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: OWNED_SESSION_KEY },
@@ -171,7 +177,6 @@ export async function withAuthenticatedTaskGateway(
           visibility: "shared",
         },
       );
-      initializeTasks();
       const stateDir = process.env.OPENCLAW_STATE_DIR;
       if (!stateDir) {
         throw new Error("OPENCLAW_STATE_DIR is required for the Gateway proof");
@@ -201,11 +206,15 @@ export async function withAuthenticatedTaskGateway(
       } finally {
         admin.close();
         viewer.close();
-        resetTaskRegistryForTests({ persist: false });
       }
     });
   } finally {
-    invalidateOperatorRolePolicy(adminProfile.id);
-    invalidateOperatorRolePolicy(viewerProfile.id);
+    try {
+      // Gateway shutdown joins readers before the shared database is closed.
+      resetTaskRegistryForTests({ persist: false });
+    } finally {
+      invalidateOperatorRolePolicy(adminProfile.id);
+      invalidateOperatorRolePolicy(viewerProfile.id);
+    }
   }
 }

@@ -187,44 +187,71 @@ it.each(["delete", "artifact cleanup"] as const)(
   },
 );
 
-it("keeps no-op lifecycle cleanup read-only across a cold ordinary-session fleet", async () => {
-  const root = roots.make("session-lifecycle-clean-fleet-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  const fleet = ["first", "second", "third"].map((agentId) => {
-    const storePath = path.join(root, "agents", agentId, "sessions", "sessions.json");
-    const scope = { agentId, storePath, sessionKey: `agent:${agentId}:ordinary` };
-    const entry = { sessionId: `${agentId}-retained`, updatedAt: 1 };
-    replaceSessionEntrySync(scope, entry);
-    return { scope, entry, path: openOpenClawAgentDatabase({ agentId }).path };
-  });
-  const paths = new Set(fleet.map((store) => store.path));
-  const opened = vi.spyOn(sqlite, "openNodeSqliteDatabase");
-  const inspected = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
-  for (let boot = 0; boot < 2; boot++) {
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    opened.mockClear();
-    inspected.mockClear();
-    for (const { scope, entry } of fleet) {
-      await expect(
-        cleanupSessionLifecycleArtifactsCore({
-          agentId: scope.agentId,
-          storePath: scope.storePath,
-          sessionKeySegmentPrefix: "dreaming-",
-          transcriptContentMarker: "dreaming-marker",
-          orphanTranscriptMinAgeMs: 0,
-        }),
-      ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
-      expect(loadSessionEntryReadOnly(scope)).toMatchObject(entry);
+it.each(["cold", "warm"] as const)(
+  "keeps no-op lifecycle cleanup read-only across a %s ordinary-session fleet",
+  async (admission) => {
+    const root = roots.make("session-lifecycle-clean-fleet-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const fleet = ["first", "second", "third"].map((agentId) => {
+      const storePath = path.join(root, "agents", agentId, "sessions", "sessions.json");
+      const scope = { agentId, storePath, sessionKey: `agent:${agentId}:ordinary` };
+      const entry = { sessionId: `${agentId}-retained`, updatedAt: 1 };
+      replaceSessionEntrySync(scope, entry);
+      return { scope, entry, path: openOpenClawAgentDatabase({ agentId }).path };
+    });
+    const paths = new Set(fleet.map((store) => store.path));
+    const opened = vi.spyOn(sqlite, "openNodeSqliteDatabase");
+    const inspected = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
+    for (let boot = 0; boot < 2; boot++) {
+      if (admission === "cold") {
+        await closeOpenClawAgentDatabasesAsync();
+        closeOpenClawAgentDatabasesForTest();
+      }
+      opened.mockClear();
+      inspected.mockClear();
+      for (const { scope, entry } of fleet) {
+        await expect(
+          cleanupSessionLifecycleArtifactsCore({
+            agentId: scope.agentId,
+            storePath: scope.storePath,
+            sessionKeySegmentPrefix: "dreaming-",
+            transcriptContentMarker: "dreaming-marker",
+            orphanTranscriptMinAgeMs: 0,
+          }),
+        ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+        expect(loadSessionEntryReadOnly(scope)).toMatchObject(entry);
+      }
+      expect(
+        opened.mock.calls.filter(
+          ([pathname, options]) =>
+            typeof pathname === "string" && paths.has(pathname) && options?.readOnly !== true,
+        ),
+      ).toEqual([]);
+      expect(inspected.mock.calls.filter(([pathname]) => paths.has(pathname))).toEqual([]);
     }
-    expect(
-      opened.mock.calls.filter(
-        ([pathname, options]) =>
-          typeof pathname === "string" && paths.has(pathname) && options?.readOnly !== true,
-      ),
-    ).toEqual([]);
-    expect(inspected.mock.calls.filter(([pathname]) => paths.has(pathname))).toEqual([]);
-  }
+  },
+);
+
+it("retains canonical repair refusal during warm cleanup with no matching artifacts", async () => {
+  const f = fixture();
+  const database = openOpenClawAgentDatabase(f.databaseOptions);
+  database.db
+    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+    .run("{", f.scope.sessionKey);
+  await expect(
+    cleanupSessionLifecycleArtifactsCore({
+      storePath: f.scope.storePath,
+      sessionKeySegmentPrefix: "dreaming-",
+      transcriptContentMarker: "dreaming-marker",
+      orphanTranscriptMinAgeMs: 0,
+    }),
+  ).rejects.toThrow("invalid persisted session row requires repair");
+  expect(database.db.isTransaction).toBe(false);
+  expect(
+    database.db
+      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+      .get(f.scope.sessionKey),
+  ).toEqual({ entry_json: "{" });
 });
 
 it("rejects retired authority before evaluating a stale deletion target", async () => {

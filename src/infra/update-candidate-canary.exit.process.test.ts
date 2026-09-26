@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
+import * as rehearsals from "./update-candidate-rehearsal.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 it.each([
   "doctor",
@@ -67,30 +69,28 @@ if (args.includes("--fix")) {
 }
 `,
     );
+    vi.spyOn(rehearsals, "prepareUpdateCandidateRehearsal").mockResolvedValueOnce({
+      stateDir,
+      configPath,
+      workspaceDir: stateDir,
+      port: await tryListenOnPort({ port: 0, host: "127.0.0.1" }),
+      env: buildUpdateRehearsalPathEnv(stateDir),
+      snapshotCapacity: {
+        reason: "explicit-tmpdir",
+        sqliteBytes: 0,
+        pluginBytes: 0,
+        requiredBytes: 0,
+        candidates: [],
+        selection: { kind: "explicit-tmpdir", directory: stateDir },
+      },
+      cleanupDirectories: [],
+      cleanup: async () => {},
+    });
     const result = await validateUpdateCandidateCanary({
       root,
       config: {},
       stateDir,
       timeoutMs: 2_000,
-      rehearsal: {
-        sourceConfig: {},
-        sourceConfigHash: null,
-        stateDir,
-        configPath,
-        workspaceDir: stateDir,
-        port: await tryListenOnPort({ port: 0, host: "127.0.0.1" }),
-        env: buildUpdateRehearsalPathEnv(stateDir),
-        snapshotCapacity: {
-          reason: "explicit-tmpdir",
-          sqliteBytes: 0,
-          pluginBytes: 0,
-          requiredBytes: 0,
-          candidates: [],
-          selection: { kind: "explicit-tmpdir", directory: stateDir },
-        },
-        cleanupDirectories: [],
-        cleanup: async () => {},
-      },
     });
     const failedExit = mode === "failed-exit" || mode === "signalled-exit";
     const step = result.steps.find((candidate) =>

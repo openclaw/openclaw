@@ -1,4 +1,8 @@
 import type { ProgressCard, ProgressCardStep } from "../../packages/gateway-protocol/src/index.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import {
   readSessionProgressCard,
@@ -6,12 +10,13 @@ import {
 } from "../session-cards/progress-card-store.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
+  isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import { resolveGatewaySessionDatabase } from "./board-store.js";
+import { captureGatewaySessionStoreScope, resolveGatewaySessionDatabase } from "./board-store.js";
 
 export type ProgressCardStore = {
   get(sessionKey: string, agentId?: string): Promise<ProgressCard | null>;
@@ -30,12 +35,24 @@ export type ProgressCardStore = {
 
 export const progressCardStore: ProgressCardStore = {
   async get(sessionKey, agentId) {
-    const resolved = resolveGatewaySessionDatabase(sessionKey, agentId);
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) => readSessionProgressCard(database.db, resolved.sessionKey),
-      resolved,
+    const env = captureSessionTranscriptStorageEnvironment(process.env);
+    const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
+    const unsuffixed = resolveUnsuffixedSqliteTargetFromSessionStorePath(scope.storePath);
+    if (isIncognitoOpenClawAgentSqlitePath(unsuffixed.path, { agentId: scope.agentId, env })) {
+      const result = withOpenClawAgentDatabaseReadOnly(
+        (database) => readSessionProgressCard(database.db, scope.sessionKey),
+        { agentId: scope.agentId, path: unsuffixed.path, env },
+      );
+      return result.found ? result.value : null;
+    }
+    const target = await prepareSqliteTargetFromSessionStorePath(scope.storePath, {
+      agentId: scope.agentId,
+      env,
+    });
+    return await withSessionHistoryWorkerDatabase(
+      { agentId: target.agentId ?? scope.agentId, path: target.path, env },
+      (owner) => owner.readProgressCard({ sessionKey: scope.sessionKey, env }),
     );
-    return result.found ? result.value : null;
   },
   async put(sessionKey, input, agentId) {
     const resolved = resolveGatewaySessionDatabase(sessionKey, agentId);

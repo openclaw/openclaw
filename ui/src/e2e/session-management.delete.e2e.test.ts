@@ -282,7 +282,8 @@ suite.define(() => {
           if (durable.status !== "not-found") {
             throw new Error("confirmed deletion did not leave a durable retirement fence");
           }
-          const revision = Date.now();
+          // Retirement fences can lead the wall clock; a new edit must advance that fence.
+          const revision = Math.max(Date.now(), (durable.revision ?? 0) + 1);
           local.sessions[scopeKey] = {
             draft: "post-confirm local replacement",
             draftRevision: revision,
@@ -396,12 +397,6 @@ suite.define(() => {
       );
 
       await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...replacement,
-        reason: "update",
-        sessionKey: key,
-      });
-      await replacementLabel.waitFor();
       await gateway.deferNext("sessions.delete");
       await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
 
@@ -416,7 +411,16 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".sessions-error[role=alert]").textContent())
         .toContain("changed before deletion. Retry.");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...replacement,
+        reason: "update",
+        sessionKey: key,
+      });
       await replacementLabel.waitFor();
+      expect(await page.getByRole("checkbox", { name: `Select session: ${key}` }).isChecked()).toBe(
+        false,
+      );
+      expect(await gateway.getRequests("sessions.delete")).toHaveLength(1);
       await captureUiProof(suite, page, "sessions-bulk-delete-replacement-protected.png");
     } finally {
       await context.close();

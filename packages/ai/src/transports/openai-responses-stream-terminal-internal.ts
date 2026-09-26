@@ -357,6 +357,9 @@ export function createResponsesTerminalController(params: {
       timestamp: Date.now(),
       details: {
         eventType: terminalEventType,
+        // Keep the canonical status interpretation before tool validation replaces
+        // output.stopReason with an error. Conflicting statuses cannot authorize retry.
+        stopReason: terminal.stopReason,
         ...(terminalEventType === "response.incomplete"
           ? {
               incompleteReason:

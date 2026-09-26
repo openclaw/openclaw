@@ -30,9 +30,9 @@ public enum ShareToAgentDeepLink {
     public static func buildMessage(from payload: SharedContentPayload, instruction: String? = nil) -> String {
         let title = self.clean(payload.title)
         let text = self.clean(payload.text)
-        let urlText = payload.url?.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let urlText = self.clean(payload.url?.absoluteString)
         let resolvedInstruction = self.clean(instruction)
-        let hasSharedContent = title != nil || text != nil || self.clean(urlText) != nil
+        let hasSharedContent = title != nil || text != nil || urlText != nil
 
         guard hasSharedContent || resolvedInstruction != nil else { return "" }
 
@@ -40,13 +40,13 @@ public enum ShareToAgentDeepLink {
         if hasSharedContent {
             lines.append("Shared from iOS.")
         }
-        if let title, !title.isEmpty {
+        if let title {
             lines.append("Title: \(title)")
         }
-        if let urlText, !urlText.isEmpty {
+        if let urlText {
             lines.append("URL: \(urlText)")
         }
-        if let text, !text.isEmpty {
+        if let text {
             lines.append("Text:\n\(text)")
         }
         if let resolvedInstruction {
@@ -54,17 +54,12 @@ public enum ShareToAgentDeepLink {
         }
 
         let message = lines.joined(separator: "\n\n")
-        return self.limit(message, maxCharacters: 2400)
+        return String(message.prefix(2400))
     }
 
     private static func clean(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func limit(_ value: String, maxCharacters: Int) -> String {
-        guard value.count > maxCharacters else { return value }
-        return String(value.prefix(maxCharacters))
     }
 }

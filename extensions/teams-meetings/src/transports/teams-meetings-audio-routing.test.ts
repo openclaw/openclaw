@@ -11,6 +11,14 @@ import {
   type PageMedia,
 } from "./teams-meetings-platform-adapter.test-helpers.js";
 
+function unloadedRemoteMedia(stream = liveMediaStream()) {
+  return abortingMedia("The element has no supported source.", {
+    muted: false,
+    sinkId: "built-in-output",
+    srcObject: stream,
+  });
+}
+
 describe("Microsoft Teams meeting audio routing", () => {
   it("does not let one routed element hide a failed live remote stream", async () => {
     const routed = pageMedia();
@@ -67,11 +75,7 @@ describe("Microsoft Teams meeting audio routing", () => {
   });
 
   it("retries bridge playback instead of trusting a previously selected sink", async () => {
-    const source = abortingMedia("The element has no supported source.", {
-      muted: false,
-      sinkId: "built-in-output",
-      srcObject: liveMediaStream(),
-    });
+    const source = unloadedRemoteMedia();
     let playAttempts = 0;
     const bridge = pageMedia({
       isConnected: false,
@@ -164,11 +168,7 @@ describe("Microsoft Teams meeting audio routing", () => {
   });
 
   it("keeps the source muted when a previously working bridge fails", async () => {
-    const source = abortingMedia("The element has no supported source.", {
-      muted: false,
-      sinkId: "built-in-output",
-      srcObject: liveMediaStream(),
-    });
+    const source = unloadedRemoteMedia();
     let failPlayback = false;
     const bridge = pageMedia({
       isConnected: false,
@@ -200,11 +200,7 @@ describe("Microsoft Teams meeting audio routing", () => {
 
   it("keeps a per-source bridge when another element sharing its stream routes directly", async () => {
     const stream = liveMediaStream();
-    const bridgedSource = abortingMedia("The element has no supported source.", {
-      muted: false,
-      sinkId: "built-in-output",
-      srcObject: stream,
-    });
+    const bridgedSource = unloadedRemoteMedia(stream);
     const directSource = pageMedia({
       muted: false,
       sinkId: "built-in-output",
@@ -263,11 +259,7 @@ describe("Microsoft Teams meeting audio routing", () => {
   it("reroutes a replacement stream on an element muted by its prior bridge", async () => {
     const firstStream = liveMediaStream();
     const replacementStream = liveMediaStream();
-    const source = abortingMedia("The element has no supported source.", {
-      muted: false,
-      sinkId: "built-in-output",
-      srcObject: firstStream,
-    });
+    const source = unloadedRemoteMedia(firstStream);
     const directSource = pageMedia({
       muted: false,
       sinkId: "built-in-output",
@@ -304,11 +296,7 @@ describe("Microsoft Teams meeting audio routing", () => {
 
   it("keeps a detached source muted after its owned stream is cleared", async () => {
     const stream = liveMediaStream();
-    const source = abortingMedia("The element has no supported source.", {
-      muted: false,
-      sinkId: "built-in-output",
-      srcObject: stream,
-    });
+    const source = unloadedRemoteMedia(stream);
     const directSource = pageMedia({
       muted: false,
       sinkId: "built-in-output",
@@ -344,14 +332,7 @@ describe("Microsoft Teams meeting audio routing", () => {
   });
 
   it("tears down audio bridges and restores sources after the call ends", async () => {
-    const source: PageMedia = {
-      muted: false,
-      sinkId: "built-in-output",
-      srcObject: liveMediaStream(),
-      async setSinkId() {
-        throw new DOMException("The element has no supported source.", "AbortError");
-      },
-    };
+    const source = unloadedRemoteMedia();
     let pauses = 0;
     let removals = 0;
     const bridge = pageMedia({

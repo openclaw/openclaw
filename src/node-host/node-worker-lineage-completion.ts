@@ -4,7 +4,7 @@ import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-stat
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import type { NodeWorkerCleanupBinding } from "./node-worker-launch-receipt.js";
-import { readNodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
+import { readNodeWorkerLaunchReceipt } from "./node-worker-launch-store.kernel.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,

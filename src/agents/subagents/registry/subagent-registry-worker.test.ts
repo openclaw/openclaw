@@ -5,6 +5,7 @@ import type { SqliteWorkerOperationAdmission } from "../../../infra/sqlite-worke
 import { onSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import * as databaseCache from "../../../state/openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { getSubagentRegistryPublicationRevision } from "./subagent-registry-publication.js";
@@ -27,24 +28,14 @@ const mocks = vi.hoisted(() => ({
   save: vi.fn(),
 }));
 vi.mock("../../../state/openclaw-state-worker-context.js", () => ({
+  captureOpenClawStateReadContext: mocks.context,
   captureOpenClawStateWorkerContext: mocks.context,
 }));
 vi.mock("../../../state/openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: mocks.runWorker,
 }));
-vi.mock("./subagent-registry.store.codec.js", () => ({
-  bindSubagentRunRecord: (entry: SubagentRunRecord) => ({
-    run_id: entry.runId,
-    child_session_key: entry.childSessionKey,
-    controller_session_key: entry.controllerSessionKey ?? null,
-    requester_session_key: entry.requesterSessionKey,
-    created_at: entry.createdAt,
-    payload_json: JSON.stringify(entry),
-  }),
-}));
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRegistryFromSqlite: () => new Map(),
-  loadSubagentSessionListRunsFromSqlite: () => new Map(),
   loadSubagentMaintenanceRunsFromSqlite: () => new Map(),
   saveSubagentRegistryChangesToSqlite: mocks.save,
   saveSubagentRegistryToSqlite: mocks.save,
@@ -64,6 +55,8 @@ function run(): SubagentRunRecord {
     swarmRequesterSessionKey: "agent:parent:main",
     createdAt: 1,
     execution: { status: "queued" },
+    completion: { required: false },
+    delivery: { status: "not_required" },
   };
 }
 
@@ -90,6 +83,9 @@ describe("queued registry worker publication", () => {
     process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE = "1";
     original = context();
     mocks.context.mockReturnValue(original);
+    vi.spyOn(databaseCache, "captureOpenClawStateDatabaseReadAdmission").mockImplementation(
+      () => mocks.context().admission,
+    );
     mocks.save.mockReset();
     clearSubagentRunsReadCacheForTest();
     reply = createDeferredCore();
@@ -114,6 +110,7 @@ describe("queued registry worker publication", () => {
   });
   afterEach(() => {
     clearSubagentRunsReadCacheForTest();
+    vi.restoreAllMocks();
     if (previous === undefined) {
       delete process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE;
     } else {
@@ -131,6 +128,17 @@ describe("queued registry worker publication", () => {
 
   it("publishes the acknowledged immutable delta and exact deletion into all read caches", async () => {
     const entry = run();
+    const timestamp = "[Mon 2026-09-21 12:00 UTC] ";
+    entry.completion = {
+      required: false,
+      terminalReply: { disposition: "visible", text: `${timestamp}${timestamp}reply` },
+    };
+    entry.queuedLaunch = {
+      request: { completion: entry.completion },
+      timeoutMs: 100,
+      schedulerGroupKey: "synthetic",
+      maxConcurrent: 1,
+    };
     const removed = { ...run(), runId: "removed" };
     persistSubagentRunsToDiskOrThrow(new Map([[removed.runId, removed]]));
     const entries = new Map([[entry.runId, entry]]);
@@ -149,6 +157,8 @@ describe("queued registry worker publication", () => {
       ).toMatchObject({
         task: "captured task",
         execution: { status: "queued" },
+        completion: { terminalReply: { text: "reply" } },
+        queuedLaunch: { request: { completion: { terminalReply: { text: "reply" } } } },
       });
       expect(wake).not.toHaveBeenCalled();
       expect(await request("transaction")).toBe(true);
@@ -168,6 +178,9 @@ describe("queued registry worker publication", () => {
       expect(getSubagentRunsSnapshotForRead(new Map()).get(entry.runId)?.task).toBe(
         "captured task",
       );
+      expect(getSubagentRunsSnapshotForRead(new Map()).get(entry.runId)?.completion).toMatchObject({
+        terminalReply: { text: `${timestamp}reply` },
+      });
     } finally {
       stop();
     }

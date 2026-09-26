@@ -488,7 +488,9 @@ describe("updater plugin degradation with a running source Gateway", () => {
       expect.objectContaining({ pluginId, status: "error" }),
     );
 
-    expect(applyPostPluginConfigValidation(result, false)).toMatchObject({
+    expect(
+      applyPostPluginConfigValidation(result, { status: "invalid", failureFacts: [] }),
+    ).toMatchObject({
       status: "error",
       reason: "post-plugin-doctor-invalid-config",
     });

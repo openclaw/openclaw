@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 
 export class TranscriptStartError extends Error {
@@ -53,4 +54,29 @@ export function revokeTranscriptStartRetries(
       pendingStartRetries.delete(owner);
     }
   }
+}
+
+export const capturePolicyTransitions = new Map<string, symbol>();
+
+export function assertTranscriptCaptureEnabled(ctx: { config?: OpenClawConfig; stateDir: string }) {
+  if (ctx.config?.transcripts?.enabled === false || capturePolicyTransitions.has(ctx.stateDir)) {
+    throw new Error("transcripts are disabled");
+  }
+}
+
+export function createStartupAbortScope(parent?: AbortSignal) {
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parent?.reason);
+  if (parent?.aborted) {
+    abortFromParent();
+  } else {
+    parent?.addEventListener("abort", abortFromParent, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    abort: () => controller.abort(),
+    // Provider startup owns this scoped signal only until start settles.
+    // Detaching prevents a later agent-run abort from ending live capture.
+    detach: () => parent?.removeEventListener("abort", abortFromParent),
+  };
 }

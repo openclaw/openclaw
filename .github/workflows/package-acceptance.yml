@@ -120,7 +120,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.4.23, release-history, or exact versions
+        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string
@@ -143,23 +143,13 @@ on:
         required: false
         default: ""
         type: string
-      advisory:
-        description: Treat acceptance failures as advisory for the caller
-        required: false
-        default: false
-        type: boolean
   workflow_call:
     inputs:
-      advisory:
-        description: Treat acceptance failures as advisory for the caller
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
         required: false
-        default: false
-        type: boolean
-      telegram_advisory:
-        description: Treat only Telegram acceptance failures as advisory
-        required: false
-        default: false
-        type: boolean
+        default: ""
+        type: string
       workflow_ref:
         description: "Assertion of the called workflow identity: dispatch/call at the desired ref and supply its matching SHA/ref; package_ref independently selects package source"
         required: false
@@ -272,7 +262,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.4.23, release-history, or exact versions
+        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string
@@ -435,14 +425,14 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   PACKAGE_ARTIFACT_NAME: package-under-test-${{ github.run_id }}-${{ github.run_attempt }}
   TELEGRAM_PLUGIN_REGISTRY_ARTIFACT_NAME: package-acceptance-telegram-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   resolve_package:
     name: Resolve package candidate
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 60
     outputs:
       tooling_sha: ${{ steps.tooling.outputs.sha }}
@@ -468,6 +458,12 @@ jobs:
       telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
       telegram_scenarios: ${{ steps.profile.outputs.telegram_scenarios }}
     steps:
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Resolve called package tooling identity
         id: tooling_identity
         env:
@@ -946,12 +942,7 @@ jobs:
             args+=(--npm-dist-tags-json "$npm_dist_tags_json")
           fi
           if [[ -n "$releases_json" ]]; then
-            args+=(
-              --releases-json "$releases_json"
-              --history-count 6
-              --include-version 2026.4.23
-              --pre-date 2026-03-15T00:00:00Z
-            )
+            args+=(--releases-json "$releases_json")
           fi
           node --import tsx scripts/resolve-upgrade-survivor-baselines.mts "${args[@]}" >/dev/null
           echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"
@@ -967,7 +958,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
           import { execFileSync } from 'node:child_process';
-          import { normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } from './scripts/lib/upgrade-survivor-policy.mjs';
+          import { assertSupportedUpgradeSurvivorBaselineSpec, normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } from './scripts/lib/upgrade-survivor-policy.mjs';
           import { resolveNpmJsonString } from './scripts/lib/npm-json-output.mts';
           const captured = new Map();
           const exact = raw => {
@@ -979,6 +970,7 @@ jobs:
                   ['view', spec, 'version', '--json', '--silent', '--prefer-online'],
                   { encoding: 'utf8', timeout: 60000, maxBuffer: 1024 * 1024 }))));
               if (!/^openclaw@[0-9]/u.test(value ?? '')) throw new Error('upgrade baseline did not resolve to an exact version');
+              assertSupportedUpgradeSurvivorBaselineSpec(value);
               captured.set(spec, value);
             }
             return captured.get(spec);
@@ -1183,7 +1175,7 @@ jobs:
   package_integrity:
     name: Package integrity
     needs: resolve_package
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
       - name: Checkout package workflow ref
@@ -1228,7 +1220,7 @@ jobs:
     name: npm 12 install.sh acceptance
     needs: [resolve_package, package_integrity]
     if: inputs.suite_profile != 'telegram'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     permissions:
       actions: read
@@ -1328,7 +1320,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with: &docker_acceptance_inputs
-      advisory: ${{ inputs.advisory || false }}
+      runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.resolve_package.outputs.package_source_sha }}
       include_repo_e2e: false
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
@@ -1433,7 +1425,7 @@ jobs:
     if: needs.resolve_package.outputs.telegram_enabled == 'true'
     uses: ./.github/workflows/npm-telegram-beta-e2e.yml
     with:
-      advisory: ${{ inputs.advisory || inputs.telegram_advisory || false }}
+      runner_group: ${{ inputs.runner_group }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions || false }}
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
@@ -1472,12 +1464,11 @@ jobs:
         package_telegram,
       ]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
       - name: Verify package acceptance results
         env:
-          ADVISORY: ${{ inputs.advisory }}
           DOCKER_ARTIFACT_RESULT: ${{ needs.docker_acceptance.result }}
           DOCKER_REGISTRY_RESULT: ${{ needs.docker_acceptance_registry.result }}
           PACKAGE_INTEGRITY_RESULT: ${{ needs.package_integrity.result }}
@@ -1486,7 +1477,6 @@ jobs:
           RESOLVE_RESULT: ${{ needs.resolve_package.result }}
           SUITE_PROFILE: ${{ inputs.suite_profile }}
           TELEGRAM_ENABLED: ${{ needs.resolve_package.outputs.telegram_enabled }}
-          TELEGRAM_ADVISORY: ${{ inputs.telegram_advisory }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1534,11 +1524,6 @@ jobs:
               result_failed=true
             fi
             if [[ "$result_failed" == "true" ]]; then
-              if [[ ("$ADVISORY" == "true" && "$name" != "resolve_package") ||
-                    ("$TELEGRAM_ADVISORY" == "true" && "$name" == "package_telegram") ]]; then
-                echo "::warning::${name} ended with ${result}; package acceptance is advisory for this caller."
-                continue
-              fi
               echo "::error::${name} ended with ${result}"
               failed=1
             fi

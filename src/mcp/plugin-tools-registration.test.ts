@@ -3,11 +3,9 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { resolvePluginProviders } from "../plugin-sdk/provider-catalog-runtime.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
-import { mcpProviderCatalogEntrypoint } from "../plugins/loader-sdk-bridge-artifacts.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
@@ -22,18 +20,6 @@ import { createCodexSupervisionToolsMcpServer } from "./codex-supervision-tools-
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
 let sequence = 0;
-const sdkHostDirs = createTempDirTracker();
-let sdkHost: string | undefined;
-beforeAll(() => {
-  sdkHost = createCompiledSdkHost([mcpProviderCatalogEntrypoint], (prefix) =>
-    sdkHostDirs.make(prefix),
-  );
-});
-beforeEach(() => {
-  if (sdkHost) {
-    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", sdkHost);
-  }
-});
 function nativePlugin(options: { failDisposal?: boolean; abortSdk?: boolean } = {}) {
   useNoBundledPlugins();
   const key = `__mcp_registration_native_${sequence++}`;
@@ -48,20 +34,23 @@ function nativePlugin(options: { failDisposal?: boolean; abortSdk?: boolean } = 
     abortReason?: unknown;
     abortFailure?: unknown;
     abortRead?: unknown;
+    resolvePluginProviders: typeof resolvePluginProviders;
   } = {
     disposals: 0,
     factories: 0,
     aborted: createDeferredCore(),
     started: createDeferredCore(),
     finish: createDeferredCore(),
+    // This scope fixture shares its host SDK; the stdio fixture covers native SDK imports.
+    resolvePluginProviders,
   };
   Object.defineProperty(globalThis, key, { value: state, configurable: true });
   const plugin = writePlugin({
     id: "mcp-native",
     body: `const { DatabaseSync } = require("node:sqlite");
-const { resolvePluginProviders } = require("openclaw/plugin-sdk/provider-catalog-runtime");
 module.exports = { id: "mcp-native", register(api) {
   const state = globalThis[${JSON.stringify(key)}];
+  const { resolvePluginProviders } = state;
   const db = state.database = new DatabaseSync(":memory:");
   api.lifecycle.registerRuntimeLifecycle({ id: "native", dispose() {
     state.disposals++;
@@ -137,7 +126,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
-afterAll(sdkHostDirs.cleanup);
 
 function causes(error: unknown): unknown[] {
   if (error instanceof AggregateError) {

@@ -1,10 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
+import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+  removeAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
 import { readRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   registerOpenClawAgentDatabase,
@@ -16,11 +21,11 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
@@ -29,6 +34,7 @@ import {
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
+import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
 import { createLegacyStateMigrationStepReceipt } from "./state-migrations.messages.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 
@@ -40,26 +46,11 @@ function createLegacyAgentDatabase(params: {
   env: NodeJS.ProcessEnv;
   path?: string;
 }): string {
-  const agentId = params.agentId ?? "main";
-  const opened = openOpenClawAgentDatabase({
-    agentId,
-    env: params.env,
-    ...(params.path ? { path: params.path } : {}),
+  return createLegacyDatabaseFixture({
+    ...params,
+    eventsBySession: {},
+    schemaVersion: PREVIOUS_VERSION,
   });
-  const databasePath = opened.path;
-  closeOpenClawAgentDatabasesForTest();
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    removeCanonicalValidationFromHistoricalAgentFixture(database);
-    database.exec(`DROP TABLE session_participants; PRAGMA user_version = ${PREVIOUS_VERSION};`);
-    database
-      .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
-      .run(PREVIOUS_VERSION);
-  } finally {
-    database.close();
-  }
-  return databasePath;
 }
 
 function readUserVersion(databasePath: string): number {
@@ -73,23 +64,107 @@ function readUserVersion(databasePath: string): number {
 }
 
 afterEach(() => {
-  vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
 });
 
 describe("media persistence migration targets", () => {
+  it.each(
+    ["aaa-deleted", "zzz-deleted"].flatMap((deletedId) =>
+      [false, true].map((hardlink) => ({ deletedId, hardlink })),
+    ),
+  )(
+    "migrates a surviving physical owner beside retained registry owner $deletedId (hardlink=$hardlink)",
+    async ({ deletedId, hardlink }) => {
+      const stateDir = fs.realpathSync.native(
+        makeTempDir(tempDirs, "media-retained-shared-owner-"),
+      );
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const databasePath = createLegacyAgentDatabase({ env });
+      const retainedPath = hardlink ? path.join(stateDir, "retained.sqlite") : databasePath;
+      if (hardlink) {
+        fs.linkSync(databasePath, retainedPath);
+      }
+      registerOpenClawAgentDatabase({
+        agentId: deletedId,
+        path: retainedPath,
+        env,
+        schemaVersion: PREVIOUS_VERSION,
+      });
+      beginAgentDeletionJournal(
+        {
+          agentId: deletedId,
+          operationId: "delete-shared-owner",
+          agentDir: path.dirname(retainedPath),
+          workspaceDir: path.join(stateDir, "workspace"),
+          sessionsDir: path.join(stateDir, "agents", deletedId, "sessions"),
+          deleteFiles: false,
+        },
+        { env },
+      );
+      runOpenClawStateWriteTransaction(
+        (database) => {
+          completeAgentDeletionJournalInDatabase(database, deletedId, "delete-shared-owner");
+        },
+        { env },
+      );
+
+      await expect(
+        assertOpenClawDatabasesReady({
+          env,
+          operation: "doctor",
+          configuredAgentDatabaseTargets: [],
+        }),
+      ).rejects.toThrow(/uses schema version 16/);
+      const result = await migrateLegacyMediaPersistence({ env });
+      expect(result.warnings).toEqual([]);
+      expect(result.notices ?? []).toEqual([]);
+      expect(readUserVersion(databasePath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+      await expect(
+        assertOpenClawDatabasesReady({
+          env,
+          operation: "doctor",
+          configuredAgentDatabaseTargets: [],
+        }),
+      ).resolves.toBeUndefined();
+    },
+  );
+
   it.each([
     "unchanged",
     "missing-file-created",
     "directory-replaced",
     "registry-changed",
     "config-changed",
-  ] as const)("validates prepared fleet discovery once before registry cleanup: %s", (scenario) => {
+    "deletion-completed",
+    "deletion-restored",
+  ] as const)("rechecks prepared fleet facts before registry cleanup: %s", (scenario) => {
     const stateDir = fs.realpathSync.native(makeTempDir(tempDirs, "media-prepared-targets-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const mainPath = createLegacyAgentDatabase({ env });
+    const completeDeletion = () => {
+      beginAgentDeletionJournal(
+        {
+          agentId: "main",
+          operationId: "delete-main",
+          agentDir: path.dirname(mainPath),
+          workspaceDir: path.join(stateDir, "workspace"),
+          sessionsDir: path.join(stateDir, "agents", "main", "sessions"),
+          deleteFiles: false,
+        },
+        { env },
+      );
+      runOpenClawStateWriteTransaction(
+        (database) => {
+          completeAgentDeletionJournalInDatabase(database, "main", "delete-main");
+        },
+        { env },
+      );
+    };
+    if (scenario === "deletion-restored") {
+      completeDeletion();
+    }
     const missingPath = path.join(stateDir, "agents", "missing", "agent", "openclaw-agent.sqlite");
     fs.mkdirSync(path.dirname(missingPath), { recursive: true });
     if (scenario === "directory-replaced") {
@@ -109,7 +184,6 @@ describe("media persistence migration targets", () => {
       { env, includeIncompatibleSchemaVersions: true },
       false,
     );
-    const reads = vi.spyOn(fs, "readdirSync");
     const preparedDiscovery: PreparedAgentDatabaseMigrationDiscovery = {
       stateDir,
       configuredAgentDatabaseTargets,
@@ -136,6 +210,10 @@ describe("media persistence migration targets", () => {
     } else if (scenario === "registry-changed") {
       // Raw schema migrations can change registrations before the memo owner is invalidated.
       state.db.prepare("DELETE FROM agent_databases WHERE agent_id = ?").run("missing");
+    } else if (scenario === "deletion-completed") {
+      completeDeletion();
+    } else if (scenario === "deletion-restored") {
+      removeAgentDeletionJournal("main", "delete-main", { env });
     }
     const result = resolveAgentDatabaseMigrationTargets({
       env,
@@ -150,11 +228,8 @@ describe("media persistence migration targets", () => {
       changes: [],
       warnings: [],
     });
-    expect(
-      reads.mock.calls.filter(([directory]) => directory === path.join(stateDir, "agents")),
-    ).toHaveLength(scenario === "unchanged" ? 1 : 2);
     expect(result.targets.map((target) => target.path)).toEqual(
-      fileCreated ? [mainPath, missingPath] : [mainPath],
+      fileCreated ? [mainPath, missingPath] : scenario === "deletion-completed" ? [] : [mainPath],
     );
     expect(
       state.db.prepare("SELECT agent_id FROM agent_databases WHERE agent_id = ?").get("missing") !==

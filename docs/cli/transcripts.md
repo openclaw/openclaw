@@ -417,10 +417,10 @@ that draft without sending it to the new connection. Review it and select
 **Save** in the Settings footer. The full transcript schema editor is available
 under **Meeting capture → Advanced settings**.
 
-Changing only auto-start source titles applies to future captures without
-restarting or interrupting current captures. Current and historical notes keep
-their original title, source, agent attribution, and selector. Other source edits
-retain normal Gateway restart behavior.
+Meeting capture settings apply without restarting the Gateway. Removed or changed
+sources drain their received speech and finalize notes before replacement; unchanged
+sources keep recording. Source title edits apply to future captures. Current and
+historical notes keep their original title, source, agent attribution, and selector.
 
 Startup retries preserve the same admitted ID, original title, start time,
 source, and saved notes only while the exact failed provider attempt retains

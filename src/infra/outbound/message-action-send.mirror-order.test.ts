@@ -19,10 +19,8 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import {
-  normalizeSessionDeliveryState,
-  sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 vi.mock("../../tts/tts.runtime.js", () => ({

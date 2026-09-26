@@ -76,6 +76,30 @@ describe("new-session browser preferences", () => {
     ).toBe(true);
   });
 
+  it.each([true, false, "auto"] as const)(
+    "round-trips a standalone Fast Mode choice %s",
+    (fastMode) => {
+      replaceBrowserPreference("ws://one.example", "main", { fastMode });
+      expect(loadNewSessionPreference("ws://one.example", "main")).toEqual({ fastMode });
+      expect(
+        decodeIdentityPreferences(
+          encodeIdentityPreferences(loadBrowserPreferences("ws://one.example")),
+        ),
+      ).toEqual({ main: { fastMode } });
+      expect(loadNewSessionPreference("ws://one.example", "other")).toBeNull();
+      expect(loadNewSessionPreference("ws://two.example", "main")).toBeNull();
+      replaceBrowserPreference("ws://one.example", "main", { fastMode: undefined });
+      expect(loadNewSessionPreference("ws://one.example", "main")).toBeNull();
+    },
+  );
+
+  it.each(["on", "off", "false", 0, 1, null, {}, []])(
+    "drops malformed stored Fast Mode %j",
+    (fastMode) => {
+      expect(decodeIdentityPreferences({ "new-session.v1:main": { fastMode } })).toEqual({});
+    },
+  );
+
   it("preserves boolean choices and drops malformed persisted fields", () => {
     replaceBrowserPreference("ws://one.example", "main", {
       worktree: false,
@@ -173,6 +197,7 @@ describe("palette placement overrides", () => {
           freshWorkspace: false,
           model: "do-not-restore",
           thinkingLevel: "high",
+          fastMode: true,
         },
       }),
     ).toEqual({

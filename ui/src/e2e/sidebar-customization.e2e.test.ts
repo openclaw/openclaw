@@ -16,6 +16,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarMoreMenu } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
@@ -494,7 +495,7 @@ suite.define(() => {
       const moreButton = sidebar.locator(".sidebar-nav__head-action");
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
+      await openSidebarMoreMenu(page);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       // Enabled plugin tabs render directly in the sidebar body (#111995),
       // not inside the More menu.
@@ -519,8 +520,8 @@ suite.define(() => {
       await expect
         .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
         .not.toContain("Workboard");
-      const tasksItem = menu.getByRole("menuitemcheckbox", { name: "Tasks" });
-      await expect.poll(() => tasksItem.getAttribute("aria-checked")).toBe("false");
+      const usageItem = menu.getByRole("menuitemcheckbox", { name: "Usage" });
+      await expect.poll(() => usageItem.getAttribute("aria-checked")).toBe("false");
       // Ask OpenClaw moved to Settings (#111686): custodian is not a sidebar
       // nav route anymore, so the pin editor does not offer it.
       await expect
@@ -528,17 +529,17 @@ suite.define(() => {
         .toBe(0);
       await captureUiProof(page, "02-customize-menu.png", menu.locator('[part="menu"]'));
 
-      await tasksItem.click();
+      await usageItem.click();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Tasks"]);
+        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Usage"]);
       await page.reload();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Tasks"]);
+        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Usage"]);
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
+      await openSidebarMoreMenu(page);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       const editPersistedPinnedItems = moreMenu.getByRole("menuitem", {
         name: "Edit pinned items",
@@ -546,7 +547,7 @@ suite.define(() => {
       await expect.poll(() => editPersistedPinnedItems.isVisible()).toBe(true);
       await expect
         .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
-        .not.toContain("Tasks");
+        .not.toContain("Usage");
       await captureUiProof(
         page,
         "03-persisted-customization.png",

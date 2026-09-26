@@ -64,3 +64,26 @@ export function toOpenClawStateLeaseVerificationError(
         { code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED", cause: error },
       );
 }
+
+export function createOpenClawStateLeaseError(
+  code: OpenClawStateLeaseErrorCode,
+  message: string,
+  cause?: unknown,
+): OpenClawStateLeaseError {
+  return new OpenClawStateLeaseError(message, {
+    code,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+export function createOpenClawStateLeaseAbortError(
+  signal: AbortSignal,
+  label: string,
+  leaseLabel: string,
+): OpenClawStateLeaseError {
+  return createOpenClawStateLeaseError(
+    "OPENCLAW_STATE_LEASE_ABORTED",
+    `${leaseLabel} ${label} was aborted`,
+    signal.reason,
+  );
+}

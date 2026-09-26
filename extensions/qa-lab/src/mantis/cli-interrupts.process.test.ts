@@ -8,7 +8,6 @@ import { build as esbuild } from "esbuild";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
 const CHILD_TIMEOUT_MS = 3_000;
-const CLEANUP_DELAY_MS = 400;
 let bundleRoot: string | undefined;
 let interruptsModuleUrl: string;
 
@@ -62,7 +61,7 @@ async function withTimeout<T>(promise: Promise<T>, message: string): Promise<T> 
   }
 }
 
-it.skipIf(process.platform === "win32").each([
+it.skipIf(process.platform === "win32").concurrent.each([
   { signal: "SIGINT", code: 130 },
   { signal: "SIGTERM", code: 143 },
   { signal: "SIGHUP", code: 129 },
@@ -74,12 +73,13 @@ it.skipIf(process.platform === "win32").each([
       import { runWithMantisCliInterrupts } from ${JSON.stringify(interruptsModuleUrl)};
 
       const keepalive = setInterval(() => {}, 1_000);
+      const cleanupReleased = new Promise(resolve => process.stdin.once("data", resolve));
       try {
         await runWithMantisCliInterrupts(async (signal) => {
           writeSync(1, "ready\\n");
           await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
           writeSync(1, "cleanup-started\\n");
-          await new Promise((resolve) => setTimeout(resolve, ${CLEANUP_DELAY_MS}));
+          await cleanupReleased;
           writeSync(1, "cleanup-complete\\n");
           throw signal.reason;
         });
@@ -90,7 +90,7 @@ it.skipIf(process.platform === "win32").each([
     const child = spawn(process.execPath, ["--input-type=module", "--eval", script], {
       cwd: path.resolve("."),
       env: { ...process.env, VITEST: undefined },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
@@ -100,21 +100,23 @@ it.skipIf(process.platform === "win32").each([
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
       stderr += chunk;
     });
-    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       (resolve, reject) => {
         child.once("error", reject);
-        child.once("exit", (exitCode, exitSignal) =>
+        child.once("close", (exitCode, exitSignal) =>
           resolve({ code: exitCode, signal: exitSignal }),
         );
       },
     );
+    void closed.catch(() => undefined);
 
     try {
       await waitForMarker(() => stdout, "ready\n");
       expect(child.kill(signal)).toBe(true);
       await waitForMarker(() => stdout, "cleanup-started\n");
       expect(child.kill(signal)).toBe(true);
-      const outcome = await withTimeout(exited, "timeout waiting for Mantis signal child");
+      child.stdin.end("release cleanup\n");
+      const outcome = await withTimeout(closed, "timeout waiting for Mantis signal child");
       const diagnostics = JSON.stringify({ outcome, stderr, stdout }, null, 2);
 
       expect(stdout, diagnostics).toContain("cleanup-complete\n");
@@ -124,6 +126,7 @@ it.skipIf(process.platform === "win32").each([
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
       }
+      await withTimeout(closed, "timeout joining Mantis signal child cleanup");
     }
   },
 );

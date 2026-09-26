@@ -6,7 +6,7 @@ import {
   parseOpenAIQuicksilverEvent,
   type OpenAIQuicksilverInboundEvent,
 } from "./realtime-quicksilver-events.js";
-import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-sideband.js";
+import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-socket.shared.js";
 import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 
 export function buildOpenAIQuicksilverAudioAppend(model: string, audio: string) {
@@ -194,11 +194,14 @@ export function captureOpenAIQuicksilverTransportEvent(
   direction: "local" | "inbound" | "outbound",
   kind: "ws-open" | "ws-frame",
 ): void {
-  runtime.captureWsEvent({
-    url: "wss://realtime.invalid/private",
-    direction,
-    kind,
-    flowId: "private-realtime",
-    meta: { provider: "openai", capability: "gpt-live-voice" },
-  });
+  // Finalization retains capture failures; observe the Promise returned by the host view.
+  void runtime
+    .captureWsEventAsync({
+      url: "wss://realtime.invalid/private",
+      direction,
+      kind,
+      flowId: "private-realtime",
+      meta: { provider: "openai", capability: "gpt-live-voice" },
+    })
+    .catch(() => {});
 }

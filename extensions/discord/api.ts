@@ -108,7 +108,10 @@ export {
   type DiscordProbe,
 } from "./src/probe.js";
 export { normalizeExplicitDiscordSessionKey } from "./src/session-key-normalization.js";
-export { parseDiscordSendTarget, type SendDiscordTarget } from "./src/send-target-parsing.js";
+export {
+  parseDiscordTarget as parseDiscordSendTarget,
+  type DiscordTarget as SendDiscordTarget,
+} from "./src/target-parsing.js";
 export {
   parseDiscordTarget,
   resolveDiscordChannelId,

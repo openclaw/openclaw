@@ -86,6 +86,7 @@ export class DraftPlaceState {
   readonly cloudMachines = new DraftCloudMachineState();
   private agentsHydratedValue = false;
   private agentSelectedByUser = false;
+  private routeModelIntentActive = true;
   private folderSelectedByUser = false;
   private preferredWhereRestore: NewSessionWhere | null = null;
   private preferredProjectRestore = "";
@@ -379,6 +380,9 @@ export class DraftPlaceState {
     this.modelControl.load(snapshot.context, this.agentIdValue, !catalog.isTarget(snapshot.data), {
       agent: this.selectedAgent(),
       preference,
+      initialModel: this.routeModelIntentActive
+        ? catalog.requestedModelForAgent(snapshot.data, this.agentIdValue)
+        : undefined,
     });
     if (this.preferredProjectRestore) {
       this.folderValidation.cancel();
@@ -410,6 +414,7 @@ export class DraftPlaceState {
   }
 
   resetDraft() {
+    this.routeModelIntentActive = true;
     this.terminalHostId = "gateway:local";
     this.terminalHostInitialized = false;
     this.agentSelectedByUser = false;
@@ -493,6 +498,7 @@ export class DraftPlaceState {
       return;
     }
     this.agentIdValue = normalizeAgentId(agentId);
+    this.routeModelIntentActive = false;
     this.modelControl.reset();
     this.callbacks.onError(null);
     this.agentSelectedByUser = true;
@@ -585,11 +591,7 @@ export class DraftPlaceState {
     if (selection.kind === "local") {
       this.persistPreference({
         projectId: selection.id,
-        where: resolveNewSessionWhere({
-          cloudProfileId: this.cloudProfileIdValue,
-          deviceId: this.deviceIdValue,
-          autoDevice: this.autoDeviceValue,
-        }),
+        where: resolveNewSessionWhere(this),
         worktree: this.worktree,
         worktreeName: "",
         freshWorkspace: false,
@@ -711,8 +713,7 @@ export class DraftPlaceState {
       (preferredWhere?.kind === "device" || preferredWhere?.kind === "auto-device") &&
       this.gateway.cloudProfilesReady
     ) {
-      const automatic = preferredWhere.kind === "auto-device";
-      this.autoDeviceValue = automatic;
+      this.autoDeviceValue = preferredWhere.kind === "auto-device";
       this.deviceIdValue = preferredWhere.kind === "device" ? preferredWhere.id : "";
       this.cloudProfileIdValue = "";
       this.repositoryState.forceWorktree(this.remotePlacement);

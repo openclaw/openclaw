@@ -94,3 +94,24 @@ it.each([
     `- Failed phase: ${name}`,
   ]);
 });
+
+it("retains bounded informational diagnostics without warnings or raw process output", () => {
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-diagnostics-") } };
+  const run = createUpdateRun({ trigger: "cli" }, options);
+  const diagnostics = ["Snapshot needs 18 GiB.", "SQLite family: 3.6 GiB.", "x".repeat(2048)];
+  for (const receipt of updateRunStepsFromResultStep({
+    name: "snapshot-space-preflight",
+    exitCode: 0,
+    diagnostics,
+    stdoutTail: "RAW_PROCESS_OUTPUT",
+  })) {
+    recordUpdateRunStep(run.runId, receipt, options);
+  }
+  const recorded = getUpdateRun(run.runId, options)!;
+  const decoded = releasedSteps.parse(recorded.steps);
+  expect(
+    decoded.filter((step) => step.step.startsWith("diagnostic:")).map((step) => step.detail),
+  ).toEqual([diagnostics[0], diagnostics[1], "x".repeat(1024)]);
+  expect(decoded.some((step) => step.step.startsWith("warning:"))).toBe(false);
+  expect(JSON.stringify(recorded)).not.toContain("RAW_PROCESS_OUTPUT");
+});

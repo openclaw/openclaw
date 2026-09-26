@@ -51,10 +51,12 @@ describe("AppSidebar delegated activity", () => {
       updatedAt: 3,
     };
     sessions.list.mockResolvedValue({ ...result, ts: 3, sessions: [finished] });
+    vi.useFakeTimers();
     gateway.publishEvent("sessions.changed", {
       sessionKey: childKey,
       session: finished,
     });
+    await vi.advanceTimersByTimeAsync(5_000);
     await waitForFast(() => expect(parent().querySelector(".session-glyph__ring")).toBeNull());
   });
 

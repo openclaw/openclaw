@@ -12,7 +12,7 @@ import type { OpenClawPluginApi } from "./api.js";
 
 const pluginApiMocks = vi.hoisted(() => ({
   clearDeviceBootstrapTokens: vi.fn(async () => ({ removed: 2 })),
-  issueDeviceBootstrapToken: vi.fn(async () => ({
+  issueDeviceBootstrapToken: vi.fn(async (_params?: { assertCurrent?: () => void }) => ({
     token: "boot-token",
     expiresAtMs: Date.now() + 10 * 60_000,
   })),
@@ -622,6 +622,53 @@ describe("device-pair /pair default setup code", () => {
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith(FULL_SETUP_REQUEST);
     expect(text).toContain("Pairing setup code generated.");
   });
+
+  it.each([false, true])(
+    "rechecks channel ownership after Gateway URL discovery (gateway admin: %s)",
+    async (gatewayAdmin) => {
+      let current = true;
+      const ctx = createCommandContext({
+        channel: "discord",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: gatewayAdmin ? ["operator.admin"] : undefined,
+        senderIsOwner: true,
+        assertOwnerCurrent: () => {
+          if (!current) {
+            throw new Error("original owner revoked");
+          }
+        },
+      });
+      vi.mocked(resolveTailnetHostWithRunner).mockImplementationOnce(async () => {
+        current = false;
+        ctx.assertOwnerCurrent = () => {};
+        return "gateway.tailnet.ts.net";
+      });
+      let issued = false;
+      pluginApiMocks.issueDeviceBootstrapToken.mockImplementationOnce(async (params) => {
+        params?.assertCurrent?.();
+        issued = true;
+        return { token: "boot-token", expiresAtMs: Date.now() + 60_000 };
+      });
+      const pending = registerPairCommand({
+        config: {
+          gateway: {
+            tailscale: { mode: "serve" },
+            auth: { mode: "token", token: "gateway-token" },
+          },
+        },
+        pluginConfig: { publicUrl: undefined },
+      }).handler(ctx);
+      if (gatewayAdmin) {
+        await expect(pending).resolves.toMatchObject({
+          text: expect.stringContaining("Pairing setup code generated"),
+        });
+      } else {
+        await expect(pending).rejects.toThrow("original owner revoked");
+      }
+      expect(issued).toBe(gatewayAdmin);
+    },
+  );
 
   it.each`
     toString                                                                                    | options                                                                                                                                                                  | context                                        | expectedText

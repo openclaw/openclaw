@@ -210,7 +210,7 @@ async function enqueueRestartSentinelNoticeOwned(
     if (preparation.status === "claimed") {
       return preparation.value;
     }
-    if (findDeliveryIntentOwner(deliveryIntentId, undefined, context)) {
+    if (await findDeliveryIntentOwner(deliveryIntentId, undefined, context)) {
       return { id: deliveryIntentId, created: false };
     }
     throw new Error(`Restart sentinel notice has an active producer without durable custody`);
@@ -218,7 +218,7 @@ async function enqueueRestartSentinelNoticeOwned(
   if (claim.status === "claimed") {
     return claim.value;
   }
-  if (findDeliveryIntentOwner(deliveryIntentId, undefined, context)) {
+  if (await findDeliveryIntentOwner(deliveryIntentId, undefined, context)) {
     return { id: deliveryIntentId, created: false };
   }
   throw new Error(`Restart sentinel notice has an active producer without durable custody`);

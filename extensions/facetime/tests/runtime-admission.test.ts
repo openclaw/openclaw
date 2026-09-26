@@ -46,7 +46,7 @@ describe("FaceTime runtime admission", () => {
     { phase: "active", status: 1 },
   ])("$phase calls", ({ status }) => {
     it("reserves admission for the approved pending outbound call", async () => {
-      const state = pendingDialState();
+      const state = await pendingDialState();
       const talk = createTalkDriver({});
       const activated = new Promise<void>((resolve) => {
         talk.activate.mockImplementation(resolve);
@@ -64,7 +64,7 @@ describe("FaceTime runtime admission", () => {
         },
       };
       try {
-        mocks.helperParams?.onMessage({
+        await mocks.helperParams?.onMessage({
           ...incoming,
           data: { ...incoming.data, handle: { value: "other-owner@example.com" } },
         });
@@ -73,7 +73,7 @@ describe("FaceTime runtime admission", () => {
         expect(mocks.startTalk).not.toHaveBeenCalled();
         expect(mocks.helper.answerCall).not.toHaveBeenCalled();
 
-        mocks.helperParams?.onMessage(outbound);
+        await mocks.helperParams?.onMessage(outbound);
         await activated;
         expect(mocks.startTalk).toHaveBeenCalledOnce();
         expect(mocks.startTalk).toHaveBeenCalledWith(
@@ -81,8 +81,8 @@ describe("FaceTime runtime admission", () => {
         );
         expect((await runtime.status()).calls).toMatchObject([{ callUUID: "approved-call" }]);
       } finally {
-        mocks.helperParams?.onMessage(incomingCall(6));
-        mocks.helperParams?.onMessage({
+        await mocks.helperParams?.onMessage(incomingCall(6));
+        await mocks.helperParams?.onMessage({
           ...outbound,
           data: { ...outbound.data, call_status: 6, has_ended: true },
         });
@@ -100,10 +100,7 @@ describe("FaceTime runtime admission", () => {
           throw new Error("Runtime did not register its helper event handler");
         }
         const event = incomingCall(status);
-        helperParams.onMessage({ ...event, data: { ...event.data, ...data } });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await helperParams.onMessage({ ...event, data: { ...event.data, ...data } });
 
         expect((await runtime.status()).calls).toEqual([]);
         expect(mocks.startTalk).not.toHaveBeenCalled();

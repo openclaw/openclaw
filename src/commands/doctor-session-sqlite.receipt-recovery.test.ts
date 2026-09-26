@@ -9,11 +9,11 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
+import { readSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readMigrationArtifactIdentity } from "./doctor-session-sqlite-artifact.js";
-import { readSessionSqliteMigrationManifest } from "./doctor-session-sqlite-migration-run.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 

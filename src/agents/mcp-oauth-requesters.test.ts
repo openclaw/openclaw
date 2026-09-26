@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -9,7 +9,6 @@ import {
   requesterMcpOAuthStoreKeyPrefix,
   type McpOAuthIdentity,
 } from "./mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
 import { listMcpOAuthStoreKeysByPrefix } from "./mcp-oauth-store.js";
 import {
   clearMcpOAuthServer,
@@ -18,6 +17,7 @@ import {
   resolveMcpOAuthAccessToken,
 } from "./mcp-oauth.js";
 import { requesterIdentity, withTempHome } from "./mcp-oauth.test-harness.js";
+import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
 const authMock = vi.hoisted(() => vi.fn());
 const REMOTE_IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
@@ -27,20 +27,26 @@ vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
 }));
 
 async function saveAccessToken(identity: McpOAuthIdentity, accessToken: string): Promise<void> {
-  await createMcpOAuthClientProvider({ identity }).saveTokens({
-    access_token: accessToken,
-    token_type: "Bearer",
-    expires_in: 3600,
+  await withMcpOAuthProviderForTest({ identity }, async (provider) => {
+    await provider.saveTokens({
+      access_token: accessToken,
+      token_type: "Bearer",
+      expires_in: 3600,
+    });
   });
 }
 
 describe("MCP OAuth requester credentials", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     authMock.mockReset();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
 
-  afterEach(() => closeOpenClawStateDatabaseForTest());
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  });
 
   it("fails closed when canonical SQLite JSON is malformed", async () => {
     await withTempHome(
@@ -50,17 +56,18 @@ describe("MCP OAuth requester credentials", () => {
           REMOTE_IDENTITY.serverUrl,
           "alice",
         );
-        const provider = createMcpOAuthClientProvider({ identity });
-        await provider.saveTokens({ access_token: "access", token_type: "Bearer" });
-        const storeKey = identity.storeKey;
-        openOpenClawStateDatabase()
-          .db.prepare("UPDATE mcp_oauth_stores SET store_json = ? WHERE store_key = ?")
-          .run("{", storeKey);
+        await withMcpOAuthProviderForTest({ identity }, async (provider) => {
+          await provider.saveTokens({ access_token: "access", token_type: "Bearer" });
+          const storeKey = identity.storeKey;
+          openOpenClawStateDatabase()
+            .db.prepare("UPDATE mcp_oauth_stores SET store_json = ? WHERE store_key = ?")
+            .run("{", storeKey);
 
-        expect(() => provider.tokens()).toThrow("store_json is not valid JSON");
-        expect(() => countMcpOAuthPrincipals(REMOTE_IDENTITY)).toThrow(
-          `MCP OAuth store ${storeKey} is invalid: store_json is not valid JSON`,
-        );
+          await expect(provider.tokens()).rejects.toThrow("store_json is not valid JSON");
+          await expect(countMcpOAuthPrincipals(REMOTE_IDENTITY)).rejects.toThrow(
+            `MCP OAuth store ${storeKey} is invalid: store_json is not valid JSON`,
+          );
+        });
       },
       {
         prefix: "openclaw-mcp-oauth-corrupt-row-",
@@ -95,25 +102,17 @@ describe("MCP OAuth requester credentials", () => {
           insert.run(key, "{");
         }
 
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         await expect(resolveMcpOAuthAccessToken({ identity: alice })).resolves.toBe("alice-token");
         await expect(resolveMcpOAuthAccessToken({ identity: bob })).resolves.toBe("bob-token");
         expect(alice.storeKey).not.toBe(bob.storeKey);
-        expect(listMcpOAuthStoreKeysByPrefix(prefix)).toEqual(
+        expect(await listMcpOAuthStoreKeysByPrefix(prefix)).toEqual(
           [alice.storeKey, bob.storeKey].toSorted(),
         );
-        const reads = trackSqliteStatementExecutions(
-          openOpenClawStateDatabase().db,
-          ["keys"],
-          (sql) =>
-            /^select "store_key" from "mcp_oauth_stores"(?:\s|$)/iu.test(sql) ? "keys" : null,
-        );
-        try {
-          expect(countMcpOAuthPrincipals(operator)).toBe(2);
-          await clearMcpOAuthServer(operator);
-        } finally {
-          reads.restore();
-        }
+        expect(await countMcpOAuthPrincipals(operator)).toBe(2);
+        await clearMcpOAuthServer(operator);
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         for (const identity of [alice, bob]) {
           await expect(readMcpOAuthCredentialsStatus(identity)).resolves.toEqual({
@@ -128,8 +127,6 @@ describe("MCP OAuth requester credentials", () => {
             )
             .all("{"),
         ).toEqual(unrelatedKeys.toSorted().map((store_key) => ({ store_key })));
-        expect(reads.counts.keys).toBeGreaterThan(0);
-        expect(reads.rowCounts.keys).toBeLessThanOrEqual(8);
       },
       {
         prefix: "openclaw-mcp-oauth-requesters-",

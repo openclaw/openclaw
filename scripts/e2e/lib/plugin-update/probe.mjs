@@ -3,7 +3,6 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { legacyPackageAcceptanceCompat } from "../package-compat.mjs";
 import {
   readPluginInstallRecords,
   writePluginInstallIndexForE2E,
@@ -24,8 +23,7 @@ const readJson = (file) => {
 };
 
 const pluginRecordSnapshot = () => {
-  const config = readJson(openclawPath("openclaw.json"));
-  const records = readPluginInstallRecords({ fallbackRecords: config.plugins?.installs ?? {} });
+  const records = readPluginInstallRecords({ fallbackRecords: {} });
   const record = records["lossless-claw"] ?? records["@example/lossless-claw"];
   if (!record) {
     throw new Error("missing plugin install record");
@@ -306,7 +304,6 @@ function assertCorruptPluginPolicyPreserved(configPath, pluginId) {
 const [command, arg, arg2] = process.argv.slice(2);
 const commands = {
   consent: () => runConsentScenario(arg, arg2),
-  "legacy-compat": () => console.log(legacyPackageAcceptanceCompat(arg || "") ? "1" : "0"),
   seed: seedInstallState,
   "wait-registry": waitRegistry,
   snapshot: () => process.stdout.write(JSON.stringify(pluginRecordSnapshot(), null, 2)),

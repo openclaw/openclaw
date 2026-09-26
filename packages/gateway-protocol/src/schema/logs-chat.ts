@@ -74,10 +74,12 @@ export const ChatPendingInputsPageSchema = closedObject({
       message: Type.Unknown(),
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
+      queued: Type.Optional(Type.Literal(true)),
     }),
     { maxItems: 20 },
   ),
   total: Type.Integer({ minimum: 0 }),
+  queuedCount: Type.Optional(Type.Integer({ minimum: 0 })),
   nextBefore: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 export type ChatPendingInputsPage = Static<typeof ChatPendingInputsPageSchema>;
@@ -88,6 +90,7 @@ export const ChatInputReceiptsSchema = Type.Array(
     closedObject({
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
       state: Type.Literal("pending"),
+      queued: Type.Optional(Type.Literal(true)),
     }),
     closedObject({
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
@@ -359,11 +362,13 @@ const ChatEventErrorKindSchema = Type.Union([
   Type.Literal("timeout"),
   Type.Literal("rate_limit"),
   Type.Literal("context_length"),
+  Type.Literal("state_contention"),
   Type.Literal("unknown"),
 ]);
 
 /** Coarse startup stages shown while a run has not produced visible activity yet. */
 export const ChatRunStartupPhaseSchema = Type.Union([
+  Type.Literal("waiting_for_state"),
   Type.Literal("preparing_workspace"),
   Type.Literal("naming_worktree"),
   Type.Literal("creating_worktree"),

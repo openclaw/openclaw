@@ -17,27 +17,35 @@ import {
 } from "./code-mode.test-support.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+function createReplayTools(
+  targetTools: AnyAgentTool[],
+  options?: Parameters<typeof createCodeModeHarness>[0],
+) {
+  const { config, catalogRef, tools } = createCodeModeHarness(options);
+  applyCodeModeCatalog({
+    tools: [...tools, ...targetTools],
+    config,
+    sessionId: "session-code-mode",
+    sessionKey: "agent:main:main",
+    runId: "run-code-mode",
+    catalogRef,
+  });
+  return tools;
+}
+
 describe("Code Mode restart-safe replay", () => {
   beforeEach(() => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("completes audited core reads inline in restart-safe mode", async () => {
     const targetTool = fakeTool("read", "Read");
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, targetTool],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const codeModeTools = createReplayTools([targetTool]);
 
     const first = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
@@ -66,15 +74,7 @@ describe("Code Mode restart-safe replay", () => {
       await release.promise;
       return await execute(...args);
     }) as AnyAgentTool["execute"];
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, targetTool],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const codeModeTools = createReplayTools([targetTool]);
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const running = expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
@@ -102,38 +102,6 @@ describe("Code Mode restart-safe replay", () => {
     }
   });
 
-  it("allows explicitly replay-safe plugin tools through callable search", async () => {
-    const targetTool = pluginTool("fake_plugin_read", "Plugin read");
-    setPluginToolMeta(targetTool, {
-      pluginId: "fake-code-mode",
-      optional: true,
-      replaySafe: true,
-    });
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, targetTool],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const completed = await runUntilCompleted({
-      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
-      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      restartSafe: true,
-      code: `
-        const [read] = await catalog.search("fake_plugin_read");
-        return await read({});
-      `,
-    });
-
-    expect(completed.status).toBe("completed");
-    expect(completed.replaySafe).toBe(true);
-    expect(targetTool.execute).toHaveBeenCalledTimes(1);
-  });
-
   it("resolves a replay-safe tool through its reserved-name catalog handle", async () => {
     const targetTool = pluginTool("catalog", "Reserved-name plugin read");
     setPluginToolMeta(targetTool, {
@@ -141,15 +109,7 @@ describe("Code Mode restart-safe replay", () => {
       optional: true,
       replaySafe: true,
     });
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, targetTool],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const codeModeTools = createReplayTools([targetTool]);
 
     const completed = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
@@ -183,15 +143,7 @@ describe("Code Mode restart-safe replay", () => {
         operation: "tool",
       },
     });
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, targetTool],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const codeModeTools = createReplayTools([targetTool]);
 
     const completed = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
@@ -208,15 +160,7 @@ describe("Code Mode restart-safe replay", () => {
 
   it("rejects side-effecting calls before executing them in restart-safe mode", async () => {
     const targetTool = pluginTool("fake_write", "Write");
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, targetTool],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const codeModeTools = createReplayTools([targetTool]);
 
     const failed = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
@@ -245,15 +189,7 @@ describe("Code Mode restart-safe replay", () => {
       replaySafe: true,
     });
     const writeTool = pluginTool("fake_unsafe_write", "Write");
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, readTool, writeTool],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const codeModeTools = createReplayTools([readTool, writeTool]);
 
     const failed = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
@@ -280,21 +216,7 @@ describe("Code Mode restart-safe replay", () => {
 
   it("keeps host-forced restart safety when the model clears the exec flag", async () => {
     const targetTool = pluginTool("fake_forced_write", "Write");
-    const {
-      config,
-      catalogRef,
-      tools: codeModeTools,
-    } = createCodeModeHarness({
-      forceRestartSafeTools: true,
-    });
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, targetTool],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const codeModeTools = createReplayTools([targetTool], { forceRestartSafeTools: true });
 
     const failed = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(

@@ -4,6 +4,10 @@ import path from "node:path";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import {
+  cacheProcessDeviceIdentity,
+  readProcessDeviceIdentity,
+} from "./device-identity-process-cache.js";
+import {
   generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
   PRIMARY_DEVICE_IDENTITY_KEY,
@@ -20,7 +24,6 @@ import {
   signEd25519Payload,
   verifyEd25519Signature,
 } from "./ed25519-signature.js";
-import { pruneMapToMaxSize } from "./map-size.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 
@@ -47,7 +50,7 @@ function resolveLegacyDeviceIdentityPath(options: DeviceIdentityStoreOptions = {
   );
 }
 
-function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): void {
+export function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): void {
   const { identityKey } = resolveDeviceIdentityStore(options);
   if (identityKey !== PRIMARY_DEVICE_IDENTITY_KEY) {
     return;
@@ -132,24 +135,19 @@ export function loadOrCreateDeviceIdentity(
   );
 }
 
-const processDeviceIdentities = new Map<string, DeviceIdentity>();
-const MAX_PROCESS_DEVICE_IDENTITIES = 32;
-
 /** Keep one authoritative identity stable for the lifetime of a state-dir process. */
 export function loadOrCreateProcessDeviceIdentity(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity {
-  return withDeviceIdentityCoordinator(options, (resolved, resolvedOptions) => {
-    const cacheKey = `${resolved.databasePath}\0${resolved.identityKey}`;
-    const cached = processDeviceIdentities.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const identity = loadOrCreateDeviceIdentityOwned(resolvedOptions);
-    pruneMapToMaxSize(processDeviceIdentities, MAX_PROCESS_DEVICE_IDENTITIES - 1);
-    processDeviceIdentities.set(cacheKey, identity);
-    return identity;
-  });
+  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
+  const cacheKey = `${databasePath}\0${identityKey}`;
+  const cached = readProcessDeviceIdentity(cacheKey);
+  // A process-stable identity needs no database admission on a warm read.
+  if (cached) {
+    return cached;
+  }
+  const identity = loadOrCreateDeviceIdentity({ ...options, path: databasePath, identityKey });
+  return cacheProcessDeviceIdentity(cacheKey, identity);
 }
 
 /** Load a valid persisted identity without creating or mutating SQLite state. */

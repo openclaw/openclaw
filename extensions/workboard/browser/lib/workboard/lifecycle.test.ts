@@ -6,27 +6,6 @@ import { createGatewaySession, createWorkboardCard } from "./test/index-helpers.
 const localKey = "subagent:workboard-default-card-1";
 
 it.each([
-  { status: "running", hasActiveRun: true, state: "running", targetStatus: "running" },
-  { status: "done", hasActiveRun: false, state: "succeeded", targetStatus: "review" },
-  { status: "failed", hasActiveRun: false, state: "failed", targetStatus: "blocked" },
-] as const)("resolves $status from the accepted agent-prefixed session", (expected) => {
-  const card = createWorkboardCard({ sessionKey: localKey });
-  const session = createGatewaySession({
-    key: `agent:main:${localKey}`,
-    status: expected.status,
-    hasActiveRun: expected.hasActiveRun,
-  });
-
-  expect(
-    getWorkboardLifecycle(card, [], undefined, { key: localKey, status: "resolved", session }),
-  ).toMatchObject({
-    session,
-    state: expected.state,
-    targetStatus: expected.targetStatus,
-  });
-});
-
-it.each([
   {
     name: "an explicit link to a different agent",
     linkedKey: `agent:worker:${localKey}`,

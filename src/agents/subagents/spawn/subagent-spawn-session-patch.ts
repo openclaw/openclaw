@@ -1,8 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  inheritSessionGitContributorProfileIds,
+} from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { GatewaySessionStoreTargetWithStore } from "../../../gateway/session-utils-store.types.js";
+import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../../utils.js";
 import {
@@ -12,12 +17,12 @@ import {
   normalizeInheritedToolDenylist,
 } from "../../inherited-tool-deny.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import {
   loadSessionEntry,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetInWorker,
   upsertSessionEntryCore,
+  withSessionEntryReadOnlyInWorker,
 } from "./subagent-spawn.runtime.js";
 
 function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<SessionEntry> {
@@ -102,10 +107,6 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   return entry;
 }
 
-export function loadSubagentConfig() {
-  return getSubagentSpawnDeps().getRuntimeConfig();
-}
-
 export async function createInitialSubagentSession(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -146,34 +147,55 @@ export async function createInitialSubagentSession(params: {
     ...(params.incognito ? { incognito: true } : {}),
   };
   try {
-    const parentTarget = resolveGatewaySessionStoreTarget({
+    const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
       cfg: params.cfg,
       key: params.requesterInternalKey,
+      assertActive: params.assertActive,
     });
-    const parentEntry = loadSessionEntry({
-      storePath: parentTarget.storePath,
+    const parentStorePath = parentTarget.readSource?.path ?? parentTarget.storePath;
+    await waitForSessionParticipantRecording({
+      agentId: parentTarget.agentId,
       sessionKey: parentTarget.canonicalKey,
+      storePath: parentStorePath,
     });
+    params.assertActive?.();
+    const parentEntry = await withSessionEntryReadOnlyInWorker(
+      {
+        agentId: parentTarget.agentId,
+        storePath: parentStorePath,
+        sessionKey: parentTarget.canonicalKey,
+      },
+      () => params.assertActive?.(),
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        return read.value;
+      },
+    );
+    params.assertActive?.();
     // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
     // launch so it cannot delete a reset successor that reuses the session id.
     const childSessionIdentity = {
       sessionId: randomUUID(),
       lifecycleRevision: randomUUID(),
     };
-    const target = params.incognito
+    const target: Omit<GatewaySessionStoreTargetWithStore, "store"> = params.incognito
       ? {
           agentId: params.targetAgentId,
           canonicalKey: params.childSessionKey,
           storeKeys: [params.childSessionKey],
           storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: params.targetAgentId }),
         }
-      : resolveGatewaySessionStoreTarget({
+      : await resolveGatewaySessionStoreTargetInWorker({
           cfg: params.cfg,
           key: params.childSessionKey,
+          assertActive: params.assertActive,
         });
+    params.assertActive?.();
     const entry = await upsertSessionEntryCore(
       {
-        storePath: target.storePath,
+        storePath: target.readSource?.path ?? target.storePath,
         sessionKey: target.canonicalKey,
       },
       {
@@ -199,6 +221,12 @@ export async function createInitialSubagentSession(params: {
         ...buildSessionCreationStamp({
           via: "spawn",
           ...params.creationPolicy,
+          ...(!params.incognito
+            ? {
+                inheritedGitContributorProfileIds:
+                  inheritSessionGitContributorProfileIds(parentEntry),
+              }
+            : {}),
         }),
       },
       {
@@ -206,7 +234,7 @@ export async function createInitialSubagentSession(params: {
           params.assertActive?.();
           if (parentEntry?.skillLibrarySelections) {
             const latest = loadSessionEntry({
-              storePath: parentTarget.storePath,
+              storePath: parentStorePath,
               sessionKey: parentTarget.canonicalKey,
             });
             if (

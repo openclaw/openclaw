@@ -62,6 +62,7 @@ type LocalHost = {
   completion: ReturnType<typeof createDeferred<CodexSessionCatalogHost>>;
   value?: CodexSessionCatalogHost;
   active?: Promise<void>;
+  background?: boolean;
 };
 
 type PreparedList = {
@@ -70,7 +71,7 @@ type PreparedList = {
   requestedHostIds?: Set<string>;
 };
 
-async function boundedNodeHost(
+async function boundedHost(
   pending: Promise<CodexSessionCatalogHost>,
 ): Promise<CodexSessionCatalogHost | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -195,6 +196,26 @@ function managedMarker(
       }
     }
   };
+}
+
+async function finishLocalHost(
+  params: ListParams,
+  agentId: string,
+  host: LocalHost,
+): Promise<CodexSessionCatalogHost> {
+  try {
+    for (;;) {
+      const step = await host.page.next();
+      params.signal?.throwIfAborted();
+      if (step.done) {
+        return await projectLocalHost(params, agentId, host.source, step.page);
+      }
+    }
+  } catch (error) {
+    return hostFailure(host.source, error);
+  } finally {
+    host.page.close();
+  }
 }
 
 function createNodePublicationTracker(
@@ -327,6 +348,21 @@ class CodexCatalogListDriver {
 
   private async readHost(host: LocalHost): Promise<void> {
     const params = this.request();
+    if (params.allowPartialResults === true && params.onHost && params.waitUntil) {
+      // The registered publication owns completion after the foreground driver closes.
+      host.background = true;
+      const completion = finishLocalHost(params, this.selection().agentId, host);
+      void completion.then(host.completion.resolve, host.completion.reject);
+      host.value = (await boundedHost(completion)) ?? {
+        hostId: host.source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID,
+        label: host.source?.label ?? "Local Codex",
+        kind: "gateway",
+        connected: true,
+        pending: true,
+        sessions: [],
+      };
+      return;
+    }
     try {
       const page = await host.page.next();
       params.signal?.throwIfAborted();
@@ -486,7 +522,7 @@ class CodexCatalogListDriver {
         void completion.catch(() => undefined);
         return Promise.resolve(project(cached.host));
       }
-      return (partial ? boundedNodeHost(completion) : completion).then((value) => {
+      return (partial ? boundedHost(completion) : completion).then((value) => {
         result = value
           ? project(value)
           : {
@@ -503,9 +539,7 @@ class CodexCatalogListDriver {
       });
     });
     try {
-      return (await Promise.all(pendingHosts)).filter(
-        (host): host is CodexSessionCatalogHost => host !== undefined,
-      );
+      return await Promise.all(pendingHosts);
     } catch (error) {
       // A fatal callback still owns every started node's fail-soft foreground result.
       await Promise.allSettled(pendingHosts);
@@ -602,7 +636,9 @@ class CodexCatalogListDriver {
       new Error("Codex catalog list operation closed");
     this.params = undefined;
     for (const host of this.locals) {
-      host.page.close();
+      if (!host.background) {
+        host.page.close();
+      }
       if (!host.value) {
         host.completion.reject(reason);
       }

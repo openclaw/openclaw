@@ -1,4 +1,3 @@
-// OpenAI ChatGPT Responses provider handles ChatGPT-authenticated response streams.
 import type * as NodeOs from "node:os";
 import type * as NodeZlib from "node:zlib";
 import {
@@ -6,11 +5,11 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   Tool as OpenAITool,
   ResponseCreateParamsStreaming,
   ResponseInput,
-  ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
@@ -32,12 +31,12 @@ import {
   resolveNextResponsesEncryptedContentAttempt,
   type ResponsesEncryptedContentAttempt,
 } from "../transports/openai-responses-replay-internal.js";
+import { responsesRequestLifecycle } from "../transports/openai-responses-request-lifecycle.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { CompletedResponse } from "../transports/openai-responses-stream-types-internal.js";
 import {
   createOpenAIProviderAcceptanceHook,
   createOpenAIResponseHook,
-  createResponseModelTracker,
 } from "../transports/openai-transport-shared.js";
 import {
   assignTransportErrorDetails,
@@ -60,6 +59,7 @@ import {
   appendAssistantMessageDiagnostic,
   createAssistantMessageDiagnostic,
   formatThrownValue,
+  type ProviderRefusalReview,
 } from "../utils/diagnostics.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
@@ -72,11 +72,13 @@ import {
   withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { CodexApiError, mapCodexEvents } from "./openai-chatgpt-responses-events.js";
 import {
   CodexProtocolError,
   parseOpenAIChatGptResponsesSse,
 } from "./openai-chatgpt-responses-protocol.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import { readOpenAIMisalignmentReview } from "./openai-provider-refusal.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
   resolveOpenAISimpleReasoningEffort,
@@ -109,10 +111,6 @@ function loadNodeOs(): typeof NodeOs | null {
 // NEVER convert to top-level runtime imports - breaks browser/Vite builds
 const os = loadNodeOs();
 
-// ============================================================================
-// Configuration
-// ============================================================================
-
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
@@ -124,33 +122,12 @@ const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reached";
 const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
 
-const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
-  "completed",
-  "incomplete",
-  "failed",
-  "cancelled",
-  "queued",
-  "in_progress",
-]);
-
-// ============================================================================
-// Types
-// ============================================================================
-
 interface OpenAICodexResponsesOptions extends BaseOpenAIStreamOptions {
   reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   textVerbosity?: "low" | "medium" | "high";
 }
-
-type CodexResponseStatus =
-  | "completed"
-  | "incomplete"
-  | "failed"
-  | "cancelled"
-  | "queued"
-  | "in_progress";
 
 interface RequestBody {
   model: string;
@@ -265,10 +242,6 @@ function compressRequestBodyZstd(bodyJson: string): Uint8Array<ArrayBuffer> | nu
   }
 }
 
-// ============================================================================
-// Main Stream Function
-// ============================================================================
-
 export const streamOpenAICodexResponses: StreamFunction<
   "openai-chatgpt-responses",
   OpenAICodexResponsesOptions
@@ -318,10 +291,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         options,
         context.systemPrompt,
       );
-      // NOTE: when options.sessionId is absent, this falls back to a fresh random id
-      // per request, which forfeits session-affinity routing on the WS transport (the
-      // backend routes by session_id/x-client-request-id). Left as-is for this fix;
-      // see the SSE-path session_id addition in buildOpenAIClientHeaders (agents/openai-transport-stream.ts).
+      // Without a session id, each WebSocket request gets independent affinity.
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
       requestTimeoutMs = resolveRequestTimeoutMs(options);
       requestTimeoutSignal = buildRequestSignal(options?.signal, requestTimeoutMs);
@@ -477,6 +447,12 @@ export const streamOpenAICodexResponses: StreamFunction<
 
         let attemptResponse: Response;
         try {
+          const lifecycle = responsesRequestLifecycle.get(options);
+          if (lifecycle) {
+            await lifecycle.beforeDispatch(activeSignal);
+            activeSignal?.throwIfAborted();
+            lifecycle.assertCurrent();
+          }
           attemptResponse = await fetch(resolveCodexUrl(model.baseUrl), {
             method: "POST",
             headers: sseHeaders,
@@ -554,7 +530,11 @@ export const streamOpenAICodexResponses: StreamFunction<
       }
 
       const hookedResponseStream = withProviderResponseHook({
-        stream: mapCodexEvents(parseOpenAIChatGptResponsesSse(response), response.headers),
+        stream: mapCodexEvents(
+          parseOpenAIChatGptResponsesSse(response),
+          response.headers,
+          requestOptions,
+        ),
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
         hook: createOpenAIProviderAcceptanceHook(options, response, model),
@@ -600,6 +580,11 @@ export const streamOpenAICodexResponses: StreamFunction<
       });
       stream.end();
     } catch (error) {
+      // A timeout can detach the iterator while its acceptance write is still settling.
+      await responsesRequestLifecycle
+        .get(options)
+        ?.settle()
+        .catch(() => undefined);
       const requestTimedOut =
         isRequestTimeoutError(error, options?.signal, requestTimeoutSignal, requestTimeoutMs) &&
         requestTimeoutMs !== undefined;
@@ -616,7 +601,11 @@ export const streamOpenAICodexResponses: StreamFunction<
         appendAssistantMessageDiagnostic(output, {
           type: "provider_refusal",
           timestamp: Date.now(),
-          details: { provider: "openai", category: providerRefusal.category },
+          details: {
+            provider: "openai",
+            category: providerRefusal.category,
+            ...(providerRefusal.review ? { review: providerRefusal.review } : {}),
+          },
         });
       }
       const terminal = assignTransportErrorDetails(output, normalizedError, options?.signal);
@@ -659,12 +648,12 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
     reasoningEffort: resolveOpenAISimpleReasoningEffort(model, options?.reasoning),
   } satisfies OpenAICodexResponsesOptions;
   responsesPromptObserver.copy(options, resolvedOptions);
+  const lifecycle = responsesRequestLifecycle.get(options);
+  if (lifecycle) {
+    responsesRequestLifecycle.set(resolvedOptions, lifecycle);
+  }
   return streamOpenAICodexResponses(model, context, resolvedOptions);
 };
-
-// ============================================================================
-// Request Building
-// ============================================================================
 
 function buildRequestBody(
   model: Model<"openai-chatgpt-responses">,
@@ -770,46 +759,40 @@ function resolveCodexWebSocketUrl(baseUrl?: string): string {
   return url.toString();
 }
 
-// ============================================================================
-// Response Processing
-// ============================================================================
-
 type CodexProviderRefusalCategory = "bio" | "cyber" | "misalignment";
-
-function isJsonRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 /**
  * Structured refusal code carried by the OpenAI Responses transport. Every
  * terminal Responses path preserves it: a non-OK HTTP body parsed by
  * {@link parseErrorResponse}, an SSE/WebSocket `error` event mapped by
- * {@link extractCodexEventError}, and a `response.failed` event normalized into
+ * {@link mapCodexEvents}, and a `response.failed` event normalized into
  * {@link ResponsesStreamFailure}. Only the app-server surface carries the
  * `codexErrorInfo` discriminator, so both shapes must be read here.
  */
-const RESPONSES_CYBER_POLICY_ERROR_CODE = "cyber_policy";
-
 function readCodexProviderRefusal(
   error: unknown,
-): { category: CodexProviderRefusalCategory } | undefined {
-  if (error instanceof ResponsesStreamFailure) {
-    return error.code === RESPONSES_CYBER_POLICY_ERROR_CODE ? { category: "cyber" } : undefined;
-  }
-  if (!(error instanceof CodexApiError)) {
+): { category: CodexProviderRefusalCategory; review?: ProviderRefusalReview } | undefined {
+  if (!(error instanceof ResponsesStreamFailure || error instanceof CodexApiError)) {
     return undefined;
   }
-  if (error.code === RESPONSES_CYBER_POLICY_ERROR_CODE) {
-    return { category: "cyber" };
-  }
-  const payload = error.payload;
-  const nested = isJsonRecord(payload?.error) ? payload.error : undefined;
+  const payload =
+    error instanceof CodexApiError
+      ? error.payload
+      : isRecord(error.response)
+        ? error.response
+        : undefined;
+  const nested = isRecord(payload?.error) ? payload.error : undefined;
   const codexErrorInfo = payload?.codexErrorInfo ?? nested?.codexErrorInfo;
-  if (codexErrorInfo === "cyberPolicy") {
+  if (error.code === "cyber_policy" || codexErrorInfo === "cyberPolicy") {
     return { category: "cyber" };
   }
-  if (codexErrorInfo === "misalignmentPolicyViolation") {
-    return { category: "misalignment" };
+  if (
+    error.code === "misalignment_policy_violation" ||
+    codexErrorInfo === "misalignmentPolicyViolation"
+  ) {
+    const details = nested?.misalignment ?? payload?.misalignment;
+    const review = readOpenAIMisalignmentReview(details, true);
+    return { category: "misalignment", ...(review ? { review } : {}) };
   }
   const message =
     typeof payload?.message === "string"
@@ -820,29 +803,6 @@ function readCodexProviderRefusal(
   return message.startsWith("This content was flagged for possible biological risk.")
     ? { category: "bio" }
     : undefined;
-}
-
-class CodexApiError extends Error {
-  readonly code?: string;
-  readonly status?: number;
-  readonly payload?: Record<string, unknown>;
-
-  constructor(
-    message: string,
-    options?: {
-      code?: string;
-      status?: number;
-      payload?: Record<string, unknown>;
-      cause?: unknown;
-    },
-  ) {
-    super(message);
-    this.name = "CodexApiError";
-    this.code = options?.code;
-    this.status = options?.status;
-    this.payload = options?.payload;
-    this.cause = options?.cause;
-  }
 }
 
 function isCodexNonTransportError(error: unknown): boolean {
@@ -856,89 +816,6 @@ function isCodexNonTransportError(error: unknown): boolean {
 function isWebSocketConnectionLimitReachedError(error: unknown): boolean {
   return error instanceof CodexApiError && error.code === WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
 }
-
-function extractCodexEventError(event: Record<string, unknown>): {
-  code?: string;
-  message?: string;
-} {
-  const nested =
-    event.error && typeof event.error === "object"
-      ? (event.error as Record<string, unknown>)
-      : undefined;
-  return {
-    code:
-      typeof event.code === "string"
-        ? event.code
-        : typeof nested?.code === "string"
-          ? nested.code
-          : undefined,
-    message:
-      typeof event.message === "string"
-        ? event.message
-        : typeof nested?.message === "string"
-          ? nested.message
-          : undefined,
-  };
-}
-
-async function* mapCodexEvents(
-  events: AsyncIterable<Record<string, unknown>>,
-  initialResponseHeaders?: Headers,
-): AsyncGenerator<ResponseStreamEvent> {
-  const responseModelTracker = createResponseModelTracker();
-  responseModelTracker.begin(initialResponseHeaders);
-  for await (const event of events) {
-    responseModelTracker.observeEvent(event);
-    const type = typeof event.type === "string" ? event.type : undefined;
-    if (!type) {
-      continue;
-    }
-
-    if (type === "error") {
-      const { code, message } = extractCodexEventError(event);
-      throw new CodexApiError(`Codex error: ${message || code || JSON.stringify(event)}`, {
-        code,
-        payload: event,
-      });
-    }
-
-    if (
-      type === "response.done" ||
-      type === "response.completed" ||
-      type === "response.incomplete"
-    ) {
-      const response = (event as { response?: { status?: unknown } }).response;
-      const normalizedResponse = response
-        ? {
-            ...response,
-            status: normalizeCodexStatus(response.status),
-            model: responseModelTracker.resolve(),
-          }
-        : response;
-      yield {
-        ...event,
-        type: type === "response.done" ? "response.completed" : type,
-        response: normalizedResponse,
-      } as ResponseStreamEvent;
-      return;
-    }
-
-    yield event as unknown as ResponseStreamEvent;
-  }
-}
-
-function normalizeCodexStatus(status: unknown): CodexResponseStatus | undefined {
-  if (typeof status !== "string") {
-    return undefined;
-  }
-  return CODEX_RESPONSE_STATUSES.has(status as CodexResponseStatus)
-    ? (status as CodexResponseStatus)
-    : undefined;
-}
-
-// ============================================================================
-// WebSocket Parsing
-// ============================================================================
 
 const OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06";
 const SESSION_WEBSOCKET_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -1092,12 +969,7 @@ function deleteOwnedWebSocketSession(sessionId: string, entry: CachedWebSocketCo
   }
 }
 
-// An acquire that awaited connectWebSocket() must not clobber a newer lease a
-// concurrent request installed during the await. Install the fresh entry only
-// when the cache still matches what this acquire left behind before the await:
-// the stale entry it observed (and did not remove), or undefined once it removed
-// its own stale entry (or for a first connect with no prior entry). A different
-// cached entry means a concurrent request already won this session.
+// Install after connect only if no concurrent acquire replaced the observed lease.
 function setOwnedWebSocketSession(
   sessionId: string,
   entry: CachedWebSocketConnection,
@@ -1223,11 +1095,7 @@ async function acquireWebSocket(
   }
 
   const cached = websocketSessionCache.get(sessionId);
-  // Track what the cache is expected to hold after this acquire's own cleanup,
-  // so the post-await install only proceeds when no concurrent request installed
-  // a newer entry. Starts as the observed entry; reset to undefined once this
-  // acquire removes its own stale entry, since owner-checked delete leaves the
-  // cache empty (and a concurrent winner would fill it with a different entry).
+  // Update the expected lease after our own cleanup before awaiting a new connection.
   let expectedCacheValue: CachedWebSocketConnection | undefined = cached;
   if (cached) {
     if (cached.idleTimer) {
@@ -1272,10 +1140,7 @@ async function acquireWebSocket(
 
   const socket = await connectWebSocket(url, headers, signal);
   const entry: CachedWebSocketConnection = { socket, busy: true, createdAt: Date.now() };
-  // Install only if the cache still matches what this acquire left behind (the
-  // stale entry it removed, or empty for a first connect). A different cached
-  // entry means a concurrent request already won this session during the await;
-  // let it keep the lease and leave this socket transient.
+  // A concurrent winner keeps the cache; this socket then remains transient.
   const ownsCache = setOwnedWebSocketSession(sessionId, entry, expectedCacheValue);
   return {
     socket,
@@ -1464,10 +1329,6 @@ function requestBodyWithoutInput(body: RequestBody): RequestBody {
   return rest;
 }
 
-function responseInputsEqual(a: ResponseInput | undefined, b: ResponseInput | undefined): boolean {
-  return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
-}
-
 function requestBodiesMatchExceptInput(a: RequestBody, b: RequestBody): boolean {
   return JSON.stringify(requestBodyWithoutInput(a)) === JSON.stringify(requestBodyWithoutInput(b));
 }
@@ -1490,7 +1351,7 @@ function getCachedWebSocketInputDelta(
   }
 
   const prefix = currentInput.slice(0, baseline.length);
-  if (!responseInputsEqual(prefix, baseline)) {
+  if (JSON.stringify(prefix) !== JSON.stringify(baseline)) {
     return undefined;
   }
 
@@ -1519,14 +1380,14 @@ function buildCachedWebSocketRequestBody(
   };
 }
 
-async function* startWebSocketOutputOnFirstEvent(
-  events: AsyncIterable<ResponseStreamEvent>,
+async function* startWebSocketOutputOnFirstEvent<TEvent>(
+  events: AsyncIterable<TEvent>,
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
   onFirstProviderEvent: () => void,
   reportStreamOpened: () => Promise<void>,
   onStart: () => void,
-): AsyncGenerator<ResponseStreamEvent> {
+): AsyncGenerator<TEvent> {
   let started = false;
   for await (const event of events) {
     if (!started) {
@@ -1581,11 +1442,17 @@ async function processWebSocketStream(
       egress: "native-codex-websocket",
       payloadVariant,
     });
+    const lifecycle = responsesRequestLifecycle.get(options);
+    if (lifecycle) {
+      await lifecycle.beforeDispatch(options?.signal);
+      options?.signal?.throwIfAborted();
+      lifecycle.assertCurrent();
+    }
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
     onRequestSent?.();
     const terminal = await processResponsesStream(
       startWebSocketOutputOnFirstEvent(
-        mapCodexEvents(parseWebSocket(socket, options?.signal)),
+        mapCodexEvents(parseWebSocket(socket, options?.signal), undefined, options),
         output,
         stream,
         onFirstProviderEvent,
@@ -1648,10 +1515,6 @@ async function processWebSocketStream(
     release({ keep: keepConnection });
   }
 }
-
-// ============================================================================
-// Error Handling
-// ============================================================================
 
 async function readChatGptResponsesErrorTextLimited(
   response: Response,
@@ -1740,7 +1603,7 @@ function parseErrorResponse(raw: string, response: Response): CodexApiError {
         resets_at?: number;
       };
     };
-    payload = isJsonRecord(parsed) ? parsed : undefined;
+    payload = isRecord(parsed) ? parsed : undefined;
     const err = parsed?.error;
     if (err) {
       code = err.code || err.type || undefined;
@@ -1771,10 +1634,6 @@ function parseErrorResponse(raw: string, response: Response): CodexApiError {
     payload,
   });
 }
-
-// ============================================================================
-// Auth & Headers
-// ============================================================================
 
 export function extractOpenAICodexAccountId(token: string): string {
   const accountId = resolveOpenAICodexAccountId(token);

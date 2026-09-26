@@ -11,7 +11,6 @@ import {
   assertOwnedServicePath,
   directoryIdentityIsStable,
   ensureOwnedCodexHome,
-  ownedServiceParentIsStable,
   prepareOwnedServiceParent,
   readRealDirectoryIdentity,
 } from "./computer-use-service-path.js";
@@ -320,7 +319,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   } catch (error) {
     if (
       backupCreated &&
-      (await ownedServiceParentIsStable(ownedParent)) &&
+      (await directoryIdentityIsStable(ownedParent)) &&
       !(await pathExists(operationTargetPath))
     ) {
       await assertOwnedServiceParentStable(ownedParent);
@@ -330,7 +329,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     throw error;
   } finally {
     if (
-      (await ownedServiceParentIsStable(ownedParent)) &&
+      (await directoryIdentityIsStable(ownedParent)) &&
       (await directoryIdentityIsStable(stagingRootIdentity))
     ) {
       await fs.rm(stagingRoot, { recursive: true, force: true });
@@ -434,23 +433,12 @@ function identitiesMatch(
   );
 }
 
-async function hasExecutableClient(appPath: string): Promise<boolean> {
-  try {
-    await fs.access(path.join(appPath, CLIENT_RELATIVE_PATH), fsConstants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function inspectTrustedServiceApp(
   appPath: string,
 ): Promise<CodexComputerUseServiceIdentity | undefined> {
-  if (!(await hasExecutableClient(appPath))) {
-    return undefined;
-  }
   const clientAppPath = path.join(appPath, CLIENT_APP_RELATIVE_PATH);
   try {
+    await fs.access(path.join(appPath, CLIENT_RELATIVE_PATH), fsConstants.X_OK);
     await verifyTrustedBundle(appPath, SERVICE_BUNDLE_ID, true);
     await verifyTrustedBundle(clientAppPath, CLIENT_BUNDLE_ID, false);
     const [info, serviceSignature, clientSignature] = await Promise.all([

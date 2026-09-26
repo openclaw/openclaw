@@ -9,6 +9,7 @@ import { readTaskBackingInstance } from "./task-backing-records.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
 import { resolveTaskAgentId } from "./task-registry-records.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
+import { getTaskRunOwner } from "./task-run-owner.js";
 import { sanitizeTaskStatusText, TASK_STATUS_DETAIL_MAX_CHARS } from "./task-status.js";
 
 function sanitizeOptionalTaskText(value: unknown): string | undefined {
@@ -18,6 +19,9 @@ function sanitizeOptionalTaskText(value: unknown): string | undefined {
 function observeCliExecution(task: TaskRecord): "queued" | "running" | undefined {
   if (task.runtime !== "cli" || !task.runId) {
     return undefined;
+  }
+  if (getTaskRunOwner(task)) {
+    return "running";
   }
   const context = getAgentRunContext(task.runId);
   const sessionKey =

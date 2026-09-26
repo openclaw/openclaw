@@ -2,7 +2,6 @@ import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
@@ -17,6 +16,7 @@ import {
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
 import {
+  isPreparedModelRuntimePluginLifecycleFailure,
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
@@ -699,7 +699,7 @@ export async function publishModelRuntimeSnapshot(
           if (!owner.snapshot) {
             retirePreparedModelRuntimeOwnerIfUnused(owners, key, owner);
           }
-        } else if (refreshError instanceof PluginInstanceUnavailableError) {
+        } else if (isPreparedModelRuntimePluginLifecycleFailure(refreshError)) {
           // A reload can revoke a plugin during awaited preparation, before the next build guard.
           throw new PreparedModelRuntimePublicationSupersededError(
             `prepared model runtime publication was superseded for ${input.agentDir}`,

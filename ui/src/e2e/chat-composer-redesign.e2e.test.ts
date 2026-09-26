@@ -14,6 +14,8 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({
   name: "Control UI chat composer redesign",
 });
+const pickerPopup = (kind: "model" | "effort") =>
+  `.chat-controls__${kind}-picker > wa-popup[data-anchored-overlay] > [part="popup"]`;
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
@@ -188,32 +190,6 @@ suite.define(() => {
     });
   });
 
-  it("keeps offline outbox guidance in one bounded composer row", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      await gateway.setOnline(false);
-
-      const statusBand = page.locator(".agent-chat__composer-status-band");
-      await expect
-        .poll(() => statusBand.locator("xpath=..").getAttribute("data-tone"))
-        .toBe("info");
-      await expect.poll(() => statusBand.textContent()).toContain("You can keep writing.");
-      await expect
-        .poll(() =>
-          statusBand.locator("svg").evaluate((node) => {
-            const bounds = node.getBoundingClientRect();
-            return [bounds.width, bounds.height];
-          }),
-        )
-        .toEqual([16, 16]);
-      await expect
-        .poll(() => statusBand.evaluate((node) => node.getBoundingClientRect().height))
-        .toBe(44);
-    });
-  });
-
   it("keeps mobile picker panels above an attachment-expanded composer", async () => {
     await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
@@ -231,12 +207,12 @@ suite.define(() => {
       for (const picker of [
         {
           menu: ".chat-controls__model-menu",
-          popup: '.chat-controls__model-picker wa-popup [part="popup"]',
+          popup: pickerPopup("model"),
           trigger: '[data-chat-model-select="true"]',
         },
         {
           menu: ".chat-controls__effort-menu",
-          popup: '.chat-controls__effort-picker wa-popup [part="popup"]',
+          popup: pickerPopup("effort"),
           trigger: '[data-chat-thinking-select="true"]',
         },
       ]) {
@@ -253,10 +229,6 @@ suite.define(() => {
           page.locator(picker.menu).boundingBox(),
           visibleTrigger.boundingBox(),
         ]);
-        expect(composerBox).not.toBeNull();
-        expect(footerBox).not.toBeNull();
-        expect(menuBox).not.toBeNull();
-        expect(triggerBox).not.toBeNull();
         if (!composerBox || !footerBox || !menuBox || !triggerBox) {
           throw new Error(`expected mobile layout boxes for ${picker.menu}`);
         }
@@ -989,7 +961,7 @@ suite.define(() => {
       await revealChatModelOption(composer.locator('[data-chat-model-option="openai/gpt-5.5"]'));
       await captureMobileState(
         "mobile-composer-model-open.png",
-        composer.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+        composer.locator(pickerPopup("model")),
         [composer.locator('[data-chat-model-option="openai/gpt-5.5"]')],
       );
       const mobilePickerBox = await composer.locator(".chat-controls__model-menu").boundingBox();
@@ -1012,7 +984,7 @@ suite.define(() => {
         .toBe(true);
       await captureMobileState(
         "mobile-composer-effort-open.png",
-        composer.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
+        composer.locator(pickerPopup("effort")),
         [thinkingSlider],
       );
       await page.keyboard.press("Escape");

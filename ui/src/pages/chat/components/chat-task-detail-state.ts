@@ -1,13 +1,19 @@
+import { GatewayErrorDetailCodes } from "@openclaw/gateway-client/browser";
 import type { TasksHistoryResult } from "../../../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  resolveGatewayErrorDetailCode,
+  type GatewayBrowserClient,
+} from "../../../api/gateway.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { visibleChatHistoryMessages } from "../../../lib/chat/message-visibility.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
-import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 import { setExpansionState } from "../chat-thread.ts";
+import { mergeChatTranscriptPages } from "../chat-transcript-pages.ts";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 const TASK_TRANSCRIPT_REFRESH_MS = 2_000;
@@ -19,9 +25,13 @@ type LoadedTaskTranscript = {
   nextCursor?: string;
   loading: boolean;
   error?: "refresh" | "older";
+  capacityMessage?: string;
 };
 
-type TaskTranscriptLoad = { status: "loading" } | LoadedTaskTranscript | { status: "error" };
+type TaskTranscriptLoad =
+  | { status: "loading" }
+  | LoadedTaskTranscript
+  | { status: "error"; capacityMessage?: string };
 
 type TaskDetailState = {
   client: GatewayBrowserClient;
@@ -134,28 +144,6 @@ function scheduleTranscriptLoad(host: TaskTranscriptHost, state: TaskDetailState
   void loadTranscriptPage(host, state);
 }
 
-function transcriptEntryKey(message: unknown): string | undefined {
-  const identity = readChatThreadMessageIdentity(message);
-  if (!identity) {
-    return undefined;
-  }
-  return identity.externalSource
-    ? `external:${identity.externalSource}`
-    : identity.id
-      ? `id:${identity.id}`
-      : identity.sequence == null
-        ? undefined
-        : `seq:${identity.sequence}`;
-}
-
-function transcriptOverlap(earlier: unknown[], later: unknown[]): number {
-  const laterKeys = new Set(later.map(transcriptEntryKey).filter(Boolean));
-  return earlier.findIndex((message) => {
-    const key = transcriptEntryKey(message);
-    return key !== undefined && laterKeys.has(key);
-  });
-}
-
 async function loadTranscriptPage(
   host: TaskTranscriptHost,
   state: TaskDetailState,
@@ -181,7 +169,9 @@ async function loadTranscriptPage(
     state.lastRequestStartedAt = Date.now();
     state.refreshPending = false;
   }
-  state.load = previous ? { ...previous, loading: true, error: undefined } : { status: "loading" };
+  state.load = previous
+    ? { ...previous, loading: true, error: undefined, capacityMessage: undefined }
+    : { status: "loading" };
   host.requestUpdate?.();
   let load: TaskTranscriptLoad;
   try {
@@ -194,8 +184,8 @@ async function loadTranscriptPage(
     const previousMessages = previous?.messages ?? [];
     const earlier = cursor ? messages : previousMessages;
     const later = cursor ? previousMessages : messages;
-    const overlap = transcriptOverlap(earlier, later);
-    const retainPrevious = previous !== undefined && (cursor !== undefined || overlap >= 0);
+    const merged = mergeChatTranscriptPages(earlier, later);
+    const retainPrevious = previous !== undefined && (cursor !== undefined || merged.hasOverlap);
     if (cursor) {
       state.olderCursors.add(cursor);
     } else if (!retainPrevious) {
@@ -205,10 +195,7 @@ async function loadTranscriptPage(
     }
     load = {
       status: "loaded",
-      // Replace whole overlapping entries, including their projected siblings.
-      messages: retainPrevious
-        ? [...earlier.slice(0, overlap < 0 ? earlier.length : overlap), ...later]
-        : messages,
+      messages: retainPrevious ? merged.messages : messages,
       // Only overlapping refreshes preserve the oldest boundary already loaded.
       nextCursor:
         retainPrevious && !cursor
@@ -218,10 +205,16 @@ async function loadTranscriptPage(
             : undefined,
       loading: false,
     };
-  } catch {
+  } catch (error) {
+    const capacityMessage =
+      error instanceof GatewayRequestError &&
+      error.gatewayCode === "UNAVAILABLE" &&
+      resolveGatewayErrorDetailCode(error) === GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY
+        ? formatUiError(error)
+        : undefined;
     load = previous
-      ? { ...previous, loading: false, error: cursor ? "older" : "refresh" }
-      : { status: "error" };
+      ? { ...previous, loading: false, error: cursor ? "older" : "refresh", capacityMessage }
+      : { status: "error", ...(capacityMessage ? { capacityMessage } : {}) };
   }
   const current = host.taskDetailState;
   if (

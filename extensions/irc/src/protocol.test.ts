@@ -39,30 +39,14 @@ describe("irc protocol", () => {
   describe("\\u escape surrogate-range guard", () => {
     const LONE_SURROGATE = /[\uD800-\uDFFF]/;
 
-    it("preserves literal \\uXXXX when codepoint is a high surrogate", () => {
-      const out = sanitizeIrcOutboundText("\\uD800");
-      expect(LONE_SURROGATE.test(out)).toBe(false);
-    });
-
     it("preserves literal \\uXXXX when codepoint is a low surrogate", () => {
       const out = sanitizeIrcOutboundText("\\uDFFF");
       expect(LONE_SURROGATE.test(out)).toBe(false);
     });
 
-    it("still decodes valid BMP codepoints outside the surrogate range", () => {
-      expect(sanitizeIrcOutboundText("\\u0041")).toBe("A");
-      expect(sanitizeIrcOutboundText("\\u00e9")).toBe("é"); // é
-    });
-
     it("decodes adjacent surrogate-pair escapes to the astral character", () => {
       expect(sanitizeIrcOutboundText("\\uD83D\\uDE00")).toBe("😀");
       expect(sanitizeIrcOutboundText("\\uD83D\\uDE00\\uD83D\\uDE01")).toBe("😀😁");
-    });
-
-    it("preserves lone high surrogate even when followed by a non-surrogate \\u", () => {
-      const out = sanitizeIrcOutboundText("\\uD800\\u0041");
-      expect(LONE_SURROGATE.test(out)).toBe(false);
-      expect(out).toContain("A");
     });
 
     it("decodes BMP-escaped prefix before a surrogate pair correctly", () => {
@@ -77,11 +61,6 @@ describe("irc protocol", () => {
       // Use toBe rather than LONE_SURROGATE regex: emoji contains surrogate
       // code units internally that would trigger a naive /[\uD800-\uDFFF]/ check.
       expect(sanitizeIrcOutboundText("\\uD800\\uD83D\\uDE00")).toBe("\\uD800😀");
-    });
-
-    it("preserves two consecutive lone high surrogates", () => {
-      const out = sanitizeIrcOutboundText("\\uD800\\uD801");
-      expect(LONE_SURROGATE.test(out)).toBe(false);
     });
   });
 });

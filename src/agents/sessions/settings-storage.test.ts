@@ -5,10 +5,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { waitForFile } from "../../../test/helpers/process-wait.js";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
+import { agentProcessTestEntrypoints } from "../process-runtime.test-support.js";
 import { SettingsManager } from "./settings-manager.js";
 import { FileSettingsStorage } from "./settings-storage.js";
 
 const fixtures = createFixtureLifetime();
+const storageUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.settingsStorage);
 afterEach(async () => {
   vi.restoreAllMocks();
   syncBuiltinESMExports();
@@ -90,8 +97,7 @@ describe("FileSettingsStorage", () => {
       const agentDir = join(root, "agent");
       const result = await runNodeScript(
         [
-          "--import",
-          new URL("../../../scripts/tsx.mjs", import.meta.url).href,
+          ...resolveRuntimeWorkerArgv(storageUrl, resolveTestNodeExecPath()).slice(0, -1),
           "--input-type=module",
           "--eval",
           String.raw`
@@ -103,7 +109,7 @@ describe("FileSettingsStorage", () => {
               new FileSettingsStorage(root, agentDir).withLock("global", () => "{}");
               console.log(statSync(join(agentDir, "settings.json")).mode & 0o777);
             `,
-          new URL("./settings-storage.ts", import.meta.url).href,
+          storageUrl.href,
           root,
           agentDir,
         ],
@@ -187,8 +193,7 @@ describe("FileSettingsStorage", () => {
         const writer = fixtures.track(
           runNodeScript(
             [
-              "--import",
-              new URL("../../../scripts/tsx.mjs", import.meta.url).href,
+              ...resolveRuntimeWorkerArgv(storageUrl, resolveTestNodeExecPath()).slice(0, -1),
               "--input-type=module",
               "--eval",
               String.raw`
@@ -208,7 +213,7 @@ describe("FileSettingsStorage", () => {
                 });
                 writeFileSync(committedPath, "committed");
               `,
-              new URL("./settings-storage.ts", import.meta.url).href,
+              storageUrl.href,
               root,
               agentDir,
               scope,
@@ -343,8 +348,7 @@ describe("FileSettingsStorage", () => {
           const writer = fixtures.track(
             runNodeScript(
               [
-                "--import",
-                new URL("../../../scripts/tsx.mjs", import.meta.url).href,
+                ...resolveRuntimeWorkerArgv(storageUrl, resolveTestNodeExecPath()).slice(0, -1),
                 "--input-type=module",
                 "--eval",
                 String.raw`
@@ -391,7 +395,7 @@ describe("FileSettingsStorage", () => {
                     });
                   });
                 `,
-                new URL("./settings-storage.ts", import.meta.url).href,
+                storageUrl.href,
                 root,
                 agentDir,
                 scope,

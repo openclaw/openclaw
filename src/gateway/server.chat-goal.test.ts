@@ -467,8 +467,8 @@ describe("Goal chat admission and continuation", () => {
   it.each([
     { caseName: "the existing session is busy", entry: { status: "running" as const } },
     {
-      caseName: "the session used an external harness",
-      entry: { agentHarnessId: "test-external-runtime" },
+      caseName: "the session used the native Codex harness",
+      entry: { agentHarnessId: "codex" },
     },
     {
       caseName: "the session used an unknown harness",
@@ -481,7 +481,9 @@ describe("Goal chat admission and continuation", () => {
       false,
       undefined,
       expect.objectContaining({
-        message: expect.stringMatching(/idle|active|work/i),
+        code: "INVALID_REQUEST",
+        message:
+          "Error: Goal start or resume requires the built-in OpenClaw runtime and an idle local session with recoverable history. This action is unavailable for native Codex and other external runtimes.",
       }),
     );
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();

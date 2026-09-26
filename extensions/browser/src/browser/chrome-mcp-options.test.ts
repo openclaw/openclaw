@@ -1,17 +1,42 @@
+import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 
 describe("Chrome MCP profile options", () => {
   it.each([undefined, "npx"])(
-    "uses pinned Chrome MCP without install audits for HTTP endpoints with command %s",
+    "launches the packaged Chrome MCP with Node for HTTP endpoints with command %s",
     (mcpCommand) => {
       const { command, args } = normalizeChromeMcpOptions({
         cdpUrl: "http://127.0.0.1:9222",
         mcpCommand,
       });
 
-      expect(command).toBe("npx");
-      expect(args.slice(0, 3)).toEqual(["-y", "--audit=false", "chrome-devtools-mcp@1.8.0"]);
+      const identity = JSON.parse(
+        execFileSync(
+          command,
+          [
+            "--eval",
+            'process.stdout.write(JSON.stringify({ executable: require("node:fs").realpathSync(process.execPath), runtime: process.versions.bun ? "bun" : "node" }))',
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              SystemRoot: process.env.SystemRoot,
+              SYSTEMROOT: process.env.SYSTEMROOT,
+              WINDIR: process.env.WINDIR,
+              TEMP: process.env.TEMP,
+              TMP: process.env.TMP,
+              TMPDIR: process.env.TMPDIR,
+            },
+          },
+        ),
+      );
+      expect(identity).toEqual({ executable: realpathSync(command), runtime: "node" });
+      expect(args[0]).toMatch(
+        /[/\\]chrome-devtools-mcp[/\\]build[/\\]src[/\\]bin[/\\]chrome-devtools-mcp\.js$/,
+      );
+      expect(args[1]).toBe("--experimentalVision");
       expect(args).toContain("--browserUrl");
       expect(args).toContain("http://127.0.0.1:9222");
       expect(args).not.toContain("--wsEndpoint");

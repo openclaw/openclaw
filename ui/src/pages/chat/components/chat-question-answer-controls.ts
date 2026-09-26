@@ -1,5 +1,6 @@
 import type { Question } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { t } from "../../../i18n/index.ts";
 
@@ -65,53 +66,83 @@ export function renderQuestionOptions(props: QuestionOptionsProps) {
   `;
 }
 
-export function renderQuestionFreeText(props: QuestionFreeTextProps) {
-  const { question } = props;
+function renderFreeTextControl(
+  props: QuestionFreeTextProps,
+  className: string,
+  placeholder: string,
+  label?: string,
+) {
   const handleInput = (event: Event) => {
-    if (event.currentTarget instanceof HTMLInputElement) {
+    if (
+      event.currentTarget instanceof HTMLInputElement ||
+      event.currentTarget instanceof HTMLTextAreaElement
+    ) {
       props.onInput(event.currentTarget.value);
     }
   };
-  if (question.options.length === 0) {
-    const answerLabel = question.header || t("chat.questions.answer");
-    return html`
-      <label class="field">
-        <span>${answerLabel}</span>
-        <input
-          class="input"
-          type=${question.isSecret ? "password" : "text"}
-          autocomplete="off"
-          placeholder=${t("chat.questions.answerPlaceholder", {
-            label: question.secretStore?.name ?? answerLabel,
-          })}
-          .value=${props.value}
-          ?disabled=${props.disabled}
-          @input=${handleInput}
-        />
-      </label>
-    `;
-  }
-  if (!question.isOther) {
-    return nothing;
-  }
-  return html`
-    <label
-      class="chat-question-panel__option chat-question-panel__option--other ${
-        props.selected ? "chat-question-panel__option--selected" : ""
-      }"
-    >
-      <span class="chat-question-panel__option-marker" aria-hidden="true"></span>
-      <input
-        class="chat-question-panel__other"
-        type=${question.isSecret ? "password" : "text"}
+  return props.question.isSecret
+    ? html`<input
+        class=${className}
+        type="password"
         autocomplete="off"
-        placeholder=${t("chat.questions.other")}
-        aria-label=${t("chat.questions.ownAnswerFor", { header: question.header })}
+        placeholder=${placeholder}
+        aria-label=${ifDefined(label)}
         .value=${props.value}
         ?disabled=${props.disabled}
         @input=${handleInput}
-      />
-      <kbd>${question.options.length + 1}</kbd>
-    </label>
+      />`
+    : html`<textarea
+        class="${className} chat-question-panel__textarea"
+        rows="1"
+        placeholder=${placeholder}
+        aria-label=${ifDefined(label)}
+        aria-description=${t("chat.questions.multilineHint")}
+        .value=${props.value}
+        ?disabled=${props.disabled}
+        @input=${handleInput}
+      ></textarea>`;
+}
+
+export function renderQuestionFreeText(props: QuestionFreeTextProps) {
+  const { question } = props;
+  if (question.options.length > 0 && !question.isOther) {
+    return nothing;
+  }
+  const answerLabel = question.header || t("chat.questions.answer");
+  return html`
+    ${
+      question.options.length === 0
+        ? html`<label class="field">
+            <span>${answerLabel}</span>
+            ${renderFreeTextControl(
+              props,
+              "input",
+              t("chat.questions.answerPlaceholder", {
+                label: question.secretStore?.name ?? answerLabel,
+              }),
+            )}
+          </label>`
+        : html`<label
+            class="chat-question-panel__option chat-question-panel__option--other ${
+              props.selected ? "chat-question-panel__option--selected" : ""
+            }"
+          >
+            <span class="chat-question-panel__option-marker" aria-hidden="true"></span>
+            ${renderFreeTextControl(
+              props,
+              "chat-question-panel__other",
+              t("chat.questions.other"),
+              t("chat.questions.ownAnswerFor", { header: question.header }),
+            )}
+            <kbd>${question.options.length + 1}</kbd>
+          </label>`
+    }
+    ${
+      question.isSecret
+        ? nothing
+        : html`<div class="chat-question-panel__input-hint">
+            ${t("chat.questions.multilineHint")}
+          </div>`
+    }
   `;
 }

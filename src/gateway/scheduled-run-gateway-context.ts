@@ -7,6 +7,7 @@
  * their caller and must keep it.
  */
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
@@ -52,8 +53,13 @@ export function createScheduledGatewayRunner(
   resolveGatewayContext?: ScheduledGatewayContextResolver,
 ) {
   const spawnBroker = getSpawnBroker();
+  const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   return <T>(run: () => Promise<T>): Promise<T> =>
-    runWithScheduledGatewayContext({ resolveGatewayContext, spawnBroker, run });
+    runWithScheduledGatewayContext({
+      resolveGatewayContext,
+      spawnBroker,
+      run: () => runWithReadOnlyWorkers(run),
+    });
 }
 
 /**

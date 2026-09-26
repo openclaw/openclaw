@@ -85,7 +85,7 @@ export function registerOnnxCli(
         const start = performance.now();
         await client.warm([id], AbortSignal.timeout(120_000));
         const warmed = performance.now();
-        const timeoutMs = 10_000;
+        const timeoutMs = 30_000;
         const signal = AbortSignal.timeout(timeoutMs);
         const outcome = await createOnnxProvider(client, (message) =>
           console.error(message),

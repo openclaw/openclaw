@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import { availableParallelism } from "node:os";
 import type { Worker } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -6,7 +7,12 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
-import { createCpuTrackedWorker } from "./worker-cpu.js";
+import {
+  attributeWorkerToPool,
+  createCpuTrackedWorker,
+  markWorkerRetirement,
+  receiveWorkerMemoryPort,
+} from "./worker-cpu.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -28,10 +34,7 @@ import {
   type OwnedWorkerTaskSettlement,
 } from "./worker-task-pool-owned.js";
 import { closeWorkerPoolResources } from "./worker-task-pool-resources.js";
-import {
-  createWorkerTaskPoolRetirement,
-  type WorkerTaskPoolRetirement,
-} from "./worker-task-pool-retirement.js";
+import { createWorkerTaskPoolRetirement } from "./worker-task-pool-retirement.js";
 import type {
   OwnedWorkerTask,
   WorkerTaskPoolDispatch,
@@ -92,7 +95,7 @@ class WorkerTaskPoolCore<Input, Output> {
       pendingBytes: this.pendingBytes,
     }),
   };
-  private readonly retirement: WorkerTaskPoolRetirement<Input, Output>;
+  private readonly retirement;
   private readonly queue: Task<Input, Output>[] = [];
   private readonly maxWorkers: number;
   private readonly maxPendingTasks: number;
@@ -108,12 +111,7 @@ class WorkerTaskPoolCore<Input, Output> {
   private rotation?: Promise<void>;
   private rotationFailed = false;
   private nextTaskId = 0;
-  // Idle retirement is armed from worker messages, outside any caller's turn.
-  // Bind the clock at construction so a process-wide pool cannot land that timer
-  // on a fake or stubbed setTimeout an unrelated test installed later; on the
-  // wrong clock the worker never retires and that test's timer count is off.
-  private readonly setTimeoutFn = setTimeout;
-  private readonly clearTimeoutFn = clearTimeout;
+  private readonly retireIdleOnPressure = () => this.retirement.retireIdle(this.resourceClosures);
 
   constructor(
     private readonly options: WorkerTaskPoolOptions<Output>,
@@ -135,7 +133,6 @@ class WorkerTaskPoolCore<Input, Output> {
     this.retirement = createWorkerTaskPoolRetirement({
       slots: this.slots,
       options,
-      clearIdleTimer: (timer) => this.clearTimeoutFn(timer),
       runInContext: runInWorkerPoolContext,
       dispatch: () => this.dispatch(),
     });
@@ -258,7 +255,7 @@ class WorkerTaskPoolCore<Input, Output> {
     const slots = [...this.slots];
     const tasks = slots.flatMap((slot) => (slot.task ? [slot.task] : []));
     void Promise.allSettled(tasks.map((task) => task.promise))
-      .then(() => Promise.all(slots.map((slot) => this.retirement.retire(slot))))
+      .then(() => Promise.all(slots.map((slot) => this.retirement.retire(slot, "rotation"))))
       .then(() => this.retirement.joinArtifacts())
       .then(
         () => {
@@ -279,11 +276,15 @@ class WorkerTaskPoolCore<Input, Output> {
     error: Error = new WorkerTaskError("worker task pool closed", "unavailable"),
   ): Promise<void> {
     this.closedError ??= error;
+    channel("openclaw.memory.critical").unsubscribe(this.retireIdleOnPressure);
     this.computeCapacity?.remove(this.resumeCompute);
     for (const task of this.queue.splice(0)) {
       this.finish(task, this.closedError);
     }
     for (const slot of this.slots) {
+      if (slot.worker) {
+        markWorkerRetirement(slot.worker, "closed");
+      }
       if (slot.task && !slot.task.owner) {
         this.finish(slot.task, this.closedError, undefined, true);
       }
@@ -302,6 +303,9 @@ class WorkerTaskPoolCore<Input, Output> {
   }
 
   private dispatch(): void {
+    if (!this.slots.size) {
+      channel("openclaw.memory.critical").unsubscribe(this.retireIdleOnPressure);
+    }
     if (!this.queue.length || this.closedError || this.rotation || this.rotationFailed) {
       this.computeCapacity?.remove(this.resumeCompute);
     }
@@ -345,7 +349,7 @@ class WorkerTaskPoolCore<Input, Output> {
         slot = { nativeSections: createWorkerNativeSectionState() };
         this.slots.add(slot);
       }
-      this.clearTimeoutFn(slot.idleTimer);
+      this.retirement.clearIdle(slot);
       const task = this.queue.shift()!;
       slot.task = task;
       this.activeTasks++;
@@ -358,6 +362,12 @@ class WorkerTaskPoolCore<Input, Output> {
 
   // Worker listeners outlive tasks; their creation scope must not retain an async task frame.
   private createWorker(slot: Slot<Input, Output>): Worker {
+    // A zero idle timeout delegates retirement (and retained custody) to the caller.
+    if ((this.options.idleTimeoutMs ?? 60_000) > 0) {
+      const pressure = channel("openclaw.memory.critical");
+      pressure.unsubscribe(this.retireIdleOnPressure);
+      pressure.subscribe(this.retireIdleOnPressure);
+    }
     const worker = runInWorkerPoolContext(() => {
       const prepared = this.options.prepareWorker?.();
       slot.releaseResources = prepared?.releaseResources;
@@ -388,8 +398,13 @@ class WorkerTaskPoolCore<Input, Output> {
     });
     this.workers++;
     this.workersCreated++;
+    attributeWorkerToPool(worker, this);
     slot.worker = worker;
     worker.on("message", (message: unknown) => {
+      // Native message events inherit the Worker's detached creation context.
+      if (receiveWorkerMemoryPort(worker, message)) {
+        return;
+      }
       const task = slot.task;
       if (task) {
         task.runInContext(() => this.receive(slot, message));
@@ -448,6 +463,7 @@ class WorkerTaskPoolCore<Input, Output> {
             taskId: task.id,
             interactive: Boolean(task.options.onRequest),
             nativeSections: slot.nativeSections.buffer,
+            sampleMemory: true,
           },
           transferList,
         );
@@ -618,6 +634,9 @@ class WorkerTaskPoolCore<Input, Output> {
       return;
     }
     if (task.slot) {
+      if (task.slot.worker) {
+        markWorkerRetirement(task.slot.worker, "cancelled");
+      }
       if (task.owner) {
         this.finish(task, error, undefined, true);
       } else {
@@ -633,6 +652,9 @@ class WorkerTaskPoolCore<Input, Output> {
   private fail(slot: Slot<Input, Output>, error: Error): void {
     if (slot.retiring) {
       return;
+    }
+    if (slot.worker) {
+      markWorkerRetirement(slot.worker, "failure");
     }
     if (slot.task?.owner) {
       if (slot.task.done) {
@@ -683,7 +705,7 @@ class WorkerTaskPoolCore<Input, Output> {
       if (retire) {
         // Keep input and capacity custody until execution stops, even if rejection is early.
         (slot.completions ??= []).push(complete);
-        void this.retirement.retire(slot).catch((failure: unknown) => {
+        void this.retirement.retire(slot, "failure").catch((failure: unknown) => {
           task.reject(
             error
               ? new AggregateError(
@@ -718,13 +740,7 @@ class WorkerTaskPoolCore<Input, Output> {
     if (slot.worker && !this.resourceClosures.get(slot.worker)?.pending) {
       slot.worker.unref();
     }
-    const idleMs = this.options.idleTimeoutMs ?? 60_000;
-    if (idleMs > 0) {
-      slot.idleTimer = runInWorkerPoolContext(() =>
-        this.setTimeoutFn(() => void this.retirement.retire(slot).catch(() => undefined), idleMs),
-      );
-      slot.idleTimer.unref();
-    }
+    this.retirement.idle(slot);
   }
 }
 

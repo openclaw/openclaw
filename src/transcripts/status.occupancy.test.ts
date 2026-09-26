@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
-import * as providerRegistry from "./provider-registry.js";
 import type { TranscriptOccupancyWatchRequest, TranscriptStartRequest } from "./provider-types.js";
 import {
   transcriptStatusRoom as room,
@@ -131,14 +130,14 @@ describe("configured transcript occupancy diagnostics", () => {
       }
       const start = vi.fn(f.provider.start!);
       f.provider.start = start;
-      vi.mocked(providerRegistry.getTranscriptSourceProvider).mockReturnValue(undefined);
+      f.setProviders([]);
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         service.start();
         expect((await f.read()).configuredSources.map((source) => source.startDiagnostic)).toEqual(
           entries.map(() => "retrying"),
         );
-        vi.mocked(providerRegistry.getTranscriptSourceProvider).mockReturnValue(f.provider);
+        f.setProviders([f.provider]);
         await vi.advanceTimersByTimeAsync(5_000);
         await vi.waitFor(async () =>
           expect((await f.read()).configuredSources.map((source) => source.state)).toEqual(

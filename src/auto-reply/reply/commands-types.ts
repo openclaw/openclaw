@@ -30,6 +30,8 @@ export type CommandContext = {
   accountId?: string;
   ownerList: string[];
   senderIsOwner: boolean;
+  /** Captured host owner capability, rechecked by handlers at awaited effect boundaries. */
+  assertOwnerCurrent?: () => void;
   isAuthorizedSender: boolean;
   senderId?: string;
   abortKey?: string;

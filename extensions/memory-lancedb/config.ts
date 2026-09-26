@@ -1,7 +1,9 @@
-// Memory Lancedb helper module supports config behavior.
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseFiniteNumber,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 
 export type MemoryConfig = {
   embedding: {
@@ -51,9 +53,9 @@ export function vectorDimsForModel(model: string): number {
   return dims;
 }
 
-function resolveEnvVars(value: string): string {
+export function resolveEnvVars(value: string, env: NodeJS.ProcessEnv = process.env): string {
   return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    const envValue = process.env[envVar];
+    const envValue = env[envVar];
     if (!envValue) {
       throw new Error(`Environment variable ${envVar} is not set`);
     }
@@ -72,14 +74,6 @@ function resolveEmbeddingModel(
   return model;
 }
 
-function resolveFiniteIntegerConfig(value: unknown): number | undefined {
-  if (typeof value !== "number") {
-    return undefined;
-  }
-  const parsed = parseFiniteNumber(value);
-  return parsed === undefined ? undefined : Math.floor(parsed);
-}
-
 function resolveBoundedIntegerConfig(params: {
   value: unknown;
   fallback: number;
@@ -87,7 +81,7 @@ function resolveBoundedIntegerConfig(params: {
   max: number;
   label: string;
 }): number {
-  const resolved = resolveFiniteIntegerConfig(params.value) ?? params.fallback;
+  const resolved = resolveOptionalIntegerOption(params.value) ?? params.fallback;
   if (resolved < params.min || resolved > params.max) {
     throw new Error(`${params.label} must be between ${params.min} and ${params.max}`);
   }
@@ -190,7 +184,6 @@ export const memoryConfigSchema = {
               throw new Error("dreaming config must be an object");
             })();
 
-    // Parse storageOptions (object with string values)
     let storageOptions: Record<string, string> | undefined;
     const storageOpts = cfg.storageOptions as Record<string, unknown> | undefined;
     if (storageOpts !== undefined && storageOpts !== null) {
@@ -198,7 +191,6 @@ export const memoryConfigSchema = {
         throw new Error("storageOptions must be an object");
       }
       storageOptions = {};
-      // Validate all values are strings
       for (const [key, valueLocal] of Object.entries(storageOpts)) {
         if (typeof valueLocal !== "string") {
           throw new Error(`storageOptions.${key} must be a string`);

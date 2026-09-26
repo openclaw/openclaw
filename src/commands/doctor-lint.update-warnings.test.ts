@@ -55,8 +55,8 @@ it.each([false, true])(
 );
 
 it.each(
-  ["security", "runtime-tool-schemas", "final-config-validation"].flatMap((check) =>
-    [false, true].map((update) => ({ check, update })),
+  ["security", "runtime-tool-schemas", "auth-profiles", "final-config-validation"].flatMap(
+    (check) => [false, true].map((update) => ({ check, update })),
   ),
 )(
   "uses the existing update work classification for $check (update: $update)",

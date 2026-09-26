@@ -1,8 +1,6 @@
 // Covers browser sandbox security audit findings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { collectSandboxBrowserHashLabelFindings } from "./audit-extra.async.js";
-import { collectSandboxDangerousConfigFindings } from "./audit-extra.sync.js";
 
 function hasFinding(
   checkId:
@@ -35,14 +33,6 @@ afterEach(() => {
 });
 
 describe("security audit sandbox browser findings", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("warns when sandbox browser containers have missing or stale hash labels", async () => {
     const findings = await collectSandboxBrowserHashLabelFindings({
       execDockerRawFn: async (args: string[]) => {
@@ -201,22 +191,6 @@ describe("security audit sandbox browser findings", () => {
 
     expect(hasFinding("sandbox.browser_container.non_loopback_publish", "critical", findings)).toBe(
       true,
-    );
-  });
-
-  it("does not warn about cdpSourceRange since runtime auto-derives it", () => {
-    const findings = collectSandboxDangerousConfigFindings({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            browser: { enabled: true, network: "bridge" },
-          },
-        },
-      },
-    } satisfies OpenClawConfig);
-    expect(findings.map((finding) => finding.checkId)).not.toContain(
-      "sandbox.browser_cdp_bridge_unrestricted",
     );
   });
 });

@@ -120,21 +120,8 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
   };
 }
 
-function projectAvailablePlugin(plugin: CodexAvailablePlugin): {
-  id: string;
-  pluginName: string;
-  marketplaceName: string;
-  untrustedDisplayName?: string;
-  untrustedDeveloperName?: string;
-  untrustedDescription?: string;
-  installed: boolean;
-  enabled: boolean;
-  available: boolean;
-  installPolicy?: string;
-  authPolicy?: string;
-  mustShowInstallationInterstitial?: boolean | null;
-} {
-  const projected: ReturnType<typeof projectAvailablePlugin> = {
+function projectAvailablePlugin(plugin: CodexAvailablePlugin) {
+  return {
     id: plugin.id,
     pluginName: plugin.pluginName,
     marketplaceName: plugin.marketplaceName,
@@ -143,18 +130,11 @@ function projectAvailablePlugin(plugin: CodexAvailablePlugin): {
     installed: plugin.installed,
     enabled: plugin.enabled,
     available: plugin.available,
+    ...(plugin.description ? { untrustedDescription: plugin.description } : {}),
+    ...(plugin.installPolicy ? { installPolicy: plugin.installPolicy } : {}),
+    ...(plugin.authPolicy ? { authPolicy: plugin.authPolicy } : {}),
+    ...(plugin.mustShowInstallationInterstitial !== undefined
+      ? { mustShowInstallationInterstitial: plugin.mustShowInstallationInterstitial }
+      : {}),
   };
-  if (plugin.description) {
-    projected.untrustedDescription = plugin.description;
-  }
-  if (plugin.installPolicy) {
-    projected.installPolicy = plugin.installPolicy;
-  }
-  if (plugin.authPolicy) {
-    projected.authPolicy = plugin.authPolicy;
-  }
-  if (plugin.mustShowInstallationInterstitial !== undefined) {
-    projected.mustShowInstallationInterstitial = plugin.mustShowInstallationInterstitial;
-  }
-  return projected;
 }

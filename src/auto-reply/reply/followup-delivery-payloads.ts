@@ -1,12 +1,12 @@
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
+import { setReplyPayloadMetadata, isRenderablePayload } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads-base.js";
+import { applyReplyTagsToPayload } from "./reply-payloads-base.js";
 import { filterMessagingToolReplyPayload } from "./reply-payloads.js";
 import {
   createReplyDeliveryContext,

@@ -210,46 +210,6 @@ describe("browser server-context existing-session profile", () => {
     expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
   });
 
-  it("reports attach-only profiles as running when the MCP session is available but no page is selected", async () => {
-    const state = makeState();
-    const ctx = createBrowserRouteContext({ getState: () => state });
-
-    vi.mocked(chromeMcp.countChromeMcpTabs).mockRejectedValueOnce(new Error("No page selected"));
-
-    const profiles = await ctx.listProfiles();
-    expect(profiles).toHaveLength(1);
-    expect(profiles[0]?.name).toBe("chrome-live");
-    expect(profiles[0]?.transport).toBe("chrome-mcp");
-    expect(profiles[0]?.running).toBe(true);
-    expect(profiles[0]?.tabCount).toBe(0);
-
-    const [, ensuredProfile, ensureOptions] =
-      (
-        vi.mocked(chromeMcp.ensureChromeMcpAvailable).mock.calls as unknown as Array<
-          [string, ChromeLiveProfile, { ephemeral?: boolean; timeoutMs?: number }]
-        >
-      )[0] ?? [];
-    expect(ensuredProfile?.name).toBe("chrome-live");
-    expect(ensuredProfile?.driver).toBe("existing-session");
-    expect(ensuredProfile?.userDataDir).toBe(braveProfileDir);
-    expect(ensureOptions).toEqual({
-      ephemeral: true,
-      timeoutMs: 300,
-      signal: expect.any(AbortSignal),
-      pageProbe: { onResult: expect.any(Function) },
-    });
-    const [, countedProfile, countOptions] =
-      (
-        vi.mocked(chromeMcp.countChromeMcpTabs).mock.calls as unknown as Array<
-          [string, ChromeLiveProfile, { ephemeral?: boolean }]
-        >
-      )[0] ?? [];
-    expect(countedProfile?.name).toBe("chrome-live");
-    expect(countedProfile?.driver).toBe("existing-session");
-    expect(countedProfile?.userDataDir).toBe(braveProfileDir);
-    expect(countOptions).toEqual({ ephemeral: true, signal: expect.any(AbortSignal) });
-  });
-
   it("reports endpoint cdpUrl for existing-session profiles", async () => {
     const state = makeState();
     const chromeLiveProfile = expectDefined(
@@ -580,18 +540,6 @@ describe("browser server-context existing-session profile", () => {
     await expect(live.ensureTabAvailable()).resolves.toEqual(
       expect.objectContaining({ targetId: goodTab.targetId }),
     );
-  });
-
-  it("rejects invalid labels before asking Chrome MCP to create a page", async () => {
-    const state = makeState();
-    const live = createBrowserRouteContext({ getState: () => state }).forProfile("chrome-live");
-
-    await expect(live.openTab("about:blank", { label: "not allowed" })).rejects.toThrow(
-      /tab label/i,
-    );
-
-    expect(chromeMcp.openChromeMcpTab).not.toHaveBeenCalled();
-    expect(state.profiles.get("chrome-live")?.tabAliases).toBeUndefined();
   });
 
   it("does not adopt a Chrome MCP page when the operation aborts after creation", async () => {

@@ -8,12 +8,14 @@ import {
   replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import {
   prepareSessionEntryPresenceRead,
   withSessionHistoryWorkerDatabase,
@@ -24,7 +26,10 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { captureOpenClawAgentDatabaseRegistration } from "../state/openclaw-agent-db-registry-listing.js";
+import {
+  captureOpenClawAgentDatabaseRegistration,
+  invalidateRegisteredAgentDatabasesMemo,
+} from "../state/openclaw-agent-db-registry-listing.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -186,7 +191,12 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
     storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
   };
   const entry = { sessionId, updatedAt: 1 };
-  await replaceSessionEntry(target, entry);
+  // Seed reader lifecycle fixtures without queueing unrelated automatic maintenance.
+  await patchSessionEntryCore(target, () => entry, {
+    fallbackEntry: entry,
+    replaceEntry: true,
+    skipMaintenance: true,
+  });
   await replaceTranscriptEvents(target, [
     { type: "session", version: 3, id: sessionId },
     {
@@ -211,34 +221,96 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
     messageId: undefined,
   };
   return {
+    target,
     path: resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
     read: () => readChatHistoryPage(params),
   };
 }
 
-it.each(["no-commit", "metadata-refresh"] as const)(
-  "keeps history readable across unchanged sibling registration (%s)",
-  async (mode) => {
+it.each(["message-by-id", "message-count"] as const)(
+  "settles cancelled %s reads before reuse and joins their worker on close",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const fixture = await seed(state, "main", "cancel-message-read");
+      const controller = new AbortController();
+      const cancelled = new Error("history consumer closed");
+      let dispatched = false;
+      observed.dispatch = (message) => {
+        const input = asOptionalRecord(asOptionalRecord(message)?.input);
+        if (asOptionalRecord(input?.request)?.kind === kind) {
+          observed.dispatch = undefined;
+          dispatched = true;
+          controller.abort(cancelled);
+        }
+      };
+      const pending =
+        kind === "message-by-id"
+          ? readSessionHistoryPageInWorker(
+              {
+                kind,
+                params: { target: fixture.target, messageId: "cancel-message-read-message" },
+              },
+              controller.signal,
+            )
+          : readSessionHistoryPageInWorker(
+              { kind, params: { target: fixture.target } },
+              controller.signal,
+            );
+      await expect(pending).rejects.toBe(cancelled);
+      expect(dispatched).toBe(true);
+      const worker = observed.workers.at(-1)!;
+      expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+        "cancel-message-read-message",
+      ]);
+      expect(observed.workers.at(-1)).toBe(worker);
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+      expect(worker.threadId).toBe(-1);
+      expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+        "cancel-message-read-message",
+      ]);
+      expect(observed.workers.at(-1)).not.toBe(worker);
+    });
+  },
+);
+
+it.each([
+  { phase: "discovery", mode: "no-commit" },
+  { phase: "discovery", mode: "metadata-refresh" },
+  { phase: "revalidation", mode: "no-commit" },
+  { phase: "revalidation", mode: "metadata-refresh" },
+])(
+  "keeps history readable across unchanged sibling registration during $phase ($mode)",
+  async ({ phase, mode }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const a = await seed(state, "main", "registration-a");
       const b = await seed(state, "other", "registration-b");
       await a.read();
       await b.read();
-      let dispatched = false;
+      const registryPath = openOpenClawStateDatabase().path;
+      const registration = captureOpenClawAgentDatabaseRegistration({
+        agentId: "other",
+        agentPath: b.path,
+        admission: captureOpenClawStateDatabaseReadAdmission(registryPath),
+      });
+      invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
+      let started = false;
+      let finished = false;
       observed.dispatch = (message) => {
         const input = asOptionalRecord(asOptionalRecord(message)?.input);
         const params = asOptionalRecord(asOptionalRecord(input?.request)?.params);
-        if (params?.sessionId !== "registration-a") {
+        const registryRead =
+          asOptionalRecord(input?.command)?.type === "agentDatabaseRegistry.read";
+        if (!started) {
+          if (phase === "discovery" ? registryRead : params?.sessionId === "registration-a") {
+            started = true;
+            registration.begin();
+          }
+          return;
+        }
+        if (!registryRead) {
           return;
         }
         observed.dispatch = undefined;
-        dispatched = true;
-        const registration = captureOpenClawAgentDatabaseRegistration({
-          agentId: "other",
-          agentPath: b.path,
-          admission: captureOpenClawStateDatabaseReadAdmission(openOpenClawStateDatabase().path),
-        });
-        registration.begin();
         if (mode === "metadata-refresh") {
           registerOpenClawAgentDatabase(
             { agentId: "other", path: b.path, env: state.env },
@@ -246,11 +318,17 @@ it.each(["no-commit", "metadata-refresh"] as const)(
           );
         }
         registration.finish();
+        finished = true;
       };
-      expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
-        "registration-a-message",
-      ]);
-      expect(dispatched).toBe(true);
+      try {
+        expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
+          "registration-a-message",
+        ]);
+        expect(started && finished).toBe(true);
+      } finally {
+        observed.dispatch = undefined;
+        registration.finish();
+      }
     });
   },
 );

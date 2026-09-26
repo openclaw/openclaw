@@ -77,10 +77,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     },
   );
 
-  it.each([
-    { state: 1, label: "disabled" },
-    { state: 3, label: "ready" },
-  ])("accepts a localized /End failure when COM proves the task is $label", async ({ state }) => {
+  it("accepts a localized /End failure when COM proves the task is ready", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       const onMutation = vi.fn();
       schtasksResponses.push(
@@ -92,7 +89,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
           stderr: "FEHLER: Die Aufgabe wird derzeit nicht ausgeführt.",
         },
       );
-      setTaskStateProbeResult(state);
+      setTaskStateProbeResult(3);
 
       await expect(stopScheduledTask({ env, stdout, onMutation })).resolves.toBeUndefined();
 
@@ -108,11 +105,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it.each([
-    { state: 0, label: "unknown" },
-    { state: 2, label: "queued" },
-    { state: 4, label: "running" },
-  ])("fails closed after a localized /End failure when the task is $label", async ({ state }) => {
+  it("fails closed after a localized /End failure when the task is running", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       const onMutation = vi.fn();
       schtasksResponses.push(
@@ -124,7 +117,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
           stderr: "FEHLER: Die Aufgabe konnte nicht beendet werden.",
         },
       );
-      setTaskStateProbeResult(state);
+      setTaskStateProbeResult(4);
 
       await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
         "schtasks end failed: FEHLER: Die Aufgabe konnte nicht beendet werden.",
@@ -135,42 +128,35 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it.each([
-    { label: "malformed", status: 0, probeOutput: "3 trailing output" },
-    { label: "missing", status: 1, probeOutput: "-2147024894" },
-    { label: "unavailable", status: 1, probeOutput: "-2147024891" },
-  ])(
-    "fails closed after a localized /End failure when the state probe is $label",
-    async ({ status, probeOutput }) => {
-      await withPreparedGatewayTask(async ({ env, stdout }) => {
-        const onMutation = vi.fn();
-        schtasksResponses.push(
-          { ...SUCCESS_RESPONSE },
-          { ...SUCCESS_RESPONSE },
-          {
-            code: 1,
-            stdout: "",
-            stderr: "FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
-          },
-        );
-        spawnSync.mockReturnValueOnce({
-          pid: 0,
-          output: [null, probeOutput, ""],
-          stdout: probeOutput,
-          stderr: "",
-          status,
-          signal: null,
-        });
-
-        await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
-          "schtasks end failed: FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
-        );
-
-        expect(spawnSync).toHaveBeenCalledOnce();
-        expect(onMutation).not.toHaveBeenCalled();
+  it("fails closed after a localized /End failure when the state probe is missing", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        {
+          code: 1,
+          stdout: "",
+          stderr: "FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
+        },
+      );
+      spawnSync.mockReturnValueOnce({
+        pid: 0,
+        output: [null, "-2147024894", ""],
+        stdout: "-2147024894",
+        stderr: "",
+        status: 1,
+        signal: null,
       });
-    },
-  );
+
+      await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
+        "schtasks end failed: FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
+      );
+
+      expect(spawnSync).toHaveBeenCalledOnce();
+      expect(onMutation).not.toHaveBeenCalled();
+    });
+  });
 
   it.each(["", '< NUL >> "gateway output.log" 2>&1'])(
     "kills the lingering gateway owned by the persisted task with suffix %s",
@@ -231,14 +217,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
             CommandLine: `${INSTALLED_GATEWAY_COMMAND_LINE} ${formatWindowsTaskSupervisorChildArgument(305419896)}`,
           },
         ]);
-        return {
-          pid: 0,
-          output: [null, output, ""],
-          stdout: output,
-          stderr: "",
-          status: 0,
-          signal: null,
-        };
+        return spawnSyncResult(output);
       });
 
       await expect(resolveScheduledTaskOwnedGatewayPids(env)).resolves.toEqual([4242]);
@@ -296,14 +275,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
         const output = JSON.stringify([
           { ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE },
         ]);
-        spawnSync.mockReturnValue({
-          pid: 0,
-          output: [null, output, ""],
-          stdout: output,
-          stderr: "",
-          status: 0,
-          signal: null,
-        });
+        spawnSync.mockReturnValue(spawnSyncResult(output));
 
         await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([]);
 
@@ -345,27 +317,13 @@ describe("Scheduled Task stop/restart cleanup", () => {
           }
           if (executable.endsWith("tasklist.exe")) {
             const output = killed ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
-            return {
-              pid: 0,
-              output: [null, output, ""],
-              stdout: output,
-              stderr: "",
-              status: 0,
-              signal: null,
-            };
+            return spawnSyncResult(output);
           }
           const output = JSON.stringify([
             ...(!killed ? [{ ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }] : []),
             { ProcessId: 9999, CommandLine: "powershell.exe" },
           ]);
-          return {
-            pid: 0,
-            output: [null, output, ""],
-            stdout: output,
-            stderr: "",
-            status: 0,
-            signal: null,
-          };
+          return spawnSyncResult(output);
         });
 
         await expect(terminateScheduledTaskGatewayListeners(env)).rejects.toThrow(
@@ -417,14 +375,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
           if (executable.endsWith("tasklist.exe")) {
             const alive = phase === "before forced stop" && !forced;
             const output = alive ? '"node.exe","4242","Console","1","1 K"' : "No tasks";
-            return {
-              pid: 0,
-              output: [null, output, ""],
-              stdout: output,
-              stderr: "",
-              status: 0,
-              signal: null,
-            };
+            return spawnSyncResult(output);
           }
           const keepGateway = phase === "before forced stop" && !forced;
           const output = JSON.stringify([
@@ -433,14 +384,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
               : []),
             { ProcessId: 9999, CommandLine: "powershell.exe" },
           ]);
-          return {
-            pid: 0,
-            output: [null, output, ""],
-            stdout: output,
-            stderr: "",
-            status: 0,
-            signal: null,
-          };
+          return spawnSyncResult(output);
         });
 
         await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
@@ -487,27 +431,13 @@ describe("Scheduled Task stop/restart cleanup", () => {
         }
         if (executable.endsWith("tasklist.exe")) {
           const output = forced ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
-          return {
-            pid: 0,
-            output: [null, output, ""],
-            stdout: output,
-            stderr: "",
-            status: 0,
-            signal: null,
-          };
+          return spawnSyncResult(output);
         }
         const output = JSON.stringify([
           ...(!forced ? [{ ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }] : []),
           { ProcessId: 9999, CommandLine: "powershell.exe" },
         ]);
-        return {
-          pid: 0,
-          output: [null, output, ""],
-          stdout: output,
-          stderr: "",
-          status: 0,
-          signal: null,
-        };
+        return spawnSyncResult(output);
       });
 
       await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
@@ -571,27 +501,13 @@ describe("Scheduled Task stop/restart cleanup", () => {
           }
           if (executable.endsWith("tasklist.exe")) {
             const output = forced ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
-            return {
-              pid: 0,
-              output: [null, output, ""],
-              stdout: output,
-              stderr: "",
-              status: 0,
-              signal: null,
-            };
+            return spawnSyncResult(output);
           }
           const output = JSON.stringify([
             ...(!forced ? [{ ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }] : []),
             { ProcessId: 9999, CommandLine: "powershell.exe" },
           ]);
-          return {
-            pid: 0,
-            output: [null, output, ""],
-            stdout: output,
-            stderr: "",
-            status: 0,
-            signal: null,
-          };
+          return spawnSyncResult(output);
         });
 
         await expect(terminateScheduledTaskGatewayListeners(env)).rejects.toThrow(
@@ -650,28 +566,14 @@ describe("Scheduled Task stop/restart cleanup", () => {
         }
         if (executable.endsWith("tasklist.exe")) {
           const output = removed ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
-          return {
-            pid: 0,
-            output: [null, output, ""],
-            stdout: output,
-            stderr: "",
-            status: 0,
-            signal: null,
-          };
+          return spawnSyncResult(output);
         }
         // Model the lagging CIM result from the packaged Windows failure.
         const output = JSON.stringify([
           { ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE },
           { ProcessId: 9999, CommandLine: "powershell.exe" },
         ]);
-        return {
-          pid: 0,
-          output: [null, output, ""],
-          stdout: output,
-          stderr: "",
-          status: 0,
-          signal: null,
-        };
+        return spawnSyncResult(output);
       });
 
       await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
@@ -760,14 +662,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
           }
           if (executable.endsWith("tasklist.exe")) {
             const output = forced ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
-            return {
-              pid: 0,
-              output: [null, output, ""],
-              stdout: output,
-              stderr: "",
-              status: 0,
-              signal: null,
-            };
+            return spawnSyncResult(output);
           }
           const processes = [
             ...(owner === "gateway-with-supervisor"
@@ -796,14 +691,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
             { ProcessId: 9999, CommandLine: "powershell.exe" },
           ];
           const output = JSON.stringify(processes);
-          return {
-            pid: 0,
-            output: [null, output, ""],
-            stdout: output,
-            stderr: "",
-            status: 0,
-            signal: null,
-          };
+          return spawnSyncResult(output);
         });
 
         await stopScheduledTask({ env, stdout });

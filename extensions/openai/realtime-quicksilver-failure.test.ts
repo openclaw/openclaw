@@ -2,6 +2,7 @@ import { createRealtimeVoiceBridgeSession } from "openclaw/plugin-sdk/realtime-v
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
+import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 import { emitSideband, FakeSocket } from "./realtime-quicksilver.test-helpers.js";
 
 describe("public GPT-Live active failure ownership", () => {
@@ -34,11 +35,11 @@ describe("public GPT-Live active failure ownership", () => {
               model: "gpt-live-1",
               resolveAuth: async () => ({ type: "api-key", token: "fixture-key" }),
               logger: { warn: vi.fn() },
-              webSocketFactory: () => {
+              mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
                 const socket = new FakeSocket();
                 sockets.push(socket);
                 return socket;
-              },
+              }),
             },
             openAIRealtimeHost,
           ),

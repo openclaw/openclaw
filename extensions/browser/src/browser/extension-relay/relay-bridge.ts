@@ -8,8 +8,8 @@
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
 import { addAbortListener, once } from "node:events";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
 import { resolveExtensionRelayCommandTimeoutMs } from "./relay-command-timeout.js";
 import {
@@ -284,21 +284,17 @@ export class ExtensionRelayBridge {
 
   private handleExtensionMessage(msg: ExtensionToRelayMessage): void {
     switch (msg.type) {
-      case "result": {
-        const pending = this.pendingExtension.get(msg.seq);
-        if (pending) {
-          this.pendingExtension.delete(msg.seq);
-          clearTimeout(pending.timer);
-          pending.resolve(msg.result);
-        }
-        return;
-      }
+      case "result":
       case "error": {
         const pending = this.pendingExtension.get(msg.seq);
         if (pending) {
           this.pendingExtension.delete(msg.seq);
           clearTimeout(pending.timer);
-          pending.reject(new Error(msg.message));
+          if (msg.type === "result") {
+            pending.resolve(msg.result);
+          } else {
+            pending.reject(new Error(msg.message));
+          }
         }
         return;
       }
@@ -615,8 +611,9 @@ export class ExtensionRelayBridge {
       return { status: "unavailable", reason: "extension-disconnected" };
     }
     // Tabs can arrive while Chrome attaches the previous batch. Visit each tab
-    // generation once; a failed acquisition still rejects the complete inventory.
+    // generation once; only Chrome's permanent page refusal permits an omission.
     const identities = new Map<TabState, string | undefined>();
+    const skipped = new Map<TabState, { url: string; reason: string }>();
     while (this.extensionConnected) {
       const pending = [...this.tabs].filter(([, tab]) => !identities.has(tab));
       if (pending.length === 0) {
@@ -626,16 +623,30 @@ export class ExtensionRelayBridge {
         identities.set(tab, undefined);
       }
       await Promise.allSettled(
-        pending.map(([tabId, tab]) =>
-          this.withAttachedTab(client, tabId, (attached) => {
-            this.announceAttachedTab(
-              tabId,
-              attached,
-              this.autoAttachRecipients(tabId, attached.sessionId),
-            );
-            identities.set(tab, attached.targetId);
-          }),
-        ),
+        pending.map(async ([tabId, tab]) => {
+          const url = tab.info.url;
+          try {
+            await this.withAttachedTab(client, tabId, (attached) => {
+              this.announceAttachedTab(
+                tabId,
+                attached,
+                this.autoAttachRecipients(tabId, attached.sessionId),
+              );
+              identities.set(tab, attached.targetId);
+            });
+          } catch (error) {
+            // Exact Chromium page restrictions, not attachment conflicts,
+            // permission failures, timeouts, or retired tab generations.
+            if (
+              error instanceof Error &&
+              (error.message === "The extensions gallery cannot be scripted." ||
+                error.message === "Cannot access a chrome:// URL" ||
+                error.message === "Cannot access a chrome-extension:// URL of different extension")
+            ) {
+              skipped.set(tab, { url, reason: error.message });
+            }
+          }
+        }),
       );
     }
     if (!this.extensionConnected) {
@@ -643,6 +654,11 @@ export class ExtensionRelayBridge {
     }
     const targetInfos: Record<string, unknown>[] = [];
     for (const [tabId, tab] of this.tabs) {
+      const refusal = skipped.get(tab);
+      if (refusal && refusal.url === tab.info.url) {
+        log.warn(`Skipping tab ${tabId} during target enumeration: ${refusal.reason}`);
+        continue;
+      }
       const targetId = identities.get(tab);
       if (!targetId || (!tab.target?.sessionId && this.autoAttachRecipients(tabId).length > 0)) {
         return { status: "unavailable", reason: "target-identity-unresolved" };
@@ -1182,22 +1198,7 @@ export class ExtensionRelayBridge {
         }
         return;
       }
-      case "Target.closeTarget": {
-        const targetId = request.params?.targetId as string | undefined;
-        const found = targetId ? this.tabByTargetId(targetId) : null;
-        if (!found) {
-          this.respondError(
-            client,
-            request,
-            `No target with given id found: ${String(targetId)}`,
-            -32602,
-          );
-          return;
-        }
-        await this.callExtension({ type: "closeTab", tabId: found.tabId });
-        this.respond(client, request, { success: true });
-        return;
-      }
+      case "Target.closeTarget":
       case "Target.activateTarget": {
         const targetId = request.params?.targetId as string | undefined;
         const found = targetId ? this.tabByTargetId(targetId) : null;
@@ -1210,8 +1211,9 @@ export class ExtensionRelayBridge {
           );
           return;
         }
-        await this.callExtension({ type: "activateTab", tabId: found.tabId });
-        this.respond(client, request, {});
+        const close = request.method === "Target.closeTarget";
+        await this.callExtension({ type: close ? "closeTab" : "activateTab", tabId: found.tabId });
+        this.respond(client, request, close ? { success: true } : {});
         return;
       }
       case "Target.getBrowserContexts": {

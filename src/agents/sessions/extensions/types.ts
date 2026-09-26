@@ -1356,7 +1356,7 @@ export interface ExtensionAPI {
   getThinkingLevel(): ThinkingLevel;
 
   /** Set thinking level (clamped to model capabilities). */
-  setThinkingLevel(level: ThinkingLevel): void;
+  setThinkingLevel(level: ThinkingLevel): Promise<void>;
 
   // =========================================================================
   // Provider Registration

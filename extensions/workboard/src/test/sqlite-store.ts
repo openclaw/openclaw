@@ -3,15 +3,24 @@ import os from "node:os";
 import path from "node:path";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach } from "vitest";
-import type { PersistedWorkboardCard, WorkboardCardStore } from "../persistence-types.js";
+import type {
+  PersistedWorkboardCard,
+  WorkboardCardStore,
+  WorkboardWriteAuthority,
+} from "../persistence-types.js";
 import { workboardSqliteBackendEntrypoint } from "../sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardSqliteStores } from "../sqlite-store.js";
 import { WorkboardStore } from "../store.js";
 
 const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
 
+type WorkboardSqliteTestStores = Omit<
+  ReturnType<typeof createWorkboardSqliteStores>,
+  "runWithWriteAuthority"
+> & { runWithWriteAuthority?: WorkboardWriteAuthority };
+
 type WorkboardSqliteTestOptions = {
-  createStores?: (dbPath: string) => ReturnType<typeof createWorkboardSqliteStores>;
+  createStores?: (dbPath: string) => WorkboardSqliteTestStores;
   beforeCardWrite?: (key: string, value: PersistedWorkboardCard) => void | Promise<void>;
   beforeCardLookup?: (key: string) => void | Promise<void>;
   onStoreClose?: () => void | Promise<void>;
@@ -66,7 +75,7 @@ export function createWorkboardSqliteTestHarness(options: WorkboardSqliteTestOpt
   // openclaw-temp-dir: allow closes the SQLite owner before removing database files.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-test-"));
   const dbPath = path.join(dir, "workboard.sqlite");
-  let sqlite: ReturnType<typeof createWorkboardSqliteStores>;
+  let sqlite: WorkboardSqliteTestStores;
   try {
     sqlite = options.createStores
       ? options.createStores(dbPath)
@@ -112,7 +121,7 @@ export function createWorkboardSqliteTestStore(options: WorkboardSqliteTestOptio
   return createWorkboardSqliteTestHarness(options).store;
 }
 
-export function sqliteTestAuxStores(stores: ReturnType<typeof createWorkboardSqliteStores>) {
+export function sqliteTestAuxStores(stores: WorkboardSqliteTestStores) {
   const { boards, subscriptions, attachments, ready } = stores;
   return { boards, subscriptions, attachments, ready };
 }

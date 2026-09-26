@@ -94,6 +94,8 @@ type AcpTurnLifecycleEvent = {
 
 /** Input for closing, resetting, or cleaning up an ACP session. */
 export type AcpCloseSessionInput = {
+  /** Source authority for new backend effects, independent of accepted-write settlement. */
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
@@ -197,6 +199,7 @@ export type ResolveManagerSession = (params: {
 }) => AcpSessionResolution;
 
 export type EnsureManagerRuntimeHandle = (params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;

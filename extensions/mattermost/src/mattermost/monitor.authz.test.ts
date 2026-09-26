@@ -2,7 +2,9 @@
 import "./monitor-helpers.test-support.js";
 import "./monitor-onchar.test-support.js";
 import "./monitor.channel-kind.test-support.js";
-import { describe, expect, it } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setMattermostRuntime } from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   authorizeMattermostCommandInvocation,
@@ -46,6 +48,10 @@ function authorizeGroupCommand(senderId: string) {
 }
 
 describe("mattermost monitor authz", () => {
+  beforeEach(() => {
+    setMattermostRuntime(createPluginRuntimeMock());
+  });
+
   it("keeps DM allowlist merged with pairing-store entries", async () => {
     const resolved = await resolveMattermostMonitorInboundAccess({
       account: {

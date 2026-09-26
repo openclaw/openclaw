@@ -11,7 +11,7 @@ type IdleAwareAgent = {
 
 type ToolResultFlushManager = Pick<
   ReturnType<typeof guardSessionManager>,
-  "getSessionTarget" | "hasPendingToolResults" | "flushPendingToolResults"
+  "getSessionTarget" | "getSessionId" | "hasPendingToolResults" | "flushPendingToolResults"
 >;
 
 const DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;

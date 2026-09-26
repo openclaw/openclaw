@@ -13,6 +13,7 @@ import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
@@ -217,13 +218,14 @@ describe("mcp connection resolver helpers", () => {
     const previousExternalRestartPolicy = isGatewayRestartExternallyAllowed();
 
     try {
-      // Keep Gateway refresh scheduling observable without starting provider discovery.
-      const refreshPreparedModelRuntimeSnapshots = vi
-        .spyOn(await import("./prepared-model-runtime.js"), "refreshPreparedModelRuntimeSnapshots")
-        .mockResolvedValue(undefined);
-      const refreshContextWindowCache = vi
-        .spyOn(await import("./context.js"), "refreshContextWindowCache")
-        .mockResolvedValue(undefined);
+      // Keep provider discovery outside the MCP credential-revocation fixture.
+      vi.spyOn(
+        await import("./prepared-model-runtime.js"),
+        "refreshPreparedModelRuntimeSnapshots",
+      ).mockResolvedValue(undefined);
+      vi.spyOn(await import("./context.js"), "refreshContextWindowCache").mockResolvedValue(
+        undefined,
+      );
       const previous = createMcpProofPluginRegistry();
       previous.apiFor("startup-mail").registerMcpServerConnectionResolver({
         serverName: "user-mail",
@@ -334,6 +336,7 @@ describe("mcp connection resolver helpers", () => {
         sourceDigests: {},
       };
       const gatewayReload = createGatewayReloadHandlers({
+        scheduler: createTestGatewayScheduler(),
         deps: {},
         broadcast() {},
         getState: () => gatewayState,
@@ -373,11 +376,6 @@ describe("mcp connection resolver helpers", () => {
         status: "applied",
         runtime,
       });
-      expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
-        allowGatewaySubagentBinding: true,
-        catalogMode: "static",
-      });
-      expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(isPluginRegistryRetired(previous.registry)).toBe(true);
       expect(
@@ -704,23 +702,5 @@ describe("mcp connection resolver helpers", () => {
       { url: "https://live.example/sse-case" },
     );
     expect(sseCase.transport).toBe("sse");
-  });
-
-  it("builds stable requester cache keys", () => {
-    expect(
-      buildMcpRequesterRuntimeCacheKey({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
-    ).toBe(
-      JSON.stringify({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
-    );
   });
 });

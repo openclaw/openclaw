@@ -6,11 +6,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   prepareSqliteReadOnlyLocation,
   withSqliteSnapshotSource,
 } from "../infra/sqlite-snapshot-source.js";
 import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
+import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "./openclaw-state-db-cache.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -140,19 +142,20 @@ it("keeps the source-copy child's own handle lease until its actual backup settl
   const setup = openNodeSqliteDatabase(pathname);
   setup.exec("PRAGMA journal_mode=DELETE");
   setup.close();
-  const locationModule = new URL("../infra/sqlite-readonly-location.ts", import.meta.url).href;
-  const sqliteModule = new URL("../infra/node-sqlite.ts", import.meta.url).href;
+  const locationModule = resolveRuntimeWorkerUrl(
+    stateNativeProcessEntrypoints.sqliteReadOnlyLocation,
+  );
+  const sqliteModule = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.nodeSqlite);
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
+      ...resolveRuntimeWorkerArgv(locationModule).slice(0, -1),
       "--input-type=module",
       "--eval",
       `
     import { once } from "node:events";
-    import { requireNodeSqlite } from ${JSON.stringify(sqliteModule)};
-    import { prepareSqliteReadOnlyLocationInProcess } from ${JSON.stringify(locationModule)};
+    import { requireNodeSqlite } from ${JSON.stringify(sqliteModule.href)};
+    import { prepareSqliteReadOnlyLocationInProcess } from ${JSON.stringify(locationModule.href)};
     const sqlite = requireNodeSqlite();
     const backup = sqlite.backup.bind(sqlite);
     sqlite.backup = async (...args) => {

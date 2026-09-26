@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type ToolExecutionValidator = (params: unknown) => void | Promise<void>;
 type ScopedToolExecutionValidator = {
@@ -6,13 +7,11 @@ type ScopedToolExecutionValidator = {
   validate: ToolExecutionValidator;
 };
 
-const executionValidators = new AsyncLocalStorage<ScopedToolExecutionValidator>();
-const INTERNAL_TOOL_EXECUTION_VALIDATION = Symbol.for("openclaw.internalToolExecutionValidation");
-
-type InternalToolExecutionValidation = {
-  toolCallId: string;
-  validate: ToolExecutionValidator;
-};
+// SDK and host chunks must validate through the same per-invocation context.
+const executionValidators = resolveGlobalSingleton(
+  Symbol.for("openclaw.toolExecutionValidationContext"),
+  () => new AsyncLocalStorage<ScopedToolExecutionValidator>(),
+);
 
 /** Keep per-call validation inside the policy wrapper's final execution boundary. */
 export async function runWithToolExecutionValidation<T>(
@@ -32,25 +31,4 @@ export async function validateToolExecutionParams(
   if (scopedValidator?.toolCallId === toolCallId) {
     await scopedValidator.validate(params);
   }
-}
-
-/** Read the private validation control carried by one native harness call. */
-export function readInternalToolExecutionValidation(
-  value: unknown,
-): InternalToolExecutionValidation | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const marker = Reflect.get(value, INTERNAL_TOOL_EXECUTION_VALIDATION);
-  const toolCallId = Reflect.get(value, "toolCallId");
-  const validate = Reflect.get(value, "validate");
-  if (marker !== true || typeof toolCallId !== "string" || typeof validate !== "function") {
-    return undefined;
-  }
-  return {
-    toolCallId,
-    validate: async (params) => {
-      await Reflect.apply(validate, undefined, [params]);
-    },
-  };
 }

@@ -1,24 +1,19 @@
+import { truncateNativeToolTranscriptText } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   inferToolMetaFromArgs,
   projectAgentToolActivity,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   itemName,
   itemStatus,
   auditNativeToolName,
   unknownItemStatus,
-  shouldSynthesizeToolProgressForItem,
+  isProjectedNativeToolItem,
 } from "./event-projector-items.js";
-import {
-  collectDynamicToolContentText,
-  truncateToolTranscriptText,
-} from "./event-projector-tool-output.js";
-import {
-  normalizeNonEmptyString,
-  readNonEmptyString,
-  readNonEmptyStringArray,
-} from "./event-projector-values.js";
+import { collectDynamicToolContentText } from "./event-projector-tool-output.js";
+import { normalizeNonEmptyString, readNonEmptyString } from "./event-projector-values.js";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 import {
   sanitizeCodexAgentEventRecord,
@@ -120,7 +115,7 @@ export function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {
 }
 
 export function shouldSuppressChannelProgressForItem(item: CodexThreadItem): boolean {
-  if (shouldSynthesizeToolProgressForItem(item)) {
+  if (isProjectedNativeToolItem(item)) {
     return true;
   }
   // Dynamic OpenClaw tool requests are emitted at the item/tool/call request
@@ -163,7 +158,7 @@ function webSearchToolArgs(item: CodexThreadItem): Record<string, unknown> {
   const action = isJsonObject(item.action) ? item.action : undefined;
   const actionType = action ? readNonEmptyString(action, "type") : undefined;
   const queries =
-    action && actionType === "search" ? readNonEmptyStringArray(action, "queries") : [];
+    action && actionType === "search" ? normalizeTrimmedStringList(action.queries) : [];
   const query =
     normalizeNonEmptyString(item.query) ??
     (action && actionType === "search" ? readNonEmptyString(action, "query") : undefined) ??
@@ -246,7 +241,7 @@ type CodexTranscriptFileChange = CodexFileChangeSummary & {
 };
 
 function itemFileChangeRecords(item: CodexThreadItem): JsonObject[] {
-  const changes = (item as Record<string, unknown>).changes;
+  const changes = item.changes;
   return Array.isArray(changes) ? changes.filter(isJsonObject) : [];
 }
 
@@ -389,7 +384,7 @@ export function itemOutputText(
   outputTextByItem?: ReadonlyMap<string, string>,
 ): string | undefined {
   const output = itemObservedOutputText(item, outputTextByItem)?.trim();
-  return output ? truncateToolTranscriptText(output) : undefined;
+  return output ? truncateNativeToolTranscriptText(output, "Codex") : undefined;
 }
 
 function itemObservedOutputText(

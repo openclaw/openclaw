@@ -6,6 +6,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawStatusRow
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
@@ -117,13 +118,8 @@ private fun DreamDiaryPanel(summary: GatewayDreamingSummary) {
       return
     }
     ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-      Column {
-        summary.diaryEntries.forEachIndexed { index, entry ->
-          DreamDiaryRow(entry = entry)
-          if (index != summary.diaryEntries.lastIndex) {
-            HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-          }
-        }
+      ClawSeparatedColumn(items = summary.diaryEntries, dividerColor = ClawTheme.colors.border) { entry ->
+        DreamDiaryRow(entry = entry)
       }
     }
   }

@@ -11,44 +11,26 @@ import { formatDrainCounts, formatShutdownReason } from "./run-loop-shutdown-for
 
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 
-export function resolveRestartDrainTimeoutMs(
-  restartIntent: GatewayRunSignalRequest["restartIntent"],
-  runtime: Pick<typeof import("./lifecycle.runtime.js"), "resolveGatewayRestartDeferralTimeoutMs">,
-): number | undefined {
-  if (restartIntent?.force) {
-    return 0;
-  }
-  if (typeof restartIntent?.waitMs === "number" && Number.isFinite(restartIntent.waitMs)) {
-    return restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined;
-  }
-  try {
-    return runtime.resolveGatewayRestartDeferralTimeoutMs();
-  } catch {
-    return 300_000;
-  }
-}
-
 export async function drainGatewayActiveWork({
   request,
-  restartIntent,
   runtime,
-  loadRuntime,
   drainTimeoutMs,
   restartDrainDeadlineAt,
   markDraining,
   recordCounts,
+  recordWarning,
   logger,
 }: {
   request: GatewayRunSignalRequest;
-  restartIntent: GatewayRunSignalRequest["restartIntent"];
   runtime: typeof import("./lifecycle.runtime.js");
-  loadRuntime: () => Promise<typeof import("./lifecycle.runtime.js")>;
   drainTimeoutMs: number | undefined;
   restartDrainDeadlineAt: number | undefined;
   markDraining: (reason: GatewayDrainReason) => void;
   recordCounts: (counts: string) => void;
+  recordWarning: (warning: string) => void;
   logger: Pick<SubsystemLogger, "info" | "warn">;
 }) {
+  const { restartIntent } = request;
   const reportDrainSnapshot = createGatewayDrainReporter(
     request.action,
     drainTimeoutMs,
@@ -66,7 +48,7 @@ export async function drainGatewayActiveWork({
       "restart.drain",
       async () => {
         const { abortEmbeddedAgentRun, createGatewayActiveWorkSnapshot, waitForGatewayActiveWork } =
-          await loadRuntime();
+          runtime;
         // Reject new enqueues immediately during the drain window so
         // sessions get an explicit restart error instead of silent task loss.
         markDraining(formatShutdownReason(request));
@@ -78,27 +60,23 @@ export async function drainGatewayActiveWork({
         }
 
         reportDrainSnapshot(initialSnapshot);
-        if (restartIntent?.force) {
-          logger.warn("forced restart requested; skipping active work drain");
-        } else {
-          const remainingDrainTimeoutMs =
-            restartDrainDeadlineAt === undefined
-              ? undefined
-              : Math.max(0, restartDrainDeadlineAt - Date.now());
-          const drain = await waitForGatewayActiveWork(remainingDrainTimeoutMs, {
-            onSnapshot: reportDrainSnapshot,
-          });
-          if (drain.drained) {
-            if (!initialSnapshot.idle) {
-              logger.info("all active work drained");
-            }
-            return;
+        const remainingDrainTimeoutMs =
+          restartDrainDeadlineAt === undefined
+            ? undefined
+            : Math.max(0, restartDrainDeadlineAt - Date.now());
+        const drain = await waitForGatewayActiveWork(remainingDrainTimeoutMs, {
+          onSnapshot: reportDrainSnapshot,
+        });
+        if (drain.drained) {
+          if (!initialSnapshot.idle) {
+            logger.info("all active work drained");
           }
-          drainTimedOut = true;
-          logger.warn(
-            `active-work drain timeout reached; proceeding with restart: ${formatDrainCounts(drain.snapshot)}`,
-          );
+          return;
         }
+        drainTimedOut = true;
+        const warning = `restart drain budget ${drainTimeoutMs}ms exhausted; cutting short ${formatDrainCounts(drain.snapshot)}`;
+        recordWarning(warning);
+        logger.warn(warning);
         // Connection work can retain cron cleanup; cancel before close joins it.
         runtime.abortActiveCronTaskRuns("Gateway restarting.");
       },

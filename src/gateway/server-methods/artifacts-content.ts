@@ -20,6 +20,11 @@ export type ArtifactLookup = {
   assertCurrent?: () => void;
 };
 
+export function toArtifactSummary(artifact: ArtifactRecord): ArtifactSummary {
+  const { data: _data, url: _url, ...summary } = artifact;
+  return summary;
+}
+
 export function mediaUrlValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return asNonEmptyString(value);

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { updateStateSchemaVersionsMatch } from "../infra/update-candidate-state.js";
 import {
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -56,7 +57,11 @@ function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
   const database = {
     db,
     path: path.join(stateDir, "state", "openclaw.sqlite"),
-    walMaintenance: { checkpoint: () => true, close: () => true },
+    walMaintenance: {
+      checkpoint: () => true,
+      close: () => true,
+      reclaimFreePages: createSqliteWalReclamationResult,
+    },
   };
   fixture.database = database;
   const queries = getNodeSqliteKysely<Pick<DB, "agent_databases" | "update_runs">>(db);

@@ -2,12 +2,15 @@ import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 
-export function claimWorkerPlacement(params: {
+export async function claimWorkerPlacement(params: {
   environmentId: string;
   ownerEpoch: number;
   runId?: string;
   sessionId: string;
-}): { claim: WorkerSessionTurnClaim; store: ReturnType<typeof createWorkerSessionPlacementStore> } {
+}): Promise<{
+  claim: WorkerSessionTurnClaim;
+  store: ReturnType<typeof createWorkerSessionPlacementStore>;
+}> {
   const store = createWorkerSessionPlacementStore({
     database: support.testState.stateDb,
     now: () => support.testState.nowMs,
@@ -17,7 +20,7 @@ export function claimWorkerPlacement(params: {
     agentId: "main",
     sessionKey: `agent:main:${params.sessionId}`,
   };
-  let placement = store.startDispatch(identity);
+  let placement = await store.startDispatch(identity);
   placement = store.transition({
     sessionId: params.sessionId,
     from: "requested",
@@ -49,7 +52,7 @@ export function claimWorkerPlacement(params: {
     expectedGeneration: placement.generation,
     patch: { activeOwnerEpoch: params.ownerEpoch },
   });
-  const claim = store.claimTurn({
+  const claim = await store.claimTurn({
     ...identity,
     claimId: `claim-${params.sessionId}`,
     runId: params.runId ?? "run-1",

@@ -28,8 +28,12 @@ function tableExists(database: DatabaseSync, tableName: string): boolean {
 
 /** Remove coordination rows that must never survive restore. */
 export function sanitizeOpenClawStateLeaseRows(database: DatabaseSync): void {
-  if (tableExists(database, "state_leases")) {
-    database.prepare("DELETE FROM state_leases").run(); // sqlite-allow-raw -- Offline snapshot maintenance boundary.
+  // A copied agent lease still names a live source PID, but owns no handle in
+  // this snapshot. Keeping it would incorrectly block copied-state maintenance.
+  for (const table of ["state_leases", "agent_database_leases"]) {
+    if (tableExists(database, table)) {
+      database.prepare(`DELETE FROM ${table}`).run(); // sqlite-allow-raw -- Offline snapshot maintenance boundary; fixed table names.
+    }
   }
 }
 

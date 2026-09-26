@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createTaskActivityOverviewFixture } from "../test-helpers/task-activity-overview-fixture.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Task activity overview" });
@@ -16,7 +17,7 @@ suite.define(() => {
     const artifactDir = createControlUiE2eArtifactDir(`task-feed-redesign-${viewport.name}`);
     await suite.withPage({ viewport, timezoneId: "UTC" }, async ({ page }) => {
       const fixture = createTaskActivityOverviewFixture();
-      // Retain the completed child in the parent activity row deterministically.
+      // Keep the completed task's timestamps deterministic for the captured details.
       await page.clock.setFixedTime(new Date(Date.UTC(2026, 8, 18, 12, 1, 5)));
       const gateway = await installMockGateway(page, {
         sessionKey: fixture.sessionKey,
@@ -27,7 +28,11 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(`[data-subagent-task-id="${fixture.task.id}"]`).click();
+      await openChatSidePanelType(page, "Tasks");
+      const rail = page.locator(".chat-tasks-rail");
+      await rail.getByRole("button", { name: "Finished (1)" }).click();
+      expect(await page.locator(`[data-subagent-task-id="${fixture.task.id}"]`).count()).toBe(0);
+      await rail.locator(`[data-task-id="${fixture.task.id}"]`).click();
       const inspector = page.locator("[data-task-detail-panel]");
       const group = inspector.locator("details.chat-task-feed__tool-group");
       const summary = group.locator(":scope > summary");

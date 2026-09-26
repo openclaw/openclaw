@@ -116,10 +116,30 @@ export class CodexNativeSubagentRecoveryCoordinator {
   }
 
   dispose(): void {
-    for (const { timer } of this.taskReconciliationTimers.values()) {
-      clearTimeout(timer);
+    this.releaseCandidates();
+  }
+
+  retireParent(parentState: ParentState): void {
+    this.releaseCandidates(parentState);
+  }
+
+  private releaseCandidates(parentState?: ParentState): void {
+    for (const [key, { candidate }] of this.taskReconciliations) {
+      if (!parentState || candidate.parentState === parentState) {
+        candidate.completionCustody?.release();
+        // A replacement registration must not join retired history work. The
+        // old promise's identity check keeps its finalizer off the new slot.
+        this.taskReconciliations.delete(key);
+      }
     }
-    this.taskReconciliationTimers.clear();
+    for (const [key, { timer, candidate }] of this.taskReconciliationTimers) {
+      if (parentState && candidate.parentState !== parentState) {
+        continue;
+      }
+      clearTimeout(timer);
+      candidate.completionCustody?.release();
+      this.taskReconciliationTimers.delete(key);
+    }
   }
 
   async reconcileRegisteredChild(childState: ChildState): Promise<boolean> {
@@ -296,9 +316,15 @@ export class CodexNativeSubagentRecoveryCoordinator {
     if (scheduled) {
       clearTimeout(scheduled.timer);
       this.taskReconciliationTimers.delete(key);
+      if (scheduled.candidate !== candidate) {
+        scheduled.candidate.completionCustody?.release();
+      }
     }
     const existing = this.taskReconciliations.get(key);
     if (existing) {
+      if (existing.candidate !== candidate) {
+        candidate.completionCustody?.release();
+      }
       await existing.promise;
       return;
     }
@@ -310,9 +336,15 @@ export class CodexNativeSubagentRecoveryCoordinator {
     this.taskReconciliations.set(key, { candidate, promise: reconciliation });
     try {
       await reconciliation;
+    } catch (error) {
+      this.scheduleTaskCandidateReconciliation(candidate);
+      throw error;
     } finally {
       if (this.taskReconciliations.get(key)?.promise === reconciliation) {
         this.taskReconciliations.delete(key);
+      }
+      if (this.taskReconciliationTimers.get(key)?.candidate !== candidate) {
+        candidate.completionCustody?.release();
       }
       this.dependencies.onCandidateSettled(candidate.parentState);
     }
@@ -322,11 +354,17 @@ export class CodexNativeSubagentRecoveryCoordinator {
     const key = `${candidate.requesterSessionKey}\0${candidate.runId}`;
     if (
       this.dependencies.isDisposed() ||
+      candidate.completionCustody?.signal.aborted ||
       this.dependencies.isRetiredParent(candidate.parentState) ||
       this.recoveryPollDelaysMs.length === 0 ||
       this.taskReconciliationTimers.has(key)
     ) {
       return;
+    }
+    // The initial history read and handoff own the admitted root. A terminal
+    // result waiting for another history poll keeps only delivery authority.
+    if (candidate.terminal) {
+      candidate.completionCustody?.settleExecution();
     }
     const delayMs = delayForAttempt(this.recoveryPollDelaysMs, candidate.recoveryAttempt++);
     const timer = setTimeout(() => {

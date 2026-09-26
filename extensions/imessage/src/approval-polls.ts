@@ -373,43 +373,27 @@ function readPollVoteEvent(message: IMessagePayload): ApprovalPollVoteEvent | nu
   };
 }
 
-async function lookupPollTarget(params: {
-  accountId: string;
-  conversation: IMessageApprovalConversationKey;
-  pollGuid: string;
-  optionIds: readonly string[];
-}): Promise<IMessageApprovalPollTarget | null> {
+async function lookupPollRecord<T>(
+  store: { lookup: (key: string) => Promise<T | null> },
+  params: {
+    accountId: string;
+    conversation: IMessageApprovalConversationKey;
+    pollGuid: string;
+    optionIds: readonly string[];
+  },
+): Promise<T | null> {
   for (const key of enumeratePollTargetKeys({
     accountId: params.accountId,
     conversation: params.conversation,
     pollGuid: params.pollGuid,
     optionIds: params.optionIds,
   })) {
-    const target = await pollTargets.lookup(key);
+    const target = await store.lookup(key);
     if (target) {
       return target;
     }
   }
   return null;
-}
-
-async function hasTombstone(params: {
-  accountId: string;
-  conversation: IMessageApprovalConversationKey;
-  pollGuid: string;
-  optionIds: readonly string[];
-}): Promise<boolean> {
-  for (const key of enumeratePollTargetKeys({
-    accountId: params.accountId,
-    conversation: params.conversation,
-    pollGuid: params.pollGuid,
-    optionIds: params.optionIds,
-  })) {
-    if (await pollTombstones.lookup(key)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /**
@@ -459,11 +443,11 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     pollGuid: event.pollGuid,
     optionIds: event.votes.map((vote) => vote.optionId),
   };
-  const target = await lookupPollTarget(lookupKey);
+  const target = await lookupPollRecord(pollTargets, lookupKey);
   if (!target) {
     // Resolved/expired approval polls stay tappable; swallow late taps so they
     // do not reach the agent as chat messages.
-    return await hasTombstone(lookupKey);
+    return Boolean(await lookupPollRecord(pollTombstones, lookupKey));
   }
 
   if (event.malformedVotes) {

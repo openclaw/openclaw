@@ -1,21 +1,153 @@
-// Discord tests cover sender bot-status forwarding into the inbound context payload.
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createHostChannelInboundEventContextBuilder,
+  createHostChannelIngressRuntime,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
+import * as discordRuntime from "../runtime.js";
+import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
-describe("discord buildDiscordMessageProcessContext sender bot status", () => {
-  it("preserves the native Discord channel id for tool authorization", async () => {
-    const ctx = await createBaseDiscordMessageContext();
+describe("discord message context", () => {
+  it.each([
+    {
+      name: "batched messages",
+      replyToMode: "batched" as const,
+      sourceMessageIds: ["1000", "1001"],
+      expected: {
+        MessageSids: ["1000", "1001"],
+        MessageSidFirst: "1000",
+        MessageSidLast: "1001",
+        ReplyThreading: { implicitCurrentMessage: "allow" },
+      },
+    },
+    {
+      name: "a single message",
+      replyToMode: "batched" as const,
+      sourceMessageIds: ["1001"],
+      expected: {
+        MessageSids: undefined,
+        MessageSidFirst: undefined,
+        MessageSidLast: undefined,
+        ReplyThreading: { implicitCurrentMessage: "deny" },
+      },
+    },
+    {
+      name: "a batch with first-reply mode",
+      replyToMode: "first" as const,
+      sourceMessageIds: ["1000", "1001"],
+      expected: {
+        MessageSids: ["1000", "1001"],
+        MessageSidFirst: "1000",
+        MessageSidLast: "1001",
+        ReplyThreading: undefined,
+      },
+    },
+  ])("preserves reply policy and source identities for $name", async (testCase) => {
+    const ctx = await createBaseDiscordMessageContext({
+      replyToMode: testCase.replyToMode,
+      sourceMessageIds: testCase.sourceMessageIds,
+      canonicalMessageId: "pluralkit-original",
+    });
 
     const result = await buildDiscordMessageProcessContext({ ctx, text: "hi", mediaList: [] });
-    if (!result) {
-      throw new Error("expected a built Discord message context");
-    }
 
-    expect(result.ctxPayload.NativeChannelId).toBe(ctx.messageChannelId);
-    expect(result.ctxPayload.ConversationRoutePeerId).toBe(ctx.messageChannelId);
+    expect(result?.ctxPayload).toMatchObject({
+      MessageSid: "pluralkit-original",
+      MessageSidFull: "1001",
+      ...testCase.expected,
+    });
   });
+
+  it.each(["user", "bot"] as const)(
+    "preserves Discord text scope and live owner authority for %s",
+    async (authorKind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const senderId = "123456789012345678";
+        const cfg: OpenClawConfig = {
+          session: { store: state.path("sessions.json") },
+          commands: { ownerAllowFrom: [`discord:${senderId}`] },
+        };
+        type GatewayContext = NonNullable<
+          ReturnType<
+            NonNullable<
+              Parameters<typeof createHostChannelIngressRuntime>[0]["resolveGatewayContext"]
+            >
+          >
+        >;
+        // SAFETY: Host ingress only reads current config from this synthetic Gateway.
+        const gateway = { getRuntimeConfig: () => cfg } as GatewayContext;
+        let live = true;
+        const host = {
+          channelId: "discord",
+          isLive: () => live,
+          resolveGatewayContext: () => gateway,
+        };
+        const runtime = createPluginRuntimeMock({
+          channel: { inbound: { ingress: createHostChannelIngressRuntime(host) } },
+        });
+        const runtimeSpy = vi.spyOn(discordRuntime, "getDiscordRuntime").mockReturnValue(runtime);
+        try {
+          const text = "/config show messages.responsePrefix";
+          const ctx = await createBaseDiscordMessageContext(
+            {
+              cfg,
+              inboundEventKind: "user_request",
+              author: { id: senderId, username: "ada", bot: authorKind === "bot" },
+              sender: { id: senderId, label: "Ada", name: "ada", isPluralKit: false },
+              baseText: text,
+              messageText: text,
+              buildContext: createHostChannelInboundEventContextBuilder(
+                buildChannelInboundEventContext,
+                host,
+              ),
+            },
+            { storePath: state.path("sessions.json") },
+          );
+          ctx.resolveChannelIngress = (contextBinding, conversation) =>
+            resolveDiscordTextCommandAccess({
+              accountId: ctx.accountId,
+              cfg,
+              sender: { id: senderId, authorKind },
+              ownerAllowFrom: [senderId],
+              memberAccessConfigured: true,
+              memberAllowed: true,
+              allowNameMatching: false,
+              allowTextCommands: true,
+              hasControlCommand: true,
+              conversationId: ctx.messageChannelId,
+              conversationParentId: conversation?.parentId,
+              conversationThreadId: conversation?.threadId,
+              contextBinding,
+            });
+          const result = await buildDiscordMessageProcessContext({ ctx, text, mediaList: [] });
+          if (!result) {
+            throw new Error("expected a built Discord message context");
+          }
+
+          expect(result.ctxPayload.NativeChannelId).toBe(ctx.messageChannelId);
+          expect(result.ctxPayload.ConversationRoutePeerId).toBe(ctx.messageChannelId);
+          const authorization = resolveCommandAuthorization({
+            ctx: result.ctxPayload,
+            cfg,
+            commandAuthorized: true,
+          });
+          expect(authorization.assertOwnerCurrent).toBeTypeOf("function");
+          expect(() => authorization.assertOwnerCurrent?.()).not.toThrow();
+          cfg.commands = { ownerAllowFrom: [] };
+          expect(() => authorization.assertOwnerCurrent?.()).toThrow("authority changed");
+        } finally {
+          live = false;
+          runtimeSpy.mockRestore();
+        }
+      });
+    },
+  );
 
   it("projects a cached conversation avatar into channel-owned context", async () => {
     const ctx = await createBaseDiscordMessageContext({
@@ -56,9 +188,12 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
   });
 
   it("builds the payload through the host channel context builder when one is supplied", async () => {
+    const routeMetadata = Symbol("opaque route metadata");
+    const metadata = { capturedAt: "route resolution" };
     const host = { buildContext: buildChannelInboundEventContext };
     const buildContext = vi.spyOn(host, "buildContext");
     const ctx = { ...(await createBaseDiscordMessageContext()), buildContext: host.buildContext };
+    ctx.route = Object.assign({}, ctx.route, { [routeMetadata]: metadata });
 
     const result = await buildDiscordMessageProcessContext({ ctx, text: "hi", mediaList: [] });
     if (!result) {
@@ -66,6 +201,7 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
     }
 
     expect(buildContext).toHaveBeenCalledTimes(1);
+    expect(buildContext.mock.calls[0]?.[0].route).toMatchObject({ [routeMetadata]: metadata });
     expect(result.ctxPayload).toBe(await buildContext.mock.results[0]?.value);
     expect(result.ctxPayload.NativeChannelId).toBe(ctx.messageChannelId);
   });

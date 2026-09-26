@@ -94,7 +94,7 @@ export async function runConsentScenario(entry, coreTarball) {
     if (args[0] === "update" && args.includes("--json")) {
       assert.doesNotThrow(() => {
         result = JSON.parse(output);
-      }, `${label} did not return JSON: ${output}\n${diagnostic}`);
+      }, `${label} did not return JSON (exit ${code}): ${output}\n${diagnostic}`);
     }
     runs.push({
       label,

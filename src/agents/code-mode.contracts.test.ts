@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import ts from "typescript";
 import { afterEach, expect, it, vi } from "vitest";
+import { typeCheckSources } from "../../test/helpers/typescript.js";
 import { createMcpApiVirtualFiles } from "./code-mode-mcp-api.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -134,23 +134,5 @@ it("merges actual root and multiple server files without skipping declaration er
   );
   const texts = new Map(files.map((file) => ["/" + file.path, file.content]));
   texts.set("/consumer.ts", "MCP.$api(); MCP.alpha.$api(); MCP.beta.$api(); MCP.index.$api();");
-  const options = {
-    noEmit: true,
-    strict: true,
-    types: [],
-    target: ts.ScriptTarget.ESNext,
-    skipLibCheck: false,
-  };
-  const host = ts.createCompilerHost(options);
-  const original = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, ...args) =>
-    texts.has(name)
-      ? ts.createSourceFile(name, texts.get(name)!, args[0], true)
-      : original(name, ...args);
-  const program = ts.createProgram([...texts.keys()], options, host);
-  expect(
-    ts
-      .getPreEmitDiagnostics(program)
-      .map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n")),
-  ).toEqual([]);
+  expect(typeCheckSources(Object.fromEntries(texts))).toEqual([]);
 });

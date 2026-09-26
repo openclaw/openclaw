@@ -114,11 +114,6 @@ function disableImplicitPreferredOverPlugin(params: {
   };
 }
 
-function isBuiltInChannelAlreadyEnabled(cfg: OpenClawConfig, channelId: string): boolean {
-  const channels = cfg.channels;
-  return asOptionalRecord(channels?.[channelId])?.enabled === true;
-}
-
 function resolveAutoEnableChannelId(params: {
   entry: PluginAutoEnableCandidate;
   manifestRegistry: PluginManifestRegistry;
@@ -157,9 +152,8 @@ function resolveAutoEnableChannelId(params: {
 function registerPluginEntry(
   cfg: OpenClawConfig,
   entry: PluginAutoEnableCandidate,
-  manifestRegistry: PluginManifestRegistry,
+  builtInChannelId: string | null,
 ): OpenClawConfig {
-  const builtInChannelId = resolveAutoEnableChannelId({ entry, manifestRegistry });
   if (builtInChannelId) {
     const channels = cfg.channels;
     return {
@@ -344,13 +338,13 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     const allowMissing = hasRestrictiveAllowlist && !allow.includes(entry.pluginId);
     const alreadyEnabled =
       builtInChannelId != null
-        ? isBuiltInChannelAlreadyEnabled(next, builtInChannelId)
+        ? asOptionalRecord(next.channels?.[builtInChannelId])?.enabled === true
         : next.plugins?.entries?.[entry.pluginId]?.enabled === true;
     if (alreadyEnabled && !allowMissing) {
       continue;
     }
 
-    next = registerPluginEntry(next, entry, params.manifestRegistry);
+    next = registerPluginEntry(next, entry, builtInChannelId);
     if (hasRestrictiveAllowlist) {
       next = ensurePluginAllowlisted(next, entry.pluginId);
     }

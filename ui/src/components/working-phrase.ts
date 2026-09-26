@@ -2,7 +2,7 @@
 // Silent for the first stretch of a run, then rotates through crab-themed
 // gerunds so long quiet runs feel alive without claiming progress data the
 // UI does not have. Decorative only — the row keeps its sr-only "Working…".
-import { html, nothing } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
@@ -37,23 +37,40 @@ const WORKING_PHRASE_SHOW_AFTER_MS = 30_000;
 /** How long each phrase holds before rotating to the next. */
 const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
 
-/** Constant-time stride walk over the phrase list: any stride in
- * [1, len-1] guarantees adjacent buckets differ, and with a prime-length
- * list (currently 19) every stride cycles through all phrases before
- * repeating. Must stay O(1) in bucket — ChatItem.startedAt can be an
- * arbitrarily old timestamp, and this runs on a one-second poll. */
-function displayedPhraseIndex(seed: string, bucket: number): number {
-  const length = PHRASE_KEYS.length;
+function greatestCommonDivisor(first: number, second: number): number {
+  let left = first;
+  let right = second;
+  while (right !== 0) {
+    [left, right] = [right, left % right];
+  }
+  return left;
+}
+
+/** A coprime stride visits every authored phrase before repeating. Keep the
+ * existing seed walk for the prime-length default list and stay O(1) in bucket,
+ * since a persisted run can have an arbitrarily old start time. */
+function displayedPhraseIndex(seed: string, bucket: number, length: number): number {
   const offset = fnv1aUtf16(`${seed}:offset`) % length;
-  const stride = 1 + (fnv1aUtf16(`${seed}:stride`) % (length - 1));
+  let stride = length === 1 ? 0 : 1 + (fnv1aUtf16(`${seed}:stride`) % (length - 1));
+  while (greatestCommonDivisor(stride, length) !== 1) {
+    stride = (stride % (length - 1)) + 1;
+  }
   return (offset + bucket * stride) % length;
 }
 
 class WorkingPhrase extends OpenClawLightDomContentsElement {
   @property({ type: Number }) startMs: number | null = null;
   @property() seed = "";
+  @property({ attribute: false }) phrases: readonly string[] | undefined;
 
-  private readonly polling = new PollController(this, 1_000, () => this.requestUpdate(), false);
+  private phrase: string | undefined;
+  private readonly polling = new PollController(
+    this,
+    1_000,
+    () => this.requestUpdate(),
+    false,
+    "visible",
+  );
 
   override connectedCallback() {
     super.connectedCallback();
@@ -65,25 +82,40 @@ class WorkingPhrase extends OpenClawLightDomContentsElement {
   }
 
   private syncTimer() {
-    if (this.isConnected && this.startMs != null) {
+    if (this.isConnected && this.startMs != null && this.phrases?.length !== 0) {
       this.polling.start();
     } else {
       this.polling.stop();
     }
   }
 
-  override render() {
-    if (this.startMs == null) {
-      return nothing;
+  override shouldUpdate(changed: PropertyValues<this>) {
+    const phrase = this.currentPhrase();
+    const phraseChanged = phrase !== this.phrase;
+    this.phrase = phrase;
+    return !this.hasUpdated || changed.size > 0 || phraseChanged;
+  }
+
+  private currentPhrase() {
+    if (this.startMs == null || this.phrases?.length === 0) {
+      return undefined;
     }
     const elapsed = Date.now() - this.startMs;
     if (elapsed < WORKING_PHRASE_SHOW_AFTER_MS) {
-      return nothing;
+      return undefined;
     }
     const sinceShown = elapsed - WORKING_PHRASE_SHOW_AFTER_MS;
     const bucket = Math.floor(sinceShown / WORKING_PHRASE_ROTATE_EVERY_MS);
-    const index = displayedPhraseIndex(this.seed, bucket);
-    return html`<span>·</span> ${t(`chat.progressLabels.${PHRASE_KEYS[index]}`)}…`;
+    const index = displayedPhraseIndex(
+      this.seed,
+      bucket,
+      this.phrases?.length ?? PHRASE_KEYS.length,
+    );
+    return this.phrases ? this.phrases[index] : t(`chat.progressLabels.${PHRASE_KEYS[index]}`);
+  }
+
+  override render() {
+    return this.phrase === undefined ? nothing : html`<span>·</span> ${this.phrase}…`;
   }
 }
 

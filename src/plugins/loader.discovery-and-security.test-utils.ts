@@ -635,7 +635,7 @@ describe("loadOpenClawPlugins", () => {
       {
         label: "config load overrides bundled",
         pluginId: "shadow",
-        bundledFilename: "shadow.cjs",
+        expectedDuplicateLevel: "info",
         loadRegistry: () => {
           const bundled = writeBundledPlugin({
             id: "shadow",
@@ -755,7 +755,7 @@ describe("loadOpenClawPlugins", () => {
         expectedLoadedOrigin: "global",
         expectedDisabledOrigin: "bundled",
         expectedDisabledError: "overridden by global plugin",
-        expectDuplicateWarning: false,
+        expectedDuplicateLevel: null,
         assert: expectPluginSourcePrecedence,
       },
       {
@@ -884,7 +884,7 @@ describe("loadOpenClawPlugins", () => {
         expectedLoadedOrigin: "global",
         expectedDisabledOrigin: "bundled",
         expectedDisabledError: "overridden by global plugin",
-        expectDuplicateWarning: false,
+        expectedDuplicateLevel: null,
         assert: (
           registry: PluginRegistry,
           scenario: Parameters<typeof expectPluginSourcePrecedence>[1],

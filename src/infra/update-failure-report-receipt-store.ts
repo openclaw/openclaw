@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   buildRestartSentinelRow,
@@ -97,7 +97,7 @@ function isValidTerminalReceipt(receipt: UpdateFailureReportReceipt): boolean {
 }
 
 function receiptKey(attemptId: string): string {
-  return `${RECEIPT_KEY_PREFIX}${createHash("sha256").update(attemptId).digest("hex")}`;
+  return `${RECEIPT_KEY_PREFIX}${sha256Hex(attemptId)}`;
 }
 
 function parseReceipt(sentinel: RestartSentinel | null): UpdateFailureReportReceipt | null {

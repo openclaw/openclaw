@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareGithubIssue } from "../infra/github-issue.js";
-import { VERSION } from "../version.js";
+import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   canonicalMigrationFilePath,
   readSessionSqliteMigrationManifest,
@@ -13,9 +13,9 @@ import {
   type SessionSqliteMigrationGithubIssue,
   type SessionSqliteMigrationTargetInput,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { VERSION } from "../version.js";
 import type {
-  DoctorSessionSqliteIssue,
   DoctorSessionSqliteTargetReport,
   SessionSqliteMigrationFailureIssue,
 } from "./doctor-session-sqlite-types.js";
@@ -39,25 +39,26 @@ export function writeSessionSqliteMigrationFailureReports(
       : manifest.targets
     : [];
   const payload = {
+    failedAt: manifest?.failedAt,
     generatedAt: new Date().toISOString(),
     manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
     reason: params.reason,
     recoveryCommand: "openclaw doctor --session-sqlite recover --github-issue",
     restoreStatus: manifest?.restore?.status ?? "not_attempted",
     runId: manifest?.runId ?? path.basename(manifestPath, ".json"),
-    targets: targets.map((target) => ({
-      agentId: sanitizeFailureReportText(target.agentId),
-      completedMoves: target.completedMoves.length,
-      issues: collectFailureReportIssues(target, params.recoveryTargets).map((issue) => ({
-        code: issue.code,
-        message: sanitizeFailureIssueMessage(issue, target),
-        sessionKey: issue.sessionKey ? redactSessionKey(issue.sessionKey) : undefined,
-      })),
-      plannedMoves: target.plannedMoves.length,
-      sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
-      storePath: sanitizeFailureReportText(shortenFailureReportPath(target.storePath)),
-      validationBeforeArchive: target.validationBeforeArchive,
-    })),
+    targets: targets.map((target) => {
+      const { issues, recoveryIssues } = collectFailureReportIssues(target, params.recoveryTargets);
+      return {
+        agentId: sanitizeFailureReportText(target.agentId),
+        completedMoves: target.completedMoves.length,
+        issues,
+        recoveryIssues,
+        plannedMoves: target.plannedMoves.length,
+        sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
+        storePath: sanitizeFailureReportText(shortenFailureReportPath(target.storePath)),
+        validationBeforeArchive: target.validationBeforeArchive,
+      };
+    }),
     version: VERSION,
   };
   fs.writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
@@ -78,7 +79,7 @@ export function writeSessionSqliteMigrationFailureReports(
 function collectFailureReportIssues(
   target: SessionSqliteMigrationTargetManifest,
   recoveryTargets: readonly DoctorSessionSqliteTargetReport[] = [],
-): DoctorSessionSqliteIssue[] {
+): { issues: DoctorSessionSqliteIssue[]; recoveryIssues?: DoctorSessionSqliteIssue[] } {
   const recoveryTarget = recoveryTargets.find(
     (current) =>
       current.agentId === target.agentId &&
@@ -91,7 +92,15 @@ function collectFailureReportIssues(
   for (const issue of [...target.issues, ...(recoveryTarget?.issues ?? [])]) {
     issues.set(JSON.stringify([issue.code, issue.message, issue.sessionKey]), issue);
   }
-  return [...issues.values()];
+  const sanitize = (issue: DoctorSessionSqliteIssue): DoctorSessionSqliteIssue => ({
+    code: issue.code,
+    message: sanitizeFailureIssueMessage(issue, target),
+    sessionKey: issue.sessionKey ? redactSessionKey(issue.sessionKey) : undefined,
+  });
+  return {
+    issues: [...issues.values()].map(sanitize),
+    recoveryIssues: recoveryTarget?.issues.map(sanitize),
+  };
 }
 
 export function createSessionSqliteMigrationFailureIssue(
@@ -118,6 +127,7 @@ export function createSessionSqliteMigrationFailureIssue(
   const reportBody =
     persistedBody ??
     renderFailureMarkdown({
+      failedAt: manifest.failedAt,
       generatedAt: new Date().toISOString(),
       manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
       reason: "session SQLite migration failed",
@@ -230,6 +240,7 @@ function resolveFailureReportPaths(manifestPath: string): {
 }
 
 function renderFailureMarkdown(payload: {
+  failedAt?: string;
   generatedAt: string;
   manifestPath: string;
   reason: string;
@@ -239,7 +250,8 @@ function renderFailureMarkdown(payload: {
   targets: Array<{
     agentId: string;
     completedMoves: number;
-    issues: Array<{ code: string; message: string; sessionKey?: string }>;
+    issues: DoctorSessionSqliteIssue[];
+    recoveryIssues?: DoctorSessionSqliteIssue[];
     plannedMoves: number;
     sqlitePath: string;
     storePath: string;
@@ -251,6 +263,7 @@ function renderFailureMarkdown(payload: {
     "# Session SQLite Migration Failure",
     "",
     `- Run: ${payload.runId}`,
+    `- Failed: ${payload.failedAt ?? "not recorded"}`,
     `- Generated: ${payload.generatedAt}`,
     `- OpenClaw version: ${payload.version}`,
     `- Reason: ${sanitizeFailureReportText(payload.reason)}`,
@@ -269,12 +282,22 @@ function renderFailureMarkdown(payload: {
       `- Planned moves: ${target.plannedMoves}`,
       `- Completed moves: ${target.completedMoves}`,
       `- Validation before archive: ${target.validationBeforeArchive}`,
-      `- Issues: ${target.issues.length}`,
     );
-    for (const issue of target.issues) {
-      lines.push(
-        `  - [${issue.code}] ${issue.sessionKey ? `${issue.sessionKey}: ` : ""}${issue.message}`,
-      );
+    const groups: Array<[string, DoctorSessionSqliteIssue[]]> = [
+      ["Recorded migration and recovery evidence", target.issues],
+    ];
+    if (target.recoveryIssues) {
+      groups.unshift(["Current recovery issues", target.recoveryIssues]);
+    } else {
+      lines.push("- Current recovery: not assessed");
+    }
+    for (const [label, issues] of groups) {
+      lines.push(`- ${label}: ${issues.length}`);
+      for (const issue of issues) {
+        lines.push(
+          `  - [${issue.code}] ${issue.sessionKey ? `${issue.sessionKey}: ` : ""}${issue.message}`,
+        );
+      }
     }
   }
   lines.push("");

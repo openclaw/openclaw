@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -317,8 +318,8 @@ describe("memory manager reindex recovery", () => {
     harness.db
       .prepare(`INSERT INTO memory_embedding_cache
       (provider, model, provider_key, hash, embedding, dims, updated_at)
-      VALUES ('unrelated', 'unrelated', 'unrelated', 'keep', '[1,0]', 2, 1)`)
-      .run();
+      VALUES ('unrelated', 'unrelated', 'unrelated', 'keep', ?, 2, 1)`)
+      .run(encodeMemoryEmbedding([1, 0]));
     const queued = createDeferred<void>();
     const admit = sqliteRuntime.withOpenClawAgentDatabaseWrite;
     let reservation: Awaited<ReturnType<typeof reservePublishedWriter>> | undefined;
@@ -422,7 +423,7 @@ describe("memory manager reindex recovery", () => {
             { text: "New reusable alpha memory." },
           ]);
           expect(publishedDb.prepare("SELECT embedding FROM memory_embedding_cache").all()).toEqual(
-            [{ embedding: "[0,1,0]" }],
+            [{ embedding: encodeMemoryEmbedding([0, 1, 0]) }],
           );
         } else {
           await expect(sync).rejects.toThrow(
@@ -666,10 +667,10 @@ describe("memory manager reindex recovery", () => {
     const insert = harness.db.prepare(`
       INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
-      VALUES ('previous-provider', 'previous-model', 'previous-key', ?, '[0,1,0]', 3, 1)
+      VALUES ('previous-provider', 'previous-model', 'previous-key', ?, ?, 3, 1)
     `);
-    insert.run("old-a");
-    insert.run("old-b");
+    insert.run("old-a", encodeMemoryEmbedding([0, 1, 0]));
+    insert.run("old-b", encodeMemoryEmbedding([0, 1, 0]));
     harness.cache.maxEntries = 1;
     const before = harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
     expect(before).toHaveLength(3);
@@ -933,7 +934,7 @@ describe("memory manager reindex recovery", () => {
         "sessions-retry-hash",
         "fts-only",
         "sessions retry marker",
-        "[]",
+        encodeMemoryEmbedding([]),
         Date.now(),
       );
     harness.writeMeta({

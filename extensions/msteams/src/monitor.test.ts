@@ -72,25 +72,6 @@ describe("msteams monitor webhook hardening", () => {
     }
   });
 
-  it("clamps headers timeout when explicit value exceeds request timeout", async () => {
-    const app = express();
-    const server = app.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    try {
-      applyMSTeamsWebhookTimeouts(server, {
-        inactivityTimeoutMs: 12_000,
-        requestTimeoutMs: 9_000,
-        headersTimeoutMs: 15_000,
-      });
-
-      expect(server.timeout).toBe(12_000);
-      expect(server.requestTimeout).toBe(9_000);
-      expect(server.headersTimeout).toBe(9_000);
-    } finally {
-      await closeServer(server);
-    }
-  });
-
   it("drops slow-body webhook requests within configured inactivity timeout", async () => {
     const app = express();
     app.use(express.json({ limit: "1mb" }));

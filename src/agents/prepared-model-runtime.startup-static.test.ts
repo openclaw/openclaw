@@ -10,6 +10,7 @@ import {
 } from "../plugins/plugin-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type * as ModelCatalog from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
@@ -163,7 +164,7 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
         modelCatalog: catalog,
         runtimeModels: new Map(),
         providerExpiries: new Map(),
-        configuredProviderModelIds: new Map(),
+        hookRows: new Map(),
         configuredRuntimeModels: agentFacts.configuredRuntimeModels,
       };
     },
@@ -226,7 +227,9 @@ vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
   },
 }));
 
-vi.mock("./model-catalog.js", () => ({
+vi.mock("./model-catalog.js", async () => ({
+  loadManifestModelCatalog: (await vi.importActual<typeof ModelCatalog>("./model-catalog.js"))
+    .loadManifestModelCatalog,
   buildPreparedModelCatalogSnapshot: mocks.buildPreparedModelCatalogSnapshot,
 }));
 
@@ -256,7 +259,7 @@ vi.mock("../logging/subsystem.js", () => ({
 const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
   await import("./prepared-model-runtime.js");
 const { getPreparedModelCatalogSnapshot } = await import("./prepared-model-catalog.js");
-const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
+const { prepareScopedReadOnlyModelCatalog } =
   await import("./prepared-model-runtime.scoped-catalog.js");
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
@@ -309,7 +312,10 @@ describe("prepared model runtime Gateway catalog mode", () => {
         levels: [{ id: "off" }, { id: "low", label: "on" }],
         defaultLevel: "low",
       },
-      expectedLevels: [{ id: "low", label: "on" }],
+      expectedLevels: [
+        { id: "low", label: "on" },
+        { id: "ultra", label: "ultra" },
+      ],
     },
   ] as const)(
     "publishes $name policy with model caps for lightweight configured and full catalog reads",
@@ -410,11 +416,8 @@ describe("prepared model runtime Gateway catalog mode", () => {
         contextWindow: 128_000,
         maxTokens: 8_192,
       });
-      const prepare = live
-        ? prepareScopedReadOnlyLiveModelCatalog
-        : prepareScopedReadOnlyModelCatalog;
       const catalog = await withScopedCatalogCache(() =>
-        prepare(
+        prepareScopedReadOnlyModelCatalog(
           {
             config: {
               agents: { defaults: { model: "openai/gpt-5.5" } },
@@ -425,6 +428,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
             readOnly: true,
           },
           ["openai"],
+          live ? "live" : "static",
         ),
       );
       expect(catalog.staticEntries).toEqual(
@@ -446,12 +450,9 @@ describe("prepared model runtime Gateway catalog mode", () => {
   it.each([false, true])("releases a failed scoped catalog generation (live=%s)", async (live) => {
     const failure = new Error("catalog materialization failed");
     mocks.buildPreparedModelCatalogSnapshot.mockRejectedValueOnce(failure);
-    const prepare = live
-      ? prepareScopedReadOnlyLiveModelCatalog
-      : prepareScopedReadOnlyModelCatalog;
     await withScopedCatalogCache(async () => {
       await expect(
-        prepare(
+        prepareScopedReadOnlyModelCatalog(
           {
             config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
             agentDir: "/tmp/prepared-scoped-failure",
@@ -459,6 +460,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
             readOnly: true,
           },
           ["openai"],
+          live ? "live" : "static",
         ),
       ).rejects.toBe(failure);
     });
@@ -519,7 +521,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     };
 
-    await prepareScopedReadOnlyLiveModelCatalog(
+    await prepareScopedReadOnlyModelCatalog(
       {
         agentId: "default",
         agentDir: "/tmp/prepared-live-agent",
@@ -530,6 +532,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
         readOnly: true,
       },
       ["anthropic"],
+      "live",
     );
 
     expect(mocks.planOpenClawModelsJsonSource).toHaveBeenCalledWith(

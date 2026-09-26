@@ -10,10 +10,11 @@ import type { CronJob } from "../types.js";
 import { locked } from "./locked.js";
 import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
 import { cronRunReceiptPersistHooks, supersedeServiceCronRunReceipt } from "./run-receipts.js";
-import { recomputeUnownedCronSchedules } from "./run-recovery.js";
+import { publishCronRuntimeRows } from "./runtime-publication.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { emitCronOutcomeEventForJob, recordCronOutcomeForJob } from "./timer-outcome-events.js";
@@ -107,7 +108,7 @@ export async function finalizeCompletedCronRunOutcomes(
     isCronActiveJobMarkerCurrent(outcome.activeJobMarker);
   try {
     await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      await ensureLoaded(state, { forceReload: true });
       // Payload outcomes survive a failed row write as recovery facts. Quiet
       // evaluations have no payload outcome and finalize only after the commit.
       for (const outcome of outcomes) {
@@ -254,14 +255,12 @@ export async function finalizeCompletedCronRunOutcomes(
       }
       publishCronRuntimeRows(state);
       try {
-        const maintenance = recomputeUnownedCronSchedules(
+        await recomputeUnownedCronSchedules(
           state,
           opts?.repairFutureCronNextRunAtMs === false
             ? { repairFutureCronNextRunAtMs: false }
             : undefined,
         );
-        applyCronRuntimeRowsToState(state, maintenance.jobs);
-        runPostPersistCronNotifications(state, maintenance.notifications);
       } catch (error) {
         state.deps.log.warn(
           { err: String(error) },

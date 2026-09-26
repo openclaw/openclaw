@@ -26,7 +26,8 @@ import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import type { GatewayClient } from "./types.js";
+import type { ArtifactLookup } from "./artifacts-content.js";
+import type { GatewayClient, RespondFn } from "./types.js";
 
 export type ArtifactQuery = ArtifactsListParams;
 
@@ -158,6 +159,19 @@ function resolveQuerySession(
 export class ArtifactSessionResolutionError extends Error {
   constructor(readonly shape: ReturnType<typeof errorShape>) {
     super(shape.message);
+  }
+}
+
+export function artifactResponseIsCurrent(found: ArtifactLookup, respond: RespondFn): boolean {
+  try {
+    found.assertCurrent?.();
+    return true;
+  } catch (error) {
+    if (!(error instanceof ArtifactSessionResolutionError)) {
+      throw error;
+    }
+    respond(false, undefined, error.shape);
+    return false;
   }
 }
 

@@ -131,10 +131,12 @@ struct StatusMenuSummariesTests {
     private func checkColdUsageRetry(_ transition: String, fixture: UsageGatewayFixture) async throws {
         fixture.coldUsage.setValue(true)
         _ = try await fixture.control.request(method: "health")
-        fixture.summaries.refresh {}
-        try await fixture.waitUntil {
-            fixture.requests.value.contains { $0.method == "usage.status" }
+        var usageUpdated = false
+        fixture.summaries.refresh { usageUpdated = true }
+        try await fixture.waitUntil(context: "\(transition) initial cold usage response") {
+            usageUpdated && fixture.requests.value.contains { $0.method == "usage.status" }
         }
+        fixture.releaseCostResponses(for: "A")
         if transition == "closed" {
             fixture.summaries.menuDidClose()
             try await Task.sleep(for: .milliseconds(5200))
@@ -143,14 +145,16 @@ struct StatusMenuSummariesTests {
         }
         let owner = transition == "replacement" ? "B" : "A"
         if transition == "replacement" {
+            usageUpdated = false
             fixture.revision.setValue(2)
             _ = try await fixture.control.request(method: "health")
-            try await fixture.waitUntil {
-                fixture.requests.value.contains { $0.method == "usage.status" && $0.owner == "B" }
+            try await fixture.waitUntil(context: "replacement cold usage response from Gateway B") {
+                usageUpdated && fixture.requests.value.contains { $0.method == "usage.status" && $0.owner == "B" }
             }
+            fixture.releaseCostResponses(for: "B")
         }
-        // The client retry interval is five seconds; allow its one timer to fire.
-        try await fixture.waitUntil(timeout: .seconds(6)) {
+        // The five-second retry starts after the cold usage response is published.
+        try await fixture.waitUntil(timeout: .seconds(6), context: "\(transition) usage retry from Gateway \(owner)") {
             fixture.summaries.usageSummary?.contains("Gateway \(owner)") == true
         }
         #expect(
@@ -210,6 +214,7 @@ private final class UsageGatewayFixture {
     let revision = LockIsolated<UInt64>(1)
     let requests = LockIsolated<[Request]>([])
     let coldUsage = LockIsolated(false)
+    private let pendingCostResponses = LockIsolated<[String: [@Sendable () -> Void]]>(["A": [], "B": []])
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
     let control: ControlChannel
@@ -220,6 +225,7 @@ private final class UsageGatewayFixture {
         let revision = self.revision
         let requests = self.requests
         let coldUsage = self.coldUsage
+        let pendingCostResponses = self.pendingCostResponses
         self.session = GatewayTestWebSocketSession(taskFactory: {
             let owner = revision.value == 1 ? "A" : "B"
             return GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
@@ -286,7 +292,19 @@ private final class UsageGatewayFixture {
                     payload = #"{"ok":true}"#
                 }
                 let response = #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#
-                socket.emitReceiveSuccess(.data(Data(response.utf8)))
+                let sendResponse: @Sendable () -> Void = {
+                    socket.emitReceiveSuccess(.data(Data(response.utf8)))
+                }
+                if method == "usage.cost", coldUsage.value {
+                    // The usage callback releases cost replies before their independent deadline.
+                    let deferred = pendingCostResponses.withValue { pending in
+                        guard pending[owner] != nil else { return false }
+                        pending[owner, default: []].append(sendResponse)
+                        return true
+                    }
+                    if deferred { return }
+                }
+                sendResponse()
             })
         })
         self.gateway = GatewayConnection(
@@ -324,16 +342,28 @@ private final class UsageGatewayFixture {
         #expect(self.hasCostChart)
     }
 
+    func releaseCostResponses(for owner: String) {
+        let responses = self.pendingCostResponses.withValue { $0.removeValue(forKey: owner) ?? [] }
+        responses.forEach { $0() }
+    }
+
     func close() async {
         self.summaries.menuDidClose()
         await self.control.disconnect()
+        self.releaseCostResponses(for: "A")
+        self.releaseCostResponses(for: "B")
     }
 
-    func waitUntil(timeout: Duration = .seconds(2), _ condition: () -> Bool) async throws {
+    func waitUntil(
+        timeout: Duration = .seconds(2),
+        context: String = "Gateway condition",
+        sourceLocation: SourceLocation = #_sourceLocation,
+        _ condition: () -> Bool) async throws
+    {
         let deadline = ContinuousClock.now + timeout
         while !condition(), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(2))
         }
-        try #require(condition())
+        try #require(condition(), "\(context)", sourceLocation: sourceLocation)
     }
 }

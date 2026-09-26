@@ -141,6 +141,7 @@ describe("install smoke no-push root image transport", () => {
       "sparse-checkout": "scripts/resolve-fs-safe-native-contract.mjs",
     });
 
+    const identityOutput = path.join(tempDirs.make("install-smoke-workflow-identity-"), "output");
     const identityResult = spawnSync(
       "bash",
       ["--noprofile", "--norc", "-c", workflowIdentity.run!],
@@ -149,7 +150,7 @@ describe("install smoke no-push root image transport", () => {
         env: {
           ...process.env,
           EXPECTED_WORKFLOW_REPOSITORY: "openclaw/openclaw",
-          GITHUB_OUTPUT: "/dev/null",
+          GITHUB_OUTPUT: identityOutput,
           GITHUB_WORKFLOW_SHA: "a".repeat(40),
           JOB_CONTEXT: JSON.stringify({
             workflow_repository: "openclaw/openclaw",
@@ -159,9 +160,33 @@ describe("install smoke no-push root image transport", () => {
       },
     );
     expect(identityResult.status, identityResult.stderr).toBe(0);
+    expect(readFileSync(identityOutput, "utf8")).toBe(
+      `workflow_repository=openclaw/openclaw\nworkflow_sha=${"b".repeat(40)}\n`,
+    );
     const workflowText = JSON.stringify(workflow);
     expect(workflowText).not.toContain("${{ github.workflow_sha }}");
     expect(workflowText).not.toContain("fromJSON(toJSON(job)).workflow_");
+    expect(workflowText).not.toContain("needs.preflight.outputs.workflow_");
+
+    const fastJob = job(workflow, "install-smoke-fast");
+    const warningRelay = step(fastJob, "Checkout trusted build warning relay");
+    expect(fastJob.needs).toContain("preflight");
+    expect(warningRelay.with).toMatchObject({
+      repository: "openclaw/openclaw",
+      ref: "main",
+      path: ".artifacts/build-warning-harness",
+      "fetch-depth": 1,
+      "persist-credentials": false,
+      "sparse-checkout-cone-mode": false,
+      "sparse-checkout": "scripts/relay-build-limit-warnings.mts\nscripts/lib/check-limits.mts\n",
+    });
+    const warningBuild = step(fastJob, "Build root Dockerfile smoke image");
+    expect(warningBuild.run).toContain(
+      "node .artifacts/build-warning-harness/scripts/relay-build-limit-warnings.mts",
+    );
+    expect(
+      fastJob.steps!.indexOf(step(fastJob, "Restore exact trusted workflow revision")),
+    ).toBeLessThan(fastJob.steps!.indexOf(warningBuild));
     const trustedJobs: string[] = [];
     for (const [jobName, workflowJob] of Object.entries(workflow.jobs)) {
       const trustedCheckouts =
@@ -176,7 +201,9 @@ describe("install smoke no-push root image transport", () => {
         EXPECTED_WORKFLOW_REPOSITORY: "${{ github.repository }}",
         JOB_CONTEXT: "${{ toJSON(job) }}",
       });
-      expect(resolver.env?.HARNESS_PATH, jobName).toMatch(/^(\.|\.release-harness)$/u);
+      const harnessPath =
+        jobName === "install-smoke-fast" ? ".artifacts/build-warning-harness" : ".release-harness";
+      expect(resolver.env?.HARNESS_PATH, jobName).toBe(harnessPath);
       expect(resolver.run, jobName).toContain(
         "job.workflow_sha must be a full lowercase commit SHA",
       );
@@ -191,6 +218,7 @@ describe("install smoke no-push root image transport", () => {
         expect(checkout.with, jobName).toMatchObject({
           repository: "openclaw/openclaw",
           ref: "main",
+          path: harnessPath,
           "fetch-depth": 1,
           "persist-credentials": false,
         });
@@ -199,6 +227,7 @@ describe("install smoke no-push root image transport", () => {
     expect(trustedJobs.toSorted()).toEqual(
       [
         "bun_global_install_smoke",
+        "install-smoke-fast",
         "installer_smoke_candidate_payload",
         "installer_smoke_nonroot",
         "installer_smoke_nonroot_image",
@@ -725,7 +754,7 @@ describe("install smoke no-push root image transport", () => {
     expect(bunVerify.run).toContain("install-smoke-candidate-payload.mts verify");
     expect(bunVerify.run).toContain('--run-id "$PRODUCER_RUN_ID"');
     expect(bunVerify.run).toContain('--run-attempt "$PRODUCER_RUN_ATTEMPT"');
-    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.0");
+    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.2");
     expect(step(bunConsumer, "Run Bun global install candidate-payload smoke")).toMatchObject({
       "working-directory": ".release-harness",
       env: {

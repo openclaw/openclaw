@@ -14,6 +14,8 @@ export type CommandPaletteInputSnapshot = Pick<
 export type CommandPaletteOpenInput = CommandPaletteInputSnapshot & {
   returnFocus?: HTMLElement | null;
   submitRequested?: true;
+  /** Position of an explicitly typed @ retained only during the cold-input handoff. */
+  mentionTrigger?: number;
   /** Clipboard Files remain in memory until the canonical draft admits and reads them. */
   imageFiles?: readonly File[];
 };
@@ -56,17 +58,6 @@ function isCommandPaletteTargetDetail(value: unknown): value is CommandPaletteTa
   );
 }
 
-function commandPaletteTargetFromEvent(
-  current: CommandPaletteTargetDetail | undefined,
-  event: Event,
-): CommandPaletteTargetDetail | null | undefined {
-  const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
-  if (!isCommandPaletteTargetDetail(detail)) {
-    return null;
-  }
-  return detail.onSlashCommand ? detail : current?.owner === detail.owner ? undefined : current;
-}
-
 export function applyCommandPaletteTargetEvent(
   host: HTMLElement & {
     commandPaletteTarget: CommandPaletteTargetDetail | undefined;
@@ -74,11 +65,16 @@ export function applyCommandPaletteTargetEvent(
   },
   event: Event,
 ): void {
-  const target = commandPaletteTargetFromEvent(host.commandPaletteTarget, event);
-  if (target !== null) {
-    host.commandPaletteTarget = target;
-    host.requestUpdate();
+  const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
+  if (!isCommandPaletteTargetDetail(detail)) {
+    return;
   }
+  host.commandPaletteTarget = detail.onSlashCommand
+    ? detail
+    : host.commandPaletteTarget?.owner === detail.owner
+      ? undefined
+      : host.commandPaletteTarget;
+  host.requestUpdate();
 }
 
 export type CommandPaletteElement = HTMLElement & {

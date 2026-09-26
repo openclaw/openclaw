@@ -1,6 +1,7 @@
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
@@ -12,7 +13,7 @@ import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import type { MonitorTelegramOpts } from "./monitor.types.js";
 import { acquireTelegramPollingLease } from "./polling-lease.js";
-import { makeProxyFetch } from "./proxy.js";
+import { getTelegramRuntime } from "./runtime.js";
 import {
   createTelegramUpdateOffsetPersistence,
   normalizeTelegramUpdateId,
@@ -41,9 +42,7 @@ const loadTelegramMonitorPollingRuntime = createLazyRuntimeModule(
   () => import("./monitor-polling.runtime.js"),
 );
 
-const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(
-  () => import("./monitor-webhook.runtime.js"),
-);
+const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(() => import("./webhook.js"));
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);
@@ -94,16 +93,15 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       ownerAgentId,
       config: cfg,
       path: opts.webhookPath,
-      port: opts.webhookPort,
+      legacyWebhook: opts.legacyWebhook ?? account.config.legacyWebhook,
       secret: opts.webhookSecret ?? account.config.webhookSecret,
-      host: opts.webhookHost ?? account.config.webhookHost,
       runtime: opts.runtime as RuntimeEnv,
       buildContext: pluginChannelRuntime?.inbound.buildContext,
       // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
       dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
       fetch: proxyFetch,
       abortSignal: opts.abortSignal,
-      publicUrl: opts.webhookUrl,
+      publicUrl: opts.webhookUrl ?? account.config.webhookUrl,
       webhookCertPath: opts.webhookCertPath,
       setStatus: opts.setStatus,
     });
@@ -156,9 +154,26 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       onRotationDetected: async (info) => {
         log(formatTelegramOffsetRotationMessage(account.accountId, info));
         try {
+          if (info.previousBotId !== null && info.previousBotId !== info.currentBotId) {
+            const queue = getTelegramRuntime().state.openChannelIngressQueue({
+              accountId: account.accountId,
+            });
+            if (!queue.purge) {
+              throw new Error(
+                "The host does not support ingress identity resets; update OpenClaw.",
+              );
+            }
+            opts.abortSignal?.throwIfAborted();
+            await queue.purge({ signal: opts.abortSignal });
+          }
+          // An abort keeps the old identity so the next start re-detects and repeats the purge.
+          opts.abortSignal?.throwIfAborted();
           await deleteTelegramUpdateOffset({ accountId: account.accountId });
         } catch (err) {
-          logError(`telegram: failed to delete stale update offset after rotation: ${String(err)}`);
+          throw new Error(
+            `telegram: failed to reset ingress for account "${account.accountId}" after rotation; restart the account to retry: ${formatErrorMessage(err)}`,
+            { cause: err },
+          );
         }
       },
     });

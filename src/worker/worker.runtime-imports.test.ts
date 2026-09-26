@@ -4,9 +4,13 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { workerImportRuntimeEntrypoints } from "./worker-import-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+const runtimeUrl = resolveRuntimeWorkerUrl(workerImportRuntimeEntrypoints.runtime);
 
 describe("worker runtime imports during admission", () => {
   it.each([
@@ -21,11 +25,14 @@ describe("worker runtime imports during admission", () => {
     const result = await runNodeScript(
       [
         "--unhandled-rejections=strict",
-        "--import",
-        path.join(repoRoot, "scripts/tsx.mjs"),
+        ...resolveRuntimeWorkerArgv(runtimeUrl, resolveTestNodeExecPath()).slice(0, -1),
         fileURLToPath(new URL("./worker.runtime-imports.test-support.mjs", import.meta.url)),
         mode,
         workspace,
+        runtimeUrl.href,
+        resolveRuntimeWorkerUrl(workerImportRuntimeEntrypoints.launchDescriptor).href,
+        resolveRuntimeWorkerUrl(workerImportRuntimeEntrypoints.admission).href,
+        resolveRuntimeWorkerUrl(workerImportRuntimeEntrypoints.websocketData).href,
       ],
       {
         PATH: process.env.PATH,

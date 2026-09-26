@@ -32,13 +32,6 @@ export class ModelCache {
     if (!model) {
       throw new UnsupportedInputError("Unknown ONNX model.");
     }
-    if (this.models.size >= this.config.maxLoadedModels) {
-      const first = this.models.entries().next().value;
-      if (first) {
-        this.models.delete(first[0]);
-        await first[1].session.release();
-      }
-    }
     const files = await resolveModelFiles(this.config.modelDir, model);
     const buffers = new Map<string, Buffer>();
     for (const file of files) {
@@ -54,6 +47,13 @@ export class ModelCache {
       jsonObject(tokenizerBytes),
       tokenizerConfig ? jsonObject(tokenizerConfig) : {},
     );
+    if (this.models.size >= this.config.maxLoadedModels) {
+      const first = this.models.entries().next().value;
+      if (first) {
+        this.models.delete(first[0]);
+        await first[1].session.release();
+      }
+    }
     // An in-memory graph cannot implicitly follow external-data filesystem paths.
     const session = await InferenceSession.create(modelBytes, {
       executionProviders: ["cpu"],

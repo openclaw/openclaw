@@ -21,7 +21,7 @@ import {
   findNodeAdoptedSessionEntry,
   nodeAdoptedSourceKey,
   nodeSessionMarker,
-  runSessionActionExclusive,
+  catalogSessionActions,
   type AdoptedSessionEntry,
   type CodexNodeHistory,
   type CodexSessionDisposition,
@@ -399,7 +399,7 @@ export async function continueNodeCodexSession(params: {
     sourceKey: operationKey,
     findExisting: () => undefined,
     create: () =>
-      runSessionActionExclusive(sourceKey, async () =>
+      catalogSessionActions.enqueue(sourceKey, async () =>
         continueNodeCodexSessionInner({ ...params, agentId }),
       ),
     complete: async (continued) =>

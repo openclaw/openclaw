@@ -1,7 +1,10 @@
+import { Check } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
+import { ModelsListResultSchema } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
@@ -118,12 +121,21 @@ describe("models.list plugin metadata handoff", () => {
         entries: chat ? [catalogEntry("chat")] : [],
         routeVariants: [],
       };
+      const capabilities: DecisionProviderCapabilities = {
+        questionTypes: ["boolean", "choice", "score"],
+        maxQuestions: 32,
+        maxInputTokens: 512,
+        inputTokenScope: "state-plus-each-criterion",
+        confidence: "provider-specific",
+      };
       const metadataSnapshot = createPluginMetadataSnapshotFixture({
         plugins: [
           {
             id: "decisions",
             contracts: { decisionProviders: ["fixture"] },
-            decisionModels: [{ provider: "fixture", id: "fast", name: "Fast decisions" }],
+            decisionModels: [
+              { provider: "fixture", id: "fast", name: "Fast decisions", capabilities },
+            ],
           },
           ...(chat ? [{ id: "custom", providers: ["custom"] }] : []),
         ],
@@ -166,10 +178,12 @@ describe("models.list plugin metadata handoff", () => {
                 id: "fast",
                 name: "Fast decisions",
                 pluginId: "decisions",
+                capabilities,
               },
             ]
           : [],
       );
+      expect(Check(ModelsListResultSchema, result)).toBe(true);
       expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
     },
   );

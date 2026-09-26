@@ -43,12 +43,13 @@ it.each(["worker", "snapshot"] as const)(
         const pools = new Set<WorkerTaskPool<unknown, unknown>>();
         // oxlint-disable-next-line typescript/unbound-method -- call restores the intercepted pool receiver below.
         const close = WorkerTaskPool.prototype.close;
-        const closeSpy = vi
-          .spyOn(WorkerTaskPool.prototype, "close")
-          .mockImplementation(function (this: WorkerTaskPool<unknown, unknown>, error) {
-            pools.add(this);
-            return close.call(this, error);
-          });
+        const closeSpy = vi.spyOn(WorkerTaskPool.prototype, "close").mockImplementation(function (
+          this: WorkerTaskPool<unknown, unknown>,
+          error,
+        ) {
+          pools.add(this);
+          return close.call(this, error);
+        });
         // Test cleanup must also reclaim the intentionally leaked pre-fix resources.
         const readers: Array<() => void> = [];
         const directories: string[] = [];

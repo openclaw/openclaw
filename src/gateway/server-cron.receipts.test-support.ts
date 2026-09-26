@@ -7,9 +7,14 @@ import { CronService } from "../cron/service.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { findActiveCronRunReceiptInDatabase } from "../cron/store/run-receipt-store.js";
 import type { CronJobCreate } from "../cron/types.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { buildGatewayCronService } from "./server-cron.js";
 
 type CronFixture = ReturnType<typeof buildGatewayCronService>;
@@ -26,7 +31,10 @@ type GatewayCronReceiptTestHarness = {
     spawn: Mock<() => Promise<WatchedRun & { runId: string }>>;
   };
   createCronConfig: (name: string) => OpenClawConfig;
-  loadCronService: (cfg: OpenClawConfig) => CronFixture;
+  loadCronService: (
+    cfg: OpenClawConfig,
+    overrides?: { scheduler: GatewayScheduler },
+  ) => CronFixture;
   getCronDeps: (service: CronFixture) => Pick<CronServiceState["deps"], "runCommandJob">;
   getConcreteCron: (service: CronFixture) => CronService;
   addCronJob: (
@@ -70,7 +78,18 @@ export function registerGatewayCronReceiptTests({
       const cleanupGuardRegistered = createDeferred();
       const receiptRecheckRegistered = createDeferred();
       const { spawn } = mockCronSupervisor(...watched);
-      const state = loadCronService(createCronConfig("server-cron-on-exit-receipt"));
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler({
+        ...clock.clock,
+        arm: (run, delayMs) => {
+          const cancel = clock.clock.arm(run, delayMs);
+          if (delayMs === 2_000) {
+            receiptRecheckRegistered.resolve();
+          }
+          return cancel;
+        },
+      });
+      const state = loadCronService(createCronConfig("server-cron-on-exit-receipt"), { scheduler });
       const runCommandJob = vi.fn<NonNullable<CronServiceState["deps"]["runCommandJob"]>>(
         async () => ({ status: "ok", summary: "next payload" }),
       );
@@ -111,8 +130,6 @@ export function registerGatewayCronReceiptTests({
           const timer = schedule(callback, delay, ...args);
           if (delay === 20_000) {
             cleanupGuardRegistered.resolve();
-          } else if (delay === 2_000) {
-            receiptRecheckRegistered.resolve();
           }
           return timer;
         });
@@ -187,6 +204,7 @@ export function registerGatewayCronReceiptTests({
         if (action === "run" || action === "replace") {
           // The registered receipt owner rechecks active fences every two seconds.
           await vi.advanceTimersByTimeAsync(2_000);
+          await clock.advanceBy(2_000);
           await vi.waitFor(() => expect(runCommandJob).toHaveBeenCalledTimes(2), {
             timeout: 5_000,
           });
@@ -240,15 +258,20 @@ export function registerGatewayCronHandoffTests({
     async (outcome) => {
       const watched = [createWatchedRun(false), createWatchedRun(false)] as const;
       const exits = [watched[0].exit, watched[1].exit] as const;
+      const firstStarted = createDeferred();
+      const secondStarted = createDeferred();
       const releaseFirst = createDeferred();
       const releaseSecond = createDeferred();
       const { spawn } = mockCronSupervisor(...watched);
       requestHeartbeatAndWaitMock
+        .mockReset()
         .mockImplementationOnce(async () => {
+          firstStarted.resolve();
           await releaseFirst.promise;
           return { status: "ran", durationMs: 1 };
         })
         .mockImplementationOnce(async () => {
+          secondStarted.resolve();
           await releaseSecond.promise;
           return { status: "ran", durationMs: 1 };
         });
@@ -284,7 +307,8 @@ export function registerGatewayCronHandoffTests({
         await previous.reconcileExitWatchers();
         expect(spawn).toHaveBeenCalledTimes(2);
         exits[0].resolve(runExit({ reason: "exit", exitCode: 0 }));
-        await vi.waitFor(() => expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce());
+        await firstStarted.promise;
+        expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
         const oldHandoff = expectDefined(
           await previous.prepareExitWatcherHandoff?.(),
           "previous handoff",
@@ -310,16 +334,21 @@ export function registerGatewayCronHandoffTests({
             expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
           }
           await next.cron.start();
-          await vi.waitFor(() => expect(requestHeartbeatAndWaitMock).toHaveBeenCalledTimes(2));
+          await secondStarted.promise;
+          expect(requestHeartbeatAndWaitMock).toHaveBeenCalledTimes(2);
+          expect(nextRun).toHaveBeenCalledOnce();
           expect(requestHeartbeatAndWaitMock).toHaveBeenNthCalledWith(
             2,
             expect.objectContaining({ reason: "cron:" + secondId }),
             expect.anything(),
           );
           releaseSecond.resolve();
-          await vi.waitFor(() =>
-            expect(next.cron.getJob(secondId)?.state.lastRunStatus).toBe("ok"),
-          );
+          const completion = expectDefined(nextRun.mock.results[0], "adopted on-exit run");
+          if (completion.type !== "return") {
+            throw new Error("Adopted on-exit run did not return a completion");
+          }
+          await completion.value;
+          expect(next.cron.getJob(secondId)?.state.lastRunStatus).toBe("ok");
           expect(enqueueSystemEventMock).toHaveBeenLastCalledWith(
             expect.stringContaining("completed before reload"),
             expect.anything(),
@@ -340,10 +369,16 @@ export function registerGatewayCronHandoffTests({
         for (const exit of exits) {
           exit.resolve(runExit());
         }
-        await adoption;
-        await next.cron.stopAndDrain?.();
-        await previous.cron.stopAndDrain?.();
-        start?.mockRestore();
+        try {
+          await adoption;
+          await next.cron.stopAndDrain?.();
+          await previous.cron.stopAndDrain?.();
+        } finally {
+          nextRun.mockRestore();
+          start?.mockRestore();
+          // The stop case deliberately leaves its second heartbeat unconsumed.
+          requestHeartbeatAndWaitMock.mockReset();
+        }
       }
     },
   );

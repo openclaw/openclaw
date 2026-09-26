@@ -157,6 +157,28 @@ describe("buildInworldSpeechProvider", () => {
     });
   });
 
+  it("preserves inherited Talk settings when overrides are blank", () => {
+    const provider = buildInworldSpeechProvider();
+    const params = { voiceId: " ", modelId: " inworld-tts-1.5-mini ", temperature: 0.5 };
+    const talk = provider.resolveTalkConfig?.({
+      cfg: {},
+      baseTtsConfig: { providers: { inworld: { apiKey: "base-key", voiceId: "Ashley" } } },
+      talkProviderConfig: { ...params, apiKey: " ", baseUrl: " " },
+      timeoutMs: 1000,
+    });
+    expect(talk).toMatchObject({
+      apiKey: "base-key",
+      baseUrl: "https://api.inworld.ai",
+      voiceId: "Ashley",
+      modelId: "inworld-tts-1.5-mini",
+      temperature: 0.5,
+    });
+    expect(provider.resolveTalkOverrides?.({ talkProviderConfig: {}, params })).toStrictEqual({
+      modelId: "inworld-tts-1.5-mini",
+      temperature: 0.5,
+    });
+  });
+
   it("parses Inworld TTS directive overrides", () => {
     const provider = buildInworldSpeechProvider();
     const policy = {

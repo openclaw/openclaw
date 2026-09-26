@@ -22,8 +22,7 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { findSecretStoreRedactedValueFindings } from "../secrets/audit-store.js";
-import { isLikelySensitiveModelProviderHeaderName } from "../secrets/model-provider-header-policy.js";
-import { hasConfiguredPlaintextSecretValue } from "../secrets/secret-value.js";
+import { classifyConfigSecretTarget } from "../secrets/config-secret-target.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { collectChannelSecurityFindingsCore } from "../security/audit-channel.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
@@ -239,30 +238,10 @@ function collectExecFilesystemPolicyWarnings(cfg: OpenClawConfig): SecurityAudit
 
 function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const plaintextPaths: string[] = [];
-  const defaults = cfg.secrets?.defaults;
-
   for (const target of discoverConfigSecretTargets(cfg)) {
-    if (!target.entry.includeInAudit) {
-      continue;
+    if (classifyConfigSecretTarget(cfg, target).plaintext) {
+      plaintextPaths.push(target.path);
     }
-    if (
-      target.entry.id === "models.providers.*.headers.*" &&
-      !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
-    ) {
-      continue;
-    }
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults,
-    });
-    if (ref) {
-      continue;
-    }
-    if (!hasConfiguredPlaintextSecretValue(target.value, target.entry.expectedResolvedValue)) {
-      continue;
-    }
-    plaintextPaths.push(target.path);
   }
 
   if (plaintextPaths.length === 0) {

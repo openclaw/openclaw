@@ -115,7 +115,7 @@ export function commitSubagentTaskReplacement(params: {
     deferredObserverEvents,
   });
   if (flow) {
-    publishTaskFlowAfterAtomicStore(flow, deferredObserverEvents);
+    publishTaskFlowAfterAtomicStore(flow);
   }
   for (const emitObserverEvent of deferredObserverEvents) {
     emitObserverEvent();

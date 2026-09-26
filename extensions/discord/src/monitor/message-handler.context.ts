@@ -16,6 +16,7 @@ import {
   buildInboundHistoryFromEntries,
   createChannelHistoryWindow,
 } from "openclaw/plugin-sdk/reply-history";
+import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -33,7 +34,10 @@ import {
   buildDiscordInboundAccessContext,
   createDiscordSupplementalContextAccessChecker,
 } from "./inbound-context.js";
-import { resolveDiscordMessageStickers } from "./message-forwarded.js";
+import {
+  resolveDiscordMessageStickers,
+  resolveDiscordReferencedReplyMessageId,
+} from "./message-forwarded.js";
 import {
   createDiscordHistorySenderProvenance,
   filterDiscordHistoryEntriesForContext,
@@ -428,6 +432,7 @@ export async function buildDiscordMessageProcessContext(params: {
     {
       agentId: route.agentId,
       sessionKey: effectiveSessionKey,
+      nativeChannelId: messageChannelId,
       messageId: canonicalMessageId ?? message.id,
       inboundEventKind: ctx.inboundEventKind,
     },
@@ -440,12 +445,12 @@ export async function buildDiscordMessageProcessContext(params: {
     return null;
   }
 
+  const batchMessageIds =
+    ctx.sourceMessageIds && ctx.sourceMessageIds.length > 1 ? [...ctx.sourceMessageIds] : undefined;
   const ctxPayload = await (ctx.buildContext ?? buildChannelInboundEventContext)({
     channelIngress,
     channel: "discord",
     resolveSupplementalMedia: true,
-    // User-selected bot text is reply context, not a new bot-authored event.
-    suppressSelfQuoteBody: false,
     contextVisibility: contextVisibilityMode,
     accountId: route.accountId,
     messageId: canonicalMessageId ?? message.id,
@@ -481,9 +486,7 @@ export async function buildDiscordMessageProcessContext(params: {
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },
     route: {
-      agentId: route.agentId,
-      dmScope: route.dmScope,
-      accountId: route.accountId,
+      ...route,
       routeSessionKey: route.sessionKey,
       dispatchSessionKey: effectiveSessionKey,
       parentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
@@ -492,6 +495,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
     reply: {
       to: effectiveTo,
+      replyToId: resolveDiscordReferencedReplyMessageId(message) ?? undefined,
       ...(originatingTo !== effectiveTo ? { originatingTo } : {}),
     },
     message: {
@@ -565,6 +569,13 @@ export async function buildDiscordMessageProcessContext(params: {
       groupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     },
     extra: {
+      MessageSids: batchMessageIds,
+      MessageSidFirst: batchMessageIds?.[0],
+      MessageSidLast: batchMessageIds?.at(-1),
+      ReplyThreading: resolveBatchedReplyThreadingPolicy(
+        replyToMode,
+        batchMessageIds !== undefined,
+      ),
       GroupThread: ctx.groupThread,
       ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
       GroupSubject: isDirectMessage ? undefined : groupChannel,

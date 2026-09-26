@@ -1,14 +1,15 @@
 // Memory Core tests cover index plugin behavior.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  encodeMemoryEmbedding,
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_CHUNKING_VERSION,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
-  type MemorySessionSyncTarget,
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -19,11 +20,13 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
+import { writeMemoryIndexArchiveTranscript } from "./index-archive.test-support.js";
 import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
 } from "./manager-index.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 import { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -40,7 +43,6 @@ describe("memory index", () => {
     getFtsSessionManager,
     getPersistentManager,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
-    trackManager,
   } = fixture;
 
   it("rebuilds a missing vector table through forced sync with cached readiness", async () => {
@@ -48,7 +50,6 @@ describe("memory index", () => {
       vectorEnabled: true,
     });
     const manager = await getFreshManager(cfg);
-    trackManager(manager);
     await manager.sync({ reason: "test", force: true });
     const db = Reflect.get(manager, "db") as DatabaseSync;
     expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
@@ -562,7 +563,7 @@ describe("memory index", () => {
       db.prepare(
         `INSERT INTO memory_index_chunks
          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, ?, 'memory', 1, 3, ?, 'fts-only', ?, '[]', ?)`,
+         VALUES (?, ?, 'memory', 1, 3, ?, 'fts-only', ?, x'', ?)`,
       ).run(
         "legacy-curated-chunk",
         "MEMORY.md",
@@ -584,7 +585,7 @@ describe("memory index", () => {
          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
          VALUES (
            'stale-default-media', 'memory/default-diagram.png', 'memory', 1, 1,
-           'stale-default-media', 'fts-only', 'Image file: memory/default-diagram.png', '[]', ?
+           'stale-default-media', 'fts-only', 'Image file: memory/default-diagram.png', x'', ?
          )`,
       ).run(Date.now());
       db.prepare(
@@ -765,8 +766,8 @@ describe("memory index", () => {
       await statusManager.close?.();
       statusManager = undefined;
 
-      expect(await fs.readFile(agentPath)).toEqual(databaseBefore);
-      expect(await fs.readFile(`${agentPath}-wal`)).toEqual(walBefore);
+      assert.deepStrictEqual(await fs.readFile(agentPath), databaseBefore);
+      assert.deepStrictEqual(await fs.readFile(`${agentPath}-wal`), walBefore);
     } finally {
       await statusManager?.close?.();
       writer.close();
@@ -828,10 +829,10 @@ describe("memory index", () => {
         }
       ).db
         .prepare("SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
-        .get("%2026-01-13.md", "memory") as { embedding: string } | undefined;
+        .get("%2026-01-13.md", "memory") as { embedding: Uint8Array } | undefined;
 
       expect(betaRow).toBeDefined();
-      expect(JSON.parse(betaRow?.embedding ?? "[]")).toEqual([0, 1, 0, 0]);
+      expect(betaRow?.embedding).toEqual(encodeMemoryEmbedding([0, 1, 0, 0]));
     } finally {
       await manager.close?.();
     }
@@ -1568,12 +1569,12 @@ describe("memory index", () => {
       manager.takeReindexRetryStateForMaintenance();
       const recoveryState = manager as unknown as {
         syncing: Promise<void> | null;
-        queuedSessions: Map<string, unknown>;
+        sessionSyncQueue: MemoryTargetedSessionSyncQueue;
         sessionsDirtyFiles: Set<string>;
         sessionsFullRetryDirty: boolean;
       };
       expect(recoveryState.syncing).toBeNull();
-      expect(recoveryState.queuedSessions.size).toBe(1);
+      expect(recoveryState.sessionSyncQueue.sessions.size).toBe(1);
       expect(recoveryState.sessionsDirtyFiles.size).toBe(0);
       expect(recoveryState.sessionsFullRetryDirty).toBe(false);
 
@@ -1597,7 +1598,7 @@ describe("memory index", () => {
 
       expect(ftsMatchCount(markers.retained)).toBeGreaterThan(0);
       expect(ftsMatchCount(markers.trigger)).toBeGreaterThan(0);
-      expect(recoveryState.queuedSessions.size).toBe(0);
+      expect(recoveryState.sessionSyncQueue.sessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
     } finally {
       db.close();
@@ -1630,9 +1631,8 @@ describe("memory index", () => {
       rejectQueuedSync = reject;
     });
     const owner = manager as unknown as {
+      sessionSyncQueue: MemoryTargetedSessionSyncQueue;
       syncing: Promise<void> | null;
-      queuedSessions: Map<string, MemorySessionSyncTarget>;
-      queuedSessionSync: Promise<void> | null;
       runSync: (params?: MemorySyncParams) => Promise<void>;
     };
     const originalRunSync = owner.runSync.bind(owner);
@@ -1687,7 +1687,7 @@ describe("memory index", () => {
       await vi.waitFor(() => {
         expect(runSyncSpy).toHaveBeenCalledTimes(3);
         expect(owner.syncing).not.toBeNull();
-        expect(owner.queuedSessionSync).not.toBeNull();
+        expect(owner.sessionSyncQueue.pending).not.toBeNull();
       });
       const rejectingQueuedSync = owner.syncing;
       if (!rejectingQueuedSync) {
@@ -1705,8 +1705,8 @@ describe("memory index", () => {
       void rejectingQueuedSync.catch(() => {
         transitionState = {
           syncingNull: owner.syncing === null,
-          queueOwnerLive: owner.queuedSessionSync !== null,
-          queuedTargets: owner.queuedSessions.size,
+          queueOwnerLive: owner.sessionSyncQueue.pending !== null,
+          queuedTargets: owner.sessionSyncQueue.sessions.size,
         };
         const transitionCall = manager.sync({
           reason: "test-live-rejection-transition",
@@ -1741,7 +1741,7 @@ describe("memory index", () => {
         queueOwnerLive: true,
         queuedTargets: 0,
       });
-      expect(Array.from(owner.queuedSessions.values())).toEqual([
+      expect(Array.from(owner.sessionSyncQueue.sessions.values())).toEqual([
         {
           agentId: "main",
           sessionId: "transition",
@@ -1784,7 +1784,7 @@ describe("memory index", () => {
       } finally {
         observer.close();
       }
-      expect(owner.queuedSessions.size).toBe(0);
+      expect(owner.sessionSyncQueue.sessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
       expect(transitionProgress).not.toHaveBeenCalled();
     } finally {
@@ -1808,18 +1808,16 @@ describe("memory index", () => {
       resolveFullSync = resolve;
     });
     const owner = manager as unknown as {
+      sessionSyncQueue: MemoryTargetedSessionSyncQueue;
       closing: boolean;
       closed: boolean;
-      queuedSessions: Map<string, MemorySessionSyncTarget>;
-      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
-      queuedForce: boolean;
       syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
       runSync: (params?: MemorySyncParams) => Promise<void>;
     };
     const syncAdmitted = vi.spyOn(owner, "syncAdmitted");
     const runSyncSpy = vi.spyOn(owner, "runSync").mockReturnValueOnce(fullSyncGate);
     const progress = vi.fn();
-    owner.queuedSessions.set("retained", {
+    owner.sessionSyncQueue.sessions.set("retained", {
       agentId: "main",
       sessionId: "retained-close",
       sessionKey: "agent:main:retained-close",
@@ -1855,9 +1853,9 @@ describe("memory index", () => {
       expect(runSyncSpy).toHaveBeenCalledTimes(1);
       expect(syncAdmitted).toHaveBeenCalledTimes(2);
       expect(owner.closed).toBe(true);
-      expect(owner.queuedSessions.size).toBe(0);
-      expect(owner.queuedProgressCallbacks.size).toBe(0);
-      expect(owner.queuedForce).toBe(false);
+      expect(owner.sessionSyncQueue.sessions.size).toBe(0);
+      expect(owner.sessionSyncQueue.progressCallbacks.size).toBe(0);
+      expect(owner.sessionSyncQueue.force).toBe(false);
       expect(progress).not.toHaveBeenCalled();
     } finally {
       resolveFullSync?.();
@@ -1880,12 +1878,8 @@ describe("memory index", () => {
       resolveActiveSync = resolve;
     });
     const owner = manager as unknown as {
+      sessionSyncQueue: MemoryTargetedSessionSyncQueue;
       closed: boolean;
-      queuedArchiveFiles: Set<string>;
-      queuedSessions: Map<string, MemorySessionSyncTarget>;
-      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
-      queuedForce: boolean;
-      queuedSessionSync: Promise<void> | null;
       runSync: (params?: MemorySyncParams) => Promise<void>;
     };
     const runSyncSpy = vi
@@ -1925,27 +1919,27 @@ describe("memory index", () => {
       await queuedRejection;
 
       expect(runSyncSpy).toHaveBeenCalledTimes(2);
-      expect(owner.queuedArchiveFiles).toEqual(
+      expect(owner.sessionSyncQueue.archiveFiles).toEqual(
         new Set(["/tmp/retained-close-after-failure.jsonl"]),
       );
-      expect(Array.from(owner.queuedSessions.values())).toEqual([
+      expect(Array.from(owner.sessionSyncQueue.sessions.values())).toEqual([
         {
           agentId: "main",
           sessionId: "retained-close-after-failure",
           sessionKey: "agent:main:retained-close-after-failure",
         },
       ]);
-      expect(owner.queuedForce).toBe(true);
-      expect(owner.queuedProgressCallbacks.size).toBe(0);
-      expect(owner.queuedSessionSync).toBeNull();
+      expect(owner.sessionSyncQueue.force).toBe(true);
+      expect(owner.sessionSyncQueue.progressCallbacks.size).toBe(0);
+      expect(owner.sessionSyncQueue.pending).toBeNull();
 
       await manager.close?.();
 
       expect(owner.closed).toBe(true);
-      expect(owner.queuedArchiveFiles.size).toBe(0);
-      expect(owner.queuedSessions.size).toBe(0);
-      expect(owner.queuedProgressCallbacks.size).toBe(0);
-      expect(owner.queuedForce).toBe(false);
+      expect(owner.sessionSyncQueue.archiveFiles.size).toBe(0);
+      expect(owner.sessionSyncQueue.sessions.size).toBe(0);
+      expect(owner.sessionSyncQueue.progressCallbacks.size).toBe(0);
+      expect(owner.sessionSyncQueue.force).toBe(false);
     } finally {
       resolveActiveSync?.();
       await manager.close?.();
@@ -1954,28 +1948,10 @@ describe("memory index", () => {
   });
 
   it("keeps provider cutover vector search paused during targeted session sync", async () => {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "session-targeted-cutover.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session-targeted-cutover",
-          timestamp: "2026-04-07T15:24:04.113Z",
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: [{ type: "text", text: "Targeted cutover marker." }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+    const sessionFile = await writeMemoryIndexArchiveTranscript({
+      sessionId: "session-targeted-cutover",
+      text: "Targeted cutover marker.",
+    });
 
     const oldCfg = createCfg({
       sources: ["memory", "sessions"],
@@ -2015,27 +1991,10 @@ describe("memory index", () => {
   });
 
   it("preserves memory dirty events raised during session identity reindex", async () => {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sessionsDir, "session-dirty-during-reindex.jsonl"),
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session-dirty-during-reindex",
-          timestamp: "2026-04-07T15:24:04.113Z",
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: [{ type: "text", text: "Dirty during session marker." }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+    await writeMemoryIndexArchiveTranscript({
+      sessionId: "session-dirty-during-reindex",
+      text: "Dirty during session marker.",
+    });
 
     const oldCfg = createCfg({
       sources: ["memory", "sessions"],
@@ -2272,10 +2231,12 @@ describe("memory index", () => {
       const db = Reflect.get(diagnostic, "db") as DatabaseSync;
       db.prepare(`INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
-        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', '[0,1]', 2, 1)`).run();
+        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', ?, 2, 1)`).run(
+        encodeMemoryEmbedding([0, 1]),
+      );
       expect(diagnostic.status().storage).toMatchObject({
         embeddingCacheEntries: 1,
-        embeddingCacheBytes: 5,
+        embeddingCacheBytes: 16,
       });
       const storedBytes = db
         .prepare(
@@ -2332,16 +2293,15 @@ describe("memory index", () => {
     }
   });
 
-  it("drops the shipped legacy vector table and schedules a full reindex", async () => {
-    const cfg = createCfg({ vectorEnabled: true });
-    const manager = await getPersistentManager(cfg);
+  it("prepares the native vector connection after child retrieval and retires the legacy table", async () => {
+    const manager = await getPersistentManager(createCfg({ vectorEnabled: true }));
+    await manager.sync({ reason: "test", force: true });
+    await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
+    expect(manager.status().vector?.storeAvailable).toBe(true);
     const db = Reflect.get(manager, "db") as DatabaseSync;
     db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
 
-    const available = await manager.probeVectorStoreAvailability?.();
-    if (!available) {
-      return;
-    }
+    await expect(manager.probeVectorStoreAvailability?.()).resolves.toBe(true);
 
     expect(
       db
@@ -2578,7 +2538,6 @@ describe("memory index", () => {
     });
 
     const manager = await getFreshManager(cfg, "status", true);
-    trackManager(manager);
 
     const result = manager.status();
     expect(result.dirty).toBe(true);
@@ -2623,7 +2582,6 @@ describe("memory index", () => {
     });
 
     const initial = await getFreshManager(cfg, "cli");
-    trackManager(initial);
     await initial.sync({ reason: "cli", force: true });
     await expect(
       initial.search("ORBIT-DELETE-91", { minScore: 0, sources: ["sessions"] }),
@@ -2645,12 +2603,10 @@ describe("memory index", () => {
     ).resolves.toBe(true);
 
     const statusManager = await getFreshManager(cfg, "status", true);
-    trackManager(statusManager);
     expect(statusManager.status().dirty).toBe(true);
     await statusManager.close?.();
 
     const repairManager = await getFreshManager(cfg, "cli");
-    trackManager(repairManager);
     await repairManager.sync({ reason: "cli" });
     expect(providerFixture.embedBatchCalls).toBe(0);
     const deletedResults = await repairManager.search("ORBIT-DELETE-91", {

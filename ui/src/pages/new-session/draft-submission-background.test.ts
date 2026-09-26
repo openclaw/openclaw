@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createNativeNotificationsCapability } from "../../app/native-notifications.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import * as toast from "../../lib/toast.ts";
@@ -51,6 +52,54 @@ function failedPlacement(
 }
 
 describe("DraftSubmissionFlow background completion", () => {
+  it.each([
+    "replacement Gateway",
+    "changed credentials",
+    "changed account",
+    "unscoped reconnect",
+    "same-owner reconnect",
+  ] as const)("binds an already displayed completion action across %s", async (scenario) => {
+    const published = createDeferred();
+    const showToast = vi.spyOn(toast, "showToast").mockImplementation(() => {
+      published.resolve();
+      return true;
+    });
+    const { context, flow, dispose } = nativeBackgroundFixture({
+      request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
+    });
+    const navigate = vi.fn();
+    Object.assign(context, { navigate });
+    Object.assign(context.gateway, { connectionRevision: 1 });
+    if (scenario === "unscoped reconnect") {
+      delete context.gateway.snapshot.hello!.auth!.recoveryScope;
+    }
+    try {
+      await flow.submit(undefined, true);
+      await published.promise;
+      expect(showToast).toHaveBeenCalledOnce();
+      const action = showToast.mock.calls[0]?.[0].onAction;
+      expect(action).toBeTypeOf("function");
+      context.gateway.snapshot.client = createDraftFixture().context.gateway.snapshot.client;
+      if (scenario === "replacement Gateway") {
+        Object.assign(context.gateway.connection, { gatewayUrl: "ws://replacement.example" });
+        Object.assign(context.gateway, { connectionRevision: 2 });
+      } else if (scenario === "changed credentials") {
+        Object.assign(context.gateway, { connectionRevision: 2 });
+      } else if (scenario === "changed account") {
+        context.gateway.snapshot.hello!.auth!.recoveryScope = "principal-b";
+      }
+      action?.();
+      expect(context.gateway.setSessionKey).toHaveBeenCalledTimes(
+        scenario === "same-owner reconnect" ? 1 : 0,
+      );
+      expect(context.agentSelection.set).toHaveBeenCalledTimes(
+        scenario === "same-owner reconnect" ? 1 : 0,
+      );
+      expect(navigate).toHaveBeenCalledTimes(scenario === "same-owner reconnect" ? 1 : 0);
+    } finally {
+      dispose();
+    }
+  });
   it.each([
     { status: "idle" as const },
     { status: "started" as const },
@@ -122,14 +171,19 @@ describe("DraftSubmissionFlow background completion", () => {
     }
   });
 
-  it.each(["selected session", "replaced Gateway"])(
+  it.each(["selected session", "replaced Gateway", "changed credentials", "changed account"])(
     "suppresses a background completion for the %s",
     async (scenario) => {
+      const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
       const { context, flow, request, postMessage, dispose } = nativeBackgroundFixture();
       request.mockImplementation(async (method) => {
         if (method === "agent.wait") {
           if (scenario === "selected session") {
             context.gateway.snapshot.sessionKey = "agent:main:dashboard:background";
+          } else if (scenario === "changed credentials") {
+            Object.assign(context.gateway, { connectionRevision: 2 });
+          } else if (scenario === "changed account") {
+            context.gateway.snapshot.hello!.auth!.recoveryScope = "principal-b";
           } else {
             context.gateway.snapshot.client = null;
           }
@@ -141,6 +195,7 @@ describe("DraftSubmissionFlow background completion", () => {
         await flow.submit(undefined, true);
         await Promise.resolve();
         expect(postMessage.mock.calls).toEqual([[{ type: "status" }]]);
+        expect(showToast).not.toHaveBeenCalled();
       } finally {
         dispose();
       }

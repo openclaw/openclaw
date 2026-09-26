@@ -1,9 +1,11 @@
 import path from "node:path";
 import { ChannelType, MessageType, type APIMessage } from "discord-api-types/v10";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Message } from "../internal/discord.js";
+import { setDiscordRuntime } from "../runtime.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
@@ -78,6 +80,10 @@ const buildContext = (ctx: DiscordMessagePreflightContext) =>
   buildDiscordMessageProcessContext({ ctx, text: "addressed current turn", mediaList: [] });
 
 describe("Discord native recent history through process context", () => {
+  beforeEach(() => {
+    setDiscordRuntime(createPluginRuntimeMock());
+  });
+
   it("keeps quiet ingress quiet, then excludes each debounced original without losing its current text", async () => {
     const base = await recentContext();
     const get = vi
@@ -488,13 +494,9 @@ describe("Discord native recent history through process context", () => {
     expect(second?.ctxPayload.Body).not.toContain("first account discussion");
   });
 
-  it.each([
-    { allowBots: false, expected: ["898"] },
-    { allowBots: true, expected: ["894", "895", "896", "897", "898", "899"] },
-    { allowBots: "mentions", expected: ["895", "896", "898"] },
-  ])(
-    "excludes own-bot history while respecting allowBots=$allowBots",
-    async ({ allowBots, expected }) => {
+  it.each([undefined, false, true, "mentions"] as const)(
+    "retains other bots as context independently of allowBots=%s",
+    async (allowBots) => {
       const bot = { ...nativeMessage(900).author, id: "other-bot", bot: true };
       const reply = {
         author: bot,
@@ -523,7 +525,14 @@ describe("Discord native recent history through process context", () => {
       ctx.cfg = { ...ctx.cfg, messages: { groupChat: { mentionPatterns: ["history-helper"] } } };
       const result = await buildContext(ctx);
 
-      expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual(expected);
+      expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual([
+        "894",
+        "895",
+        "896",
+        "897",
+        "898",
+        "899",
+      ]);
       expect(result?.ctxPayload.Body).not.toContain("own bot output");
     },
   );

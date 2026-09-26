@@ -139,7 +139,6 @@ describe("logbook gateway methods", () => {
   it.each([
     ["source", "extensions/logbook/index.ts", "extensions/logbook/src/store.worker.ts"],
     ["standalone", "plugins/logbook/dist/index.js", "plugins/logbook/dist/src/store.worker.js"],
-    ["bundled", "dist/extensions/logbook/index.js", "dist/extensions/logbook/src/store.worker.js"],
   ] as const)(
     "locates its %s worker from the selected runtime entry",
     async (_layout, entry, worker) => {

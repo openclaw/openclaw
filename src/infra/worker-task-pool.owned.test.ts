@@ -87,6 +87,39 @@ function holdExit(worker: FakeWorker) {
 beforeEach(() => {
   workers.splice(0);
 });
+
+it("retires only idle slots on critical pressure, after result and resource custody settle", async () => {
+  const pool = createPool({ idleTimeoutMs: 30 * 60_000 });
+  const pressure = diagnosticsChannel("openclaw.memory.critical");
+  const task = pool.runTask("read", {});
+  const worker = workerFor("read");
+  pressure.publish(undefined);
+  reply(worker, "read");
+  await task.result;
+  pressure.publish(undefined);
+  expect(worker.terminate).not.toHaveBeenCalled();
+  await task.close();
+  const cleanup = pool.closeResources("source");
+  pressure.publish(undefined);
+  expect(worker.terminate).not.toHaveBeenCalled();
+  const receipt = expectDefined(
+    worker.postMessage.mock.calls.at(-1)?.[0].resourcePort,
+    "cleanup receipt",
+  );
+  receipt.postMessage({ ok: true }, []);
+  receipt.close();
+  await cleanup;
+  pressure.publish(undefined);
+  await nextTurn();
+  expect(worker.terminate).toHaveBeenCalledOnce();
+  expect(pool.getSnapshot().workers).toBe(0);
+  const next = pool.runTask("next", {});
+  const replacement = workerFor("next");
+  expect(replacement).not.toBe(worker);
+  reply(replacement, "next");
+  await next.result;
+  await next.close();
+});
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
 });

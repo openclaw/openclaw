@@ -86,6 +86,8 @@ export const UpdateAvailableSchema = closedObject({
 
 const GitInstallMetadataProperties = {
   currentSha: Type.Optional(NonEmptyString),
+  upstreamSha: Type.Optional(NonEmptyString),
+  repositoryUrl: Type.Optional(NonEmptyString),
   commitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   installedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 } as const;

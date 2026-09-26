@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -129,7 +130,8 @@ it.each([
           if (entry.type === "symlink") {
             expect(await fs.readlink(target)).toBe(entry.target);
           } else {
-            expect(await fs.readFile(target)).toEqual(fixture.files.get(entry.path));
+            // Node compares Buffer bytes without Vitest's per-byte object traversal.
+            assert.deepStrictEqual(await fs.readFile(target), fixture.files.get(entry.path));
             if (process.platform !== "win32") {
               expect((await fs.stat(target)).mode & 0o777).toBe(entry.mode);
             }

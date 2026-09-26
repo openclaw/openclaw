@@ -4,16 +4,13 @@ import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime
 import { coerceSecretRef, normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { findMatrixAccountConfig } from "./account-config.js";
-import {
-  resolveMatrixConfigPath as resolveMatrixConfigPathBase,
-  shouldStoreMatrixAccountAtTopLevel,
-} from "./config-paths.js";
+import { shouldStoreMatrixAccountAtTopLevel } from "./config-paths.js";
 
 export {
   resolveMatrixConfigFieldPath,
+  resolveMatrixConfigPath,
   shouldStoreMatrixAccountAtTopLevel,
 } from "./config-paths.js";
-export const resolveMatrixConfigPath = resolveMatrixConfigPathBase;
 
 export type MatrixAccountPatch = {
   name?: string | null;
@@ -103,11 +100,9 @@ function cloneMatrixRoomMap(rooms: MatrixConfig["groups"]): MatrixConfig["groups
   if (!rooms) {
     return rooms;
   }
-  const clonedRoomEntries: Array<[string, NonNullable<MatrixConfig["groups"]>[string]]> = [];
-  for (const [roomId, roomCfg] of Object.entries(rooms)) {
-    clonedRoomEntries.push([roomId, roomCfg ? { ...roomCfg } : roomCfg]);
-  }
-  return Object.fromEntries(clonedRoomEntries);
+  return Object.fromEntries(
+    Object.entries(rooms).map(([roomId, roomCfg]) => [roomId, roomCfg ? { ...roomCfg } : roomCfg]),
+  );
 }
 
 function applyNullableArrayField(
@@ -125,6 +120,18 @@ function applyNullableArrayField(
   target[key] = [...value];
 }
 
+function applyNullableScalarField(
+  target: Record<string, unknown>,
+  key: "encryption" | "allowBots" | "autoJoin" | "groupPolicy",
+  value: string | boolean | null | undefined,
+): void {
+  if (value === null) {
+    delete target[key];
+  } else if (value !== undefined) {
+    target[key] = value;
+  }
+}
+
 export function updateMatrixAccountConfig(
   cfg: CoreConfig,
   accountId: string,
@@ -136,18 +143,7 @@ export function updateMatrixAccountConfig(
     (normalizedAccountId === DEFAULT_ACCOUNT_ID ? matrix : {})) as MatrixConfig;
   const nextAccount: Record<string, unknown> = { ...existingAccount };
 
-  if (patch.name !== undefined) {
-    if (patch.name === null) {
-      delete nextAccount.name;
-    } else {
-      const trimmed = patch.name.trim();
-      if (trimmed) {
-        nextAccount.name = trimmed;
-      } else {
-        delete nextAccount.name;
-      }
-    }
-  }
+  applyNullableStringField(nextAccount, "name", patch.name);
   if (typeof patch.enabled === "boolean") {
     nextAccount.enabled = patch.enabled;
   } else if (typeof nextAccount.enabled !== "boolean") {
@@ -198,27 +194,9 @@ export function updateMatrixAccountConfig(
     }
   }
 
-  if (patch.encryption !== undefined) {
-    if (patch.encryption === null) {
-      delete nextAccount.encryption;
-    } else {
-      nextAccount.encryption = patch.encryption;
-    }
-  }
-  if (patch.allowBots !== undefined) {
-    if (patch.allowBots === null) {
-      delete nextAccount.allowBots;
-    } else {
-      nextAccount.allowBots = patch.allowBots;
-    }
-  }
-  if (patch.autoJoin !== undefined) {
-    if (patch.autoJoin === null) {
-      delete nextAccount.autoJoin;
-    } else {
-      nextAccount.autoJoin = patch.autoJoin;
-    }
-  }
+  applyNullableScalarField(nextAccount, "encryption", patch.encryption);
+  applyNullableScalarField(nextAccount, "allowBots", patch.allowBots);
+  applyNullableScalarField(nextAccount, "autoJoin", patch.autoJoin);
   applyNullableArrayField(nextAccount, "autoJoinAllowlist", patch.autoJoinAllowlist);
   if (patch.dm !== undefined) {
     if (patch.dm === null) {
@@ -230,26 +208,15 @@ export function updateMatrixAccountConfig(
       });
     }
   }
-  if (patch.groupPolicy !== undefined) {
-    if (patch.groupPolicy === null) {
-      delete nextAccount.groupPolicy;
-    } else {
-      nextAccount.groupPolicy = patch.groupPolicy;
-    }
-  }
+  applyNullableScalarField(nextAccount, "groupPolicy", patch.groupPolicy);
   applyNullableArrayField(nextAccount, "groupAllowFrom", patch.groupAllowFrom);
-  if (patch.groups !== undefined) {
-    if (patch.groups === null) {
-      delete nextAccount.groups;
-    } else {
-      nextAccount.groups = cloneMatrixRoomMap(patch.groups);
-    }
-  }
-  if (patch.rooms !== undefined) {
-    if (patch.rooms === null) {
-      delete nextAccount.rooms;
-    } else {
-      nextAccount.rooms = cloneMatrixRoomMap(patch.rooms);
+  for (const key of ["groups", "rooms"] as const) {
+    if (patch[key] !== undefined) {
+      if (patch[key] === null) {
+        delete nextAccount[key];
+      } else {
+        nextAccount[key] = cloneMatrixRoomMap(patch[key]);
+      }
     }
   }
 

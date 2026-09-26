@@ -72,6 +72,9 @@ before replacing the package. If the current runtime cannot run that release, th
 updater selects a compatible installed Node or quietly provisions a verified
 private runtime on the supported platforms above. This target-aware recovery also
 works with `--yes` and `--json`; it does not change system Node or shell settings.
+The installer starts only after the updater confirms that the original request
+and installation ownership are still current. A request revoked before that check
+does not install a private runtime.
 
 After a version-manager switch, a restarting update keeps the invoking OpenClaw
 installation as its target and rebinds its owned Gateway service to that

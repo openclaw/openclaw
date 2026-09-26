@@ -351,11 +351,9 @@ async function clearActiveRetainedManagedNpmInstallMarkers(
       }
       throw error;
     }
-    const cleared = await clearRetainedManagedNpmInstallMarker(record.installPath, assertCurrent);
-    if (cleared) {
-      // Record each cleared marker immediately so a later filesystem failure can roll it back.
-      clearedMarkers.push({ markerPath, contents });
-    }
+    // Journal before removal: the helper can refuse after deleting the marker.
+    clearedMarkers.push({ markerPath, contents });
+    await clearRetainedManagedNpmInstallMarker(record.installPath, assertCurrent);
   }
 }
 
@@ -425,7 +423,11 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
 }> {
   return await withPluginLifecycleLease({}, async (lease) => {
     // The lifecycle owner shares refusal with outer package settlement.
-    const assertCurrent = () => lease.assertOwned();
+    const assertOwned = () => lease.assertOwned();
+    const assertCurrent = () => {
+      assertOwned();
+      params.writeOptions?.assertConfigPathForWrite?.();
+    };
     let tentativeWrite: InstalledPluginIndexWriteReceipt | undefined;
     const retainedMarkerPaths: string[] = [];
     const clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }> = [];
@@ -435,6 +437,7 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
       // Preparation and lease acquisition can outlive the approving operation.
       // The index writer below completes its mutation synchronously.
       await params.beforePersistentEffect?.();
+      assertCurrent();
       tentativeWrite = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
         prepared.nextInstallRecords,
         {
@@ -490,7 +493,8 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
         indexWrite: tentativeWrite,
       };
     } catch (error) {
-      assertCurrent();
+      // Revoked invokers cannot authorize new effects, but the lease still owns compensation.
+      assertOwned();
       const failures: unknown[] = [error];
       const tentative = tentativeWrite;
       if (tentative) {
@@ -509,11 +513,11 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
             await restoreRetainedManagedNpmInstallMarkers({
               clearedMarkerSnapshots,
               createdMarkerPaths: retainedMarkerPaths,
-              assertCurrent,
+              assertCurrent: assertOwned,
             });
           }
         } catch (rollbackError) {
-          assertCurrent();
+          assertOwned();
           failures.push(rollbackError);
         }
       }

@@ -144,6 +144,48 @@ export async function readDeferredPluginMigrationsAsync(
   return pending ?? [];
 }
 
+/** Completion receipts resolve historical warnings without loading their retired reports. */
+export function readDeferredPluginMigrationCompletions(
+  options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
+) {
+  return (
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+      if (!tableExists(db, "migration_runs")) {
+        return [];
+      }
+      return executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "migration_runs">>(db)
+          .selectFrom("migration_runs")
+          .select(["id", "finished_at"])
+          .where("id", "like", `${RUN_PREFIX}%`)
+          .where("status", "=", "completed"),
+      ).rows.flatMap(({ id, finished_at }) =>
+        finished_at === null
+          ? []
+          : [{ pluginId: id.slice(RUN_PREFIX.length), completedAtMs: finished_at }],
+      );
+    }, options) ?? []
+  );
+}
+
+export async function readDeferredPluginMigrationCompletionsAsync(
+  options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
+) {
+  const context = captureOpenClawStateWorkerContext(options);
+  const { runOpenClawStateWorkerOperation } =
+    await import("../state/openclaw-state-worker-store.js");
+  context.admission.assertCurrent();
+  const completed = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({ type: "plugins.deferredMigrations.completions.read", input: undefined }),
+    { existingOnly: true },
+  );
+  context.admission.assertCurrent();
+  return completed ?? [];
+}
+
 /** Bind asynchronous settlement to the same pending records, including newly added owners. */
 export function assertDeferredPluginMigrationsCurrent(params: {
   env?: NodeJS.ProcessEnv;
@@ -199,9 +241,9 @@ export function formatDeferredPluginMigration(
     isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
     isTruthyEnvValue(env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE);
   const next = updating
-    ? `Let the current update or repair finish. If this warning remains afterward, run "${pending.command}"${retry}.`
-    : `Run "${pending.command}"${retry}.`;
-  return `Plugin "${pending.pluginId}" state migration is pending: ${pending.reason} State and legacy config inputs are preserved. ${next}`;
+    ? `Let the current update or repair finish. If this warning remains afterward, run "${pending.command}"${retry} to retry the upgrade.`
+    : `Run "${pending.command}"${retry} to retry the upgrade.`;
+  return `Plugin "${pending.pluginId}" data/settings upgrade is unfinished: ${pending.reason} Your existing data and settings have been kept. ${next}`;
 }
 
 /** Only the migration owner can resolve a pending record after its work completes. */

@@ -14,6 +14,10 @@ describe("tokenjuice package manifest", () => {
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
     ) as TokenjuicePluginManifest;
 
-    expect(manifest.contracts?.agentToolResultMiddleware).toEqual(["openclaw", "codex"]);
+    expect(manifest.contracts?.agentToolResultMiddleware).toEqual([
+      "openclaw",
+      "codex",
+      "agentsapi",
+    ]);
   });
 });

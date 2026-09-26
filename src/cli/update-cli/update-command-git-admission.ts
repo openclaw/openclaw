@@ -1,11 +1,42 @@
+import { inspectSourceUpdateArtifacts } from "../../../scripts/lib/source-update-artifact-preflight.mts";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
-import type { UpdateRunnerOptions } from "../../infra/update-runner-types.js";
-import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { isFailedUpdateStep } from "../../infra/update-run-step.js";
+import type { UpdateRunnerOptions, UpdateRunResult } from "../../infra/update-runner-types.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
-import type { PreManagedServiceStop } from "./update-command-service.js";
 
 type BeforeGitMutation = NonNullable<UpdateRunnerOptions["beforeGitMutation"]>;
+
+export function assertGitCandidateSteps(steps: UpdateRunResult["steps"]): void {
+  const failed = steps.find(isFailedUpdateStep);
+  if (failed) {
+    throw new UpdatePreMutationError(failed.name, failed.stderrTail ?? "Update checks failed.", {
+      failureFacts: failed.failureFacts,
+    });
+  }
+}
+
+export async function admitSourceUpdateArtifacts(
+  root: string,
+  run: UpdateCommandOptions["run"],
+): Promise<boolean> {
+  try {
+    const prepared = await inspectSourceUpdateArtifacts(root);
+    if (prepared.lock && !run) {
+      await prepared.lock.release();
+      throw new Error("Source artifact admission requires an active update run.");
+    }
+    if (run) {
+      run.sourceArtifactLock = prepared.lock;
+    }
+    return prepared.sourceRuntimePrepared;
+  } catch (cause) {
+    throw new UpdatePreMutationError("source-artifact-ownership", formatErrorMessage(cause), {
+      cause,
+    });
+  }
+}
 
 export function recordInspectedGitTarget(
   run: UpdateCommandOptions["run"],
@@ -23,46 +54,14 @@ export function recordInspectedGitTarget(
       { env: run.env },
     );
   }
+  assertReadableGitTarget(target);
+}
+
+export function assertReadableGitTarget(target: Parameters<BeforeGitMutation>[0]): void {
   if (target.metadataUnreadable) {
     const failure = createUpdatePreflightFailure("target-git-metadata", target.metadataUnreadable);
     throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
       failureFacts: failure.failureFacts,
     });
   }
-}
-
-export function createBeforeGitMutation(params: {
-  updateRun?: UpdateCommandOptions["run"];
-  roots: readonly string[];
-  stopManagedService: (roots: readonly string[]) => Promise<void>;
-  getPreManagedServiceStop: () => PreManagedServiceStop | undefined;
-  checkTargetSchemas: (versions: OpenClawSchemaVersions | undefined) => Promise<void>;
-  prepareMutableUpdate: () => Promise<void>;
-}): BeforeGitMutation {
-  return async (target) => {
-    if (target?.metadataUnreadable) {
-      const failure = createUpdatePreflightFailure(
-        "target-git-metadata",
-        target.metadataUnreadable,
-      );
-      throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
-        failureFacts: failure.failureFacts,
-      });
-    }
-    await params.checkTargetSchemas(target.schemaVersions);
-    await params.prepareMutableUpdate();
-    await params.stopManagedService(params.roots);
-    const preManagedServiceStop = params.getPreManagedServiceStop();
-    await params.checkTargetSchemas(target.schemaVersions);
-    // Git's deferred prepare phase owns the task suspension. Once mutation
-    // starts, only a verified recovery may re-enable persistent autostart.
-    preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
-    if (params.updateRun) {
-      recordUpdateRunPhase(params.updateRun.runId, "activating", undefined, {
-        env: params.updateRun.env,
-      });
-    }
-    // Finalization owns the backed-up service rewrite and activation after Doctor.
-    return { allowGatewayServiceRepair: false, allowGatewayActivation: false };
-  };
 }

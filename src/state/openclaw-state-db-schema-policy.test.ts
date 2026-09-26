@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { constants, DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { NodeWorkerPreparedWorkspaceStore } from "../node-host/node-worker-prepared-workspace-store.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
@@ -16,19 +17,21 @@ import {
 } from "./openclaw-state-db-schema-policy.js";
 import {
   closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   initializeNativeOpenClawStateDatabase,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseReadabilityForDoctor,
   repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
   runWithOpenClawStateBusyTimeout,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
@@ -80,7 +83,7 @@ function createExistingState(mutate?: (db: DatabaseSync) => void) {
 }
 
 describe("existing shared-state schema admission", () => {
-  it("writes node state and initializes its lazy store without taking over release repair", () => {
+  it("writes node state and initializes its lazy store without taking over release repair", async () => {
     const { options, before } = createExistingState((db) => {
       db.exec(`
         PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
@@ -94,7 +97,7 @@ describe("existing shared-state schema admission", () => {
       `);
     });
 
-    withExistingOpenClawStateSchema(options, () => {
+    await withExistingOpenClawStateSchema(options, async () => {
       writeConfigMachineState("node.schema-policy-probe", { nodeId: "paired-node" }, options);
       const database = openOpenClawStateDatabase(options);
       expect(
@@ -103,7 +106,7 @@ describe("existing shared-state schema admission", () => {
           .get(),
       ).toBeUndefined();
       const store = new NodeWorkerPreparedWorkspaceStore(options);
-      const registered = store.register({
+      const registered = await store.register({
         action: "register",
         gatewayNamespace: "test-gateway",
         environmentId: "test-environment",
@@ -114,7 +117,7 @@ describe("existing shared-state schema admission", () => {
         sourceManifestRef: `sha256:${"c".repeat(64)}`,
         preparedManifestRef: `sha256:${"d".repeat(64)}`,
       });
-      expect(store.find("test-environment")).toEqual(registered);
+      expect(await store.find("test-environment")).toEqual(registered);
       expect(readConfigMachineState("node.schema-policy-probe", options)).toEqual({
         nodeId: "paired-node",
       });
@@ -124,7 +127,7 @@ describe("existing shared-state schema admission", () => {
       });
     });
 
-    closeOpenClawStateDatabase();
+    await closeOpenClawStateDatabaseAsync();
     const reopened = openOpenClawStateDatabase(options);
     expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -138,12 +141,14 @@ describe("existing shared-state schema admission", () => {
     expect(readConfigMachineState("node.schema-policy-probe", options)).toEqual({
       nodeId: "paired-node",
     });
-    expect(new NodeWorkerPreparedWorkspaceStore(options).find("test-environment")).toMatchObject({
+    expect(
+      await new NodeWorkerPreparedWorkspaceStore(options).find("test-environment"),
+    ).toMatchObject({
       preparation_key: "a".repeat(64),
       state: "available",
     });
 
-    closeOpenClawStateDatabase();
+    await closeOpenClawStateDatabaseAsync();
     expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
     const repaired = openOpenClawStateDatabase(options);
     expect(
@@ -234,18 +239,20 @@ describe("existing shared-state schema admission", () => {
     expect(readPersistedSchema(options.path)).toEqual(before);
   });
 
-  it("refuses global repair and startup-checkpoint entry points inside the node scope", () => {
+  it("refuses global repair and startup-checkpoint entry points inside the node scope", async () => {
     const { options, before } = createExistingState();
-    withExistingOpenClawStateSchema(options, () => {
+    await withExistingOpenClawStateSchema(options, async () => {
       for (const run of [
         () => repairOpenClawStateDatabaseSchema(options),
-        () => repairOpenClawStateDatabaseSchemaIfNeeded(options),
         () => repairOpenClawStateDatabaseReadabilityForDoctor(options),
         () => initializeNativeOpenClawStateDatabase(options),
         () => withOpenClawStateStartupMigrationCheckpointDatabase(() => "checkpoint", options),
       ]) {
         expect(run).toThrow(/schema repair.*owned/i);
       }
+      await expect(prepareOpenClawStateDatabaseSchema(options)).rejects.toThrow(
+        /schema repair.*owned/i,
+      );
     });
     expect(readPersistedSchema(options.path)).toMatchObject(before);
   });
@@ -298,31 +305,41 @@ describe("existing shared-state schema admission", () => {
     },
   );
 
-  it("revalidates same-version schema changes before reusing a cached handle", () => {
+  it("inspects schema indexes once and revalidates same-version changes before handle reuse", () => {
     const { options } = createExistingState();
-    withExistingOpenClawStateSchema(options, () => {
-      const database = openOpenClawStateDatabase(options);
-      const external = new DatabaseSync(options.path);
-      try {
-        external.exec("ALTER TABLE worker_environments DROP COLUMN preparation_purpose");
-      } finally {
-        external.close();
-      }
-      expect(() => openOpenClawStateDatabase(options)).toThrow(/schema|repair/i);
-      expect(() =>
-        writeConfigMachineState("node.incompatible", true, { ...options, database }),
-      ).toThrow(/schema|repair/i);
-      expect(() => runWithOpenClawStateBusyTimeout(() => "must not run", options, 0)).toThrow(
-        /schema|repair/i,
-      );
-      expect(
-        database.db
-          .prepare(
-            "SELECT state_key FROM config_machine_state WHERE state_key = 'node.incompatible'",
-          )
-          .get(),
-      ).toBeUndefined();
-    });
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      withExistingOpenClawStateSchema(options, () => {
+        const database = openOpenClawStateDatabase(options);
+        expect(
+          reads.queries.filter(
+            (sql) => sql.includes("index_xinfo") && sql.includes("idx_plugin_state_listing"),
+          ).length,
+        ).toBeLessThanOrEqual(1);
+        const external = new DatabaseSync(options.path);
+        try {
+          external.exec("ALTER TABLE worker_environments DROP COLUMN preparation_purpose");
+        } finally {
+          external.close();
+        }
+        expect(() => openOpenClawStateDatabase(options)).toThrow(/schema|repair/i);
+        expect(() =>
+          writeConfigMachineState("node.incompatible", true, { ...options, database }),
+        ).toThrow(/schema|repair/i);
+        expect(() => runWithOpenClawStateBusyTimeout(() => "must not run", options, 0)).toThrow(
+          /schema|repair/i,
+        );
+        expect(
+          database.db
+            .prepare(
+              "SELECT state_key FROM config_machine_state WHERE state_key = 'node.incompatible'",
+            )
+            .get(),
+        ).toBeUndefined();
+      });
+    } finally {
+      reads.restore();
+    }
   });
 
   it("does not reuse validation from a rolled-back schema transaction", () => {

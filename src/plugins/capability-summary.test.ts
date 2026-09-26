@@ -125,6 +125,7 @@ describe("plugin capability summaries", () => {
 
   it("includes every manifest contract family in the reviewed capability surface", () => {
     const contracts = {
+      codeModeExecutors: ["quickjs"],
       embeddedExtensionFactories: ["embedded"],
       agentToolResultMiddleware: ["middleware"],
       trustedToolPolicies: ["trusted-policy"],

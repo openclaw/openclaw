@@ -142,19 +142,22 @@ export default definePluginEntry({
       );
     }
     let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
+    let bindingMutationStore: PluginStateKeyedStore<StoredCodexAppServerBinding> | undefined;
     let managedThreadStateStore: PluginStateKeyedStore<StoredCodexManagedThread> | undefined;
+    const bindingStateOptions = {
+      namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+      maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+      overflowPolicy: "reject-new" as const,
+    };
     const openBindingStateStore = () =>
-      (bindingStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
-        namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
-        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      }));
+      (bindingStateStore ??=
+        api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>(bindingStateOptions));
+    const openBindingMutationStore = () =>
+      (bindingMutationStore ??=
+        api.runtime.state.openKeyedStore<StoredCodexAppServerBinding>(bindingStateOptions));
     // The base registration runtime deliberately rejects state access. Open the
     // store only when a proxied runtime performs the first binding operation.
-    const lazyBindingStateStore: Pick<
-      PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-      "deleteIf" | "entries" | "lookup" | "lookupMany" | "registerIfAbsent" | "update"
-    > = {
+    const lazyBindingStateStore: Parameters<typeof createLazyCodexAppServerBindingStore>[0] = {
       deleteIf: (key, predicate) => openBindingStateStore().deleteIf!(key, predicate),
       entries: () => openBindingStateStore().entries(),
       lookup: (key) => openBindingStateStore().lookup(key),
@@ -164,9 +167,12 @@ export default definePluginEntry({
       },
       registerIfAbsent: (key, value, options) =>
         openBindingStateStore().registerIfAbsent(key, value, options),
-      get update() {
-        const store = openBindingStateStore();
-        return store.update?.bind(store);
+      withCurrent: (authority) => {
+        const store = openBindingMutationStore();
+        if (!store.withCurrent) {
+          throw new Error("Codex bindings require action-bound plugin-state mutations");
+        }
+        return store.withCurrent(authority);
       },
     };
     const openManagedThreadStateStore = () =>
@@ -371,9 +377,10 @@ export default definePluginEntry({
                 plugins: declared as Record<string, never>,
               });
             },
-            mutate: async (update) => {
+            mutate: async (update, assertCurrent) => {
               const { mutateConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
               await mutateConfigFile({
+                writeOptions: { assertCurrent },
                 mutate: (draft) => {
                   // Create the nested plugin config path on demand so codex
                   // plugin commands can enable/update Codex-managed plugins.

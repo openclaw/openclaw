@@ -96,6 +96,7 @@ export type ChatScrollHost = {
   chatReadingHistory: boolean;
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll?: () => boolean;
+  chatIsManualScroll?: () => boolean;
   chatIsMaintenanceScroll?: () => boolean;
   chatScrollElement?: () => HTMLElement | null;
   chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;
@@ -275,8 +276,11 @@ export function lockChatScroll(
   host: ChatScrollHost,
   source: "reader" | "remote-input" = "reader",
 ): void {
-  // A remote receipt is not a reader gesture and cannot cancel a queued local send/latest.
-  if (source === "remote-input" && pendingChatScrolls.get(host)?.manual) {
+  // Remote activity cannot cancel a queued or already-issued reader command.
+  if (
+    source === "remote-input" &&
+    (pendingChatScrolls.get(host)?.manual || host.chatIsManualScroll?.())
+  ) {
     return;
   }
   const changed = !host.chatFollowLocked || host.chatUserNearBottom;

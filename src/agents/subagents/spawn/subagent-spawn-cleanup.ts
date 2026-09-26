@@ -1,5 +1,8 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { callGateway } from "../../../gateway/call.js";
+import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
@@ -8,6 +11,107 @@ import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 type GatewayCall = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
+
+/** Binds rollback to the session this spawn created, independently of its operator's lifetime. */
+export function bindSubagentSpawnCleanup(params: {
+  childSessionKey: string;
+  resolveGatewayContext: GatewayContextResolver;
+  isCurrent: () => boolean;
+  getSessionIdentity: () => {
+    expectedSessionId?: string;
+    expectedLifecycleRevision?: string;
+  };
+}) {
+  const context = params.resolveGatewayContext();
+  const dispatchCleanup = bindGatewayLifecycleRequest(params.resolveGatewayContext);
+  let acceptedRun:
+    | {
+        runId: string;
+        entry: ChatAbortControllerEntry | undefined;
+        operationalRunInstance: ChatAbortControllerEntry["operationalRunInstance"];
+      }
+    | undefined;
+  const isCurrent = () => {
+    if (!context || params.resolveGatewayContext() !== context || !params.isCurrent()) {
+      return false;
+    }
+    const identity = params.getSessionIdentity();
+    if (!identity.expectedSessionId || !identity.expectedLifecycleRevision) {
+      return false;
+    }
+    const currentRun = acceptedRun && context.chatAbortControllers.get(acceptedRun.runId);
+    return (
+      !currentRun ||
+      (currentRun === acceptedRun?.entry &&
+        currentRun.operationalRunInstance === acceptedRun?.operationalRunInstance &&
+        currentRun.sessionKey === params.childSessionKey &&
+        currentRun.sessionId === identity.expectedSessionId)
+    );
+  };
+  const callGateway: GatewayCall = async (request) => {
+    const method = request.method;
+    if (method !== "sessions.delete" && method !== "chat.abort") {
+      throw new Error("Subagent cleanup cannot dispatch this Gateway method");
+    }
+    const identity = params.getSessionIdentity();
+    const payload = asNullableRecord(request.params);
+    const assertCurrent = () => {
+      const currentIdentity = params.getSessionIdentity();
+      if (
+        !isCurrent() ||
+        currentIdentity.expectedSessionId !== identity.expectedSessionId ||
+        currentIdentity.expectedLifecycleRevision !== identity.expectedLifecycleRevision
+      ) {
+        throw new Error("Subagent spawn no longer owns this cleanup");
+      }
+      if (method === "sessions.delete") {
+        if (
+          payload?.key !== params.childSessionKey ||
+          payload.expectedSessionId !== identity.expectedSessionId ||
+          payload.expectedLifecycleRevision !== identity.expectedLifecycleRevision
+        ) {
+          throw new Error("Subagent cleanup session does not match its owner");
+        }
+      } else if (
+        !acceptedRun ||
+        payload?.sessionKey !== params.childSessionKey ||
+        payload.runId !== acceptedRun.runId
+      ) {
+        throw new Error("Subagent cleanup run does not match its accepted owner");
+      }
+      request.assertDispatchCurrent?.();
+    };
+    assertCurrent();
+    if (
+      method === "chat.abort" &&
+      (!acceptedRun?.entry ||
+        context?.chatAbortControllers.get(acceptedRun.runId) !== acceptedRun.entry)
+    ) {
+      return { aborted: false, runIds: [] };
+    }
+    if (!context?.recoveryRuntime) {
+      throw new Error("Subagent cleanup Gateway is unavailable");
+    }
+    return await dispatchCleanup({
+      method,
+      params: payload,
+      assertDispatchCurrent: assertCurrent,
+      timeoutMs: request.timeoutMs ?? null,
+    });
+  };
+  return {
+    isCurrent,
+    callGateway,
+    bindAcceptedRun: (runId: string) => {
+      if (acceptedRun) {
+        throw new Error("Subagent cleanup already owns an accepted run");
+      }
+      const entry = context?.chatAbortControllers.get(runId);
+      acceptedRun = { runId, entry, operationalRunInstance: entry?.operationalRunInstance };
+    },
+  };
+}
+
 function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boolean {
   const result = asNullableRecord(response);
   if (!result) {
@@ -103,6 +207,7 @@ async function waitForProvisionalSessionDeletion(
 
 export async function cleanupFailedSpawnBeforeAgentStart(params: {
   isCurrent?: () => boolean;
+  callGateway?: GatewayCall;
   childSessionKey: string;
   attachmentId?: string;
   emitLifecycleHooks?: boolean;
@@ -186,7 +291,9 @@ export async function terminateAcceptedCollectorRun(params: {
     {
       // A retired request scope can never dispatch again; retrying would retain
       // its Gateway forever without terminating the accepted run.
-      shouldRetry: () => !resolveGatewayContext || Boolean(resolveGatewayContext()),
+      shouldRetry: () =>
+        params.isCurrent?.() !== false &&
+        (!resolveGatewayContext || Boolean(resolveGatewayContext())),
     },
   );
 }

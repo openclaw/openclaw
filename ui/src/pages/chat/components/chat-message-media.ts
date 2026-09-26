@@ -24,10 +24,10 @@ export type ImageBlock = {
   height?: number;
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
 
-export type ArtifactDownloadResolver = (params: {
-  sessionKey: string;
-  artifactId: string;
-}) => Promise<{ url: string; expiresAt?: string } | null>;
+export type ArtifactDownloadResolver = (
+  params: { sessionKey: string; artifactId: string },
+  signal?: AbortSignal,
+) => Promise<{ url: string; expiresAt?: string; blob?: Blob } | null>;
 
 export type ImageRenderOptions = {
   galleryImages?: readonly ImageBlock[];

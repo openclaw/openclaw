@@ -80,6 +80,7 @@ import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { registerSessionNativeRuntimeConsentTests } from "./sessions-mutations.native-consent.test-support.js";
+import { registerSessionOperatorPreparationTests } from "./sessions-mutations.operator-preparation.test-support.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
 import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
 
@@ -266,6 +267,8 @@ registerSessionNativeRuntimeConsentTests({
   configMutationRequested: () => effects.mutateConfigFileWithRetry.mock.calls.length > 0,
   queueRuntimeSelection,
 });
+
+registerSessionOperatorPreparationTests({ context, profileId: () => accountOwnerId, personClient });
 
 describe("sessions.patch sticky model persistence", () => {
   registerSessionSandboxStickyModelTests({

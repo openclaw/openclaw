@@ -15,8 +15,6 @@ type CodexContextProjection = {
   developerInstructionAddition?: string;
   promptText: string;
   promptContextRange?: CodexProjectedContextRange;
-  assembledMessages: AgentMessage[];
-  prePromptMessageCount: number;
   imageGroups?: CodexProjectedImageGroup[];
 };
 
@@ -115,7 +113,6 @@ export function isCodexDurableCustomMessage(message: AgentMessage): boolean {
 /** Projects assembled OpenClaw context-engine messages into Codex prompt inputs. */
 export async function projectContextEngineAssemblyForCodex(params: {
   assembledMessages: AgentMessage[];
-  originalHistoryMessages: AgentMessage[];
   prompt: string;
   systemPromptAddition?: string;
   maxRenderedContextChars?: number;
@@ -154,8 +151,6 @@ export async function projectContextEngineAssemblyForCodex(params: {
       : {}),
     promptText,
     ...(promptContextRange ? { promptContextRange } : {}),
-    assembledMessages: params.assembledMessages,
-    prePromptMessageCount: params.originalHistoryMessages.length,
     ...(context.imageGroups.length && promptPrefix
       ? {
           imageGroups: context.imageGroups.map((group) => ({
@@ -188,35 +183,13 @@ export function resolveCodexContextEngineProjectionMaxChars(params: {
   return normalizeRenderedContextMaxChars(scaledChars);
 }
 
-/** Returns the fixed reserve used for Codex context-engine projections. */
-export function resolveCodexContextEngineProjectionReserveTokens(): number {
-  return DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
-}
-
-// Continuity projections run without an active context engine, so nothing ever
-// compacts what they render: a projection sized near the whole window leaves the
-// fresh native thread at the rotation threshold, forcing the next turn to rotate
-// and re-project the transcript again. Reserving half the window keeps the
-// thread alive for later delta turns instead.
+// Reserve half the window so no-engine continuity leaves room for later delta turns.
 const CONTINUITY_PROJECTION_RESERVE_RATIO = 0.5;
-// Codex reports input tokens only after a turn (codex-rs/protocol/src/protocol.rs
-// TokenUsage.input_tokens) and bounds turn input by characters, not tokens
-// (codex-rs/protocol/src/user_input.rs MAX_USER_INPUT_TEXT_CHARS), so a projection cannot
-// be priced in verified tokens before it is sent. The remedy is feedback: each completed
-// turn records the density this session's content actually exhibited (prompt chars sent
-// vs provider-reported input tokens, persisted on the thread binding), and the next
-// continuity cap is sized from that observed ratio. capChars = budgetTokens × ratio means
-// real token cost ≈ budget for ANY density, which is the headroom invariant the fuse
-// needs. Before the first sample exists, the empirical default below applies — measured
-// on a real projection (703,134 chars for 226,146 input tokens = 3.11), where the shared
-// APPROX_RENDERED_CHARS_PER_TOKEN = 4 overshot by ~29%.
+// Native input tokens arrive after the turn; calibrate future character budgets from
+// observed density. The default rounds down a measured 703,134 chars / 226,146 tokens.
 const CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN = 3;
-// Calibration is monotone: an observed sample may only TIGHTEN the cap below the
-// empirical default, never loosen it. A session whose content later shifts denser, a
-// sample poisoned by a non-continuity turn, or a stale sample therefore degrades at
-// worst to the uncalibrated behavior, not past it. The numerator also undercounts the
-// native turn's full input (tools and base instructions are not in the prompt text),
-// which biases the measured ratio low - again the tighter, safe direction.
+// Samples only tighten the default cap. Uncounted tool/instruction overhead also
+// lowers the measured ratio, preserving conservative headroom.
 const CONTINUITY_MIN_CHARS_PER_TOKEN = 0.5;
 const CONTINUITY_MAX_CHARS_PER_TOKEN = CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN;
 // Only projection-dominated turns give a usable density sample; short prompts are
@@ -364,18 +337,17 @@ export function fitCodexProjectedContextForTurnStart(params: {
     if (request.length >= maxChars) {
       return finish(slice(requestRange.start, requestRange.end, maxChars));
     }
-    // Hook-appended context is newer than the projected history. Retain it
-    // before trimming the projection, while the full current request remains
-    // the hard boundary that must survive a bounded turn/start input.
+    // Keep current request and hook context ahead of history when they fit.
+    // If they exceed the limit, retain the existing request/tail-first priority.
     const fittedAppendedContext = slice(
       requestRange.end,
       params.promptText.length,
       maxChars - request.length,
     );
     const contextBudget = maxChars - request.length - fittedAppendedContext.text.length;
-    const fittedContext = slice(range.start, range.end, contextBudget);
-    const beforeContextBudget =
-      maxChars - fittedContext.text.length - request.length - fittedAppendedContext.text.length;
+    const prefixBudget = beforeContext.length <= contextBudget ? beforeContext.length : 0;
+    const fittedContext = slice(range.start, range.end, contextBudget - prefixBudget);
+    const beforeContextBudget = contextBudget - fittedContext.text.length;
     return finish(
       slice(0, range.start, beforeContextBudget),
       fittedContext,
@@ -384,7 +356,7 @@ export function fitCodexProjectedContextForTurnStart(params: {
     );
   }
   const contextBudget = maxChars - beforeContext.length - afterContext.length;
-  if (contextBudget > 0) {
+  if (contextBudget >= 0) {
     return finish(
       slice(0, range.start),
       slice(range.start, range.end, contextBudget),

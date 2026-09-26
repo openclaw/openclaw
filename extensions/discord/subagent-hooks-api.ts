@@ -9,10 +9,8 @@ const loadDiscordSubagentHooksModule = createLazyRuntimeModule(
 // register one stable hook wiring path while keeping the handler module lazy.
 export function registerDiscordSubagentHooks(api: OpenClawPluginApi): void {
   api.on("subagent_ended", async (event) => {
-    const { ensureBindingsLoadedAsync, handleDiscordSubagentEnded } =
-      await loadDiscordSubagentHooksModule();
-    await ensureBindingsLoadedAsync();
-    handleDiscordSubagentEnded(event);
+    const { handleDiscordSubagentEnded } = await loadDiscordSubagentHooksModule();
+    await handleDiscordSubagentEnded(event);
   });
   api.on("subagent_delivery_target", async (event) => {
     const { handleDiscordSubagentDeliveryTargetAsync } = await loadDiscordSubagentHooksModule();

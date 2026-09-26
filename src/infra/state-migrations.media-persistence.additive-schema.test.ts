@@ -3,12 +3,11 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
-  openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
+import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
 
 const tempDirs: string[] = [];
 
@@ -17,21 +16,15 @@ function createV17AdditiveFixture(
 ) {
   const stateDir = makeTempDir(tempDirs, "media-persistence-v17-additive-");
   const env = { OPENCLAW_STATE_DIR: stateDir };
-  const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-  const databasePath = opened.path;
-  closeOpenClawAgentDatabasesForTest();
+  const databasePath = createLegacyDatabaseFixture({ env, eventsBySession: {}, schemaVersion: 17 });
   closeOpenClawStateDatabaseForTest();
 
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
-  removeCanonicalValidationFromHistoricalAgentFixture(database);
   database.exec(`
-    DROP TABLE session_participants;
     DROP TRIGGER session_conversations_route_context_invalidate_after_update;
     ALTER TABLE session_conversations DROP COLUMN route_context_json;
     DROP INDEX idx_agent_transcript_event_identity_sequence;
-    PRAGMA user_version = 17;
-    UPDATE schema_meta SET schema_version = 17;
   `);
   if (options.schemaDrift === "participant-dependency") {
     database.exec(`
@@ -66,9 +59,15 @@ describe("legacy media persistence additive schema repair", () => {
   it("repairs schema-19 additive session schema before media validation", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-current-additive-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const databasePath = opened.path;
-    opened.db
+    const databasePath = createLegacyDatabaseFixture({
+      env,
+      eventsBySession: {},
+      schemaVersion: 19,
+    });
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database
       .prepare(
         `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
          VALUES (?, ?, ?, ?)`,
@@ -79,16 +78,8 @@ describe("legacy media persistence additive schema repair", () => {
         JSON.stringify({ sessionId: "session-1", updatedAt: 1 }),
         1,
       );
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    removeCanonicalValidationFromHistoricalAgentFixture(database);
     database.exec(`
       DROP TABLE session_transcript_cold_archives;
-      PRAGMA user_version = 19;
-      UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
       DROP TRIGGER session_nodes_entry_valid_after_insert;
       DROP TRIGGER session_nodes_entry_valid_after_entry_update;
       DROP TRIGGER session_nodes_entry_valid_after_identity_update;

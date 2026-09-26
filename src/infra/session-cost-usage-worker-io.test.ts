@@ -91,7 +91,7 @@ if (!isMainThread) {
       for (const method of ["all", "get", "iterate"]) {
         const original = statement[method];
         statement[method] = function(...args) {
-          if (!args.includes("session-cost-usage-rollup-v2")) {
+          if (!args.includes("session-cost-usage-rollup-v3")) {
             return Reflect.apply(original, this, args);
           }
           record({ kind: "cache" });
@@ -492,6 +492,7 @@ if (!isMainThread) {
               rollupId: path.join(sessionsDir, "unrequested.jsonl"),
               previousValueJson: null,
               valueJson: unrelatedValue,
+              blob: null,
               updatedAt: selectedRow.updatedAt,
             }),
           { agentId: "main" },
@@ -516,15 +517,18 @@ if (!isMainThread) {
         ["2026-02-06"],
       ]);
       const reads = await probe.read();
-      expect(reads.filter((entry) => entry.kind === "cache")).toHaveLength(1);
+      expect(reads.filter((entry) => entry.kind === "cache")).toHaveLength(3);
       expect(reads.filter((entry) => entry.kind === "transcript")).toEqual([]);
       const cacheRows = reads.filter((entry) => entry.kind === "cache-row");
       const returnedBytes = cacheRows.reduce((total, row) => total + row.valueBytes, 0);
       expect(returnedBytes, "selected cache JSON bytes").toBeGreaterThan(0);
       expect(returnedBytes, "selected cache JSON bytes").toBeLessThan(16 * 1_024);
-      expect(cacheRows.map((row) => row.key).toSorted()).toEqual(
-        sessions.map((session) => session.sessionFile).toSorted(),
-      );
+      expect(
+        cacheRows
+          .filter((row) => row.valueBytes > 0)
+          .map((row) => row.key)
+          .toSorted(),
+      ).toEqual(sessions.map((session) => session.sessionFile).toSorted());
     });
   });
 });

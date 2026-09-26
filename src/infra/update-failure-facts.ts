@@ -1,9 +1,17 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
-import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
+import {
+  redactPublicSupportDiagnosticLine,
+  redactSupportDiagnosticLine,
+  redactSupportString,
+  type SupportRedactionContext,
+} from "../logging/diagnostic-support-redaction.js";
+import { UPDATE_FOREIGN_DESTINATION_REASON } from "../shared/update-outcome.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -13,9 +21,48 @@ import {
 } from "./errors.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-identifiers.js";
-import type { UpdateFailureFactSchema } from "./update-run-schema.js";
+import {
+  UpdateDestinationFailureSchema,
+  type UpdateFailureFactSchema,
+} from "./update-run-schema.js";
 
 export type UpdateFailureFact = z.infer<typeof UpdateFailureFactSchema>;
+
+function normalizeDestinationFailure(
+  fact: NonNullable<UpdateFailureFact["destination"]>,
+  context: SupportRedactionContext,
+): UpdateFailureFact["destination"] {
+  const sanitizePath = (value: string | null) => {
+    if (value === null) {
+      return null;
+    }
+    if (
+      typeof value !== "string" ||
+      containsAsciiControlCharacter(value) ||
+      /[`\u2028\u2029]/u.test(value) ||
+      !/^(?:[/\\]|[A-Za-z]:[/\\]|~[/\\]|\$OPENCLAW_STATE_DIR(?:[/\\]|$))/u.test(value)
+    ) {
+      return "[redacted-path]";
+    }
+    return truncateUtf16Safe(
+      redactSupportString(value, context, { maxLength: Number.MAX_SAFE_INTEGER }).replace(
+        /([/\\](?:home|Users)[/\\])[^/\\]+/giu,
+        "$1[redacted-user]",
+      ),
+      240,
+    );
+  };
+  const parsed = UpdateDestinationFailureSchema.safeParse({
+    ...fact,
+    prefix: sanitizePath(fact.prefix),
+    packageRoot: sanitizePath(fact.packageRoot),
+    runningRoot: sanitizePath(fact.runningRoot),
+    runningPrefix: sanitizePath(fact.runningPrefix),
+    launcher: sanitizePath(fact.launcher),
+    launcherTarget: sanitizePath(fact.launcherTarget),
+  });
+  return parsed.success ? parsed.data : undefined;
+}
 
 function readErrorMetadata<T>(read: () => T): T | undefined {
   try {
@@ -107,7 +154,17 @@ export function createUpdateFailureFact(
   const context = { env, stateDir: resolveStateDir(env) };
   const line = (value: string, limit: number) => redactSupportDiagnosticLine(value, context, limit);
   // Redact credentials and complete email addresses before replacing their host suffixes.
-  const diagnostic = fact.message ? line(fact.message, Number.MAX_SAFE_INTEGER) : undefined;
+  // Protocol-1 candidate refusals carry field facts in multiline text; retain them before truncation.
+  const configDiagnostic =
+    fact.code === "invalid-config" && fact.message
+      ? redactPublicSupportDiagnosticLine(fact.message, context)
+      : undefined;
+  const diagnostic =
+    configDiagnostic && configDiagnostic !== "[redacted-diagnostic]"
+      ? configDiagnostic
+      : fact.message
+        ? line(fact.message, Number.MAX_SAFE_INTEGER)
+        : undefined;
   const message = fact.errorName
     ? diagnostic
         ?.replace(
@@ -124,6 +181,10 @@ export function createUpdateFailureFact(
     /^(?:src|dist|packages|extensions)\/[A-Za-z0-9_./-]+:\d+:\d+$/u.test(fact.location)
       ? line(fact.location, 160)
       : null;
+  const destination =
+    fact.code === UPDATE_FOREIGN_DESTINATION_REASON && fact.destination
+      ? normalizeDestinationFailure(fact.destination, context)
+      : undefined;
   return {
     check: line(fact.check, 128),
     code: line(fact.code, 80),
@@ -132,6 +193,7 @@ export function createUpdateFailureFact(
     ...(fact.location !== undefined ? { location } : {}),
     ...(fact.affectedKey ? { affectedKey: line(fact.affectedKey, 128) } : {}),
     ...(fact.pluginId ? { pluginId: line(fact.pluginId, 80) } : {}),
+    ...(destination ? { destination } : {}),
   };
 }
 

@@ -323,6 +323,23 @@ openclaw-chat-question-panel {
   outline: none;
 }
 
+.chat-question-panel textarea.chat-question-panel__textarea {
+  /* Override the shared field textarea's tall, monospace editor defaults. */
+  min-height: 24px;
+  max-height: 160px;
+  resize: none;
+  font-family: inherit;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-question-panel__input-hint {
+  margin-top: -6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
 /*
  * The hosts field sits outside an option row, so it cannot borrow the row's
  * border/focus treatment; give it its own so the one field the operator is

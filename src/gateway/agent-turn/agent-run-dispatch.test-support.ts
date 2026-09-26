@@ -17,6 +17,7 @@ function createContext(): AgentTurnContext {
     dedupe: new Map(),
     deps: {},
     getRuntimeConfig: () => ({}),
+    trackExecution: async (work) => await work(),
     getSessionEventSubscriberConnIds: () => new Set(),
     loadGatewayModelCatalog: vi.fn(async () => []),
     loadGatewayModelCatalogSnapshot: vi.fn<AgentTurnContext["loadGatewayModelCatalogSnapshot"]>(),

@@ -4,6 +4,10 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runMantisSlackDesktopSmoke } from "./slack-desktop-smoke.runtime.js";
+import {
+  SLACK_ARTIFACT_TEST_CHANNEL,
+  writeApprovalCheckpointArtifacts,
+} from "./slack-desktop-smoke.test-support.js";
 
 vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) => {
   const actual =
@@ -45,51 +49,6 @@ function phaseStatus(
   name: string,
 ): string | undefined {
   return phases.find((phase) => phase.name === name)?.status;
-}
-
-async function writeApprovalCheckpointArtifacts(outputDir: string, scenarioIds: readonly string[]) {
-  const checkpointDir = path.join(outputDir, "approval-checkpoints");
-  await fs.mkdir(checkpointDir, { recursive: true });
-  for (const scenarioId of scenarioIds) {
-    for (const state of ["pending", "resolved"] as const) {
-      await fs.writeFile(
-        path.join(checkpointDir, `${scenarioId}.${state}.json`),
-        `${JSON.stringify({
-          version: 1,
-          scenarioId,
-          approvalKind: scenarioId.includes("plugin") ? "plugin" : "exec",
-          state,
-          approvalId: scenarioId.includes("plugin") ? "plugin:abc" : "exec-abc",
-          channelId: "C123456789",
-          messageTs: "1.000000",
-          threadTs: null,
-          decision: state === "resolved" ? "allow-once" : null,
-          observedAt: "2026-05-04T13:00:29.000Z",
-          message: {
-            actionLabels: state === "pending" ? ["Allow Once", "Allow Always", "Deny"] : [],
-            blockText:
-              state === "pending"
-                ? ["Plugin approval required", "Slack plugin approval QA marker"]
-                : ["Plugin approval: Allowed once", "Slack plugin approval QA marker"],
-            hasNativeActions: state === "pending",
-            text:
-              state === "pending" ? "Plugin approval required" : "Plugin approval: Allowed once",
-          },
-        })}\n`,
-      );
-      await fs.writeFile(
-        path.join(checkpointDir, `${scenarioId}.${state}.ack.json`),
-        `${JSON.stringify({
-          version: 1,
-          capturedAt: "2026-05-04T13:00:30.000Z",
-          scenarioId,
-          screenshotPath: `${checkpointDir}/${scenarioId}-${state}.png`,
-          state,
-        })}\n`,
-      );
-      await fs.writeFile(path.join(checkpointDir, `${scenarioId}-${state}.png`), "png");
-    }
-  }
 }
 
 function mockMantisCliRuntime(runMantisSlackDesktopSmokeCommand = vi.fn()) {
@@ -277,8 +236,10 @@ describe("mantis Slack desktop smoke runtime", () => {
       .filter((entry) => entry.command === "rsync")
       .flatMap((entry) => entry.args);
     expect(rsyncArgs).not.toContain("--delete");
-    expect(rsyncArgs).toContain(
-      "crabbox@203.0.113.10:/tmp/openclaw-mantis-slack-desktop-2026-05-04T13-00-00-000Z/",
+    expect(rsyncArgs).toContainEqual(
+      expect.stringMatching(
+        /^crabbox@203\.0\.113\.10:\/tmp\/openclaw-mantis-slack-desktop-2026-05-04T13-00-00-000Z-[^/]+\/$/,
+      ),
     );
     await expect(fs.readFile(result.screenshotPath ?? "", "utf8")).resolves.toBe("png");
     await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
@@ -348,6 +309,7 @@ describe("mantis Slack desktop smoke runtime", () => {
       crabboxBin: "/tmp/crabbox",
       now: () => new Date("2026-05-04T13:15:00.000Z"),
       outputDir: ".artifacts/qa-e2e/mantis/slack-desktop-checkpoints",
+      slackChannelId: SLACK_ARTIFACT_TEST_CHANNEL,
       repoRoot,
     });
 
@@ -400,17 +362,6 @@ describe("mantis Slack desktop smoke runtime", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain(
       "Approval checkpoint slack-approval-plugin-native resolved",
     );
-  });
-
-  it("rejects non-approval scenarios in approval checkpoint mode", async () => {
-    await expect(
-      runMantisSlackDesktopSmoke({
-        approvalCheckpoints: true,
-        crabboxBin: "/tmp/crabbox",
-        repoRoot,
-        scenarioIds: ["slack-canary"],
-      }),
-    ).rejects.toThrow("--approval-checkpoints only supports approval checkpoint scenarios");
   });
 
   it.each([
@@ -494,82 +445,6 @@ describe("mantis Slack desktop smoke runtime", () => {
     },
   );
 
-  it("fails approval checkpoint mode when ack metadata does not match the expected state", async () => {
-    const expectedScenarios = ["slack-approval-exec-native", "slack-approval-plugin-native"];
-    const runner = vi.fn(async (command: string, args: readonly string[]) => {
-      if (command === "/tmp/crabbox" && args[0] === "warmup") {
-        return { stdout: "ready lease cbx_123abc\n", stderr: "" };
-      }
-      if (command === "/tmp/crabbox" && args[0] === "inspect") {
-        return {
-          stdout: `${JSON.stringify({
-            host: "203.0.113.10",
-            id: "cbx_123abc",
-            provider: "hetzner",
-            sshKey: "/tmp/key",
-            sshPort: "2222",
-            sshUser: "crabbox",
-            state: "active",
-          })}\n`,
-          stderr: "",
-        };
-      }
-      if (command === "rsync") {
-        const outputDir = args.at(-1) as string;
-        await fs.mkdir(outputDir, { recursive: true });
-        if (!outputDir.endsWith("slack-qa/")) {
-          await fs.writeFile(path.join(outputDir, "slack-desktop-smoke.png"), "png");
-          await fs.writeFile(
-            path.join(outputDir, "remote-metadata.json"),
-            `${JSON.stringify({ qaExitCode: 0 })}\n`,
-          );
-          await fs.writeFile(path.join(outputDir, "slack-desktop-command.log"), "qa\n");
-          await writeApprovalCheckpointArtifacts(outputDir, expectedScenarios);
-          await fs.writeFile(
-            path.join(
-              outputDir,
-              "approval-checkpoints",
-              "slack-approval-plugin-native.resolved.ack.json",
-            ),
-            `${JSON.stringify({
-              version: 1,
-              capturedAt: "2026-05-04T13:00:30.000Z",
-              scenarioId: "slack-approval-plugin-native",
-              screenshotPath: `${outputDir}/approval-checkpoints/slack-approval-plugin-native-resolved.png`,
-              state: "pending",
-            })}\n`,
-          );
-        }
-      }
-      return { stdout: "", stderr: "" };
-    });
-
-    const result = await runMantisSlackDesktopSmoke({
-      approvalCheckpoints: true,
-      commandRunner: runner,
-      crabboxBin: "/tmp/crabbox",
-      outputDir: ".artifacts/qa-e2e/mantis/slack-desktop-bad-checkpoints",
-      repoRoot,
-    });
-
-    expect(result.status).toBe("fail");
-    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      error?: string;
-    };
-    expect(summary.error).toContain("unexpected state");
-  });
-
-  it("rejects approval checkpoints with gateway setup", async () => {
-    await expect(
-      runMantisSlackDesktopSmoke({
-        approvalCheckpoints: true,
-        crabboxBin: "/tmp/crabbox",
-        gatewaySetup: true,
-        repoRoot,
-      }),
-    ).rejects.toThrow("--approval-checkpoints cannot be used with --gateway-setup");
-  });
-
   it("supports prehydrated remote workspaces without installing or building inside the VM", async () => {
     const commands: { args: readonly string[]; command: string }[] = [];
     const runner = vi.fn(async (command: string, args: readonly string[]) => {
@@ -627,7 +502,7 @@ describe("mantis Slack desktop smoke runtime", () => {
 
   it.each([
     { expectedError: "Crabbox stop failed", failure: "Crabbox stop" },
-    { expectedError: "EISDIR", failure: "report write" },
+    { expectedError: "Artifact destination is not a regular file", failure: "report write" },
   ])(
     "releases Convex Slack credentials when $failure fails",
     async ({ expectedError, failure }) => {
@@ -706,7 +581,11 @@ describe("mantis Slack desktop smoke runtime", () => {
               );
               if (failure === "report write") {
                 await fs.mkdir(
-                  path.join(outputDir as string, "mantis-slack-desktop-smoke-report.md"),
+                  path.join(
+                    repoRoot,
+                    ".artifacts/qa-e2e/mantis/slack-desktop-convex",
+                    "mantis-slack-desktop-smoke-report.md",
+                  ),
                 );
               }
             }

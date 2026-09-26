@@ -79,6 +79,35 @@ describe("exec approval card", () => {
     expect(card?.classList.contains("exec-approval-card--severity-warning")).toBe(true);
   });
 
+  it("preserves command text while highlighting ordered, non-overlapping valid spans", () => {
+    const command = "echo hello | cat";
+    const card = renderCard(
+      approval({
+        kind: "exec",
+        request: {
+          command,
+          commandSpans: [
+            { startIndex: 13, endIndex: 16 },
+            { startIndex: 0, endIndex: 2 },
+            { startIndex: 0, endIndex: 4 },
+            { startIndex: 3, endIndex: 7 },
+            { startIndex: 5, endIndex: 10 },
+            { startIndex: -1, endIndex: 1 },
+            { startIndex: 11, endIndex: 11 },
+            { startIndex: 12, endIndex: 99 },
+          ],
+        },
+      }),
+    );
+
+    expect(card?.querySelector(".exec-approval-command")?.textContent).toBe(command);
+    expect(Array.from(card?.querySelectorAll("mark") ?? [], (mark) => mark.textContent)).toEqual([
+      "echo",
+      "hello",
+      "cat",
+    ]);
+  });
+
   it("shows plugin and agent chips with session details in the modal", () => {
     const card = renderCard(approval());
     const details = card?.querySelector<HTMLDetailsElement>(".exec-approval-details");

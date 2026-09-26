@@ -1,7 +1,14 @@
 // Memory schema operations shared by host maintenance and native publication workers.
 export {
+  dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
   ensureMemoryChunkProvenance,
+  ensureMemoryChunkFtsTriggers,
+  migrateMemoryIndexStorage,
+  registerMemoryEmbeddingMigrationFunctions,
+  markInvalidImportedMemoryEmbeddings,
+  rebuildMemoryChunkFts,
+  MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS,
   ensureMemoryIndexSchema,
   ensureMemoryPathFtsTriggers,
   ensureMemoryRecallMetadataSchema,

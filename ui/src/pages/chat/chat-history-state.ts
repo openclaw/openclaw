@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionMessageSubscription } from "../../lib/sessions/index.ts";
@@ -43,6 +44,7 @@ type ChatHistoryLoadState =
       sessionKey: string;
       requestAgentId: string | undefined;
       sessionInfo: ChatHistoryResult["sessionInfo"];
+      sessionId?: string | null;
     }
   | ({ phase: "failed"; message: string; retryable: boolean } & ChatHistoryLoadRequest);
 
@@ -213,6 +215,27 @@ export function getAcceptedChatHistorySession(state: ChatState) {
     : undefined;
 }
 
+/** A successful scoped read can prove an ephemeral session is gone; roster absence cannot. */
+export function isExpiredIncognitoSession(
+  state: ChatState,
+  sessionKey = state.sessionKey,
+): boolean {
+  const accepted = chatHistoryRequests(state).acceptedHistory;
+  const creation = state.chatSubmissions?.creation;
+  return (
+    isIncognitoSessionKey(sessionKey) &&
+    accepted?.sessionId === null &&
+    state.connected &&
+    state.client === accepted.client &&
+    state.sessions === accepted.sessions &&
+    state.connectionEpoch === accepted.connectionEpoch &&
+    state.sessionKey === sessionKey &&
+    accepted.sessionKey === sessionKey &&
+    !(creation?.sessionKey === sessionKey && !creation.admitted) &&
+    !state.hasPendingInitialTurn?.(sessionKey)
+  );
+}
+
 /** Cached identity alone cannot authorize delivery before the first authoritative history result. */
 export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
   const requests = chatHistoryRequests(state);
@@ -305,10 +328,17 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
 }
 
-export function setChatError(state: ChatState, error: string | null) {
+export function setChatError(
+  state: { lastError?: string | null; chatError?: string | null; requestUpdate?: () => void },
+  error: string | null,
+  requestUpdate = false,
+) {
   const message = error === null ? null : formatUiError(error);
   state.lastError = message;
   state.chatError = message;
+  if (requestUpdate) {
+    state.requestUpdate?.();
+  }
 }
 
 export function chatScopedEventSessionMatches(

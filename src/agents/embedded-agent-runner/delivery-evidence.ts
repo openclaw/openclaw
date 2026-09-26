@@ -2,7 +2,14 @@ import {
   asOptionalObjectRecord,
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import {
+  hasNonEmptyString,
+  normalizeOptionalLowercaseString as normalizeEvidenceStatus,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeSingleOrTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 import type { ReplyDeliveryState } from "../reply-completion.js";
@@ -38,6 +45,7 @@ export type AgentDeliveryEvidence = {
   successfulCronAdds?: unknown;
   meta?: {
     yielded?: unknown;
+    continuationPending?: unknown;
     error?: unknown;
     aborted?: unknown;
     finalAssistantVisibleText?: unknown;
@@ -126,18 +134,6 @@ function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
     : false;
 }
 
-function collectStringValues(value: unknown, output: Set<string>) {
-  if (typeof value === "string" && value.trim()) {
-    output.add(value.trim());
-  } else if (Array.isArray(value)) {
-    value.filter(hasNonEmptyString).forEach((entry) => output.add(entry.trim()));
-  }
-}
-
-function normalizeEvidenceStatus(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined;
-}
-
 function hasVisibleMessagingToolTarget(value: unknown): boolean {
   const target = asOptionalRecord(value);
   if (!target) {
@@ -185,8 +181,7 @@ export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string
 export function collectMessagingToolDeliveredMediaUrls(
   result: Pick<AgentDeliveryEvidence, "messagingToolSentMediaUrls" | "messagingToolSentTargets">,
 ): string[] {
-  const urls = new Set<string>();
-  collectStringValues(result.messagingToolSentMediaUrls, urls);
+  const urls = new Set(normalizeSingleOrTrimmedStringList(result.messagingToolSentMediaUrls));
   for (const url of collectPayloadMediaUrls(result.messagingToolSentTargets)) {
     urls.add(url);
   }
@@ -403,12 +398,6 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   );
 }
 
-function collectNonEmptyStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.flatMap((item) => (typeof item === "string" && item.trim() ? [item.trim()] : []))
-    : [];
-}
-
 function hasUnaccountedStrings(aggregate: string[], accounted: string[]): boolean {
   const remaining = new Map<string, number>();
   for (const value of accounted) {
@@ -419,11 +408,7 @@ function hasUnaccountedStrings(aggregate: string[], accounted: string[]): boolea
     if (count === 0) {
       return true;
     }
-    if (count === 1) {
-      remaining.delete(value);
-    } else {
-      remaining.set(value, count - 1);
-    }
+    remaining.set(value, count - 1);
   }
   return false;
 }
@@ -444,13 +429,13 @@ export function hasUnaccountedMessagingToolAggregateEvidence(
         return record && hasNonEmptyString(record.to) ? [record] : [];
       })
     : [];
-  const aggregateTexts = collectNonEmptyStringArray(result.messagingToolSentTexts);
-  const aggregateMediaUrls = collectNonEmptyStringArray(result.messagingToolSentMediaUrls);
+  const aggregateTexts = normalizeTrimmedStringList(result.messagingToolSentTexts);
+  const aggregateMediaUrls = normalizeTrimmedStringList(result.messagingToolSentMediaUrls);
   const accountedTexts = routeCheckableTargets.flatMap((target) =>
     typeof target.text === "string" && target.text.trim() ? [target.text.trim()] : [],
   );
   const accountedMediaUrls = routeCheckableTargets.flatMap((target) =>
-    collectNonEmptyStringArray(target.mediaUrls),
+    normalizeTrimmedStringList(target.mediaUrls),
   );
   if (
     hasUnaccountedStrings(aggregateTexts, accountedTexts) ||

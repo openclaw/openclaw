@@ -185,7 +185,12 @@ describe("field-scoped config draft cancellation", () => {
       await expect(runtimeConfig.discardFormValue(["count"])).resolves.toBe(confirmed);
       expect(runtimeConfig.state.configForm).toEqual({ count: value });
       expect(runtimeConfig.state.configFormDirty).toBe(!confirmed);
-      expect(runtimeConfig.state.configRecoveryError === null).toBe(confirmed);
+      if (!confirmed) {
+        await expect(
+          runtimeConfig.patch({ raw: { unrelated: true }, note: "synthetic toggle" }),
+        ).resolves.toBe(false);
+        expect(request.mock.calls.some(([method]) => method === "config.patch")).toBe(false);
+      }
       await vi.advanceTimersByTimeAsync(1_000);
       expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(1);
       runtimeConfig.dispose();

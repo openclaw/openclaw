@@ -16,6 +16,7 @@ import {
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
+  hasRecordedModelFallbackStop,
   isCliTerminalStopCode,
   resolveFailoverStatus,
 } from "../../failover-error.js";
@@ -83,6 +84,9 @@ export async function handleEmbeddedPromptFailure(input: {
   traceAttempts: TraceAttempt[];
   previousRetryFailoverReason: FailoverReason | null;
 }): Promise<PromptFailureOutcome> {
+  if (hasRecordedModelFallbackStop(input.promptError)) {
+    throw input.promptError;
+  }
   // Only the local precheck owns this recovery; provider text cannot request it.
   if (
     input.promptErrorSource === "precheck" &&

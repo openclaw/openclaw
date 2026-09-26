@@ -11,7 +11,6 @@ import {
   type UpdateRepairValidation,
 } from "./update-repair-protocol.js";
 import { repairSummary, runLocalUpdateRepairTurn } from "./update-repair-turn.js";
-import { runUpdateRepairWorker } from "./update-repair-worker.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 
 type RepairAttempt = UpdateRepairResult["attempts"][number];
@@ -260,26 +259,5 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     clearTimeout(timer);
     // Failed cleanup retains the process-local owner; Doctor cannot prove resource closure.
     repairActive = cleanup.outcome === "uncertain";
-  }
-}
-
-export async function prepareUnattendedUpdateRepair(
-  params: UpdateRepairParams,
-): Promise<UpdateRepairResult> {
-  if (repairActive) {
-    const reason = "Another installation repair is already running.";
-    params.onEvent?.({ type: "stopped", status: "unavailable", reason });
-    return {
-      status: "unavailable",
-      attempts: [],
-      finalValidation: { ok: false, score: 0, summary: "Validation did not complete." },
-      reason,
-    };
-  }
-  repairActive = true;
-  try {
-    return await runUpdateRepairWorker(params);
-  } finally {
-    repairActive = false;
   }
 }

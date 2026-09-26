@@ -14,12 +14,37 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 
 const AGENT_ID = "recreated-agent";
 const EXTERNAL_STATE_AGENT_ID = "external-state-agent";
 const SESSION_KEY = `agent:${AGENT_ID}:product-proof`;
+const SESSION_KEYS = [SESSION_KEY, `${SESSION_KEY}-second`];
+
+async function expectSessionListPages(client: GatewayClient) {
+  const first = await client.request<SessionsListResult>("sessions.list", {
+    agentId: AGENT_ID,
+    limit: 1,
+  });
+  const full = await client.request<SessionsListResult>("sessions.list", {
+    agentId: AGENT_ID,
+    limit: 100,
+  });
+  const next = await client.request<SessionsListResult>("sessions.list", {
+    agentId: AGENT_ID,
+    limit: 1,
+    offset: 1,
+  });
+  expect(first).toMatchObject({ count: 1, totalCount: 2 });
+  expect(full).toMatchObject({ count: 2, totalCount: 2 });
+  expect(next).toMatchObject({ count: 1, totalCount: 2 });
+  expect(new Set(full.sessions.map((row) => row.key))).toEqual(new Set(SESSION_KEYS));
+  expect(new Set([...first.sessions, ...next.sessions].map((row) => row.key))).toEqual(
+    new Set(SESSION_KEYS),
+  );
+}
 
 installGatewayTestHooks();
 
@@ -54,12 +79,12 @@ describe("agent database recreation product proof", () => {
           workspace,
         });
         expect(created).toMatchObject({ agentId: AGENT_ID, ok: true });
-        await expect(
-          client.request("sessions.create", { agentId: AGENT_ID, key: SESSION_KEY }),
-        ).resolves.toMatchObject({ key: SESSION_KEY });
-        await expect(client.request("sessions.list", { agentId: AGENT_ID })).resolves.toMatchObject(
-          { sessions: [expect.objectContaining({ key: SESSION_KEY })] },
-        );
+        for (const key of SESSION_KEYS) {
+          await expect(
+            client.request("sessions.create", { agentId: AGENT_ID, key }),
+          ).resolves.toMatchObject({ key });
+        }
+        await expectSessionListPages(client);
 
         const databasePath = resolveOpenClawAgentSqlitePath({
           agentId: AGENT_ID,
@@ -77,12 +102,12 @@ describe("agent database recreation product proof", () => {
           workspace,
         });
         expect(recreated).toMatchObject({ agentId: AGENT_ID, ok: true });
-        await expect(
-          client.request("sessions.create", { agentId: AGENT_ID, key: SESSION_KEY }),
-        ).resolves.toMatchObject({ key: SESSION_KEY });
-        await expect(client.request("sessions.list", { agentId: AGENT_ID })).resolves.toMatchObject(
-          { sessions: [expect.objectContaining({ key: SESSION_KEY })] },
-        );
+        for (const key of SESSION_KEYS) {
+          await expect(
+            client.request("sessions.create", { agentId: AGENT_ID, key }),
+          ).resolves.toMatchObject({ key });
+        }
+        await expectSessionListPages(client);
         await expect(client.request("health", { probe: true })).resolves.toBeDefined();
 
         const recreatedIdentity = await fs.stat(databasePath, { bigint: true });

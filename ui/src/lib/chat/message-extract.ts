@@ -165,24 +165,16 @@ function isTextOnlyContent(content: unknown): boolean {
   if (!Array.isArray(content)) {
     return false;
   }
-  if (content.length === 0) {
-    return true;
-  }
-  let sawText = false;
   for (const block of content) {
     if (!block || typeof block !== "object") {
       return false;
     }
     const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text") {
-      return false;
-    }
-    sawText = true;
-    if (typeof entry.text !== "string") {
+    if (entry.type !== "text" || typeof entry.text !== "string") {
       return false;
     }
   }
-  return sawText;
+  return true;
 }
 
 /** True for user rows with no text and no media facts; such rows hide from history. */

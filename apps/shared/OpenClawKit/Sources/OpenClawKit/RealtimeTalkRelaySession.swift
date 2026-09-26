@@ -358,7 +358,7 @@ public final class RealtimeTalkRelaySession {
         self.startEventPump(stream: eventStream, lifecycleGeneration: lifecycleGeneration)
         do {
             let result = try await self.createRelaySession()
-            let createdRelaySessionId = self.nonEmpty(result.relaysessionid)
+            let createdRelaySessionId = Self.trimmed(result.relaysessionid)
             let statusAfterCreate = await self.lifecycleStatus(lifecycleGeneration)
             if statusAfterCreate != .current {
                 if let relaySessionId = createdRelaySessionId {
@@ -408,9 +408,7 @@ public final class RealtimeTalkRelaySession {
             case .ready, .cancelled:
                 return
             case let .failed(issue):
-                throw NSError(domain: "RealtimeTalkRelay", code: 6, userInfo: [
-                    NSLocalizedDescriptionKey: issue.message,
-                ])
+                throw Self.startupFailureError(issue)
             }
         } catch {
             // A lost route must still surface: swallowing here would discard both the original
@@ -523,19 +521,19 @@ public final class RealtimeTalkRelaySession {
             "transport": AnyCodable("gateway-relay"),
             "brain": AnyCodable("agent-consult"),
         ]
-        if let provider = self.nonEmpty(self.options.provider) {
+        if let provider = Self.trimmed(self.options.provider) {
             payload["provider"] = AnyCodable(provider)
         }
-        if let model = self.nonEmpty(self.options.model) {
+        if let model = Self.trimmed(self.options.model) {
             payload["model"] = AnyCodable(model)
         }
-        if let voice = self.nonEmpty(self.options.voice) {
+        if let voice = Self.trimmed(self.options.voice) {
             payload["voice"] = AnyCodable(voice)
         }
         if self.options.supportsVoiceSelection {
             payload["capabilities"] = AnyCodable(["voice-selection"])
         }
-        if let voiceChangeId = self.nonEmpty(self.options.voiceChangeId) {
+        if let voiceChangeId = Self.trimmed(self.options.voiceChangeId) {
             payload["voiceChangeId"] = AnyCodable(voiceChangeId)
         }
         let response = try await self.transport.request("talk.session.create", payload, 20000)
@@ -558,10 +556,10 @@ public final class RealtimeTalkRelaySession {
 
     private func resolveSupportsBargeIn(_ session: TalkSessionCreateResult) async -> Bool? {
         var payload: [String: AnyCodable] = [:]
-        if let provider = self.nonEmpty(session.provider ?? self.options.provider) {
+        if let provider = Self.trimmed(session.provider ?? self.options.provider) {
             payload["provider"] = AnyCodable(provider)
         }
-        if let model = self.nonEmpty(session.model ?? self.options.model) {
+        if let model = Self.trimmed(session.model ?? self.options.model) {
             payload["model"] = AnyCodable(model)
         }
         // A talk-only client may create sessions without permission to read the catalog.
@@ -666,7 +664,7 @@ extension RealtimeTalkRelaySession {
             self.logger.debug("talk realtime: close")
             if self.hasReceivedReady {
                 self.onStatus("Ready")
-                let reason = self.nonEmpty(payload["reason"]?.stringValue)
+                let reason = Self.trimmed(payload["reason"]?.stringValue)
                 let talkEvent = payload["talkEvent"]?.dictionaryValue
                 let termination: RealtimeTalkRelayTermination = if talkEvent?["type"]?.stringValue == "session.closed",
                                                                    talkEvent?["payload"]?.dictionaryValue?["reason"]?
@@ -703,12 +701,12 @@ extension RealtimeTalkRelaySession {
         // Provider clears retire playback; only turn.cancelled acknowledges turn cancellation.
         let clearsSuppressed = self.awaitingOutputClear &&
             payload["talkEvent"]?.dictionaryValue?["type"]?.stringValue == "turn.cancelled" &&
-            self.suppressedOutputIdentity?.relation(to: clearIdentity) == .same
+            self.suppressedOutputIdentity == clearIdentity
         if clearsSuppressed {
             self.awaitingOutputClear = false
             if self.outputCancellationTask == nil { self.retireOutputCancellation() }
         }
-        let currentMatches = clearIdentity.isEmpty() || self.outputIdentity?.relation(to: clearIdentity) == .same
+        let currentMatches = clearIdentity.turnId == nil || self.outputIdentity == clearIdentity
         guard clearsSuppressed || currentMatches else { return }
         let marks = self.takePendingPlaybackMarks()
         // Cancellation already published the stopped state. A later clear with no
@@ -1156,11 +1154,6 @@ extension RealtimeTalkRelaySession {
         return String(singleLine.prefix(180)) + "..."
     }
 
-    private func nonEmpty(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
-    }
-
     private nonisolated static func assistantText(from message: AnyCodable?) -> String? {
         guard let message else { return nil }
         if let text = message.stringValue {
@@ -1188,32 +1181,12 @@ extension RealtimeTalkRelaySession {
 }
 
 extension RealtimeTalkRelaySession {
-    private struct OutputIdentity {
-        enum Relation {
-            case same
-            case different
-            case unknown
-        }
-
+    private struct OutputIdentity: Equatable {
         let turnId: String?
+
         init(_ payload: [String: AnyCodable]) {
-            let turnId = payload["talkEvent"]?.dictionaryValue?["turnId"]?.stringValue?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            self.turnId = turnId?.isEmpty == false ? turnId : nil
-        }
-
-        func isEmpty() -> Bool {
-            self.turnId == nil
-        }
-
-        func relation(to other: OutputIdentity) -> Relation {
-            if self.isEmpty() || other.isEmpty() {
-                return self.isEmpty() == other.isEmpty() ? .same : .different
-            }
-            if let turnId, let otherTurnId = other.turnId {
-                return turnId == otherTurnId ? .same : .different
-            }
-            return .unknown
+            self.turnId = RealtimeTalkRelaySession
+                .trimmed(payload["talkEvent"]?.dictionaryValue?["turnId"]?.stringValue)
         }
     }
 
@@ -1294,11 +1267,7 @@ extension RealtimeTalkRelaySession {
             return
         }
         guard !self.awaitingOutputClear else { return }
-        if let cancelledOutputTurnId {
-            if incomingTurnId == cancelledOutputTurnId {
-                return
-            }
-        }
+        guard incomingTurnId != self.cancelledOutputTurnId else { return }
         guard let base64 = payload["audioBase64"]?.stringValue else { return }
         guard let data = Data(base64Encoded: base64) else {
             self.handleOutputPlaybackOverflow()
@@ -1306,7 +1275,7 @@ extension RealtimeTalkRelaySession {
         }
         self.terminalOutputCancellationReason = nil
         if let currentIdentity = self.outputIdentity,
-           currentIdentity.relation(to: incomingIdentity) == .different
+           currentIdentity != incomingIdentity
         {
             let marks = self.takePendingPlaybackMarks()
             self.stopOutputPlayback()
@@ -1366,9 +1335,9 @@ extension RealtimeTalkRelaySession {
 
     private func handleOutputAudioDone(_ payload: [String: AnyCodable]) {
         let incomingIdentity = OutputIdentity(payload)
-        if !incomingIdentity.isEmpty(),
+        if incomingIdentity.turnId != nil,
            let outputIdentity,
-           outputIdentity.relation(to: incomingIdentity) != .same
+           outputIdentity != incomingIdentity
         {
             return
         }
@@ -1473,9 +1442,7 @@ extension RealtimeTalkRelaySession {
                     timestampMs: timestampMs)
                 return nil
             }
-            if rms >= Self.bargeInRmsThreshold {
-                self.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)
-            }
+            self.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)
         }
 
         let taskID = UUID()

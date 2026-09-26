@@ -1,7 +1,7 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { UPDATE_ACTIVATION_TIMEOUT_REASON } from "../../shared/update-outcome.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { UpdateCommandTerminalRecord } from "./update-command-terminal-record.js";

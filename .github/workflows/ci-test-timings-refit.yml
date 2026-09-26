@@ -92,11 +92,11 @@ jobs:
           pr-body: |
             ## What Problem This Solves
 
-            Refresh stale CI shard weights from successful main-push and release-check runs, plus tooling file weights from successful pull-request CI runs.
+            Refresh stale CI shard weights from successful jobs in completed main-push workflows and successful release-check runs, plus tooling file weights from successful pull-request CI runs.
 
             ## Why This Change Was Made
 
-            The daily refit uses medians, rejects outliers and single samples, and keeps existing weights when the new median is within 15% of them. Pull-request samples measure their merge-ref and update only PR-only tooling files. Main compact keys absent from every contributing run are removed only when their profile has observations from at least three sampled runs; partial PR inventories never prune tooling files. The table below lists each removal explicitly.
+            The daily refit uses medians, rejects outliers and single samples, and keeps existing weights when the new median is within 15% of them. Completed failed main workflows contribute only their successful timing jobs; their missing jobs never supply pruning evidence. Pull-request samples measure their merge-ref and update only PR-only tooling files. Main compact keys absent from every contributing run are removed only when their profile has observations from at least three successful workflows; partial PR inventories never prune tooling files. The table below lists each removal explicitly.
 
             ## User Impact
 

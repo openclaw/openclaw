@@ -7,6 +7,7 @@ import { isRecord } from "../utils.js";
 import { externalCliDiscoveryForProviderAuth } from "./auth-profiles/external-cli-discovery.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   type CodexNativeSearchMode,
   resolveCodexNativeWebSearchConfig,
@@ -64,7 +65,11 @@ function hasCodexNativeWebSearchTool(tools: unknown): boolean {
 export function hasAvailableCodexAuth(params: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): boolean {
+  if (params.authStore) {
+    return listProfilesForProvider(params.authStore, "openai").length > 0;
+  }
   if (
     Object.values(params.config?.auth?.profiles ?? {}).some(
       (profile) =>
@@ -115,6 +120,7 @@ export function resolveCodexNativeSearchActivation(params: {
   senderUsername?: string | null;
   senderE164?: string | null;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): CodexNativeSearchActivation {
   const globalWebSearchEnabled =
     params.webSearchEnabled !== false && params.config?.tools?.web?.search?.enabled !== false;

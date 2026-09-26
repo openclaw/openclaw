@@ -12,7 +12,6 @@ import {
   loadSessionEntry,
   onSessionIdentityMutation,
   patchSessionEntryCore,
-  recordSessionParticipant,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { readSessionEntryStore } from "./session-accessor.sqlite-entry-inventory.js";
@@ -22,6 +21,7 @@ import {
 } from "./session-accessor.sqlite-entry.js";
 import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-lifecycle-state.js";
 import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
 import {
   projectPublicSessionEntry,

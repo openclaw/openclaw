@@ -1,11 +1,7 @@
-/**
- * Channel setup wizard adapter.
- *
- * Adapts declarative wizard definitions into imperative setup adapters used by onboarding.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { writeChannelSection } from "./config-helpers.js";
 import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
@@ -32,8 +28,6 @@ export type {
   ChannelSetupWizardStatus,
   ChannelSetupWizardTextInput,
 } from "./setup-wizard-types.js";
-
-type ChannelSetupWizardPlugin = ChannelSetupPlugin;
 
 type ChannelSectionWithAccounts = Record<string, unknown> & {
   accounts?: Record<string, unknown>;
@@ -70,19 +64,13 @@ function createWizardAccountScope(params: {
 
   // Some shipped plugins ignore accountId and resolve through defaultAccount.
   // Scope their callbacks to this wizard run, then restore the operator's default.
-  const scopedCfg = {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      [params.channelKey]: {
-        ...channel,
-        // Legacy callbacks use this map to choose account-scoped writes even
-        // when there were no root values to promote into a default account.
-        accounts: channel.accounts ?? {},
-        defaultAccount: accountId,
-      },
-    },
-  } as OpenClawConfig;
+  const scopedCfg = writeChannelSection(cfg, params.channelKey, {
+    ...channel,
+    // Legacy callbacks use this map to choose account-scoped writes even
+    // when there were no root values to promote into a default account.
+    accounts: channel.accounts ?? {},
+    defaultAccount: accountId,
+  });
 
   return {
     cfg: scopedCfg,
@@ -92,19 +80,13 @@ function createWizardAccountScope(params: {
         previousDefaultAccount !== undefined
           ? { ...currentChannel, defaultAccount: previousDefaultAccount }
           : (({ defaultAccount: _ignored, ...rest }) => rest)(currentChannel);
-      return {
-        ...currentCfg,
-        channels: {
-          ...currentCfg.channels,
-          [params.channelKey]: restoredChannel,
-        },
-      } as OpenClawConfig;
+      return writeChannelSection(currentCfg, params.channelKey, restoredChannel);
     },
   };
 }
 
 async function buildStatus(
-  plugin: ChannelSetupWizardPlugin,
+  plugin: ChannelSetupPlugin,
   wizard: ChannelSetupWizard,
   ctx: ChannelSetupStatusContext,
 ): Promise<ChannelSetupStatus> {
@@ -141,7 +123,7 @@ async function buildStatus(
 // Channel-owned contracts own config writes; released legacy adapters remain
 // supported through the single setup execution compatibility boundary.
 function applySetupInput(params: {
-  plugin: ChannelSetupWizardPlugin;
+  plugin: ChannelSetupPlugin;
   cfg: OpenClawConfig;
   accountId: string;
   input: ChannelSetupInput;
@@ -213,7 +195,7 @@ function collectCredentialValues(params: {
 // Text inputs can either update custom config state or reuse the same generic
 // setup input contract as credential steps.
 async function applyWizardTextInputValue(params: {
-  plugin: ChannelSetupWizardPlugin;
+  plugin: ChannelSetupPlugin;
   input: ChannelSetupWizardTextInput;
   cfg: OpenClawConfig;
   accountId: string;
@@ -251,7 +233,7 @@ function resolveTextInputKeepMessage(
 }
 
 export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
-  plugin: ChannelSetupWizardPlugin;
+  plugin: ChannelSetupPlugin;
   wizard: ChannelSetupWizard;
 }): ChannelSetupWizardAdapter {
   const { plugin, wizard } = params;
@@ -479,11 +461,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
 
       const runTextInputSteps = async () => {
         for (const textInput of wizard.textInputs ?? []) {
-          let currentValue = normalizeOptionalString(
-            typeof credentialValues[textInput.inputKey] === "string"
-              ? credentialValues[textInput.inputKey]
-              : undefined,
-          );
+          let currentValue = normalizeOptionalString(credentialValues[textInput.inputKey]);
           if (!currentValue && textInput.currentValue) {
             currentValue = normalizeOptionalString(
               await textInput.currentValue({
@@ -502,7 +480,22 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
               })
             : true;
 
-          if (!shouldPrompt) {
+          let keepCurrentValue = !shouldPrompt;
+          if (shouldPrompt) {
+            if (textInput.helpLines && textInput.helpLines.length > 0) {
+              await prompter.note(
+                textInput.helpLines.join("\n"),
+                textInput.helpTitle ?? textInput.message,
+              );
+            }
+            if (currentValue && textInput.confirmCurrentValue !== false) {
+              keepCurrentValue = await prompter.confirm({
+                message: resolveTextInputKeepMessage(textInput, currentValue),
+                initialValue: true,
+              });
+            }
+          }
+          if (keepCurrentValue) {
             if (currentValue) {
               credentialValues[textInput.inputKey] = currentValue;
               if (textInput.applyCurrentValue) {
@@ -518,33 +511,6 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
               }
             }
             continue;
-          }
-
-          if (textInput.helpLines && textInput.helpLines.length > 0) {
-            await prompter.note(
-              textInput.helpLines.join("\n"),
-              textInput.helpTitle ?? textInput.message,
-            );
-          }
-
-          if (currentValue && textInput.confirmCurrentValue !== false) {
-            const keep = await prompter.confirm({
-              message: resolveTextInputKeepMessage(textInput, currentValue),
-              initialValue: true,
-            });
-            if (keep) {
-              credentialValues[textInput.inputKey] = currentValue;
-              if (textInput.applyCurrentValue) {
-                next = await applyWizardTextInputValue({
-                  plugin,
-                  input: textInput,
-                  cfg: next,
-                  accountId,
-                  value: currentValue,
-                });
-              }
-              continue;
-            }
           }
 
           const initialValue =

@@ -9,7 +9,6 @@ import {
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
-import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -38,6 +37,7 @@ import {
 
 /** Returns a reusable cached handle or initializes a fresh runtime session for the metadata. */
 export async function ensureManagerRuntimeHandle(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -52,6 +52,7 @@ export async function ensureManagerRuntimeHandle(params: {
   if (!isCurrentActor()) {
     throw createSupersededActorError(params.sessionKey);
   }
+  params.assertActive?.();
   const agent =
     normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
   const mode = params.meta.mode;
@@ -65,7 +66,6 @@ export async function ensureManagerRuntimeHandle(params: {
     params.cfg.acp?.backend ||
     ""
   ).trim();
-  const configSignature = resolveRuntimeConfigCacheKey(params.cfg);
   const backend = params.deps.requireRuntimeBackend(configuredBackend || undefined);
   const runtime = backend.runtime;
   assertAcpRuntimeOwnerSupport(runtime, params);
@@ -75,7 +75,6 @@ export async function ensureManagerRuntimeHandle(params: {
     const agentMatches = cached.agent === agent;
     const modeMatches = cached.mode === mode;
     const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
-    const configMatches = cached.configSignature === configSignature;
     const handleMatchesMeta = params.runtimeHandles.handleMatchesMeta({
       handle: cached.handle,
       meta: params.meta,
@@ -85,7 +84,7 @@ export async function ensureManagerRuntimeHandle(params: {
       agentMatches &&
       modeMatches &&
       cwdMatches &&
-      configMatches &&
+      cached.runtime === runtime &&
       handleMatchesMeta &&
       (await params.runtimeHandles.isReusable({
         sessionKey: params.sessionKey,
@@ -96,6 +95,7 @@ export async function ensureManagerRuntimeHandle(params: {
     if (!isCurrentActor()) {
       throw createSupersededActorError(params.sessionKey);
     }
+    params.assertActive?.();
     if (reusable) {
       if (!isCurrentActor()) {
         throw createSupersededActorError(params.sessionKey);
@@ -107,6 +107,7 @@ export async function ensureManagerRuntimeHandle(params: {
       };
     }
     await params.runtimeHandles.close({
+      assertActive: params.assertActive,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       reason: "runtime-handle-replaced",
@@ -133,6 +134,7 @@ export async function ensureManagerRuntimeHandle(params: {
     previousIdentity != null &&
     !identityHasStableSessionId(previousIdentity);
   const ensureSession = async (resumeSessionId?: string) => {
+    params.assertActive?.();
     const ensured = await withAcpRuntimeErrorBoundary({
       run: async () =>
         await runtime.ensureSession({
@@ -166,6 +168,7 @@ export async function ensureManagerRuntimeHandle(params: {
     if (!isCurrentActor()) {
       throw createSupersededActorError(params.sessionKey);
     }
+    params.assertActive?.();
     await runtime.prepareFreshSession?.({
       persistedHandle,
       sessionKey: params.sessionKey,
@@ -187,6 +190,7 @@ export async function ensureManagerRuntimeHandle(params: {
       if (!isCurrentActor()) {
         throw acpError;
       }
+      params.assertActive?.();
       if (isAcpOwnerRepairRequired(acpError) || acpError.code !== "ACP_SESSION_INIT_FAILED") {
         throw acpError;
       }
@@ -310,7 +314,6 @@ export async function ensureManagerRuntimeHandle(params: {
     agent,
     mode,
     cwd: effectiveCwd,
-    configSignature,
     appliedControlSignature: undefined,
   });
   return {

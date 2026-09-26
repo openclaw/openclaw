@@ -22,7 +22,7 @@ import {
   DEFAULT_WHATSAPP_SOCKET_TIMING,
   createWhatsAppSocketOperationTimeoutAdapter,
 } from "./socket-timing.js";
-import { jidToE164 } from "./text-runtime.js";
+import { jidToE164 } from "./targets-runtime.js";
 
 type WhatsAppQaDriverObservedMessageKind =
   | "media"

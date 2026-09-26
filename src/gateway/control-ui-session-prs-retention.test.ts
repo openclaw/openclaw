@@ -2,14 +2,17 @@ import { getEventListeners } from "node:events";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runGitWorkerOperation } from "../infra/git-worker.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
-import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
 import {
-  evictPullRequestCache,
+  createSessionPullRequestsFixture,
   githubJson,
   pullListItem,
   routedFetch,
 } from "./control-ui-session-prs.test-support.js";
+
+const fixture = createSessionPullRequestsFixture();
+const loadControlUiSessionPullRequests = fixture.load;
 
 vi.mock("../infra/git-worker.js", () => ({ runGitWorkerOperation: vi.fn() }));
 
@@ -24,8 +27,7 @@ beforeEach(() => {
   vi.setSystemTime(cacheEpochMs);
 });
 
-afterEach(async () => {
-  await evictPullRequestCache();
+afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });
@@ -47,6 +49,8 @@ describe("watched session PR retention", () => {
       { rateLimited: boolean; pullRequests: unknown[]; repository: unknown }
     >();
     const subscriptions = createControlUiSessionPullRequestSubscriptions({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      prepareRead: fixture.prepareRead,
       broadcastToConnIds: (_event, payload) => {
         if (!isRecord(payload) || !isRecord(payload.sessions)) {
           throw new Error("invalid subscription event");
@@ -140,6 +144,8 @@ describe("watched session PR retention", () => {
       throw new Error("Unexpected local Git operation");
     });
     const subscriptions = createControlUiSessionPullRequestSubscriptions({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      prepareRead: fixture.prepareRead,
       broadcastToConnIds: vi.fn(),
       load: (params, cacheSignal) => {
         if (cacheSignal) {
@@ -175,7 +181,7 @@ describe("watched session PR retention", () => {
       expect(fetchImpl.mock.calls).toHaveLength(300);
       expect(runGitWorkerOperation).toHaveBeenCalledTimes(1_200);
       expect(signals.size).toBe(300);
-      expect([...signals].every((signal) => getEventListeners(signal, "abort").length === 3)).toBe(
+      expect([...signals].every((signal) => getEventListeners(signal, "abort").length === 4)).toBe(
         true,
       );
     } finally {
@@ -235,11 +241,11 @@ describe("watched session PR retention", () => {
     const pins = () => getEventListeners(cacheLifetime.signal, "abort").length;
     try {
       await load();
-      expect(pins()).toBe(3);
+      expect(pins()).toBe(4);
       root = "/retained/second";
       branch = "feature-b";
       await load();
-      expect(pins()).toBe(3);
+      expect(pins()).toBe(4);
       root = null;
       await load();
       expect(pins()).toBe(0);
@@ -252,12 +258,12 @@ describe("watched session PR retention", () => {
         rateLimited: false,
         status: "unavailable",
       });
-      // Preserve context and the GitHub failure's expiry, but drop obsolete branch facts.
-      expect(pins()).toBe(2);
+      // Preserve context, transcript references, and the failure expiry; drop obsolete branch facts.
+      expect(pins()).toBe(3);
       fetchFailure = false;
       vi.setSystemTime(Date.now() + 30_001);
       await load();
-      expect(pins()).toBe(3);
+      expect(pins()).toBe(4);
       branch = null;
       await load();
       expect(pins()).toBe(1);
@@ -267,5 +273,6 @@ describe("watched session PR retention", () => {
     } finally {
       cacheLifetime.abort();
     }
+    expect(pins()).toBe(0);
   });
 });

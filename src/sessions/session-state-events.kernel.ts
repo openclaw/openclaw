@@ -1,5 +1,7 @@
 // Shared row mutations for synchronous session signals and the shared-state worker.
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { Insertable, Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -21,6 +23,10 @@ import {
   type SessionStateActorType,
   type SessionStateEventKind,
 } from "./session-state-event-kinds.js";
+import {
+  rowToSessionUpstreamLink,
+  type SessionUpstreamLink,
+} from "./session-upstream-links.kernel.js";
 
 export type SessionStateEventInput = {
   sessionKey: string;
@@ -66,6 +72,25 @@ export type SessionStateEventRecord = {
   payload?: Record<string, unknown>;
 };
 
+export function rowToSessionStateEvent(row: SessionStateEventRow): SessionStateEventRecord {
+  const payload = row.payload_json ? safeParseJsonRecord(row.payload_json) : undefined;
+  return {
+    sequence: normalizeSqliteNumber(row.sequence) ?? 0,
+    sessionKey: row.session_key,
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    agentId: row.agent_id,
+    // SAFETY: The sole event writer stores SessionStateEventInput.kind unchanged in this TEXT column.
+    kind: row.kind as SessionStateEventKind,
+    // SAFETY: The same typed recorder stores SessionStateEventInput.actorType unchanged as TEXT.
+    actorType: row.actor_type as SessionStateActorType,
+    ...(row.actor_id ? { actorId: row.actor_id } : {}),
+    ...(row.run_id ? { runId: row.run_id } : {}),
+    occurredAt: normalizeSqliteNumber(row.occurred_at) ?? 0,
+    summary: row.summary,
+    ...(payload ? { payload } : {}),
+  };
+}
+
 type SessionWatchCursorRow = Selectable<OpenClawStateKyselyDatabase["session_watch_cursors"]>;
 
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -91,6 +116,38 @@ export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
 
 export function getSessionStateKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<SessionStateDatabase>(db);
+}
+
+export function hasSessionStateWatchersInDatabase(
+  db: DatabaseSync,
+  targetSessionKey: string,
+): boolean {
+  return (
+    executeSqliteQueryTakeFirstSync(
+      db,
+      getSessionStateKysely(db)
+        .selectFrom("session_watch_cursors")
+        .select("watcher_session_key")
+        .where("target_session_key", "=", targetSessionKey)
+        .limit(1),
+    ) !== undefined
+  );
+}
+
+/** A queued upstream observation must still describe the exact source it inspected. */
+export function isSessionStateUpstreamCurrentInDatabase(
+  db: DatabaseSync,
+  expected: SessionUpstreamLink,
+): boolean {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_upstream_links">>(db)
+      .selectFrom("session_upstream_links")
+      .selectAll()
+      .where("session_key", "=", expected.sessionKey)
+      .where("agent_id", "=", expected.agentId),
+  );
+  return row !== undefined && isDeepStrictEqual(rowToSessionUpstreamLink(row), expected);
 }
 
 export function normalizeOptionalSqliteNumber(
@@ -131,6 +188,32 @@ export function readCursor(
       .where("watcher_session_key", "=", watcherSessionKey)
       .where("target_session_key", "=", targetSessionKey),
   );
+}
+
+function readMaterialCursors(
+  db: DatabaseSync,
+  watcherSessionKeys: readonly string[],
+  targetSessionKey: string,
+): Map<string, SessionWatchCursorRow> | undefined {
+  // Node binds lone surrogates as U+FFFD. Aliased keys must observe earlier writes.
+  if (watcherSessionKeys.length <= 1 || watcherSessionKeys.some((key) => !key.isWellFormed())) {
+    return undefined;
+  }
+  const cursors = new Map<string, SessionWatchCursorRow>();
+  for (let offset = 0; offset < watcherSessionKeys.length; offset += 500) {
+    const rows = executeSqliteQuerySync(
+      db,
+      getSessionStateKysely(db)
+        .selectFrom("session_watch_cursors")
+        .selectAll()
+        .where("target_session_key", "=", targetSessionKey)
+        .where("watcher_session_key", "in", watcherSessionKeys.slice(offset, offset + 500)),
+    ).rows;
+    for (const row of rows) {
+      cursors.set(row.watcher_session_key, row);
+    }
+  }
+  return cursors;
 }
 
 export function isAmbientGroupWatchCursor(row: SessionWatchCursorRow | undefined): boolean {
@@ -176,13 +259,14 @@ export function upsertSeedCursor(params: {
 
 function updateMaterialCursor(params: {
   db: DatabaseSync;
+  current: SessionWatchCursorRow | undefined;
   watcherSessionKey: string;
   watcherStorePath?: string;
   targetSessionKey: string;
   sequence: number;
   now: number;
 }): { lastSeenSequence: number; queueOnly: boolean; watcherStorePath: string | null } {
-  const current = readCursor(params.db, params.watcherSessionKey, params.targetSessionKey);
+  const { current } = params;
   const watcherStorePath = current
     ? (current.watcher_store_path ?? null)
     : (params.watcherStorePath ?? null);
@@ -304,6 +388,14 @@ export function recordSessionStateEventInDatabase(
   const watcherSessionKeys = [
     ...new Set([...(input.watcherSessionKeys ?? []), ...registeredWatcherKeys]),
   ].filter((key) => Boolean(key) && isNotifiableWatcherKey(key));
+  const cursors =
+    NOTIFY_BY_KIND[input.kind] && watcherSessionKeys.length > 1
+      ? readMaterialCursors(
+          db,
+          watcherSessionKeys.filter((key) => key !== input.actorId),
+          input.sessionKey,
+        )
+      : undefined;
   for (const watcherSessionKey of watcherSessionKeys) {
     if (input.kind === "child_spawned") {
       upsertSeedCursor({
@@ -321,6 +413,9 @@ export function recordSessionStateEventInDatabase(
     }
     const materialCursor = updateMaterialCursor({
       db,
+      current: cursors
+        ? cursors.get(watcherSessionKey)
+        : readCursor(db, watcherSessionKey, input.sessionKey),
       watcherSessionKey,
       watcherStorePath: input.watcherStorePaths?.[watcherSessionKey],
       targetSessionKey: input.sessionKey,

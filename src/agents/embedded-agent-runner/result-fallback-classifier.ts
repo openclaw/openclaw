@@ -82,10 +82,6 @@ function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boole
   );
 }
 
-export function hasIntentionalTerminalCompletion(result: EmbeddedAgentRunResult): boolean {
-  return result.meta.intentionalTerminalCompletion === "tool-batch";
-}
-
 function hasDeliverableAssistantPayload(result: {
   payloads?: unknown;
   meta?: { finalAssistantVisibleText?: unknown };
@@ -201,8 +197,11 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (!isEmbeddedAgentRunResult(params.result)) {
     return null;
   }
+  if (params.result.meta.agentMeta?.providerRefusal?.category === "misalignment") {
+    return null;
+  }
   if (
-    hasIntentionalTerminalCompletion(params.result) ||
+    params.result.meta.intentionalTerminalCompletion === "tool-batch" ||
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
     params.hasBlockReplyPipelineOutput === true

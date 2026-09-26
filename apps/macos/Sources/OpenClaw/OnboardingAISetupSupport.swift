@@ -580,12 +580,11 @@ extension OnboardingAISetupModel {
         ]
         return (advertisedOptions ?? legacyOptions).filter { choice in
             let providerKind = self.providerAutoSetupKind(choiceID: choice.id)
-            guard !candidates.contains(where: {
+            return !candidates.contains(where: {
                 $0.credentials != false &&
                     ($0.kind == providerKind ||
                         $0.modelRef.hasPrefix("\(choice.brandId ?? choice.id)/"))
-            }) else { return false }
-            return true
+            })
         }
     }
 
@@ -735,10 +734,6 @@ extension OnboardingAISetupModel {
             return "\(label) is temporarily rate-limited. Try again in a moment."
         case "timeout":
             return "\(label) didn’t answer in time."
-        case "format", "unavailable":
-            return detail.isEmpty
-                ? "\(label) couldn’t complete the test."
-                : "\(label) couldn’t complete the test. Show details to inspect or copy the error."
         default:
             return detail.isEmpty
                 ? "\(label) couldn’t complete the test."

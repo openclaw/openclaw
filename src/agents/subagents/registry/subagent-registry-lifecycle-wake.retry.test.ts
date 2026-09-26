@@ -16,9 +16,11 @@ vi.mock("./subagent-registry-lifecycle-completion.js", () => ({
   completeSubagentRunAttempt: vi.fn(),
 }));
 vi.mock("./subagent-registry-lifecycle-announce-cleanup.js", () => ({
-  finalizeResumedAnnounceGiveUp: vi.fn(),
   resumeAncestorCleanup: vi.fn(),
   startSubagentAnnounceCleanupFlow: vi.fn(),
+}));
+vi.mock("./subagent-registry-lifecycle-give-up.js", () => ({
+  finalizeResumedAnnounceGiveUp: vi.fn(),
 }));
 vi.mock("./subagent-registry-requester-yield.js", () => ({
   settleRequesterTurnAfterSessionSpawns: vi.fn(),
@@ -45,9 +47,6 @@ vi.mock("../../internal-session-effects.js", () => ({
 }));
 vi.mock("../requester-cron-authority.js", () => ({
   revokeRequesterCronAuthorityBatch: vi.fn(),
-}));
-vi.mock("./subagent-registry-memory.js", () => ({
-  subagentRuns: { confirmRetirement: vi.fn() },
 }));
 vi.mock("../../../runtime.js", () => ({ defaultRuntime: { log: vi.fn() } }));
 vi.mock("../../../logging/subsystem.js", () => ({
@@ -123,6 +122,7 @@ describe("requester settle retry lifetime", () => {
         getLatestRunForChildSession: () => null,
         suppressAnnounceForSteerRestart: () => false,
         resolveSubagentTask: () => ({ lookup: "available" }),
+        resolveSubagentTaskAsync: unexpected,
         shouldEmitEndedHookForRun: () => false,
         emitSubagentEndedHookForRun: unexpected,
         emitSubagentProgressEndedForRun: unexpected,

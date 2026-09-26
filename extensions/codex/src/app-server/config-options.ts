@@ -1,5 +1,10 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  normalizeTrimmedStringList,
+  parseBooleanValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseToml } from "smol-toml";
 import type {
   CodexAppServerApprovalPolicySource,
@@ -7,7 +12,6 @@ import type {
   CodexAppServerHomeScope,
   CodexAppServerRemoteAppsSubstrate,
   CodexAppServerRuntimeOptions,
-  CodexAppServerSandboxMode,
   CodexAppServerStartOptions,
   CodexManagedCommandOrder,
   CodexComputerUseConfig,
@@ -48,7 +52,6 @@ import {
 import {
   assertCodexAppServerConnectionSecurity,
   inferCodexAppServerConnectionClass,
-  normalizeRemoteWorkspaceRoot,
   resolveCodexAppServerNetworkProxy,
   resolveDefaultCodexAppServerPolicy,
   resolvePolicyMode,
@@ -56,17 +59,14 @@ import {
 } from "./config-security.js";
 import {
   hashSecretForKey,
-  normalizeCodexAppServerSecretInput,
   normalizeCodexServiceTier,
   normalizeHeaders,
-  normalizePositiveNumber,
-  readBooleanEnv,
   readNonEmptyString,
   readNumberEnv,
   resolveArgs,
 } from "./config-utils.js";
 import { readCodexAppServerConfigOptions } from "./launch-args.js";
-import type { CodexSandboxPolicy } from "./protocol.js";
+import type { CodexSandboxMode, CodexSandboxPolicy } from "./protocol.js";
 
 /**
  * Sole owner of the app-server home-scope decision. Ordinary harness connections
@@ -139,14 +139,14 @@ export function createCodexAppServerConfig({
     const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
     const headers = normalizeHeaders(config.headers);
     const clearEnv = normalizeTrimmedStringList(config.clearEnv);
-    const authToken = normalizeCodexAppServerSecretInput({
+    const authToken = normalizeResolvedSecretInputString({
       value: config.authToken,
       path: "plugins.entries.codex.config.appServer.authToken",
     });
     const url = readNonEmptyString(config.url) ?? (transport === "unix" ? "unix://" : undefined);
     const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
     const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
-    const remoteWorkspaceRoot = normalizeRemoteWorkspaceRoot(config.remoteWorkspaceRoot);
+    const remoteWorkspaceRoot = readNonEmptyString(config.remoteWorkspaceRoot);
     const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer({
       execMode: params.execMode,
       execPolicy: params.execPolicy,
@@ -315,7 +315,7 @@ export function createCodexAppServerConfig({
       (homeScope === "user" || computerUseConfig.enabled ? "desktop-first" : "package-first");
     const includeManagedCommandOrder =
       commandSource === "managed" &&
-      (managedCommandOrder === "desktop-first" || params.managedCommandOrder === "package-first");
+      (managedCommandOrder === "desktop-first" || params.managedCommandOrder !== undefined);
     const managedComputerUsePluginNames = [
       ...new Set([DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME, computerUseConfig.pluginName]),
     ];
@@ -339,7 +339,7 @@ export function createCodexAppServerConfig({
       ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
       codeModeOnly: config.codeModeOnly === true,
       loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
-      requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
+      requestTimeoutMs: resolvePositiveTimerTimeoutMs(config.requestTimeoutMs, 60_000),
       approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
       approvalPolicySource,
       sandbox: resolvedSandbox,
@@ -446,21 +446,21 @@ export function resolveCodexComputerUseConfig(
   const autoInstall =
     params.overrides?.autoInstall ??
     config.autoInstall ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL) ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL) ??
     false;
-  const marketplaceDiscoveryTimeoutMs = normalizePositiveNumber(
+  const marketplaceDiscoveryTimeoutMs = resolvePositiveTimerTimeoutMs(
     params.overrides?.marketplaceDiscoveryTimeoutMs ??
       config.marketplaceDiscoveryTimeoutMs ??
       readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS),
     DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS,
   );
-  const liveTestTimeoutMs = normalizePositiveNumber(
+  const liveTestTimeoutMs = resolvePositiveTimerTimeoutMs(
     params.overrides?.liveTestTimeoutMs ??
       config.liveTestTimeoutMs ??
       readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS),
     DEFAULT_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS,
   );
-  const toolCallTimeoutMs = normalizePositiveNumber(
+  const toolCallTimeoutMs = resolvePositiveTimerTimeoutMs(
     params.overrides?.toolCallTimeoutMs ??
       config.toolCallTimeoutMs ??
       readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS),
@@ -474,7 +474,7 @@ export function resolveCodexComputerUseConfig(
   const healthCheckEnabled =
     params.overrides?.healthCheckEnabled ??
     config.healthCheckEnabled ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED) ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED) ??
     false;
   const pluginCacheMode =
     normalizeComputerUsePluginCacheMode(params.overrides?.pluginCacheMode) ??
@@ -484,17 +484,17 @@ export function resolveCodexComputerUseConfig(
   const strictReadiness =
     params.overrides?.strictReadiness ??
     config.strictReadiness ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS) ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS) ??
     false;
   const autoRepair =
     params.overrides?.autoRepair ??
     config.autoRepair ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR) ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR) ??
     false;
   const enabled =
     params.overrides?.enabled ??
     config.enabled ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE) ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE) ??
     Boolean(
       autoInstall ||
       marketplaceSource ||
@@ -571,7 +571,7 @@ export function codexAppServerStartOptionsKey(
 }
 
 export function codexSandboxPolicyForTurn(
-  mode: CodexAppServerSandboxMode,
+  mode: CodexSandboxMode,
   cwd: string,
   nativeArgs: readonly string[] = [],
 ): CodexSandboxPolicy {

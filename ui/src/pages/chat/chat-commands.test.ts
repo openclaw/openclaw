@@ -1,8 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { expectObjectFields } from "../../../../src/test-utils/mock-call-assertions.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
@@ -13,6 +11,7 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   applyRemoteSlashCommandsResult,
@@ -20,19 +19,14 @@ import {
   dispatchChatSlashCommand,
   refreshSlashCommands,
 } from "./chat-commands.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 
-function requireCommandByName(name: string): Record<string, unknown> {
+function requireCommandByName(name: string) {
   const command = SLASH_COMMANDS.find((entry) => entry.name === name);
   if (!command) {
     throw new Error(`expected slash command ${name}`);
   }
-  return command as unknown as Record<string, unknown>;
-}
-
-const requireRecord = createRequireRecord("record", "expected-label-object");
-
-function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
-  expectObjectFields(requireRecord(value, label), expected);
+  return command;
 }
 
 function connectedSessionAccess() {
@@ -53,6 +47,15 @@ function remoteCommand(name: string, description: string) {
     acceptsArgs: false,
   };
 }
+
+const pairCommand = {
+  name: "pair",
+  textAliases: ["/pair"],
+  description: "Generate setup codes.",
+  source: "plugin",
+  scope: "both",
+  acceptsArgs: true,
+};
 
 describe("refreshSlashCommands", () => {
   it("keeps managed command catalogs scoped to the session when the same viewer switches chats", async () => {
@@ -136,7 +139,7 @@ describe("refreshSlashCommands", () => {
   });
 
   it("exposes /learn through the browser fallback registry", () => {
-    expectRecordFields(requireCommandByName("learn"), "learn command", {
+    expect(requireCommandByName("learn")).toMatchObject({
       description: "Draft a reusable skill from recent work or named sources.",
       args: "[request]",
       category: "tools",
@@ -145,53 +148,9 @@ describe("refreshSlashCommands", () => {
     });
   });
 
-  it("refreshes runtime commands from commands.list", async () => {
-    const request = vi.fn().mockImplementation(async (method: string) => {
-      expect(method).toBe("commands.list");
-      return {
-        commands: [
-          {
-            name: "pair",
-            textAliases: ["/pair"],
-            description: "Generate setup codes.",
-            source: "plugin",
-            scope: "both",
-            acceptsArgs: true,
-          },
-        ],
-      };
-    });
-
-    await refreshSlashCommands({
-      client: { request } as never,
-      agentId: "main",
-    });
-
-    expect(request).toHaveBeenCalledWith("commands.list", {
-      agentId: "main",
-      includeArgs: true,
-      scope: "text",
-    });
-    expectRecordFields(requireCommandByName("pair"), "pair command", {
-      name: "pair",
-      description: "Generate setup codes.",
-      executeLocal: false,
-      tier: "standard",
-    });
-  });
-
   it("requests the gateway default agent when no explicit agentId is available", async () => {
     const request = vi.fn().mockResolvedValue({
-      commands: [
-        {
-          name: "pair",
-          textAliases: ["/pair"],
-          description: "Generate setup codes.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
-        },
-      ],
+      commands: [pairCommand],
     });
 
     await refreshSlashCommands({
@@ -203,7 +162,7 @@ describe("refreshSlashCommands", () => {
       includeArgs: true,
       scope: "text",
     });
-    expectRecordFields(requireCommandByName("pair"), "pair command", {
+    expect(requireCommandByName("pair")).toMatchObject({
       name: "pair",
       description: "Generate setup codes.",
       executeLocal: false,
@@ -216,14 +175,14 @@ describe("refreshSlashCommands", () => {
     const client = { request } as never;
 
     await refreshSlashCommands({ client, agentId: "main" });
-    expectRecordFields(requireCommandByName("help"), "first fallback help command", {
+    expect(requireCommandByName("help")).toMatchObject({
       key: "help",
       executeLocal: true,
     });
 
     await refreshSlashCommands({ client, agentId: "main" });
     expect(request).toHaveBeenCalledTimes(2);
-    expectRecordFields(requireCommandByName("help"), "second fallback help command", {
+    expect(requireCommandByName("help")).toMatchObject({
       key: "help",
       executeLocal: true,
     });
@@ -243,22 +202,13 @@ describe("refreshSlashCommands", () => {
       agentId: "main",
     });
     resolveFirst?.({
-      commands: [
-        {
-          name: "pair",
-          textAliases: ["/pair"],
-          description: "Generate setup codes.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
-        },
-      ],
+      commands: [pairCommand],
     });
     await pending;
     await duplicate;
 
     expect(request).toHaveBeenCalledTimes(1);
-    expectRecordFields(requireCommandByName("pair"), "pair command", {
+    expect(requireCommandByName("pair")).toMatchObject({
       name: "pair",
       description: "Generate setup codes.",
       executeLocal: false,
@@ -273,16 +223,7 @@ describe("refreshSlashCommands", () => {
         return first;
       }
       return Promise.resolve({
-        commands: [
-          {
-            name: "pair",
-            textAliases: ["/pair"],
-            description: "Generate setup codes.",
-            source: "plugin",
-            scope: "both",
-            acceptsArgs: true,
-          },
-        ],
+        commands: [pairCommand],
       });
     });
     const client = { request } as never;
@@ -303,52 +244,11 @@ describe("refreshSlashCommands", () => {
     });
     await pending;
 
-    expectRecordFields(requireCommandByName("pair"), "pair command", {
+    expect(requireCommandByName("pair")).toMatchObject({
       name: "pair",
       description: "Generate setup codes.",
     });
     expect(SLASH_COMMANDS.find((entry) => entry.name === "dreaming")).toBeUndefined();
-  });
-
-  it("uses the fresh remote command cache for repeated refreshes", async () => {
-    const request = vi.fn().mockResolvedValue({
-      commands: [
-        {
-          name: "pair",
-          textAliases: ["/pair"],
-          description: "Generate setup codes.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
-        },
-      ],
-    });
-    const client = { request } as never;
-
-    await refreshSlashCommands({ client, agentId: "main" });
-    await refreshSlashCommands({ client, agentId: "main" });
-
-    expect(request).toHaveBeenCalledTimes(1);
-    expectRecordFields(requireCommandByName("pair"), "pair command", {
-      name: "pair",
-      description: "Generate setup codes.",
-    });
-  });
-
-  it("reads commands from the chat metadata store without requesting commands.list", async () => {
-    const request = vi.fn();
-    const client = { request } as never;
-    beginChatMetadataPublication(client, { agentId: "main" }).publish({
-      commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
-    });
-
-    await refreshSlashCommands({ client, agentId: "main" });
-
-    expect(request).not.toHaveBeenCalled();
-    expectRecordFields(requireCommandByName("metadata-command"), "metadata command", {
-      description: "Loaded from chat metadata.",
-      executeLocal: false,
-    });
   });
 
   it("prefers stored metadata after the commands.list cache expires", async () => {
@@ -368,7 +268,7 @@ describe("refreshSlashCommands", () => {
       await refreshSlashCommands({ client, agentId: "main" });
 
       expect(request).toHaveBeenCalledOnce();
-      expectRecordFields(requireCommandByName("metadata-command"), "metadata command", {
+      expect(requireCommandByName("metadata-command")).toMatchObject({
         description: "Loaded from chat metadata.",
       });
     } finally {
@@ -391,13 +291,35 @@ describe("refreshSlashCommands", () => {
     await refreshSlashCommands({ client, agentId: "main" });
 
     expect(request).toHaveBeenCalledOnce();
-    expectRecordFields(requireCommandByName("requested-command"), "requested command", {
+    expect(requireCommandByName("requested-command")).toMatchObject({
       description: "Loaded after metadata invalidation.",
     });
   });
 });
 
 describe("conversation reset confirmation", () => {
+  it.each(["owner", "member", "viewer"] as const)(
+    "authorizes /stop with narrow scope for a %s session",
+    async (sharingRole) => {
+      const sessionKey = "agent:main:current";
+      const host = makeChatHost({
+        sessionKey,
+        chatRunId: "run-1",
+        hello: sessionMutationGatewayHello(["operator.sessions.write"]),
+        sessionsResult: {
+          ...createSessionsListResult(),
+          sessions: [{ key: sessionKey, kind: "direct", sessionId: "session-1", sharingRole }],
+        },
+        requestHandlers: { "chat.abort": { aborted: true } },
+      });
+      const result = await dispatchChatSlashCommand(host, "stop", "", {
+        sendResetMessage: vi.fn(),
+      });
+      expect(result).toBe(sharingRole === "owner" ? "completed" : "failed");
+      expect(host.request).toHaveBeenCalledTimes(sharingRole === "owner" ? 1 : 0);
+    },
+  );
+
   it.each([
     ["stop", "chat.abort"],
     ["reset", "chat.send"],

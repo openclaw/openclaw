@@ -409,16 +409,17 @@ export async function probeGateway(opts: {
         });
       })();
     };
-    const settleProbe = (params: {
-      ok: boolean;
-      error: string | null;
-      missingScopeErrorDetails?: MissingScopeErrorDetails;
-      verifiedRead?: boolean;
-      health: unknown;
-      status: Partial<StatusSummary> | null;
-      presence: SystemPresence[] | null;
-      configSnapshot: unknown;
-    }) => {
+    const settleProbe = (
+      params: {
+        ok: boolean;
+        error: string | null;
+        missingScopeErrorDetails?: MissingScopeErrorDetails;
+        verifiedRead?: boolean;
+      },
+      details: Partial<
+        Pick<GatewayProbeResult, "health" | "status" | "presence" | "configSnapshot">
+      > = {},
+    ) => {
       settle({
         ok: params.ok,
         ...(gatewayReached ? { gatewayReached: true as const } : {}),
@@ -440,10 +441,11 @@ export async function probeGateway(opts: {
           connectLatencyMs,
         }),
         server,
-        health: params.health,
-        status: params.status,
-        presence: params.presence,
-        configSnapshot: params.configSnapshot,
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+        ...details,
       });
     };
 
@@ -485,10 +487,6 @@ export async function probeGateway(opts: {
           settleProbe({
             ok: false,
             error: connectError || formatProbeCloseError(close),
-            health: null,
-            status: null,
-            presence: null,
-            configSnapshot: null,
           });
         }
       },
@@ -516,10 +514,6 @@ export async function probeGateway(opts: {
               ok: true,
               error: null,
               verifiedRead: false,
-              health: null,
-              status: null,
-              presence: null,
-              configSnapshot: null,
             });
             return;
           }
@@ -529,37 +523,35 @@ export async function probeGateway(opts: {
             settleProbe({
               ok: false,
               error: "timeout",
-              health: null,
-              status: null,
-              presence: null,
-              configSnapshot: null,
             });
           });
           try {
             if (detailLevel === "presence") {
               const presence = await client.request("system-presence");
-              settleProbe({
-                ok: true,
-                error: null,
-                verifiedRead: true,
-                health: null,
-                status: null,
-                presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-                configSnapshot: null,
-              });
+              settleProbe(
+                {
+                  ok: true,
+                  error: null,
+                  verifiedRead: true,
+                },
+                {
+                  presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+                },
+              );
               return;
             }
             if (detailLevel === "config") {
               const configSnapshot = await client.request("config.get", {});
-              settleProbe({
-                ok: true,
-                error: null,
-                verifiedRead: true,
-                health: null,
-                status: null,
-                presence: null,
-                configSnapshot,
-              });
+              settleProbe(
+                {
+                  ok: true,
+                  error: null,
+                  verifiedRead: true,
+                },
+                {
+                  configSnapshot,
+                },
+              );
               return;
             }
             const [health, status, presence, configSnapshot] = await Promise.all([
@@ -568,15 +560,19 @@ export async function probeGateway(opts: {
               client.request("system-presence"),
               client.request("config.get", {}),
             ]);
-            settleProbe({
-              ok: true,
-              error: null,
-              verifiedRead: true,
-              health,
-              status,
-              presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-              configSnapshot,
-            });
+            settleProbe(
+              {
+                ok: true,
+                error: null,
+                verifiedRead: true,
+              },
+              {
+                health,
+                status,
+                presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+                configSnapshot,
+              },
+            );
           } catch (err) {
             const error = formatErrorMessage(err);
             const missingScopeErrorDetails = readMissingScopeError(err);
@@ -584,10 +580,6 @@ export async function probeGateway(opts: {
               ok: false,
               error,
               ...(missingScopeErrorDetails ? { missingScopeErrorDetails } : {}),
-              health: null,
-              status: null,
-              presence: null,
-              configSnapshot: null,
             });
           }
         })();
@@ -599,10 +591,6 @@ export async function probeGateway(opts: {
         settleProbe({
           ok: false,
           error: "aborted",
-          health: null,
-          status: null,
-          presence: null,
-          configSnapshot: null,
         });
       };
       opts.signal.addEventListener("abort", onAbort, { once: true });
@@ -619,10 +607,6 @@ export async function probeGateway(opts: {
       settleProbe({
         ok: false,
         error,
-        health: null,
-        status: null,
-        presence: null,
-        configSnapshot: null,
       });
     });
 
@@ -637,10 +621,6 @@ export async function probeGateway(opts: {
         settleProbe({
           ok: false,
           error: "timeout",
-          health: null,
-          status: null,
-          presence: null,
-          configSnapshot: null,
         });
       })
       .catch((err: unknown) => {
@@ -651,10 +631,6 @@ export async function probeGateway(opts: {
         settleProbe({
           ok: false,
           error: connectError,
-          health: null,
-          status: null,
-          presence: null,
-          configSnapshot: null,
         });
       });
   });

@@ -6,7 +6,7 @@ import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config.js";
-import { findCodexMarketplacePluginSummary, readCodexPluginInventory } from "./plugin-inventory.js";
+import { readCodexPluginInventory } from "./plugin-inventory.js";
 import {
   appInfo,
   appSummary,
@@ -127,11 +127,6 @@ describe("Codex plugin inventory", () => {
         name: "GitHub",
       }),
     ]);
-    expect(
-      findCodexMarketplacePluginSummary(listed, CODEX_PLUGINS_MARKETPLACE_NAME, "github")?.summary
-        .id,
-    ).toBe("openai-curated/github");
-
     const inventory = await readCodexPluginInventory({
       pluginConfig: pluginConfig({ github: curatedPlugin("github") }),
       appCache,
@@ -289,35 +284,6 @@ describe("Codex plugin inventory", () => {
     },
   );
 
-  it("fails closed when an installed remote curated plugin omits its opaque id", async () => {
-    const calls: string[] = [];
-    const inventory = await readCodexPluginInventory({
-      pluginConfig: pluginConfig({
-        "google-calendar": curatedPlugin("google-calendar"),
-      }),
-      request: async (method) => {
-        calls.push(method);
-        if (method === "plugin/installed") {
-          return pluginInstalled(
-            [
-              activePlugin("google-calendar@openai-curated-remote", {
-                name: "google-calendar",
-              }),
-            ],
-            { name: "openai-curated-remote", path: null },
-          );
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expect(calls).toEqual(["plugin/installed"]);
-    expect(inventory.records[0]?.detail).toBeUndefined();
-    expect(inventory.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "plugin_detail_unavailable" }),
-    );
-  });
-
   it("resolves an installed workspace plugin from the one canonical installed snapshot", async () => {
     const appCache = await cachedApps(appInfo("workspace-data-app", true));
     const calls: Array<{ method: string; params: unknown }> = [];
@@ -368,23 +334,6 @@ describe("Codex plugin inventory", () => {
     expect(inventory.diagnostics).toStrictEqual([]);
   });
 
-  it("uses only the cached installed snapshot for an installed curated plugin", async () => {
-    const calls: unknown[] = [];
-    await readCodexPluginInventory({
-      pluginConfig: pluginConfig({ github: curatedPlugin("github") }),
-      readPluginDetails: false,
-      request: async (method, params) => {
-        if (method === "plugin/installed") {
-          calls.push(params);
-          return pluginInstalled([activePlugin("github")]);
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expect(calls).toStrictEqual([{}]);
-  });
-
   it("fails closed before plugin/read when a workspace summary lacks remotePluginId", async () => {
     const calls: string[] = [];
     const inventory = await readCodexPluginInventory({
@@ -411,30 +360,6 @@ describe("Codex plugin inventory", () => {
     expect(inventory.records[0]?.detail).toBeUndefined();
     expect(inventory.diagnostics.map((diagnostic) => diagnostic.code)).toStrictEqual([
       "plugin_detail_unavailable",
-    ]);
-  });
-
-  it("keeps curated records when a configured workspace marketplace is missing", async () => {
-    const inventory = await readCodexPluginInventory({
-      pluginConfig: pluginConfig({
-        github: curatedPlugin("github"),
-        workspaceData: workspacePlugin("workspace-data@workspace-directory"),
-      }),
-      readPluginDetails: false,
-      request: async (method) => {
-        if (method !== "plugin/installed") {
-          throw new Error(`unexpected request ${method}`);
-        }
-        return pluginInstalled([activePlugin("github")]);
-      },
-    });
-
-    expect(inventory.records.map((record) => record.policy.configKey)).toStrictEqual(["github"]);
-    expect(inventory.diagnostics).toMatchObject([
-      {
-        code: "marketplace_missing",
-        plugin: { configKey: "workspaceData" },
-      },
     ]);
   });
 

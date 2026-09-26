@@ -1,5 +1,7 @@
 // Gateway broadcast types are shared by websocket fanout helpers and request
 // contexts so event delivery can carry optional state-version hints.
+import type { GatewayClient } from "./server-methods/client-types.js";
+
 type GatewayBroadcastStateVersion = {
   presence?: number;
   health?: number;
@@ -14,6 +16,8 @@ export type GatewayBroadcastOpts = {
   sessionKeys?: readonly string[];
   /** Target recipients were selected from subscriptions at ingress. */
   sessionSubscriptionVerified?: boolean;
+  /** Question owner authorizes ordinary own-run recipients without a broad question grant. */
+  questionRecipient?: (client: GatewayClient) => boolean;
   stateVersion?: GatewayBroadcastStateVersion;
   /** Private live-text ownership; omitting coalesce flushes this group's progress. */
   liveText?: {

@@ -29,6 +29,26 @@ type ToolExecute = ReturnType<
 >[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
 
+function definitionFor(tool: AgentTool) {
+  const [definition] = toToolDefinitions([tool]);
+  if (!definition) {
+    throw new Error("missing tool definition");
+  }
+  return definition;
+}
+
+function failingExecDefinition(name: string, parameters: AgentTool["parameters"]) {
+  return definitionFor({
+    name,
+    label: name,
+    description: "runs commands",
+    parameters,
+    execute: async () => {
+      throw new Error("exec denied: allowlist miss");
+    },
+  });
+}
+
 function firstLogErrorMessage(): unknown {
   return vi.mocked(logError).mock.calls[0]?.[0];
 }
@@ -69,10 +89,7 @@ describe("agent tool definition adapter logging", () => {
     } satisfies AgentTool;
 
     const tool = wrapToolParamValidation(baseTool, REQUIRED_PARAM_GROUPS.edit);
-    const [def] = toToolDefinitions([tool]);
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
+    const def = definitionFor(tool);
 
     await def.execute("call-edit-1", { path: "notes.txt" }, undefined, undefined, extensionContext);
 
@@ -129,10 +146,7 @@ describe("agent tool definition adapter logging", () => {
         throw createBeforeToolCallBlockedError("blocked by policy");
       },
     } satisfies AgentTool;
-    const [def] = toToolDefinitions([baseTool]);
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
+    const def = definitionFor(baseTool);
 
     const result = await def.execute(
       "call-blocked-1",
@@ -157,23 +171,14 @@ describe("agent tool definition adapter logging", () => {
   it("omits raw exec commands and env values from failure logs", async () => {
     const commandSecret = "issue85049-xai-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
     const envSecret = "issue85049-env-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
-    const baseTool = {
-      name: "exec",
-      label: "exec",
-      description: "runs commands",
-      parameters: Type.Object({
+    const def = failingExecDefinition(
+      "exec",
+      Type.Object({
         command: Type.String(),
         env: Type.Optional(Type.Record(Type.String(), Type.String())),
         timeout: Type.Optional(Type.Number()),
       }),
-      execute: async () => {
-        throw new Error("exec denied: allowlist miss");
-      },
-    } satisfies AgentTool;
-    const [def] = toToolDefinitions([baseTool]);
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
+    );
 
     await def.execute(
       "call-exec-denied",
@@ -204,19 +209,7 @@ describe("agent tool definition adapter logging", () => {
 
   it("omits raw exec commands from JSON-string failure params", async () => {
     const commandSecret = "issue85049-json-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
-    const baseTool = {
-      name: "exec",
-      label: "exec",
-      description: "runs commands",
-      parameters: Type.Any(),
-      execute: async () => {
-        throw new Error("exec denied: allowlist miss");
-      },
-    } satisfies AgentTool;
-    const [def] = toToolDefinitions([baseTool]);
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
+    const def = failingExecDefinition("exec", Type.Any());
 
     await def.execute(
       "call-exec-denied-json-string",
@@ -242,19 +235,7 @@ describe("agent tool definition adapter logging", () => {
       "issue85049-malformed-command-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
     const envSecret =
       "issue85049-malformed-env-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
-    const baseTool = {
-      name: "exec",
-      label: "exec",
-      description: "runs commands",
-      parameters: Type.Any(),
-      execute: async () => {
-        throw new Error("exec denied: allowlist miss");
-      },
-    } satisfies AgentTool;
-    const [def] = toToolDefinitions([baseTool]);
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
+    const def = failingExecDefinition("exec", Type.Any());
 
     await def.execute(
       "call-exec-denied-malformed",
@@ -279,19 +260,7 @@ describe("agent tool definition adapter logging", () => {
   it("omits cmd-style exec payloads from normalized bash failure logs", async () => {
     const commandSecret =
       "issue85049-cmd-alias-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
-    const baseTool = {
-      name: "bash",
-      label: "Bash",
-      description: "runs commands",
-      parameters: Type.Any(),
-      execute: async () => {
-        throw new Error("exec denied: allowlist miss");
-      },
-    } satisfies AgentTool;
-    const [def] = toToolDefinitions([baseTool]);
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
+    const def = failingExecDefinition("bash", Type.Any());
 
     await def.execute(
       "call-bash-denied-cmd-alias",
@@ -327,10 +296,7 @@ describe("agent tool definition adapter logging", () => {
         throw error;
       },
     } satisfies AgentTool;
-    const [def] = toToolDefinitions([baseTool]);
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
+    const def = definitionFor(baseTool);
 
     const result = await def.execute(
       "call-web-search-abort",
@@ -365,10 +331,7 @@ describe("agent tool definition adapter logging", () => {
         throw error;
       },
     } satisfies AgentTool;
-    const [def] = toToolDefinitions([baseTool]);
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
+    const def = definitionFor(baseTool);
     const controller = new AbortController();
     controller.abort();
 
@@ -412,10 +375,7 @@ describe("agent tool definition adapter logging", () => {
     } satisfies AgentTool;
 
     const tool = wrapToolParamValidation(baseTool, REQUIRED_PARAM_GROUPS.edit);
-    const [def] = toToolDefinitions([tool]);
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
+    const def = definitionFor(tool);
 
     const payload = {
       path: "notes.txt",

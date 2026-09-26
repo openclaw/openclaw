@@ -5,7 +5,10 @@ import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
 import { readUpdateStateDatabaseSizes } from "../../infra/update-candidate-state.sizes.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
+import {
+  DoctorMaintenanceRefusalError,
+  UpdateDoctorError,
+} from "../../infra/update-doctor-result.js";
 import {
   createUpdateFailureFact,
   type UpdateFailureFact,
@@ -26,7 +29,7 @@ import {
   UPDATE_RUN_HEARTBEAT_MS,
   UPDATE_RUNNER_TIMEOUT_MS,
 } from "../../infra/update-run-timeouts.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -140,7 +143,7 @@ export class UpdateFinalizationLifecycle {
 
   private record(
     active: { phase: Phase; step: string },
-    status: "in_progress" | "completed" | "failed",
+    status: "in_progress" | "completed" | "failed" | "skipped",
     at: number,
     detail?: string,
     failureFacts?: UpdateFailureFact[],
@@ -258,7 +261,7 @@ export class UpdateFinalizationLifecycle {
       });
       this.record(
         active,
-        result === "failed" ? "failed" : "completed",
+        result === "failed" ? "failed" : result === "deferred" ? "skipped" : "completed",
         Date.now(),
         detail,
         failureFacts,
@@ -377,16 +380,20 @@ export class UpdateFinalizationLifecycle {
                 message: formatErrorMessage(error),
               }),
             ];
+      const deferred =
+        !failure &&
+        error instanceof DoctorMaintenanceRefusalError &&
+        error.refusal.kind === "deferred";
       end(
-        "failed",
+        deferred ? "deferred" : "failed",
         doctorOutput
           ? formatDoctorOutputDetail(doctorOutput)
           : redactSupportDiagnosticLine(formatErrorMessage(error), {
               env: process.env,
               stateDir: resolveStateDir(process.env),
             }),
-        facts,
-        error instanceof UpdateDoctorError ? error.exitCode : undefined,
+        deferred ? undefined : facts,
+        !deferred && error instanceof UpdateDoctorError ? error.exitCode : undefined,
       );
       throw error;
     } finally {

@@ -7,10 +7,11 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
+  waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
 import { openSidebarSortMenu } from "./session-ownership-visuals.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+const suite = createSessionManagementE2eSuite();
 const sessionKey = "agent:main:design-review";
 const homeKey = "agent:main:my-work";
 const person = (id: string, label: string) => ({
@@ -60,6 +61,7 @@ suite.define(() => {
             methodResponses: { "sessions.list": list([home, mentioned]) },
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
+          await waitForSessionRosterHydration(page);
           const target = page.locator('[data-session-key="' + sessionKey + '"]');
           await expectBrowser(target).toBeVisible();
           await target.hover();
@@ -96,6 +98,7 @@ suite.define(() => {
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
+        await waitForSessionRosterHydration(page);
         const target = page.locator('[data-session-key="' + sessionKey + '"]');
         await expectBrowser(target).toBeVisible();
         const chooseFilter = async (label: string) => {
@@ -158,6 +161,7 @@ suite.define(() => {
         await chooseFilter("Involving me");
         await expectBrowser(target).toBeVisible();
         await page.reload();
+        await waitForSessionRosterHydration(page);
         await expectBrowser(target).toBeVisible();
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       },

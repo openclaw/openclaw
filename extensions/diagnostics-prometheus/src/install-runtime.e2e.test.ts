@@ -7,12 +7,17 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
+import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 import { stopChildProcess } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
+import { packagingEntrypoints } from "./install-runtime-entrypoints.test-support.mts";
 
 const execFileAsync = promisify(execFile);
 const packageName = "@openclaw/diagnostics-prometheus";
@@ -115,15 +120,22 @@ async function packPlugin(
       return topLevel !== "dist" && topLevel !== "node_modules";
     },
   });
-  await execFileAsync(process.execPath, ["scripts/lib/plugin-npm-runtime-build.mjs", stagingDir], {
-    cwd: repoRoot,
-    maxBuffer: 2 * 1024 * 1024,
-    timeout: 60_000,
-  });
   await execFileAsync(
     process.execPath,
     [
-      "scripts/lib/plugin-npm-package-manifest.mjs",
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints.runtimeBuild)),
+      stagingDir,
+    ],
+    {
+      cwd: repoRoot,
+      maxBuffer: 2 * 1024 * 1024,
+      timeout: 60_000,
+    },
+  );
+  await execFileAsync(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints.packageManifest)),
       "--run",
       stagingDir,
       "--",

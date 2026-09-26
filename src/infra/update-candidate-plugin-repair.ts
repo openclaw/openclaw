@@ -91,7 +91,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ),
     params.config,
   );
-  const originals: Array<{ rootDir: string; entryFile: string }> = [];
+  const originals: Array<ReturnType<typeof inspectPluginSourceDependencies>> = [];
   const comparedFiles = new Map<string, string>();
   const project = (source: string) =>
     resolveUpdateCandidatePluginPath(privateRoot, privateRoot, source);
@@ -113,7 +113,18 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   for (const entry of entries) {
     assertPrivate(entry.rootDir);
     assertPrivate(entry.entryFile);
-    const copiedGraph = inspectPluginSourceDependencies([entry]);
+    let copiedGraph: ReturnType<typeof inspectPluginSourceDependencies>;
+    try {
+      copiedGraph = inspectPluginSourceDependencies([entry]);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+      warnings.push(
+        `Update checks could not inspect plugin ${entry.pluginId} (${entry.entryFile}): ${error.message}. Continuing without dependency repair for this entry.`,
+      );
+      continue;
+    }
     for (const reference of copiedGraph.references) {
       // Explicit external imports retain their source semantics. Lookups naming
       // private paths must not escape through a symlink, including absolute paths.
@@ -159,10 +170,12 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     let available: ReturnType<typeof inspectPluginSourceDependencies>;
     try {
       available = inspectPluginSourceDependencies([{ rootDir, entryFile }]);
-    } catch {
+    } catch (error) {
       // Source edits cannot invalidate an already runnable copy. Without a
       // supplied missing edge, candidate execution still owns optional imports.
-      warnings.push(`Update checks could not inspect the original plugin source: ${entryFile}.`);
+      warnings.push(
+        `Update checks could not inspect the original source for plugin ${entry.pluginId} (${entryFile}): ${String(error)}`,
+      );
       continue;
     }
     if (
@@ -184,13 +197,14 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       comparedFiles.set(source, copied);
     }
     available.assertSourceCurrent();
-    originals.push({ rootDir, entryFile });
+    originals.push(available);
   }
   if (originals.length === 0) {
     return { copiedFiles: 0, warnings };
   }
-  const graph = inspectPluginSourceDependencies(originals);
-  for (const source of graph.files) {
+  const files = new Set(originals.flatMap((graph) => graph.files));
+  const assertSourcesCurrent = () => originals.forEach((graph) => graph.assertSourceCurrent());
+  for (const source of files) {
     const copied = project(source);
     assertPrivate(copied);
     if (await readOptionalFile(copied)) {
@@ -204,16 +218,18 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ) {
       throw new Error("Update authority changed during plugin dependency preparation");
     }
-    graph.assertSourceCurrent();
+    assertSourcesCurrent();
     for (const [source, copied] of comparedFiles) {
       await assertMatchingFile(source, copied);
     }
-    graph.assertSourceCurrent();
+    assertSourcesCurrent();
   };
   await assertCurrent();
   const plan = await prepareUpdateCandidatePluginTrees({
     roots: new Map(
-      [...graph.packageRoots, ...graph.files].map((source) => [source, project(source)]),
+      originals
+        .flatMap((graph) => graph.packageRoots.concat(graph.files))
+        .map((source) => [source, project(source)]),
     ),
     project,
     targetStateDir: privateRoot,

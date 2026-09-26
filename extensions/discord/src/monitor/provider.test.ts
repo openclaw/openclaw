@@ -189,13 +189,13 @@ describe("monitorDiscordProvider", () => {
   const getConstructedClientOptions = (): {
     clientId?: string;
     eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-    requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
+    requestOptions?: { timeout?: number; maxQueueSize?: number };
   } => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     return firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
       clientId?: string;
       eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-      requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
+      requestOptions?: { timeout?: number; maxQueueSize?: number };
     };
   };
 
@@ -333,6 +333,10 @@ describe("monitorDiscordProvider", () => {
     providerTesting.setShouldLogVerbose(() => shouldLogVerboseMock());
   });
 
+  function runProvider(overrides: Partial<Parameters<typeof monitorDiscordProvider>[0]> = {}) {
+    return monitorDiscordProvider({ config: baseConfig(), runtime: baseRuntime(), ...overrides });
+  }
+
   it("awaits restored thread bindings before reconciliation and provider startup", async () => {
     const ready = createDeferred<{ stop: ReturnType<typeof vi.fn> }>();
     const entered = createDeferred<void>();
@@ -439,12 +443,7 @@ describe("monitorDiscordProvider", () => {
       throw new Error("handler init failed");
     });
 
-    await expect(
-      monitorDiscordProvider({
-        config: baseConfig(),
-        runtime,
-      }),
-    ).rejects.toThrow("handler init failed");
+    await expect(runProvider({ runtime })).rejects.toThrow("handler init failed");
 
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
     expect(disconnect).toHaveBeenCalledTimes(1);
@@ -458,12 +457,9 @@ describe("monitorDiscordProvider", () => {
     const runtime = baseRuntime();
     clientFetchUserMock.mockRejectedValueOnce(new Error("identity offline"));
 
-    await expect(
-      monitorDiscordProvider({
-        config: baseConfig(),
-        runtime,
-      }),
-    ).rejects.toThrow("Failed to resolve Discord bot identity");
+    await expect(runProvider({ runtime })).rejects.toThrow(
+      "Failed to resolve Discord bot identity",
+    );
 
     expect(createDiscordMessageHandlerMock).not.toHaveBeenCalled();
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
@@ -476,12 +472,9 @@ describe("monitorDiscordProvider", () => {
     const runtime = baseRuntime();
     clientFetchUserMock.mockResolvedValueOnce({ username: "Molty" } as never);
 
-    await expect(
-      monitorDiscordProvider({
-        config: baseConfig(),
-        runtime,
-      }),
-    ).rejects.toThrow("Failed to resolve Discord bot identity");
+    await expect(runProvider({ runtime })).rejects.toThrow(
+      "Failed to resolve Discord bot identity",
+    );
 
     expect(createDiscordMessageHandlerMock).not.toHaveBeenCalled();
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
@@ -491,10 +484,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("does not double-stop thread bindings when lifecycle performs cleanup", async () => {
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
     expect(createdBindingManagers).toHaveLength(1);
@@ -503,10 +493,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("does not load the Discord voice runtime when voice is disabled", async () => {
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     expect(voiceRuntimeModuleLoadedMock).not.toHaveBeenCalled();
   });
@@ -522,10 +509,7 @@ describe("monitorDiscordProvider", () => {
       },
     });
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     expect(voiceRuntimeModuleLoadedMock).not.toHaveBeenCalled();
   });
@@ -542,10 +526,7 @@ describe("monitorDiscordProvider", () => {
       },
     });
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
   });
@@ -562,10 +543,7 @@ describe("monitorDiscordProvider", () => {
       },
     });
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
   });
@@ -619,11 +597,7 @@ describe("monitorDiscordProvider", () => {
       },
     });
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-      channelRuntime,
-    });
+    await runProvider({ channelRuntime });
 
     expect(
       channelRuntime.runtimeContexts.get({
@@ -640,10 +614,7 @@ describe("monitorDiscordProvider", () => {
   it("treats ACP error status as uncertain during startup thread-binding probes", async () => {
     getAcpSessionStatusMock.mockResolvedValue({ state: "error" });
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     const probeResult = await getHealthProbe()({
       cfg: baseConfig(),
@@ -669,10 +640,7 @@ describe("monitorDiscordProvider", () => {
       createAcpRuntimeError("ACP_SESSION_INIT_FAILED", "missing ACP metadata"),
     );
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     const probeResult = await getHealthProbe()({
       cfg: baseConfig(),
@@ -698,10 +666,7 @@ describe("monitorDiscordProvider", () => {
       createAcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "runtime unavailable"),
     );
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     const probeResult = await getHealthProbe()({
       cfg: baseConfig(),
@@ -732,10 +697,7 @@ describe("monitorDiscordProvider", () => {
           }),
       );
 
-      await monitorDiscordProvider({
-        config: baseConfig(),
-        runtime: baseRuntime(),
-      });
+      await runProvider();
 
       const probePromise = getHealthProbe()({
         cfg: baseConfig(),
@@ -779,10 +741,7 @@ describe("monitorDiscordProvider", () => {
           }),
       );
 
-      await monitorDiscordProvider({
-        config: baseConfig(),
-        runtime: baseRuntime(),
-      });
+      await runProvider();
 
       const probePromise = getHealthProbe()({
         cfg: baseConfig(),
@@ -810,10 +769,7 @@ describe("monitorDiscordProvider", () => {
   it("falls back to legacy missing-session message classification", async () => {
     getAcpSessionStatusMock.mockRejectedValue(new Error("ACP session metadata missing"));
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     const probeResult = await getHealthProbe()({
       cfg: baseConfig(),
@@ -861,10 +817,7 @@ describe("monitorDiscordProvider", () => {
       return { id: "bot-1" };
     });
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
     expect(drained).toHaveLength(1);
@@ -873,10 +826,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("passes OpenClaw event queue defaults to the Discord client", async () => {
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     const eventQueue = getConstructedEventQueue();
     expect(eventQueue).toEqual({
@@ -898,10 +848,7 @@ describe("monitorDiscordProvider", () => {
       },
     });
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     const eventQueue = getConstructedEventQueue();
     expect(eventQueue?.listenerTimeout).toBe(120_000);
@@ -936,10 +883,7 @@ describe("monitorDiscordProvider", () => {
       },
     });
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     const params = getFirstDiscordMessageHandlerParams<{
       workerRunTimeoutMs?: number;
@@ -970,10 +914,7 @@ describe("monitorDiscordProvider", () => {
     rateLimitError.discordCode = 30034;
     clientDeployCommandsMock.mockRejectedValueOnce(rateLimitError);
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime,
-    });
+    await runProvider({ runtime });
 
     await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
     expect(clientDeployCommandsMock).toHaveBeenCalledWith({ mode: "reconcile" });
@@ -985,10 +926,7 @@ describe("monitorDiscordProvider", () => {
     const runtime = baseRuntime();
     clientDeployCommandsMock.mockRejectedValueOnce(new Error("This operation was aborted"));
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime,
-    });
+    await runProvider({ runtime });
 
     await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
@@ -1033,10 +971,7 @@ describe("monitorDiscordProvider", () => {
     );
     clientDeployCommandsMock.mockRejectedValue(rateLimitError);
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime,
-    });
+    await runProvider({ runtime });
 
     await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
     const warningMessages = vi
@@ -1105,28 +1040,16 @@ describe("monitorDiscordProvider", () => {
       rawBody: {
         code: 50035,
         message: "Invalid Form Body",
-        errors: {
-          63: {
-            description: {
-              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+        errors: Object.fromEntries(
+          [63, 65, 66, 67].map((index) => [
+            index,
+            {
+              description: {
+                _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+              },
             },
-          },
-          65: {
-            description: {
-              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
-            },
-          },
-          66: {
-            description: {
-              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
-            },
-          },
-          67: {
-            description: {
-              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
-            },
-          },
-        },
+          ]),
+        ),
       },
       deployRequestBody: Array.from({ length: 68 }, (_entry, index) => ({
         name: `command-${index}`,
@@ -1136,6 +1059,7 @@ describe("monitorDiscordProvider", () => {
 
     expect(details).toContain("status=400");
     expect(details).toContain("code=50035");
+    expect(details).toContain("body=");
     expect(details).toContain("rejected=");
     expect(details).toContain(
       '#63 fields=description name=command-63 description="description-63"',
@@ -1150,16 +1074,12 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("configures internal native deploy by default", async () => {
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
     expect(clientDeployCommandsMock).toHaveBeenCalledWith({ mode: "reconcile" });
     const requestOptions = getConstructedClientOptions().requestOptions;
     expect(requestOptions?.timeout).toBe(15_000);
-    expect(requestOptions?.runtimeProfile).toBe("persistent");
     expect(requestOptions?.maxQueueSize).toBe(1000);
     expect(getConstructedClientOptions().eventQueue?.listenerTimeout).toBe(120_000);
   });
@@ -1180,10 +1100,7 @@ describe("monitorDiscordProvider", () => {
       },
     });
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime,
-    });
+    await runProvider({ runtime });
 
     expect(listNativeCommandSpecsForConfigMock).not.toHaveBeenCalled();
     expect(clientDeployCommandsMock).not.toHaveBeenCalled();
@@ -1207,10 +1124,7 @@ describe("monitorDiscordProvider", () => {
       },
     });
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     expect(probeApplicationId).not.toHaveBeenCalled();
     expect(clientFetchUserMock).not.toHaveBeenCalled();
@@ -1235,10 +1149,7 @@ describe("monitorDiscordProvider", () => {
       },
     });
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
+    await runProvider();
 
     expect(probeApplicationId).not.toHaveBeenCalled();
     expect(getConstructedClientOptions().clientId).toBe("987654321098765432");
@@ -1285,9 +1196,9 @@ describe("monitorDiscordProvider", () => {
         },
       });
 
-      await expect(
-        monitorDiscordProvider({ config: baseConfig(), runtime: baseRuntime(), setStatus }),
-      ).rejects.toThrow("Failed to resolve Discord application id");
+      await expect(runProvider({ setStatus })).rejects.toThrow(
+        "Failed to resolve Discord application id",
+      );
 
       expect(setStatus).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1311,11 +1222,7 @@ describe("monitorDiscordProvider", () => {
       name === "gateway" ? { isConnected: true } : undefined,
     );
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-      setStatus,
-    });
+    await runProvider({ setStatus });
 
     const statuses = setStatus.mock.calls.map(
       (call) => call[0] as { connected?: boolean; lifecycle?: string },
@@ -1339,10 +1246,7 @@ describe("monitorDiscordProvider", () => {
     });
     isVerboseMock.mockReturnValue(true);
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime,
-    });
+    await runProvider({ runtime });
 
     await vi.waitFor(() => expectMockLogContains(runtime.log, "deploy-commands:done"));
 
@@ -1364,10 +1268,7 @@ describe("monitorDiscordProvider", () => {
   it("keeps Discord startup chatter quiet by default", async () => {
     const runtime = baseRuntime();
 
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime,
-    });
+    await runProvider({ runtime });
 
     const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
     expect(messages.join("\n")).not.toContain("discord startup [");

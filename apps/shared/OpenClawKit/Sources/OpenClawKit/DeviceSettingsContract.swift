@@ -50,42 +50,26 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case localeAdditional = "voice.locale.additional"
     case automaticUpdates = "updates.automatic"
 
-    private enum ValueType {
-        case boolean, string, strings, nullableString, provider, location, iconStyle, appearance
-    }
-
-    private var valueType: ValueType {
-        switch self {
-        case .appearance: .appearance
-        case .computerControlProvider: .provider
-        case .locationMode: .location
-        case .iconStyle: .iconStyle
-        case .cookieSyncTargetProfile, .localePrimary: .string
-        case .cookieSyncDomains, .localeAdditional: .strings
-        case .microphone: .nullableString
-        default: .boolean
-        }
-    }
-
     public func value(from raw: Any) -> DeviceSettingValue? {
-        switch self.valueType {
-        case .boolean:
+        switch self {
+        case .cookieSyncDomains, .localeAdditional:
+            guard let values = raw as? [String] else { return nil }
+            return .strings(values)
+        case .microphone where raw is NSNull:
+            return .null
+        case .cookieSyncTargetProfile, .localePrimary, .microphone,
+             .computerControlProvider, .locationMode, .iconStyle, .appearance:
+            guard let value = raw as? String else { return nil }
+            if self == .computerControlProvider, !["peekaboo", "cua"].contains(value) { return nil }
+            if self == .locationMode, DeviceSettingsLocationMode(rawValue: value) == nil { return nil }
+            if self == .iconStyle,
+               !["paper", "heritage", "clawmark", "origami", "pincer", "openC"].contains(value) { return nil }
+            if self == .appearance, DeviceSettingsAppearance(rawValue: value) == nil { return nil }
+            return .string(value)
+        default:
             // WKWebView bridges both numbers and booleans as NSNumber. A numeric 0/1 is not a toggle.
             guard let number = raw as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
             return .boolean(number.boolValue)
-        case .strings:
-            guard let values = raw as? [String] else { return nil }
-            return .strings(values)
-        case .nullableString where raw is NSNull:
-            return .null
-        case .string, .nullableString, .provider, .location, .iconStyle, .appearance:
-            guard let value = raw as? String else { return nil }
-            if self.valueType == .provider, !["peekaboo", "cua"].contains(value) { return nil }
-            if self.valueType == .location, DeviceSettingsLocationMode(rawValue: value) == nil { return nil }
-            if self.valueType == .iconStyle,
-               !["paper", "heritage", "clawmark", "origami", "pincer", "openC"].contains(value) { return nil }
-            if self.valueType == .appearance, DeviceSettingsAppearance(rawValue: value) == nil { return nil }
-            return .string(value)
         }
     }
 }
@@ -131,6 +115,10 @@ public enum DeviceSettingsLocationMode: String, CaseIterable, Encodable, Sendabl
     }
 }
 
+public enum ChromeExtensionSetupAction: String, Codable, CaseIterable, Sendable {
+    case inspect, install, verify
+}
+
 public enum DeviceSettingsRequest: Equatable, Sendable {
     case status
     case set(DeviceSettingKey, DeviceSettingValue)
@@ -138,7 +126,9 @@ public enum DeviceSettingsRequest: Equatable, Sendable {
     case openSystemSettings(DeviceSettingsPermission)
     case open(DeviceSettingsPanel)
     case checkForUpdates
+    case chromeExtensionSetup(ChromeExtensionSetupAction)
     case chromeExtensionStatus
+    /// Shipped contract-1 request; projects through the same canonical setup owner.
     case installChromeExtension
 
     public init?(body: Any) {
@@ -165,6 +155,10 @@ public enum DeviceSettingsRequest: Equatable, Sendable {
         case "install-chrome-extension":
             guard payload.count == 1 else { return nil }
             self = .installChromeExtension
+        case "chrome-extension-setup":
+            guard payload.count == 2, let rawAction = payload["action"] as? String,
+                  let action = ChromeExtensionSetupAction(rawValue: rawAction) else { return nil }
+            self = .chromeExtensionSetup(action)
         default: return nil
         }
     }
@@ -365,11 +359,14 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
     public struct Browser: Encodable, Sendable {
         public let importAvailable: Bool
         public let cookieSync: CookieSync
+        public let chromeSetupActions: [ChromeExtensionSetupAction]?
 
         public init(
             importAvailable: Bool,
-            cookieSync: CookieSync)
+            cookieSync: CookieSync,
+            chromeSetupActions: [ChromeExtensionSetupAction]? = nil)
         {
+            self.chromeSetupActions = chromeSetupActions
             self.importAvailable = importAvailable
             self.cookieSync = cookieSync
         }

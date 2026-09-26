@@ -17,6 +17,8 @@ export {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   cosineSimilarity,
+  encodeMemoryEmbedding,
+  decodeMemoryEmbedding,
   createMemorySearchDeadlineControl,
   extractProjectKeysFromCuratedEntry,
   DEFAULT_MEMORY_READ_LINES,

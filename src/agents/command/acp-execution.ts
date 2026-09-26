@@ -24,7 +24,7 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import { applyAgentRunAbortMetadata } from "./lifecycle.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
@@ -352,6 +352,7 @@ export async function runAcpAgentCommand(params: {
     }),
     params.opts.abortSignal,
   );
+  await params.opts.beforeTerminalDelivery?.();
   const { deliverAgentCommandResult } = await loadDeliveryRuntime();
   const deliveryResult = await deliverAgentCommandResult({
     cfg: params.cfg,

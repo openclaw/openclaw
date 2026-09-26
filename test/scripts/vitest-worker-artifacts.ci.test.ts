@@ -20,6 +20,7 @@ type Observation = {
   parent: number;
   group: string;
   inputDigest: string;
+  includeFile: string;
 };
 const generationDirectory = (generation: string) => fileURLToPath(new URL("../../", generation));
 
@@ -65,6 +66,7 @@ function createCiProbe(
       }
       fs.appendFileSync(${JSON.stringify(observationsFile)}, JSON.stringify({
         generation: generation.href, pid: process.pid, parent: process.ppid, group,
+        includeFile: process.env.OPENCLAW_VITEST_INCLUDE_FILE,
         inputDigest: createHash('sha256').update(JSON.stringify(manifest.inputs)).digest('hex'),
       })+'\\n');
       if (${retain}) {
@@ -179,9 +181,17 @@ it.runIf(process.platform !== "win32").for([
         expect(result.code, result.stderr + result.stdout).toBe(0);
         if (controlled) {
           const receipts = controlled.read();
-          expect(receipts).toHaveLength(shared ? 1 : 2);
-          expect(new Set(receipts.map(({ pid }) => pid)).size).toBe(receipts.length);
           console.log("Controlled compiler receipts", JSON.stringify(receipts));
+          expect(receipts).toHaveLength(shared ? 1 : 2);
+          expect(
+            new Set(receipts.map(({ pid, processStartTime }) => `${pid}:${processStartTime}`)).size,
+          ).toBe(receipts.length);
+          for (const receipt of receipts) {
+            expect(receipt).toMatchObject({
+              processStartTime: expect.any(Number),
+              isMainThread: true,
+            });
+          }
         }
         const observations = fixture.read();
         const borrowerCount = parallelism === 1 ? 3 : 2;
@@ -200,6 +210,9 @@ it.runIf(process.platform !== "win32").for([
         for (const generation of generations) {
           expect(fs.existsSync(generationDirectory(generation))).toBe(false);
         }
+        for (const { includeFile } of observations) {
+          expect(fs.existsSync(path.dirname(includeFile))).toBe(!shared);
+        }
       } finally {
         const observations = fs.existsSync(fixture.observationsFile) ? fixture.read() : [];
         await Promise.all(
@@ -210,6 +223,11 @@ it.runIf(process.platform !== "win32").for([
         );
         for (const run of new Set(observations.map(({ generation }) => generation))) {
           fs.rmSync(generationDirectory(run), { recursive: true, force: true });
+        }
+        for (const scratch of new Set(
+          observations.map(({ includeFile }) => path.dirname(includeFile)),
+        )) {
+          fs.rmSync(scratch, { recursive: true, force: true });
         }
       }
     }),
@@ -263,6 +281,7 @@ it
       await Promise.all([waitForDead(first.pid, 5_000), waitForDead(first.parent, 5_000)]);
       expect(isProcessAlive(second.pid)).toBe(true);
       expect(fs.existsSync(generationDirectory(first.generation))).toBe(true);
+      expect(fs.existsSync(first.includeFile)).toBe(true);
       fs.writeFileSync(fixture.release, "finish");
       const result = await running;
       const receipts = controlled.read();
@@ -291,6 +310,7 @@ it
       }
       expect(fs.readFileSync(fixture.ready + ".read", "utf8")).toBe("read after sibling exit");
       expect(fs.existsSync(generationDirectory(first.generation))).toBe(claim !== "released");
+      expect(fs.existsSync(path.dirname(first.includeFile))).toBe(claim !== "released");
     } finally {
       fs.writeFileSync(fixture.release, "finish");
       await running;
@@ -303,6 +323,11 @@ it
       );
       for (const run of new Set(observations.map(({ generation }) => generation))) {
         fs.rmSync(generationDirectory(run), { recursive: true, force: true });
+      }
+      for (const scratch of new Set(
+        observations.map(({ includeFile }) => path.dirname(includeFile)),
+      )) {
+        fs.rmSync(scratch, { recursive: true, force: true });
       }
     }
   }),

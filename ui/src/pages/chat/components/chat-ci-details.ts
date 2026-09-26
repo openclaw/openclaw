@@ -46,26 +46,17 @@ function stepState(step: ControlUiSessionPullRequestCheckStep): CheckState {
   }
 }
 
-const STATE_LABEL_KEYS = {
-  passed: "chat.pullRequests.checksPassed",
-  failed: "chat.pullRequests.checksFailed",
-  running: "chat.pullRequests.checksRunning",
-  skipped: "chat.pullRequests.checksSkipped",
-  queued: "chat.pullRequests.checksQueued",
+const CHECK_PRESENTATION = {
+  passed: ["chat.pullRequests.checksPassed", icons.check],
+  failed: ["chat.pullRequests.checksFailed", icons.circleX],
+  running: ["chat.pullRequests.checksRunning", icons.loader],
+  skipped: ["chat.pullRequests.checksSkipped", SKIPPED_ICON],
+  queued: ["chat.pullRequests.checksQueued", icons.clock],
 } as const;
 
 function renderStatus(state: CheckState) {
-  const label = t(STATE_LABEL_KEYS[state]);
-  const icon =
-    state === "passed"
-      ? icons.check
-      : state === "failed"
-        ? icons.circleX
-        : state === "running"
-          ? icons.loader
-          : state === "skipped"
-            ? SKIPPED_ICON
-            : icons.clock;
+  const [labelKey, icon] = CHECK_PRESENTATION[state];
+  const label = t(labelKey);
   return html`<span
     class="chat-ci__status"
     data-state=${state}
@@ -208,11 +199,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
     if (event.target !== this.disclosure) {
       return;
     }
-    if (this.visible) {
-      void this.load();
-    } else {
-      this.cancelRequest();
-    }
+    this.handleVisibility();
   };
 
   private readonly handleVisibility = (): void => {

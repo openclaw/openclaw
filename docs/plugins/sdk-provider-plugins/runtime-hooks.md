@@ -46,6 +46,20 @@ legacy official Completions adapter, prefers subscription authentication when
 both kinds are eligible, and honors explicit API route intent. These are
 additive fields on the existing contract; they add no hook or user setting.
 
+## Credential lookup cancellation
+
+Credential consumers using `resolveApiKeyForProvider` from
+`openclaw/plugin-sdk/provider-auth-runtime` should pass their request's optional
+`signal`. It ends the caller's wait for queued admission, a profile lock, or
+OAuth settlement, not an already-claimed refresh's credential write. Started lock
+acquisition remains owned through cleanup. Preserve non-missing authentication
+errors rather than converting every failure into an absent API key.
+
+`buildTimeoutAbortSignal` from `openclaw/plugin-sdk/extension-shared` combines a
+caller signal with an operation timeout. Start it before credential preparation
+when authentication shares the request budget, and call its `cleanup` in
+`finally` to release the timer.
+
 ## Hook examples
 
 <Tabs>

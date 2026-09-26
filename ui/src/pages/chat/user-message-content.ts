@@ -1,4 +1,3 @@
-// Control UI chat module implements user message content behavior.
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";

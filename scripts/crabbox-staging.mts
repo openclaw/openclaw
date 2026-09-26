@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, type Hash } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -17,9 +17,11 @@ import {
   rmSync,
   rmdirSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import {
   crabboxArtifactEvidenceSchema,
@@ -81,6 +83,18 @@ const receiptSchema = z.strictObject({
   artifactManifest: z
     .string()
     .regex(/^[a-f0-9]{64}$/u)
+    .optional(),
+  mirror: z
+    .strictObject({
+      key: z.string().regex(/^[a-f0-9]{64}$/u),
+      slotIdentity: identitySchema,
+      idle: z.boolean(),
+      lastUsed: z.number().int().nonnegative(),
+      database: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/u)
+        .optional(),
+    })
     .optional(),
   hold: z.enum(["artifacts", "claims", "writers", "registration"]).optional(),
 });
@@ -260,19 +274,19 @@ function syncFile(fd: number) {
   }
 }
 
-function writeAtomic(root: string, name: string, bytes: string) {
+function writeAtomic(root: string, name: string, bytes: string, durable = true) {
   const temporary = join(root, "." + name + "." + randomUUID());
   try {
     let fileDurable = false;
     const fd = openSync(temporary, "wx", 0o600);
     try {
       writeFileSync(fd, bytes);
-      fileDurable = syncFile(fd);
+      fileDurable = durable && syncFile(fd);
     } finally {
       closeSync(fd);
     }
     renameSync(temporary, join(root, name));
-    return syncDirectory(root) && fileDurable;
+    return fileDurable && syncDirectory(root);
   } finally {
     rmSync(temporary, { force: true });
   }
@@ -286,13 +300,17 @@ function blob(path: string, symbolic: boolean) {
       .update(bytes)
       .digest("hex");
   }
+  return regularFileDigest(path, (size) => createHash("sha1").update("blob " + size + "\0"));
+}
+
+function regularFileDigest(path: string, initialize: (size: bigint) => Hash) {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = fstatSync(fd, { bigint: true });
     if (!before.isFile()) {
       throw new Error("staging contains an unsupported file");
     }
-    const hash = createHash("sha1").update("blob " + before.size + "\0");
+    const hash = initialize(before.size);
     const buffer = Buffer.alloc(64 * 1024);
     for (;;) {
       const count = readSync(fd, buffer);
@@ -328,6 +346,7 @@ function inventory(
   payload: string,
   known = new Map<string, Entry>(),
   preservedArtifacts = false,
+  observeEntry?: (path: string, stat: Stats) => void,
 ): Entry[] {
   const entries: Entry[] = [];
   const walk = (directory: string, parent: string) => {
@@ -341,6 +360,7 @@ function inventory(
       }
       const absolute = join(payload, path);
       const stat = lstatSync(absolute);
+      observeEntry?.(path, stat);
       if (stat.isDirectory()) {
         if (!preservedArtifacts || path !== "source/.crabbox") {
           entries.push({ path, kind: "directory" });
@@ -398,7 +418,11 @@ export type StagingHandle = {
   recorded: boolean;
   root: string;
   payload: string;
-  prepared: (source: FrozenSource, witness?: SourceWitness) => void;
+  prepared: (
+    source: FrozenSource,
+    witness?: SourceWitness,
+    observeEntry?: (path: string, stat: Stats) => void,
+  ) => void;
   admitted: (claims?: ClaimNamespace, leases?: string[]) => void;
   settled: (leases?: string[]) => void;
   preserved: (artifacts: CrabboxArtifactEvidence) => void;
@@ -436,11 +460,11 @@ export function createStaging(
     };
     if (
       recorded &&
-      !writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n") &&
+      !writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", receipt.durable) &&
       receipt.durable
     ) {
       receipt.durable = false;
-      writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n");
+      writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", false);
     }
   } catch (error) {
     try {
@@ -454,15 +478,26 @@ export function createStaging(
     }
     throw error;
   }
+  return stagingHandle(root, receipt, recorded);
+}
+
+function stagingHandle(root: string, initialReceipt: Receipt, recorded: boolean): StagingHandle {
+  let receipt = initialReceipt;
+  const payload = join(root, "payload");
   const update = (fields: Partial<Receipt>) => {
     assertIdentity(root, receipt.rootIdentity);
     receipt = { ...receipt, ...fields };
     if (!recorded) {
       return;
     }
-    if (!writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n") && receipt.durable) {
+    // Unsupported durability is terminal for this generation, including later
+    // metadata writes. The live producer still owns ordinary cleanup.
+    if (
+      !writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", receipt.durable) &&
+      receipt.durable
+    ) {
       receipt.durable = false;
-      writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n");
+      writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", false);
     }
   };
   let disposed = false;
@@ -470,7 +505,7 @@ export function createStaging(
     recorded,
     root,
     payload,
-    prepared(source, witness) {
+    prepared(source, witness, observeEntry) {
       if (!recorded) {
         return;
       }
@@ -484,12 +519,15 @@ export function createStaging(
           },
         ]),
       );
-      const manifest: Manifest = { source, entries: inventory(payload, known) };
+      const manifest: Manifest = {
+        source,
+        entries: inventory(payload, known, false, observeEntry),
+      };
       const bytes = JSON.stringify(manifest) + "\n";
       if (Buffer.byteLength(bytes) > manifestLimit) {
         throw new Error("staging manifest exceeds the recovery metadata limit");
       }
-      const durable = writeAtomic(root, manifestName, bytes) && receipt.durable;
+      const durable = writeAtomic(root, manifestName, bytes, receipt.durable);
       let claims: ClaimNamespace | undefined;
       try {
         claims = captureClaimNamespace(join(payload, "source"));
@@ -512,7 +550,7 @@ export function createStaging(
         return;
       }
       assertIdentity(root, receipt.rootIdentity);
-      const saved = writeArtifactRecord(root, artifacts);
+      const saved = writeArtifactRecord(root, artifacts, receipt.durable);
       update({
         state: "preserved",
         durable: saved.durable && receipt.durable && artifacts.durable,
@@ -536,6 +574,461 @@ export function createStaging(
   };
 }
 
+const mirrorLimit = 32;
+const mirrorDatabase = "mirror.sqlite";
+
+function privateMirrorDirectory(path: string) {
+  const stat = lstatSync(path);
+  if (
+    !stat.isDirectory() ||
+    stat.isSymbolicLink() ||
+    (stat.mode & 0o077) !== 0 ||
+    (process.getuid && stat.uid !== process.getuid())
+  ) {
+    throw new Error("source mirror directory is not private: " + path);
+  }
+  return identity(path);
+}
+
+function mirrorLock(path: string) {
+  const parent = dirname(path);
+  const parentIdentity = privateMirrorDirectory(parent);
+  try {
+    closeSync(
+      openSync(
+        path,
+        constants.O_CREAT | constants.O_EXCL | constants.O_RDWR | constants.O_NOFOLLOW,
+        0o600,
+      ),
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw error;
+    }
+  }
+  const captured = lstatSync(path, { bigint: true });
+  if (
+    !captured.isFile() ||
+    captured.isSymbolicLink() ||
+    captured.nlink !== 1n ||
+    captured.size !== 0n ||
+    (captured.mode & 0o077n) !== 0n ||
+    (process.getuid && captured.uid !== BigInt(process.getuid()))
+  ) {
+    throw new Error("source mirror lock is not a private empty regular database");
+  }
+  let released = false;
+  const assertOwned = () => {
+    assertIdentity(parent, parentIdentity);
+    const current = lstatSync(path, { bigint: true });
+    if (
+      !current.isFile() ||
+      current.isSymbolicLink() ||
+      current.nlink !== 1n ||
+      current.dev !== captured.dev ||
+      current.ino !== captured.ino ||
+      current.mode !== captured.mode ||
+      current.size !== 0n
+    ) {
+      throw new Error("source mirror lock ownership changed");
+    }
+  };
+  let database: DatabaseSync | undefined;
+  try {
+    database = new DatabaseSync(path, { timeout: 0 });
+    // A lock-only transaction never commits data or writes a journal. SQLite
+    // owns every open descriptor so closing a competing connection cannot drop
+    // another connection's POSIX locks. Kernel locks disappear on producer exit.
+    database.exec("PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE");
+    assertOwned();
+  } catch (error) {
+    database?.close();
+    if (typeof error === "object" && error !== null && "errcode" in error && error.errcode === 5) {
+      return undefined;
+    }
+    throw error;
+  }
+  const connection = database;
+  const release = () => {
+    if (released) {
+      return;
+    }
+    assertOwned();
+    connection.exec("ROLLBACK");
+    connection.close();
+    released = true;
+  };
+  const remove = () => {
+    if (!released) {
+      throw new Error("cannot remove an active source mirror lock");
+    }
+    assertOwned();
+    rmSync(path);
+  };
+  return Object.assign(release, { assertOwned, remove });
+}
+
+function mirrorSlot(syncRoot: string, key: string) {
+  const slot = join(syncRoot, "mirrors", key);
+  const slotIdentity = privateMirrorDirectory(slot);
+  if (readdirSync(slot).some((name) => name !== "stage" && name !== "lock")) {
+    throw new Error("source mirror slot has unknown metadata");
+  }
+  const id = readBounded(join(slot, "stage"), 128).toString("utf8").trim();
+  if (!z.uuid().safeParse(id).success) {
+    throw new Error("source mirror slot has an invalid staging identity");
+  }
+  const root = join(syncRoot, prefix + id);
+  const receipt = lstatSync(root, { throwIfNoEntry: false }) ? readReceipt(root) : undefined;
+  if (
+    receipt &&
+    (receipt.mirror?.key !== key || !sameIdentity(receipt.mirror.slotIdentity, slotIdentity))
+  ) {
+    throw new Error("source mirror staging ownership does not match its slot");
+  }
+  return { slot, slotIdentity, root, receipt, id };
+}
+
+function idleMirror(receipt: Receipt) {
+  return Boolean(
+    receipt.mirror?.idle &&
+    receipt.durable &&
+    receipt.manifest &&
+    !receipt.hold &&
+    ((receipt.users === "none" && receipt.state === "prepared") ||
+      (receipt.users === "settled" && receipt.state === "preserved")),
+  );
+}
+
+function saveMirrorReceipt(root: string, receipt: Receipt) {
+  assertIdentity(root, receipt.rootIdentity);
+  if (!writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n")) {
+    writeAtomic(
+      root,
+      receiptName,
+      JSON.stringify({
+        ...receipt,
+        durable: false,
+        mirror: receipt.mirror ? { ...receipt.mirror, idle: false } : undefined,
+      }) + "\n",
+      false,
+    );
+    throw new Error("source mirror ownership could not be recorded durably");
+  }
+}
+
+function databaseDigest(root: string, witness?: SourceWitness) {
+  for (const suffix of ["-journal", "-wal", "-shm"]) {
+    if (lstatSync(join(root, mirrorDatabase + suffix), { throwIfNoEntry: false })) {
+      throw new Error("source mirror database has unsettled journal state");
+    }
+  }
+  return regularFileDigest(join(root, mirrorDatabase), () =>
+    createHash("sha256").update(JSON.stringify(witness ?? null) + "\0"),
+  );
+}
+
+/** The old producer's explicit idle handoff, never PID absence, grants disposal. */
+function disposeIdleMirror(syncRoot: string, key: string, expectedId?: string) {
+  const slot = join(syncRoot, "mirrors", key);
+  privateMirrorDirectory(slot);
+  const release = mirrorLock(join(slot, "lock"));
+  if (!release) {
+    return false;
+  }
+  try {
+    const current = mirrorSlot(syncRoot, key);
+    if (
+      (expectedId && current.id !== expectedId) ||
+      (current.receipt && !idleMirror(current.receipt))
+    ) {
+      return false;
+    }
+    if (current.receipt) {
+      recoveryMetadata(current.root, join(current.root, "payload", "source"));
+      assertIdentity(current.root, current.receipt.rootIdentity);
+      release.assertOwned();
+      rmSync(current.root, { recursive: true, force: true });
+    }
+    assertIdentity(slot, current.slotIdentity);
+    rmSync(join(slot, "stage"));
+    release();
+    release.remove();
+    rmdirSync(slot);
+    return true;
+  } finally {
+    release();
+  }
+}
+
+type MirrorStagingHandle = {
+  staging: StagingHandle;
+  reused: boolean;
+  finish: () => void;
+  discard: () => void;
+};
+
+/** Own one immutable command view, with a bounded disposable cache between runs. */
+export function createMirrorStaging(
+  syncRootInput: string,
+  repositoryInput: string,
+): MirrorStagingHandle | undefined {
+  let allocation: ReturnType<typeof mirrorLock>;
+  let release: ReturnType<typeof mirrorLock>;
+  try {
+    if (!processDomain()) {
+      console.error(
+        "[crabbox] source mirror process ownership is unavailable; using a fresh capsule",
+      );
+      return undefined;
+    }
+    mkdirSync(syncRootInput, { recursive: true });
+    const syncRoot = realpathSync(syncRootInput);
+    const repository = realpathSync(repositoryInput);
+    if (!canRecordStaging(join(syncRoot, prefix + "mirror"), repository)) {
+      return undefined;
+    }
+    if (!syncDirectory(syncRoot)) {
+      console.error(
+        "[crabbox] durable source mirror ownership is unavailable; using a fresh capsule",
+      );
+      return undefined;
+    }
+    const mirrors = join(syncRoot, "mirrors");
+    mkdirSync(mirrors, { recursive: true, mode: 0o700 });
+    privateMirrorDirectory(mirrors);
+    allocation = mirrorLock(join(mirrors, ".allocation.lock"));
+    if (!allocation) {
+      console.error("[crabbox] source mirror allocation is busy; using a fresh capsule");
+      return undefined;
+    }
+    const key = createHash("sha256").update(repository).digest("hex");
+    const slot = join(mirrors, key);
+    let createdSlot = false;
+    if (!lstatSync(slot, { throwIfNoEntry: false })) {
+      const slots = readdirSync(mirrors).filter((name) => name !== ".allocation.lock");
+      if (slots.length >= mirrorLimit) {
+        const idle = slots
+          .flatMap((name) => {
+            try {
+              if (!/^[a-f0-9]{64}$/u.test(name)) {
+                return [];
+              }
+              const value = mirrorSlot(syncRoot, name);
+              return !value.receipt || idleMirror(value.receipt)
+                ? [{ key: name, lastUsed: value.receipt?.mirror?.lastUsed ?? 0 }]
+                : [];
+            } catch {
+              return [];
+            }
+          })
+          .toSorted((a, b) => a.lastUsed - b.lastUsed);
+        if (
+          !idle.some((entry) => {
+            try {
+              return disposeIdleMirror(syncRoot, entry.key);
+            } catch (error) {
+              console.error(
+                "[crabbox] source mirror eviction could not verify a candidate; retained it and checking later idle mirrors: " +
+                  (error instanceof Error ? error.message : String(error)),
+              );
+              return false;
+            }
+          }) ||
+          readdirSync(mirrors).filter((name) => name !== ".allocation.lock").length >= mirrorLimit
+        ) {
+          console.error(
+            "[crabbox] source mirror limit reached; protected copies retained, using a fresh capsule",
+          );
+          return undefined;
+        }
+      }
+      mkdirSync(slot, { mode: 0o700 });
+      createdSlot = true;
+    }
+    const slotIdentity = privateMirrorDirectory(slot);
+    release = mirrorLock(join(slot, "lock"));
+    if (!release) {
+      console.error(
+        "[crabbox] source mirror is in use or has an unresolved owner; using a fresh capsule",
+      );
+      return undefined;
+    }
+    let receipt: Receipt | undefined;
+    let root: string | undefined;
+    if (!createdSlot && !lstatSync(join(slot, "stage"), { throwIfNoEntry: false })) {
+      throw new Error("source mirror slot has no recorded staging owner");
+    }
+    if (lstatSync(join(slot, "stage"), { throwIfNoEntry: false })) {
+      const previous = mirrorSlot(syncRoot, key);
+      receipt = previous.receipt;
+      root = previous.root;
+      if (receipt && !idleMirror(receipt)) {
+        console.error(
+          "[crabbox] source mirror has no completed idle handoff; using a fresh capsule",
+        );
+        return undefined;
+      }
+      if (receipt) {
+        recoveryMetadata(root, join(root, "payload", "source"));
+        let intact = false;
+        try {
+          intact =
+            Boolean(receipt.mirror?.database) &&
+            databaseDigest(root, receipt.witness) === receipt.mirror?.database;
+        } catch {
+          // Known disposable idle data may be rebuilt; unknown ownership may not.
+        }
+        if (!intact) {
+          assertIdentity(root, receipt.rootIdentity);
+          rmSync(root, { recursive: true, force: true });
+          receipt = undefined;
+          console.error("[crabbox] source mirror metadata changed or disappeared; rebuilding cold");
+        }
+      }
+    }
+    const reused = Boolean(receipt);
+    if (!receipt) {
+      const fresh = createStaging(syncRoot, repository);
+      if (!fresh.recorded) {
+        fresh.dispose();
+        return undefined;
+      }
+      root = fresh.root;
+      receipt = readReceipt(root);
+    }
+    if (!root || !canRecordStaging(root, repository)) {
+      return undefined;
+    }
+    assertIdentity(join(root, "payload"), receipt.payloadIdentity);
+    const generations = recoveryMetadata(root, join(root, "payload", "source"));
+    const adopted: Receipt = {
+      ...receipt,
+      ownerPid: process.pid,
+      ownerDomain: processDomain(),
+      repository,
+      repositoryIdentity: identity(repository),
+      state: "preparing",
+      users: "none",
+      claims: undefined,
+      leases: undefined,
+      witness: undefined,
+      artifactManifest: undefined,
+      mirror: { key, slotIdentity, idle: false, lastUsed: Date.now() },
+    };
+    saveMirrorReceipt(root, adopted);
+    if (!writeAtomic(slot, "stage", adopted.id + "\n")) {
+      throw new Error("source mirror slot could not be recorded durably");
+    }
+    for (const name of generations) {
+      rmSync(join(root, name));
+    }
+    const staging = stagingHandle(root, adopted, true);
+    const unlock = release;
+    release = undefined;
+    let finished = false;
+    const abandon = () => {
+      if (!finished) {
+        unlock();
+        finished = true;
+      }
+    };
+    const ownedReceipt = () => {
+      unlock.assertOwned();
+      const current = mirrorSlot(syncRoot, key);
+      if (
+        current.root !== root ||
+        current.receipt?.ownerPid !== process.pid ||
+        current.receipt.mirror?.idle ||
+        current.receipt.id !== adopted.id
+      ) {
+        throw new Error("source mirror ownership changed during its command");
+      }
+      return current.receipt;
+    };
+    return {
+      staging,
+      reused,
+      finish() {
+        if (finished) {
+          return;
+        }
+        try {
+          const current = ownedReceipt();
+          const idle = {
+            ...current,
+            mirror: { ...current.mirror!, idle: true, lastUsed: Date.now() },
+          };
+          if (idleMirror(idle)) {
+            const source = join(staging.payload, "source");
+            const outputs = join(source, ".crabbox");
+            if (lstatSync(outputs, { throwIfNoEntry: false })) {
+              try {
+                const outputIdentity = identity(outputs);
+                if (!current.artifactManifest) {
+                  throw new Error("source mirror output preservation was not recorded");
+                }
+                const artifacts = readArtifactRecord(staging.root, current.artifactManifest);
+                verifyPreservedCrabboxArtifacts(source, artifacts);
+                unlock.assertOwned();
+                assertIdentity(outputs, outputIdentity);
+                if (readdirSync(outputs).some((name) => name !== "runs" && name !== "captures")) {
+                  // Native state outside the artifact roots is disposable only
+                  // through the completed live producer's ordinary cleanup.
+                  staging.dispose();
+                  return;
+                }
+                idle.mirror.database = databaseDigest(staging.root, current.witness);
+                for (const name of ["runs", "captures"]) {
+                  rmSync(join(outputs, name), { recursive: true, force: true });
+                }
+                rmdirSync(outputs);
+              } catch (error) {
+                staging.hold("artifacts");
+                throw error;
+              }
+            } else {
+              idle.mirror.database = databaseDigest(staging.root, current.witness);
+            }
+            saveMirrorReceipt(staging.root, idle);
+          }
+        } finally {
+          abandon();
+        }
+      },
+      discard() {
+        if (finished) {
+          return;
+        }
+        try {
+          const current = ownedReceipt();
+          if (
+            current.users !== "none" ||
+            current.hold ||
+            !["preparing", "prepared"].includes(current.state)
+          ) {
+            throw new Error(
+              "source mirror has admitted or unverified users; retained for recovery",
+            );
+          }
+          staging.dispose();
+        } finally {
+          abandon();
+        }
+      },
+    };
+  } catch (error) {
+    console.error(
+      "[crabbox] source mirror unavailable; retained for inspection, using a fresh capsule: " +
+        (error instanceof Error ? error.message : String(error)),
+    );
+    return undefined;
+  } finally {
+    release?.();
+    allocation?.();
+  }
+}
+
 function readManifest(root: string, receipt: Receipt): Manifest {
   const bytes = readBounded(join(root, manifestName), manifestLimit);
   if (createHash("sha256").update(bytes).digest("hex") !== receipt.manifest) {
@@ -548,15 +1041,14 @@ function readManifest(root: string, receipt: Receipt): Manifest {
   }
 }
 
-function writeArtifactRecord(root: string, artifacts: CrabboxArtifactEvidence) {
+function writeArtifactRecord(root: string, artifacts: CrabboxArtifactEvidence, durable = true) {
   const bytes = JSON.stringify(artifacts) + "\n";
   if (Buffer.byteLength(bytes) > manifestLimit) {
     throw new Error("staging artifact evidence exceeds the recovery metadata limit");
   }
   const digest = createHash("sha256").update(bytes).digest("hex");
   // Keep the previous committed generation readable until the receipt advances.
-  const durable = writeAtomic(root, "artifacts-" + digest + ".json", bytes);
-  return { digest, durable };
+  return { digest, durable: writeAtomic(root, "artifacts-" + digest + ".json", bytes, durable) };
 }
 
 function readArtifactRecord(root: string, digest: string) {
@@ -581,8 +1073,24 @@ function recoveryMetadata(root: string, source: string, artifacts?: CrabboxArtif
     ? identity(source)
     : artifacts?.sourceIdentity;
   const generations: string[] = [];
+  const mirror = readReceipt(root).mirror;
   for (const name of names) {
     if (known.has(name)) {
+      continue;
+    }
+    if (
+      mirror &&
+      [
+        mirrorDatabase,
+        `${mirrorDatabase}-journal`,
+        `${mirrorDatabase}-wal`,
+        `${mirrorDatabase}-shm`,
+      ].includes(name)
+    ) {
+      const stat = lstatSync(join(root, name));
+      if (!stat.isFile() && !stat.isSymbolicLink()) {
+        throw new Error("source mirror database metadata has an unsupported kind");
+      }
       continue;
     }
     const match = /^artifacts-([a-f0-9]{64})\.json$/u.exec(name);
@@ -630,6 +1138,14 @@ function metadataStatus(root: string, receipt: Receipt, explicit = false): Stagi
       status: "protected",
       reason:
         "Another or interrupted recovery owns this copy; inspect that operation before manual disposition.",
+    };
+  }
+  if (idleMirror(receipt)) {
+    return {
+      ...base,
+      status: "protected",
+      reason:
+        "Idle source mirror retained for reuse; capacity eviction or explicit staging recover uses its exclusive mirror lock.",
     };
   }
   if (!receipt.ownerDomain || receipt.ownerDomain !== processDomain()) {
@@ -905,6 +1421,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
   const source = join(root, "payload", "source");
   let locked = false;
   let unsettled = false;
+  let releaseMirror: (() => void) | undefined;
   let lockedRoot: Identity | undefined;
   let lockedDirectory: Identity | undefined;
   const lockOwner = JSON.stringify({ pid: process.pid, generation: randomUUID() }) + "\n";
@@ -912,6 +1429,35 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
   try {
     options.signal?.throwIfAborted();
     const before = readReceipt(root);
+    if (idleMirror(before)) {
+      if (options.automatic) {
+        return {
+          id,
+          recovered: false,
+          reason: "Idle source mirrors are retained until capacity eviction or explicit recovery.",
+        };
+      }
+      const allocation = mirrorLock(join(syncRoot, "mirrors", ".allocation.lock"));
+      if (!allocation) {
+        return {
+          id,
+          recovered: false,
+          reason: "Source mirror allocation is busy; retry after the active command finishes.",
+        };
+      }
+      try {
+        const recovered = disposeIdleMirror(syncRoot, before.mirror!.key, id);
+        return {
+          id,
+          recovered,
+          reason: recovered
+            ? "Explicitly disposable idle source mirror removed."
+            : "Source mirror is in use or its ownership changed; retained.",
+        };
+      } finally {
+        allocation();
+      }
+    }
     const selectedWitness = options.witness ?? before.witness;
     const status = metadataStatus(
       root,
@@ -920,6 +1466,32 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
     );
     if (status.status !== "candidate") {
       return { id, recovered: false, reason: status.reason };
+    }
+    if (before.mirror) {
+      const allocation = mirrorLock(join(syncRoot, "mirrors", ".allocation.lock"));
+      if (!allocation) {
+        return {
+          id,
+          recovered: false,
+          reason: "Source mirror allocation is busy; retry after the active command finishes.",
+        };
+      }
+      try {
+        const slot = mirrorSlot(syncRoot, before.mirror.key);
+        if (slot.root !== root) {
+          throw new Error("Source mirror staging ownership changed before recovery.");
+        }
+        releaseMirror = mirrorLock(join(slot.slot, "lock"));
+        if (!releaseMirror) {
+          return {
+            id,
+            recovered: false,
+            reason: "Source mirror has an active lock owner; retained.",
+          };
+        }
+      } finally {
+        allocation();
+      }
     }
     // Interrupted owners do not supply settlement evidence for their child tools.
     mkdirSync(lock, { mode: 0o700 });
@@ -936,7 +1508,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       receipt = next;
       if (!writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n")) {
         receipt.durable = false;
-        writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n");
+        writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", false);
         throw new Error("Durable recovery updates are unavailable; staging remains protected.");
       }
     };
@@ -1054,6 +1626,16 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
     for (const name of generations) {
       rmSync(join(root, name));
     }
+    if (receipt.mirror) {
+      for (const name of [
+        mirrorDatabase,
+        `${mirrorDatabase}-journal`,
+        `${mirrorDatabase}-wal`,
+        `${mirrorDatabase}-shm`,
+      ]) {
+        rmSync(join(root, name), { force: true });
+      }
+    }
     rmSync(join(root, receiptName));
     rmSync(join(lock, "owner.json"));
     rmdirSync(lock);
@@ -1085,6 +1667,9 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       } catch {
         // A replaced or incomplete recovery owner never grants cleanup authority.
       }
+    }
+    if (!unsettled) {
+      releaseMirror?.();
     }
   }
 }

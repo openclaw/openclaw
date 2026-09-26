@@ -342,7 +342,7 @@ describe("registered mcp.authLogin", () => {
     expect((await callback(started.state)).status).toBe(200);
     expect(await terminal(started.sessionId)).toMatchObject({ status: "done" });
     expect((await callback(started.state)).status).toBe(410);
-    const stored = readMcpOAuthStore(identity().storeKey);
+    const stored = await readMcpOAuthStore(identity().storeKey);
     expect(stored.tokens?.access_token).toBe("fixture-access");
     expect(stored.tokensAuthorizationServerUrl).toBe(new URL(resourceUrl).origin);
     expect(stored.codeVerifier).toBeUndefined();
@@ -376,10 +376,10 @@ describe("registered mcp.authLogin", () => {
     }
     const newer = await startMcpOAuthAuthorization(identity(), resolved, {});
     expect(newer.status).toBe("redirect");
-    const before = readMcpOAuthStore(identity().storeKey);
+    const before = await readMcpOAuthStore(identity().storeKey);
     expect((await callback(started.state, "error=access_denied")).status).toBe(400);
     expect(await terminal(started.sessionId)).toMatchObject({ status: "error" });
-    expect(readMcpOAuthStore(identity().storeKey)).toEqual(before);
+    expect(await readMcpOAuthStore(identity().storeKey)).toEqual(before);
   });
 
   it.each(["invalid_grant", "invalid_client", "unauthorized_client"] as const)(
@@ -389,7 +389,7 @@ describe("registered mcp.authLogin", () => {
       const initial = await begin();
       expect((await callback(initial.state)).status).toBe(200);
       expect(await terminal(initial.sessionId)).toMatchObject({ status: "done" });
-      const before = readMcpOAuthStore(identity().storeKey);
+      const before = await readMcpOAuthStore(identity().storeKey);
       expect(
         await recordMcpOAuthAuthorizationRequired({
           identity: identity(),
@@ -405,7 +405,7 @@ describe("registered mcp.authLogin", () => {
         const result = await terminal(started.sessionId);
         expect(result.status).toBe("error");
         expect(JSON.stringify(result)).not.toContain("private exchange detail");
-        const after = readMcpOAuthStore(identity().storeKey);
+        const after = await readMcpOAuthStore(identity().storeKey);
         expect(after.tokens).toEqual(before.tokens);
         expect(after.clientInformation).toEqual(before.clientInformation);
         expect(after.tokensAuthorizationServerUrl).toEqual(before.tokensAuthorizationServerUrl);
@@ -441,11 +441,11 @@ describe("registered mcp.authLogin", () => {
   it("rejects a blank callback code without exchanging or replacing the pending attempt", async () => {
     await clearMcpOAuthCredentials(identity());
     const started = await begin();
-    const before = readMcpOAuthStore(identity().storeKey);
+    const before = await readMcpOAuthStore(identity().storeKey);
     const requestCount = requests.length;
     try {
       expect((await callback(started.state, "code=%20")).status).toBe(400);
-      expect(readMcpOAuthStore(identity().storeKey)).toEqual(before);
+      expect(await readMcpOAuthStore(identity().storeKey)).toEqual(before);
       expect(requests).toHaveLength(requestCount);
       expect(await rpcReq(owner, "wizard.status", { sessionId: started.sessionId })).toMatchObject({
         ok: true,
@@ -486,7 +486,7 @@ describe("registered mcp.authLogin", () => {
       release.resolve();
       expect((await start).ok).toBe(false);
       expect(requests).toHaveLength(before);
-      expect(readMcpOAuthStore(identity().storeKey).tokens).toBeUndefined();
+      expect((await readMcpOAuthStore(identity().storeKey)).tokens).toBeUndefined();
     } finally {
       beforeLogin = undefined;
       release.resolve();
@@ -511,7 +511,7 @@ describe("registered mcp.authLogin", () => {
       clock.mockRestore();
     }
     expect(await terminal(started.sessionId)).toMatchObject({ status: "error" });
-    expect(readMcpOAuthStore(identity().storeKey).codeVerifier).toBeUndefined();
+    expect((await readMcpOAuthStore(identity().storeKey)).codeVerifier).toBeUndefined();
     const next = await begin();
     const session = expectDefined(
       admitted?.context.wizardSessions.get(next.sessionId),
@@ -523,7 +523,7 @@ describe("registered mcp.authLogin", () => {
     });
     expect((await callback(next.state)).status).toBe(410);
     await whenAdmittedWizardSessionSettled(session);
-    expect(readMcpOAuthStore(identity().storeKey).codeVerifier).toBeUndefined();
+    expect((await readMcpOAuthStore(identity().storeKey)).codeVerifier).toBeUndefined();
   });
 
   it.each(["disabled", "removed", "url", "identity", "profile"] as const)(
@@ -553,7 +553,7 @@ describe("registered mcp.authLogin", () => {
         const result = await terminal(started.sessionId);
         expect(result.status).toBe("error");
         expect(JSON.stringify(result)).not.toContain("private exchange detail");
-        expect(readMcpOAuthStore(identity().storeKey).tokens).toBeUndefined();
+        expect((await readMcpOAuthStore(identity().storeKey)).tokens).toBeUndefined();
       } finally {
         releaseToken.resolve();
         releaseToken = undefined;
@@ -595,7 +595,7 @@ describe("registered mcp.authLogin", () => {
         releaseRedirect.resolve();
         expect(await terminal(activeSessionId)).toMatchObject({ status: "error" });
         expect(requests.slice(before)).not.toContain(`/${stage}-final`);
-        expect(readMcpOAuthStore(identity().storeKey).tokens).toBeUndefined();
+        expect((await readMcpOAuthStore(identity().storeKey)).tokens).toBeUndefined();
       } finally {
         releaseRedirect.resolve();
         redirectStage = undefined;
@@ -652,7 +652,7 @@ describe("registered mcp.authLogin", () => {
         releaseToken.resolve();
         await session.whenSettled();
         expect(session.getStatus()).toBe("error");
-        expect(readMcpOAuthStore(identity().storeKey).tokens).toBeUndefined();
+        expect((await readMcpOAuthStore(identity().storeKey)).tokens).toBeUndefined();
       } finally {
         releaseToken.resolve();
         releaseToken = undefined;
@@ -699,7 +699,7 @@ describe("registered mcp.authLogin", () => {
       await admissionSettled.promise;
       expect(invocation.context.wizardSessions.has(sessionId)).toBe(false);
       expect(requests).toHaveLength(before);
-      expect(readMcpOAuthStore(identity().storeKey).tokens).toBeUndefined();
+      expect((await readMcpOAuthStore(identity().storeKey)).tokens).toBeUndefined();
     } finally {
       release.resolve();
       client.close();
@@ -745,7 +745,7 @@ describe("registered mcp.authLogin", () => {
         release.resolve();
         await whenAdmittedWizardSessionSettled(session);
         expect(session.getStatus()).toBe("error");
-        const stored = readMcpOAuthStore(identity().storeKey);
+        const stored = await readMcpOAuthStore(identity().storeKey);
         expect(stored.tokens).toBeUndefined();
         expect(stored.codeVerifier).toBeUndefined();
         expect(stored.lastAuthorizationUrl).toBeUndefined();
@@ -780,7 +780,7 @@ describe("registered mcp.authLogin", () => {
       await whenAdmittedWizardSessionSettled(session);
       expect(session.getStatus()).toBe("error");
       expect((await callback(started.state)).status).toBe(410);
-      expect(readMcpOAuthStore(identity().storeKey).tokens).toBeUndefined();
+      expect((await readMcpOAuthStore(identity().storeKey)).tokens).toBeUndefined();
     } finally {
       withdraw();
       client.close();

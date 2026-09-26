@@ -178,44 +178,27 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   });
 
   it.each([
-    { label: "accidental", intentionalTerminalCompletion: undefined },
-    { label: "intentional terminal tool", intentionalTerminalCompletion: "tool-batch" as const },
-  ])("accounts for an $label embedded run with no final payload", async (testCase) => {
-    mockAgentRun({
-      meta: testCase.intentionalTerminalCompletion
-        ? { intentionalTerminalCompletion: testCase.intentionalTerminalCompletion }
-        : {},
-    });
-    mockAnnounceOutcome();
+    { label: "empty", meta: {} },
+    { label: "reply-layer suppressed empty", meta: { terminalReplyKind: "silent-empty" } },
+    {
+      label: "intentional terminal tool",
+      meta: { intentionalTerminalCompletion: "tool-batch" as const },
+    },
+  ])(
+    "preserves successful $label completion without requiring a final payload",
+    async ({ meta }) => {
+      mockAgentRun({
+        meta,
+      });
+      mockAnnounceOutcome();
 
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+      const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
-    if (testCase.intentionalTerminalCompletion) {
       expect(dispatchCronDeliveryMock).toHaveBeenCalled();
       expect(result.status).toBe("ok");
       expect(result.error).toBeUndefined();
-      return;
-    }
-    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron isolated run completed without a final assistant payload");
-    expect(result.delivered).toBe(false);
-  });
-
-  it("marks empty message-tool attempts without source delivery as cron errors", async () => {
-    mockAgentRun({
-      didSendViaMessagingTool: true,
-      messagingToolSentTargets: [],
-    });
-    mockAnnounceOutcome();
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron isolated run completed without a final assistant payload");
-    expect(result.delivered).toBe(false);
-  });
+    },
+  );
 
   it("keeps explicit silent replies as successful cron completions", async () => {
     const { resolveCronPayloadOutcome } =

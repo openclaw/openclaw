@@ -94,6 +94,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Collections
+import kotlin.math.sign
 
 private const val SIDEBAR_CATALOG_REFRESH_MS = 30_000L
 
@@ -130,7 +131,7 @@ internal enum class SidebarDestination(
 internal fun SidebarDestination.localizedLabel(): String =
   when (this) {
     SidebarDestination.Settings -> nativeString("Settings")
-    SidebarDestination.Work -> nativeString("Work")
+    SidebarDestination.Work -> nativeString("Overview")
     SidebarDestination.Home -> nativeString("Home")
     SidebarDestination.Skills -> nativeString("Skills")
     SidebarDestination.Threads -> nativeString("Threads")
@@ -181,14 +182,6 @@ internal fun updateSidebarDestinationVisibility(
   return SidebarDestination.entries.map(SidebarDestination::stableId).filter(updated::contains)
 }
 
-private val Int.sign: Int
-  get() =
-    when {
-      this < 0 -> -1
-      this > 0 -> 1
-      else -> 0
-    }
-
 private const val SIDEBAR_SESSION_LIMIT = 8
 
 internal data class SidebarSessionPresentation(
@@ -232,33 +225,19 @@ internal fun sidebarSessionPresentation(
 internal fun sessionPresentationTitle(
   session: ChatSessionEntry,
   unnamedTitle: () -> String,
-): String {
-  val label = session.label?.trim()?.takeIf(String::isNotEmpty)
-  val displayName = session.displayName?.trim()?.takeIf(String::isNotEmpty)
-  val autoLabel = session.autoLabel?.trim()?.takeIf(String::isNotEmpty)
-  val localFallbackTitle = session.localFallbackTitle?.trim()?.takeIf(String::isNotEmpty)
-  if (label != null) {
-    return label
-  }
-  if (displayName != null) {
-    return displayName
-  }
-  if (autoLabel != null) {
-    return autoLabel
-  }
-  if (localFallbackTitle != null) {
-    return localFallbackTitle
-  }
-  return nativeString("New chat").takeIf { session.isDashboardSession() } ?: unnamedTitle()
-}
+): String =
+  session.label?.trim()?.takeIf(String::isNotEmpty)
+    ?: session.displayName?.trim()?.takeIf(String::isNotEmpty)
+    ?: session.autoLabel?.trim()?.takeIf(String::isNotEmpty)
+    ?: session.localFallbackTitle?.trim()?.takeIf(String::isNotEmpty)
+    ?: nativeString("New chat").takeIf { session.isDashboardSession() }
+    ?: unnamedTitle()
 
 private fun ChatSessionEntry.isDashboardSession(): Boolean {
   if (classification == "dashboard") return true
   val parts = key.split(':', limit = 4)
   return parts.size == 4 && parts[0] == "agent" && parts[2] == "dashboard"
 }
-
-internal fun sidebarSessionTitle(session: ChatSessionEntry): String = sessionPresentationTitle(session) { session.key }
 
 internal data class SidebarCatalogWorkspace(
   val stableId: String,
@@ -422,9 +401,6 @@ internal fun sidebarPalette(colors: ClawColors): SidebarPalette =
   )
 
 @Composable
-private fun sidebarPalette(): SidebarPalette = sidebarPalette(ClawTheme.colors)
-
-@Composable
 internal fun OpenClawSidebar(
   viewModel: MainViewModel,
   agents: List<GatewayAgentSummary>,
@@ -445,7 +421,7 @@ internal fun OpenClawSidebar(
   onSelectDestination: (SidebarDestination) -> Unit,
   rowHostBand: IntRect? = null,
 ) {
-  val palette = sidebarPalette()
+  val palette = sidebarPalette(ClawTheme.colors)
   val scope = rememberCoroutineScope()
   val lifecycle = LocalLifecycleOwner.current.lifecycle
   val scrollState = rememberScrollState()
@@ -533,6 +509,31 @@ internal fun OpenClawSidebar(
   val setSessionPinned: (String, String?, Boolean) -> Unit = { key, ownerAgentId, pinned ->
     scope.launch {
       viewModel.patchChatSession(key = key, ownerAgentId = ownerAgentId, pinned = pinned)
+    }
+  }
+  val sessionRows: @Composable (List<ChatSessionEntry>, SidebarSessionDragSource?) -> Unit = { entries, dragSource ->
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      entries.forEach { session ->
+        SidebarSessionRow(
+          session = session,
+          attention = attentionFor(listOf(sidebarAttentionSessionKey(session.key, session.ownerAgentId ?: selectedAgentId ?: defaultAgentId))),
+          rowHost = rowHost,
+          selected = session.key == activeSessionKey,
+          palette = palette,
+          onClick = { onSelectSession(session) },
+          onDragCommit =
+            if (canMutateSessions && dragSource != null) {
+              { direction ->
+                sidebarSessionPinnedAfterDrag(dragSource, direction)?.let { pinned ->
+                  setSessionPinned(session.key, session.ownerAgentId, pinned)
+                }
+              }
+            } else {
+              null
+            },
+          onDragActiveChange = if (dragSource == null) ({}) else onDragActiveChange,
+        )
+      }
     }
   }
   LaunchedEffect(
@@ -699,18 +700,7 @@ internal fun OpenClawSidebar(
                   modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
                 )
               } else {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                  searchResults.forEach { session ->
-                    SidebarSessionRow(
-                      session = session,
-                      attention = attentionFor(listOf(sidebarAttentionSessionKey(session.key, session.ownerAgentId ?: selectedAgentId ?: defaultAgentId))),
-                      rowHost = rowHost,
-                      selected = session.key == activeSessionKey,
-                      palette = palette,
-                      onClick = { onSelectSession(session) },
-                    )
-                  }
-                }
+                sessionRows(searchResults, null)
               }
             }
           }
@@ -776,29 +766,7 @@ internal fun OpenClawSidebar(
                 modifier = Modifier.padding(horizontal = 40.dp, vertical = 10.dp),
               )
             } else {
-              Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                pinnedSessions.forEach { session ->
-                  SidebarSessionRow(
-                    session = session,
-                    attention = attentionFor(listOf(sidebarAttentionSessionKey(session.key, session.ownerAgentId ?: selectedAgentId ?: defaultAgentId))),
-                    rowHost = rowHost,
-                    selected = session.key == activeSessionKey,
-                    palette = palette,
-                    onClick = { onSelectSession(session) },
-                    onDragCommit =
-                      if (canMutateSessions) {
-                        { direction ->
-                          sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Pinned, direction)?.let { pinned ->
-                            setSessionPinned(session.key, session.ownerAgentId, pinned)
-                          }
-                        }
-                      } else {
-                        null
-                      },
-                    onDragActiveChange = onDragActiveChange,
-                  )
-                }
-              }
+              sessionRows(pinnedSessions, SidebarSessionDragSource.Pinned)
             }
           }
 
@@ -916,29 +884,7 @@ internal fun OpenClawSidebar(
             } else {
               recentSections.forEach { section ->
                 section.title?.let { title -> SidebarSectionTitle(title, palette, Modifier.padding(start = 24.dp)) }
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                  section.entries.forEach { session ->
-                    SidebarSessionRow(
-                      session = session,
-                      attention = attentionFor(listOf(sidebarAttentionSessionKey(session.key, session.ownerAgentId ?: selectedAgentId ?: defaultAgentId))),
-                      rowHost = rowHost,
-                      selected = session.key == activeSessionKey,
-                      palette = palette,
-                      onClick = { onSelectSession(session) },
-                      onDragCommit =
-                        if (canMutateSessions) {
-                          { direction ->
-                            sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Recent, direction)?.let { pinned ->
-                              setSessionPinned(session.key, session.ownerAgentId, pinned)
-                            }
-                          }
-                        } else {
-                          null
-                        },
-                      onDragActiveChange = onDragActiveChange,
-                    )
-                  }
-                }
+                sessionRows(section.entries, SidebarSessionDragSource.Recent)
               }
             }
             if (recentPresentation.canExpandRecent) {

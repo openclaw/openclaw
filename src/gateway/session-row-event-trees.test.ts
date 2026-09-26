@@ -4,6 +4,7 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
@@ -54,7 +55,11 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
         },
       );
     }
-    const connection = createGatewayConnectionState({ bootId: "tree-events", cfg });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "tree-events",
+      cfg,
+    });
     const context = requestContext(cfg);
     context.chatAbortControllers = connection.chatAbortControllers;
     context.broadcastToConnIds = connection.broadcastToConnIds;

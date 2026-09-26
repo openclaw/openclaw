@@ -3,7 +3,7 @@
  */
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
-import { sessionDeliveryChannel } from "../../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../../utils/delivery-context.read.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import { waitForAnnounceRetryDelay } from "./subagent-announce-delivery-retry.js";
@@ -11,7 +11,6 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   getSubagentAnnounceRuntimeConfig,
   getSubagentRequesterSessionActivity,
-  isEmbeddedAgentRunActive,
   resolveSubagentRequesterSessionAbandonment,
   loadRequesterSessionEntry,
   queueSubagentAnnounceMessage,
@@ -35,16 +34,7 @@ export function resolveRequesterSessionActivity(
   if (!resolvedAgentId) {
     return { isActive: false };
   }
-  const activity = getSubagentRequesterSessionActivity(requesterSessionKey, resolvedAgentId);
-  if (activity.sessionId || activity.isActive) {
-    return activity;
-  }
-  const { entry } = loadRequesterSessionEntry(requesterSessionKey, resolvedAgentId);
-  const sessionId = entry?.sessionId;
-  return {
-    sessionId,
-    isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
-  };
+  return getSubagentRequesterSessionActivity(requesterSessionKey, resolvedAgentId);
 }
 
 // Backoff schedule for re-attempting an active-requester steer while the run is

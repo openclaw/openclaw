@@ -23,20 +23,18 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
   prepareLeaseDatabase: fixture.forbiddenNative,
   resolveLeaseDatabasePath: () => "/synthetic-state/lease.sqlite",
-  readLeaseDatabase: (_database: unknown, run: () => unknown) => run(),
-  withLeaseWriteTransaction: (_database: unknown, _label: string, run: () => unknown) => run(),
-}));
-vi.mock("./openclaw-state-lease-store.js", () => ({
-  readOpenClawStateLeaseExpiry: () =>
-    Date.now() < fixture.expiresAt ? fixture.expiresAt : undefined,
-  renewOpenClawStateLeaseInTransaction: () => {
+  verifyOpenClawStateLeaseOwnership: () => fixture.expiresAt,
+  renewOpenClawStateLease: () => {
     if (fixture.loseRenewal) {
-      return undefined;
+      throw new OpenClawStateLeaseError("Synthetic lease ownership was lost", {
+        code: "OPENCLAW_STATE_LEASE_LOST",
+      });
     }
     fixture.expiresAt = Date.now() + 30_000;
     return fixture.expiresAt;
   },
-  releaseOpenClawStateLeaseInTransaction: fixture.release,
+  releaseOpenClawStateLeaseBestEffort: async () => fixture.release(),
+  releaseOpenClawStateLease: fixture.release,
 }));
 vi.mock("./openclaw-state-lease-exclusion.js", () => ({
   createOpenClawStateLeaseExclusion: () => ({

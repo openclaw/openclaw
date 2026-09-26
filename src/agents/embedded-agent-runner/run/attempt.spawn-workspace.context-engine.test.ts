@@ -1320,12 +1320,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       return id === "orphan-leaf" ? orphanLeaf : undefined;
     });
     const replayedEntries: string[] = [];
-    hoisted.sessionManager.appendThinkingLevelChange.mockImplementation((...args: unknown[]) => {
-      replayedEntries.push(`thinking:${String(args[0])}`);
+    hoisted.sessionManager.appendThinkingLevelChange.mockImplementation(async (level) => {
+      replayedEntries.push(`thinking:${String(level)}`);
       return "replayed-thinking";
     });
-    hoisted.sessionManager.appendModelChange.mockImplementation((...args: unknown[]) => {
-      replayedEntries.push(`model:${String(args[0])}/${String(args[1])}`);
+    hoisted.sessionManager.appendModelChange.mockImplementation(async (provider, modelId) => {
+      replayedEntries.push(`model:${String(provider)}/${String(modelId)}`);
       return "replayed-model";
     });
     hoisted.sessionManager.appendCustomEntry.mockImplementation((...args: unknown[]) => {
@@ -1407,7 +1407,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       }
       return id === "orphan-leaf" ? orphanLeaf : undefined;
     });
-    hoisted.sessionManager.appendThinkingLevelChange.mockReturnValue("replayed-thinking");
+    hoisted.sessionManager.appendThinkingLevelChange.mockResolvedValue("replayed-thinking");
     hoisted.sessionManager.appendLabelChange.mockImplementation((targetId: unknown) => {
       throw new Error(`Entry ${String(targetId)} not found`);
     });

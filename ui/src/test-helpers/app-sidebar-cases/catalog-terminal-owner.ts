@@ -338,7 +338,7 @@ describe("AppSidebar catalog deletion", () => {
           });
         } else {
           gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-          await vi.advanceTimersByTimeAsync(200);
+          await vi.advanceTimersByTimeAsync(5_000);
         }
         expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.catalog.list"]);
 

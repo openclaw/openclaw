@@ -69,11 +69,10 @@ Gateway clients. Authorized non-owner senders can still use `sessions`,
 lists only the current bound or requester session; owner identity and
 `operator.admin` clients see all recent sessions.
 
-ACP has no request that adds input to a turn that is already running, so
-`/acp steer` does not change the in-flight turn. The instruction waits for that
-turn to finish, then runs as the next turn in the same session and context. The
-command replies after that turn completes. To redirect work in progress, run
-`/acp cancel` first, then send the new instruction.
+`/acp steer` queues a follow-up; it cannot add input to the running ACP turn.
+The instruction waits for that turn to finish, then runs in the same session
+and context. The command replies after the follow-up completes. To redirect
+work in progress, run `/acp cancel` first, then send the new instruction.
 
 `/acp status` shows the effective runtime options plus runtime-level and
 backend-level session identifiers. Unsupported-control errors surface

@@ -125,6 +125,7 @@ During `openclaw update`, a locally linked plugin with an explicit load path kee
 ```bash
 openclaw plugins reload <ids...>
 openclaw plugins reload <ids...> --json
+openclaw plugins reload <ids...> --wait
 ```
 
 Reload discovered plugins after editing their TypeScript source, imported helpers,
@@ -132,24 +133,51 @@ or manifest, including plugins selected through `plugins.load.paths`. The comman
 requires a running Gateway and waits for the replacement to finish without
 restarting it. Configured enablement is preserved, and unchanged
 plugins keep their runtime instances. JSON output includes `pluginIds`,
-`restartRequired: false`, and the applied runtime receipt with its generation
-and source digests when available. Multiple IDs use one Gateway reload request
+`restartRequired`, and the applied runtime receipt with its generation
+and source digests when available. The receipt's `selectedEntries` names the files
+the loader selected. CLI and tool output remind you to rebuild compiled output
+after editing its source; reload does not run the build. Multiple IDs use one Gateway reload request
 and one applied runtime generation. Repeated IDs are collapsed, and the Gateway
 resolves package siblings together. The request supports up to 64 distinct IDs.
 
-Before stopping a plugin's services or channels, replacement waits up to 60 seconds
-for its in-flight work to finish. If that work does not finish, the reload fails
-once and the previous plugin generation keeps serving. Retry
-`openclaw plugins reload <id>` after the work finishes.
+Busy plugins admit replacement and fence new retained work on the old instance.
+Existing agent runs keep their original callbacks while new runs wait for the
+replacement. Before stopping services or channels, replacement waits up to
+60 seconds for retained work and in-flight calls to finish. Detailed readiness
+and Gateway logs show the queued work count and deadline; the command waits for
+the final applied receipt. Successful publication emits `plugins.changed` and
+logs the applied replacement. If work exceeds the budget, the reload fails once
+and the previous generation resumes serving; unfinished runs are not forcibly
+disposed. Retry `openclaw plugins reload <id>` after that work finishes, or use
+`openclaw plugins reload <id> --wait` to wait without a deadline for admitted work.
 
-Cleanup is best effort. A successful replacement can return `warnings` when an
-old service or cleanup hook could not stop. Modules and native libraries may
-remain loaded after their registrations are removed. Inspect the warning before
-retrying; restart the Gateway if residual plugin behavior causes problems.
+`--wait` keeps new runs behind the same replacement gate. Press Ctrl+C to cancel
+the wait; disconnecting its Gateway request also cancels it. Before publication,
+cancellation restores the previous generation when recovery succeeds, without
+cancelling admitted runs. Once publication commits, cancellation does not undo it.
+Service shutdown, resource cleanup, and recovery keep their existing deadlines.
+Detailed readiness exposes the pending reload; an explicit wait has no drain
+deadline. Incoming messages retain their channel's existing queue and replay
+contract; this option does not add durable ingress to channels that lack it.
+Run this maintenance command outside a turn that itself holds the target plugin:
+waiting for that turn while it waits for reload cannot make progress.
+
+Replacement requires the previous registration's resource cleanup to finish
+before its successor acquires those resources. Failed cleanup can prevent
+replacement and automatic recovery; inspect the reported failure before retrying.
+The receipt can also include cleanup warnings. Modules and native libraries may
+remain loaded after their registrations are removed.
 
 Bundled plugins can reload while preserving their enabled or disabled policy.
-Reload does not rebuild compiled bundled code; changed compiled code still needs
-a build and Gateway restart. Reloading a discovered source does not create an
+Compiled bundled plugins reuse their process-loaded code when their registrations
+reload. If the plugin's files changed while its original module remains loaded,
+the result reports `restartRequired: true` with a warning, and CLI and tool
+output explain that a Gateway restart is needed to load edited code. Reload does
+not rebuild compiled bundled code; source installations also need a build.
+External captured sources return `restartRequired: false` after replacement.
+Reloading unchanged bundled files also returns `restartRequired: false`; channel
+and service registrations can be replaced without restarting the Gateway.
+Reloading a discovered source does not create an
 install record or grant permission to install, replace, or remove its files.
 
 Reload also works with externally managed config (`OPENCLAW_CONFIG_READONLY=1`)

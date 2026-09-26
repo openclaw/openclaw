@@ -1,5 +1,4 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-// Google Meet plugin module implements meet behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { googleApiError } from "./google-api-errors.js";
 
@@ -259,15 +258,20 @@ function assertResourceArray<T extends { name?: string }>(
   return resources;
 }
 
-async function requestGoogleMeetApi(params: {
-  accessToken: string;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  method?: "GET" | "POST";
-  body?: string;
-  auditContext: string;
-}) {
-  return await fetchWithSsrFGuard({
+async function requestGoogleMeetApi<T>(
+  params: {
+    accessToken: string;
+    path: string;
+    query?: Record<string, string | number | boolean | undefined>;
+    method?: "GET" | "POST";
+    body?: string;
+    auditContext: string;
+    errorPrefix: string;
+    scopes?: string[];
+  },
+  read: (response: Response) => Promise<T>,
+): Promise<T> {
+  const { response, release } = await fetchWithSsrFGuard({
     url: appendQuery(`${GOOGLE_MEET_API_BASE_URL}/${params.path}`, params.query),
     init: {
       method: params.method,
@@ -282,33 +286,24 @@ async function requestGoogleMeetApi(params: {
     auditContext: params.auditContext,
     timeoutMs: GOOGLE_MEET_REQUEST_TIMEOUT_MS,
   });
-}
-
-async function fetchGoogleMeetJson<T>(params: {
-  accessToken: string;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  auditContext: string;
-  errorPrefix: string;
-}): Promise<T> {
-  const { response, release } = await requestGoogleMeetApi({
-    accessToken: params.accessToken,
-    path: params.path,
-    query: params.query,
-    auditContext: params.auditContext,
-  });
   try {
     if (!response.ok) {
       throw await googleApiError({
         response,
         prefix: params.errorPrefix,
-        scopes: [GOOGLE_MEET_MEDIA_SCOPE],
+        scopes: params.scopes ?? [GOOGLE_MEET_MEDIA_SCOPE],
       });
     }
-    return await readProviderJsonResponse<T>(response, params.errorPrefix);
+    return await read(response);
   } finally {
     await release();
   }
+}
+
+function fetchGoogleMeetJson<T>(params: Parameters<typeof requestGoogleMeetApi>[0]): Promise<T> {
+  return requestGoogleMeetApi(params, (response) =>
+    readProviderJsonResponse<T>(response, params.errorPrefix),
+  );
 }
 
 async function listGoogleMeetCollection<T extends { name?: string }>(params: {
@@ -351,73 +346,43 @@ export async function fetchGoogleMeetSpace(params: {
   meeting: string;
 }): Promise<GoogleMeetSpace> {
   const name = normalizeGoogleMeetSpaceName(params.meeting);
-  const { response, release } = await requestGoogleMeetApi({
+  const payload = await fetchGoogleMeetJson<GoogleMeetSpace>({
     accessToken: params.accessToken,
     path: encodeSpaceNameForPath(name),
     auditContext: "google-meet.spaces.get",
+    errorPrefix: "Google Meet spaces.get",
+    scopes: [GOOGLE_MEET_SPACE_SCOPE],
   });
-  try {
-    if (!response.ok) {
-      throw await googleApiError({
-        response,
-        prefix: "Google Meet spaces.get",
-        scopes: [GOOGLE_MEET_SPACE_SCOPE],
-      });
-    }
-    const payload = await readProviderJsonResponse<GoogleMeetSpace>(
-      response,
-      "Google Meet spaces.get",
-    );
-    if (!payload.name?.trim()) {
-      throw new Error("Google Meet spaces.get response was missing name");
-    }
-    return payload;
-  } finally {
-    await release();
+  if (!payload.name?.trim()) {
+    throw new Error("Google Meet spaces.get response was missing name");
   }
+  return payload;
 }
 
 export async function createGoogleMeetSpace(params: {
   accessToken: string;
   config?: GoogleMeetSpaceConfig;
 }): Promise<GoogleMeetCreateSpaceResult> {
-  const body =
-    params.config && Object.keys(params.config).length > 0
-      ? JSON.stringify({ config: params.config })
-      : "{}";
-  const { response, release } = await requestGoogleMeetApi({
+  const hasConfig = params.config && Object.keys(params.config).length > 0;
+  const payload = await fetchGoogleMeetJson<GoogleMeetSpace>({
     accessToken: params.accessToken,
     path: "spaces",
     method: "POST",
-    body,
+    body: hasConfig ? JSON.stringify({ config: params.config }) : "{}",
     auditContext: "google-meet.spaces.create",
+    errorPrefix: "Google Meet spaces.create",
+    scopes: hasConfig
+      ? [GOOGLE_MEET_SPACE_CREATED_SCOPE, GOOGLE_MEET_SPACE_SETTINGS_SCOPE]
+      : [GOOGLE_MEET_SPACE_CREATED_SCOPE],
   });
-  try {
-    if (!response.ok) {
-      throw await googleApiError({
-        response,
-        prefix: "Google Meet spaces.create",
-        scopes:
-          params.config && Object.keys(params.config).length > 0
-            ? [GOOGLE_MEET_SPACE_CREATED_SCOPE, GOOGLE_MEET_SPACE_SETTINGS_SCOPE]
-            : [GOOGLE_MEET_SPACE_CREATED_SCOPE],
-      });
-    }
-    const payload = await readProviderJsonResponse<GoogleMeetSpace>(
-      response,
-      "Google Meet spaces.create",
-    );
-    if (!payload.name?.trim()) {
-      throw new Error("Google Meet spaces.create response was missing name");
-    }
-    const meetingUri = payload.meetingUri?.trim();
-    if (!meetingUri) {
-      throw new Error("Google Meet spaces.create response was missing meetingUri");
-    }
-    return { space: payload, meetingUri };
-  } finally {
-    await release();
+  if (!payload.name?.trim()) {
+    throw new Error("Google Meet spaces.create response was missing name");
   }
+  const meetingUri = payload.meetingUri?.trim();
+  if (!meetingUri) {
+    throw new Error("Google Meet spaces.create response was missing meetingUri");
+  }
+  return { space: payload, meetingUri };
 }
 
 export async function endGoogleMeetActiveConference(params: {
@@ -429,25 +394,19 @@ export async function endGoogleMeetActiveConference(params: {
     meeting: params.meeting,
   });
   const space = resolved.name;
-  const { response, release } = await requestGoogleMeetApi({
-    accessToken: params.accessToken,
-    path: `${encodeSpaceNameForPath(space)}:endActiveConference`,
-    method: "POST",
-    body: "{}",
-    auditContext: "google-meet.spaces.endActiveConference",
-  });
-  try {
-    if (!response.ok) {
-      throw await googleApiError({
-        response,
-        prefix: "Google Meet spaces.endActiveConference",
-        scopes: [GOOGLE_MEET_SPACE_CREATED_SCOPE],
-      });
-    }
-    return { space, ended: true };
-  } finally {
-    await release();
-  }
+  await requestGoogleMeetApi(
+    {
+      accessToken: params.accessToken,
+      path: `${encodeSpaceNameForPath(space)}:endActiveConference`,
+      method: "POST",
+      body: "{}",
+      auditContext: "google-meet.spaces.endActiveConference",
+      errorPrefix: "Google Meet spaces.endActiveConference",
+      scopes: [GOOGLE_MEET_SPACE_CREATED_SCOPE],
+    },
+    async () => undefined,
+  );
+  return { space, ended: true };
 }
 
 async function fetchGoogleMeetConferenceRecord(params: {
@@ -511,19 +470,25 @@ export async function fetchLatestGoogleMeetConferenceRecord(params: {
   };
 }
 
-export async function listGoogleMeetParticipants(params: {
-  accessToken: string;
-  conferenceRecord: string;
-  pageSize?: number;
-}): Promise<GoogleMeetParticipant[]> {
+type GoogleMeetConferenceResources = {
+  participants: GoogleMeetParticipant;
+  recordings: GoogleMeetRecording;
+  transcripts: GoogleMeetTranscript;
+  smartNotes: GoogleMeetSmartNote;
+};
+
+export function listGoogleMeetConferenceResources<K extends keyof GoogleMeetConferenceResources>(
+  collection: K,
+  params: { accessToken: string; conferenceRecord: string; pageSize?: number },
+): Promise<GoogleMeetConferenceResources[K][]> {
   const parent = normalizeConferenceRecordName(params.conferenceRecord);
-  return listGoogleMeetCollection<GoogleMeetParticipant>({
+  return listGoogleMeetCollection<GoogleMeetConferenceResources[K]>({
     accessToken: params.accessToken,
-    path: `${encodeResourceNameForPath(parent)}/participants`,
-    collectionKey: "participants",
+    path: `${encodeResourceNameForPath(parent)}/${collection}`,
+    collectionKey: collection,
     query: { pageSize: params.pageSize },
-    auditContext: "google-meet.conferenceRecords.participants.list",
-    errorPrefix: "Google Meet conferenceRecords.participants.list",
+    auditContext: `google-meet.conferenceRecords.${collection}.list`,
+    errorPrefix: `Google Meet conferenceRecords.${collection}.list`,
   });
 }
 
@@ -542,38 +507,6 @@ export async function listGoogleMeetParticipantSessions(params: {
   });
 }
 
-export async function listGoogleMeetRecordings(params: {
-  accessToken: string;
-  conferenceRecord: string;
-  pageSize?: number;
-}): Promise<GoogleMeetRecording[]> {
-  const parent = normalizeConferenceRecordName(params.conferenceRecord);
-  return listGoogleMeetCollection<GoogleMeetRecording>({
-    accessToken: params.accessToken,
-    path: `${encodeResourceNameForPath(parent)}/recordings`,
-    collectionKey: "recordings",
-    query: { pageSize: params.pageSize },
-    auditContext: "google-meet.conferenceRecords.recordings.list",
-    errorPrefix: "Google Meet conferenceRecords.recordings.list",
-  });
-}
-
-export async function listGoogleMeetTranscripts(params: {
-  accessToken: string;
-  conferenceRecord: string;
-  pageSize?: number;
-}): Promise<GoogleMeetTranscript[]> {
-  const parent = normalizeConferenceRecordName(params.conferenceRecord);
-  return listGoogleMeetCollection<GoogleMeetTranscript>({
-    accessToken: params.accessToken,
-    path: `${encodeResourceNameForPath(parent)}/transcripts`,
-    collectionKey: "transcripts",
-    query: { pageSize: params.pageSize },
-    auditContext: "google-meet.conferenceRecords.transcripts.list",
-    errorPrefix: "Google Meet conferenceRecords.transcripts.list",
-  });
-}
-
 export async function listGoogleMeetTranscriptEntries(params: {
   accessToken: string;
   transcript: string;
@@ -586,22 +519,6 @@ export async function listGoogleMeetTranscriptEntries(params: {
     query: { pageSize: params.pageSize },
     auditContext: "google-meet.conferenceRecords.transcripts.entries.list",
     errorPrefix: "Google Meet conferenceRecords.transcripts.entries.list",
-  });
-}
-
-export async function listGoogleMeetSmartNotes(params: {
-  accessToken: string;
-  conferenceRecord: string;
-  pageSize?: number;
-}): Promise<GoogleMeetSmartNote[]> {
-  const parent = normalizeConferenceRecordName(params.conferenceRecord);
-  return listGoogleMeetCollection<GoogleMeetSmartNote>({
-    accessToken: params.accessToken,
-    path: `${encodeResourceNameForPath(parent)}/smartNotes`,
-    collectionKey: "smartNotes",
-    query: { pageSize: params.pageSize },
-    auditContext: "google-meet.conferenceRecords.smartNotes.list",
-    errorPrefix: "Google Meet conferenceRecords.smartNotes.list",
   });
 }
 

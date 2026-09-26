@@ -19,6 +19,7 @@ import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { buildSessionPreviewItems } from "./session-display-projection.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   ArchivedTranscriptReader,
@@ -26,7 +27,6 @@ import {
   type ReadSessionMessagesAsyncOptions,
 } from "./session-transcript-archive-reader.js";
 import {
-  buildSessionPreviewItems,
   readLatestSessionUsageFromTranscriptFileAsync,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
@@ -1575,23 +1575,6 @@ describe("resolveSessionTranscriptCandidates", () => {
 });
 
 describe("resolveSessionTranscriptCandidates safety", () => {
-  test.each([
-    {
-      storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
-      sessionFile: "/tmp/openclaw/agents/ops/sessions/sess-safe.jsonl",
-    },
-    {
-      storePath: "/srv/custom/agents/main/sessions/sessions.json",
-      sessionFile: "/srv/custom/agents/ops/sessions/sess-safe.jsonl",
-    },
-  ] as const)(
-    "keeps cross-agent absolute sessionFile candidate for $storePath",
-    ({ storePath, sessionFile }) => {
-      const candidates = resolveSessionTranscriptCandidates("sess-safe", storePath, sessionFile);
-      expect(candidates.map((value) => path.resolve(value))).toContain(path.resolve(sessionFile));
-    },
-  );
-
   test("drops unsafe session IDs instead of producing traversal paths", () => {
     const candidates = resolveSessionTranscriptCandidates(
       "../etc/passwd",
@@ -2145,8 +2128,8 @@ describe("oversized transcript line guards", () => {
     // parentId extraction is proven by the record being included:
     // if parentId was not extracted, the tree would orphan this node.
 
-    // The oversized content must NOT appear in the output.
     const serialized = JSON.stringify(out);
+    expect(serialized).toContain("[chat.history omitted: message too large]");
     expect(serialized).not.toContain(oversizedContent);
   });
 

@@ -15,12 +15,9 @@ import {
   parseBrowserSessionTabRecord,
   sameBrowserSessionTabRecord,
   updateBrowserSessionTab,
+  withoutBrowserSessionTabCleanup,
 } from "./session-tab-store.js";
-
-type DurableTab = BrowserSessionTabRecord & {
-  kind: "durable";
-  storageKey: string;
-};
+import type { DurableTab } from "./session-tab-tracking.js";
 
 export type CleanupKind = "lifecycle" | "sweep";
 
@@ -35,6 +32,8 @@ type CloseTab = (tab: {
   profile?: string;
 }) => Promise<void>;
 export type CloseParams = {
+  /** Gates new cleanup claims, without revoking an already admitted close. */
+  isCurrent?: () => boolean;
   closeTab?: CloseTab;
   closeDurableTab?: (
     tab: DurableTab,
@@ -86,9 +85,6 @@ function matchesCleanupAttempt(
 ): current is BrowserSessionTabRecord {
   return Boolean(
     current &&
-    current.cleanupAttemptToken === tab.cleanupAttemptToken &&
-    current.cleanupRequestedAt === tab.cleanupRequestedAt &&
-    current.cleanupKind === tab.cleanupKind &&
     // Lifecycle activity may advance lastUsedAt without revoking mandatory
     // cleanup. Every other field, especially the generation, must still match.
     sameBrowserSessionTabRecord({ ...current, lastUsedAt: tab.lastUsedAt }, tab),
@@ -108,13 +104,10 @@ function deleteClaimedTab(tab: DurableTab, onWarn?: (message: string) => void): 
         if (!matchesCleanupAttempt(record, tab) || !record.dashboard) {
           return undefined;
         }
-        const {
-          cleanupRequestedAt: _requested,
-          cleanupAttemptToken: _token,
-          cleanupKind: _kind,
-          ...settled
-        } = record;
-        return { ...settled, dashboard: { ...record.dashboard, state: "stopped" } };
+        return {
+          ...withoutBrowserSessionTabCleanup(record),
+          dashboard: { ...record.dashboard, state: "stopped" },
+        };
       });
       return;
     }
@@ -135,7 +128,7 @@ async function closeCurrentDurableTab(
   // Empty session cleanup must not initialize Browser control or its CDP graph.
   const [{ getRuntimeConfig }, { resolveCdpControlPolicy }, { closeTrackedCdpTarget }, config] =
     await Promise.all([
-      import("../config/config.js"),
+      import("openclaw/plugin-sdk/runtime-config-snapshot"),
       import("./cdp-reachability-policy.js"),
       import("./cdp.helpers.js"),
       import("./config.js"),
@@ -177,7 +170,11 @@ export async function closeDurableTab(
   now: number,
   cleanupKind: CleanupKind,
 ): Promise<number> {
-  if (candidate.dashboard?.state === "active" || candidate.dashboard?.state === "stopped") {
+  if (
+    params.isCurrent?.() === false ||
+    candidate.dashboard?.state === "active" ||
+    candidate.dashboard?.state === "stopped"
+  ) {
     return 0;
   }
   const tab = claimCleanup(candidate, now, cleanupKind);

@@ -43,6 +43,7 @@ fn snapshot_value(
         "desktopSharing": sharing,
         "permissions": { "entries": [] },
         "voice": { "supported": false, "wakeEnabled": false },
+        "browser": { "chromeSetupActions": ["inspect", "install", "verify"] },
     })
 }
 
@@ -66,6 +67,10 @@ mod tests {
         assert_eq!(wire["capabilities"]["desktopSharingEnabled"], false);
         assert_eq!(wire["desktopSharing"], json!({"state":"off"}));
         assert_eq!(wire["permissions"], json!({"entries":[]}));
+        assert_eq!(
+            wire["browser"],
+            json!({"chromeSetupActions":["inspect","install","verify"]})
+        );
         assert_eq!(
             wire["voice"],
             json!({"supported":false,"wakeEnabled":false})
@@ -109,8 +114,24 @@ pub async fn native_device_settings_request(
         .authorize(&webview, &token)
         .ok_or("This desktop settings document is no longer current.")?
         .generation;
+    let mut setup_result = None;
     match message.get("type").and_then(Value::as_str) {
         Some("status") => {}
+        Some("chrome-extension-setup") => {
+            let action = crate::chrome_setup::parse_request(message)?;
+            let current_app = app.clone();
+            setup_result = Some(
+                tauri::async_runtime::spawn_blocking(move || {
+                    current_app
+                        .state::<crate::DesktopState>()
+                        .inner
+                        .chrome_setup
+                        .run_for_document(current_app.clone(), action, generation)
+                })
+                .await
+                .map_err(|_| "Chrome setup could not complete. Try again.")??,
+            );
+        }
         Some("set")
             if message.get("key").and_then(Value::as_str)
                 == Some("capabilities.desktopSharingEnabled") =>
@@ -137,6 +158,9 @@ pub async fn native_device_settings_request(
         .is_some_and(|current| current.generation == generation)
     {
         return Err("The desktop settings document changed.".into());
+    }
+    if let Some(result) = setup_result {
+        return Ok(result);
     }
     let snapshot = snapshot(&app).ok_or("Desktop sharing is not ready.")?;
     publish(&app);

@@ -1,15 +1,15 @@
 // Gateway tool runtime-identity tests keep current-turn authority fail closed.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { withAgentRuntimeExecutionLineage } from "../../gateway/agent-runtime-execution-lineage.js";
 import {
-  createAgentRuntimeApprovalAuthorityValidator,
   mintAgentRuntimeIdentityToken,
   verifyAgentRuntimeIdentityToken,
 } from "../../gateway/agent-runtime-identity-token.js";
 import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
+import { createPreparedTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -722,7 +722,7 @@ describe("gateway tool runtime identity", () => {
     "rejects late $method registration after permission change (ambient lifetime: $ambient)",
     async ({ method, ambient }, testContext) => {
       mocks.callGateway.mockResolvedValue({ id: "approval" });
-      const manager = createTestApprovalManager<{
+      const { manager } = await createPreparedTestApprovalManager<{
         command: string;
         title: string;
         description: string;
@@ -758,8 +758,8 @@ describe("gateway tool runtime identity", () => {
             oldRecord.agentRuntimeDelegatedAuthority = oldIdentity.delegatedAuthority;
             // The request is already dispatched, but has not registered its pending card.
             oldGeneration.abort(new Error("Permission change"));
-            expect(() => manager.register(oldRecord, 2_000)).toThrow("no longer active");
-            expect(manager.listPendingRecords()).toHaveLength(0);
+            await expect(manager.register(oldRecord, 2_000)).rejects.toThrow("no longer active");
+            expect(await manager.listPendingRecords()).toHaveLength(0);
 
             await callGatewayTool(method, {}, {}, { signal: nextGeneration.signal });
             const nextCall = mocks.callGateway.mock.calls.at(-1)?.[0] as CallGatewayOptions;
@@ -775,10 +775,10 @@ describe("gateway tool runtime identity", () => {
               "next-generation",
             );
             nextRecord.agentRuntimeDelegatedAuthority = nextIdentity.delegatedAuthority;
-            const decision = manager.register(nextRecord, 2_000);
+            const decision = (await manager.register(nextRecord, 2_000)).decision;
             const waiter = manager.awaitDecision(nextRecord.id);
-            expect(manager.listPendingRecords()).toHaveLength(1);
-            manager.resolve(nextRecord.id, "allow-once");
+            expect(await manager.listPendingRecords()).toHaveLength(1);
+            await manager.resolve(nextRecord.id, "allow-once");
             await expect(decision).resolves.toBe("allow-once");
             expect(manager.projectDecisionIfActive(nextRecord.id, await waiter)).toBe("allow-once");
           },
@@ -787,8 +787,8 @@ describe("gateway tool runtime identity", () => {
         outerLifetime.abort();
         oldGeneration.abort();
         nextGeneration.abort();
-        for (const record of manager.listPendingRecords()) {
-          manager.resolve(record.id, "deny");
+        for (const record of await manager.listPendingRecords()) {
+          await manager.resolve(record.id, "deny");
         }
       }
     },

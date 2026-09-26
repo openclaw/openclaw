@@ -2,13 +2,9 @@
 // sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  ErrorCodes,
-  errorShape,
-  validateUpdateRunParams,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
+import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
@@ -24,17 +20,14 @@ import {
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import {
   type RestartSentinelPayload,
   writeRestartSentinel,
   formatDoctorNonInteractiveHint,
 } from "../../infra/restart-sentinel.js";
-import {
-  normalizeGatewayRestartDelayMs,
-  resolveGatewayRestartDeferralTimeoutMs,
-  scheduleGatewayRestart,
-} from "../../infra/restart.js";
+import { normalizeGatewayRestartDelayMs, scheduleGatewayRestart } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import {
@@ -84,21 +77,24 @@ import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import {
+  admitGatewayUpdateRequest,
+  retainUpdateRequesterAuthority,
   createUnexpectedUpdateFailureResult,
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
 } from "./update-admission.js";
 import { updateReportHandler } from "./update-report.js";
 import { updateStatusHandlers } from "./update-status.js";
-import { assertValidParams } from "./validation.js";
 
 const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-running";
 
 export const updateHandlers: GatewayRequestHandlers = {
   ...updateStatusHandlers,
   "update.report": updateReportHandler,
-  "update.run": async ({ params, respond, client, context }) => {
-    if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
+  "update.run": async (request) => {
+    const { respond, client, context, sessionMutationCommitGuard } = request;
+    const params = await admitGatewayUpdateRequest(request);
+    if (!params) {
       return;
     }
     const actor = resolveControlPlaneActor(client);
@@ -142,7 +138,21 @@ export const updateHandlers: GatewayRequestHandlers = {
             (sessionKey && isInternalMessageChannel(requesterChannel ?? deliveryContext?.channel))
           ? "control-ui"
           : "api";
-    const noticeTarget = resolveUpdateRunNoticeTarget({
+    const requesterInput = params.requester ? { ...params.requester } : undefined;
+    const requesterAuthority =
+      requesterInput?.channel && !isInternalMessageChannel(requesterInput.channel)
+        ? await prepareCommandOwnerAuthority(config, requesterInput)
+        : undefined;
+    const requester = requesterInput && {
+      ...requesterInput,
+      ...(requesterAuthority ? { authorizationSource: requesterAuthority.source ?? "" } : {}),
+    };
+    const retainedRequesterAuthority = retainUpdateRequesterAuthority(
+      requester,
+      requesterAuthority,
+      getConfig,
+    );
+    const noticeTarget = await resolveUpdateRunNoticeTarget({
       cfg: config,
       sessionKey,
       explicitDeliveryContext: deliveryContext,
@@ -154,7 +164,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
     const origin = {
       doctorHint: formatDoctorNonInteractiveHint(),
-      ...(params.requester ? { requester: params.requester } : {}),
+      ...(requester ? { requester } : {}),
       ...(sessionKey ? { sessionKey } : {}),
       ...(deliveryContext
         ? {
@@ -199,21 +209,30 @@ export const updateHandlers: GatewayRequestHandlers = {
     let ackQueued = false;
     let acknowledgement: string | undefined;
     let outcomeMessage: string | undefined;
+    const assertUpdateAdmissionCurrent = () => {
+      try {
+        sessionMutationCommitGuard?.();
+      } catch {
+        outcomeMessage =
+          "This update no longer has a live requester principal or scheduled operator admission. Ask the operator to run the update again.";
+        throw new UpdatePreMutationError("owner_required", outcomeMessage);
+      }
+    };
     let ownsUpdateOutcome = false;
     let adoptedCampaignId: string | undefined;
     const refuseUnauthorizedChatUpdate = () => {
-      const requester = params.requester;
       // Chat update authority is revocable; internal or channel-less requesters
       // retain the operator authority established at admission.
       if (!requester?.channel || isInternalMessageChannel(requester.channel)) {
         return false;
       }
       const currentConfig = getConfig();
-      const reason = !isConfiguredCommandOwner(currentConfig, requester)
-        ? "owner_required"
-        : !isRestartEnabled(currentConfig)
-          ? "restart-disabled"
-          : undefined;
+      const reason =
+        !requester.authorizationSource || !requesterAuthority?.isCurrent(currentConfig)
+          ? "owner_required"
+          : !isRestartEnabled(currentConfig)
+            ? "restart-disabled"
+            : undefined;
       if (!reason) {
         return false;
       }
@@ -245,7 +264,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       return;
     }
     const { createUpdateRunNotifier } = await import("../update-run-notice.runtime.js");
-    const notify = createUpdateRunNotifier(run, getConfig, context.deps, noticeTarget);
+    const notify = await createUpdateRunNotifier(run, getConfig, context.deps, noticeTarget);
     const sentinelMeta: UpdateRestartSentinelMeta = {
       runId,
       ...(sessionKey ? { sessionKey } : {}),
@@ -319,12 +338,6 @@ export const updateHandlers: GatewayRequestHandlers = {
         adoptedCampaign?.target.kind === "package"
           ? adoptedCampaign.target.version.trim() || undefined
           : undefined;
-      if (adoptedCampaign) {
-        context?.logGateway?.info(
-          `update.run adopted campaign ${adoptedCampaign.campaignId} ${formatControlPlaneActor(actor)}`,
-          { target: adoptedCampaign.target },
-        );
-      }
       const devTarget = explicitDevTarget ?? adoptedDevTarget;
       recordUpdateRunPhase(runId, "requested", {
         ...(adoptedCampaign
@@ -337,6 +350,13 @@ export const updateHandlers: GatewayRequestHandlers = {
           ...(adoptedPackageTargetVersion ? { version: adoptedPackageTargetVersion } : {}),
         },
       });
+      if (adoptedCampaign) {
+        gatewayUpdateCampaign.bindRun(adoptedCampaign.campaignId, runId);
+        context?.logGateway?.info(
+          `update.run adopted campaign ${adoptedCampaign.campaignId} ${formatControlPlaneActor(actor)}`,
+          { target: adoptedCampaign.target },
+        );
+      }
       sentinelMeta.target = devTarget
         ? `${devTarget.upstreamRef}@${devTarget.upstreamSha}`
         : adoptedPackageTargetVersion
@@ -463,23 +483,23 @@ export const updateHandlers: GatewayRequestHandlers = {
             return;
           }
           assertForegroundRespawnEnabled();
+          assertUpdateAdmissionCurrent();
           const started = await startManagedServiceUpdateHandoff({
             runId,
+            requesterAuthority: retainedRequesterAuthority,
             beforePark: async () => {
               const assertMayPark = () => {
                 const current = getUpdateRun(runId);
                 if (current?.status !== "running") {
                   throw new Error("Update run disappeared before Gateway parking.");
                 }
+                const currentConfig = getConfig();
+                retainedRequesterAuthority.assertCurrent();
                 if (foregroundOrigin) {
-                  const currentConfig = getConfig();
                   if (
                     !managedHandoffOwner ||
                     !claimManagedServiceUpdateHandoff(managedHandoffOwner) ||
-                    !isRestartEnabled(currentConfig) ||
-                    (params.requester?.channel &&
-                      !isInternalMessageChannel(params.requester.channel) &&
-                      !isConfiguredCommandOwner(currentConfig, params.requester))
+                    !isRestartEnabled(currentConfig)
                   ) {
                     throw new Error("Foreground update authority changed before parking.");
                   }
@@ -504,7 +524,7 @@ export const updateHandlers: GatewayRequestHandlers = {
                 });
               }
             },
-            requester: params.requester,
+            requester,
             root: installRoot,
             timeoutMs,
             restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
@@ -638,6 +658,9 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     if (managedHandoffOwner) {
       try {
+        if (sentinelPersisted) {
+          assertUpdateAdmissionCurrent();
+        }
         if (
           !sentinelPersisted ||
           !(await transferManagedServiceUpdateHandoff(managedHandoffOwner))

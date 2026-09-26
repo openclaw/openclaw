@@ -1,3 +1,6 @@
+import path from "node:path";
+import { afterEach, beforeEach } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -26,4 +29,17 @@ export async function withStateDirEnv<T>(
       await closeSessionSqliteDatabasesForTest();
     }
   });
+}
+
+export function useSessionStoreFixture(prefix: string): () => string {
+  const tempDirs = createTempDirTracker();
+  let storePath: string;
+  beforeEach(() => {
+    storePath = path.join(tempDirs.make(prefix), "sessions.json");
+  });
+  afterEach(async () => {
+    await closeSessionSqliteDatabasesForTest();
+    tempDirs.cleanup();
+  });
+  return () => storePath;
 }

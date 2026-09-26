@@ -1,15 +1,22 @@
-/** Exact local runtime artifact identity for verified Codex setup turns. */
+/** Local executable or configured-service identity for verified Codex turns. */
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathInside, sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveWindowsExecutablePath } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { resolvePackagedCodexNativeCommand } from "./managed-binary.js";
+import {
+  captureCodexConfiguredConnection,
+  finalizeCodexConfiguredConnection,
+  isCodexConfiguredConnectionArtifact,
+  validateCodexConfiguredConnectionCapture,
+  type CodexConfiguredConnectionCapture,
+} from "./runtime-artifact-connection.js";
 import type { CodexAppServerSpawnIdentity } from "./spawn-identity.js";
 import {
   resolveCodexAppServerSpawnEnv,
@@ -25,7 +32,6 @@ const MAX_ARTIFACT_DEPTH = 64;
 const MAX_ARTIFACT_ENTRIES = 32_768;
 const MAX_ARTIFACT_FILES = 8192;
 const MAX_ARTIFACT_TOTAL_BYTES = 1024n * 1024n * 1024n;
-const READ_CHUNK_BYTES = 64 * 1024;
 const SAFE_NODE_OPTIONS_BOOLEAN_FLAGS = new Set([
   "--enable-network-family-autoselection",
   "--network-family-autoselection",
@@ -70,10 +76,13 @@ type CodexRuntimeArtifactDescriptor = CodexRuntimeFilesystemDescriptor &
     userAgentFingerprint?: string;
   }>;
 
-export type CodexAppServerRuntimeArtifactCapture = Readonly<{
-  descriptor: CodexRuntimeFilesystemDescriptor;
-  contentFingerprint: string;
-}>;
+export type CodexAppServerRuntimeArtifactCapture =
+  | CodexConfiguredConnectionCapture
+  | Readonly<{
+      kind: "local-executable";
+      descriptor: CodexRuntimeFilesystemDescriptor;
+      contentFingerprint: string;
+    }>;
 
 type StableBigIntFileStat = Readonly<{
   dev: bigint;
@@ -151,30 +160,23 @@ async function readRegularFileFingerprint(params: {
     if (params.budget.totalBytes + before.size > MAX_ARTIFACT_TOTAL_BYTES) {
       throw new Error("Codex runtime artifact exceeds the bounded content size");
     }
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
-    let offset = 0n;
-    while (offset < before.size) {
-      throwIfAborted(params.signal);
-      const length = Number(
-        before.size - offset < BigInt(buffer.length) ? before.size - offset : BigInt(buffer.length),
-      );
-      const { bytesRead } = await handle.read(buffer, 0, length, Number(offset));
-      if (bytesRead === 0) {
-        throw new Error(`Codex runtime artifact changed while reading: ${params.filePath}`);
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      offset += BigInt(bytesRead);
-    }
+    const hash = await sha256File(handle, {
+      maxBytes: Number(before.size),
+      signal: params.signal,
+    });
     const after = await handle.stat({ bigint: true });
     const current = await fs.stat(params.filePath, { bigint: true });
-    if (!sameOpenedFile(before, after) || !sameOpenedFile(after, current)) {
+    if (
+      BigInt(hash.bytes) !== before.size ||
+      !sameOpenedFile(before, after) ||
+      !sameOpenedFile(after, current)
+    ) {
       throw new Error(`Codex runtime artifact changed while reading: ${params.filePath}`);
     }
     params.budget.fileCount += 1;
     params.budget.totalBytes += after.size;
     return {
-      contentHash: hash.digest("hex"),
+      contentHash: hash.digest,
       mode: String(after.mode),
       size: String(after.size),
     };
@@ -659,8 +661,7 @@ function validateFilesystemDescriptorShape(descriptor: CodexRuntimeFilesystemDes
   }
   if (
     descriptor.managedCommandOrder !== undefined &&
-    descriptor.managedCommandOrder !== "package-first" &&
-    descriptor.managedCommandOrder !== "desktop-first"
+    !["package-first", "package-only", "desktop-first"].includes(descriptor.managedCommandOrder)
   ) {
     throw new Error("Invalid Codex managed command order");
   }
@@ -759,9 +760,13 @@ export async function captureCodexAppServerRuntimeArtifactBeforeStart(params: {
   spawnIdentity: Readonly<CodexAppServerSpawnIdentity>;
   signal?: AbortSignal;
 }): Promise<CodexAppServerRuntimeArtifactCapture> {
+  throwIfAborted(params.signal);
+  if (params.startOptions.transport !== "stdio") {
+    return captureCodexConfiguredConnection(params.startOptions);
+  }
   const descriptor = await captureFilesystemDescriptor(params);
   const contentFingerprint = await hashSelectedArtifactFiles(descriptor, params.signal);
-  return { descriptor, contentFingerprint };
+  return { kind: "local-executable", descriptor, contentFingerprint };
 }
 
 /** Rechecks startup bytes and adds initialized handshake identity. */
@@ -772,6 +777,10 @@ export async function finalizeCodexAppServerRuntimeArtifact(params: {
   runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
   signal?: AbortSignal;
 }): Promise<AgentHarnessRuntimeArtifactBinding> {
+  throwIfAborted(params.signal);
+  if (params.before.kind === "configured-connection") {
+    return finalizeCodexConfiguredConnection({ ...params, before: params.before });
+  }
   const afterDescriptor = await captureFilesystemDescriptor(params);
   const afterContentFingerprint = await hashSelectedArtifactFiles(afterDescriptor, params.signal);
   if (
@@ -805,6 +814,9 @@ export function validateCodexAppServerRuntimeArtifactCapture(
   binding: AgentHarnessRuntimeArtifactBinding,
   capture: CodexAppServerRuntimeArtifactCapture,
 ): boolean {
+  if (capture.kind === "configured-connection") {
+    return validateCodexConfiguredConnectionCapture(binding, capture);
+  }
   try {
     const expectedDescriptor = decodeArtifactId(binding.id);
     const {
@@ -845,8 +857,19 @@ export function readCodexAppServerClientRuntimeArtifact(
 export async function validateCodexAppServerRuntimeArtifact(
   binding: AgentHarnessRuntimeArtifactBinding,
   signal?: AbortSignal,
+  startOptions?: CodexAppServerStartOptions,
 ): Promise<boolean> {
   try {
+    throwIfAborted(signal);
+    if (isCodexConfiguredConnectionArtifact(binding.id)) {
+      return Boolean(
+        startOptions &&
+        validateCodexConfiguredConnectionCapture(
+          binding,
+          captureCodexConfiguredConnection(startOptions),
+        ),
+      );
+    }
     const descriptor = decodeArtifactId(binding.id);
     const contentFingerprint = await hashSelectedArtifactFiles(descriptor, signal);
     return binding.fingerprint === fingerprintBinding(descriptor, contentFingerprint);

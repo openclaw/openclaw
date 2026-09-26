@@ -9,6 +9,7 @@ import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-backgro
 import { uiConversationMatches } from "../../../lib/sessions/session-key.ts";
 import {
   isActiveTask,
+  newestTaskSnapshot,
   taskDetail,
   taskRuntimeLabel,
   taskTimestampMs,
@@ -21,14 +22,12 @@ import {
   backgroundTaskStatusLabel,
   backgroundTaskIsExecuting,
   backgroundTaskDeliveryLabel,
-  newestTaskSnapshot,
   STATUS_TONES,
 } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { renderDiffStatChips } from "./chat-diff-render.ts";
 import { renderChatHistoryBoundary } from "./chat-history-boundary.ts";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
-import { renderTaskActivityFeed } from "./chat-task-activity-feed.ts";
 import {
   loadOlderTaskTranscript,
   readTaskTranscript,
@@ -38,6 +37,7 @@ import {
   type TaskDetailHost,
   type TaskTranscriptHost,
 } from "./chat-task-detail-state.ts";
+import { renderChatTranscriptFeed } from "./chat-transcript-feed.ts";
 
 registerBackgroundTasksEnglish();
 
@@ -53,28 +53,23 @@ export function renderTaskDetailPanel(params: {
   if (!task) {
     resetTaskDetail(params.host);
     const error = taskId ? backgroundTasks.taskDetailErrors.get(taskId) : undefined;
-    if (
+    const loading =
       !error &&
       (backgroundTasks.loading ||
         (backgroundTasks.connected && backgroundTasks.tasks === null && !backgroundTasks.error) ||
-        (taskId && backgroundTasks.taskDetailLoadingIds.has(taskId)))
-    ) {
-      return html`
-        <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
-          ${renderTaskHeader(t("chat.backgroundTasks.taskDetailTitle"), undefined, undefined, params.onBack)}
-          ${renderBackgroundTasksError(backgroundTasks.error)}
-          ${renderPanelLoadingSkeleton("tasks", t("chat.backgroundTasks.detailLoading"))}
-        </div>
-      `;
-    }
+        (taskId && backgroundTasks.taskDetailLoadingIds.has(taskId)));
     return html`
       <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
         ${renderTaskHeader(t("chat.backgroundTasks.taskDetailTitle"), undefined, undefined, params.onBack)}
         ${renderBackgroundTasksError(backgroundTasks.error)}
-        <div class="sidebar-content chat-task-detail__state">
-          ${error ?? backgroundTasks.error ?? t("chat.backgroundTasks.taskUnavailable")}
-          ${error && taskId && backgroundTasks.onLoadDetail ? html`<button type="button" @click=${() => backgroundTasks.onLoadDetail?.({ id: taskId })}>${t("chat.backgroundTasks.detailRetry")}</button>` : nothing}
-        </div>
+        ${
+          loading
+            ? renderPanelLoadingSkeleton("tasks", t("chat.backgroundTasks.detailLoading"))
+            : html`<div class="sidebar-content chat-task-detail__state">
+                ${error ?? backgroundTasks.error ?? t("chat.backgroundTasks.taskUnavailable")}
+                ${error && taskId && backgroundTasks.onLoadDetail ? html`<button type="button" @click=${() => backgroundTasks.onLoadDetail?.({ id: taskId })}>${t("chat.backgroundTasks.detailRetry")}</button>` : nothing}
+              </div>`
+        }
       </div>
     `;
   }
@@ -245,7 +240,7 @@ function renderTaskObservation(task: TaskSummary, props: BackgroundTasksProps) {
   </div>`;
 }
 
-export function renderTaskTranscript(params: {
+function renderTaskTranscript(params: {
   host: TaskTranscriptHost;
   task: TaskSummary;
   transcriptSessionKey?: string;
@@ -255,6 +250,7 @@ export function renderTaskTranscript(params: {
     taskId: params.task.id,
   });
   const messages = load.status === "loaded" ? load.messages : [];
+  const capacityMessage = load.status === "loading" ? undefined : load.capacityMessage;
   const { loadFullAssistantMessage: loader, transcriptSessionKey: sessionKey } = params;
   const state = params.host.taskDetailState;
   const recovery =
@@ -282,21 +278,25 @@ export function renderTaskTranscript(params: {
     ${
       load.status === "error" || (load.status === "loaded" && load.error)
         ? html`<div class="chat-task-detail__state chat-task-detail__state--error" role="status">
-            ${t("chat.backgroundTasks.transcriptFailed")}
-            <button
-              class="btn btn--sm"
-              type="button"
-              ?disabled=${load.status === "loaded" && load.loading}
-              @click=${() => retryTaskTranscript(params.host)}
-            >
-              ${t("common.retry")}
-            </button>
+            ${capacityMessage ?? t("chat.backgroundTasks.transcriptFailed")}
+            ${
+              capacityMessage
+                ? nothing
+                : html`<button
+                    class="btn btn--sm"
+                    type="button"
+                    ?disabled=${load.status === "loaded" && load.loading}
+                    @click=${() => retryTaskTranscript(params.host)}
+                  >
+                    ${t("common.retry")}
+                  </button>`
+            }
           </div>`
         : nothing
     }
-    ${load.status === "loaded" && load.nextCursor ? renderChatHistoryBoundary({ hasMore: true, loading: load.loading, onShowEarlier: () => loadOlderTaskTranscript(params.host) }) : nothing}
+    ${load.status === "loaded" && load.nextCursor && !capacityMessage ? renderChatHistoryBoundary({ hasMore: true, loading: load.loading, onShowEarlier: () => loadOlderTaskTranscript(params.host) }) : nothing}
     ${load.status === "loaded" && !messages.length && !load.nextCursor && !load.error ? html`<div class="chat-task-detail__state">${t("chat.backgroundTasks.transcriptEmpty")}</div>` : nothing}
-    ${renderTaskActivityFeed(messages, recovery)}
+    ${renderChatTranscriptFeed(messages, recovery)}
   </div>`;
 }
 

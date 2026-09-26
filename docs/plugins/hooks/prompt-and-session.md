@@ -331,6 +331,11 @@ Pass `agentId` with an unscoped `sessionKey`, such as `global`, when multiple
 agents are configured. Enqueueing, consumption, and plugin session state stay in
 that agent's store; the owner selector is not part of the persisted injection.
 
+Consumption stays bound to the selected stored session. A reset or a conflicting
+legacy and qualified identity prevents the drain from consuming another
+conversation's queue. Reading or consuming a legacy alias does not rename its
+stored session key.
+
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
 `restart`. The host removes the owning plugin's persistent session extension

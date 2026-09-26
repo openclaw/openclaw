@@ -67,8 +67,6 @@ type QuestionPromptState = QuestionClientResolutionOwner & {
   onChange: () => void;
 };
 
-type QuestionAnswerValues = Record<string, string[]>;
-
 const REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 
 function readTimestamp(value: unknown): number | null {
@@ -162,10 +160,10 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
     const answers = parseQuestionAnswers(payload.answers);
     return answers ? { ...base, status: "answered", answers } : null;
   }
-  if (payload.status === "cancelled") {
-    return { ...base, status: "cancelled" };
+  if (payload.status === "cancelled" || payload.status === "expired") {
+    return { ...base, status: payload.status };
   }
-  return payload.status === "expired" ? { ...base, status: "expired" } : null;
+  return null;
 }
 
 function parseQuestionRequestedEvent(payload: unknown): QuestionRecord | null {
@@ -246,17 +244,18 @@ function scheduleExpiry(state: QuestionPromptState): void {
   );
 }
 
-function promptFromRecord(
+function storeQuestionRecord(
   state: QuestionPromptState,
+  id: string,
   record: QuestionRecord,
   previous?: QuestionPrompt,
-): QuestionPrompt {
+): void {
   const revision = ++state.revision;
   const drafts = previous?.drafts ?? new Map();
   if (record.status !== "pending") {
     clearSecretQuestionDrafts(record.questions, drafts);
   }
-  return {
+  const prompt: QuestionPrompt = {
     id: record.id,
     questions: record.questions,
     ...(record.agentId ? { agentId: record.agentId } : {}),
@@ -285,6 +284,12 @@ function promptFromRecord(
       : {}),
     revision,
   };
+  const unmatched = state.unmatchedResolutions.get(id);
+  if (unmatched) {
+    state.unmatchedResolutions.delete(id);
+    applyQuestionResolution(state, prompt, unmatched);
+  }
+  state.prompts.set(id, prompt);
 }
 
 function applyQuestionResolution(
@@ -348,13 +353,7 @@ export function handleQuestionPromptEvent(
     if (previous && previous.status !== "pending") {
       return true;
     }
-    const prompt = promptFromRecord(state, record, previous);
-    const unmatched = state.unmatchedResolutions.get(record.id);
-    if (unmatched) {
-      state.unmatchedResolutions.delete(record.id);
-      applyQuestionResolution(state, prompt, unmatched);
-    }
-    state.prompts.set(record.id, prompt);
+    storeQuestionRecord(state, record.id, record, previous);
     scheduleExpiry(state);
     state.onChange();
     return true;
@@ -376,10 +375,6 @@ function parseQuestionListResult(value: unknown): QuestionRecord[] | null {
   }
   const questions = value.questions.map(parseQuestionRequestedEvent);
   return questions.every((question) => question !== null) ? questions : null;
-}
-
-function parseQuestionGetResult(value: unknown): QuestionRecord | null {
-  return isRecord(value) ? parseQuestionRecord(value.question) : null;
 }
 
 function isQuestionNotFoundError(error: unknown): boolean {
@@ -423,13 +418,7 @@ async function refreshPendingQuestions(
   for (const record of records) {
     const previous = state.prompts.get(record.id);
     if (!previous || previous.revision <= startedAtRevision || previous.locallyExpired) {
-      const prompt = promptFromRecord(state, record, previous);
-      const unmatched = state.unmatchedResolutions.get(record.id);
-      if (unmatched) {
-        state.unmatchedResolutions.delete(record.id);
-        applyQuestionResolution(state, prompt, unmatched);
-      }
-      state.prompts.set(record.id, prompt);
+      storeQuestionRecord(state, record.id, record, previous);
     }
   }
   scheduleExpiry(state);
@@ -492,17 +481,11 @@ async function refreshPendingQuestions(
         state.onChange();
         return true;
       }
-      const record = parseQuestionGetResult(result.value);
+      const record = isRecord(result.value) ? parseQuestionRecord(result.value.question) : null;
       if (!record) {
         return false;
       }
-      const prompt = promptFromRecord(state, record, current);
-      const unmatched = state.unmatchedResolutions.get(candidate.id);
-      if (unmatched) {
-        state.unmatchedResolutions.delete(candidate.id);
-        applyQuestionResolution(state, prompt, unmatched);
-      }
-      state.prompts.set(candidate.id, prompt);
+      storeQuestionRecord(state, candidate.id, record, current);
       scheduleExpiry(state);
       // Publish each settled recovery immediately; a hung sibling must never
       // withhold an already-authoritative answer until its own deadline.
@@ -626,7 +609,7 @@ export function disposeQuestionPromptState(state: QuestionPromptState): void {
 async function resolveQuestionPrompt(
   state: QuestionPromptState,
   id: string,
-  resolution: { answers: QuestionAnswerValues } | { cancel: true },
+  resolution: { answers: QuestionAnswers["answers"] } | { cancel: true },
 ): Promise<void> {
   const prompt = state.prompts.get(id);
   const client = state.client;
@@ -682,11 +665,7 @@ async function resolveQuestionPrompt(
     current.submitting = false;
     if (current.status === "pending") {
       current.error = formatUiError(error);
-      current.revision = ++state.revision;
-      state.onChange();
-      return;
-    }
-    if (current.status === "answered" && !current.localResolutionConfirmed) {
+    } else if (current.status === "answered" && !current.localResolutionConfirmed) {
       current.answeredElsewhere = !questionAnswersEqual(current.submittedAnswers, current.answers);
     }
     current.revision = ++state.revision;
@@ -697,7 +676,7 @@ async function resolveQuestionPrompt(
 export async function submitQuestionPrompt(
   state: QuestionPromptState,
   id: string,
-  answers: QuestionAnswerValues,
+  answers: QuestionAnswers["answers"],
 ): Promise<void> {
   await resolveQuestionPrompt(state, id, { answers });
 }

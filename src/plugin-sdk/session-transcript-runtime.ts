@@ -30,6 +30,7 @@ import {
   selectVisibleTranscriptEventEntries,
   selectVisibleTranscriptEvents,
 } from "../config/sessions/transcript-visible-events.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type {
   LatestAssistantTranscriptText,
   SessionTranscriptAppendResult,
@@ -97,16 +98,13 @@ export async function appendSessionYieldContext(
 ): Promise<void> {
   const { message, assertCurrent, config, ...scope } = params;
   assertCurrent();
-  const result = await appendSessionTranscriptReport(
-    bindSessionTranscriptStoreScope(scope, config),
-    {
+  const target = bindSessionTranscriptStoreScope(scope, config);
+  const result = await withSessionTranscriptWriteAssertion(target, assertCurrent, () =>
+    appendSessionTranscriptReport(target, {
       kind: "custom",
       customTypes: [],
-      selectReport: () => {
-        assertCurrent();
-        return buildSessionsYieldContextMessage(message);
-      },
-    },
+      selectReport: () => buildSessionsYieldContextMessage(message),
+    }),
   );
   if (!result.ok) {
     throw new Error(`Could not persist sessions_yield context: ${result.error.code}`);

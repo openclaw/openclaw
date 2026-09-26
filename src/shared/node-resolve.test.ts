@@ -12,18 +12,9 @@ describe("shared/node-resolve", () => {
     expect(resolveNodeIdFromNodeList(nodes, "Mac Studio")).toBe("mac-123");
   });
 
-  it("supports optional default-node selection when query is blank", () => {
-    expect(
-      resolveNodeIdFromNodeList(nodes, "   ", {
-        allowDefault: true,
-        pickDefaultNode: (entries) => entries.find((entry) => entry.connected) ?? null,
-      }),
-    ).toBe("mac-123");
-  });
-
   it("passes the original node list to the default picker", () => {
     expect(
-      resolveNodeIdFromNodeList(nodes, "", {
+      resolveNodeIdFromNodeList(nodes, "   ", {
         allowDefault: true,
         pickDefaultNode: (entries) => {
           expect(entries).toBe(nodes);

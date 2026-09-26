@@ -146,9 +146,6 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
         },
         () => {
           synchronize();
-          if (connection.isCurrent(scope)) {
-            snapshot = { ...snapshot, ready: true };
-          }
         },
       )
       .finally(() => {

@@ -52,6 +52,15 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
   const selectedThinkingValue = hasThinkingOverride ? selection.value : "";
   const sliderIndex = selection.kind === "anchored" ? selection.index : 0;
   const sliderUnanchored = selection.kind === "unanchored";
+  // Binary providers can use a ranked wire value with the display label "On".
+  const maximumIndex = sliderStops.findLastIndex(
+    (stop) =>
+      stop.label !== "On" &&
+      ["minimal", "low", "medium", "high", "xhigh", "max"].includes(stop.value),
+  );
+  const sliderBoost = (index: number) =>
+    sliderStops[index]?.value === "ultra" ? "ultra" : index === maximumIndex ? "max" : "";
+  const committedBoost = sliderUnanchored ? "" : sliderBoost(sliderIndex);
   const sliderFillPercent = (index: number) =>
     sliderStops.length > 1 ? (index / (sliderStops.length - 1)) * 100 : 0;
   const defaultLevelLabel = formatEffortLabel(params.thinking.inherited.displayLabel);
@@ -82,6 +91,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
       input.value = String(sliderIndex);
     }
     input.style.setProperty("--reasoning-fill", `${sliderFillPercent(sliderIndex)}%`);
+    input.dataset.effortBoost = committedBoost;
     input.setAttribute("aria-valuetext", reasoningValueLabel);
     const panel = input.closest(".chat-controls__reasoning-panel");
     panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
@@ -101,6 +111,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
       return;
     }
     input.style.setProperty("--reasoning-fill", `${sliderFillPercent(Number(input.value))}%`);
+    input.dataset.effortBoost = sliderBoost(Number(input.value));
     input.setAttribute("aria-valuetext", formatEffortLabel(stop.label));
     const panel = input.closest(".chat-controls__reasoning-panel");
     panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
@@ -259,6 +270,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                                 .value=${String(sliderIndex)}
                                 style=${`--reasoning-fill: ${sliderFillPercent(sliderIndex)}%`}
                                 data-chat-thinking-slider="true"
+                                data-effort-boost=${committedBoost}
                                 data-chat-thinking-values=${sliderStops
                                   .map((stop) => stop.value)
                                   .join(",")}

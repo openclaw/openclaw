@@ -4,6 +4,12 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
 
+#if os(macOS)
+import AppKit
+import SwiftMath
+import SwiftUI
+#endif
+
 // MARK: - Scripted transport
 
 /// Replays scripted gateway traffic against `OpenClawChatViewModel` with deterministic
@@ -66,6 +72,10 @@ private final class ScriptedChatTransport: @unchecked Sendable, OpenClawChatTran
 
     func emit(_ event: OpenClawChatTransportEvent) {
         self.continuation.yield(event)
+    }
+
+    func finish() {
+        self.continuation.finish()
     }
 
     func sentRunIds() async -> [String] {
@@ -370,6 +380,91 @@ Closing paragraph with unicode — dashes, émojis 🦀🚀, and a trailing line
 /// `session.message` rows, duplicate delivery, out-of-order arrival, and reconnect
 /// convergence. Tracking: #100196.
 struct ChatStreamReplayTests {
+    #if os(macOS)
+    @Test @MainActor func `hosted stream updates appended replaced and reasoning content`() async throws {
+        _ = NSApplication.shared
+        let suiteName = "ChatStreamReplayTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let transport = ScriptedChatTransport(history: replayHistory())
+        let vm = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: transport,
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        let harness = StreamReplayHarness(transport: transport, vm: vm)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        func content(options: OpenClawChatDisplayOptions) -> OpenClawChatView {
+            OpenClawChatView(
+                viewModel: vm,
+                displayOptions: options,
+                showsAssistantAvatars: false,
+                showsComposer: false)
+        }
+        let host = NSHostingView(rootView: content(options: []))
+        window.contentView = host
+        defer {
+            vm.detachTransport()
+            transport.finish()
+            window.contentView = nil
+            window.close()
+        }
+
+        // Native math labels expose rendered content without global accessibility or focus state.
+        func expectRendered(_ expected: [String]) {
+            host.layoutSubtreeIfNeeded()
+            // Subview order is stacking order, not the vertical order seen by the reader.
+            let rendered = Self.mathLabels(in: host).map { label in
+                (label: label, frame: label.convert(label.bounds, to: host))
+            }.sorted { lhs, rhs in
+                host.isFlipped ? lhs.frame.minY < rhs.frame.minY : lhs.frame.maxY > rhs.frame.maxY
+            }
+            #expect(rendered.map { $0.label.latex } == expected)
+            #expect(rendered.allSatisfy {
+                $0.label.error == nil && $0.frame.width > 0 && $0.frame.height > 0 &&
+                    host.bounds.contains($0.frame)
+            })
+            #expect(zip(rendered, rendered.dropFirst()).allSatisfy { first, second in
+                host.isFlipped
+                    ? first.frame.maxY <= second.frame.minY
+                    : first.frame.minY >= second.frame.maxY
+            })
+        }
+
+        host.layoutSubtreeIfNeeded()
+        try await harness.converge("hosted replay bootstrap") { $0.healthOK && !$0.isLoading }
+        let runId = try await harness.send("show the equations")
+        let initial = "<think>$$r = 0$$</think>\n\n$$x = 1$$"
+        let appended = initial + "\n\n$$y = 2$$"
+        let replacement = "<think>$$r = 4$$</think>\n\n$$z = 3$$"
+        for (offset, entry) in [
+            (initial, ["x = 1"]),
+            (appended, ["x = 1", "y = 2"]),
+            (replacement, ["z = 3"]),
+        ].enumerated() {
+            let (text, expected) = entry
+            transport.emit(replayAssistantDeltaEvent(runId: runId, cumulativeText: text, seq: offset + 1))
+            try await harness.converge("hosted stream applied") { $0.streamingAssistantText == text }
+            expectRendered(expected)
+        }
+
+        // Keep the same host and model so the streaming body's retained state must invalidate.
+        host.rootView = content(options: [.reasoning])
+        expectRendered(["r = 4", "z = 3"])
+        host.rootView = content(options: [])
+        expectRendered(["z = 3"])
+    }
+
+    @MainActor private static func mathLabels(in view: NSView) -> [MTMathUILabel] {
+        if let label = view as? MTMathUILabel { return [label] }
+        return view.subviews.flatMap { Self.mathLabels(in: $0) }
+    }
+    #endif
+
     @Test func `live session message marker produces a visible transcript row`() async throws {
         let harness = try await StreamReplayHarness.bootstrapped()
         let frame = EventFrame(

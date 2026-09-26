@@ -9,7 +9,6 @@ import {
   reconcileRosterPresentationMetadata,
 } from "./reconcile.ts";
 import type {
-  SessionConnectionScope,
   SessionGateway,
   SessionListOptions,
   SessionListScope,
@@ -28,6 +27,7 @@ import {
   prepareSessionRefreshOptions,
   queuedSessionRefreshCompletion,
   retainSessionPaginationWindow,
+  sessionListAgentMatcher,
   sessionListEventMatcher,
   type ManagedSessionList,
   type QueuedSessionRefresh,
@@ -59,40 +59,6 @@ type SessionRosterRefreshHost = SessionListRefreshHost & {
 export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let gatewayAvailable = isGatewayAvailable(host.snapshot());
   let requestRevision = 0;
-  const eventRevisions = new WeakMap<
-    object,
-    {
-      revision: number;
-      scope: SessionConnectionScope | null;
-      lists: ReadonlySet<ManagedSessionList>;
-    }
-  >();
-  const captureEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
-      return { revision: requestRevision, scope: host.connection.capture() };
-    }
-    const previous = eventRevisions.get(payload);
-    if (previous !== undefined) {
-      return previous;
-    }
-    const matches = sessionListEventMatcher(payload);
-    const observation = {
-      revision: ++requestRevision,
-      scope: host.connection.capture(),
-      lists: new Set(
-        [...managedLists.values()]
-          .filter((entry) => matches(entry.scope, entry.snapshot.result))
-          .filter(
-            (entry) =>
-              entry.pending !== null ||
-              entry.snapshot.error !== null ||
-              !canApplySessionListSnapshot(entry.snapshot.result, payload, entry.scope),
-          ),
-      ),
-    };
-    eventRevisions.set(payload, observation);
-    return observation;
-  };
   // A queued foreground replacement owns publication; older loads may only finish for callers.
   let foregroundPublicationGeneration = 0;
   let inFlight: Promise<SessionRefreshAttempt | null> | null = null;
@@ -178,7 +144,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       sourceListScope && JSON.stringify(normalizeManagedSessionListQuery(sourceListScope));
     // Adopting a query's accepted row into the primary roster cannot make
     // that supplying query stale. Other membership projections still refresh.
-    scheduleManagedLists((entry) => matches(entry.scope, entry.snapshot.result), sourceKey);
+    scheduleManagedLists((entry) => matches(entry.query, entry.snapshot.result), sourceKey);
   };
 
   const refreshManagedList = createSessionManagedListRefresh(host, {
@@ -544,34 +510,36 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       gatewayAvailable = available;
     },
     captureReconciliation: () => observations.captureReconciliation(++requestRevision),
-    copyRow: observations.copyRow,
-    inheritRow: observations.inheritRow,
-    mergeRow: observations.mergeRow,
-    registerRow: observations.registerRow,
-    currentRow: observations.currentRow,
-    mergeRows: observations.mergeRows,
-    rowRevision: observations.rowRevision,
-    hasLiveObservation: observations.hasLiveObservation,
-    isCurrentRow: observations.isCurrentRow,
-    inherit: observations.inherit,
-    observeReadRow: observations.observeReadRow,
-    observeReadRows: observations.observeReadRows,
-    bindOwner: observations.bindOwner,
-    observeFields: observations.observeFields,
-    fieldObservation: observations.fieldObservation,
-    stageObservedRows: observations.stageObservedRows,
-    stageManagedResults: observations.stageManagedResults,
-    stageRunTerminal: observations.stageRunTerminal,
-    projectFields: observations.projectFields,
-    prepareProjection: observations.prepareProjection,
-    projectRows: observations.projectRows,
-    captureEvent,
+    observations,
+    captureEvent(payload: unknown) {
+      const scope = host.connection.capture();
+      const revision = ++requestRevision;
+      const matches = sessionListEventMatcher(payload);
+      const lists = new Set<ManagedSessionList>();
+      for (const entry of managedLists.values()) {
+        if (
+          matches(entry.query, entry.snapshot.result) &&
+          (entry.pending !== null ||
+            entry.snapshot.error !== null ||
+            !canApplySessionListSnapshot(entry.snapshot.result, payload, entry.scope))
+        ) {
+          lists.add(entry);
+        }
+      }
+      return {
+        revision,
+        scope,
+        lists,
+        affectsPrimary: matches({ agentId: lastListOptions.agentId }),
+        ...observations.captureEventDelivery(scope, revision),
+      };
+    },
     primaryList: () => primaryList,
     get requestRevision() {
       return requestRevision;
     },
     list: listReader.list,
-    listSnapshot(scope: SessionListScope): SessionListSnapshot {
+    listSnapshot(this: void, scope: SessionListScope): SessionListSnapshot {
       if (isPrimarySessionListQuery(scope)) {
         const { result, agentId, loading, error } = host.readState();
         return { result, agentId, loading, error };
@@ -594,7 +562,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         refreshManagedList(entry, { append: false, invalidated: true }),
       );
     },
-    refreshList(options: SessionRefreshOptions = {}): Promise<void> {
+    refreshList(this: void, options: SessionRefreshOptions = {}): Promise<void> {
       if (isPrimarySessionListQuery(options)) {
         return refresh(options);
       }
@@ -641,10 +609,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
     },
     reconcileMutation,
-    publishedRow: observations.publishedRow,
     /** Republishes every held list through `decorate` so a UI-owned overlay
      * reaches the archived/all snapshots too, not just the primary state. */
-    redecorateLists() {
+    redecorateLists(this: void) {
       const state = host.readState();
       const result = host.decorate(state.result, primaryList);
       const staged = observations.stageManagedResults(
@@ -672,26 +639,36 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         ? primaryWindows.presentation(replacementOptions(agentId), connection.epoch)
         : null;
     },
-    canApplyPrimarySnapshot: (payload: unknown) =>
-      !inFlight &&
-      host.readState().error === null &&
-      !host.readState().resultCached &&
-      canApplySessionListSnapshot(host.readState().result, payload, lastListOptions),
+    canApplyPrimarySnapshot(payload: unknown) {
+      const state = !inFlight && host.readState();
+      return (
+        state &&
+        state.error === null &&
+        !state.resultCached &&
+        canApplySessionListSnapshot(state.result, payload, lastListOptions)
+      );
+    },
     invalidateManagedLists,
     scheduleEvent(
       this: void,
-      options: { agentId?: string | null; primarySnapshotApplied?: boolean; event?: unknown } = {},
+      options: {
+        agentId?: string | null;
+        primarySnapshotApplied?: boolean;
+        affectsPrimary?: boolean;
+        affectedLists?: ReadonlySet<ManagedSessionList>;
+      } = {},
     ) {
-      const matches = sessionListEventMatcher(options.event, options.agentId);
-      const event = options.event;
-      const affected =
-        event && typeof event === "object" ? eventRevisions.get(event)?.lists : undefined;
+      const matchesAgent = sessionListAgentMatcher(options.agentId);
+      const affected = options.affectedLists;
       // Server events can invalidate a read; accepted row observations are reconciled into it.
       primaryWindows.invalidate(
-        (entry) => affected?.has(entry) ?? matches({ agentId: entry.scope.agentId }),
+        (entry) => affected?.has(entry) ?? matchesAgent(entry.query.agentId),
         lastListOptions,
       );
-      if (!options.primarySnapshotApplied && matches({ agentId: lastListOptions.agentId })) {
+      if (
+        !options.primarySnapshotApplied &&
+        (options.affectsPrimary ?? matchesAgent(lastListOptions.agentId))
+      ) {
         eventRefreshCoordinator.schedule();
       }
       if (affected) {

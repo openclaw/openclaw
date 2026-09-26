@@ -7,12 +7,59 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   createSqliteWorkerOperationAdmission,
   deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
   settleSqliteWorkerOperationContext,
   withSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-admission.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["grant", "revoke", "close"] as const)(
+  "waits for the live owner's %s decision when host scheduling is delayed",
+  (outcome) => {
+    const revoked = new Error("Synthetic owner authority revoked");
+    const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
+      if (outcome === "revoke") {
+        throw revoked;
+      }
+      grant();
+    });
+    const mutate = vi.fn();
+    // Advance a delayed native wait without sleeping or blocking the test host.
+    // The host has not run yet: elapsed time is not an authority decision.
+    vi.spyOn(Atomics, "wait")
+      .mockImplementationOnce(() => "timed-out")
+      .mockImplementationOnce(() => {
+        if (outcome === "close") {
+          admission.finish();
+        } else {
+          admission.service();
+        }
+        return "ok";
+      });
+    const write = () =>
+      withSqliteWorkerOperationAdmission({ port: admission.port }, () => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        mutate();
+      });
+    try {
+      if (outcome === "grant") {
+        expect(write).not.toThrow();
+        expect(mutate).toHaveBeenCalledOnce();
+        expect(admission.failure).toBeUndefined();
+      } else {
+        expect(write).toThrow("SQLite transaction admission was refused");
+        expect(mutate).not.toHaveBeenCalled();
+        expect(admission.failure).toMatchObject({
+          message: outcome === "revoke" ? revoked.message : "SQLite worker admission is closed",
+        });
+      }
+    } finally {
+      admission.finish();
+    }
+  },
+);
 
 it("reads a queued worker commit before settlement and message callbacks run", async () => {
   const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());

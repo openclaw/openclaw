@@ -7,6 +7,7 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
+import { t } from "../../i18n/index.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -22,7 +23,7 @@ import {
   toggleSidebarPanelExpanded,
   closeSlot,
   fitSidebarLayout,
-  isSidebarRegionCollapsed,
+  SIDEBAR_NARROW_BREAKPOINT_PX,
   openSlot,
   reorderPanel,
   sidebarDock,
@@ -155,6 +156,8 @@ export function sidebarRegionCallbacks(params: {
 }
 
 export function renderSidebarRegion(params: {
+  presentationId: string;
+  conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
   fetchFavicon?: LinkFaviconFetcher;
   availableWidth: number;
   callbacks: SidebarRegionCallbacks;
@@ -168,6 +171,7 @@ export function renderSidebarRegion(params: {
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
+  const panelIdPrefix = `chat-panel-${encodeURIComponent(params.presentationId)}`;
   const panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
   const panelOpen = params.layout.open === true;
   const hasPanels = params.layout.columns.length > 0;
@@ -183,7 +187,7 @@ export function renderSidebarRegion(params: {
   }
   const availableWidth =
     params.availableWidth > 0 ? params.availableWidth : Number.POSITIVE_INFINITY;
-  const collapsed = params.narrow || isSidebarRegionCollapsed(params.layout, availableWidth);
+  const collapsed = params.narrow || availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX;
   const main = sidebarMainPanel(params.layout);
   const chatMain = !main || main.slot === "conversation";
   const column = params.layout.columns[0];
@@ -210,6 +214,8 @@ export function renderSidebarRegion(params: {
           ? (regionLoading ?? null)
           : null
         : html`<openclaw-chat-sidebar-region
+            .panelIdPrefix=${panelIdPrefix}
+            .conversationTab=${params.conversationTab}
             .layout=${params.layout}
             .fetchFavicon=${params.fetchFavicon}
             .panelDefinitions=${panelDefinitions}
@@ -222,7 +228,10 @@ export function renderSidebarRegion(params: {
           ></openclaw-chat-sidebar-region>`
     }
     <div
+      id=${`${panelIdPrefix}-conversation`}
       class="sidebar-region__primary"
+      role="region"
+      aria-label=${t("chat.sidePanel.conversation")}
       data-region=${chatMain ? "main" : "side"}
       ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
     >
@@ -240,12 +249,9 @@ export function resolveSidebarLayoutForBoard(params: {
   let layout = params.layout;
   if (!params.board.available) {
     layout = closeSlot(layout, "dashboard");
-    return fitSidebarLayout(layout, params.paneWidth) ?? layout;
+  } else if (params.board.face === "dashboard" && layout.columns.length === 0) {
+    layout = openSlot(layout, "dashboard");
   }
-  if (params.board.face !== "dashboard" || layout.columns.length > 0) {
-    return fitSidebarLayout(layout, params.paneWidth) ?? layout;
-  }
-  layout = openSlot(layout, "dashboard");
   return fitSidebarLayout(layout, params.paneWidth) ?? layout;
 }
 

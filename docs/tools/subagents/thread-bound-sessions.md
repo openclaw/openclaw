@@ -103,5 +103,9 @@ remain spawnable while inheriting defaults.
 - Auto-archive applies equally at every sub-agent depth.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
 
+If a newer run takes over the same session, the older run stops claiming tabs for
+cleanup. Cleanup already admitted for a tab still settles against that tab's
+captured ownership; it does not remove a later registration.
+
 The `subagent_ended` plugin hook is best-effort. Hook execution or plugin runtime
 loading failures are logged and do not abort sub-agent cleanup.

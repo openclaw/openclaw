@@ -21,6 +21,8 @@ import {
   requireNodeWorkerProcessIdentity,
 } from "../../node-host/node-worker-process-identity.js";
 import * as commandRunner from "../../process/exec.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -48,7 +50,18 @@ function assertLegacyCommandJoined(
   result: Awaited<ReturnType<typeof commandRunner.runUtf8CommandWithTimeout>> | undefined,
 ) {
   if (result?.cleanup === "uncertain") {
-    throw new Error("Legacy finalizer process cleanup is unverified");
+    throw new Error("Legacy finalizer process cleanup is unverified", {
+      cause: {
+        pid: result.pid,
+        code: result.code,
+        signal: result.signal,
+        termination: result.termination,
+        cleanup: result.cleanup,
+        killed: result.killed,
+        stdoutTail: result.stdout.slice(-8192),
+        stderrTail: result.stderr.slice(-8192),
+      },
+    });
   }
 }
 
@@ -83,6 +96,66 @@ it.for(scenarios)(
   "shipped legacy grant completes migrated finalization and native restart: %s",
   { timeout: 90_000 },
   (scenario, { signal }) => runLegacyFinalizationScenario(scenario, signal),
+);
+
+it(
+  "reports migrated finalizer capabilities through its real validation entrypoint",
+  { timeout: 90_000 },
+  ({ signal }) =>
+    fixture.run(async () => {
+      signal.throwIfAborted();
+      const scratch = fs.realpathSync(fixture.createTempDir("legacy-native-check-"));
+      const configPath = path.join(scratch, "openclaw.json");
+      fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
+      let command: ReturnType<typeof commandRunner.runUtf8CommandWithTimeout> | undefined;
+      try {
+        command = commandRunner.runUtf8CommandWithTimeout(
+          [
+            testNodeExecPath,
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
+              testNodeExecPath,
+            ),
+            JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
+            "--check",
+          ],
+          {
+            env: {
+              ...process.env,
+              HOME: scratch,
+              USERPROFILE: scratch,
+              OPENCLAW_HOME: scratch,
+              OPENCLAW_STATE_DIR: scratch,
+              OPENCLAW_CONFIG_PATH: configPath,
+              TMPDIR: scratch,
+              TMP: scratch,
+              TEMP: scratch,
+            },
+            baseEnv: {},
+            cwd: process.cwd(),
+            timeoutMs: 60_000,
+            signal,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+          },
+        );
+        const result = await command;
+        assertLegacyCommandJoined(result);
+        signal.throwIfAborted();
+        const details = result.stderr + "\n" + result.stdout;
+        expect(result.termination, details).toBe("exit");
+        expect(result.code, details).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          executorDelegation: "pid-start-v1",
+          retainedOwnerBinding: true,
+          doctorConfigWrites: "pid-start-v1",
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        });
+      } finally {
+        await closeLegacyFixture(command, () => {});
+      }
+    }),
 );
 
 function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], signal: AbortSignal) {
@@ -387,6 +460,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       assertLegacyCommandJoined(result);
       signal.throwIfAborted();
       const details = result.stderr + "\n" + result.stdout;
+      expect(result.termination, details).toBe("exit");
       if (incumbent || refusedParent) {
         expect(result.code, details).not.toBe(0);
         expect(fs.existsSync(path.join(scratch, "receiver-pid"))).toBe(false);

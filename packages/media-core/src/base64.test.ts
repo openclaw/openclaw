@@ -1,5 +1,8 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes, isValidBase64 } from "./base64.js";
+import { measureBase64Memory } from "./base64.memory.test-support.js";
 
 describe("base64 helpers", () => {
   it("canonicalizeBase64 validates large payloads without cons-string overflow", () => {
@@ -8,19 +11,16 @@ describe("base64 helpers", () => {
     expect(canonicalizeBase64(encoded)).toBe(encoded);
   });
 
-  it("canonicalizeBase64 handles attachment-sized payloads without heap blow-up", () => {
+  it("canonicalizeBase64 handles attachment-sized payloads without heap blow-up", async ({
+    signal,
+  }) => {
     // Regression guard: the previous per-character append built one cons-string
     // node per input character (~25 bytes each, all live at once), so this
     // 16 MiB payload (21.3 M base64 chars) transiently needed >500 MB of heap.
     // The threshold is deliberately generous; the bounded-buffer implementation
     // returns already-canonical input unchanged.
-    const encoded = Buffer.alloc(16 * 1024 * 1024, 0xab).toString("base64");
-    const before = process.memoryUsage().heapUsed;
-
-    expect(canonicalizeBase64(encoded)).toBe(encoded);
-
-    const delta = process.memoryUsage().heapUsed - before;
-    expect(delta).toBeLessThan(100 * 1024 * 1024);
+    const memory = await measureBase64Memory("canonical", signal);
+    expect(memory.vmDelta).toBeLessThan(100 * 1024 * 1024);
   });
 
   it("canonicalizeBase64 cleans whitespace inside large payloads", () => {
@@ -30,26 +30,28 @@ describe("base64 helpers", () => {
     expect(canonicalizeBase64(wrapped)).toBe(encoded);
   });
 
-  it("canonicalizeBase64 handles one whitespace per character without heap blow-up", () => {
-    // Worst case for any run-collecting cleanup strategy: every data character
-    // is its own whitespace-delimited run (2.7 M runs here). The whole cleanup
-    // must stay bounded by the input length — one output buffer — not by the
-    // number of runs.
-    const encoded = Buffer.alloc(2 * 1024 * 1024, 0xab).toString("base64");
-    const shredded = encoded.split("").join("\n");
-    // heapUsed catches per-run JS objects (slices, rope nodes); arrayBuffers
-    // catches Buffer-backed strategies — bound both.
-    const usedBytes = () => {
-      const usage = process.memoryUsage();
-      return usage.heapUsed + usage.arrayBuffers;
-    };
-    const before = usedBytes();
-
-    expect(canonicalizeBase64(shredded)).toBe(encoded);
-
-    const delta = usedBytes() - before;
-    expect(delta).toBeLessThan(64 * 1024 * 1024);
+  it("canonicalizeBase64 handles one whitespace per character without heap blow-up", async ({
+    signal,
+  }) => {
+    // Keep the same coarse memory budget when every data character is its own
+    // whitespace-delimited run (2.7 M runs here).
+    const memory = await measureBase64Memory("shredded", signal);
+    expect(memory.vmDelta).toBeLessThan(64 * 1024 * 1024);
   });
+
+  it.skipIf(!process.versions.bun)(
+    "memory guards exclude predecessor allocations",
+    async ({ signal }) => {
+      const result = await runNodeScript(
+        [fileURLToPath(new URL("./base64.memory-ownership.test-support.mjs", import.meta.url))],
+        process.env,
+        15_000,
+        { signal, maxBuffer: 4096, executable: process.execPath },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+    },
+  );
 
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 

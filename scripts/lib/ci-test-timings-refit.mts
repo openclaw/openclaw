@@ -11,6 +11,8 @@ import { parseCompactSplitTimingKey } from "./vitest-shard-metadata.mts";
 export type CiTimingRun = {
   id: number;
   createdAt: string;
+  /** Failed workflows supply positive samples, never evidence that absent keys disappeared. */
+  completeInventory: boolean;
   logs: (
     | { kind: "uiE2e" | "repoE2e"; text: string }
     | { kind: "compact" | "tooling"; text: string; labels: string[] }
@@ -204,6 +206,11 @@ function readToolingLog(text: string, samples: Samples) {
       files: Map<string, number>;
       complete: boolean;
       declaredFiles: Set<string>;
+      singletonFile: string | undefined;
+      fileSummaryCount: number;
+      singletonSummary: boolean;
+      durationCount: number;
+      durationSeconds: number | undefined;
     }
   >();
   for (const line of text.split("\n")) {
@@ -223,13 +230,40 @@ function readToolingLog(text: string, samples: Samples) {
           files: new Map(),
           complete: false,
           declaredFiles: new Set(descriptor.includePatterns),
+          singletonFile:
+            !active.has(shard) &&
+            descriptor.configs.length === 1 &&
+            descriptor.configs[0] === "test/vitest/vitest.tooling.config.ts" &&
+            descriptor.includePatterns.length === 1
+              ? descriptor.includePatterns[0]
+              : undefined,
+          fileSummaryCount: 0,
+          singletonSummary: false,
+          durationCount: 0,
+          durationSeconds: undefined,
         });
       } else {
         const invocation = active.get(shard);
         if (event[3] === "0" && invocation?.complete) {
-          // Native file summaries include hooks. Older verbose-only logs supply
-          // case-cost sums, which can exceed wall time for concurrent cases.
-          for (const [file, duration] of new Map([...invocation.cases, ...invocation.files])) {
+          const files = new Map([...invocation.cases, ...invocation.files]);
+          const singletonFile = invocation.singletonFile;
+          if (
+            singletonFile !== undefined &&
+            files.size === 1 &&
+            files.has(singletonFile) &&
+            !invocation.files.has(singletonFile) &&
+            invocation.fileSummaryCount === 1 &&
+            invocation.singletonSummary &&
+            invocation.durationCount === 1 &&
+            invocation.durationSeconds !== undefined &&
+            Number.isFinite(invocation.durationSeconds) &&
+            invocation.durationSeconds > 0
+          ) {
+            // A complete one-file invocation includes startup and suite hooks;
+            // concurrent case sums can overstate its wall. Native file time wins.
+            files.set(singletonFile, invocation.durationSeconds);
+          }
+          for (const [file, duration] of files) {
             // Tooling fixtures print nested reporters. Only this shard's
             // declared inventory can supply measurements for its real files.
             if (invocation.declaredFiles.has(file)) {
@@ -264,8 +298,17 @@ function readToolingLog(text: string, samples: Samples) {
         );
       }
     }
-    if (/^Duration\s+[\d.]+m?s(?:\s|$)/u.test(row[2]!)) {
+    // Nested reporters can print their own summaries inside this shard's output.
+    // Count those too, but only an unwrapped native header qualifies the wall.
+    if (/\bTest Files\b/u.test(row[2]!)) {
+      invocation.fileSummaryCount += 1;
+      invocation.singletonSummary = /^Test Files\s+1 passed\s+\(1\)\s*$/u.test(row[2]!);
+    }
+    invocation.durationCount += row[2]!.match(/\bDuration\b/gu)?.length ?? 0;
+    const duration = /^Duration\s+([\d.]+)(m?s)(?:\s|$)/u.exec(row[2]!);
+    if (duration) {
       invocation.complete = true;
+      invocation.durationSeconds = seconds(duration[1]!, duration[2]!);
     }
   }
 }
@@ -317,10 +360,15 @@ function refitMap(
   contributingRuns = 0,
   observedParents?: Set<string>,
   minimumSamples = 2,
+  retainReleaseCosts = false,
 ) {
   const next = Object.fromEntries(
     Object.entries(previous).filter(
-      ([key]) => contributingRuns < MIN_PRUNE_RUNS || samples.has(key) || observedParents?.has(key),
+      ([key]) =>
+        (retainReleaseCosts && key.startsWith("release-full-")) ||
+        contributingRuns < MIN_PRUNE_RUNS ||
+        samples.has(key) ||
+        observedParents?.has(key),
     ),
   );
   for (const [key, values] of samples) {
@@ -378,6 +426,7 @@ export function refitTestTimings(
     const retained = uniqueRuns.get(run.id);
     if (retained) {
       retained.logs.push(...run.logs);
+      retained.completeInventory = retained.completeInventory && run.completeInventory;
     } else {
       uniqueRuns.set(run.id, { ...run, logs: [...run.logs] });
     }
@@ -433,6 +482,12 @@ export function refitTestTimings(
     }
   }
 
+  const completeInventoryRuns = new Set(
+    [...uniqueRuns.values()].filter((run) => run.completeInventory).map((run) => run.id),
+  );
+  const pruningRunCount = (profile: keyof typeof contributingRuns) =>
+    [...contributingRuns[profile]].filter((id) => completeInventoryRuns.has(id)).length;
+
   const measuredOverhead =
     overhead.length >= 2 ? Math.max(0, Math.min(5, median(overhead))) : undefined;
   const oldOverhead = previous?.uiE2e.perFileOverheadSeconds;
@@ -445,7 +500,7 @@ export function refitTestTimings(
       refitMap(
         runtimeSamples[profile],
         runtimePlacementSecondsMap(previous?.runtimePlacementTimings[profile]),
-        contributingRuns[profile].size,
+        pruningRunCount(profile),
       ),
     ).map(([identity, measuredSeconds]) =>
       Object.assign({}, runtimeDescriptors.get(identity)!, { seconds: measuredSeconds }),
@@ -456,20 +511,22 @@ export function refitTestTimings(
       blacksmith: refitMap(
         samples.blacksmith,
         previous?.compactGroupSeconds.blacksmith,
-        contributingRuns.blacksmith.size,
+        pruningRunCount("blacksmith"),
         observedParents.blacksmith,
       ),
       github: refitMap(
         samples.github,
         previous?.compactGroupSeconds.github,
-        contributingRuns.github.size,
+        pruningRunCount("github"),
         observedParents.github,
+        2,
+        true,
       ),
     },
     repoE2eFileSeconds: refitMap(
       samples.repoE2e,
       previous?.repoE2eFileSeconds,
-      contributingRuns.repoE2e.size,
+      pruningRunCount("repoE2e"),
     ),
     runtimePlacementTimings: {
       blacksmith: refitRuntime("blacksmith"),
@@ -477,7 +534,7 @@ export function refitTestTimings(
     },
     source: options.seedTooling
       ? `tooling seed from successful pull_request CI merge-ref runs: ${runIds.join(", ")}; retained other timings: ${previous?.source ?? "none"}`
-      : `median of ${runIds.length} successful CI and release-check runs: ${runIds.join(", ")}`,
+      : `median of successful timing jobs from ${runIds.length} CI and release-check runs: ${runIds.join(", ")}`,
     // PR plans may select only part of tooling. Absence is not evidence that
     // a file disappeared; preserve unobserved measurements across those windows.
     toolingFileSeconds: {
@@ -497,11 +554,7 @@ export function refitTestTimings(
       ),
     },
     uiE2e: {
-      fileSeconds: refitMap(
-        samples.uiE2e,
-        previous?.uiE2e.fileSeconds,
-        contributingRuns.uiE2e.size,
-      ),
+      fileSeconds: refitMap(samples.uiE2e, previous?.uiE2e.fileSeconds, pruningRunCount("uiE2e")),
       perFileOverheadSeconds: keepOverhead
         ? (oldOverhead ?? 0)
         : Math.round(measuredOverhead * 10) / 10,

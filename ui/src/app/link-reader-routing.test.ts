@@ -1,11 +1,8 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiLinkReaderDescriptor } from "../../../src/shared/control-ui-link-reader.js";
-import {
-  linkReaderResponseMatchesTarget,
-  linkReaderTargetKey,
-  resolveLinkReaderTarget,
-} from "../components/link-reader-target.ts";
+import { linkReaderResponseMatchesTarget } from "../components/link-reader-response.ts";
+import { linkReaderTargetKey, resolveLinkReaderTarget } from "../components/link-reader-target.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";

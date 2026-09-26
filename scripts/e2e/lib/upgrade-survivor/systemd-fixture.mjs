@@ -180,33 +180,32 @@ function runtimePaths() {
   return { ...JSON.parse(fs.readFileSync(file, "utf8")), uid: stat.uid, owner: `:1.${stat.ino}` };
 }
 
-function nativeRuntime() {
-  const paths = runtimePaths();
-  let pid;
-  let generation = 0;
+function livePid(value, processGroup = false) {
+  if (value === 0) {
+    return 0;
+  }
+  if (!Number.isSafeInteger(value) || value < 1 || value > 0xffffffff) {
+    fail();
+  }
   try {
-    const raw = fs.readFileSync(paths.pidFile, "utf8").trim();
-    if (!/^[1-9][0-9]*$/.test(raw)) {
-      fail();
-    }
-    pid = Number(raw);
-    if (!Number.isSafeInteger(pid) || pid > 0xffffffff) {
-      fail();
-    }
-    process.kill(pid, 0);
-    generation = Math.trunc(fs.statSync(paths.pidFile).mtimeMs * 1000);
-    if (process.platform === "linux") {
-      const state = fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1);
+    process.kill(processGroup ? -value : value, 0);
+    if (!processGroup && process.platform === "linux") {
+      const state = fs.readFileSync(`/proc/${value}/stat`, "utf8").split(") ").at(-1);
       if (state.startsWith("Z ")) {
-        pid = 0;
+        return 0;
       }
     }
+    return value;
   } catch (error) {
     if (!["ENOENT", "ESRCH"].includes(error.code)) {
       throw error;
     }
-    pid = 0;
+    return 0;
   }
+}
+
+function nativeRuntime() {
+  const paths = runtimePaths();
   const readOptional = (file) => {
     try {
       return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -219,12 +218,18 @@ function nativeRuntime() {
   };
   const last = readOptional(`${paths.daemonLog}.exit.json`)?.last;
   const counts = readOptional(`${paths.daemonLog}.runtime.json`);
+  const pid = livePid(counts?.pid ?? 0);
+  const supervisorPid = livePid(counts?.supervisorPid ?? 0);
+  const groupPid = livePid(counts?.groupPid ?? 0, true);
+  const unsettled = counts?.starting || supervisorPid || groupPid;
   const successful = !last || last.code === 0;
   return {
     pid,
-    active: pid ? "active" : "inactive",
-    sub: pid ? "running" : "dead",
-    generation,
+    // A manager draining descendants or awaiting restart is not a settled service.
+    active: pid ? "active" : unsettled ? "activating" : "inactive",
+    sub: pid ? "running" : unsettled ? "auto-restart" : "dead",
+    generation: counts?.entered ?? 0,
+    settled: !pid && !unsettled,
     restarts: counts?.restarts ?? 0,
     result: successful ? "success" : "exit-code",
     exitStatus: Number.isInteger(last?.code) ? last.code : (osConstants.signals[last?.signal] ?? 0),
@@ -321,22 +326,22 @@ function inspectLoadedRuntime(args) {
     ]);
     return true;
   }
-  if (
-    matches([
-      "get-property",
-      paths.owner,
-      object,
-      `${manager}.Service`,
-      "Result",
-      "NRestarts",
-      "MainPID",
-      "ExecMainStatus",
-      "ExecMainCode",
-      "KillMode",
-      "TasksCurrent",
-      "MemoryCurrent",
-    ])
-  ) {
+  const runtimeQuery = [
+    "get-property",
+    paths.owner,
+    object,
+    `${manager}.Service`,
+    "Result",
+    "NRestarts",
+    "MainPID",
+    "ExecMainStatus",
+    "ExecMainCode",
+    "KillMode",
+    "TasksCurrent",
+    "MemoryCurrent",
+  ];
+  const includeControlGroup = matches([...runtimeQuery, "ControlGroup"]);
+  if (matches(runtimeQuery) || includeControlGroup) {
     // systemd's unavailable uint64 sentinel stays unknown to the native reader.
     const unknown = Number(0xffff_ffff_ffff_ffffn);
     writeProperties([
@@ -346,8 +351,10 @@ function inspectLoadedRuntime(args) {
       ["i", runtime.exitStatus],
       ["i", runtime.exitCode],
       ["s", unit.killMode],
-      ["t", runtime.pid ? unknown : 0],
+      ["t", runtime.settled ? 0 : unknown],
       ["t", unknown],
+      // This process-group emulator does not create a native systemd cgroup.
+      ...(includeControlGroup ? [["s", ""]] : []),
     ]);
     return true;
   }
@@ -416,6 +423,40 @@ function recordCaller(file, parentPid, action) {
 
 function run() {
   const [operation, ...args] = process.argv.slice(2);
+  if (operation === "begin-start" && !args.length) {
+    const file = `${runtimePaths().daemonLog}.runtime.json`;
+    const claim = `${file}.start`;
+    const descriptor = fs.openSync(claim, "wx");
+    try {
+      // Serialize the settled check and publication across concurrent start callers.
+      if (!nativeRuntime().settled) {
+        fail("Previous survivor service generation is not settled.");
+      }
+      // Keep launch custody visible before the detached supervisor publishes its child.
+      // A failed launch remains unknown instead of authorizing offline restoration.
+      fs.writeFileSync(`${file}.pending`, JSON.stringify({ starting: true }));
+      fs.renameSync(`${file}.pending`, file);
+    } finally {
+      fs.closeSync(descriptor);
+      fs.rmSync(claim);
+    }
+    return;
+  }
+  if (operation === "is-active" && !args.length) {
+    const runtime = nativeRuntime();
+    process.exitCode = runtime.pid ? 0 : runtime.settled ? 3 : 1;
+    return;
+  }
+  if (operation === "runtime" && !args.length) {
+    const runtime = nativeRuntime();
+    console.log(`ActiveState=${runtime.active}\nSubState=${runtime.sub}\nMainPID=${runtime.pid}`);
+    if (runtime.exitCode) {
+      console.log(
+        `ExecMainStatus=${runtime.exitStatus}\nExecMainCode=${runtime.exitCode === 1 ? "exited" : "killed"}`,
+      );
+    }
+    return;
+  }
   if (operation === "record-caller" && args.length === 3) {
     recordCaller(...args);
     return;

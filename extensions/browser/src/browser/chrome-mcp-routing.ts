@@ -2,8 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { toErrorObject } from "../infra/errors.js";
 import {
   CHROME_MCP_SESSION_TARGET_PREFIX,
   CHROME_MCP_SNAPSHOT_REF_PREFIX,
@@ -44,7 +44,7 @@ export function getChromeMcpRoutingState(session: ChromeMcpSession): ChromeMcpRo
     withOperationLock: createAsyncLock(),
     targetIdByPageId: new Map(),
     nextTargetHandleId: 1,
-    snapshotRefById: new Map(),
+    snapshotsByTarget: new Map(),
     nextSnapshotRefId: 1,
   };
   return session.routing;
@@ -123,31 +123,20 @@ async function withChromeMcpOperationLock<T>(
   }
 }
 
-export function clearChromeMcpSnapshotRefsForTarget(
-  routing: ChromeMcpRoutingState,
-  targetId: string,
-): void {
-  for (const [refId, ref] of routing.snapshotRefById) {
-    if (ref.targetId === targetId) {
-      routing.snapshotRefById.delete(refId);
-    }
-  }
-}
-
 function updateChromeMcpTargetMappings(
   routing: ChromeMcpRoutingState,
   targetIdByPageId: Map<number, string>,
 ): void {
   for (const [pageId, targetId] of routing.targetIdByPageId) {
     if (!targetIdByPageId.has(pageId)) {
-      clearChromeMcpSnapshotRefsForTarget(routing, targetId);
+      routing.snapshotsByTarget.delete(targetId);
     }
   }
   routing.targetIdByPageId = targetIdByPageId;
 }
 
 /** UID-only MCP actions cannot distinguish collisions between renderer documents. */
-export function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
+function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
   const documents = new Map<string, { document: ChromeMcpSnapshotNode; documentUid?: string }>();
   const pending = [{ node: root, document: root, documentUid: normalizeOptionalString(root.id) }];
   while (pending.length > 0) {
@@ -182,14 +171,19 @@ export function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
   return documents;
 }
 
-export function wrapChromeMcpSnapshotRefs(
+export function registerChromeMcpSnapshot(
   session: ChromeMcpSession,
   targetId: string,
   root: ChromeMcpSnapshotNode,
-): ChromeMcpSnapshotNode {
+): { root: ChromeMcpSnapshotNode; documentUid: string } {
+  const documentUid = normalizeOptionalString(root.id);
+  if (!documentUid || root.role?.trim().toLowerCase() !== "rootwebarea") {
+    throw new Error("Chrome MCP snapshot did not contain a top-level document uid");
+  }
   const documents = validateChromeMcpSnapshotRefs(root);
   const routing = getChromeMcpRoutingState(session);
   const wrappedByUid = new Map<string, string>();
+  const refs = new Map<string, { uid: string; documentUid?: string }>();
 
   const wrapNode = (node: ChromeMcpSnapshotNode): ChromeMcpSnapshotNode => {
     const rawUid = normalizeOptionalString(node.id);
@@ -200,8 +194,7 @@ export function wrapChromeMcpSnapshotRefs(
         id = `${CHROME_MCP_SNAPSHOT_REF_PREFIX}${routing.sessionNonce}:${routing.nextSnapshotRefId}`;
         routing.nextSnapshotRefId += 1;
         wrappedByUid.set(rawUid, id);
-        routing.snapshotRefById.set(id, {
-          targetId,
+        refs.set(id, {
           uid: rawUid,
           documentUid: documents.get(rawUid)?.documentUid,
         });
@@ -247,7 +240,8 @@ export function wrapChromeMcpSnapshotRefs(
   if (!wrappedRoot) {
     throw new Error("Chrome MCP snapshot did not contain a root node");
   }
-  return wrappedRoot;
+  routing.snapshotsByTarget.set(targetId, { documentUid, refs });
+  return { root: wrappedRoot, documentUid };
 }
 
 export function resolveChromeMcpSnapshotRef(
@@ -255,8 +249,10 @@ export function resolveChromeMcpSnapshotRef(
   targetId: string,
   refId: string,
 ) {
-  const resolved = getChromeMcpRoutingState(session).snapshotRefById.get(refId);
-  if (!resolved || resolved.targetId !== targetId) {
+  const resolved = getChromeMcpRoutingState(session)
+    .snapshotsByTarget.get(targetId)
+    ?.refs.get(refId);
+  if (!resolved) {
     throw new Error(`Unknown ref "${refId}". Run a new snapshot and use a ref from that snapshot.`);
   }
   return resolved;

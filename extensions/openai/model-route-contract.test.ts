@@ -7,7 +7,6 @@ import {
   isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
 } from "./model-route-contract.js";
-import { buildOpenAICodexProviderHooks } from "./openai-chatgpt-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import { resolveModelRoutes } from "./provider-policy-api.js";
 
@@ -20,6 +19,14 @@ function resolveUnconfiguredModel(modelId: string) {
 }
 
 describe("OpenAI model route contract", () => {
+  it.each(["gpt-6-sol", "gpt-6-luna"])("resolves both auth routes for %s", (modelId) => {
+    const result = resolveUnconfiguredModel(modelId);
+    expect(result.kind === "routes" ? result.routes.map((route) => route.api) : []).toEqual([
+      "openai-responses",
+      "openai-chatgpt-responses",
+    ]);
+  });
+
   it("preserves custom model spelling while matching built-in routes case-insensitively", () => {
     expect(normalizeOpenAIModelRouteId("  openai/Future-MODEL  ")).toBe("openai/Future-MODEL");
     expect(normalizeOpenAIModelRouteId("future-model")).toBe("future-model");
@@ -31,9 +38,8 @@ describe("OpenAI model route contract", () => {
     expect(isOpenAISubscriptionOnlyRouteModelId("GPT-5.3-CODEX-SPARK")).toBe(true);
   });
 
-  it("keeps route eligibility aligned with both provider runtime surfaces", () => {
+  it("keeps route eligibility aligned with the registered provider", () => {
     const provider = buildOpenAIProvider();
-    const chatGPTHooks = buildOpenAICodexProviderHooks();
     const routeModelIds = [
       ...new Set([...OPENAI_PROVIDER_MODERN_MODEL_IDS, ...OPENAI_CHATGPT_MODERN_MODEL_IDS]),
     ];
@@ -58,10 +64,6 @@ describe("OpenAI model route contract", () => {
     for (const modelId of OPENAI_PROVIDER_MODERN_MODEL_IDS) {
       expect(provider.isModernModelRef?.({ provider: "openai", modelId })).toBe(true);
     }
-    for (const modelId of OPENAI_CHATGPT_MODERN_MODEL_IDS) {
-      expect(chatGPTHooks.isModernModelRef?.({ provider: "openai", modelId })).toBe(true);
-    }
-
     for (const modelId of dualRouteModelIds) {
       const resolution = resolveUnconfiguredModel(modelId);
       expect(

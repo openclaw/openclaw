@@ -1,6 +1,7 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { FastMode } from "../../api/types.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 
@@ -34,6 +35,7 @@ export function decodePalettePreference(value: unknown): PaletteSessionPreferenc
   delete selection.model;
   delete selection.agentRuntime;
   delete selection.thinkingLevel;
+  delete selection.fastMode;
   delete selection.worktreeName;
   return { agentId: normalizeAgentId(value.agentId), selection };
 }
@@ -70,7 +72,16 @@ export type NewSessionPreference = {
   model?: string;
   agentRuntime?: string;
   thinkingLevel?: string;
+  fastMode?: FastMode;
 };
+
+export function hasNewSessionModelPreference(
+  preference: NewSessionPreference | null | undefined,
+): preference is NewSessionPreference {
+  return Boolean(
+    preference?.model || preference?.thinkingLevel || preference?.fastMode !== undefined,
+  );
+}
 
 export function resolveNewSessionFolderPreference(
   preference: NewSessionPreference | null,
@@ -121,6 +132,9 @@ function normalizePreference(value: unknown): NewSessionPreference | null {
   const agentRuntime = normalizeOptionalString(value.agentRuntime);
   if (preference.model && agentRuntime) {
     preference.agentRuntime = agentRuntime;
+  }
+  if (typeof value.fastMode === "boolean" || value.fastMode === "auto") {
+    preference.fastMode = value.fastMode;
   }
   if (typeof value.worktree === "boolean") {
     preference.worktree = value.worktree;

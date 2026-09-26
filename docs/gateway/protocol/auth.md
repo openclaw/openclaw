@@ -114,6 +114,10 @@ Owner page: [Gateway pairing](/gateway/pairing) — the approval flow, device re
 - Gateways issue tokens per device + role.
 - Pairing approvals are required for new device IDs unless local
   auto-approval is enabled.
+- If approval overlaps a reconnect, the Gateway checks the current paired device
+  before completing the handshake. The approved key, role, scopes, and pinned
+  client metadata must authorize that connection; a consumed request alone does
+  not grant access.
 - Pairing auto-approval is centered on direct local loopback connects.
 - OpenClaw also has a narrow backend/container-local self-connect path for
   trusted shared-secret helper flows.

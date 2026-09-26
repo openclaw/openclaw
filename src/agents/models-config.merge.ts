@@ -78,8 +78,6 @@ type ProviderModelMergeOptions = {
   providerId: string;
   modelIdMatching?: "exact";
   sourceModelFields?: SourceModelFields;
-  preserveConfiguredModelMembership?: boolean;
-  retainDiscoveredModels?: boolean;
 };
 
 export function buildSourceModelFields(
@@ -176,14 +174,6 @@ export function mergeProviderModels(
         : "input" in explicitModel
           ? explicitModel.input
           : implicitModel.input;
-    if (options?.preserveConfiguredModelMembership) {
-      return Object.assign(
-        {},
-        explicitModel,
-        { cost },
-        sourceFields?.inputOmitted ? { input } : {},
-      );
-    }
 
     const contextWindow =
       asPositiveFiniteNumber(explicitModel.contextWindow) ??
@@ -197,35 +187,23 @@ export function mergeProviderModels(
       explicitMaxTokens === undefined
         ? implicitModel.maxTokensSource
         : explicitModel.maxTokensSource;
+    const catalogRoute = {
+      api: implicitModel.api ?? implicit.api,
+      baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
+    };
+    const configuredRoute = {
+      api: explicitModel.api ?? explicit.api ?? catalogRoute.api,
+      baseUrl: explicitModel.baseUrl ?? explicit.baseUrl ?? catalogRoute.baseUrl,
+    };
     const compat = resolveCatalogOwnedModelCompat({
-      catalogRoute: {
-        api: implicitModel.api ?? implicit.api,
-        baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
-      },
+      catalogRoute,
       catalogCompat: implicitModel.compat,
-      configuredRoute: {
-        api: explicitModel.api ?? explicit.api ?? implicitModel.api ?? implicit.api,
-        baseUrl:
-          explicitModel.baseUrl ?? explicit.baseUrl ?? implicitModel.baseUrl ?? implicit.baseUrl,
-      },
+      configuredRoute,
       configuredCompat: explicitModel.compat,
     });
     const contextSelection = explicitModel.contextWindows
       ? explicitModel
-      : modelTransportRoutesMatch(
-            {
-              api: implicitModel.api ?? implicit.api,
-              baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
-            },
-            {
-              api: explicitModel.api ?? explicit.api ?? implicitModel.api ?? implicit.api,
-              baseUrl:
-                explicitModel.baseUrl ??
-                explicit.baseUrl ??
-                implicitModel.baseUrl ??
-                implicit.baseUrl,
-            },
-          )
+      : modelTransportRoutesMatch(catalogRoute, configuredRoute)
         ? implicitModel
         : undefined;
 
@@ -257,15 +235,13 @@ export function mergeProviderModels(
     );
   });
 
-  if (!options?.preserveConfiguredModelMembership || options.retainDiscoveredModels) {
-    for (const implicitModel of implicitModels) {
-      const id = getModelId(implicitModel);
-      if (!id || seen.has(id)) {
-        continue;
-      }
-      seen.add(id);
-      mergedModels.push(implicitModel);
+  for (const implicitModel of implicitModels) {
+    const id = getModelId(implicitModel);
+    if (!id || seen.has(id)) {
+      continue;
     }
+    seen.add(id);
+    mergedModels.push(implicitModel);
   }
 
   return {

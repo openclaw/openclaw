@@ -1,7 +1,6 @@
 // Runtime helpers for bounded subprocess log tails and service runtime lookups.
 import { runCommandWithTimeout } from "../process/exec.js";
 
-export { buildGatewayConnectionDetails } from "../gateway/call.js";
 export { resolveGatewaySystemdServiceName } from "../daemon/constants.js";
 export { readSystemdServiceRuntime } from "../daemon/systemd.js";
 

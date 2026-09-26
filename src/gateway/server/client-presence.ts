@@ -3,6 +3,7 @@ import { presenceUserKey } from "../../shared/presence-user.js";
 import { buildAuthenticatedPresenceUser } from "../authenticated-presence-user.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
 import type { GatewayClient } from "../server-methods/types.js";
+import type { GatewayClientRegistry } from "./client-registry.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 const ACTIVITY_BROADCAST_INTERVAL_MS = 30_000;
@@ -87,20 +88,14 @@ export function refreshClientPresence(
 
 /** Records accepted human activity; copies and clients closed during admission cannot write. */
 export function recordClientPresenceActivity(
-  clients: ReadonlySet<GatewayWsClient>,
+  clients: GatewayClientRegistry,
   client: GatewayClient | null,
 ): boolean {
-  for (const live of clients) {
-    if (
-      live !== client ||
-      !isLiveClient(live) ||
-      !live.presenceKey ||
-      !live.personPresence ||
-      !presenceIdentity(live)
-    ) {
-      continue;
-    }
-    return refreshClientPresence(clients, live, Date.now());
-  }
-  return false;
+  const live = client?.connId ? clients.getByConnectionId(client.connId) : undefined;
+  return Boolean(
+    live &&
+    live === client &&
+    live.personPresence &&
+    refreshClientPresence(clients, live, Date.now()),
+  );
 }

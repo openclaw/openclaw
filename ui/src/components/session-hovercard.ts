@@ -15,6 +15,7 @@ import {
   renderPersonName,
   type PersonActivityRouting,
 } from "./person-activity-link.ts";
+import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { renderSessionColorDot } from "./session-color.ts";
 import {
   renderSessionHovercardContext,
@@ -62,23 +63,6 @@ type SessionHovercardInput = SessionHovercardContextInput & {
 let channelAvatarElementLoad: Promise<unknown> | undefined;
 function ensureChannelAvatarElement(): void {
   channelAvatarElementLoad ??= import("./channel-avatar.ts");
-}
-
-function pullRequestStateLabel(state: ControlUiSessionPullRequest["state"]): string {
-  return t(`sessionHovercard.states.${state}`);
-}
-
-function checksLabel(checks: NonNullable<ControlUiSessionPullRequest["checks"]>): string {
-  switch (checks.state) {
-    case "passing":
-      return t("sessionHovercard.checks.passing");
-    case "failing":
-      return t("sessionHovercard.checks.failing");
-    case "pending":
-      return t("sessionHovercard.checks.pending");
-    default:
-      return checks.state satisfies never;
-  }
 }
 
 function pullRequestStateIcon(state: ControlUiSessionPullRequest["state"]) {
@@ -151,7 +135,7 @@ function formatSessionAge(timestamp: number | null | undefined, suffix: boolean)
     }).format(diff <= 0 ? -value : value, unit);
   }
   if (i18n.getLocale().toLowerCase().startsWith("en")) {
-    const compactSuffix: Partial<Record<SessionAgeUnit, string>> = {
+    const compactSuffix: Record<SessionAgeUnit, string> = {
       second: "s",
       minute: "m",
       hour: "h",
@@ -160,10 +144,7 @@ function formatSessionAge(timestamp: number | null | undefined, suffix: boolean)
       month: "mo",
       year: "y",
     };
-    const unitSuffix = compactSuffix[unit];
-    if (unitSuffix) {
-      return `${value}${unitSuffix}`;
-    }
+    return `${value}${compactSuffix[unit]}`;
   }
   return new Intl.NumberFormat(i18n.getLocale(), {
     style: "unit",
@@ -282,6 +263,11 @@ function renderSessionAttribution({
   }
   const { creator, primaryIdentity, primaryLabel, participants, otherCount } = attribution;
   const primaryParticipant = creator ? undefined : participants[0];
+  const avatarPerson =
+    creator ??
+    (primaryParticipant
+      ? { ...primaryParticipant, id: primaryParticipant.identity.id }
+      : undefined);
   const primaryActivity =
     primaryIdentity?.type === "profile"
       ? personActivityLink(primaryIdentity.id, personActivity, primaryLabel)
@@ -295,8 +281,8 @@ function renderSessionAttribution({
   if (creator && row.channelAvatarUrl) {
     ensureChannelAvatarElement();
   }
-  const primaryAvatar = creator
-    ? row.channelAvatarUrl
+  const primaryAvatar =
+    creator && row.channelAvatarUrl
       ? html`<openclaw-channel-avatar
           class="session-hovercard__creator-avatar"
           .routeUrl=${row.channelAvatarUrl}
@@ -305,34 +291,21 @@ function renderSessionAttribution({
           .fallback=${avatarFallback}
           aria-hidden="true"
         ></openclaw-channel-avatar>`
-      : html`<openclaw-viewer-avatar
-          class="session-hovercard__creator-avatar"
-          .user=${{
-            id: creator.id,
-            name: creator.label,
-            avatarUrl: creator.avatarUrl,
-            watchedSessions: [],
-          }}
-          .markAsViewer=${false}
-          .identity=${creator.identity}
-          variant="session"
-          aria-hidden="true"
-        ></openclaw-viewer-avatar>`
-    : primaryParticipant
-      ? html`<openclaw-viewer-avatar
-          class="session-hovercard__creator-avatar"
-          .user=${{
-            id: primaryParticipant.identity.id,
-            name: primaryParticipant.label,
-            avatarUrl: primaryParticipant.avatarUrl,
-            watchedSessions: [],
-          }}
-          .markAsViewer=${false}
-          .identity=${primaryParticipant.identity}
-          variant="session"
-          aria-hidden="true"
-        ></openclaw-viewer-avatar>`
-      : nothing;
+      : avatarPerson
+        ? html`<openclaw-viewer-avatar
+            class="session-hovercard__creator-avatar"
+            .user=${{
+              id: avatarPerson.id,
+              name: avatarPerson.label,
+              avatarUrl: avatarPerson.avatarUrl,
+              watchedSessions: [],
+            }}
+            .markAsViewer=${false}
+            .identity=${avatarPerson.identity}
+            variant="session"
+            aria-hidden="true"
+          ></openclaw-viewer-avatar>`
+        : nothing;
   const remainingParticipants = creator ? participants : participants.slice(1);
   const attributionLabel = [
     primaryLabel,
@@ -407,9 +380,8 @@ function renderHeader(input: SessionHovercardInput) {
         ),
       ]
     : [];
-  const hasCreatedAt = typeof row.createdAt === "number" && Number.isFinite(row.createdAt);
-  const created = hasCreatedAt ? formatSessionAge(row.createdAt, true) : "";
-  const age = hasCreatedAt ? formatSessionAge(row.createdAt, false) : "";
+  const created = formatSessionAge(row.createdAt, true);
+  const age = formatSessionAge(row.createdAt, false);
   return html`<header class="session-hovercard__header">
     <span class="session-hovercard__heading">
       ${
@@ -453,8 +425,10 @@ function renderAgentNotepad(card: ProgressCard | null | undefined) {
 }
 
 function renderPullRequestRow(pullRequest: ControlUiSessionPullRequest) {
-  const state = pullRequestStateLabel(pullRequest.state);
-  const checks = pullRequest.checks ? checksLabel(pullRequest.checks) : null;
+  const state = t(`sessionHovercard.states.${pullRequest.state}`);
+  const checks = pullRequest.checks
+    ? t(`sessionHovercard.checks.${pullRequest.checks.state}`)
+    : null;
   const details = [
     pullRequest.title,
     checks,
@@ -596,6 +570,16 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
       lastMessagePreview
         ? html`<section class="session-hovercard__section session-hovercard__section--optional">
             <div class="session-hovercard__excerpt">${lastMessagePreview}</div>
+          </section>`
+        : nothing
+    }
+    ${
+      input.row?.attention?.kind === "error"
+        ? html`<section class="session-hovercard__section session-hovercard__error">
+            <span class="session-hovercard__error-icon" aria-hidden="true"
+              >${icons.alertTriangle}</span
+            >
+            <span>${sessionAttentionSubtitle(input.row.attention)}</span>
           </section>`
         : nothing
     }

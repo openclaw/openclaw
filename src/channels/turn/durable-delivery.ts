@@ -20,7 +20,6 @@ import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-par
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import {
-  durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
   sendStructuredDurableMessageBatchCore,
 } from "../message/send.js";
@@ -285,33 +284,27 @@ async function deliverInboundReplyWithMessageSendContext(
   if (send.status === "failed") {
     return { status: "failed" as const, error: send.error };
   }
+  const content =
+    send.status === "partial_failed" ? resolveAcceptedVisibleContent(send.results) : undefined;
+  const receiptDelivery = createChannelDeliveryResultFromReceipt({
+    receipt: send.receipt,
+    threadId: stringifyThreadId(threadId),
+    ...(replyToId ? { replyToId } : {}),
+    visibleReplySent: send.status !== "suppressed",
+    ...(content ? { content } : {}),
+    ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
+  });
   if (send.status === "partial_failed") {
-    const content = resolveAcceptedVisibleContent(send.results);
-    const delivery = createChannelDeliveryResultFromReceipt({
-      receipt: send.receipt,
-      threadId: stringifyThreadId(threadId),
-      ...(replyToId ? { replyToId } : {}),
-      visibleReplySent: true,
-      ...(content ? { content } : {}),
-      ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
-    });
     return {
       status: "failed" as const,
       error: createChannelPartialDeliveryError(send.error, {
-        ...delivery,
+        ...receiptDelivery,
         visibleReplySent: true,
       }),
       sentBeforeError: true,
     };
   }
 
-  const receiptDelivery = createChannelDeliveryResultFromReceipt({
-    receipt: send.receipt,
-    threadId: stringifyThreadId(threadId),
-    ...(replyToId ? { replyToId } : {}),
-    visibleReplySent: durableMessageBatchMayHaveReachedRecipient(send),
-    ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
-  });
   const delivery: ChannelDeliveryResult =
     send.status === "suppressed"
       ? { ...receiptDelivery, suppression: resolveDurableSuppression(send) }

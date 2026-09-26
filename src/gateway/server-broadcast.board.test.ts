@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
@@ -16,10 +15,12 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { boardStore } from "./board-store.js";
 import { progressCardStore } from "./progress-card-store.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { makeClient } from "./server-broadcast.test-helpers.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
@@ -42,154 +43,6 @@ import {
 } from "./session-sharing.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
-
-type RecordingSocket = {
-  readyState: number;
-  bufferedAmount: number;
-  close: ReturnType<typeof vi.fn>;
-  send: ReturnType<typeof vi.fn>;
-  events: string[];
-};
-
-function makeClient(
-  connId: string,
-  role: "node" | "operator",
-  scopes: string[],
-): { client: GatewayWsClient; socket: RecordingSocket } {
-  const events: string[] = [];
-  const socket: RecordingSocket = {
-    readyState: WebSocket.OPEN,
-    bufferedAmount: 0,
-    close: vi.fn(),
-    send: vi.fn((payload: string) => {
-      events.push((JSON.parse(payload) as { event: string }).event);
-    }),
-    events,
-  };
-  return {
-    client: {
-      socket: socket as unknown as GatewayWsClient["socket"],
-      connect: { role, scopes } as GatewayWsClient["connect"],
-      connId,
-      usesSharedGatewayAuth: false,
-    },
-    socket,
-  };
-}
-
-describe("read-capable operator event scope guards", () => {
-  it.each(["skills.changed", "users.prefs.changed", "plugins.changed"] as const)(
-    "delivers %s only to read-capable operators",
-    (event) => {
-      const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
-      const node = makeClient("node", "node", ["operator.read"]);
-      const read = makeClient("read", "operator", ["operator.read"]);
-      const write = makeClient("write", "operator", ["operator.write"]);
-      const admin = makeClient("admin", "operator", ["operator.admin"]);
-      const clients = new GatewayClientRegistry(
-        [pairing, node, read, write, admin].map((entry) => entry.client),
-      );
-      const { broadcast } = createGatewayBroadcaster({ clients });
-
-      broadcast(
-        event,
-        event === "users.prefs.changed"
-          ? { profileId: "profile-1", keys: ["ui.accent"] }
-          : event === "plugins.changed"
-            ? { generation: 1 }
-            : { reason: "remote-node" },
-      );
-
-      expect(pairing.socket.events).toEqual([]);
-      expect(node.socket.events).toEqual([]);
-      expect(read.socket.events).toEqual([event]);
-      expect(write.socket.events).toEqual([event]);
-      expect(admin.socket.events).toEqual([event]);
-    },
-  );
-});
-
-describe("Talk voice event scope guards", () => {
-  it.each(["requested", "cancelled"])(
-    "delivers a %s voice change only to targeted Talk-capable operators",
-    (phase) => {
-      const owner = makeClient("owner", "operator", ["operator.talk"]);
-      const writer = makeClient("writer", "operator", ["operator.write"]);
-      const admin = makeClient("admin", "operator", ["operator.admin"]);
-      const observer = makeClient("observer", "operator", ["operator.talk"]);
-      const reader = makeClient("reader", "operator", ["operator.read"]);
-      const node = makeClient("node", "node", ["operator.talk"]);
-      const targets = [owner, writer, admin, reader, node];
-      const { broadcastToConnIds } = createGatewayBroadcaster({
-        clients: new GatewayClientRegistry([...targets, observer].map((entry) => entry.client)),
-      });
-
-      broadcastToConnIds(
-        "talk.voice.change",
-        {
-          phase,
-          changeId: "change-1",
-          voiceSessionId: "voice-1",
-          sessionKey: "main",
-          voice: "ember",
-        },
-        new Set(targets.map((entry) => entry.client.connId)),
-      );
-
-      for (const allowed of [owner, writer, admin]) {
-        expect(allowed.socket.events).toEqual(["talk.voice.change"]);
-      }
-      for (const denied of [observer, reader, node]) {
-        expect(denied.socket.events).toEqual([]);
-      }
-    },
-  );
-});
-
-describe("update run event scope guards", () => {
-  it("delivers run identities only to administrators", () => {
-    const read = makeClient("read", "operator", ["operator.read"]);
-    const admin = makeClient("admin", "operator", ["operator.admin"]);
-    const node = makeClient("node", "node", ["operator.admin"]);
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([read.client, admin.client, node.client]),
-    });
-    broadcast("update.run.changed", {
-      runId: "run",
-      phase: "staging",
-      status: "running",
-      updatedAtMs: 1,
-    });
-    expect(read.socket.events).toEqual([]);
-    expect(node.socket.events).toEqual([]);
-    expect(admin.socket.events).toEqual(["update.run.changed"]);
-  });
-});
-
-describe("device setup event scope guards", () => {
-  it("delivers exact setup completion only to pairing-capable operators", () => {
-    const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
-    const node = makeClient("node", "node", ["operator.read"]);
-    const read = makeClient("read", "operator", ["operator.read"]);
-    const admin = makeClient("admin", "operator", ["operator.admin"]);
-    const clients = new GatewayClientRegistry(
-      [pairing, node, read, admin].map((entry) => entry.client),
-    );
-    const { broadcast } = createGatewayBroadcaster({ clients });
-
-    broadcast("device.pair.setup.completed", {
-      setupId: "setup-123",
-      deviceId: "device-123",
-      access: "limited",
-      ts: 1,
-    });
-
-    expect(pairing.socket.events).toEqual(["device.pair.setup.completed"]);
-    expect(node.socket.events).toEqual([]);
-    expect(read.socket.events).toEqual([]);
-    expect(admin.socket.events).toEqual(["device.pair.setup.completed"]);
-  });
-});
 
 describe("board event scope guards", () => {
   it("delivers board events only to read-capable operators", () => {
@@ -284,7 +137,11 @@ describe("board and progress event session ownership", () => {
         }
         invalidateSessionSharingSnapshot();
         const projection = await createSessionRowProjection({ cfg });
-        const connection = createGatewayConnectionState({ bootId: "board-owner-events", cfg });
+        const connection = createGatewayConnectionState({
+          scheduler: createTestGatewayScheduler(),
+          bootId: "board-owner-events",
+          cfg,
+        });
         connection.attachSessionRowProjection(projection);
         for (const { client } of peers) {
           connection.clients.add(client);
@@ -957,7 +814,11 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
       }),
     ).toBe(false);
     const rowProjection = await createSessionRowProjection({ cfg });
-    const connection = createGatewayConnectionState({ bootId: "collector-events", cfg });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "collector-events",
+      cfg,
+    });
     connection.attachSessionRowProjection(rowProjection);
     peers.forEach(({ client }) => connection.clients.add(client));
     const { broadcastToConnIds } = connection;

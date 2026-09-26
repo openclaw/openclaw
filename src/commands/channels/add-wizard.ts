@@ -9,11 +9,12 @@ import {
   resolveConfiguredAgentId,
   tryResolveAgentOperationAgentId,
 } from "../../agents/agent-scope-config.js";
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { readConfigFileSnapshotForWrite, type OpenClawConfig } from "../../config/config.js";
-import { readCurrentConfigForPolicyCheck } from "../../config/io.runtime.js";
+import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
 import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
@@ -59,10 +60,11 @@ export async function selectChannelSetupOwner(
   }
   writeSnapshot.writeOptions.assertConfigPathForWrite?.();
   // The roster can change while the prompt waits; retain the original snapshot for the commit fence.
-  const currentConfig = readCurrentConfigForPolicyCheck({
+  const currentConfig = await readCurrentConfigForPolicyCheckAsync({
     configPath: writeSnapshot.snapshot.path,
     env: process.env,
   });
+  writeSnapshot.writeOptions.assertConfigPathForWrite?.();
   const agentId = resolveConfiguredAgentId(currentConfig, selectedAgent.agentId);
   return resolveChannelSetupOwner(currentConfig, agentId);
 }
@@ -111,6 +113,7 @@ type ChannelsAddWizardFlowParams = {
   prompter: WizardPrompter;
   initialChannel?: ChannelChoice;
   beforePersistentEffect?: () => Promise<void>;
+  assertPersistentEffectCurrent?: () => void;
   /**
    * The controlling client completes device linking itself after config is
    * written (e.g. the Control UI renders the WhatsApp QR via web.login.*), so
@@ -148,6 +151,9 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     allowSignalInstall: true,
     ...(params.beforePersistentEffect
       ? { beforePersistentEffect: params.beforePersistentEffect }
+      : {}),
+    ...(params.assertPersistentEffectCurrent
+      ? { assertPersistentEffectCurrent: params.assertPersistentEffectCurrent }
       : {}),
     ...(params.deferDeviceLinkToClient ? { deferDeviceLinkToClient: true } : {}),
     onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
@@ -208,9 +214,9 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
         for (const channel of selection) {
           const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
           const plugin = resolvedPlugins.get(channel) ?? getLoadedChannelPlugin(channel);
-          const account = plugin?.config.resolveAccount(nextConfig, accountId) as
-            | { name?: string }
-            | undefined;
+          const account = (
+            plugin ? await resolveChannelAccount({ plugin, cfg: nextConfig, accountId }) : undefined
+          ) as { name?: string } | undefined;
           const snapshot = plugin?.config.describeAccount?.(account, nextConfig);
           const existingName = snapshot?.name ?? account?.name;
           const name = await prompter.text({
@@ -245,7 +251,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       } => Boolean(value.accountId),
     );
   if (bindTargets.length > 0) {
-    const agentSummaries = buildAgentSummaries(nextConfig);
+    const agentSummaries = await buildAgentSummaries(nextConfig);
     const bindNow =
       usesTargetedDefaults && agentSummaries.length <= 1
         ? false
@@ -320,6 +326,7 @@ export async function runChannelsSetupWizard(
     onConfigured?: (accounts: Array<{ channel: string; accountId: string }>) => void;
     /** Revalidate/lock cancellation immediately before durable effects. */
     beforePersistentEffect?: () => Promise<void>;
+    assertPersistentEffectCurrent?: () => void;
   },
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
@@ -347,5 +354,8 @@ export async function runChannelsSetupWizard(
     deferDeviceLinkToClient: true,
     ...(opts.onConfigured ? { onConfigured: opts.onConfigured } : {}),
     ...(opts.beforePersistentEffect ? { beforePersistentEffect: opts.beforePersistentEffect } : {}),
+    ...(opts.assertPersistentEffectCurrent
+      ? { assertPersistentEffectCurrent: opts.assertPersistentEffectCurrent }
+      : {}),
   });
 }

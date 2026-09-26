@@ -1,38 +1,13 @@
 // Defines ACP session and runtime configuration types.
 import type { AcpSessionUpdateTag } from "@openclaw/acp-core/runtime/types";
+import type { z } from "zod";
+import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
-export type AcpDispatchConfig = {
-  /** Master switch for ACP turn dispatch in the reply pipeline. */
-  enabled?: boolean;
-};
+type SchemaAcpConfig = NonNullable<z.input<typeof OpenClawSchemaShape.acp>>;
 
-export type AcpStreamConfig = {
-  /** Suppresses repeated ACP status/tool projection lines within a turn. */
-  repeatSuppression?: boolean;
-  /** Live streams chunks or waits for terminal event before delivery. */
-  deliveryMode?: "live" | "final_only";
-  /**
-   * Per-sessionUpdate visibility overrides.
-   * Keys not listed here fall back to OpenClaw defaults.
-   */
+export type AcpDispatchConfig = NonNullable<SchemaAcpConfig["dispatch"]>;
+export type AcpStreamConfig = Omit<NonNullable<SchemaAcpConfig["stream"]>, "tagVisibility"> & {
   tagVisibility?: Partial<Record<AcpSessionUpdateTag, boolean>>;
 };
-
-export type AcpRuntimeConfig = {
-  /** Optional operator install/setup command shown by `/acp install` and `/acp doctor`. */
-  installCommand?: string;
-};
-
-export type AcpConfig = {
-  /** Global ACP runtime gate. */
-  enabled?: boolean;
-  dispatch?: AcpDispatchConfig;
-  /** Backend id registered by ACP runtime plugin (for example: acpx). */
-  backend?: string;
-  /** Fallback backend ids tried when the primary backend fails with UNAVAILABLE. */
-  fallbacks?: string[];
-  defaultAgent?: string;
-  allowedAgents?: string[];
-  stream?: AcpStreamConfig;
-  runtime?: AcpRuntimeConfig;
-};
+export type AcpRuntimeConfig = NonNullable<SchemaAcpConfig["runtime"]>;
+export type AcpConfig = Omit<SchemaAcpConfig, "stream"> & { stream?: AcpStreamConfig };

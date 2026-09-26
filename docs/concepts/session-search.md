@@ -18,7 +18,7 @@ and can include later post-reset turns. An explicit `messageId` for a retained
 active-path row outside the current view opens that original closed interval and does
 not mix later post-reset turns.
 
-Anchored reads use `limit` to bound the surrounding messages and cannot be combined with `offset`.
+Anchored reads use `limit` to bound the surrounding messages. Omit `offset` when using an anchor.
 For SQLite transcript history, a missing or off-path message returns empty history rather than
 the newest tail; a `sessionId` that does not belong to the selected session key is rejected.
 These rules also apply in local embedded mode, without a running Gateway.

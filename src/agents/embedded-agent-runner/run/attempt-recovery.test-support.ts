@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import {
@@ -13,6 +14,7 @@ import { createEmbeddedRunFailoverRetryController } from "./failover-retry-contr
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 export type TransportDropScenario = {
+  config?: OpenClawConfig;
   assistant?: AssistantMessage;
   providerOwner?: PreparedProviderFailoverOwner;
   assistantTexts?: string[];
@@ -134,7 +136,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
   const continueFromCurrentTranscript = vi.fn();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: { runId: "run:transport-drop" } as Parameters<
+    runParams: { runId: "run:transport-drop", config: scenario.config } as Parameters<
       typeof createEmbeddedRunFailoverRetryController
     >[0]["runParams"],
     provider,
@@ -159,7 +161,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     recoverEmbeddedRunAttempt({
       runInput: {
         runParams: {
-          config: {},
+          config: scenario.config ?? {},
           agentId: "main",
           sessionId: "session:transport-drop",
           runId: "run:transport-drop",

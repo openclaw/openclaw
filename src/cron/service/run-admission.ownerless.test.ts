@@ -20,6 +20,7 @@ import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../../tasks/
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
@@ -28,7 +29,6 @@ import {
   findActiveCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
@@ -88,7 +88,8 @@ async function setupOwnerlessJob(
 }
 
 function history(storePath: string, jobId: string, runId?: string) {
-  return readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId, runId }).entries;
+  return readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId, runId })
+    .entries;
 }
 
 function receipts(storePath: string, jobId: string) {

@@ -12,9 +12,4 @@ export const updateServiceRuntimeEntrypoints = {
     sourceWorkerName: "update-command-service-command",
     distWorkerPath: "legacy-finalizer/src/cli/update-cli/update-command-service-command.js",
   },
-  load: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../daemon-cli/install-load",
-    distWorkerPath: "legacy-finalizer/src/cli/daemon-cli/install-load.js",
-  },
 } as const;

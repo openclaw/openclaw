@@ -15,7 +15,8 @@ import {
   loadPreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
-import { AuthStorage, ModelRegistry } from "../sessions/index.js";
+import { AuthStorage } from "../sessions/auth-storage.js";
+import { ModelRegistry } from "../sessions/model-registry.js";
 import { mergeModelMediaInput } from "./model.compat.js";
 import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {

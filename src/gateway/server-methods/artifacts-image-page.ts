@@ -1,19 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
   type ArtifactSummary,
+  type ArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionTranscriptReadScope } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.sqlite-active-events.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
-import { readSessionMessagesPageWithStatsAsync } from "../session-transcript-readers.js";
+import { readSessionArtifacts } from "../session-transcript-readers.js";
 import { ArtifactSessionResolutionError } from "./artifacts-session-resolution.js";
 import type { GatewayClient } from "./types.js";
 
-const IMAGE_PAGE_MESSAGES = 32;
-const IMAGE_PAGE_BYTES = 256 * 1024;
 const CURSOR_TTL_MS = 15 * 60_000;
 type ImageCursor = {
   binding: string;
@@ -33,7 +32,8 @@ export async function readArtifactImagePage(params: {
   client: GatewayClient | null;
   cursor?: string;
   limit: number;
-  collect: (message: unknown) => ArtifactSummary[];
+  sessionKey: string;
+  filters: Pick<ArtifactsListParams, "runId" | "taskId" | "messageRole">;
 }): Promise<{ artifacts: ArtifactSummary[]; nextCursor?: string; omittedOversized?: boolean }> {
   const owner = params.client ?? internalCaller;
   let state = cursors.get(owner);
@@ -59,14 +59,14 @@ export async function readArtifactImagePage(params: {
       ),
     );
   }
-  const page = await readSessionMessagesPageWithStatsAsync(params.scope, {
-    offset: 0,
+  const page = await readSessionArtifacts(params.scope, {
+    kind: "image-page",
+    sessionKey: params.sessionKey,
+    ...params.filters,
+    limit: params.limit,
     beforeSeq: cursor?.beforeSeq,
-    maxMessages: IMAGE_PAGE_MESSAGES,
-    maxBytes: IMAGE_PAGE_BYTES,
-    readOnly: true,
-    captureReadWindow: true,
-    expectedReadWindow: cursor?.readWindow,
+    imageOffset: cursor?.imageOffset,
+    readWindow: cursor?.readWindow,
   }).catch((error: unknown) => {
     if (cursor && isSessionTranscriptProjectionUnavailableError(error)) {
       throw new ArtifactSessionResolutionError(
@@ -77,56 +77,18 @@ export async function readArtifactImagePage(params: {
     }
     throw error;
   });
-  const artifacts: ArtifactSummary[] = [];
-  let next: Pick<ImageCursor, "beforeSeq" | "imageOffset"> | undefined;
-  for (const message of page.messages.toReversed()) {
-    const seq = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.seq;
-    if (typeof seq !== "number") {
-      continue;
-    }
-    const images = params.collect(message);
-    const start = cursor?.beforeSeq === seq + 1 ? cursor.imageOffset : 0;
-    for (let index = start; index < images.length; index++) {
-      const image = images[index];
-      if (image) {
-        artifacts.push(image);
-      }
-      if (artifacts.length === params.limit) {
-        next =
-          index + 1 < images.length
-            ? { beforeSeq: seq + 1, imageOffset: index + 1 }
-            : seq > 1
-              ? { beforeSeq: seq, imageOffset: 0 }
-              : undefined;
-        break;
-      }
-    }
-    if (artifacts.length === params.limit) {
-      break;
-    }
-  }
-  if (artifacts.length < params.limit && page.olderOffset !== undefined) {
-    const head = cursor?.beforeSeq ?? page.totalMessages + 1;
-    next = { beforeSeq: head - page.olderOffset, imageOffset: 0 };
-  }
   let nextCursor: string | undefined;
-  if (next && next.beforeSeq > 1 && page.readWindow) {
+  if (page.next) {
     nextCursor = randomUUID();
     state.set(nextCursor, {
-      ...next,
+      ...page.next,
       binding: params.binding,
-      readWindow: page.readWindow,
       expiresAt: now + CURSOR_TTL_MS,
     });
-    while (state.size > 128) {
-      const oldest = state.keys().next().value;
-      if (oldest) {
-        state.delete(oldest);
-      }
-    }
+    pruneMapToMaxSize(state, 128);
   }
   return {
-    artifacts,
+    artifacts: page.artifacts,
     ...(nextCursor ? { nextCursor } : {}),
     ...(page.omittedOversized ? { omittedOversized: true } : {}),
   };

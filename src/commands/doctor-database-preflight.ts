@@ -6,6 +6,7 @@ import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database
 
 export type DoctorDatabasePreflight = OpenClawDatabaseSchemaPreflight & {
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  agentDatabaseRecoveryConfigValid?: boolean;
   updateSchemaRehearsal?: { runId: string; updaterVersion: string };
 };
 
@@ -74,6 +75,12 @@ export async function prepareDoctorDatabasePreflight(
   }
   return {
     ...databaseSchemas,
-    ...(agentDatabaseMigrationDiscovery ? { agentDatabaseMigrationDiscovery } : {}),
+    ...(agentDatabaseMigrationDiscovery
+      ? {
+          agentDatabaseMigrationDiscovery,
+          // Supplied configs do not validate a captured ownership inventory.
+          agentDatabaseRecoveryConfigValid: snapshot?.valid === true,
+        }
+      : {}),
   };
 }

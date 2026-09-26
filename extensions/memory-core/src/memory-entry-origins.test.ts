@@ -321,7 +321,7 @@ describe("memory entry origins", () => {
       });
       const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
       db.prepare(
-        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'memory', 1, 2, ?, 'fts-only', ?, '[]', 1000)",
+        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'memory', 1, 2, ?, 'fts-only', ?, x'', 1000)",
       ).run(
         "older-memory",
         "MEMORY.md",

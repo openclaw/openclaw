@@ -100,16 +100,19 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       groupPolicy: params.policies.groupPolicy,
       senderPolicy: params.policies.senderPolicy,
       agentId: profile.agentId,
+      sources: profile.sources,
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     }),
     {
       policy: params.policies.sandboxPolicy,
+      source: { kind: "session" },
       label: "sandbox tools.allow",
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     },
     ...(params.additionalStepsAfterSandbox ?? []),
     {
       policy: params.policies.subagentPolicy,
+      source: { kind: "session" },
       label: "subagent tools.allow",
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     },
@@ -117,6 +120,7 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       ? [
           {
             policy: params.policies.runtimeToolPolicy,
+            source: { kind: "runtime" as const },
             label: "runtime tools.allow",
             unavailableCoreToolReason: params.unavailableCoreToolReason,
           },
@@ -124,6 +128,7 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       : []),
     {
       policy: params.policies.inheritedToolPolicy,
+      source: { kind: "session" },
       label: "inherited tools",
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     },

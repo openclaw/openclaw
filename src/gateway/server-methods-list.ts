@@ -82,6 +82,7 @@ export const GATEWAY_EVENTS = [
   "users.prefs.changed",
   "skills.changed",
   "plugins.changed",
+  "plugins.install.progress",
   "voicewake.changed",
   "voicewake.routing.changed",
   "exec.approval.requested",

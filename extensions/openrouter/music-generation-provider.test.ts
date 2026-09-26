@@ -1,4 +1,5 @@
 // Openrouter tests cover music generation provider plugin behavior.
+import assert from "node:assert/strict";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   getProviderHttpMocks,
@@ -537,7 +538,7 @@ describe("openrouter music generation provider", () => {
         cfg: { agents: { defaults: { mediaMaxMb: 2 } } },
       });
 
-      expect(result.tracks[0]?.buffer).toEqual(audio);
+      assert.deepStrictEqual(result.tracks[0]?.buffer, audio);
     },
   );
 

@@ -250,9 +250,9 @@ export async function waitForMatrixQaRoomEvent(
     timeoutMs: number;
   },
 ) {
-  const result = await waitForOptionalMatrixQaRoomEvent(params);
-  if (result.matched) {
-    return { event: result.event, since: result.since };
-  }
-  throw new Error(`timed out after ${params.timeoutMs}ms waiting for Matrix room event`);
+  return await createMatrixQaRoomObserver(params).waitForRoomEvent({
+    predicate: params.predicate,
+    roomId: params.roomId,
+    timeoutMs: params.timeoutMs,
+  });
 }

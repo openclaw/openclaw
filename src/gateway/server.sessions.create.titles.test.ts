@@ -14,6 +14,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   controlUiClient,
   initializeRepository,
@@ -37,7 +38,8 @@ vi.mock("../plugins/session-discussion-registry.js", () => ({
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   titleMocks.generate.mockReset();
   titleMocks.open.mockReset();
   titleMocks.lookup.mockReset();

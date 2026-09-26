@@ -9,7 +9,7 @@ export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export { looksLikeSlackTargetId, normalizeSlackMessagingTarget } from "./target-parsing.js";
 
-const SLACK_CHANNEL_META = {
+export const SLACK_CHANNEL_META = {
   id: "slack",
   label: "Slack",
   selectionLabel: "Slack",
@@ -19,10 +19,3 @@ const SLACK_CHANNEL_META = {
   systemImage: "number.square",
   markdownCapable: true,
 } as const;
-
-export function getChatChannelMeta(id: string) {
-  if (id !== SLACK_CHANNEL_META.id) {
-    throw new Error(`Unsupported Slack channel meta lookup: ${id}`);
-  }
-  return SLACK_CHANNEL_META;
-}

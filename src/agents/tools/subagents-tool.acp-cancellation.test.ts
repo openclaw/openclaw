@@ -28,10 +28,7 @@ import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "../../tasks/task-flow-registry.store.test-support.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.test-support.js";
 import { getTaskById, listTasksForRelatedSessionKey } from "../../tasks/task-registry.js";
-import {
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-registry.test-support.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-registry-runtime.js";
@@ -120,7 +117,6 @@ async function withAcpTree(
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     resetDetachedTaskLifecycleRuntimeForTests();
-    resetTaskRegistryControlRuntimeForTests();
     managerTesting.resetAcpSessionManagerForTests();
     installInMemoryTaskRegistryRuntime();
     configureTaskFlowRegistryRuntime({ store: createInMemoryTaskFlowRegistryStore() });
@@ -376,7 +372,6 @@ async function withAcpTree(
       managerTesting.resetAcpSessionManagerForTests();
       unregisterAcpRuntimeBackend(backendId);
       resetDetachedTaskLifecycleRuntimeForTests();
-      resetTaskRegistryControlRuntimeForTests();
       resetSubagentRegistryForTests({ persist: false });
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });

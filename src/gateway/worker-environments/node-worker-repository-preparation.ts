@@ -7,7 +7,10 @@ import type {
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
-import { workspaceSyncError } from "./workspace-sync-helpers.js";
+import {
+  workerWorkspaceCommandSucceeded as succeeded,
+  workspaceSyncError,
+} from "./workspace-sync-helpers.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const GIT_TIMEOUT_MS = 60_000;
@@ -81,10 +84,6 @@ export type NodeWorkerRepositoryOutcome =
       reason: "clone-failed" | "checkout-failed" | "manifest-capture-failed" | "manifest-mismatch";
       detail?: string;
     };
-
-function succeeded(result: SpawnResult): boolean {
-  return result.termination === "exit" && result.code === 0;
-}
 
 function gitFailure(
   reason: "clone-failed" | "checkout-failed",

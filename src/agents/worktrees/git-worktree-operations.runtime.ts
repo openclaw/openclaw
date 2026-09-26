@@ -19,7 +19,11 @@ import {
   normalizeProvisionedRelativePath,
   resolveGitPath,
 } from "./provisioned-file-inspection.js";
-import { inspectNestedRepository, snapshotWorktree } from "./snapshot-inventory.js";
+import {
+  inspectNestedRepository,
+  snapshotWorktree,
+  verifyExactStateSnapshot,
+} from "./snapshot-inventory.js";
 
 async function inspectProvisioning(
   sourceRoot: string,
@@ -116,6 +120,8 @@ export async function executeGitWorktreeOperation(
   operation: GitWorktreeOperation,
 ): Promise<GitWorktreeOperationResult> {
   switch (operation.type) {
+    case "worktree.snapshot-verify-exact":
+      return await verifyExactStateSnapshot(operation.input);
     case "worktree.snapshot":
       return await snapshotWorktree(operation.input);
     case "worktree.provisioning-inspection":

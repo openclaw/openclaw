@@ -285,7 +285,12 @@ describe("durable accepted-turn maintenance handoff", () => {
         expect(fixture.commitTurn).toHaveBeenCalledOnce();
         expect(fixture.pendingTurn()).toBeUndefined();
         // No second user turn or explicit scheduler invocation starts the work.
-        await vi.waitFor(() => expect(fixture.maintain).toHaveBeenCalledOnce());
+        const maintenanceResult = await Promise.race([
+          fixture.maintenanceStarted.promise.then(() => "started"),
+          waitForDeferredTurnMaintenanceForSession(fixture.facts.sessionKey).then(() => "settled"),
+        ]);
+        expect(maintenanceResult).toBe("started");
+        expect(fixture.maintain).toHaveBeenCalledOnce();
         expect(fixture.maintain.mock.calls[0]?.[0]).toMatchObject({
           sessionId: fixture.facts.sessionIdUsed,
           sessionKey: fixture.facts.sessionKey,

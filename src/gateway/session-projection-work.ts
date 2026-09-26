@@ -12,6 +12,48 @@ export function yieldSessionListWork(): Promise<void> {
   }));
 }
 
+/** One pending drain also joins work published as its previous batch settles. */
+export function createSessionProjectionDrain(params: {
+  beforeEnsure(): void;
+  hasWork(): boolean;
+  refresh(): Promise<void>;
+  needsYield(): boolean;
+  idle(): Promise<void>;
+  runAsOwner<T>(operation: () => T): T;
+}): () => Promise<void> {
+  let pending: Promise<void> | undefined;
+  async function drain() {
+    while (params.hasWork()) {
+      await params.refresh();
+      if (params.needsYield()) {
+        await yieldSessionListWork();
+      }
+    }
+  }
+  function ensure(): Promise<void> {
+    params.beforeEnsure();
+    if (!params.hasWork()) {
+      return pending ?? params.idle();
+    }
+    return (pending ??= yieldSessionListWork()
+      .then(() => params.runAsOwner(drain))
+      .then(
+        () => {
+          pending = undefined;
+          if (params.hasWork()) {
+            return ensure();
+          }
+          return undefined;
+        },
+        (error: unknown) => {
+          pending = undefined;
+          throw error;
+        },
+      ));
+  }
+  return ensure;
+}
+
 /** Optional transcript work must not invalidate a request's asynchronous read or mutation. */
 export function retainSessionListForegroundWork(): () => void {
   foregroundCount++;

@@ -1,7 +1,5 @@
 export * from "./subagent-registry.js";
 export {
-  buildLatestSubagentRunReadIndex,
-  buildSubagentRunReadIndex,
   buildSubagentSessionListReadIndex,
   countActiveDescendantRuns,
   countPendingDescendantRuns,
@@ -45,26 +43,7 @@ type RegistryTestApi = {
     failQueuedSubagentRun(runId: string, error: string): boolean;
     sweepOnceForTests(): Promise<void>;
     runSweeperTickForTests(): Promise<void>;
-    setDepsForTest(overrides?: Partial<RegistryDeps>): void;
   };
-};
-
-type RegistryDeps = {
-  callGateway: typeof import("../../../gateway/call.js").callGateway;
-  captureSubagentCompletionReply: typeof import("../announce/subagent-announce.js").captureSubagentCompletionReply;
-  cleanupBrowserSessionsForLifecycleEnd: typeof import("../../../browser-lifecycle-cleanup.js").cleanupBrowserSessionsForLifecycleEnd;
-  getRuntimeConfig: typeof import("../../../config/config.js").getRuntimeConfig;
-  onAgentEvent: typeof import("../../../infra/agent-events.js").onAgentEvent;
-  persistSubagentRunsToDisk: typeof import("./subagent-registry-state.js").persistSubagentRunsToDisk;
-  persistSubagentRunsToDiskOrThrow: typeof import("./subagent-registry-state.js").persistSubagentRunsToDiskOrThrow;
-  persistSubagentRunsToDiskAsyncOrThrow: typeof import("./subagent-registry-state.js").persistSubagentRunsToDiskAsyncOrThrow;
-  resolveAgentTimeoutMs: typeof import("../../timeout.js").resolveAgentTimeoutMs;
-  restoreSubagentRunsFromDisk: typeof import("./subagent-registry-state.js").restoreSubagentRunsFromDisk;
-  runSubagentAnnounceFlow: typeof import("../announce/subagent-announce.js").runSubagentAnnounceFlow;
-  maybeWakeRequesterAfterAllChildrenSettled: typeof import("../announce/subagent-announce.requester-settle-wake.js").maybeWakeRequesterAfterAllChildrenSettled;
-  ensureContextEnginesInitialized?: () => void;
-  loadAgentRuntimePluginRegistryHandle?: import("./subagent-registry-deps.js").SubagentRegistryDeps["loadAgentRuntimePluginRegistryHandle"];
-  resolveContextEngine?: typeof import("../../../context-engine/registry.js").resolveContextEngine;
 };
 
 function getRegistryTestApi(): RegistryTestApi {
@@ -121,8 +100,6 @@ export const testing = {
     getRegistryTestApi().testing.failQueuedSubagentRun(runId, error),
   sweepOnceForTests: () => getRegistryTestApi().testing.sweepOnceForTests(),
   runSweeperTickForTests: () => getRegistryTestApi().testing.runSweeperTickForTests(),
-  setDepsForTest: (overrides?: Partial<RegistryDeps>) =>
-    getRegistryTestApi().testing.setDepsForTest(overrides),
 };
 
 export function listSessionMaintenanceProtectedSubagentSessionKeys() {

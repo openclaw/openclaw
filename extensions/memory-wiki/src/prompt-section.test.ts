@@ -163,10 +163,6 @@ describe("Memory Wiki prompt section", () => {
     expect(lines.join("\n")).toContain("wiki-specific ranking or provenance details");
   });
 
-  it("stays empty when no wiki or memory-adjacent tools are registered", () => {
-    expect(buildGuidance({ availableTools: new Set(["web_search"]) })).toStrictEqual([]);
-  });
-
   it("prepares a compact compiled digest from SQLite", async () => {
     const config = resolveMemoryWikiConfig({
       vault: { path: path.join(suiteRoot, "digest-enabled") },

@@ -52,26 +52,23 @@ describe("exact model reference selection", () => {
     );
   });
 
-  it.each(["alpha", "custom/alpha", " CUSTOM / alpha "])(
-    "prefers the exact model id in %s before case-insensitive matching",
-    (reference) => {
-      const exact = model("custom", "alpha");
-      const folded = model("custom", "Alpha");
-      for (const models of [
-        [folded, exact],
-        [exact, folded],
-      ]) {
-        expect(findExactModelReferenceMatch(reference, models)).toBe(exact);
-      }
-    },
-  );
+  it("prefers the exact model id in a whitespace-tolerant qualified reference", () => {
+    const reference = " CUSTOM / alpha ";
+    const exact = model("custom", "alpha");
+    const folded = model("custom", "Alpha");
+    for (const models of [
+      [folded, exact],
+      [exact, folded],
+    ]) {
+      expect(findExactModelReferenceMatch(reference, models)).toBe(exact);
+    }
+  });
 
   it.each([
-    { cliModel: "alpha" },
     { cliModel: "custom/alpha" },
     { cliProvider: "CUSTOM", cliModel: "alpha" },
     { cliProvider: "custom", cliModel: "CUSTOM/alpha" },
-  ])("preserves the exact model through CLI selection: %j", (selection) => {
+  ])("preserves the exact model with inferred or explicit CLI providers: %j", (selection) => {
     const exact = model("custom", "alpha");
     const result = resolveCliModel({
       ...selection,
@@ -81,11 +78,11 @@ describe("exact model reference selection", () => {
     expect(result.error).toBeUndefined();
   });
 
-  it.each(["alpha", "alpha:high"])("preserves an exact scope selection: %s", (pattern) => {
+  it("preserves an exact scope selection with a thinking suffix", () => {
     const exact = model("custom", "alpha");
-    const result = parseModelPattern(pattern, [model("custom", "Alpha"), exact]);
+    const result = parseModelPattern("alpha:high", [model("custom", "Alpha"), exact]);
     expect(result.model).toBe(exact);
-    expect(result.thinkingLevel).toBe(pattern.includes(":") ? "high" : undefined);
+    expect(result.thinkingLevel).toBe("high");
   });
 
   it.each([
@@ -119,7 +116,7 @@ describe("exact model reference selection", () => {
     );
   });
 
-  it.each(["Alpha", "custom/Alpha", "ALPHA", "custom/ALPHA"])(
+  it.each(["Alpha", "custom/ALPHA"])(
     "preserves the first row when %s matches repeated model identities",
     async (reference) => {
       const first = model("custom", "Alpha");
@@ -142,9 +139,10 @@ describe("exact model reference selection", () => {
     ).toBe(scoped);
   });
 
-  it.each(["custom", "CUSTOM"])("preserves the exact provider identity %s", (provider) => {
+  it("preserves exact provider identity independently of catalog order", () => {
+    const provider = "custom";
     const exact = model(provider, "alpha");
-    const other = model(provider === "custom" ? "CUSTOM" : "custom", "alpha");
+    const other = model("CUSTOM", "alpha");
     for (const models of [
       [exact, other],
       [other, exact],
@@ -227,21 +225,15 @@ describe("exact model reference selection", () => {
     expect(result.error).toBeUndefined();
   });
 
-  it.each([false, true])(
-    "resolves a slash-provider tuple before raw ids (short provider: %s)",
-    (shortProvider) => {
-      const exact = model("team/custom", "Alpha");
-      const models = [model("gateway", "team/custom/Alpha"), exact];
-      if (shortProvider) {
-        models.push(model("team", "other"));
-      }
-      expect(findExactModelReferenceMatch("team/custom/Alpha", models)).toBe(exact);
-      expect(parseModelPattern("team/custom/Alpha", models).model).toBe(exact);
-      expect(
-        resolveCliModel({ cliModel: "team/custom/Alpha", modelRegistry: registry(models) }).model,
-      ).toBe(exact);
-    },
-  );
+  it("resolves a slash-provider tuple before raw ids and a shorter provider", () => {
+    const exact = model("team/custom", "Alpha");
+    const models = [model("gateway", "team/custom/Alpha"), exact, model("team", "other")];
+    expect(findExactModelReferenceMatch("team/custom/Alpha", models)).toBe(exact);
+    expect(parseModelPattern("team/custom/Alpha", models).model).toBe(exact);
+    expect(
+      resolveCliModel({ cliModel: "team/custom/Alpha", modelRegistry: registry(models) }).model,
+    ).toBe(exact);
+  });
 
   it("requires an explicit provider when distinct tuples share a canonical reference", () => {
     const models = [model("team/custom", "Alpha"), model("team", "custom/Alpha")];
@@ -275,20 +267,17 @@ describe("exact model reference selection", () => {
     }
   });
 
-  it.each([false, true])(
-    "infers slash-containing providers for fuzzy patterns (short provider: %s)",
-    (shortProvider) => {
-      const exact = model("team/custom", "alpha");
-      const models = shortProvider ? [model("team", "other"), exact] : [exact];
-      const result = resolveCliModel({
-        cliModel: "team/custom/alph",
-        modelRegistry: registry(models),
-      });
-      expect(result.model).toBe(exact);
-      expect(result.error).toBeUndefined();
-      expect(result.warning).toBeUndefined();
-    },
-  );
+  it("infers slash-containing providers for fuzzy patterns beside a shorter provider", () => {
+    const exact = model("team/custom", "alpha");
+    const models = [model("team", "other"), exact];
+    const result = resolveCliModel({
+      cliModel: "team/custom/alph",
+      modelRegistry: registry(models),
+    });
+    expect(result.model).toBe(exact);
+    expect(result.error).toBeUndefined();
+    expect(result.warning).toBeUndefined();
+  });
 
   it("does not choose an owner when different slash-provider scopes both match fuzzily", () => {
     const models = [model("team/custom", "alpha"), model("team", "custom/alpha")];

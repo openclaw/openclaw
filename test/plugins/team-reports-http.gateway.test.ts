@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { ResolvedGatewayAuth } from "../../src/gateway/auth.js";
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../src/gateway/control-ui-contract.js";
 import { setControlUiPluginAuthCookie } from "../../src/gateway/control-ui-plugin-auth-cookie.js";
+import { resolveControlUiPluginAuthCookieGeneration } from "../../src/gateway/http-auth-plugin-cookie.js";
 import {
   authorizePluginGatewayHttpRequestOrReply,
   resolveSharedSecretHttpOperatorScopes,
@@ -223,7 +224,10 @@ async function withReports(
                   },
                 ],
                 {
-                  generation: resolveSharedGatewaySessionGeneration(auth),
+                  generation: resolveControlUiPluginAuthCookieGeneration(
+                    resolveSharedGatewaySessionGeneration(auth),
+                    cfg,
+                  ),
                   profileId: reader.id,
                   nowMs: issuedAt,
                 },

@@ -16,7 +16,7 @@ import { logWarn } from "../../../logger.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
-import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../../shared/lazy-promise.js";
 import {
   type DeliveryContext,
   normalizeDeliveryContext,
@@ -82,29 +82,9 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
 
-type SubagentAnnounceDeps = {
-  callGateway: typeof callSubagentLifecycleGateway;
-  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
-  getRuntimeConfig: typeof getRuntimeConfig;
-  loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
-};
-
-const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
-  callGateway: callSubagentLifecycleGateway,
-  dispatchGatewayMethodInProcess,
-  getRuntimeConfig,
-  loadSubagentRegistryRuntime,
-};
-
-let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
-
-const subagentRegistryRuntimeLoader = createLazyImportLoader(
+const loadSubagentRegistryRuntime = createLazyPromise(
   () => import("../registry/subagent-registry-runtime.js"),
 );
-
-function loadSubagentRegistryRuntime() {
-  return subagentRegistryRuntimeLoader.load();
-}
 
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 
@@ -118,7 +98,6 @@ function buildAnnounceReplyInstruction(params: {
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
-  completionRequesterSessionId?: string;
   modelRouteChange?: string;
   preserveModelRouteNotice: boolean;
 }): string {
@@ -213,7 +192,7 @@ type SubagentAnnounceFlowParams = {
   isCompletionOwnedByRequesterYield?: () => boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onBeforeDeleteChildSession?: () => boolean;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 };
@@ -300,7 +279,7 @@ async function runSubagentAnnounceFlowBound(
       reply = undefined;
     }
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
-      cfg: subagentAnnounceDeps.getRuntimeConfig(),
+      cfg: getRuntimeConfig(),
       agentId: targetRequesterAgentId,
     });
     const requesterIsInternalSession = () =>
@@ -312,7 +291,7 @@ async function runSubagentAnnounceFlowBound(
       | Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>
       | undefined;
     try {
-      subagentRegistryRuntime = await subagentAnnounceDeps.loadSubagentRegistryRuntime();
+      subagentRegistryRuntime = await loadSubagentRegistryRuntime();
       if (
         params.completionTarget !== "parent" &&
         requesterDepth >= 1 &&
@@ -375,9 +354,9 @@ async function runSubagentAnnounceFlowBound(
         hasUsableSessionEntry,
         resolveGatewayContext: params.resolveGatewayContext,
         deps: {
-          callGateway: subagentAnnounceDeps.callGateway,
-          dispatchGatewayMethodInProcess: subagentAnnounceDeps.dispatchGatewayMethodInProcess,
-          getRuntimeConfig: subagentAnnounceDeps.getRuntimeConfig,
+          callGateway: callSubagentLifecycleGateway,
+          dispatchGatewayMethodInProcess,
+          getRuntimeConfig,
           replaceSubagentRunAfterSteer: subagentRegistryRuntime.replaceSubagentRunAfterSteer,
         },
         signal: params.signal,
@@ -555,7 +534,7 @@ async function runSubagentAnnounceFlowBound(
           targetRequesterOrigin =
             normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
           requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
-            cfg: subagentAnnounceDeps.getRuntimeConfig(),
+            cfg: getRuntimeConfig(),
             agentId: targetRequesterAgentId,
           });
           requesterIsSubagent = requesterIsInternalSession();
@@ -636,12 +615,12 @@ async function runSubagentAnnounceFlowBound(
     const triggerMessage = buildAnnounceSteerMessage(internalEvents);
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
     let deliveryResultReported = false;
-    const reportDeliveryResult = (delivery: SubagentAnnounceDeliveryResult) => {
+    const reportDeliveryResult = async (delivery: SubagentAnnounceDeliveryResult) => {
       if (deliveryResultReported) {
         return;
       }
       deliveryResultReported = true;
-      params.onDeliveryResult?.(delivery);
+      await params.onDeliveryResult?.(delivery);
     };
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
@@ -668,7 +647,7 @@ async function runSubagentAnnounceFlowBound(
       signal: params.signal,
       resolveGatewayContext: params.resolveGatewayContext,
     });
-    reportDeliveryResult(delivery);
+    await reportDeliveryResult(delivery);
     announceOutcome =
       delivery.reason === "requester_turn_pending"
         ? "requester_turn_pending"
@@ -686,7 +665,7 @@ async function runSubagentAnnounceFlowBound(
       (params.onBeforeDeleteChildSession?.() ?? true)
     ) {
       await deleteSubagentSessionForCleanup({
-        callGateway: subagentAnnounceDeps.callGateway,
+        callGateway: callSubagentLifecycleGateway,
         isCurrent: childSessionEffectsAllowed,
         childSessionKey: params.childSessionKey,
         spawnMode: params.spawnMode,
@@ -697,33 +676,3 @@ async function runSubagentAnnounceFlowBound(
   }
   return announceOutcome;
 }
-
-export const testing = {
-  setDepsForTest(
-    overrides?: Partial<SubagentAnnounceDeps> & {
-      callGateway?: typeof callSubagentLifecycleGateway;
-    },
-  ) {
-    const callGatewayOverride = overrides?.callGateway;
-    const dispatchGatewayMethodInProcessOverride =
-      overrides?.dispatchGatewayMethodInProcess ??
-      (callGatewayOverride
-        ? ((async (method, agentParams, options) =>
-            await callGatewayOverride({
-              method,
-              params: agentParams,
-              expectFinal: options?.expectFinal,
-              timeoutMs: options?.timeoutMs,
-            })) satisfies typeof dispatchGatewayMethodInProcess)
-        : undefined);
-    subagentAnnounceDeps = overrides
-      ? {
-          ...defaultSubagentAnnounceDeps,
-          ...overrides,
-          ...(dispatchGatewayMethodInProcessOverride
-            ? { dispatchGatewayMethodInProcess: dispatchGatewayMethodInProcessOverride }
-            : {}),
-        }
-      : defaultSubagentAnnounceDeps;
-  },
-};

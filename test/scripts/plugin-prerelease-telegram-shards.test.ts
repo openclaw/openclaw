@@ -243,6 +243,12 @@ describe("plugin prerelease Telegram extension shards", () => {
           },
         });
 
+        if (telegramRows[index]!.vitest_config === telegramConfig || partition.length === 1) {
+          expect(specs).toHaveLength(1);
+          expect(specs[0]!.includePatterns).toBeNull();
+          expect(specs[0]!.env.OPENCLAW_VITEST_INCLUDE_FILE).toBe(includeFile);
+          continue;
+        }
         expect(specs).toHaveLength(partition.length);
         expect(specs.map((spec) => spec.includePatterns)).toEqual(partition.map((file) => [file]));
         expect(new Set(specs.map((spec) => spec.env.OPENCLAW_VITEST_INCLUDE_FILE)).size).toBe(

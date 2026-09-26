@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 enum GatewayLaunchAgentManager {
     struct LoadedGatewayState: Equatable, Sendable {
@@ -14,7 +15,7 @@ enum GatewayLaunchAgentManager {
 
     private static var disableLaunchAgentMarkerURL: URL {
         #if DEBUG
-        if let testingDisableLaunchAgentMarkerURL {
+        if let testingDisableLaunchAgentMarkerURL = self.testingState.withLock({ $0.disableLaunchAgentMarkerURL }) {
             return testingDisableLaunchAgentMarkerURL
         }
         #endif
@@ -27,7 +28,7 @@ enum GatewayLaunchAgentManager {
 
     private static var plistURL: URL {
         self.plistURL(
-            homeDirectory: FileManager().homeDirectoryForCurrentUser,
+            homeDirectory: LaunchAgentPlist.homeDirectoryURL,
             profile: .current)
     }
 
@@ -350,19 +351,20 @@ extension GatewayLaunchAgentManager {
         quiet: Bool) async -> CommandResult
     {
         #if DEBUG
-        if let resolveCLI = self.testingInterceptDaemonCommands {
+        if let resolveCLI = self.testingState.withLock({ $0.resolveCLI }) {
             let command = await self.daemonCommand(args, resolveCLI: resolveCLI)
-            self.testingDaemonCommandCalls.append((arguments: args, command: command))
-            await self.testingDaemonCommandHook?(args)
-            let payload = if args.first == "status" {
-                if self.testingDaemonStatusPayloads.isEmpty {
-                    self.testingDaemonStatusPayload ?? "{\"ok\":true}"
+            // Snapshot each response and remove it from the queue before a hook can suspend
+            // or reenter. Commands run off-actor while tests read their call snapshots.
+            let (hook, payload) = self.testingState.withLock { state in
+                state.commandCalls.append((arguments: args, command: command))
+                let payload = if args.first == "status", !state.statusPayloads.isEmpty {
+                    state.statusPayloads.removeFirst()
                 } else {
-                    self.testingDaemonStatusPayloads.removeFirst()
+                    state.statusPayload ?? "{\"ok\":true}"
                 }
-            } else {
-                self.testingDaemonStatusPayload ?? "{\"ok\":true}"
+                return (state.commandHook, payload)
             }
+            await hook?(args)
             let parsed = JSONObjectExtractionSupport.extract(from: payload)
             return CommandResult(
                 success: (parsed?.object["ok"] as? Bool) ?? true,
@@ -421,15 +423,19 @@ extension GatewayLaunchAgentManager {
     }
 
     #if DEBUG
-    private nonisolated(unsafe) static var testingDisableLaunchAgentMarkerURL: URL?
-    private nonisolated(unsafe) static var testingInterceptDaemonCommands: CommandResolver.LocalCLIResolver?
-    private nonisolated(unsafe) static var testingDaemonCommandCalls: [(arguments: [String], command: [String])] = []
-    private nonisolated(unsafe) static var testingDaemonStatusPayload: String?
-    private nonisolated(unsafe) static var testingDaemonStatusPayloads: [String] = []
-    private nonisolated(unsafe) static var testingDaemonCommandHook: (@Sendable ([String]) async -> Void)?
+    private struct TestingState: Sendable {
+        var disableLaunchAgentMarkerURL: URL?
+        var resolveCLI: CommandResolver.LocalCLIResolver?
+        var commandCalls: [(arguments: [String], command: [String])] = []
+        var statusPayload: String?
+        var statusPayloads: [String] = []
+        var commandHook: (@Sendable ([String]) async -> Void)?
+    }
+
+    private static let testingState = Mutex(TestingState())
 
     static func setTestingDisableLaunchAgentMarkerURL(_ url: URL?) {
-        self.testingDisableLaunchAgentMarkerURL = url
+        self.testingState.withLock { $0.disableLaunchAgentMarkerURL = url }
     }
 
     static func setTestingInterceptDaemonCommands(
@@ -437,30 +443,36 @@ extension GatewayLaunchAgentManager {
         beforeReturning hook: (@Sendable ([String]) async -> Void)? = nil,
         resolveCLI: @escaping CommandResolver.LocalCLIResolver = { _, _ in .executable(["openclaw"]) })
     {
-        self.testingInterceptDaemonCommands = intercept ? resolveCLI : nil
-        self.testingDaemonCommandHook = hook
+        self.testingState.withLock {
+            $0.resolveCLI = intercept ? resolveCLI : nil
+            $0.commandHook = hook
+        }
     }
 
     static func setTestingDaemonStatusPayload(_ payload: String?) {
-        self.testingDaemonStatusPayload = payload
-        self.testingDaemonStatusPayloads = []
+        self.testingState.withLock {
+            $0.statusPayload = payload
+            $0.statusPayloads = []
+        }
     }
 
     static func setTestingDaemonStatusPayloads(_ payloads: [String]) {
-        self.testingDaemonStatusPayload = nil
-        self.testingDaemonStatusPayloads = payloads
+        self.testingState.withLock {
+            $0.statusPayload = nil
+            $0.statusPayloads = payloads
+        }
     }
 
     static func clearTestingDaemonCommandCalls() {
-        self.testingDaemonCommandCalls.removeAll(keepingCapacity: false)
+        self.testingState.withLock { $0.commandCalls.removeAll(keepingCapacity: false) }
     }
 
     static func testingDaemonCommandCallsSnapshot() -> [[String]] {
-        self.testingDaemonCommandCalls.map(\.arguments)
+        self.testingState.withLock { $0.commandCalls.map(\.arguments) }
     }
 
     static func testingResolvedDaemonCommandsSnapshot() -> [[String]] {
-        self.testingDaemonCommandCalls.map(\.command)
+        self.testingState.withLock { $0.commandCalls.map(\.command) }
     }
 
     static func _testRunningGatewayPID(from json: String) -> Int32? {

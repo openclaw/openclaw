@@ -55,133 +55,80 @@ describe("resolveExecTarget", () => {
     expect(consumeTrustedToolNoStartError(invalidError)).toBe(false);
   });
 
-  it("keeps implicit auto on sandbox when a sandbox runtime is available", () => {
-    expectExecTarget(
-      resolveExecTarget({
-        configuredTarget: "auto",
-        elevatedRequested: false,
-        sandboxAvailable: true,
-      }),
-      {
-        configuredTarget: "auto",
-        requestedTarget: null,
-        selectedTarget: "auto",
-        effectiveHost: "sandbox",
-      },
-    );
-  });
+  it.each([
+    ["auto", undefined, true, false, "auto", "sandbox"],
+    ["auto", undefined, false, false, "auto", "gateway"],
+    ["auto", "node", false, false, "node", "node"],
+    ["auto", "gateway", false, false, "gateway", "gateway"],
+    ["auto", "sandbox", true, false, "sandbox", "sandbox"],
+    ["node", "node", true, false, "node", "node"],
+    ["auto", "sandbox", true, true, "gateway", "gateway"],
+    ["auto", "node", false, true, "node", "node"],
+    ["node", "node", false, true, "node", "node"],
+    ["node", undefined, false, true, "node", "node"],
+  ] as const)(
+    "resolves configured=%s requested=%s sandbox=%s elevated=%s to selected=%s host=%s",
+    (
+      configuredTarget,
+      requestedTarget,
+      sandboxAvailable,
+      elevatedRequested,
+      selectedTarget,
+      effectiveHost,
+    ) => {
+      expectExecTarget(
+        resolveExecTarget({
+          configuredTarget,
+          requestedTarget,
+          elevatedRequested,
+          sandboxAvailable,
+        }),
+        {
+          configuredTarget,
+          requestedTarget: requestedTarget ?? null,
+          selectedTarget,
+          effectiveHost,
+        },
+      );
+    },
+  );
 
-  it("keeps implicit auto on gateway when no sandbox runtime is available", () => {
-    expectExecTarget(
-      resolveExecTarget({
-        configuredTarget: "auto",
-        elevatedRequested: false,
-        sandboxAvailable: false,
-      }),
-      {
-        configuredTarget: "auto",
-        requestedTarget: null,
-        selectedTarget: "auto",
-        effectiveHost: "gateway",
-      },
-    );
-  });
+  it.each(["gateway", "node"] as const)(
+    "rejects per-call host=%s override from auto when sandbox is available",
+    (requestedTarget) => {
+      expect(() =>
+        resolveExecTarget({
+          configuredTarget: "auto",
+          requestedTarget,
+          elevatedRequested: false,
+          sandboxAvailable: true,
+        }),
+      ).toThrow(
+        `exec host not allowed (requested ${requestedTarget}; configured host is auto; set tools.exec.host=${requestedTarget} to allow this override).`,
+      );
+    },
+  );
 
-  it("allows per-call host=node override when configured host is auto", () => {
-    expectExecTarget(
-      resolveExecTarget({
-        configuredTarget: "auto",
-        requestedTarget: "node",
-        elevatedRequested: false,
-        sandboxAvailable: false,
-      }),
-      {
-        configuredTarget: "auto",
-        requestedTarget: "node",
-        selectedTarget: "node",
-        effectiveHost: "node",
-      },
-    );
-  });
-
-  it("allows per-call host=gateway override when configured host is auto and no sandbox", () => {
-    expectExecTarget(
-      resolveExecTarget({
-        configuredTarget: "auto",
-        requestedTarget: "gateway",
-        elevatedRequested: false,
-        sandboxAvailable: false,
-      }),
-      {
-        configuredTarget: "auto",
-        requestedTarget: "gateway",
-        selectedTarget: "gateway",
-        effectiveHost: "gateway",
-      },
-    );
-  });
-
-  it("rejects per-call host=gateway override from auto when sandbox is available", () => {
-    expect(() =>
-      resolveExecTarget({
-        configuredTarget: "auto",
-        requestedTarget: "gateway",
-        elevatedRequested: false,
-        sandboxAvailable: true,
-      }),
-    ).toThrow(
-      "exec host not allowed (requested gateway; configured host is auto; set tools.exec.host=gateway to allow this override).",
-    );
-  });
-
-  it("rejects per-call host=node override from auto when sandbox is available", () => {
-    expect(() =>
-      resolveExecTarget({
-        configuredTarget: "auto",
-        requestedTarget: "node",
-        elevatedRequested: false,
-        sandboxAvailable: true,
-      }),
-    ).toThrow(
-      "exec host not allowed (requested node; configured host is auto; set tools.exec.host=node to allow this override).",
-    );
-  });
-
-  it("allows per-call host=sandbox override when configured host is auto", () => {
-    expectExecTarget(
-      resolveExecTarget({
-        configuredTarget: "auto",
-        requestedTarget: "sandbox",
-        elevatedRequested: false,
-        sandboxAvailable: true,
-      }),
-      {
-        configuredTarget: "auto",
-        requestedTarget: "sandbox",
-        selectedTarget: "sandbox",
-        effectiveHost: "sandbox",
-      },
-    );
-  });
-
-  it("rejects cross-host override when configured target is a concrete host", () => {
-    expect(() =>
-      resolveExecTarget({
-        configuredTarget: "node",
-        requestedTarget: "gateway",
-        elevatedRequested: false,
-        sandboxAvailable: false,
-      }),
-    ).toThrow(
-      "exec host not allowed (requested gateway; configured host is node; set tools.exec.host=gateway or auto to allow this override).",
-    );
-  });
+  it.each([false, true])(
+    "rejects gateway override when configured host is node (elevated=%s)",
+    (elevatedRequested) => {
+      expect(() =>
+        resolveExecTarget({
+          configuredTarget: "node",
+          requestedTarget: "gateway",
+          elevatedRequested,
+          sandboxAvailable: false,
+        }),
+      ).toThrow(
+        "exec host not allowed (requested gateway; configured host is node; set tools.exec.host=gateway or auto to allow this override).",
+      );
+    },
+  );
 
   it.each([
     ["auto", true, false, "sandbox"],
     ["auto", false, false, "gateway"],
     ["sandbox", true, false, "sandbox"],
-    ["gateway", true, false, "gateway"],
     ["gateway", false, false, "gateway"],
     ["node", false, false, "node"],
     ["sandbox", true, true, "gateway"],
@@ -202,103 +149,6 @@ describe("resolveExecTarget", () => {
     },
   );
 
-  it("allows exact node matches", () => {
-    expectExecTarget(
-      resolveExecTarget({
-        configuredTarget: "node",
-        requestedTarget: "node",
-        elevatedRequested: false,
-        sandboxAvailable: true,
-      }),
-      {
-        configuredTarget: "node",
-        requestedTarget: "node",
-        selectedTarget: "node",
-        effectiveHost: "node",
-      },
-    );
-  });
-
-  it("forces elevated requests onto the gateway host when configured target is auto", () => {
-    expectExecTarget(
-      resolveExecTarget({
-        configuredTarget: "auto",
-        requestedTarget: "sandbox",
-        elevatedRequested: true,
-        sandboxAvailable: true,
-      }),
-      {
-        configuredTarget: "auto",
-        requestedTarget: "sandbox",
-        selectedTarget: "gateway",
-        effectiveHost: "gateway",
-      },
-    );
-  });
-
-  it("keeps explicit node override under elevated requests when configured target is auto", () => {
-    expectExecTarget(
-      resolveExecTarget({
-        configuredTarget: "auto",
-        requestedTarget: "node",
-        elevatedRequested: true,
-        sandboxAvailable: false,
-      }),
-      {
-        configuredTarget: "auto",
-        requestedTarget: "node",
-        selectedTarget: "node",
-        effectiveHost: "node",
-      },
-    );
-  });
-
-  it("honours node target for elevated requests when configured target is node", () => {
-    expectExecTarget(
-      resolveExecTarget({
-        configuredTarget: "node",
-        requestedTarget: "node",
-        elevatedRequested: true,
-        sandboxAvailable: false,
-      }),
-      {
-        configuredTarget: "node",
-        requestedTarget: "node",
-        selectedTarget: "node",
-        effectiveHost: "node",
-      },
-    );
-  });
-
-  it("routes to node for elevated when configured=node and no per-call override", () => {
-    expectExecTarget(
-      resolveExecTarget({
-        configuredTarget: "node",
-        elevatedRequested: true,
-        sandboxAvailable: false,
-      }),
-      {
-        configuredTarget: "node",
-        requestedTarget: null,
-        selectedTarget: "node",
-        effectiveHost: "node",
-      },
-    );
-  });
-
-  it("rejects mismatched requestedTarget under elevated+node", () => {
-    expect(() =>
-      resolveExecTarget({
-        configuredTarget: "node",
-        requestedTarget: "gateway",
-        elevatedRequested: true,
-        sandboxAvailable: false,
-      }),
-    ).toThrow(
-      "exec host not allowed (requested gateway; configured host is node; set tools.exec.host=gateway or auto to allow this override).",
-    );
-  });
-
   describe("required session sandbox", () => {
     it.each(["gateway", "node"] as const)(
       "rejects explicit host=%s even when the configured host matches",
@@ -317,8 +167,6 @@ describe("resolveExecTarget", () => {
 
     it.each([
       { host: "gateway", requestedTarget: undefined },
-      { host: "gateway", requestedTarget: "auto" },
-      { host: "node", requestedTarget: undefined },
       { host: "node", requestedTarget: "auto" },
     ] as const)(
       "keeps requested=$requestedTarget sandboxed despite configured host=$host",

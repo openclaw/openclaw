@@ -3,11 +3,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as exec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import * as gitExec from "./git-exec.js";
 import * as openclawRoot from "./openclaw-root.js";
 import { createRootRunner, writePackageRoot } from "./package-update-steps.test-support.js";
 import * as restartSentinel from "./restart-sentinel.js";
+import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
 import { checkUpdateStatus } from "./update-check.js";
 import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
 import {
@@ -173,6 +175,7 @@ describe("FreeBSD package-manager admission", () => {
             ).resolves.toMatchObject({ root, installKind: "package", packageManager: "npm" });
           } else {
             const startup = createGatewayUpdateCheck({
+              lifecycle: createGatewayUpdateLifecycle(createTestGatewayScheduler()),
               getConfig: () => ({}),
               log: { info: vi.fn() },
               isNixMode: false,

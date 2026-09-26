@@ -2,6 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import { withSqliteNativeOpen } from "../infra/sqlite-error-diagnostics.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { acquireStateDatabaseHandleLease } from "../infra/state-database-coordinator.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -12,6 +13,7 @@ const handleLeases = resolveGlobalSingleton(
 
 type StateDatabaseOpenOptions = {
   existingOnly?: boolean;
+  expectedIdentity?: string;
   readOnly?: boolean;
   timeout?: number;
   enableForeignKeyConstraints?: false;
@@ -35,7 +37,13 @@ export function openTrackedStateDatabaseResult(
 ): { status: "available"; database: DatabaseSync } | { status: "unavailable"; error: unknown } {
   const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
   try {
-    const location = options?.existingOnly ? resolveExistingSqliteFileUri(pathname) : pathname;
+    if (options?.expectedIdentity !== undefined) {
+      assertExistingDatabaseIdentity(pathname, options.expectedIdentity);
+    }
+    const location =
+      options?.existingOnly || options?.expectedIdentity !== undefined
+        ? resolveExistingSqliteFileUri(pathname)
+        : pathname;
     const nativeOptions = options?.readOnly
       ? { readOnly: true, timeout: options.timeout }
       : { enableForeignKeyConstraints: options?.enableForeignKeyConstraints };

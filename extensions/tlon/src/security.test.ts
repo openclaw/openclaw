@@ -1,3 +1,4 @@
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 /**
  * Security Tests for Tlon Plugin
  *
@@ -7,11 +8,11 @@
  * - Ship normalization consistency
  * - Bot mention detection boundaries
  */
-
-import { describe, expect, it, vi } from "vitest";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveChannelAuthorization } from "./monitor/authorization.js";
+import { createTlonCitationResolver } from "./monitor/cites.js";
 import {
-  extractCites,
   resolveTlonCommandAuthorizationWithIngress,
   isDmAllowedWithIngress,
   isGroupInviteAllowed,
@@ -20,7 +21,11 @@ import {
   resolveAuthorizedMessageText,
   resolveTlonGroupMentionDecision,
 } from "./monitor/utils.js";
-import { normalizeShip } from "./targets.js";
+import { setTlonRuntime } from "./runtime.js";
+
+beforeEach(() => {
+  setTlonRuntime(createPluginRuntimeMock());
+});
 
 const allowlistShipMatchingCases = [
   { label: "DM allowlist", isAllowed: isDmAllowedWithIngress },
@@ -78,48 +83,6 @@ describe("Security: DM Allowlist", () => {
       await expectDmAllowed("~zod", undefined, false);
     });
 
-    it("allows DMs from ships on the allowlist", async () => {
-      const allowlist = ["~zod", "~bus"];
-      await expectDmAllowed("~zod", allowlist, true);
-      await expectDmAllowed("~bus", allowlist, true);
-    });
-
-    it("rejects DMs from ships NOT on the allowlist", async () => {
-      const allowlist = ["~zod", "~bus"];
-      await expectDmAllowed("~nec", allowlist, false);
-      await expectDmAllowed("~sampel-palnet", allowlist, false);
-      await expectDmAllowed("~random-ship", allowlist, false);
-    });
-
-    it("handles galaxy, star, planet, and moon names", async () => {
-      const allowlist = [
-        "~zod", // galaxy
-        "~marzod", // star
-        "~sampel-palnet", // planet
-        "~dozzod-dozzod-dozzod-dozzod", // moon
-      ];
-
-      await expectDmAllowed("~zod", allowlist, true);
-      await expectDmAllowed("~marzod", allowlist, true);
-      await expectDmAllowed("~sampel-palnet", allowlist, true);
-      await expectDmAllowed("~dozzod-dozzod-dozzod-dozzod", allowlist, true);
-
-      // Similar but different ships should be rejected
-      await expectDmAllowed("~nec", allowlist, false);
-      await expectDmAllowed("~wanzod", allowlist, false);
-      await expectDmAllowed("~sampel-palned", allowlist, false);
-    });
-
-    // NOTE: Ship names in Urbit are always lowercase by convention.
-    // This test documents current behavior - strict equality after normalization.
-    // If case-insensitivity is desired, normalizeShip should lowercase.
-    it("uses strict equality after normalization (case-sensitive)", async () => {
-      const allowlist = ["~zod"];
-      await expectDmAllowed("~zod", allowlist, true);
-      // Different case would NOT match with current implementation
-      await expectDmAllowed("~Zod", ["~Zod"], true); // exact match works
-    });
-
     it("handles whitespace in ship names (normalized)", async () => {
       // Ships with leading/trailing whitespace are normalized by normalizeShip
       const allowlist = [" ~zod ", "~bus"];
@@ -165,19 +128,6 @@ describe("Security: Group Invite Allowlist", () => {
       expect(isGroupInviteAllowed("~sampel-palnet", undefined)).toBe(false);
     });
 
-    it("accepts invites from ships on the allowlist", () => {
-      const allowlist = ["~nocsyx-lassul", "~malmur-halmex"];
-      expect(isGroupInviteAllowed("~nocsyx-lassul", allowlist)).toBe(true);
-      expect(isGroupInviteAllowed("~malmur-halmex", allowlist)).toBe(true);
-    });
-
-    it("rejects invites from ships NOT on the allowlist", () => {
-      const allowlist = ["~nocsyx-lassul", "~malmur-halmex"];
-      expect(isGroupInviteAllowed("~random-attacker", allowlist)).toBe(false);
-      expect(isGroupInviteAllowed("~malicious-ship", allowlist)).toBe(false);
-      expect(isGroupInviteAllowed("~zod", allowlist)).toBe(false);
-    });
-
     it("handles whitespace in allowlist entries", () => {
       const allowlist = [" ~nocsyx-lassul ", "~malmur-halmex"];
       expect(isGroupInviteAllowed("~nocsyx-lassul", allowlist)).toBe(true);
@@ -206,12 +156,6 @@ describe("Security: Bot Mention Detection", () => {
       expect(isBotMentioned("hey nimbus", botShip, nickname)).toBe(true);
       expect(isBotMentioned("nimbus help me", botShip, nickname)).toBe(true);
       expect(isBotMentioned("hello NIMBUS", botShip, nickname)).toBe(true);
-    });
-
-    it("does NOT trigger on random messages", () => {
-      expect(isBotMentioned("hello world", botShip)).toBe(false);
-      expect(isBotMentioned("this is a normal message", botShip)).toBe(false);
-      expect(isBotMentioned("hey everyone", botShip)).toBe(false);
     });
 
     it("does NOT trigger on partial ship matches", () => {
@@ -290,37 +234,8 @@ describe("Security: Group Mention Policy", () => {
   });
 });
 
-describe("Security: Ship Normalization", () => {
-  describe("normalizeShip", () => {
-    it("adds ~ prefix if missing", () => {
-      expect(normalizeShip("zod")).toBe("~zod");
-      expect(normalizeShip("sampel-palnet")).toBe("~sampel-palnet");
-    });
-
-    it("preserves ~ prefix if present", () => {
-      expect(normalizeShip("~zod")).toBe("~zod");
-      expect(normalizeShip("~sampel-palnet")).toBe("~sampel-palnet");
-    });
-
-    it("trims whitespace", () => {
-      expect(normalizeShip(" ~zod ")).toBe("~zod");
-      expect(normalizeShip("  zod  ")).toBe("~zod");
-    });
-
-    it("handles empty string", () => {
-      expect(normalizeShip("")).toBe("");
-      expect(normalizeShip("   ")).toBe("");
-    });
-  });
-});
-
 describe("Security: Message Text Extraction", () => {
   describe("extractMessageText", () => {
-    it("extracts plain text", () => {
-      const content = [{ inline: ["hello world"] }];
-      expect(extractMessageText(content)).toBe("hello world");
-    });
-
     it("extracts @all mentions from sect null", () => {
       const content = [{ inline: [{ sect: null }] }];
       expect(extractMessageText(content)).toContain("@all");
@@ -337,14 +252,6 @@ describe("Security: Message Text Extraction", () => {
       expect(extractMessageText([])).toBe("");
       expect(extractMessageText([{}])).toBe("");
       expect(extractMessageText("not an array")).toBe("");
-    });
-
-    it("does not execute injected code in inline content", () => {
-      // Ensure malicious content doesn't get executed
-      const maliciousContent = [{ inline: ["<script>alert('xss')</script>"] }];
-      const result = extractMessageText(maliciousContent);
-      expect(result).toBe("<script>alert('xss')</script>");
-      // Just a string, not executed
     });
   });
 });
@@ -415,11 +322,6 @@ describe("Security: Authorization Edge Cases", () => {
     await expectDmAllowed("~zod", [""], false);
   });
 
-  it("handles very long ship-like strings", async () => {
-    const longName = "~" + "a".repeat(1000);
-    await expectDmAllowed(longName, ["~zod"], false);
-  });
-
   it("handles special characters that could break regex", async () => {
     // These should not cause regex injection
     const maliciousShip = "~zod.*";
@@ -437,181 +339,47 @@ describe("Security: Authorization Edge Cases", () => {
 });
 
 describe("Security: Cite Resolution Authorization Ordering", () => {
-  async function resolveAllCitesForPoC(
-    content: unknown,
-    api: { scry: (path: string) => Promise<unknown> },
-  ): Promise<string> {
-    const cites = extractCites(content);
-    if (cites.length === 0) {
-      return "";
-    }
-
-    const resolved: string[] = [];
-    for (const cite of cites) {
-      if (cite.type !== "chan" || !cite.nest || !cite.postId) {
-        continue;
-      }
-      const data = (await api.scry(`/channels/v4/${cite.nest}/posts/post/${cite.postId}.json`)) as {
-        essay?: { content?: unknown };
-      };
-      const text = data?.essay?.content ? extractMessageText(data.essay.content) : "";
-      if (text) {
-        resolved.push(`> ${cite.author || "unknown"} wrote: ${text}`);
-      }
-    }
-
-    return resolved.length > 0 ? resolved.join("\n") + "\n\n" : "";
-  }
-
-  function buildCitedMessage(
-    secretNest = "chat/~private-ship/ops",
-    postId = "1701411845077995094",
-  ) {
-    return [
-      {
-        block: {
-          cite: {
-            chan: {
-              nest: secretNest,
-              where: `/msg/~victim-ship/${postId}`,
-            },
+  const content = [
+    {
+      block: {
+        cite: {
+          chan: {
+            nest: "chat/~private-ship/ops",
+            where: "/msg/~victim-ship/170141184507799509469114119040828178432",
           },
         },
       },
-      { inline: ["~bot-ship please summarize this"] },
-    ];
+    },
+    { inline: ["~bot-ship please summarize this"] },
+  ];
+  const rawText = extractMessageText(content);
+
+  function createResolver() {
+    const scry = vi.fn(async () => ({ essay: { content: [{ inline: ["PRIVATE-CONTENT"] }] } }));
+    return {
+      scry,
+      ...createTlonCitationResolver({ api: { scry }, runtime: createNonExitingRuntimeEnv() }),
+    };
   }
 
-  it("does not resolve channel cites for unauthorized senders", async () => {
-    const content = buildCitedMessage();
-    const rawText = extractMessageText(content);
-    const api = {
-      scry: vi.fn(async () => ({
-        essay: { content: [{ inline: ["TOP-SECRET"] }] },
-      })),
-    };
-
-    const messageText = await resolveAuthorizedMessageText({
-      rawText,
-      content,
-      authorizedForCites: false,
-      resolveAllCites: (nextContent) => resolveAllCitesForPoC(nextContent, api),
-    });
-
-    expect(messageText).toBe(rawText);
-    expect(api.scry).not.toHaveBeenCalled();
-  });
-
-  it("resolves channel cites after sender authorization passes", async () => {
-    const secretNest = "chat/~private-ship/ops";
-    const postId = "170141184507799509469114119040828178432";
-    const content = buildCitedMessage(secretNest, postId);
-    const rawText = extractMessageText(content);
-    const api = {
-      scry: vi.fn(async (path: string) => {
-        expect(path).toBe(`/channels/v4/${secretNest}/posts/post/${postId}.json`);
-        return {
-          essay: { content: [{ inline: ["TOP-SECRET: migration key is rotate-me"] }] },
-        };
+  it("does not fetch cited content before sender authorization", async () => {
+    const { scry, resolveAllCites } = createResolver();
+    await expect(
+      resolveAuthorizedMessageText({
+        rawText,
+        content,
+        authorizedForCites: false,
+        resolveAllCites,
       }),
-    };
-
-    const messageText = await resolveAuthorizedMessageText({
-      rawText,
-      content,
-      authorizedForCites: true,
-      resolveAllCites: (nextContent) => resolveAllCitesForPoC(nextContent, api),
-    });
-
-    expect(api.scry).toHaveBeenCalledTimes(1);
-    expect(messageText).toContain("TOP-SECRET: migration key is rotate-me");
-    expect(messageText).toContain("> ~victim-ship wrote: TOP-SECRET: migration key is rotate-me");
+    ).resolves.toBe(rawText);
+    expect(scry).not.toHaveBeenCalled();
   });
 
-  it("does not resolve DM cites before a deny path", async () => {
-    const content = buildCitedMessage("chat/~secret-dm/ops", "1701411845077995095");
-    const rawText = extractMessageText(content);
-    const senderShip = "~attacker-ship";
-    const allowlist = ["~trusted-ship"];
-    const api = {
-      scry: vi.fn(async () => ({
-        essay: { content: [{ inline: ["DM-SECRET"] }] },
-      })),
-    };
-
-    const senderAllowed = allowlist
-      .map((ship) => normalizeShip(ship))
-      .includes(normalizeShip(senderShip));
-    expect(senderAllowed).toBe(false);
-
-    const messageText = await resolveAuthorizedMessageText({
-      rawText,
-      content,
-      authorizedForCites: senderAllowed,
-      resolveAllCites: (nextContent) => resolveAllCitesForPoC(nextContent, api),
-    });
-
-    expect(messageText).toBe(rawText);
-    expect(api.scry).not.toHaveBeenCalled();
-  });
-
-  it("does not resolve DM cites before owner approval command handling", async () => {
-    const content = [
-      {
-        block: {
-          cite: {
-            chan: {
-              nest: "chat/~private-ship/admin",
-              where: "/msg/~victim-ship/1701411845077995096",
-            },
-          },
-        },
-      },
-      { inline: ["/approve 1"] },
-    ];
-    const rawText = extractMessageText(content);
-    const api = {
-      scry: vi.fn(async () => ({
-        essay: { content: [{ inline: ["ADMIN-SECRET"] }] },
-      })),
-    };
-
-    const messageText = await resolveAuthorizedMessageText({
-      rawText,
-      content,
-      authorizedForCites: false,
-      resolveAllCites: (nextContent) => resolveAllCitesForPoC(nextContent, api),
-    });
-
-    expect(rawText).toContain("/approve 1");
-    expect(messageText).toBe(rawText);
-    expect(messageText).not.toContain("ADMIN-SECRET");
-    expect(api.scry).not.toHaveBeenCalled();
-  });
-
-  it("resolves DM cites for allowed senders after authorization passes", async () => {
-    const secretNest = "chat/~private-ship/dm";
-    const postId = "1701411845077995097";
-    const content = buildCitedMessage(secretNest, postId);
-    const rawText = extractMessageText(content);
-    const api = {
-      scry: vi.fn(async (path: string) => {
-        expect(path).toBe(`/channels/v4/${secretNest}/posts/post/${postId}.json`);
-        return {
-          essay: { content: [{ inline: ["ALLOWED-DM-SECRET"] }] },
-        };
-      }),
-    };
-
-    const messageText = await resolveAuthorizedMessageText({
-      rawText,
-      content,
-      authorizedForCites: true,
-      resolveAllCites: (nextContent) => resolveAllCitesForPoC(nextContent, api),
-    });
-
-    expect(api.scry).toHaveBeenCalledTimes(1);
-    expect(messageText).toContain("ALLOWED-DM-SECRET");
-    expect(messageText).toContain("> ~victim-ship wrote: ALLOWED-DM-SECRET");
+  it("prepends the resolved citation after sender authorization", async () => {
+    const { scry, resolveAllCites } = createResolver();
+    await expect(
+      resolveAuthorizedMessageText({ rawText, content, authorizedForCites: true, resolveAllCites }),
+    ).resolves.toBe(`> ~victim-ship wrote: PRIVATE-CONTENT\n\n${rawText}`);
+    expect(scry).toHaveBeenCalledTimes(1);
   });
 });

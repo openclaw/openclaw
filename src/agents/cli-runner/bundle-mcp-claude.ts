@@ -4,7 +4,24 @@
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { BundleMcpConfig } from "../../plugins/bundle-mcp.js";
+import { resolveQuestionTimeoutMs } from "../tools/ask-user-tool-normalization.js";
 import { withOpenClawMcpCaptureHeader } from "./bundle-mcp-runtime.js";
+
+export const CLAUDE_MANAGED_MCP_TIMEOUT_MS = resolveQuestionTimeoutMs(3_600);
+
+export function applyClaudeManagedMcpTimeout(config: BundleMcpConfig): BundleMcpConfig {
+  return {
+    ...config,
+    mcpServers: {
+      ...config.mcpServers,
+      openclaw: {
+        ...config.mcpServers.openclaw,
+        timeout: CLAUDE_MANAGED_MCP_TIMEOUT_MS,
+      },
+    },
+  };
+}
 
 /** Find existing Claude `--mcp-config` argument values. */
 export function findClaudeMcpConfigPaths(args?: string[]): string[] {

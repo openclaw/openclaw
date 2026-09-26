@@ -475,17 +475,6 @@ describe("external plugin local dist build", () => {
     ).toBe(true);
   });
 
-  it("leaves Docker-selected external plugin compilation on the unified build path", () => {
-    expect(
-      listExternalPluginLocalDistPackageDirs({
-        env: {
-          ...process.env,
-          [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack,whatsapp",
-        },
-      }),
-    ).toEqual([]);
-  });
-
   it("retains released optional outputs and respects private QA and bounded selectors", () => {
     const env = { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" };
     const selected = collectSourceCheckoutPluginBuildEntries({ env });

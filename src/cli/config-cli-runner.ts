@@ -5,6 +5,8 @@ import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
+import { isConfigValidationFailedError } from "../config/io.write-errors.js";
+import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
@@ -20,6 +22,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ExitError, writeRuntimeJson } from "../runtime.js";
 import { toDotPath } from "../shared/dot-path.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import { formatCliCommand } from "./command-format.js";
 import {
   formatPluginInstallConfigSetError,
   type ConfigMutationOptions,
@@ -67,13 +71,31 @@ function pathEquals(path: readonly PathSegment[], expected: readonly PathSegment
   );
 }
 
+function remapSuppliedPathsAfterDelete(
+  paths: PathSegment[][],
+  deletedPath: PathSegment[],
+  arrayIndex: number | undefined,
+): PathSegment[][] {
+  const parent = deletedPath.slice(0, -1);
+  return paths.flatMap((path) => {
+    if (pathStartsWith(path, deletedPath)) {
+      return [];
+    }
+    if (arrayIndex === undefined || path.length <= parent.length || !pathStartsWith(path, parent)) {
+      return [path];
+    }
+    const segment = path[parent.length];
+    const index = segment === undefined ? undefined : parseConfigPathArrayIndex(segment);
+    return index !== undefined && index > arrayIndex
+      ? [[...parent, String(index - 1), ...path.slice(parent.length + 1)]]
+      : [path];
+  });
+}
+
 function valueHasAutoManagedChild(value: unknown, childPath: readonly PathSegment[]): boolean {
   let cursor: unknown = value;
   for (const segment of childPath) {
-    if (!isRecord(cursor)) {
-      return false;
-    }
-    if (!Object.hasOwn(cursor, segment)) {
+    if (!isRecord(cursor) || !Object.hasOwn(cursor, segment)) {
       return false;
     }
     cursor = cursor[segment];
@@ -129,8 +151,7 @@ function findAutoManagedMetaTargets(
 }
 
 function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
-  const targets = paths.map(toDotPath);
-  const subject = targets.length === 1 ? targets[0] : targets.join(", ");
+  const subject = paths.map(toDotPath).join(", ");
   return [
     `${subject} is auto-managed by OpenClaw and cannot be edited; the value would be overwritten on the next config write.`,
     "",
@@ -239,14 +260,6 @@ function configApplyHintForOperations(
     : "No gateway restart needed.";
 }
 
-async function loadMutationSchema() {
-  try {
-    return await readBestEffortRuntimeConfigSchema();
-  } catch {
-    return undefined;
-  }
-}
-
 function assertConfigSetCurrentExpectation(params: {
   authoredConfig: OpenClawConfig;
   operation: ConfigSetOperation;
@@ -262,15 +275,6 @@ function assertConfigSetCurrentExpectation(params: {
       "conditional config set expectation did not match the authored config",
       { retryable: false },
     );
-  }
-}
-
-function assertConfigSetCurrentExpectationPath(params: {
-  operation: ConfigSetOperation;
-  writePath: readonly PathSegment[];
-}): void {
-  if (!pathEquals(params.operation.requestedPath, params.writePath)) {
-    throw new Error("conditional config set requires a direct, non-redirected config path");
   }
 }
 
@@ -314,10 +318,11 @@ export async function runConfigOperations(params: {
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved);
-  const mutationSchema = await loadMutationSchema();
+  const mutationSchema = await readBestEffortRuntimeConfigSchema().catch(() => undefined);
   const roster = new ConfigMutationAgentRoster(next, snapshot.sourceConfigBeforeMigrations);
   let unsetPaths: PathSegment[][] = [];
-  const explicitSetPaths: PathSegment[][] = [];
+  let explicitSetPaths: PathSegment[][] = [];
+  let suppliedValuePaths: PathSegment[][] = [];
   const appliedOperations: ConfigSetOperation[] = [];
   const recordOperation = (operation: ConfigSetOperation): PathSegment[] => {
     const writePath = roster.writePath(operation.setPath);
@@ -338,14 +343,21 @@ export async function runConfigOperations(params: {
     const merge =
       operation.mutation === "merge" || (options.merge && operation.mutation !== "replace");
     roster.prepare(operation, Boolean(merge));
-    if (currentExpectation) {
-      assertConfigSetCurrentExpectationPath({
-        operation,
-        writePath: roster.writePath(operation.setPath),
-      });
+    if (
+      currentExpectation &&
+      !pathEquals(operation.requestedPath, roster.writePath(operation.setPath))
+    ) {
+      throw new Error("conditional config set requires a direct, non-redirected config path");
     }
     if (operation.mutation === "delete") {
       const writePath = recordOperation(operation);
+      // Capture identity before the splice changes legacy roster positions.
+      const deletesCanonicalAgent =
+        operation.setPath.length === 3 &&
+        operation.setPath[0] === "agents" &&
+        operation.setPath[1] === "list" &&
+        writePath[1] === "entries";
+      const deletedSegment = operation.setPath.at(-1);
       const unsetResult = unsetAtPath(next, operation.setPath);
       if (!unsetResult.removed && operation.inputMode === "unset") {
         const requestedPath = formatConfigSetPath(operation.requestedPath, operation.pathTokens);
@@ -382,6 +394,33 @@ export async function runConfigOperations(params: {
       if (!unsetResult.removed || unsetResult.leafContainer !== "array") {
         unsetPaths.push(writePath);
       }
+      if (unsetResult.removed) {
+        // Canonical agent IDs (even numeric IDs) are keys, not list indices.
+        const arrayIndex =
+          unsetResult.leafContainer === "array" &&
+          !deletesCanonicalAgent &&
+          deletedSegment !== undefined
+            ? parseConfigPathArrayIndex(deletedSegment)
+            : undefined;
+        suppliedValuePaths = remapSuppliedPathsAfterDelete(
+          suppliedValuePaths,
+          writePath,
+          arrayIndex,
+        );
+        explicitSetPaths = remapSuppliedPathsAfterDelete(explicitSetPaths, writePath, arrayIndex);
+        // Validation follows surviving values after a splice, too. Keep removed
+        // operations in history for deletion policy and preview counts.
+        for (const applied of appliedOperations) {
+          const [survivingPath] = remapSuppliedPathsAfterDelete(
+            [applied.setPath],
+            writePath,
+            arrayIndex,
+          );
+          if (survivingPath) {
+            applied.setPath = survivingPath;
+          }
+        }
+      }
       continue;
     }
     const pathOptions = {
@@ -390,8 +429,9 @@ export async function runConfigOperations(params: {
       quotedNumericSegments: operation.quotedNumericSegments,
       schema: mutationSchema?.schema as JsonSchemaRecord | undefined,
     };
+    let suppliedPaths: PathSegment[][];
     if (merge) {
-      mergeAtPath(next, operation.setPath, operation.value, pathOptions);
+      suppliedPaths = mergeAtPath(next, operation.setPath, operation.value, pathOptions);
     } else {
       assertNonDestructiveReplacement({
         root: next,
@@ -400,7 +440,9 @@ export async function runConfigOperations(params: {
         allowReplace: options.replace || operation.mutation === "replace",
       });
       setAtPath(next, operation.setPath, operation.value, pathOptions);
+      suppliedPaths = [operation.setPath];
     }
+    suppliedValuePaths.push(...suppliedPaths.map((path) => roster.writePath(path)));
     explicitSetPaths.push(recordOperation(operation));
   }
   roster.finish();
@@ -423,23 +465,55 @@ export async function runConfigOperations(params: {
   }
   nextConfig = normalizeConfigMutationModelRefs(nextConfig);
   const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
+  // Parent merge paths own policy, but inherited children are not caller-authored values.
+  const resolutionEnv = mutationStart.writeOptions.envSnapshotForRestore ?? process.env;
+  const preparedValues = prepareConfigWriteValues({
+    snapshot,
+    nextConfig,
+    explicitSetPaths: suppliedValuePaths.map(normalizeConfigMutationExplicitSetPath),
+    env: resolutionEnv,
+  });
+  const authoredNextConfig = preparedValues.authoredConfig;
+  const preparedPreviousValues = prepareConfigWriteValues({
+    snapshot,
+    nextConfig: currentConfig,
+    env: resolutionEnv,
+  });
+  const authoredPreviousConfig = preparedPreviousValues.authoredConfig;
+  let modelValidation = {
+    config: authoredNextConfig,
+    previousConfig: authoredPreviousConfig,
+    env: preparedValues.resolutionEnv,
+    previousEnv: preparedPreviousValues.resolutionEnv,
+  };
   if (options.dryRun) {
-    nextConfig = prepareConfigWriteTopology({
+    const topology = prepareConfigWriteTopology({
       snapshot,
       pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
-      nextConfig,
+      nextConfig: authoredNextConfig,
       options: { explicitSetPaths: normalizedExplicitSetPaths },
       unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
-      env: process.env,
-    }).nextConfig;
+      env: resolutionEnv,
+    });
+    nextConfig = topology.nextConfig;
+    modelValidation = {
+      config: topology.authoredConfig,
+      previousConfig: authoredPreviousConfig,
+      env: topology.resolutionEnv,
+      previousEnv: preparedPreviousValues.resolutionEnv,
+    };
   }
   const validation = await validateConfigMutation({
     config: nextConfig,
+    modelValidation,
     previousConfig: currentConfig,
     operations: appliedOperations,
     options,
     configPath: snapshot.path,
-    unchanged: params.successMode === "set" && isDeepStrictEqual(currentConfig, nextConfig),
+    unchanged:
+      params.successMode === "set" &&
+      isDeepStrictEqual(currentConfig, nextConfig) &&
+      isDeepStrictEqual(authoredPreviousConfig, authoredNextConfig),
     pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
     deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
   });
@@ -454,7 +528,7 @@ export async function runConfigOperations(params: {
   }
 
   await replaceConfigFile({
-    sourceConfig: nextConfig,
+    sourceConfig: authoredNextConfig,
     snapshot,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     writeOptions: {
@@ -531,6 +605,14 @@ export function handleConfigMutationError(params: {
     params.runtime.error(danger(message));
     exitCliAfterOutput(params.runtime, 1);
   }
-  params.runtime.error(danger(message));
+  if (isConfigValidationFailedError(params.err)) {
+    params.runtime.error("Config change declined. No settings were saved.");
+    params.runtime.error(message);
+    params.runtime.error(
+      `Correct the setting above and retry. Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values.`,
+    );
+  } else {
+    params.runtime.error(danger(message));
+  }
   exitCliAfterOutput(params.runtime, 1);
 }

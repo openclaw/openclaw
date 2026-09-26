@@ -21,13 +21,14 @@ export function workspaceResultGitCommand(cwd: string, args: string[]): string[]
 export async function requireWorkspaceResultGit(
   cwd: string,
   args: string[],
-  options: { input?: Uint8Array; baseEnv?: NodeJS.ProcessEnv } = {},
+  options: { input?: Uint8Array; baseEnv?: NodeJS.ProcessEnv; beforeInput?: () => void } = {},
 ): Promise<string> {
   const result = await runCommandWithTimeout(workspaceResultGitCommand(cwd, args), {
     timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
     maxOutputBytes: 1024 * 1024,
     baseEnv: options.baseEnv,
     input: options.input,
+    beforeInput: options.beforeInput,
   });
   if (result.termination !== "exit" || result.code !== 0) {
     throw new Error((result.stderr || result.stdout || `git ${args[0]} failed`).trim());
@@ -54,8 +55,10 @@ type WorkspaceResultRefUpdate = { ref: string; objectId?: string };
 export async function updateWorkspaceResultRefs(
   root: string,
   updates: readonly WorkspaceResultRefUpdate[] | (() => readonly WorkspaceResultRefUpdate[]),
+  assertCurrent?: () => void,
 ): Promise<void> {
   await withWorkspaceResultRefMutation(root, async (baseEnv) => {
+    assertCurrent?.();
     const current = typeof updates === "function" ? updates() : updates;
     if (current.length === 0) {
       return;
@@ -68,6 +71,7 @@ export async function updateWorkspaceResultRefs(
     await requireWorkspaceResultGit(root, ["update-ref", "--stdin", "-z"], {
       input: Buffer.from(input),
       baseEnv,
+      beforeInput: assertCurrent,
     });
   });
 }

@@ -7,9 +7,21 @@ import { defaultRuntime } from "../../runtime.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { formatInvalidPortOption } from "../error-format.js";
 import { formatHelpExamples } from "../help-format.js";
-import { addNodeCommandOptions } from "./command-options.js";
+import { addNodeCommandOptions, createNodeWorkerCommand } from "./command-options.js";
 import { resolveNodeGatewayOptions, resolveNodePairGatewayOptions } from "./gateway-options.js";
 import { runNodeIdentityShow } from "./identity.js";
+
+function addNodeGatewayOptions(command: Command): Command {
+  return command
+    .option("--host <host>", "Gateway host")
+    .option("--port <port>", "Gateway port")
+    .option("--context-path <path>", "Gateway WebSocket context path (e.g. /openclaw-gw)")
+    .option("--tls", "Use TLS for the gateway connection")
+    .option("--no-tls", "Disable TLS for the gateway connection")
+    .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
+    .option("--node-id <id>", "Override the generated node instance id")
+    .option("--display-name <name>", "Override node display name");
+}
 
 export function registerNodeCli(program: Command) {
   const node = addNodeCommandOptions(
@@ -26,35 +38,29 @@ export function registerNodeCli(program: Command) {
       ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.openclaw.ai/cli/node")}\n`,
   );
 
-  node
-    .command("worker", { hidden: true })
-    .description("Run the private macOS app node-host worker")
-    .option("--desktop-sharing", "Enable the app's desktop viewer capability")
-    .option("--no-desktop-sharing", "Disable the app's desktop viewer capability")
-    .action(async (opts: { desktopSharing?: boolean }) => {
+  node.addCommand(
+    createNodeWorkerCommand().action(async (opts: { desktopSharing?: boolean }) => {
       const { runNodeHostWorker } = await import("../../node-host/worker.js");
       await runNodeHostWorker({ desktopSharingEnabled: opts.desktopSharing });
-    });
+    }),
+    { hidden: true },
+  );
 
-  addNodeCommandOptions(node.command("run").description("Run the headless node host (foreground)"))
-    .option(
-      "--pair <code-or-url>",
-      "Pair with a setup code or oc-pair URL; explicit gateway flags take precedence",
+  addNodeGatewayOptions(
+    addNodeCommandOptions(
+      node.command("run").description("Run the headless node host (foreground)"),
     )
-    .addOption(
-      new Option(
-        "--pair-if-needed <code-or-url>",
-        "Use the saved device token when available; otherwise pair with this setup code",
-      ).conflicts("pair"),
-    )
-    .option("--host <host>", "Gateway host")
-    .option("--port <port>", "Gateway port")
-    .option("--context-path <path>", "Gateway WebSocket context path (e.g. /openclaw-gw)")
-    .option("--tls", "Use TLS for the gateway connection")
-    .option("--no-tls", "Disable TLS for the gateway connection")
-    .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-    .option("--node-id <id>", "Override the generated node instance id")
-    .option("--display-name <name>", "Override node display name")
+      .option(
+        "--pair <code-or-url>",
+        "Pair with a setup code or oc-pair URL; explicit gateway flags take precedence",
+      )
+      .addOption(
+        new Option(
+          "--pair-if-needed <code-or-url>",
+          "Use the saved device token when available; otherwise pair with this setup code",
+        ).conflicts("pair"),
+      ),
+  )
     .option("--session-host", "Host worker sessions for this foreground process")
     .addOption(new Option("--ephemeral").hideHelp())
     .addOption(new Option("--desktop-sharing").hideHelp())
@@ -125,21 +131,17 @@ export function registerNodeCli(program: Command) {
     .command("identity")
     .description("Print the node host device identity (device id + public key)")
     .option("--json", "Output JSON", false)
-    .action((opts) => {
-      runNodeIdentityShow(opts);
+    .action(async (opts) => {
+      await runNodeIdentityShow(opts);
     });
 
-  addNodeCommandOptions(
-    node.command("install").description("Install the node host service (launchd/systemd/schtasks)"),
+  addNodeGatewayOptions(
+    addNodeCommandOptions(
+      node
+        .command("install")
+        .description("Install the node host service (launchd/systemd/schtasks)"),
+    ),
   )
-    .option("--host <host>", "Gateway host")
-    .option("--port <port>", "Gateway port")
-    .option("--context-path <path>", "Gateway WebSocket context path (e.g. /openclaw-gw)")
-    .option("--tls", "Use TLS for the gateway connection")
-    .option("--no-tls", "Disable TLS for the gateway connection")
-    .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-    .option("--node-id <id>", "Override the generated node instance id")
-    .option("--display-name <name>", "Override node display name")
     .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
     .option("--no-share-installed-apps", "Disable installed application sharing")
     .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")

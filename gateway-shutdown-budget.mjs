@@ -1,4 +1,5 @@
-// Shared Gateway stop policy used by the run loop and native service definitions.
+// Shared stop policy; v2026.9.5 restart-health.constants.ts fixes the replacement window.
+export const GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS = 60_000;
 const GATEWAY_SHUTDOWN_DRAIN_TIMEOUT_MS = 315_000;
 export const GATEWAY_SHUTDOWN_RESERVE_MS = 10_000;
 export const GATEWAY_SUPERVISOR_EXIT_MARGIN_MS = 5_000;

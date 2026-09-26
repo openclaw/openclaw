@@ -4,6 +4,7 @@ import type { IncomingMessage } from "node:http";
 import type { Result } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
@@ -88,7 +89,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       : { kind: "none" as const };
   const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
   const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
-  const defaultSessionKey = resolveSessionKey(cfg.hooks?.defaultSessionKey);
+  const defaultSessionKey = normalizeOptionalString(cfg.hooks?.defaultSessionKey);
   const allowedSessionKeyPrefixes = resolveAllowedSessionKeyPrefixes(
     cfg.hooks?.allowedSessionKeyPrefixes,
   );
@@ -169,22 +170,13 @@ function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId?: string): Set
   return known;
 }
 
-function resolveSessionKey(raw: string | undefined): string | undefined {
-  return normalizeOptionalString(raw);
-}
-
-function normalizeSessionKeyPrefix(raw: string): string | undefined {
-  const value = normalizeLowercaseStringOrEmpty(raw);
-  return value ? value : undefined;
-}
-
 function resolveAllowedSessionKeyPrefixes(raw: string[] | undefined): string[] | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
   }
   const set = new Set<string>();
   for (const prefix of raw) {
-    const normalized = normalizeSessionKeyPrefix(prefix);
+    const normalized = normalizeOptionalLowercaseString(prefix);
     if (!normalized) {
       continue;
     }
@@ -347,9 +339,6 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
 
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
-/** Channel values accepted by hook agent dispatch. */
-
-const getHookChannelSet = () => new Set<string>(listHookChannelValues());
 /** Render the current hook channel validation error from registered channel plugins. */
 export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
 
@@ -362,7 +351,7 @@ export function resolveHookChannel(raw: unknown): HookMessageChannel | null {
     return null;
   }
   const normalized = normalizeMessageChannel(raw);
-  if (!normalized || !getHookChannelSet().has(normalized)) {
+  if (!normalized || !listHookChannelValues().includes(normalized)) {
     return null;
   }
   return normalized as HookMessageChannel;
@@ -609,7 +598,7 @@ export function resolveHookSessionKey(params: {
   sessionKey?: string;
   idFactory?: () => string;
 }): Result<string, string> {
-  const requested = resolveSessionKey(params.sessionKey);
+  const requested = normalizeOptionalString(params.sessionKey);
   if (requested) {
     if (
       (params.source === "request" || params.source === "mapping-templated") &&

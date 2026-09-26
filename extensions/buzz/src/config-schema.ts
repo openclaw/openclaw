@@ -34,7 +34,7 @@ const BuzzAccountConfigSchema = z
     relayUrl: z
       .string()
       .url()
-      .and(z.string().regex(/^[wW][sS][sS]?:\/\//, "Buzz relay URL must use ws:// or wss://"))
+      .and(z.string().regex(/^[wW][sS][sS]?:\/\/.+/, "Buzz relay URL must use ws:// or wss://"))
       .optional(),
     privateKey: buildSecretInputSchema().optional(),
     authTag: buildSecretInputSchema().optional(),

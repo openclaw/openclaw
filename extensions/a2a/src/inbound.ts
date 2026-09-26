@@ -2,7 +2,6 @@ import {
   buildChannelInboundEventContext,
   resolveChannelInboundRouteEnvelope,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isReplyPayloadTerminalContent } from "openclaw/plugin-sdk/reply-payload";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
@@ -43,7 +42,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
       // The peer id embeds the A2A contextId, giving one session per peer+context.
       dmScope: "per-account-channel-peer",
     });
-    const ingress = await resolveStableChannelMessageIngress({
+    const ingress = await params.channelRuntime.inbound.ingress.resolveStable({
       channelId: "a2a",
       accountId: params.account.accountId,
       cfg: params.config,
@@ -122,6 +121,9 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
           params.store.fail(params.taskId, error);
         },
       },
+      // Source replies complete the correlated task; the generic message tool
+      // starts a separate outbound message without that task correlation.
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
       replyPipeline: {},
     });
     if (dispatch.admission.kind !== "dispatch") {

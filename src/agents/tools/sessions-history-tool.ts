@@ -55,10 +55,18 @@ import {
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: ChatHistoryParamsSchema.properties.sessionKey,
   limit: ChatHistoryParamsSchema.properties.limit,
-  offset: ChatHistoryParamsSchema.properties.offset,
+  offset: Type.With(ChatHistoryParamsSchema.properties.offset, {
+    description:
+      "Plain-pagination offset. Ignored when messageId is set; limit still bounds anchored history.",
+  }),
   pendingBefore: ChatHistoryParamsSchema.properties.pendingBefore,
-  messageId: ChatHistoryParamsSchema.properties.messageId,
-  sessionId: ChatHistoryParamsSchema.properties.sessionId,
+  messageId: Type.With(ChatHistoryParamsSchema.properties.messageId, {
+    description: "Return history around this message id. Ignores offset; limit bounds the window.",
+  }),
+  sessionId: Type.With(ChatHistoryParamsSchema.properties.sessionId, {
+    description:
+      "Transcript session id that owns messageId. Requires messageId; omit for the latest tail.",
+  }),
   includeTools: Type.Optional(Type.Boolean()),
 });
 
@@ -134,23 +142,16 @@ function sanitizeHistoryContentBlock(
   const entry = { ...(block as Record<string, unknown>) };
   let truncated = false;
   let redacted = false;
-  if (typeof entry.text === "string") {
-    const res = truncateHistoryText(entry.text, maxChars);
-    entry.text = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
-  }
-  if (entry.type === "thinking" && typeof entry.thinking === "string") {
-    const res = truncateHistoryText(entry.thinking, maxChars);
-    entry.thinking = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
-  }
-  if (typeof entry.partialJson === "string") {
-    const res = truncateHistoryText(entry.partialJson, maxChars);
-    entry.partialJson = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
+  const fields =
+    entry.type === "thinking" ? ["text", "thinking", "partialJson"] : ["text", "partialJson"];
+  for (const field of fields) {
+    const value = entry[field];
+    if (typeof value === "string") {
+      const res = truncateHistoryText(value, maxChars);
+      entry[field] = res.text;
+      truncated ||= res.truncated;
+      redacted ||= res.redacted;
+    }
   }
   return { block: entry, truncated, redacted };
 }
@@ -170,17 +171,11 @@ function sanitizeHistoryMessage(
   let truncated = false;
   let redacted = false;
   // Tool result details often contain very large nested payloads.
-  if ("details" in entry) {
-    delete entry.details;
-    truncated = true;
-  }
-  if ("usage" in entry) {
-    delete entry.usage;
-    truncated = true;
-  }
-  if ("cost" in entry) {
-    delete entry.cost;
-    truncated = true;
+  for (const field of ["details", "usage", "cost"]) {
+    if (field in entry) {
+      delete entry[field];
+      truncated = true;
+    }
   }
 
   if (typeof entry.content === "string") {
@@ -257,26 +252,13 @@ function enforceSessionsHistoryHardCap(params: {
 }
 
 function readHistoryMessageSeq(message: unknown): number | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const meta = (message as Record<string, unknown>)["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const seq = (meta as Record<string, unknown>).seq;
-  return asPositiveSafeInteger(seq);
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  return asPositiveSafeInteger(meta?.seq);
 }
 
 function readHistoryMessageId(message: unknown): string | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const meta = (message as Record<string, unknown>)["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const id = (meta as Record<string, unknown>).id;
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  const id = meta?.id;
   return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 

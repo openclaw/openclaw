@@ -1,5 +1,4 @@
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
-// Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   findStructuredAuthParamRanges,
@@ -509,7 +508,8 @@ function redactFormBodyLine(text: string, onEdits?: PreparationEditSink): string
 }
 
 function redactFormBody(text: string, onEdits?: PreparationEditSink): string {
-  if (!text) {
+  // Every form grammar requires a literal assignment separator, including encoded keys.
+  if (!text.includes("=")) {
     return text;
   }
   if (FORM_BODY_LINE_BREAK_SPLIT_RE.test(text)) {
@@ -632,6 +632,9 @@ function prepareRedactionCapture(
     };
   }
   const selected = selectSecretCapture(match, groups);
+  if (selected.value === "***") {
+    return undefined;
+  }
   const tokenIndex =
     selected.value === match ? 0 : getSecretCaptureStart(pattern, input, match, offset, selected);
   if (tokenIndex < 0) {
@@ -816,13 +819,7 @@ function resolveConfigRedaction(): RedactOptions {
 export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOptions {
   const resolved = options ?? resolveConfigRedaction();
   const mode = normalizeMode(resolved.mode);
-  if (mode === "off") {
-    return {
-      mode,
-      patterns: [],
-    };
-  }
-  return { mode, patterns: resolvePatterns(resolved.patterns) };
+  return { mode, patterns: mode === "off" ? [] : resolvePatterns(resolved.patterns) };
 }
 
 export function redactSensitiveText(text: string, options?: RedactOptions): string {

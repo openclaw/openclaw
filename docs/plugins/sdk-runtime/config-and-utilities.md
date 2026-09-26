@@ -26,6 +26,12 @@ Persist changes with `api.runtime.config.mutateConfigFile(...)` or `api.runtime.
 
 The mutation helpers return `afterWrite` plus a typed `followUp` summary so callers can log or test whether they requested a restart. The gateway still owns when that restart actually happens.
 
+Owner-authorized commands pass their captured `ctx.assertOwnerCurrent` as
+`writeOptions.assertCurrent`. The config writer rechecks it after asynchronous
+preparation and before publication, then completes settlement of an accepted
+write. Do not replace it with an earlier `senderIsOwner` boolean or check it only
+after the mutation returns.
+
 Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
 `replaceConfigFile(...)` for runtime config access and writes.
 
@@ -88,6 +94,11 @@ can return before canceled remote startup delivers its PID. When a command owns 
 session reservation or temporary output, await `withCommandProcessScope` from the
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
+
+For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
+the same subpath. It reuses the current Node executable and resolves a real Node
+binary when the host runs under Bun, skipping Bun's `node` shim. An unavailable
+Node runtime returns `undefined`; the caller reports the missing requirement.
 
 Interactive process adapters can use `spawnTerminalPty` from the same subpath.
 It owns platform-specific terminal creation, including the Node helper on Bun.
@@ -284,3 +295,12 @@ function diagnosticsEnabled() {
 Recheck the gates when emitting a delayed summary. Keep fields bounded and
 content-free, and preserve the operation's result if the diagnostic sink fails.
 This predicate does not enable or authorize [audit identity collection](/gateway/audit).
+
+`onInternalDiagnosticEvent(listener, interest?)` filters events before copying
+their payload for the listener. `include` and `exclude` apply to every event;
+the optional `includeTrusted` list further restricts only events marked trusted
+by the dispatcher. Omitting it preserves existing behavior, and an empty list
+accepts only untrusted events that pass `include`/`exclude`. Event payload fields
+cannot override the dispatcher's trust metadata. Accepted events retain their
+individual frozen copies; this filter does not change diagnostic collection or
+queue behavior.

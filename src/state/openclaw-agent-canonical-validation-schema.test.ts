@@ -6,9 +6,10 @@ import {
   assertCanonicalSessionValidationSchema,
   withoutCanonicalSessionValidationSchema,
 } from "./openclaw-agent-canonical-validation-schema.js";
-import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_V21_SQL } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 const key = "agent:main:target";
@@ -280,7 +281,7 @@ describe("agent schema 21 migration", () => {
       const database = new DatabaseSync(pathname);
       let oldWriter: DatabaseSync | undefined;
       try {
-        database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
+        database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_V21_SQL));
         database.exec(`PRAGMA user_version = 20;
           INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
           VALUES ('primary', 'agent', 20, 'main', 1, 1)`);
@@ -306,13 +307,13 @@ describe("agent schema 21 migration", () => {
         );
         expect(pendingKeys(database)).toEqual([key, sibling].toSorted());
         expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
+          OPENCLAW_AGENT_SCHEMA_VERSION,
         );
         expect(
           database
             .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
             .get()?.schema_version,
-        ).toBe(CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION);
+        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
         assertCanonicalSessionValidationSchema(database);
         clearPending(database);
         oldWrite.run(sibling, key);
@@ -329,14 +330,16 @@ describe("agent schema 21 migration", () => {
       const pathname = state.path("interrupted-validation.sqlite");
       const database = new DatabaseSync(pathname);
       try {
-        database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
+        database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_V21_SQL));
         database.exec(`PRAGMA user_version = 20;
           INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
           VALUES ('primary', 'agent', 20, 'main', 1, 1)`);
         insertNode(database, key, "target");
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
           database.setAuthorizer((action, name, value) =>
-            action === constants.SQLITE_PRAGMA && name === "user_version" && value === "21"
+            action === constants.SQLITE_PRAGMA &&
+            name === "user_version" &&
+            value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
               ? constants.SQLITE_DENY
               : constants.SQLITE_OK,
           );

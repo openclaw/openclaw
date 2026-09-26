@@ -252,11 +252,42 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
     return [ir];
   }
 
+  const codeSpans = ir.styles
+    .filter((span) => span.style === "code" || span.style === "code_block")
+    .toSorted((left, right) => left.start - right.start);
+  let codeIndex = 0;
   const ranges: SourceRange[] = [];
   let cursor = 0;
   while (cursor < ir.text.length) {
     const maxEnd = Math.min(ir.text.length, cursor + normalizedLimit);
-    const preferredEnd = findMarkdownIRPreservedSplitIndex(ir.text, cursor, normalizedLimit);
+    let preferredEnd = findMarkdownIRPreservedSplitIndex(ir.text, cursor, normalizedLimit);
+    let code = codeSpans[codeIndex];
+    while (code && code.end <= preferredEnd) {
+      code = codeSpans[++codeIndex];
+    }
+    if (code && code.start < preferredEnd && preferredEnd < code.end) {
+      // Transport trimming must not turn an internal code separator into message padding.
+      let codeEnd = maxEnd;
+      while (
+        codeEnd > cursor &&
+        (/\s/u.test(ir.text[codeEnd - 1] ?? "") || /\s/u.test(ir.text[codeEnd] ?? ""))
+      ) {
+        codeEnd -= 1;
+      }
+      codeEnd = findGraphemeChunkEnd(ir.text, cursor, codeEnd, codeEnd, false);
+      let nextContent = maxEnd;
+      const nextMaxEnd = Math.min(ir.text.length, codeEnd + normalizedLimit);
+      while (nextContent < nextMaxEnd && /\s/u.test(ir.text[nextContent] ?? "")) {
+        nextContent += 1;
+      }
+      // Keep the existing progress rule when whitespace and its context cannot fit.
+      if (
+        codeEnd > cursor &&
+        findGraphemeChunkEnd(ir.text, codeEnd, nextMaxEnd, undefined, false) > nextContent
+      ) {
+        preferredEnd = codeEnd;
+      }
+    }
     const end = findGraphemeChunkEnd(ir.text, cursor, maxEnd, preferredEnd);
     ranges.push({ start: cursor, end });
     cursor = end;

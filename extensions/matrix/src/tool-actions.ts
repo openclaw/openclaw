@@ -54,6 +54,16 @@ import { reactMatrixMessage } from "./matrix/send.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
 import type { CoreConfig, MatrixAccountConfig } from "./types.js";
 
+const MATRIX_ACTION_DISABLED_MESSAGES = {
+  messages: "Matrix messages are disabled.",
+  reactions: "Matrix reactions are disabled.",
+  pins: "Matrix pins are disabled.",
+  profile: "Matrix profile updates are disabled.",
+  memberInfo: "Matrix member info is disabled.",
+  channelInfo: "Matrix room info is disabled.",
+  verification: "Matrix verification actions are disabled.",
+} satisfies Record<keyof NonNullable<MatrixAccountConfig["actions"]>, string>;
+
 function projectMatrixMessagesForDisplay(messages: readonly MatrixMessageSummary[]) {
   return messages.map((message) => ({
     ...message,
@@ -147,10 +157,7 @@ export async function handleMatrixAction(
 
   // Keep each branch's validation order around account resolution and gating.
   // Some reaction checks intentionally run afterward.
-  const prepareAction = (gate?: {
-    name: keyof NonNullable<MatrixAccountConfig["actions"]>;
-    disabledMessage: string;
-  }) => {
+  const prepareAction = (gate?: keyof typeof MATRIX_ACTION_DISABLED_MESSAGES) => {
     const accountParams =
       action === "poll-vote" || action === "permissions"
         ? { ...params, ...(ctx.accountId ? { accountId: ctx.accountId } : {}) }
@@ -159,8 +166,8 @@ export async function handleMatrixAction(
     const isActionEnabled = createActionGate(
       resolveMatrixAccountConfig({ cfg, accountId }).actions,
     );
-    if (gate && !isActionEnabled(gate.name)) {
-      throw new Error(gate.disabledMessage);
+    if (gate && !isActionEnabled(gate)) {
+      throw new Error(MATRIX_ACTION_DISABLED_MESSAGES[gate]);
     }
     const clientOpts = { cfg, ...(accountId ? { accountId } : {}) };
     const withReadTarget = async <T>(
@@ -205,10 +212,7 @@ export async function handleMatrixAction(
         : typeof params.audioAsVoice === "boolean"
           ? params.audioAsVoice
           : undefined;
-    const { clientOpts } = prepareAction({
-      name: "messages",
-      disabledMessage: "Matrix messages are disabled.",
-    });
+    const { clientOpts } = prepareAction("messages");
     const result = await sendMatrixMessage(to, content, {
       mediaUrl: mediaUrl ?? undefined,
       ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
@@ -226,10 +230,7 @@ export async function handleMatrixAction(
     const emojiValue = readStringParam(params, "emoji", { allowEmpty: true });
     const removeValue = typeof params.remove === "boolean" ? params.remove : undefined;
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction({
-      name: "reactions",
-      disabledMessage: "Matrix reactions are disabled.",
-    });
+    const { clientOpts, withReadTarget } = prepareAction("reactions");
     // Emoji-required and empty-remove errors follow the action gate; only the
     // public message/room selectors were validated before it.
     const { emoji, remove, isEmpty } = readReactionParams(
@@ -261,10 +262,7 @@ export async function handleMatrixAction(
       message: "limit must be a positive integer.",
     });
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction({
-      name: "reactions",
-      disabledMessage: "Matrix reactions are disabled.",
-    });
+    const { clientOpts, withReadTarget } = prepareAction("reactions");
     const reactions = await withReadTarget(roomId, async (target) =>
       listMatrixReactions(target.roomId, messageId, {
         ...clientOpts,
@@ -289,10 +287,7 @@ export async function handleMatrixAction(
     const limit = readPositiveIntegerParam(params, "limit", {
       message: "limit must be a positive integer.",
     });
-    const { clientOpts, withReadTarget } = prepareAction({
-      name: "reactions",
-      disabledMessage: "Matrix reactions are disabled.",
-    });
+    const { clientOpts, withReadTarget } = prepareAction("reactions");
     // The bound conversation bypasses the parameter reader above. Preserve
     // its late normalization and missing-room error after the action gate.
     const resolvedRoomId = readRoomId({ roomId });
@@ -315,10 +310,7 @@ export async function handleMatrixAction(
     const after = readStringParam(params, "after");
     const threadId = readStringParam(params, "threadId");
     const messageId = readStringParam(params, "messageId");
-    const { clientOpts, withReadTarget } = prepareAction({
-      name: "messages",
-      disabledMessage: "Matrix messages are disabled.",
-    });
+    const { clientOpts, withReadTarget } = prepareAction("messages");
     const result = await withReadTarget(roomId, async (target) => {
       if (messageId) {
         const message = await readMatrixMessage(target.roomId, messageId, {
@@ -352,10 +344,7 @@ export async function handleMatrixAction(
     const messageId = readStringParam(params, "messageId", { required: true });
     const content = readStringParam(params, "message", { required: true, trim: false });
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction({
-      name: "messages",
-      disabledMessage: "Matrix messages are disabled.",
-    });
+    const { clientOpts, withReadTarget } = prepareAction("messages");
     const result = await withReadTarget(roomId, async (target) =>
       editMatrixMessage(target.roomId, messageId, content, {
         ...clientOpts,
@@ -368,10 +357,7 @@ export async function handleMatrixAction(
   if (action === "delete") {
     const messageId = readStringParam(params, "messageId", { required: true });
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction({
-      name: "messages",
-      disabledMessage: "Matrix messages are disabled.",
-    });
+    const { clientOpts, withReadTarget } = prepareAction("messages");
     await withReadTarget(roomId, async (target) =>
       deleteMatrixMessage(target.roomId, messageId, {
         reason: undefined,
@@ -388,10 +374,7 @@ export async function handleMatrixAction(
         ? { kind: "list" as const }
         : { kind: action, messageId: readStringParam(params, "messageId", { required: true }) };
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction({
-      name: "pins",
-      disabledMessage: "Matrix pins are disabled.",
-    });
+    const { clientOpts, withReadTarget } = prepareAction("pins");
     return await withReadTarget(roomId, async (target) => {
       const actionOpts = { ...clientOpts, client: target.client };
       if (request.kind === "pin") {
@@ -422,10 +405,7 @@ export async function handleMatrixAction(
       readStringParam(params, "filePath");
     const displayName = readStringParam(params, "displayName") ?? readStringParam(params, "name");
     const avatarUrl = readStringParam(params, "avatarUrl");
-    const { accountId } = prepareAction({
-      name: "profile",
-      disabledMessage: "Matrix profile updates are disabled.",
-    });
+    const { accountId } = prepareAction("profile");
     const result = await applyMatrixProfileUpdate({
       cfg,
       account: accountId,
@@ -440,10 +420,7 @@ export async function handleMatrixAction(
   if (action === "member-info") {
     const userId = readStringParam(params, "userId", { required: true });
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction({
-      name: "memberInfo",
-      disabledMessage: "Matrix member info is disabled.",
-    });
+    const { clientOpts, withReadTarget } = prepareAction("memberInfo");
     const result = await withReadTarget(roomId, async (target) =>
       getMatrixMemberInfo(userId, { roomId: target.roomId, ...clientOpts, client: target.client }),
     );
@@ -452,10 +429,7 @@ export async function handleMatrixAction(
 
   if (action === "channel-info") {
     const roomId = readRoomId(params);
-    const { clientOpts, withReadTarget } = prepareAction({
-      name: "channelInfo",
-      disabledMessage: "Matrix room info is disabled.",
-    });
+    const { clientOpts, withReadTarget } = prepareAction("channelInfo");
     const result = await withReadTarget(roomId, async (target) =>
       getMatrixRoomInfo(target.roomId, { ...clientOpts, client: target.client }),
     );
@@ -501,184 +475,130 @@ export async function handleMatrixAction(
         readStringParam(params, "mode") ??
         "verification-list",
     );
-    const operationToAction: Record<string, string> = {
-      "encryption-status": "encryptionStatus",
-      "verification-status": "verificationStatus",
-      "verification-bootstrap": "verificationBootstrap",
-      "verification-recovery-key": "verificationRecoveryKey",
-      "verification-backup-status": "verificationBackupStatus",
-      "verification-backup-restore": "verificationBackupRestore",
-      "verification-list": "verificationList",
-      "verification-request": "verificationRequest",
-      "verification-accept": "verificationAccept",
-      "verification-cancel": "verificationCancel",
-      "verification-start": "verificationStart",
-      "verification-generate-qr": "verificationGenerateQr",
-      "verification-scan-qr": "verificationScanQr",
-      "verification-sas": "verificationSas",
-      "verification-confirm": "verificationConfirm",
-      "verification-mismatch": "verificationMismatch",
-      "verification-confirm-qr": "verificationConfirmQr",
+    const operations: Record<string, () => Promise<AgentToolResult<unknown>>> = {
+      "encryption-status": async () =>
+        jsonResult({
+          ok: true,
+          status: await getMatrixEncryptionStatus({
+            includeRecoveryKey: params.includeRecoveryKey === true,
+            ...clientOpts,
+          }),
+        }),
+      "verification-status": async () =>
+        jsonResult({
+          ok: true,
+          status: await getMatrixVerificationStatus({
+            includeRecoveryKey: params.includeRecoveryKey === true,
+            ...clientOpts,
+          }),
+        }),
+      "verification-bootstrap": async () => {
+        const result = await bootstrapMatrixVerification({
+          recoveryKey: readRecoveryKey(),
+          forceResetCrossSigning: params.forceResetCrossSigning === true,
+          ...clientOpts,
+        });
+        return jsonResult({ ok: result.success, result });
+      },
+      "verification-recovery-key": async () => {
+        const recoveryKey = readRecoveryKey();
+        const result = await verifyMatrixRecoveryKey(
+          readStringParam({ recoveryKey }, "recoveryKey", { required: true, trim: false }),
+          clientOpts,
+        );
+        return jsonResult({ ok: result.success, result });
+      },
+      "verification-backup-status": async () =>
+        jsonResult({ ok: true, status: await getMatrixRoomKeyBackupStatus(clientOpts) }),
+      "verification-backup-restore": async () => {
+        const result = await restoreMatrixRoomKeyBackup({
+          recoveryKey: readRecoveryKey(),
+          ...clientOpts,
+        });
+        return jsonResult({ ok: result.success, result });
+      },
+      "verification-list": async () =>
+        jsonResult({ ok: true, verifications: await listMatrixVerifications(clientOpts) }),
+      "verification-request": async () => {
+        const userId = readStringParam(params, "userId");
+        const deviceId = readStringParam(params, "deviceId");
+        const roomId = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
+        const ownUser = typeof params.ownUser === "boolean" ? params.ownUser : undefined;
+        const verification = await requestMatrixVerification({
+          ownUser,
+          userId,
+          deviceId,
+          roomId,
+          ...clientOpts,
+        });
+        return jsonResult({ ok: true, verification });
+      },
+      "verification-accept": () => runVerification(acceptMatrixVerification),
+      "verification-cancel": async () => {
+        const reason = readStringParam(params, "reason");
+        const code = readStringParam(params, "code");
+        return runVerification((id, opts) =>
+          cancelMatrixVerification(id, { reason, code, ...opts }),
+        );
+      },
+      "verification-start": async () => {
+        const method = normalizeOptionalLowercaseString(readStringParam(params, "method"));
+        if (method && method !== "sas") {
+          throw new Error(
+            "Matrix verificationStart only supports method=sas; use verificationGenerateQr/verificationScanQr for QR flows.",
+          );
+        }
+        return runVerification((id, opts) =>
+          startMatrixVerification(id, { method: "sas", ...opts }),
+        );
+      },
+      "verification-generate-qr": async () => {
+        const qr = await generateMatrixVerificationQr(requireRequestId(), clientOpts);
+        return jsonResult({ ok: true, ...qr });
+      },
+      "verification-scan-qr": async () => {
+        const qrDataBase64 =
+          readStringParam(params, "qrDataBase64") ??
+          readStringParam(params, "qrData") ??
+          readStringParam(params, "qr");
+        return runVerification((id, opts) =>
+          scanMatrixVerificationQr(
+            id,
+            readStringParam({ qrDataBase64 }, "qrDataBase64", { required: true }),
+            opts,
+          ),
+        );
+      },
+      "verification-sas": async () =>
+        jsonResult({
+          ok: true,
+          sas: await getMatrixVerificationSas(requireRequestId(), clientOpts),
+        }),
+      "verification-confirm": () => runVerification(confirmMatrixVerificationSas),
+      "verification-mismatch": () => runVerification(mismatchMatrixVerificationSas),
+      "verification-confirm-qr": () => runVerification(confirmMatrixVerificationReciprocateQr),
     };
-    // The operation inventory is closed; inherited Object keys are not actions.
-    if (!Object.hasOwn(operationToAction, operation)) {
+    // Reject unknown operations before account resolution; inherited keys are not actions.
+    const runOperation = Object.hasOwn(operations, operation) ? operations[operation] : undefined;
+    if (!runOperation) {
       throw new Error(
         `Unsupported Matrix permissions operation: ${operation}. Supported values: ${Object.keys(
-          operationToAction,
+          operations,
         ).join(", ")}`,
       );
     }
-
-    const resolvedAction = operationToAction[operation];
-    const { clientOpts } = prepareAction({
-      name: "verification",
-      disabledMessage: "Matrix verification actions are disabled.",
-    });
+    const { clientOpts } = prepareAction("verification");
     const requestId =
       readStringParam(params, "requestId") ??
       readStringParam(params, "verificationId") ??
       readStringParam(params, "id");
-
-    if (resolvedAction === "encryptionStatus") {
-      const includeRecoveryKey = params.includeRecoveryKey === true;
-      const status = await getMatrixEncryptionStatus({ includeRecoveryKey, ...clientOpts });
-      return jsonResult({ ok: true, status });
-    }
-    if (resolvedAction === "verificationStatus") {
-      const includeRecoveryKey = params.includeRecoveryKey === true;
-      const status = await getMatrixVerificationStatus({ includeRecoveryKey, ...clientOpts });
-      return jsonResult({ ok: true, status });
-    }
-    if (resolvedAction === "verificationBootstrap") {
-      const recoveryKey =
-        readStringParam(params, "recoveryKey", { trim: false }) ??
-        readStringParam(params, "key", { trim: false });
-      const result = await bootstrapMatrixVerification({
-        recoveryKey: recoveryKey ?? undefined,
-        forceResetCrossSigning: params.forceResetCrossSigning === true,
-        ...clientOpts,
-      });
-      return jsonResult({ ok: result.success, result });
-    }
-    if (resolvedAction === "verificationRecoveryKey") {
-      const recoveryKey =
-        readStringParam(params, "recoveryKey", { trim: false }) ??
-        readStringParam(params, "key", { trim: false });
-      const result = await verifyMatrixRecoveryKey(
-        readStringParam({ recoveryKey }, "recoveryKey", { required: true, trim: false }),
-        clientOpts,
-      );
-      return jsonResult({ ok: result.success, result });
-    }
-    if (resolvedAction === "verificationBackupStatus") {
-      const status = await getMatrixRoomKeyBackupStatus(clientOpts);
-      return jsonResult({ ok: true, status });
-    }
-    if (resolvedAction === "verificationBackupRestore") {
-      const recoveryKey =
-        readStringParam(params, "recoveryKey", { trim: false }) ??
-        readStringParam(params, "key", { trim: false });
-      const result = await restoreMatrixRoomKeyBackup({
-        recoveryKey: recoveryKey ?? undefined,
-        ...clientOpts,
-      });
-      return jsonResult({ ok: result.success, result });
-    }
-    if (resolvedAction === "verificationList") {
-      const verifications = await listMatrixVerifications(clientOpts);
-      return jsonResult({ ok: true, verifications });
-    }
-    if (resolvedAction === "verificationRequest") {
-      const userId = readStringParam(params, "userId");
-      const deviceId = readStringParam(params, "deviceId");
-      const roomId = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
-      const ownUser = typeof params.ownUser === "boolean" ? params.ownUser : undefined;
-      const verification = await requestMatrixVerification({
-        ownUser,
-        userId: userId ?? undefined,
-        deviceId: deviceId ?? undefined,
-        roomId: roomId ?? undefined,
-        ...clientOpts,
-      });
-      return jsonResult({ ok: true, verification });
-    }
-    if (resolvedAction === "verificationAccept") {
-      const verification = await acceptMatrixVerification(
-        readStringParam({ requestId }, "requestId", { required: true }),
-        clientOpts,
-      );
-      return jsonResult({ ok: true, verification });
-    }
-    if (resolvedAction === "verificationCancel") {
-      const reason = readStringParam(params, "reason");
-      const code = readStringParam(params, "code");
-      const verification = await cancelMatrixVerification(
-        readStringParam({ requestId }, "requestId", { required: true }),
-        { reason: reason ?? undefined, code: code ?? undefined, ...clientOpts },
-      );
-      return jsonResult({ ok: true, verification });
-    }
-    if (resolvedAction === "verificationStart") {
-      const methodRaw = readStringParam(params, "method");
-      const method = normalizeOptionalLowercaseString(methodRaw);
-      if (method && method !== "sas") {
-        throw new Error(
-          "Matrix verificationStart only supports method=sas; use verificationGenerateQr/verificationScanQr for QR flows.",
-        );
-      }
-      const verification = await startMatrixVerification(
-        readStringParam({ requestId }, "requestId", { required: true }),
-        { method: "sas", ...clientOpts },
-      );
-      return jsonResult({ ok: true, verification });
-    }
-    if (resolvedAction === "verificationGenerateQr") {
-      const qr = await generateMatrixVerificationQr(
-        readStringParam({ requestId }, "requestId", { required: true }),
-        clientOpts,
-      );
-      return jsonResult({ ok: true, ...qr });
-    }
-    if (resolvedAction === "verificationScanQr") {
-      const qrDataBase64 =
-        readStringParam(params, "qrDataBase64") ??
-        readStringParam(params, "qrData") ??
-        readStringParam(params, "qr");
-      const verification = await scanMatrixVerificationQr(
-        readStringParam({ requestId }, "requestId", { required: true }),
-        readStringParam({ qrDataBase64 }, "qrDataBase64", { required: true }),
-        clientOpts,
-      );
-      return jsonResult({ ok: true, verification });
-    }
-    if (resolvedAction === "verificationSas") {
-      const sas = await getMatrixVerificationSas(
-        readStringParam({ requestId }, "requestId", { required: true }),
-        clientOpts,
-      );
-      return jsonResult({ ok: true, sas });
-    }
-    if (resolvedAction === "verificationConfirm") {
-      const verification = await confirmMatrixVerificationSas(
-        readStringParam({ requestId }, "requestId", { required: true }),
-        clientOpts,
-      );
-      return jsonResult({ ok: true, verification });
-    }
-    if (resolvedAction === "verificationMismatch") {
-      const verification = await mismatchMatrixVerificationSas(
-        readStringParam({ requestId }, "requestId", { required: true }),
-        clientOpts,
-      );
-      return jsonResult({ ok: true, verification });
-    }
-    if (resolvedAction === "verificationConfirmQr") {
-      const verification = await confirmMatrixVerificationReciprocateQr(
-        readStringParam({ requestId }, "requestId", { required: true }),
-        clientOpts,
-      );
-      return jsonResult({ ok: true, verification });
-    }
+    const requireRequestId = () => readStringParam({ requestId }, "requestId", { required: true });
+    const readRecoveryKey = () =>
+      readStringParam(params, "recoveryKey", { trim: false }) ??
+      readStringParam(params, "key", { trim: false });
+    const runVerification = async (run: typeof acceptMatrixVerification) =>
+      jsonResult({ ok: true, verification: await run(requireRequestId(), clientOpts) });
+    return await runOperation();
   }
 
   throw new Error(`Action ${action} is not supported for provider matrix.`);

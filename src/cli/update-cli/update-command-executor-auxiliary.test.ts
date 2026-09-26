@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { getGatewayServiceUpdateNativeCommand } from "../../daemon/service-update-authority.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
@@ -13,7 +15,9 @@ import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
+import { prepareUpdateCommandNativeGate } from "./update-command-native-gate.js";
 import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
+import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
@@ -30,12 +34,45 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["admitted", "initializing"] as const)(
-  "preserves direct preflight release through a healthy installer child and active drain: %s",
-  async (phase) => {
+function preloadFixture(kind: "require" | "import") {
+  const marker = path.join(root, "preload-effect");
+  const preload = path.join(root, "préload option.cjs");
+  fs.writeFileSync(
+    preload,
+    `require('node:fs').appendFileSync(${JSON.stringify(marker)},process.pid+'\\n');`,
+  );
+  const value = kind === "import" ? pathToFileURL(preload).href : preload;
+  return { marker, env: { ...process.env, NODE_OPTIONS: `--${kind}=${JSON.stringify(value)}` } };
+}
+
+it.each([
+  { phase: "admitted", fragmented: false },
+  { phase: "initializing", fragmented: false },
+  { phase: "admitted", fragmented: true },
+] as const)(
+  "preserves direct preflight release through a healthy installer child and active drain: $phase/fragmented=$fragmented",
+  async ({ phase, fragmented }) => {
     const runId = randomUUID();
     const ready = path.join(root, "ready");
     const proceed = path.join(root, "proceed");
+    const preload = preloadFixture(phase === "admitted" ? "require" : "import");
+    if (fragmented) {
+      const runCommand = processRunner.runCommandWithTimeout;
+      vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation((argv, options) => {
+        assert(typeof options !== "number" && typeof options.input === "string");
+        expect(Buffer.byteLength(options.input)).toBeGreaterThan(options.input.length);
+        // Split the private frame deterministically; OS pipe writes may coalesce UTF-8 fragments.
+        const receiver = `
+          const inputParts = [];
+          for await (const part of process.stdin) inputParts.push(part);
+          const { Readable } = await import("node:stream");
+          Object.defineProperty(process, "stdin", { value: Readable.from(
+            [...Buffer.concat(inputParts)].map(byte => Buffer.from([byte]))
+          ) });
+        `;
+        return runCommand([...argv.slice(0, 3), receiver + argv[3], ...argv.slice(4)], options);
+      });
+    }
     await withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root, { serviceRoot, preflight: true });
       const recovery = createPackageRuntimeRecovery({
@@ -50,9 +87,9 @@ it.each(["admitted", "initializing"] as const)(
         process.execPath,
         [
           "-e",
-          `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},'ready');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer)}},10);`,
+          `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:process.pid,nodeOptions:process.env.NODE_OPTIONS}));const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer)}},10);`,
         ],
-        process.env,
+        preload.env,
       );
       try {
         await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true), { timeout: 5000 });
@@ -71,6 +108,9 @@ it.each(["admitted", "initializing"] as const)(
         fs.writeFileSync(proceed, "continue");
       }
       expect(await installing).toBe(0);
+      const payload = JSON.parse(fs.readFileSync(ready, "utf8"));
+      expect(payload.nodeOptions).toBe(preload.env.NODE_OPTIONS);
+      expect(fs.readFileSync(preload.marker, "utf8")).toBe(`${payload.pid}\n`);
       releaseUpdateCommandPreflightForHandoff(fence);
       expect(() => fence.assertCurrent()).toThrow();
     });
@@ -280,6 +320,199 @@ it("preserves eligible preflight release until a healthy auxiliary descendant dr
   });
 });
 
+it.each([
+  { kind: "require", frame: "empty" },
+  { kind: "import", frame: "empty" },
+  { kind: "require", frame: "truncated" },
+  { kind: "require", frame: "extra" },
+  { kind: "require", frame: "malformed" },
+  { kind: "require", frame: "invalid-entry" },
+  { kind: "require", frame: "invalid-utf8" },
+  { kind: "require", frame: "nul" },
+] as const)(
+  "never starts Node provisioning without released authorization input: $kind/$frame",
+  async ({ kind, frame }) => {
+    const runId = randomUUID();
+    const effect = path.join(root, "installer-effect");
+    const preload = preloadFixture(kind);
+    if (frame === "nul") {
+      preload.env.NODE_OPTIONS += "\0private-option";
+    }
+    const runCommand = processRunner.runCommandWithTimeout;
+    let observed: Awaited<ReturnType<typeof runCommand>> | undefined;
+    vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation((argv, options) => {
+      assert(typeof options !== "number");
+      assert(typeof options.input === "string");
+      // Corrupt only the private input, retaining real admission, process custody and payload.
+      let input: string | Uint8Array = options.input;
+      if (frame === "empty") {
+        input = "";
+      }
+      if (frame === "truncated") {
+        input = input.slice(0, -1);
+      }
+      if (frame === "extra") {
+        input += " ";
+      }
+      if (frame === "malformed") {
+        input = "{" + input.slice(1);
+      }
+      if (frame === "invalid-entry") {
+        input = input.replace("NODE_OPTIONS", "_ODE_OPTIONS");
+      }
+      if (frame === "invalid-utf8") {
+        const bytes = Buffer.from(input);
+        const index = bytes.indexOf(Buffer.from("é"));
+        assert(index >= 0);
+        bytes[index] = 0xff;
+        input = bytes;
+      }
+      if (["malformed", "invalid-entry", "invalid-utf8"].includes(frame)) {
+        expect(Buffer.byteLength(input)).toBe(Buffer.byteLength(options.input));
+      }
+      return runCommand(argv, { ...options, input }).then((result) => {
+        observed = result;
+        return result;
+      });
+    });
+    const outcome = await withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(root, { serviceRoot, preflight: true });
+      const recovery = createPackageRuntimeRecovery({
+        root,
+        opts: { run: { runId, env: process.env, executorFence: fence } },
+        timeoutMs: 10000,
+      });
+      assert(recovery.installCommand);
+      await recovery.installCommand(
+        process.execPath,
+        ["-e", `require('node:fs').writeFileSync(${JSON.stringify(effect)},'unauthorized')`],
+        preload.env,
+      );
+    }).then(
+      () => "installed",
+      () => "refused",
+    );
+    expect(fs.existsSync(effect)).toBe(false);
+    expect(fs.existsSync(preload.marker)).toBe(false);
+    expect(observed).toMatchObject({ code: 1, stdout: "", stderr: "" });
+    expect(outcome).toBe("refused");
+    for (const key of [root, serviceRoot]) {
+      expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
+    }
+  },
+);
+
+it.each([undefined, ""])("preserves absent or empty native payload options: %s", async (value) => {
+  const effect = path.join(root, "native-options");
+  const gate = prepareUpdateCommandNativeGate(randomUUID(), [
+    { ...process.env, NODE_OPTIONS: value },
+  ]);
+  const result = await runUtf8CommandWithTimeout(
+    [
+      process.execPath,
+      "--input-type=module",
+      "-e",
+      gate.source,
+      "--",
+      process.execPath,
+      "-e",
+      `require('node:fs').writeFileSync(${JSON.stringify(effect)},JSON.stringify(process.env.NODE_OPTIONS ?? null));`,
+    ],
+    {
+      baseEnv: {},
+      env: gate.env,
+      input: gate.input,
+      timeoutMs: 10000,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+    },
+  );
+  expect(result.code, result.stderr).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(fs.readFileSync(effect, "utf8"))).toBe(value ?? null);
+});
+
+it.skipIf(process.platform === "win32").each([false, true])(
+  "keeps retained native preloads behind admission, released=%s",
+  async (released) => {
+    const preload = preloadFixture("require");
+    const effect = path.join(root, "native-effect");
+    const runCommand = processRunner.runCommandWithTimeout;
+    if (!released) {
+      vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation((argv, options) => {
+        assert(typeof options !== "number");
+        return runCommand(argv, { ...options, input: "" });
+      });
+    }
+    const runId = randomUUID();
+    await withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(root, { serviceRoot });
+      await withRetainedUpdateServiceAuthority(
+        {
+          run: { runId, env: process.env, executorFence: fence },
+          root: serviceRoot,
+          assertCurrent: () => {},
+        },
+        async () => {
+          // Exercise the supplied native seam; ordinary service-manager env projection stays intact.
+          const native = getGatewayServiceUpdateNativeCommand();
+          assert(native);
+          const result = await native(
+            [
+              process.execPath,
+              "-e",
+              `require('node:fs').writeFileSync(${JSON.stringify(effect)},String(process.pid));`,
+            ],
+            { baseEnv: preload.env, env: { NODE_NO_WARNINGS: "1" }, timeoutMs: 10000 },
+          );
+          expect(result.code).toBe(released ? 0 : 1);
+          expect(result.stderr).toBe("");
+        },
+      );
+    });
+    expect(fs.existsSync(effect)).toBe(released);
+    expect(fs.existsSync(preload.marker)).toBe(released);
+    if (released) {
+      expect(fs.readFileSync(preload.marker, "utf8")).toBe(`${fs.readFileSync(effect, "utf8")}\n`);
+    }
+    for (const key of [root, serviceRoot]) {
+      expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
+    }
+  },
+);
+
+it.each([
+  {
+    platform: "linux",
+    sources: [{ NODE_OPTIONS: "private", node_options: "case-distinct", KEEP: "yes" }],
+    env: { node_options: "case-distinct", KEEP: "yes" },
+    entry: ["NODE_OPTIONS", "private"],
+  },
+  {
+    platform: "win32",
+    sources: [{ NODE_OPTIONS: "base", KEEP: "yes" }, { node_options: "override" }],
+    env: { KEEP: "yes" },
+    entry: ["node_options", "override"],
+  },
+  {
+    platform: "win32",
+    sources: [{ node_options: "later", NODE_OPTIONS: undefined, KEEP: "yes" }],
+    env: { KEEP: "yes" },
+    entry: null,
+  },
+] as const)(
+  "preserves native-gate environment precedence on $platform",
+  ({ platform, sources, env, entry }) => {
+    const before = structuredClone(sources);
+    const ticket = randomUUID();
+    const gate = prepareUpdateCommandNativeGate(ticket, sources, platform);
+    expect(gate.env).toEqual(env);
+    expect(JSON.parse(gate.input)).toEqual([ticket, entry]);
+    expect(gate.source).not.toContain("private");
+    expect(sources).toEqual(before);
+  },
+);
+
 it.each(
   (["before-launch", "at-input"] as const).flatMap((boundary) =>
     (
@@ -351,10 +584,7 @@ it.each(
     }
     await recovery.installCommand(
       process.execPath,
-      [
-        "-e",
-        `const fs=require('node:fs');fs.readFileSync(0,'utf8');fs.writeFileSync(${JSON.stringify(effect)},'unauthorized')`,
-      ],
+      ["-e", `require('node:fs').writeFileSync(${JSON.stringify(effect)},'unauthorized')`],
       process.env,
     );
   });

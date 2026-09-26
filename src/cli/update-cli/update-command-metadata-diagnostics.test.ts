@@ -9,7 +9,7 @@ import * as updateCheck from "../../infra/update-check.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import * as ledger from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { expectGitMetadataPreview } from "../update-cli-invocation.test-support.js";

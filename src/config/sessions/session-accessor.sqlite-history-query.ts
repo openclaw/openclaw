@@ -1,3 +1,4 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { sql } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -55,6 +56,7 @@ import {
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 const recentHistoryWindows = new Map<
   string,
@@ -79,7 +81,10 @@ function readBoundaryEvents(
       projection.database.db,
       db
         .selectFrom("transcript_events as event")
-        .select(["event.seq", "event.event_json"])
+        .select([
+          "event.seq",
+          transcriptEventJsonSql(projection.database.db, "event").as("event_json"),
+        ])
         .where("event.session_id", "=", projection.resolved.sessionId)
         .where(
           "event.seq",
@@ -278,33 +283,29 @@ export function readTranscriptDisplayDeltaFromProjection(
   }
   const history = resolveVisibleHistoryProjection(projection);
   const visible = resolveVisibleMessagePositions(projection);
-  const firstSeq = result.events[0]?.seq;
-  const lastSeq = result.events.at(-1)?.seq;
+  const firstSeq = result.events[0]!.seq;
+  const lastSeq = result.events.at(-1)!.seq;
   const db = getActiveTranscriptKysely(projection.database);
   const sequences = new Map(
-    firstSeq === undefined || lastSeq === undefined
-      ? []
-      : executeSqliteQuerySync(
-          projection.database.db,
-          db
-            .selectFrom("session_transcript_active_events")
-            .select(["event_seq", "message_position"])
-            .where("session_id", "=", projection.resolved.sessionId)
-            .where("event_seq", ">=", firstSeq)
-            .where("event_seq", "<=", lastSeq)
-            .where("message_position", "is not", null),
-        ).rows.map((row) => [
-          row.event_seq,
-          row.message_position === null
-            ? undefined
-            : resolveHistoryMessageSequence(visible, history, row.message_position),
-        ]),
+    executeSqliteQuerySync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events")
+        .select(["event_seq", "message_position"])
+        .where("session_id", "=", projection.resolved.sessionId)
+        .where("event_seq", ">=", firstSeq)
+        .where("event_seq", "<=", lastSeq)
+        .where("message_position", "is not", null),
+    ).rows.map((row) => [
+      row.event_seq,
+      row.message_position === null
+        ? undefined
+        : resolveHistoryMessageSequence(visible, history, row.message_position),
+    ]),
   );
-  if (firstSeq !== undefined && lastSeq !== undefined) {
-    for (const boundary of history.boundaries) {
-      if (boundary.eventSeq >= firstSeq && boundary.eventSeq <= lastSeq) {
-        sequences.set(boundary.eventSeq, boundary.displayPosition + 1);
-      }
+  for (const boundary of history.boundaries) {
+    if (boundary.eventSeq >= firstSeq && boundary.eventSeq <= lastSeq) {
+      sequences.set(boundary.eventSeq, boundary.displayPosition + 1);
     }
   }
   const events = positionTranscriptDisplayEvents(
@@ -341,14 +342,11 @@ function readRecentHistoryInSnapshot(
         sessionId: projection.resolved.sessionId,
       })
     : undefined;
-  const maxMessages = Math.min(
-    MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-    Math.max(0, Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0)),
-  );
-  const maxLines = Math.max(
-    0,
-    Math.floor(Number.isFinite(options.maxLines) ? options.maxLines : 0),
-  );
+  const maxMessages = resolveIntegerOption(options.maxMessages, 0, {
+    min: 0,
+    max: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+  });
+  const maxLines = resolveIntegerOption(options.maxLines, 0, { min: 0 });
   if (maxMessages === 0 || maxLines === 0) {
     return {
       activeLeafEntryId: projection.state.leafEventId,
@@ -359,10 +357,7 @@ function readRecentHistoryInSnapshot(
       ...(options.captureReadWindow ? { readWindow: captureHistoryReadWindow(history, []) } : {}),
     };
   }
-  const maxBytes = Math.max(
-    1024,
-    Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 8 * 1024 * 1024),
-  );
+  const maxBytes = resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 });
   const { start: selectedStart, bytes } = resolveRecentHistoryStart(
     projection,
     Math.max(0, history.total - maxLines),
@@ -460,10 +455,7 @@ export function readSessionTranscriptHistoryEventPageFromProjection(
     });
   }
   assertHistoryReadWindow(projection, history, options.expectedReadWindow);
-  const maxMessages = Math.max(
-    0,
-    Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
-  );
+  const maxMessages = resolveIntegerOption(options.maxMessages, 0, { min: 0 });
   const requestedStart = Math.max(0, endExclusive - maxMessages);
   const boundedStart =
     options.maxBytes === undefined
@@ -473,10 +465,7 @@ export function readSessionTranscriptHistoryEventPageFromProjection(
           requestedStart,
           endExclusive,
           history,
-          Math.max(
-            1024,
-            Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 1024 * 1024),
-          ),
+          resolveIntegerOption(options.maxBytes, 1024 * 1024, { min: 1024 }),
           maxMessages,
           false,
         ).start;

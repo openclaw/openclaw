@@ -124,7 +124,9 @@ For the full key index and the other top-level config domains, see [Configuratio
   `snapshotDefaults`, and `tabCleanup` hot-reload.
   Changed launch settings replace affected managed browsers on their next use;
   externally attached browsers stay running. Enablement, evaluation, SSRF policy,
-  and extension relay require a Gateway restart.
+  and extension relay authentication changes replace the Browser control service
+  and its owned relay connections without restarting the Gateway. Independently
+  running relay daemons keep their own lifecycle and policy.
 
 ---
 
@@ -230,6 +232,10 @@ a Gateway connection keep TTL-only tokens.
   memory for that connection. Managed mode always creates its own ephemeral
   password.
 
+Changes to `managed`, `port`, or `passwordFile` retire the current host source,
+close its observers, and release its computer execution holds. The replacement
+starts on demand without restarting the Gateway. External VNC servers stay running.
+
 OpenClaw connects only through loopback. An explicit `port` always selects
 attach mode, and an existing RFB listener on port `5900` takes precedence over
 managed mode. Managed mode requires `Xtigervnc`, `tigervncpasswd`,
@@ -272,6 +278,47 @@ stream. The macOS account password is not returned in the observe result, URL,
 or logs. `openclaw doctor` can offer an explicitly confirmed `sudo launchctl`
 repair when Screen Sharing is off; enabling the macOS system service may expose
 it on other network interfaces according to macOS Sharing settings.
+
+### Desktop audio
+
+Managed Linux Gateway desktops can send their application audio to the browser.
+Install `pulseaudio` and `pulseaudio-utils` alongside the managed desktop dependencies,
+then restart the managed desktop and reconnect. Each managed desktop owns a private PulseAudio server
+and virtual output device; it does not capture the host microphone or another
+desktop's output. Missing audio dependencies leave the screen usable with audio
+unavailable. The viewer shows a setup notice asking the operator to check those
+packages and restart the managed desktop; native error details and host paths are
+not sent to the viewer. If private audio cannot start, desktop applications retain their
+previous audio routing; that fallback route is never captured for the viewer.
+
+If the private audio server exits, the Gateway retries its private route up to
+three times within five minutes, independently of desktop-process recovery.
+Existing streams stop; reconnect and unmute to listen again, and replay
+application audio if needed. If that route cannot recover or its retry budget is
+exhausted, audio remains unavailable without closing healthy desktop applications
+or computer sessions. Check the audio dependencies and restart the managed desktop
+only if audio is needed; an operator-requested restart can close applications.
+Actual VNC, D-Bus, or desktop-session failures still use the separate desktop
+restart budget.
+
+Audio starts muted. Select **Unmute audio** in the desktop toolbar to listen, and
+**Mute audio** to stop capture and playback. Your browser must allow audio following
+that click. Hiding, disconnecting, or replacing the desktop stops playback; a new
+connection starts muted. Audio authorization is tied to the authenticated screen
+connection and is revoked with it.
+
+The standalone Desktop view also exposes Unmute/Mute in its touch toolbar,
+with the same playback lifecycle and muted-start rules as the embedded panel.
+
+This first path uses uncompressed 48 kHz stereo PCM over a separate authenticated
+WebSocket (about 1.5 Mbit/s while listening). Buffering is bounded; a connection
+that cannot keep up stops instead of accumulating delayed sound. It is intended
+for a first desktop-audio implementation, not synchronized video playback or
+low-bandwidth streaming.
+
+External VNC servers, paired-node desktops, cloud-worker desktops, macOS, and
+Windows do not advertise audio yet. Their toolbar reports audio unavailable.
+Microphone forwarding is not supported.
 
 ### Paired node desktops
 

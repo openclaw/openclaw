@@ -277,7 +277,11 @@ it.each([
             scenario === "timeout"
               ? "systemd-inspection-deadline-exceeded"
               : "service-inspection-unavailable",
-          message: expect.stringContaining("Restart the Gateway you launched manually"),
+          message: expect.stringContaining(
+            scenario === "timeout"
+              ? "The systemd manager inspection deadline expired"
+              : "Restart the Gateway you launched manually",
+          ),
         }),
       ]);
       expect(JSON.stringify({ inspected, facts })).not.toContain("inspection-secret-canary");

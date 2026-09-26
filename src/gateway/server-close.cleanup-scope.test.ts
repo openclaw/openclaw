@@ -1,5 +1,7 @@
 import "./server-worker-free.test-support.js";
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
@@ -11,8 +13,10 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -35,6 +39,64 @@ const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+});
+
+it("finalizes capture after media drains even when stopping media cleanup fails", async () => {
+  mocks.closePluginStateDatabaseAsync.mockClear();
+  const mediaCleanup = await import("./server-media-cleanup-lifecycle.js");
+  const releaseMedia = createDeferredCore();
+  const drainEntered = createDeferredCore();
+  mediaCleanup.registerMediaCleanupDrain(releaseMedia.promise);
+  const waitForDrains = mediaCleanup.waitForMediaCleanupDrainsToSettle;
+  const drainSpy = vi
+    .spyOn(mediaCleanup, "waitForMediaCleanupDrainsToSettle")
+    .mockImplementation(() => {
+      drainEntered.resolve();
+      return waitForDrains();
+    });
+  const captureEntered = createDeferredCore();
+  const releaseCapture = createDeferredCore();
+  const finalizeCapture = vi.fn(async () => {
+    captureEntered.resolve();
+    await releaseCapture.promise;
+  });
+  const unregisterCapture = registerActiveDebugProxyCapture(finalizeCapture);
+  const registry = createEmptyPluginRegistry();
+  setActivePluginRegistry(registry);
+  const owner = createPluginRegistryOwner(registry);
+  const params = createGatewayCloseTestDeps({
+    closePluginRegistry: owner.close,
+    pluginMetadata: retainGatewayPluginMetadata(createTestGatewayScheduler()),
+    stopMediaCleanup: async () => {
+      throw new Error("media cleanup stop failed");
+    },
+  });
+  let closed = false;
+  const closing = prepareGatewayClose(params, { reason: "test" })
+    .then((preparation) => completeGatewayClose(params, preparation))
+    .then((result) => {
+      closed = true;
+      return result;
+    });
+  try {
+    await Promise.race([drainEntered.promise, captureEntered.promise, closing]);
+    expect(finalizeCapture).not.toHaveBeenCalled();
+    expect(closed).toBe(false);
+    expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+    releaseMedia.resolve();
+    await Promise.race([captureEntered.promise, closing]);
+    expect(finalizeCapture).toHaveBeenCalledOnce();
+    expect(closed).toBe(false);
+    releaseCapture.resolve();
+    await expect(closing).resolves.toMatchObject({ warnings: ["media-cleanup"] });
+    expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+  } finally {
+    releaseMedia.resolve();
+    releaseCapture.resolve();
+    await closing.catch(() => {});
+    unregisterCapture();
+    drainSpy.mockRestore();
+  }
 });
 
 it("owns plugin cleanup and its descendants after the requesting connection drains", async () => {
@@ -63,7 +125,7 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
     source: "drain-cleanup-fixture",
     lifecycle: { id: "async-cleanup", cleanup },
   });
-  const metadata = retainGatewayPluginMetadata();
+  const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
   getPluginLoaderCacheState().set("drain-cleanup", registry);
   const servingRegistry = createEmptyPluginRegistry();
   setActivePluginRegistry(servingRegistry);
@@ -91,4 +153,76 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
     release.resolve();
     await closing.catch(() => {});
   }
+});
+
+it("joins detached request attachment cleanup before shared state closes", async () => {
+  mocks.closePluginStateDatabaseAsync.mockClear();
+  const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+  const attachments = await import("./chat-attachments.js");
+  const mediaStore = await import("../media/store.js");
+  const mediaCleanup = await import("./server-media-cleanup-lifecycle.js");
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const parsed = await attachments.parseMessageWithAttachments(
+      "read this",
+      [
+        {
+          type: "file",
+          mimeType: "text/plain",
+          fileName: "cleanup.txt",
+          content: Buffer.from("synthetic request attachment").toString("base64"),
+        },
+      ],
+      { supportsImages: false },
+    );
+    const [uploaded] = parsed.offloadedRefs;
+    assert(uploaded, "request parser did not offload the attachment");
+    const deletionEntered = createDeferredCore();
+    const releaseDeletion = createDeferredCore();
+    const deleteMediaBuffer = mediaStore.deleteMediaBuffer;
+    const deleteSpy = vi
+      .spyOn(mediaStore, "deleteMediaBuffer")
+      .mockImplementation(async (id, subdir) => {
+        if (id === uploaded.id) {
+          deletionEntered.resolve();
+          await releaseDeletion.promise;
+        }
+        await deleteMediaBuffer(id, subdir);
+      });
+    const drainEntered = createDeferredCore();
+    const waitForDrains = mediaCleanup.waitForMediaCleanupDrainsToSettle;
+    const drainSpy = vi
+      .spyOn(mediaCleanup, "waitForMediaCleanupDrainsToSettle")
+      .mockImplementation(() => {
+        drainEntered.resolve();
+        return waitForDrains();
+      });
+    const discarded = attachments.discardPreparedInboundMedia(parsed.offloadedRefs);
+    await deletionEntered.promise;
+    const deps = createGatewayCloseTestDeps();
+    const closing = prepareGatewayClose(deps, { reason: "test" }).then((preparation) =>
+      completeGatewayClose(deps, preparation),
+    );
+    let observedDrain: Promise<void> | undefined;
+    try {
+      await drainEntered.promise;
+      let drained = false;
+      observedDrain = waitForDrains().then(() => {
+        drained = true;
+      });
+      // The empty owner resolves in this microtask; a retained deletion cannot.
+      await Promise.resolve();
+      expect(drained).toBe(false);
+      expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(await fs.readFile(uploaded.path, "utf8")).toBe("synthetic request attachment");
+    } finally {
+      releaseDeletion.resolve();
+      await discarded;
+      await observedDrain;
+      await closing;
+      drainSpy.mockRestore();
+      deleteSpy.mockRestore();
+    }
+    await expect(fs.stat(uploaded.path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+  });
 });

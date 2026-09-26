@@ -146,6 +146,7 @@ export class CommandPaletteLoadingState {
   submitRequested = false;
   #draft: CommandPaletteInputSnapshot | undefined;
   #imageFiles: File[] = [];
+  #mentionTrigger: number | undefined;
   #input: HTMLTextAreaElement | undefined;
   #returnFocus: HTMLElement | null | undefined;
   #composing = false;
@@ -191,9 +192,29 @@ export class CommandPaletteLoadingState {
       : this.#draft;
   }
 
-  readonly captureInput = (): void => {
+  readonly captureInput = (_value?: string, event?: InputEvent): void => {
     if (!this.active || !this.#input) {
       return;
+    }
+    const input = this.#input;
+    if (
+      !this.#composing &&
+      !event?.isComposing &&
+      event?.inputType === "insertText" &&
+      event.data?.includes("@")
+    ) {
+      this.#mentionTrigger = input.selectionStart - event.data.length + event.data.lastIndexOf("@");
+    } else if (this.#mentionTrigger !== undefined) {
+      // A pasted/replaced token is ordinary text; only continuation of the typed
+      // trigger can open the full picker after its lazy module accepts focus.
+      const end = this.#mentionTrigger + 1;
+      if (
+        event?.inputType === "insertFromPaste" ||
+        event?.inputType === "insertFromDrop" ||
+        this.#draft?.value.slice(0, end) !== input.value.slice(0, end)
+      ) {
+        this.#mentionTrigger = undefined;
+      }
     }
     // The live field owns text and selection until replacement focus accepts it.
     this.#draft = this.#snapshot();
@@ -228,6 +249,7 @@ export class CommandPaletteLoadingState {
       return;
     }
     this.#composing = true;
+    this.#mentionTrigger = undefined;
     if (this.#compositionFrame !== undefined) {
       cancelAnimationFrame(this.#compositionFrame);
       this.#compositionFrame = undefined;
@@ -311,6 +333,7 @@ export class CommandPaletteLoadingState {
     const returnFocus = this.#returnFocus;
     const submitRequested = this.submitRequested;
     const imageFiles = this.#imageFiles;
+    const mentionTrigger = this.#mentionTrigger;
     // Retiring the loader must not restore the original field between the two
     // palette inputs. The replacement dialog inherits that original target.
     this.#input?.closest<OpenClawModalDialog>("openclaw-modal-dialog")?.setReturnFocusTarget(null);
@@ -321,6 +344,7 @@ export class CommandPaletteLoadingState {
       returnFocus,
       ...(submitRequested ? { submitRequested: true as const } : {}),
       ...(imageFiles.length ? { imageFiles } : {}),
+      ...(mentionTrigger !== undefined ? { mentionTrigger } : {}),
     };
   }
 
@@ -337,6 +361,7 @@ export class CommandPaletteLoadingState {
     this.#input = undefined;
     this.#draft = undefined;
     this.#imageFiles = [];
+    this.#mentionTrigger = undefined;
     this.#returnFocus = undefined;
   }
 }

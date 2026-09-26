@@ -288,11 +288,14 @@ describe("forkCodexUpstreamSession", () => {
       runtime,
     });
 
-    expect(forkThread).toHaveBeenCalledWith({
-      threadId: sourceThreadId,
-      beforeTurnId: "turn-2",
-      excludeTurns: true,
-    });
+    expect(forkThread).toHaveBeenCalledWith(
+      {
+        threadId: sourceThreadId,
+        beforeTurnId: "turn-2",
+        excludeTurns: true,
+      },
+      expect.any(Function),
+    );
     expect(boundaryMocks.listTurns).toHaveBeenLastCalledWith(control, "thread-forked");
     expect(transcriptMocks.importHistory).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -365,6 +368,7 @@ describe("forkCodexUpstreamSession", () => {
     });
     expect(forkThread).toHaveBeenCalledWith(
       expect.objectContaining({ sandbox: "workspace-write" }),
+      expect.any(Function),
     );
   });
 

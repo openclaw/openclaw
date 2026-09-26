@@ -323,7 +323,12 @@ describe("gateway node session runtime", () => {
 
   test("does not inherit subscriptions across a replacement pairing generation", async () => {
     let currentPairingGeneration = "generation-a";
-    const runtime = createRuntime(async () => currentPairingGeneration);
+    const runtime = createRuntime(
+      async () => currentPairingGeneration,
+      undefined,
+      (_nodeId, expected) =>
+        expected.identity === "identity-a" && expected.generation === currentPairingGeneration,
+    );
 
     const originalFrames: string[] = [];
     registerNode(runtime, "conn-original", "generation-a", originalFrames);
@@ -362,7 +367,12 @@ describe("gateway node session runtime", () => {
 
   test("preserves subscriptions for an exact live pairing generation promotion", async () => {
     let currentPairingGeneration = "generation-a";
-    const runtime = createRuntime(async () => currentPairingGeneration);
+    const runtime = createRuntime(
+      async () => currentPairingGeneration,
+      undefined,
+      (_nodeId, expected) =>
+        expected.identity === "identity-a" && expected.generation === currentPairingGeneration,
+    );
     const frames: string[] = [];
     registerNode(runtime, "conn-node-a", "generation-a", frames);
     runtime.nodeSubscribe("node-a", "main", "conn-node-a");

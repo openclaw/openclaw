@@ -14,7 +14,10 @@ import type {
 import { showToast } from "../lib/toast.ts";
 import { restoreChatApiAttachments } from "../pages/chat/attachment-restoration.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
-import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
+import {
+  canReloadControlUiDocument,
+  registerControlUiReloadGuard,
+} from "./document-reload-guard.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { buildPlacementStartupInitialTurn } from "./session-placement-initial-turn.ts";
@@ -144,20 +147,27 @@ export function createApplicationPlacementStartup(
       return undefined;
     }
     const loading = runtimeLoad;
-    const current = capturePlacementStartupConnection(gateway, first.input.recovery);
+    const sameConnection = capturePlacementStartupConnection(gateway, first.input.recovery);
+    const current = () => !disposed && runtimeLoad === loading && sameConnection();
     return () => {
       const remaining = pendingInputs();
       // A retained button cannot authorize discarding a newer start or another credential owner's input.
       if (
-        disposed ||
-        runtimeLoad !== loading ||
         !current() ||
         pending.length !== remaining.length ||
         pending.some((entry, index) => entry !== remaining[index])
       ) {
         return;
       }
-      reloadControlUiDocument();
+      for (const { input, persisted } of pending) {
+        if (!persisted) {
+          preRuntimeEntries.delete(input.recovery.sessionKey);
+        }
+      }
+      publish();
+      if (current() && canReloadControlUiDocument(true)) {
+        reloadControlUiDocument();
+      }
     };
   };
   const stopReloadGuard = registerControlUiReloadGuard(canReload, () =>

@@ -1,4 +1,3 @@
-// Discord helper module supports message handler.preflight helpers behavior.
 import {
   implicitMentionKindWhen,
   matchesMentionWithExplicit,

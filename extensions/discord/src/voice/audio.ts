@@ -8,10 +8,10 @@ import {
   type OpusDecoderHandle as LibopusDecoder,
   type OpusEncoderHandle as LibopusEncoder,
 } from "libopus-wasm";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
-import { createStreamingPcmResampler } from "openclaw/plugin-sdk/realtime-voice";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
+import { createStreamingPcmResampler } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const SAMPLE_RATE = 48_000;

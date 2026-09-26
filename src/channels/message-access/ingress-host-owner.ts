@@ -1,32 +1,21 @@
+import type { PreparedCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import type { SessionParticipantIdentity } from "../../config/sessions/session-participant-identity.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { UserChannelIdentity } from "../../state/user-profiles.types.js";
+import type { ChannelIngressContextBinding } from "./runtime-types.js";
 
 export type ChannelIngressHostOwner = Readonly<{
   channelId: string;
-  record: object;
-  epoch: object;
   isLive: () => boolean;
   resolveGatewayContext?: GatewayContextResolver;
 }>;
 
-const owners = resolveGlobalSingleton(
-  Symbol.for("openclaw.channelIngressHostOwners"),
-  () => new Map<string, ChannelIngressHostOwner>(),
-);
-
-/** Register one exact native channel record as the current in-process producer. */
-export function registerChannelIngressHostOwner(owner: ChannelIngressHostOwner): () => void {
-  owners.set(owner.channelId, owner);
-  return () => {
-    if (owners.get(owner.channelId) === owner) {
-      owners.delete(owner.channelId);
-    }
-  };
-}
-
-/** Host lifecycle ownership is independent of diagnostic collection and contains no identity facts. */
-export function readChannelIngressHostOwner(
-  channelId: string,
-): ChannelIngressHostOwner | undefined {
-  return owners.get(channelId);
-}
+export type ChannelParticipantInput = {
+  identity: Extract<SessionParticipantIdentity, { type: "remote" | "observation" }>;
+  binding: ChannelIngressContextBinding;
+  promptedAt: number;
+  owner: ChannelIngressHostOwner;
+  gatewayContext: ReturnType<GatewayContextResolver>;
+  verifiedPrincipal?: UserChannelIdentity;
+  commandOwnerAuthority?: PreparedCommandOwnerAuthority;
+};

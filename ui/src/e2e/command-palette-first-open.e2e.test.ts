@@ -25,9 +25,9 @@ async function readPaletteBackdrop(page: import("playwright").Page) {
 }
 
 suite.define(() => {
-  it("preloads the palette before the shortcut without blocking chat", async () => {
+  it("loads the palette on the shortcut without adding work to chat startup", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const sessionKey = "agent:main:dashboard:palette-preload";
+      const sessionKey = "agent:main:dashboard:palette-on-demand";
       const foregroundDraft = "Keep the foreground draft.";
       await installMockGateway(page, { sessionKey });
       const paletteModule = await holdModuleResponse(
@@ -38,19 +38,23 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
         await composer.fill(foregroundDraft);
-        await expect.poll(paletteModule.requests).toBe(1);
+        expect(paletteModule.requests()).toBe(0);
         expect(await page.locator(".cmd-palette").count()).toBe(0);
 
-        paletteModule.release();
-        await page.waitForFunction(() => customElements.get("openclaw-command-palette"));
-        expect(await page.locator(".cmd-palette").count()).toBe(0);
         await page.keyboard.press("ControlOrMeta+K");
         const input = page.locator(".cmd-palette__input:not([disabled])");
         await input.waitFor({ state: "visible" });
+        await paletteModule.request;
+        await input.fill("appearance");
+        expect(paletteModule.requests()).toBe(1);
+        paletteModule.release();
+        await page.waitForFunction(() => customElements.get("openclaw-command-palette"));
+        await page
+          .locator("openclaw-command-palette .cmd-palette__input")
+          .waitFor({ state: "visible" });
         await expect
           .poll(() => input.evaluate((element) => document.activeElement === element))
           .toBe(true);
-        await page.keyboard.type("appearance");
         expect(await input.inputValue()).toBe("appearance");
         expect(await composer.inputValue()).toBe(foregroundDraft);
         expect(paletteModule.requests()).toBe(1);

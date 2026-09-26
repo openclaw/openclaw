@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
@@ -78,7 +78,8 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: { error: mocks.runtimeError },
 }));
 
-vi.mock("./schema-preflight.js", () => ({
+vi.mock("./schema-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./schema-preflight.js")>()),
   captureTargetDatabaseSchemaContext: mocks.captureSchemaContext,
   checkTargetDatabaseSchemasForContexts: mocks.checkTargetSchemas,
   formatSchemaRefusalLines: mocks.formatSchemaRefusalLines,
@@ -116,7 +117,7 @@ vi.mock("./update-command-service.js", async () => {
   return {
     maybeRestartServiceAfterFailedMutableUpdate: mocks.maybeRestartService,
     maybeStopManagedServiceBeforeMutableUpdate: mocks.maybeStopService,
-    shouldBlockMutableUpdateFromGatewayServiceEnv: mocks.shouldBlockServiceUpdate,
+    mutableUpdateGatewayServiceBlock: mocks.shouldBlockServiceUpdate,
     UpdateCommandAbort: actual.UpdateCommandAbort,
     resolveUpdatedGatewayRestartPort,
   };

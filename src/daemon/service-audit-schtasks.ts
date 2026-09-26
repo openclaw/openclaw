@@ -16,7 +16,10 @@ import {
   resolveTaskLauncherScriptPath,
   resolveTaskUser,
 } from "./schtasks-layout.js";
-import { isInstallerServiceDescription } from "./service-audit-preservation.js";
+import {
+  isInstallerServiceDescription,
+  serviceDefinitionPreserved,
+} from "./service-audit-preservation.js";
 import type {
   GatewayServiceExpectedCommand,
   ServiceDefinitionDrift,
@@ -107,6 +110,29 @@ export async function auditScheduledTaskDefinition(
     }
   }
   const nativeDefaults: Record<string, string> = {
+    // https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-schema
+    // DeleteExpiredTaskAfter is excluded: omission disables deletion, unlike explicit PT0S.
+    "Principals.Principal.RunLevel": "LeastPrivilege",
+    "Triggers.LogonTrigger.Enabled": "true",
+    "Triggers.LogonTrigger.ExecutionTimeLimit": "PT72H",
+    "Triggers.LogonTrigger.Delay": "PT0M",
+    "Settings.AllowStartOnDemand": "true",
+    "Settings.MultipleInstancesPolicy": "IgnoreNew",
+    "Settings.DisallowStartIfOnBatteries": "true",
+    "Settings.StopIfGoingOnBatteries": "true",
+    "Settings.AllowHardTerminate": "true",
+    "Settings.StartWhenAvailable": "false",
+    "Settings.RunOnlyIfNetworkAvailable": "false",
+    "Settings.WakeToRun": "false",
+    "Settings.Enabled": "true",
+    "Settings.Hidden": "false",
+    "Settings.ExecutionTimeLimit": "PT72H",
+    "Settings.Priority": "7",
+    "Settings.RunOnlyIfIdle": "false",
+    "Settings.IdleSettings.Duration": "PT10M",
+    "Settings.IdleSettings.WaitTimeout": "PT1H",
+    "Settings.IdleSettings.StopOnIdleEnd": "true",
+    "Settings.IdleSettings.RestartOnIdle": "false",
     "Settings.UseUnifiedSchedulingEngine": "false",
     "Settings.DisallowStartOnRemoteAppSession": "false",
     "Settings.Volatile": "false",
@@ -114,6 +140,9 @@ export async function auditScheduledTaskDefinition(
   const released: Record<string, string> = {
     "Settings.DisallowStartIfOnBatteries": "true",
     "Settings.StopIfGoingOnBatteries": "true",
+    // Pre-XML installers used /Create defaults for these settings.
+    "Settings.ExecutionTimeLimit": "PT72H",
+    "Settings.IdleSettings.StopOnIdleEnd": "true",
     "Principals.Principal.LogonType": "S4U",
     "Settings.RestartOnFailure.Count": "0",
     "Settings.RestartOnFailure.Interval": "PT0S",
@@ -184,6 +213,13 @@ export async function auditScheduledTaskDefinition(
     }
     if (canonical && released[key] === current) {
       outdated(key, current, canonical.textContent);
+    } else if (
+      !expectedXml &&
+      canonical &&
+      ((key.startsWith("Settings.") && key !== "Settings.Enabled") ||
+        key === "Triggers.LogonTrigger.Enabled")
+    ) {
+      findings.push(serviceDefinitionPreserved(key, sourcePath));
     } else {
       unknown(key, "The key or value is not a recognized installer setting.");
     }
@@ -195,8 +231,10 @@ export async function auditScheduledTaskDefinition(
       node.children.length ||
       (!expectedXml && preserved.test(key)) ||
       (expectedXml && key === "Settings.Enabled") ||
-      // Task Scheduler omits the default run level when exporting XML.
-      (key === "Principals.Principal.RunLevel" && node.textContent === "LeastPrivilege")
+      // Default leaf values do not imply that a missing trigger or principal exists.
+      (nativeDefaults[key] === node.textContent &&
+        (key.startsWith("Settings.") ||
+          installed.querySelector(elementKey(node.parentElement!).replaceAll(".", " > "))))
     ) {
       continue;
     }

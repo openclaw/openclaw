@@ -1,11 +1,46 @@
 // Extension test setup installs extension-specific mocks and cleanup.
-import { afterAll, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { installSharedTestSetup } from "./setup.shared.js";
 
 const testEnv = installSharedTestSetup({ loadProfileEnv: false });
+let restoreUpstreamLinks: (() => void) | undefined;
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.useRealTimers();
+  if (
+    !expect
+      .getState()
+      .testPath?.replaceAll("\\", "/")
+      .match(
+        /\/extensions\/codex\/src\/app-server\/upstream-(?:fork-import|session-fork|session-fork-continuation)\.test\.ts$/,
+      )
+  ) {
+    return;
+  }
+  // Shared initialization calls the core owner; extension fixtures keep their public SDK mocks.
+  const [owner, facade] = await Promise.all([
+    vi.importActual<typeof import("../src/sessions/session-upstream-links.js")>(
+      "../src/sessions/session-upstream-links.js",
+    ),
+    vi.importMock<typeof import("openclaw/plugin-sdk/session-catalog")>(
+      "openclaw/plugin-sdk/session-catalog",
+    ),
+  ]);
+  const upsert = vi
+    .spyOn(owner, "upsertSessionUpstreamLink")
+    .mockImplementation(facade.upsertSessionUpstreamLink);
+  const remove = vi
+    .spyOn(owner, "deleteSessionUpstreamLink")
+    .mockImplementation(facade.deleteSessionUpstreamLink);
+  restoreUpstreamLinks = () => {
+    upsert.mockRestore();
+    remove.mockRestore();
+  };
+});
+
+afterEach(() => {
+  restoreUpstreamLinks?.();
+  restoreUpstreamLinks = undefined;
 });
 
 afterAll(async () => {

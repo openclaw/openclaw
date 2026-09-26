@@ -75,9 +75,16 @@ export function resolveWorkerCellExport(source, name) {
 }
 
 /** Generated forwarding entries can share the defining owner's filename prefix. */
-export function resolveWorkerCellFunctionBinding(identity, packageRoot, prefix, symbol, ts) {
+export async function resolveWorkerCellFunctionBinding(
+  identity,
+  packageRoot,
+  prefix,
+  symbol,
+  parser,
+) {
+  const ts = await import("typescript/unstable/ast");
   const root = fs.realpathSync(packageRoot);
-  const matches = [];
+  const sources = [];
   for (const relative of Object.keys(identity.files)) {
     const name = path.posix.basename(relative);
     if (
@@ -93,23 +100,28 @@ export function resolveWorkerCellFunctionBinding(identity, packageRoot, prefix, 
     const bytes = fs.readFileSync(file);
     const expectedHash = identity.files[relative].sha256;
     assert.equal(hash(bytes), expectedHash, `Package owner changed: ${relative}`);
-    const source = bytes.toString("utf8");
-    const ast = ts.createSourceFile(
-      relative,
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      ts.ScriptKind.JS,
+    sources.push({ fileName: file, text: bytes.toString("utf8"), name, expectedHash });
+  }
+  const sourceFiles = parser.parseSourceFiles(sources);
+  const resolveFunctionExport = (sourceFile) => {
+    assert.equal(
+      parser.getSyntacticDiagnostics(sourceFile.fileName).length,
+      0,
+      `Cannot parse package owner: ${sourceFile.fileName}`,
     );
-    assert.equal(ast.parseDiagnostics.length, 0, `Cannot parse package owner: ${relative}`);
-    const definitions = ast.statements.filter(
+    const definitions = sourceFile.statements.filter(
       (entry) => ts.isFunctionDeclaration(entry) && entry.name?.text === symbol && entry.body,
     );
     if (definitions.length === 0) {
-      continue;
+      return undefined;
     }
     assert.equal(definitions.length, 1, `Ambiguous local definition: ${symbol}`);
-    if (resolveWorkerCellExport(source, symbol)) {
+    return resolveWorkerCellExport(sourceFile.text, symbol);
+  };
+  const matches = [];
+  for (const [index, sourceFile] of sourceFiles.entries()) {
+    if (resolveFunctionExport(sourceFile)) {
+      const { name, expectedHash } = sources[index];
       matches.push([name, symbol, expectedHash]);
     }
   }

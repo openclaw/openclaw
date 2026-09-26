@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { backup } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -26,6 +26,7 @@ import { normalizePersistedSessionEntryShape } from "../config/sessions/store-en
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -122,6 +123,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   let testState: OpenClawTestState;
   let cfg: OpenClawConfig;
   let service: SessionActivitySummaryService;
+  let residentProjection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
   const complete = vi.fn(async (_params: Parameters<typeof defaultCompleteModel>[0]) =>
     result("Completed the requested work."),
   );
@@ -143,6 +145,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     });
     service = createSessionActivitySummaries({
       getConfig: () => cfg,
+      getSessionRowProjection: () => residentProjection,
       onChanged: changed,
       prepareModel: prepare,
       completeModel: complete,
@@ -152,6 +155,8 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     archiveMaterializationHook.beforeMaterialize = undefined;
     clearAgentRunContext("recap-context-run");
     await service.dispose();
+    residentProjection?.dispose();
+    residentProjection = undefined;
     await testState.cleanup();
   });
 
@@ -328,15 +333,19 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         totalMessages: 1,
       });
 
+      const published = createDeferred<ReturnType<typeof view>>();
+      changed.mockImplementationOnce(() => published.resolve(view()));
       completion.resolve(result("Completed the first turn."));
-      await vi.waitFor(async () => {
-        expect(await describeSession()).toMatchObject({
-          session: {
-            key: target.key,
-            sessionId: scope.sessionId,
-            activitySummary: { state: "current", text: "Completed the first turn." },
-          },
-        });
+      expect(await published.promise).toMatchObject({
+        state: "current",
+        text: "Completed the first turn.",
+      });
+      expect(await describeSession()).toMatchObject({
+        session: {
+          key: target.key,
+          sessionId: scope.sessionId,
+          activitySummary: { state: "current", text: "Completed the first turn." },
+        },
       });
       expect(read()?.activitySummary).toMatchObject({
         ...latestWatermark,
@@ -380,30 +389,40 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     }
   });
 
-  it("does not decode saved prompts during transcript notification bursts", async () => {
+  it("uses committed resident facts for recap notifications and current-authority checks", async () => {
     await messages(2);
     const prompt = "Saved recap prompt marker. ".repeat(40_000);
     await patchSessionEntryCore(scope, () => ({ skillsSnapshot: { prompt, skills: [] } }));
     const before = read()!;
     const completion = createDeferred<ReturnType<typeof result>>();
     complete.mockImplementationOnce(() => completion.promise);
+    residentProjection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
+    await residentProjection.ensureMaterialized();
     service.ensure(target);
     await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
-      /from\s+"session_nodes"/i.test(sql) ? "entries" : null,
-    );
+    const queries = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     const parse = vi.spyOn(JSON, "parse");
     try {
-      for (let index = 0; index < 100; index += 1) {
+      for (let index = 0; index < 50; index += 1) {
         service.handleTranscript({ target: { ...scope }, lifecycleRevision: "lifecycle-1" });
+        complete.mock.calls[0]![0].assertCurrent?.();
       }
-      expect(queries.rowCounts.entries).toBeGreaterThanOrEqual(100);
-      expect(queries.textBytes.entries).toBeLessThan(100 * 1024);
+      expect(queries.queries).toHaveLength(0);
       expect(parse.mock.calls.some(([json]) => json.includes("Saved recap prompt marker."))).toBe(
         false,
       );
       expect(complete).toHaveBeenCalledTimes(1);
+      queries.restore();
+      await patchSessionEntryCore(scope, () => ({ initializationPending: true }), {
+        preserveActivity: true,
+      });
+      // A committed identity change fences requests before display rows finish refreshing.
+      expect(() => complete.mock.calls[0]![0].assertCurrent?.()).toThrow(
+        "Activity recap lifecycle or utility model changed",
+      );
+      await patchSessionEntryCore(scope, () => ({ initializationPending: undefined }), {
+        preserveActivity: true,
+      });
     } finally {
       parse.mockRestore();
       queries.restore();

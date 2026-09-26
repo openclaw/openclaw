@@ -4,23 +4,6 @@ import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtim
 
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 
-type FileStatLike = {
-  isFile?: unknown;
-  nlink?: unknown;
-};
-
-export function isRegularFileStat(value: unknown): value is FileStatLike & { nlink: number } {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const stat = value as FileStatLike;
-  const isFile =
-    typeof stat.isFile === "function"
-      ? (stat.isFile as () => boolean).call(stat)
-      : stat.isFile === true;
-  return isFile && typeof stat.nlink === "number";
-}
-
 // A concurrent atomic rewrite (write-temp + rename) of the same vault page by
 // the memory bridge re-export makes fs-safe's opened-fd identity check fail with
 // `path-mismatch` (see @openclaw/fs-safe opened-realpath): the file we opened is
@@ -41,13 +24,13 @@ export async function writeGuardedVaultPage(params: {
   vault: VaultRoot;
   pagePath: string;
   content: string;
-  pageStat: unknown;
+  pageStat: Awaited<ReturnType<VaultRoot["stat"]>> | null;
   pageLabel: string;
 }): Promise<void> {
   try {
     await retryAsync(
       async () => {
-        if (isRegularFileStat(params.pageStat) && params.pageStat.nlink > 1) {
+        if (params.pageStat?.isFile && params.pageStat.nlink > 1) {
           await params.vault.remove(params.pagePath);
         }
         await params.vault.write(params.pagePath, params.content);

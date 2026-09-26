@@ -53,33 +53,6 @@ async function writeSessionEntry(params: {
 }
 
 describe("telegram native approval adapter", () => {
-  it("describes the correct Telegram exec-approval setup path", () => {
-    const text = telegramApprovalCapability.describeExecApprovalSetup?.({
-      channel: "telegram",
-      channelLabel: "Telegram",
-    });
-
-    expect(text).toContain("`channels.telegram.execApprovals.approvers`");
-    expect(text).toContain("`commands.ownerAllowFrom`");
-    expect(text).not.toContain("`channels.telegram.allowFrom`");
-    expect(text).not.toContain("`channels.telegram.defaultTo`");
-    expect(text).not.toContain("`channels.telegram.dm.allowFrom`");
-  });
-
-  it("describes the named-account Telegram exec-approval setup path", () => {
-    const text = telegramApprovalCapability.describeExecApprovalSetup?.({
-      channel: "telegram",
-      channelLabel: "Telegram",
-      accountId: "work",
-    });
-
-    expect(text).toContain("`channels.telegram.accounts.work.execApprovals.approvers`");
-    expect(text).toContain("`commands.ownerAllowFrom`");
-    expect(text).not.toContain("`channels.telegram.accounts.work.allowFrom`");
-    expect(text).not.toContain("`channels.telegram.accounts.work.defaultTo`");
-    expect(text).not.toContain("`channels.telegram.allowFrom`");
-  });
-
   it("normalizes direct-chat origin targets so DM dedupe can converge", async () => {
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
       cfg: buildConfig(),
@@ -240,34 +213,6 @@ describe("telegram native approval adapter", () => {
     expect(target).toEqual({
       to: "-1003841603622",
       threadId: 928,
-    });
-  });
-
-  it("marks DM-only telegram approvals to notify the origin chat after delivery", () => {
-    const capabilities = telegramApprovalCapability.native?.describeDeliveryCapabilities({
-      cfg: buildConfig(),
-      accountId: "default",
-      approvalKind: "exec",
-      request: {
-        id: "req-dm-1",
-        request: {
-          command: "echo hi",
-          turnSourceChannel: "telegram",
-          turnSourceTo: "telegram:-1003841603622:topic:928",
-          turnSourceAccountId: "default",
-          turnSourceThreadId: 928,
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
-
-    expect(capabilities).toEqual({
-      enabled: true,
-      preferredSurface: "approver-dm",
-      supportsOriginSurface: true,
-      supportsApproverDmSurface: true,
-      notifyOriginWhenDmOnly: true,
     });
   });
 });

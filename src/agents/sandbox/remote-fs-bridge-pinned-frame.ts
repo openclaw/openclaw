@@ -12,6 +12,7 @@ import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
 } from "./backend-handle.types.js";
+import type { PinnedSandboxEntry } from "./fs-bridge-path-safety.js";
 import { relativePathEscapesContainerRoot } from "./path-utils.js";
 import type { RemoteCanonicalPath } from "./remote-fs-bridge-canonical-path.js";
 import {
@@ -19,24 +20,6 @@ import {
   resolveRemoteMountByContainerPath,
   type RemoteMountInfo,
 } from "./remote-fs-bridge-paths.js";
-
-/** Maps a resolver action to the mutation action label used in errors. */
-const REMOTE_PINNED_ACTION_LABELS: Record<
-  "write" | "create" | "mkdir" | "remove" | "copy-destination",
-  string
-> = {
-  write: "write files",
-  create: "create files",
-  mkdir: "create directories",
-  remove: "remove files",
-  "copy-destination": "copy files",
-};
-
-export function remotePinnedActionLabel(
-  action: "write" | "create" | "mkdir" | "remove" | "copy-destination",
-): string {
-  return REMOTE_PINNED_ACTION_LABELS[action];
-}
 
 /**
  * Builds the canonical frame for an already-authorized pinned destination.
@@ -117,11 +100,7 @@ export type RemotePinnedTargetParams = {
   signal?: AbortSignal;
 };
 
-export type RemotePinnedTarget = {
-  mountRootPath: string;
-  relativeParentPath: string;
-  basename: string;
-};
+export type RemotePinnedTarget = PinnedSandboxEntry;
 
 /**
  * Resolves the pinned mutation entry for a remote destination. Mount policy

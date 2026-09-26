@@ -21,9 +21,13 @@ import type {
   SessionTranscriptReadScope,
 } from "./session-transcript-read-kernel.js";
 
-const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES = 8_000;
+export const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES = 8_000;
 const SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES = 100;
 const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_CHUNK_MESSAGES = 400;
+
+export function resolveChatHistoryTailReadMaxBytes(maxBytes: number): number {
+  return Math.max(maxBytes * 2, 1024 * 1024);
+}
 
 export function readChatHistoryMessageId(message: unknown): string | undefined {
   const id = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;
@@ -35,7 +39,7 @@ export function readChatHistoryMessageSeq(message: unknown): number | undefined 
   return asPositiveSafeInteger(metadata?.seq);
 }
 
-export function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
+function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
   if (messages.length <= max) {
     return messages;
   }
@@ -203,7 +207,7 @@ export async function readIncrementalChatHistoryTail(params: {
       ? await params.readers.readRecentSessionMessagesWithStatsAsync(params.readScope, {
           maxMessages: initialMessages + 1,
           maxLines: initialMessages + 1,
-          maxBytes: Math.max(params.maxBytes * 2, 1024 * 1024),
+          maxBytes: resolveChatHistoryTailReadMaxBytes(params.maxBytes),
           allowResetArchiveFallback: true,
           captureReadWindow: true,
           readOnly: params.readOnly,
@@ -217,7 +221,7 @@ export async function readIncrementalChatHistoryTail(params: {
                 recentAtHead: {
                   maxMessages: rawHistoryWindowMessages + 1,
                   maxLines: rawHistoryWindowMessages + 1,
-                  maxBytes: Math.max(params.maxBytes * 2, 1024 * 1024),
+                  maxBytes: resolveChatHistoryTailReadMaxBytes(params.maxBytes),
                 },
               }
             : {}),

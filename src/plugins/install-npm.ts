@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { withInstallActivity } from "../infra/install-progress.js";
 import { resolveNpmSpecMetadata, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import { resolveManagedNpmRootDependencySpec } from "../infra/npm-managed-root.js";
@@ -20,10 +20,7 @@ import {
   validateNpmResolutionCompatibility,
 } from "./install-npm-metadata.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
-import {
-  preflightPluginNpmInstallPolicy,
-  type InstallSafetyOverrides,
-} from "./install-security-scan.js";
+import { preflightPluginNpmInstallPolicy } from "./install-security-scan.js";
 import {
   defaultLogger,
   emitSuccessfulPluginInstallSecurityEvent,
@@ -34,28 +31,20 @@ import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
-  type PluginInstallArtifactConsentHandler,
-  type PluginInstallLogger,
+  type PackageInstallCommonParams,
   type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
 
 export async function installPluginFromNpmSpec(
-  params: InstallSafetyOverrides & {
+  params: Omit<
+    PackageInstallCommonParams,
+    "requirePluginManifest" | "allowSourceTypeScriptEntries" | "installPolicyRequest"
+  > & {
     spec: string;
-    extensionsDir?: string;
-    npmDir?: string;
-    timeoutMs?: number;
-    workTimeoutMs?: number | null;
     signal?: AbortSignal;
-    logger?: PluginInstallLogger;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedPluginId?: string;
     expectedReplacementPluginId?: string;
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    beforePersistentApply?: () => void;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -83,7 +72,9 @@ export async function installPluginFromNpmSpec(
     };
   }
 
-  const metadataResult = await resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal });
+  const metadataResult = await withInstallActivity(logger, "resolve", () =>
+    resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal }),
+  );
   if (!metadataResult.ok) {
     return {
       ok: false,
@@ -112,6 +103,7 @@ export async function installPluginFromNpmSpec(
           resolvedPrereleaseVersion: npmResolution.version,
           timeoutMs,
           signal: params.signal,
+          killProcessTree: true,
           logger,
         })
       : null;
@@ -187,46 +179,37 @@ export async function installPluginFromNpmSpec(
     npmResolution,
   });
 
-  const policyTempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-policy-"));
-  try {
-    const policyMetadataPath = path.join(policyTempDir, "npm-package-metadata.json");
-    await fs.writeFile(
-      policyMetadataPath,
-      `${JSON.stringify(
-        {
-          packageName: parsedSpec.name,
-          requestedSpecifier: spec,
-          resolution: npmResolution,
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-    const preflightPolicyResult = await runInstallSourceScan({
-      subject: `Plugin "${expectedPluginId ?? parsedSpec.name}"`,
-      pluginId: expectedPluginId ?? parsedSpec.name,
-      mode: policyMode,
-      sourceFamily: "npm",
-      scan: async () =>
-        await preflightPluginNpmInstallPolicy({
-          config: params.config,
-          onInstallPolicyWarning: params.onInstallPolicyWarning,
-          logger,
-          mode: policyMode,
-          packageName: parsedSpec.name,
-          ...(expectedPluginId ? { pluginId: expectedPluginId } : {}),
-          requestedSpecifier: spec,
-          source: npmInstallPolicySource,
-          sourcePath: policyMetadataPath,
-          sourcePathKind: "file",
-        }),
-    });
-    if (preflightPolicyResult) {
-      return preflightPolicyResult;
-    }
-  } finally {
-    await fs.rm(policyTempDir, { recursive: true, force: true });
+  const preflightPolicyResult = await withTempWorkspace(
+    { rootDir: os.tmpdir(), prefix: "openclaw-npm-policy-", mode: 0o666 & ~process.umask() },
+    async (workspace) => {
+      const policyMetadataPath = await workspace.writeJson("npm-package-metadata.json", {
+        packageName: parsedSpec.name,
+        requestedSpecifier: spec,
+        resolution: npmResolution,
+      });
+      return await runInstallSourceScan({
+        subject: `Plugin "${expectedPluginId ?? parsedSpec.name}"`,
+        pluginId: expectedPluginId ?? parsedSpec.name,
+        mode: policyMode,
+        sourceFamily: "npm",
+        scan: async () =>
+          await preflightPluginNpmInstallPolicy({
+            config: params.config,
+            onInstallPolicyWarning: params.onInstallPolicyWarning,
+            logger,
+            mode: policyMode,
+            packageName: parsedSpec.name,
+            ...(expectedPluginId ? { pluginId: expectedPluginId } : {}),
+            requestedSpecifier: spec,
+            source: npmInstallPolicySource,
+            sourcePath: policyMetadataPath,
+            sourcePathKind: "file",
+          }),
+      });
+    },
+  );
+  if (preflightPolicyResult) {
+    return preflightPolicyResult;
   }
 
   const result = await installPluginFromManagedNpmRoot(

@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import { clampNumber } from "../utils.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
+import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
+import type {
+  CodeModeExecutorContinuation,
+  CodeModeExecutorInlineHost,
+} from "./code-mode-executor-types.js";
+import { runCodeModeExecutor } from "./code-mode-executor.js";
 import { CodeModeOutputState, toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
@@ -36,13 +42,9 @@ import {
   reserveActiveRunSlot,
   waitForPendingBridgeSettlement,
   type PendingBridgeState,
+  type CodeModeRunOwner,
 } from "./code-mode-state.js";
-import {
-  CodeModeHeadlessAbortError,
-  CodeModeHeadlessTimeoutError,
-  runCodeModeWorker,
-  type CodeModeWorkerInlineHost,
-} from "./code-mode-worker.js";
+import type { CodeModeWorkerPayload } from "./code-mode-worker-types.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -116,11 +118,13 @@ function remainingHeadlessMs(deadline: number): number {
 }
 
 async function runHeadlessWorkerLeg(params: {
-  input: Record<string, unknown>;
+  input: CodeModeWorkerPayload<CodeModeExecutorContinuation>;
   config: CodeModeConfig;
+  owner: CodeModeRunOwner;
+  runtimeConfig: ToolSearchToolContext["config"];
   deadline: number;
   signal: AbortSignal;
-  inlineHost?: CodeModeWorkerInlineHost;
+  inlineHost?: CodeModeExecutorInlineHost;
 }): Promise<CodeModeWorkerResult> {
   const remainingMs = remainingHeadlessMs(params.deadline);
   const executionTimeoutMs = Math.max(1, Math.min(params.config.timeoutMs, remainingMs));
@@ -130,16 +134,20 @@ async function runHeadlessWorkerLeg(params: {
   // Let the headless abort scope own the wall-clock deadline. Capping the host
   // watchdog to the same deadline makes its internal timeout message race the scope.
   const workerTimeoutMs = timeoutMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS;
-  return await runCodeModeWorker(
-    {
-      ...params.input,
-      executionTimeoutMs,
-      config: { ...params.config, timeoutMs },
-    },
-    workerTimeoutMs,
-    undefined,
-    params.signal,
-    params.inlineHost,
+  return await params.owner.runExecution(() =>
+    runCodeModeExecutor(
+      {
+        ...(params.input.kind === "exec" ? { ...params.input, executionTimeoutMs } : params.input),
+        config: { ...params.config, timeoutMs },
+      },
+      {
+        timeoutMs: workerTimeoutMs,
+        executor: params.config.executor,
+        runtimeConfig: params.runtimeConfig,
+        signal: params.signal,
+        inlineHost: params.inlineHost,
+      },
+    ),
   );
 }
 
@@ -306,7 +314,7 @@ export async function runCodeModeScriptHeadless(params: {
       );
     };
     let boundaryFailure: Error | undefined;
-    const inlineHost: CodeModeWorkerInlineHost = {
+    const inlineHost: CodeModeExecutorInlineHost = {
       onNetworkContent: () => runtime.observeNetworkContent(parentToolCallId),
       onBoundary: async (boundary, context) => {
         output.append(boundary.output);
@@ -364,6 +372,7 @@ export async function runCodeModeScriptHeadless(params: {
     let result = await runHeadlessWorkerLeg({
       input: {
         kind: "exec",
+        config,
         source: params.code,
         prelude: headlessNamespaceFreezePrelude(namespaces),
         catalog: catalogProjection.guestBindings,
@@ -372,6 +381,8 @@ export async function runCodeModeScriptHeadless(params: {
         swarmEnabled,
       },
       config,
+      owner,
+      runtimeConfig: params.ctx.runtimeConfig ?? params.ctx.config,
       deadline,
       signal: abortScope.signal,
       inlineHost,
@@ -420,11 +431,14 @@ export async function runCodeModeScriptHeadless(params: {
         result = await runHeadlessWorkerLeg({
           input: {
             kind: "resume",
-            snapshot: result.snapshot,
+            config,
+            continuation: result.continuation,
             settledRequests: delivery.requests,
             pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
           },
           config,
+          owner,
+          runtimeConfig: params.ctx.runtimeConfig ?? params.ctx.config,
           deadline,
           signal: abortScope.signal,
           inlineHost: { ...inlineHost, onInputConsumed: delivery.release },
@@ -434,26 +448,27 @@ export async function runCodeModeScriptHeadless(params: {
       }
     }
   } catch (error) {
-    const timedOut = error instanceof CodeModeHeadlessTimeoutError;
-    const aborted = error instanceof CodeModeHeadlessAbortError;
+    const failure = abortScope.signal.aborted ? headlessAbortError(abortScope.signal) : error;
+    const timedOut = failure instanceof CodeModeHeadlessTimeoutError;
+    const aborted = failure instanceof CodeModeHeadlessAbortError;
     return headlessFailure({
       code:
-        error instanceof HeadlessToolBudgetError
+        failure instanceof HeadlessToolBudgetError
           ? "tool_budget_exceeded"
           : timedOut
             ? "timeout"
             : aborted
               ? "aborted"
-              : codeModeFailureCode(error),
-      error: timedOut || aborted ? error.message : codeModeFailureMessage(error),
+              : codeModeFailureCode(failure),
+      error: timedOut || aborted ? failure.message : codeModeFailureMessage(failure),
       output,
       toolCallCount,
     });
   } finally {
     cancelPendingBridgeStates(pending);
     abortScope.cleanup();
-    owner.close();
     releaseReservation?.();
+    await owner.close();
   }
 }
 

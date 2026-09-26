@@ -5,10 +5,10 @@
  * source id, duplicate-guard timing, and prompt/status wording.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listFreshTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import {
   buildActiveMediaGenerationTaskPromptContext,
   createMediaGenerationTaskStatusOwner,
+  prepareMediaGenerationTaskLookup,
 } from "./media-generation-task-status-shared.js";
 
 export const IMAGE_GENERATION_TASK_KIND = "image_generation";
@@ -91,11 +91,19 @@ export async function buildMediaTaskRuntimeContext(params: {
     return undefined;
   }
   const sessionKey = normalizeOptionalString(params.sessionKey);
-  const tasks = sessionKey ? await listFreshTasksForOwnerKey(sessionKey) : [];
+  const lookup = sessionKey
+    ? await prepareMediaGenerationTaskLookup({
+        sessionKey,
+        agentId: params.agentId,
+        taskIdentities: enabled.map(([sourcePrefix, taskKind]) => ({ sourcePrefix, taskKind })),
+      })
+    : undefined;
+  lookup?.assertCurrent();
   const facts = enabled.map(
     ([tool, taskKind]) =>
       buildActiveMediaGenerationTaskPromptContext({
-        tasks,
+        tasks: lookup?.tasks ?? [],
+        config: lookup?.config,
         agentId: params.agentId,
         taskKind,
         sourcePrefix: tool,

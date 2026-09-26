@@ -151,8 +151,9 @@ describe("memory forget source removal", () => {
     );
     db.prepare(`INSERT INTO memory_index_chunks
       (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-      VALUES ('selected-snapshot', 'MEMORY.md', 'memory', 1, 2, 'fixture', 'test', ?, '[1,0]', 1)`).run(
+      VALUES ('selected-snapshot', 'MEMORY.md', 'memory', 1, 2, 'fixture', 'test', ?, ?, 1)`).run(
       content,
+      storage.encodeMemoryEmbedding([1, 0]),
     );
     db.prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)").run(
       "selected-snapshot",
@@ -239,7 +240,7 @@ describe("memory forget source removal", () => {
       );
       const insertChunk = db.prepare(`INSERT INTO memory_index_chunks
       (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-      VALUES (?, ?, 'sessions', 1, 1, 'fixture-hash', 'test', 'forget', '[]', 1)`);
+      VALUES (?, ?, 'sessions', 1, 1, 'fixture-hash', 'test', 'forget', x'', 1)`);
       const provenance = db.prepare(`INSERT INTO memory_index_chunk_provenance
       (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'agent', 'interactive', 1)`);
       const sessionIds = Array.from({ length: sessionCount }, (_, index) =>
@@ -322,7 +323,7 @@ describe("memory forget source removal", () => {
       VALUES ('sessions/main/target-0.jsonl', 'sessions', 'keep-until-admitted', 1, 1)`).run();
       db.prepare(`INSERT INTO memory_index_chunks
       (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-      VALUES ('target-chunk', 'sessions/main/target-0.jsonl', 'sessions', 1, 1, 'hash', 'test', 'forget', '[]', 1)`).run();
+      VALUES ('target-chunk', 'sessions/main/target-0.jsonl', 'sessions', 1, 1, 'hash', 'test', 'forget', x'', 1)`).run();
       db.prepare(`INSERT INTO memory_index_chunk_provenance
       (chunk_id, origin_class, session_kind, observed_at)
       VALUES ('target-chunk', 'agent', 'interactive', 1)`).run();

@@ -5,10 +5,11 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptStats } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 
 function sqliteTranscriptJsonlByteSize() {
   // octet_length reads column metadata; casting to BLOB loads every overflow payload first.
-  return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(OCTET_LENGTH(event_json)), 0)
+  return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(${transcriptEventReadBytesSql()}), 0)
     + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes");
 }
 

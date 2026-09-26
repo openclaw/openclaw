@@ -139,24 +139,57 @@ suite.define(() => {
             page.evaluate(() => document.activeElement?.getAttribute("data-position-marker-id"));
           const currentMarkerId = () =>
             rail.locator('[aria-current="true"]').getAttribute("data-position-marker-id");
+          const tabIntoCurrentPosition = async () => {
+            // Layout can publish a new reader position between host-side browser calls.
+            const entry = await rail.evaluateHandle((element) => {
+              let currentIds: Array<string | null> = [];
+              let tabStopIds: Array<string | null> = [];
+              const captureEntry = (event: KeyboardEvent) => {
+                if (event.key !== "Tab" || event.shiftKey) {
+                  return;
+                }
+                currentIds = [...element.querySelectorAll('[aria-current="true"]')].map((marker) =>
+                  marker.getAttribute("data-position-marker-id"),
+                );
+                tabStopIds = [...element.querySelectorAll('[tabindex="0"]')].map((marker) =>
+                  marker.getAttribute("data-position-marker-id"),
+                );
+              };
+              element.ownerDocument.addEventListener("keydown", captureEntry, true);
+              return {
+                read: () => ({ currentIds, tabStopIds }),
+                dispose: () =>
+                  element.ownerDocument.removeEventListener("keydown", captureEntry, true),
+              };
+            });
+            try {
+              await page.keyboard.press("Tab");
+              const { currentIds, tabStopIds } = await entry.evaluate((probe) => probe.read());
+              expect(currentIds).toHaveLength(1);
+              expect(currentIds[0]).not.toBeNull();
+              expect(tabStopIds).toEqual(currentIds);
+              await expect.poll(focusedMarkerId).toBe(currentIds[0]);
+            } finally {
+              await entry.evaluate((probe) => probe.dispose());
+              await entry.dispose();
+            }
+          };
           await expect.poll(() => rail.locator('[aria-current="true"]').count()).toBe(1);
           await transcript.focus();
-          const entryId = await currentMarkerId();
-          await page.keyboard.press("Tab");
-          await expect.poll(focusedMarkerId).toBe(entryId);
+          await tabIntoCurrentPosition();
           await page.keyboard.press("Home");
           await page.keyboard.press("ArrowDown");
           await expect.poll(focusedMarkerId).toBe("position-rail-1");
           await expect.poll(() => preview.count()).toBe(1);
           await page.keyboard.press("ArrowUp");
           await expect.poll(focusedMarkerId).toBe("position-rail-0");
+          await captureUiProof(suite, page, "chat-position-rail", "keyboard-exploration.png");
           await expect.poll(() => rail.locator('[tabindex="0"]').count()).toBe(1);
           await page.keyboard.press("Tab");
           expect(await focusedMarkerId()).toBeNull();
           await transcript.focus();
-          const reentryId = await currentMarkerId();
-          await page.keyboard.press("Tab");
-          await expect.poll(focusedMarkerId).toBe(reentryId);
+          await tabIntoCurrentPosition();
+          await captureUiProof(suite, page, "chat-position-rail", "native-tab-reentry.png");
           await page.keyboard.press("Shift+Tab");
           expect(await transcript.evaluate((element) => element === document.activeElement)).toBe(
             true,
@@ -453,25 +486,102 @@ suite.define(() => {
                   outline: getComputedStyle(element).outlineStyle,
                 };
               });
-          for (const index of [120, 121]) {
-            await markerForIndex(index).click();
-            const revealed = transcript.locator(
-              `.chat-bubble[data-entry-id="position-rail-${index}"]`,
+          const clickAndObserveFlash = async (index: number, animated: boolean) => {
+            // Retain the transient paint in the renderer before a delayed host can miss it.
+            const observation = await transcript.evaluateHandle(
+              (element: HTMLElement, position) => {
+                let clicked = false;
+                let animationStarted = false;
+                let paint: { visible: boolean; animated: boolean; outline: string } | null = null;
+                const sample = () => {
+                  if (!clicked) {
+                    return;
+                  }
+                  const bubble = element.querySelector(
+                    `.chat-bubble[data-entry-id="position-rail-${position}"]`,
+                  );
+                  if (!bubble) {
+                    return;
+                  }
+                  const overlay = getComputedStyle(bubble, "::after");
+                  const rect = bubble.getBoundingClientRect();
+                  const viewport = element.getBoundingClientRect();
+                  if (
+                    overlay.content !== "none" &&
+                    Number.parseFloat(overlay.opacity) > 0 &&
+                    (overlay.animationName === "none" || animationStarted) &&
+                    rect.top >= viewport.top &&
+                    rect.bottom <= viewport.bottom
+                  ) {
+                    paint = {
+                      visible: true,
+                      animated: overlay.animationName !== "none",
+                      outline: getComputedStyle(bubble).outlineStyle,
+                    };
+                  }
+                };
+                const onClick = (event: Event) => {
+                  if (
+                    event.target instanceof Element &&
+                    event.target
+                      .closest("[data-position-marker-id]")
+                      ?.getAttribute("data-position-marker-id") === `position-rail-${position}`
+                  ) {
+                    clicked = true;
+                  }
+                };
+                const onAnimationStart = (event: AnimationEvent) => {
+                  if (
+                    clicked &&
+                    event.target instanceof Element &&
+                    event.target.getAttribute("data-entry-id") === `position-rail-${position}` &&
+                    event.pseudoElement === "::after"
+                  ) {
+                    animationStarted = true;
+                    sample();
+                  }
+                };
+                const mutations = new MutationObserver(sample);
+                mutations.observe(element, {
+                  subtree: true,
+                  childList: true,
+                  attributes: true,
+                  attributeFilter: ["class"],
+                });
+                element.addEventListener("click", onClick, true);
+                element.addEventListener("animationstart", onAnimationStart, true);
+                element.addEventListener("scroll", sample, true);
+                return {
+                  read: () => paint,
+                  disconnect: () => {
+                    mutations.disconnect();
+                    element.removeEventListener("click", onClick, true);
+                    element.removeEventListener("animationstart", onAnimationStart, true);
+                    element.removeEventListener("scroll", sample, true);
+                  },
+                };
+              },
+              index,
             );
-            await expect
-              .poll(() =>
-                revealed.evaluate((element) => {
-                  const viewport = element.closest(".chat-thread")!.getBoundingClientRect();
-                  const bubble = element.getBoundingClientRect();
-                  return bubble.top >= viewport.top && bubble.bottom <= viewport.bottom;
-                }),
-              )
-              .toBe(true);
-            await expect
-              .poll(() => flashPaint(index))
-              .toEqual({ visible: true, animated: true, outline: "none" });
-            await captureUiProof(suite, page, "chat-position-rail", `jump-flash-${index}.png`);
-            await expect.poll(async () => (await flashPaint(index)).visible).toBe(false);
+            try {
+              await markerForIndex(index).click();
+              await expect
+                .poll(() => observation.evaluate((entry) => entry.read()))
+                .toEqual({ visible: true, animated, outline: "none" });
+              if (animated) {
+                await captureUiProof(suite, page, "chat-position-rail", `jump-flash-${index}.png`);
+              }
+              await expect.poll(async () => (await flashPaint(index)).visible).toBe(false);
+            } finally {
+              try {
+                await observation.evaluate((entry) => entry.disconnect());
+              } finally {
+                await observation.dispose();
+              }
+            }
+          };
+          for (const index of [120, 121]) {
+            await clickAndObserveFlash(index, true);
           }
           await markerForIndex(120).press("Escape");
           await expect.poll(() => preview.count()).toBe(0);
@@ -514,11 +624,7 @@ suite.define(() => {
           ).toBeLessThanOrEqual(0.00001); // Global reduced-motion policy uses 0.01ms.
 
           await showMarker(239);
-          await markerForIndex(239).click();
-          await expect
-            .poll(() => flashPaint(239))
-            .toEqual({ visible: true, animated: false, outline: "none" });
-          await expect.poll(async () => (await flashPaint(239)).visible).toBe(false);
+          await clickAndObserveFlash(239, false);
 
           // Saved widths can consume the gutter even in a wide desktop pane.
           for (const width of ["100%", "none", "95%", "48rem"]) {

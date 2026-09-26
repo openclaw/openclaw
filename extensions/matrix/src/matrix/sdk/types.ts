@@ -1,8 +1,7 @@
-// Matrix type declarations define plugin contracts.
 import type * as MatrixSdkTypes from "matrix-js-sdk/lib/types.js";
 import type { MatrixSyncState } from "../sync-state.js";
 import type {
-  MatrixVerificationRequestLike,
+  MatrixVerificationCryptoApi,
   MatrixVerificationSummary,
 } from "./verification-manager.js";
 
@@ -160,7 +159,7 @@ export type MatrixUiAuthCallback = <T>(
   makeRequest: (authData: MatrixAuthDict | null) => Promise<T>,
 ) => Promise<T>;
 
-export type MatrixCryptoBootstrapApi = {
+export type MatrixCryptoBootstrapApi = MatrixVerificationCryptoApi & {
   on: (eventName: string, listener: (...args: unknown[]) => void) => void;
   bootstrapCrossSigning: (opts: {
     setupNewCrossSigning?: boolean;
@@ -173,19 +172,6 @@ export type MatrixCryptoBootstrapApi = {
   }) => Promise<void>;
   createRecoveryKeyFromPassphrase?: (password?: string) => Promise<MatrixGeneratedSecretStorageKey>;
   getSecretStorageStatus?: () => Promise<MatrixSecretStorageStatus>;
-  requestOwnUserVerification: () => Promise<MatrixVerificationRequestLike | null>;
-  findVerificationRequestDMInProgress?: (
-    roomId: string,
-    userId: string,
-  ) => MatrixVerificationRequestLike | undefined;
-  requestDeviceVerification?: (
-    userId: string,
-    deviceId: string,
-  ) => Promise<MatrixVerificationRequestLike>;
-  requestVerificationDM?: (
-    userId: string,
-    roomId: string,
-  ) => Promise<MatrixVerificationRequestLike>;
   getDeviceVerificationStatus?: (
     userId: string,
     deviceId: string,

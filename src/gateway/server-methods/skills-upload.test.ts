@@ -12,7 +12,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -43,8 +43,8 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
   evaluateSkillInstallPolicy: installSecurityScanState.evaluateSkillInstallPolicy,
 }));
 
-vi.mock("../../infra/replace-file.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/replace-file.js")>();
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/atomic")>();
   return {
     ...actual,
     movePathWithCopyFallback: async (
@@ -73,7 +73,7 @@ type CallResult = {
   error?: { code?: string; message?: string };
 };
 
-async function makeHarness(): Promise<{
+async function makeHarness(uploadOnly = false): Promise<{
   handlers: GatewayRequestHandlers;
   stateDir: string;
   workspaceDir: string;
@@ -87,8 +87,10 @@ async function makeHarness(): Promise<{
   const stateDir = testState.stateDir;
   const workspaceDir = testState.workspaceDir;
   agentScopeState.workspaceDir = workspaceDir;
-  const { skillsHandlers } = await import("./skills.js");
-  return { handlers: skillsHandlers, stateDir, workspaceDir };
+  const handlers = uploadOnly
+    ? (await import("./skills-upload.js")).skillsUploadHandlers
+    : (await import("./skills.js")).skillsHandlers;
+  return { handlers, stateDir, workspaceDir };
 }
 
 function makeContext(
@@ -162,8 +164,9 @@ function expectError(result: CallResult, code: string, message: string): void {
 }
 
 function observeCommitSql() {
+  const { DatabaseSync } = requireNodeSqlite();
   const sql = observeMainThreadSql();
-  const close = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "close");
+  const close = vi.spyOn(DatabaseSync.prototype, "close");
   return {
     expectIdle() {
       sql.expectIdle();
@@ -266,6 +269,37 @@ describe("skill upload gateway handlers", () => {
       ...tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
       ...testStates.splice(0).map((state) => state.cleanup()),
     ]);
+  });
+
+  it("stages uploads through the registered handlers without caller-thread SQLite", async () => {
+    const { handlers } = await makeHarness(true);
+    await closeOpenClawStateDatabaseAsync();
+    const sql = observeCommitSql();
+    try {
+      const archive = Buffer.from("worker-owned upload staging");
+      const begin = await call(handlers, "skills.upload.begin", {
+        kind: "skill-archive",
+        slug: "worker-staging",
+        sizeBytes: archive.length,
+      });
+      expect(begin.ok).toBe(true);
+      sql.expectIdle();
+      const uploadId = (begin.payload as { uploadId: string }).uploadId;
+      expect(
+        await call(handlers, "skills.upload.chunk", {
+          uploadId,
+          offset: 0,
+          dataBase64: archive.toString("base64"),
+        }),
+      ).toMatchObject({ ok: true });
+      expect(await call(handlers, "skills.upload.commit", { uploadId })).toMatchObject({
+        ok: true,
+      });
+      await closeOpenClawStateDatabaseAsync();
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
   });
 
   it("commits and replays staged archives without caller-thread SQLite", async () => {

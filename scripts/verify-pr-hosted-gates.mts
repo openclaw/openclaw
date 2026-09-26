@@ -13,7 +13,7 @@ import {
   stringFlag,
 } from "./lib/arg-utils.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { execGhApiRead, plainGhEnv } from "./lib/plain-gh.mjs";
+import { execGhApiRead, execGhRead, plainGhEnv } from "./lib/plain-gh.mjs";
 
 const SCHEDULED_HOSTED_WORKFLOW_PATHS = new Map([
   ["Blacksmith Testbox", ".github/workflows/ci-check-testbox.yml"],
@@ -1062,10 +1062,17 @@ function loadCiGateJobs(
     // fine — a run that finished successfully still proves this attempt, and
     // a non-success completion must not be blessed by its own earlier gate.
     const current = JSON.parse(
-      execGhApiRead(`repos/${repo}/actions/runs/${run.id}`, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      }),
+      execGhRead(
+        [
+          "api",
+          `repos/${repo}/actions/runs/${run.id}`,
+          "--method",
+          "GET",
+          "-H",
+          "Cache-Control: max-age=0",
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ),
     ) as unknown;
     if (!isRecord(current)) {
       return [];
@@ -1080,19 +1087,45 @@ function loadCiGateJobs(
   });
 }
 
-function main(argv = process.argv.slice(2)) {
+export function main(argv = process.argv.slice(2), observation?: unknown) {
   const args = parseArgs(argv);
-  const pullRequest = JSON.parse(
-    execGhApiRead(`repos/${args.repo}/pulls/${args.pr}`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  ) as unknown;
-  const head = isRecord(pullRequest) && isRecord(pullRequest.head) ? pullRequest.head : undefined;
-  const headRepo = head && isRecord(head.repo) ? head.repo : undefined;
-  const headBranch = head ? readStringField(head, "ref") : undefined;
-  const headRepository = headRepo ? readStringField(headRepo, "full_name") : undefined;
-  const headSha = head ? readStringField(head, "sha") : undefined;
+  let headBranch: string | undefined;
+  let headRepository: string | undefined;
+  let headSha: string | undefined;
+  if (observation === undefined) {
+    const pullRequest = JSON.parse(
+      execGhRead(
+        [
+          "api",
+          `repos/${args.repo}/pulls/${args.pr}`,
+          "--method",
+          "GET",
+          "-H",
+          "Cache-Control: max-age=0",
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ) as unknown;
+    const head = isRecord(pullRequest) && isRecord(pullRequest.head) ? pullRequest.head : undefined;
+    const headRepo = head && isRecord(head.repo) ? head.repo : undefined;
+    headBranch = head ? readStringField(head, "ref") : undefined;
+    headRepository = headRepo ? readStringField(headRepo, "full_name") : undefined;
+    headSha = head ? readStringField(head, "sha") : undefined;
+  } else {
+    if (
+      !isRecord(observation) ||
+      observation.number !== args.pr ||
+      !isRecord(observation.baseRepository) ||
+      observation.baseRepository.nameWithOwner !== args.repo
+    ) {
+      throw new Error(`Carried observation does not identify ${args.repo}#${args.pr}.`);
+    }
+    headBranch = readStringField(observation, "headRefName");
+    headRepository = isRecord(observation.headRepository)
+      ? readStringField(observation.headRepository, "nameWithOwner")
+      : undefined;
+    headSha = readStringField(observation, "headRefOid");
+  }
   if (!headBranch || !headRepository || !headSha) {
     throw new Error(`PR #${args.pr} is missing head metadata.`);
   }

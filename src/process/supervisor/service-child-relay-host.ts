@@ -23,17 +23,12 @@ import {
 } from "./service-child-protocol.js";
 import {
   prepareServiceChildRelay,
+  type ServiceChildRelayAdapter,
   type ServiceChildRelayParams,
 } from "./service-child-relay-preparation.js";
 import { createServiceChildRelayRetirement } from "./service-child-relay-retirement.js";
-import type { ProcessAdapterStartup, SpawnProcessAdapter } from "./types.js";
+import type { AwaitedStdoutConsumer, ProcessAdapterStartup } from "./types.js";
 
-type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
-  waitForExtinction: () => Promise<void>;
-  confirmExtinction: () => boolean;
-  openStartGate?: () => Promise<void>;
-  closeStartGate?: () => void;
-} & Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
 type AuthorityState = "starting" | "active" | "closing" | "closed" | "identity-lost";
 
 function readChildMessage(raw: unknown): ServiceChildRelayMessage | ServiceChildAnchorMessage {
@@ -41,6 +36,12 @@ function readChildMessage(raw: unknown): ServiceChildRelayMessage | ServiceChild
   return raw as ServiceChildRelayMessage | ServiceChildAnchorMessage;
 }
 
+export function createServiceChildRelayAdapter(
+  params: ServiceChildRelayParams & { stdoutConsumption: "awaited" },
+): Promise<ProcessAdapterStartup<ServiceChildRelayAdapter & AwaitedStdoutConsumer>>;
+export function createServiceChildRelayAdapter(
+  params: ServiceChildRelayParams,
+): Promise<ProcessAdapterStartup<ServiceChildRelayAdapter>>;
 export async function createServiceChildRelayAdapter(
   params: ServiceChildRelayParams,
 ): Promise<ProcessAdapterStartup<ServiceChildRelayAdapter>> {
@@ -145,6 +146,11 @@ export async function createServiceChildRelayAdapter(
     // still drain, while the independent extinction join keeps the failure.
     const error = resultError ?? (rootResult ? undefined : waitError);
     if (error) {
+      if (!rootResult && waitError && params.stdoutConsumption === "awaited") {
+        // Join accepted output work without waiting for an unowned writer's EOF.
+        stdoutRelay.clear();
+        child.stdout?.resume();
+      }
       resultCompletion.reject(error);
       return;
     }
@@ -240,13 +246,7 @@ export async function createServiceChildRelayAdapter(
         reject(new Error("service child lifecycle IPC is closed"));
         return;
       }
-      child.send(message, (error) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
+      child.send(message, (error) => (error ? reject(error) : resolve()));
     });
 
   const sendControlMessage = (message: ServiceChildControlMessage): Promise<void> => {

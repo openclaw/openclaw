@@ -5,13 +5,22 @@ import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-bridge-record.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { storeDeviceAuthTokenInDatabase } from "./device-auth-store.kernel.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import {
+  openSharedStateSqliteWorkerStore,
+  runSqliteWorkerStoreOperation,
+} from "./sqlite-worker-store.js";
 import {
   acquireStateDatabaseCoordinator,
   acquireGatewayLifecycleCoordinator,
@@ -22,10 +31,87 @@ import {
 export function registerSharedStateWorkerAdmissionTests(
   createContext: () => OpenClawStateWorkerContext,
 ): void {
-  it.each([undefined, false])(
-    "borrows an already-held parent lifecycle owner for nested native admission (explicit=%s)",
-    async (requireStateLifecycle) => {
+  it("services direct broker commit admission while a native writer waits for lifecycle custody", async () => {
+    const captured = createContext();
+    await executeOpenClawStateWorker(captured, { type: "deviceAuth.prepare", input: undefined });
+    const store = await openSharedStateSqliteWorkerStore<OpenClawStateWorkerOperations>(
+      {
+        moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),
+        databasePath: captured.admission.databasePath,
+      },
+      captured,
+    );
+    if (!store) {
+      throw new Error("Expected the prepared shared-state worker");
+    }
+    const stages: string[] = [];
+    let nativeFailure: unknown;
+    const workerInput = {
+      deviceId: "synthetic-broker-worker",
+      role: "operator",
+      token: "synthetic-worker-token",
+    };
+    const nativeInput = { ...workerInput, deviceId: "synthetic-broker-native" };
+    try {
+      await runSqliteWorkerStoreOperation(
+        store,
+        (scope) => scope.execute({ type: "deviceAuth.store", input: workerInput }),
+        captured,
+        () => captured.admission.assertCurrent(),
+        () => ({
+          nativeLocations: [captured.admission.databasePath],
+          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            stages.push(request.stage);
+            expect(grant()).toBe(true);
+            if (request.stage === "transaction") {
+              // The worker owns the real lifecycle lock and next needs its commit grant.
+              try {
+                withStateDatabaseCoordinatorRuntimeDirectory(captured.coordinatorRuntime, () =>
+                  runOpenClawStateWriteTransaction(
+                    ({ db }) => storeDeviceAuthTokenInDatabase(db, nativeInput),
+                    { path: captured.admission.databasePath, env: captured.environment },
+                  ),
+                );
+              } catch (error) {
+                nativeFailure = error;
+              }
+            }
+          }),
+        }),
+      );
+      expect(nativeFailure).toBeUndefined();
+      expect(stages).toEqual(["transaction", "commit"]);
+      for (const input of [workerInput, nativeInput]) {
+        expect(
+          await store.execute({
+            type: "deviceAuth.read",
+            input: {
+              deviceId: input.deviceId,
+              role: input.role,
+              readOnly: true,
+            },
+          }),
+        ).toMatchObject({
+          entry: { token: input.token, role: input.role },
+        });
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  it.each(
+    [undefined, false].flatMap((requireStateLifecycle) =>
+      (["before-dispatch", "after-dispatch"] as const).map((timing) => ({
+        requireStateLifecycle,
+        timing,
+      })),
+    ),
+  )(
+    "borrows parent lifecycle custody acquired $timing for nested native admission (explicit=$requireStateLifecycle)",
+    async ({ requireStateLifecycle, timing }) => {
       const captured = createContext();
+      const worker = await prepareSharedStateWorker(captured);
       const record: NativeHookRelayBridgeRecord = {
         relayId: "synthetic-admission-relay",
         pid: 100,
@@ -34,9 +120,23 @@ export function registerSharedStateWorkerAdmissionTests(
         token: "synthetic-test-token",
         expiresAtMs: 20000,
       };
-      const parent = withStateDatabaseCoordinatorRuntimeDirectory(captured.coordinatorRuntime, () =>
-        acquireStateDatabaseCoordinator({ databasePath: captured.admission.databasePath }),
-      );
+      const acquireParent = () =>
+        withStateDatabaseCoordinatorRuntimeDirectory(captured.coordinatorRuntime, () =>
+          acquireStateDatabaseCoordinator({
+            databasePath: captured.admission.databasePath,
+            busyTimeoutMs: 0,
+          }),
+        );
+      let parent = timing === "before-dispatch" ? acquireParent() : undefined;
+      const post = worker.postMessage.bind(worker);
+      const posts = vi.spyOn(worker, "postMessage").mockImplementation((request, ...args) => {
+        if (timing === "after-dispatch" && request.type === "execute" && !parent) {
+          // The broker already chose worker acquisition; maintenance claims custody before delivery.
+          expect(request.workerStateLifecycle).toBeDefined();
+          parent = acquireParent();
+        }
+        return post(request, ...args);
+      });
       let grants = 0;
       try {
         await runOpenClawStateWorkerOperation(
@@ -68,7 +168,8 @@ export function registerSharedStateWorkerAdmissionTests(
           },
         );
       } finally {
-        parent.release();
+        posts.mockRestore();
+        parent?.release();
       }
       expect(grants).toBe(1);
       expect(
@@ -250,16 +351,15 @@ export function registerSharedStateWorkerAdmissionTests(
 
   it.each(
     (["after-acquire", "admission-factory", "cleanup-failure"] as const).flatMap((timing) =>
-      [false, true].map((parentHeld) => ({ timing, parentHeld })),
+      [...([false, true] as const), ...(timing === "after-acquire" ? [] : (["late"] as const))].map(
+        (parentHeld) => ({ timing, parentHeld }),
+      ),
     ),
   )(
     "settles a canceled head and its follower at $timing before native execution (parent held: $parentHeld)",
     async ({ timing, parentHeld }) => {
       const captured = createContext();
-      await executeOpenClawStateWorker(captured, {
-        type: "flows.list",
-        input: { ownerKey: "agent:main:main" },
-      });
+      const worker = await prepareSharedStateWorker(captured);
       const nativeOpen = nodeSqlite.openNodeSqliteDatabase;
       const opened = new Map<string, DatabaseSync>();
       const openSpy = vi
@@ -279,11 +379,14 @@ export function registerSharedStateWorkerAdmissionTests(
         gateway.release();
         throw new Error("Expected the native Gateway coordinator");
       }
-      const parent = parentHeld
-        ? withStateDatabaseCoordinatorRuntimeDirectory(captured.coordinatorRuntime, () =>
-            acquireStateDatabaseCoordinator({ databasePath: captured.admission.databasePath }),
-          )
-        : undefined;
+      const acquireParent = () =>
+        withStateDatabaseCoordinatorRuntimeDirectory(captured.coordinatorRuntime, () =>
+          acquireStateDatabaseCoordinator({
+            databasePath: captured.admission.databasePath,
+            busyTimeoutMs: 0,
+          }),
+        );
+      let parent = parentHeld === true ? acquireParent() : undefined;
       const canceled = new AbortController();
       const stopped = new Error("synthetic cancellation before post");
       let factories = 0;
@@ -296,7 +399,14 @@ export function registerSharedStateWorkerAdmissionTests(
         }
         return close();
       });
-      const posts = vi.spyOn(Worker.prototype, "postMessage");
+      const post = worker.postMessage.bind(worker);
+      const posts = vi.spyOn(worker, "postMessage").mockImplementation((request, ...args) => {
+        if (parentHeld === "late" && request.type === "execute" && !parent) {
+          expect(request.workerStateLifecycle).toBeDefined();
+          parent = acquireParent();
+        }
+        return post(request, ...args);
+      });
       try {
         await runOpenClawStateWorkerOperation(
           captured,
@@ -481,6 +591,20 @@ export function registerSharedStateWorkerAdmissionTests(
   });
 }
 
+async function prepareSharedStateWorker(captured: OpenClawStateWorkerContext): Promise<Worker> {
+  const posts = vi.spyOn(Worker.prototype, "postMessage");
+  try {
+    await executeOpenClawStateWorker(captured, { type: "deviceAuth.prepare", input: undefined });
+    const worker = posts.mock.contexts[0];
+    if (!(worker instanceof Worker)) {
+      throw new Error("Expected the prepared shared-state worker");
+    }
+    return worker;
+  } finally {
+    posts.mockRestore();
+  }
+}
+
 function relayRecord(pid: number): NativeHookRelayBridgeRecord {
   return {
     relayId: "queued-lifecycle-relay",
@@ -492,7 +616,7 @@ function relayRecord(pid: number): NativeHookRelayBridgeRecord {
   };
 }
 
-async function holdForeignLifecycle(captured: OpenClawStateWorkerContext, delayMs = 0) {
+export async function holdForeignLifecycle(captured: OpenClawStateWorkerContext, delayMs = 0) {
   const coordinatorPath = resolveStateDatabaseCoordinatorPath({
     databasePath: captured.admission.databasePath,
     runtimeDirectory: captured.coordinatorRuntime.directory,

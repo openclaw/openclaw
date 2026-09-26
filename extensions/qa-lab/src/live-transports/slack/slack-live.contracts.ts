@@ -14,12 +14,7 @@ export type SlackQaFetchFunction = NonNullable<
 >;
 type WebClient = SlackQaWebClient;
 
-export type SlackQaRuntimeEnv = {
-  channelId: string;
-  driverBotToken: string;
-  sutBotToken: string;
-  sutAppToken: string;
-};
+export type SlackQaRuntimeEnv = z.infer<typeof slackQaCredentialPayloadSchema>;
 
 export type SlackChannelStatus = {
   connected?: boolean;
@@ -323,6 +318,24 @@ export const slackPostMessageSchema = z.object({
 const slackHistoryMessageSchema = z.object({
   bot_id: z.string().optional(),
   blocks: z.array(z.unknown()).optional(),
+  files: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        name: z.string().optional(),
+        mimetype: z.string().optional(),
+      }),
+    )
+    .optional(),
+  reactions: z
+    .array(
+      z.object({
+        name: z.string(),
+        users: z.array(z.string()).optional(),
+        count: z.number().optional(),
+      }),
+    )
+    .optional(),
   text: z.string().optional(),
   thread_ts: z.string().optional(),
   ts: z.string().min(1),
@@ -334,6 +347,7 @@ export type SlackMessage = Omit<z.infer<typeof slackHistoryMessageSchema>, "ts">
 export const slackHistorySchema = z.object({
   ok: z.boolean().optional(),
   messages: z.array(slackHistoryMessageSchema).optional(),
+  response_metadata: z.object({ next_cursor: z.string().optional() }).optional(),
 });
 
 export const slackRepliesSchema = z.object({

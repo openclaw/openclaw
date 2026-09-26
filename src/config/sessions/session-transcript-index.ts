@@ -7,15 +7,17 @@
 // marks the session dirty for its write or maintenance owner to rebuild from
 // the canonical visible-path resolver.
 import type { DatabaseSync } from "node:sqlite";
-import type { ColumnType } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
-  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  createSessionTranscriptFtsInserter,
+  deleteSessionTranscriptFtsRowsInTransaction,
+} from "./session-transcript-fts.js";
 import {
   prepareSessionTranscriptProjectionAppend,
   type PreparedSessionTranscriptProjectionAppend,
@@ -26,24 +28,15 @@ import {
   visitSessionTranscriptProjection,
   type PreparedSessionTranscriptProjection,
 } from "./session-transcript-projection-rebuild.js";
-type TranscriptIndexDatabase = Omit<
-  Pick<
-    OpenClawAgentKyselyDatabase,
-    | "session_windows"
-    | "session_transcript_active_events"
-    | "session_transcript_fts"
-    | "session_transcript_index_state"
-    | "transcript_events"
-  >,
-  "session_transcript_fts"
-> & {
-  session_transcript_fts: Omit<
-    OpenClawAgentKyselyDatabase["session_transcript_fts"],
-    "timestamp"
-  > & {
-    timestamp: ColumnType<string | null, number | string | null, number | string | null>;
-  };
-};
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+type TranscriptIndexDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  | "session_windows"
+  | "session_transcript_active_events"
+  | "session_transcript_fts_rows"
+  | "session_transcript_index_state"
+  | "transcript_events"
+>;
 
 export type SessionTranscriptProjectionState = {
   activeEventCount: number;
@@ -97,7 +90,7 @@ export function shouldRebuildSessionTranscriptIndexSynchronously(
       .selectFrom(
         kysely
           .selectFrom("transcript_events")
-          .select((eb) => eb.fn<number>("octet_length", ["event_json"]).as("event_bytes"))
+          .select(transcriptEventReadBytesSql().as("event_bytes"))
           .where("session_id", "=", sessionId)
           .limit(SYNC_REBUILD_MAX_ROWS - events.length + 1)
           .as("stored"),
@@ -236,30 +229,6 @@ function deleteActiveEventRows(db: DatabaseSync, sessionId: string): void {
   );
 }
 
-function createFtsInserter(db: DatabaseSync, sessionId: string) {
-  return prepareSqliteQuerySync<TranscriptIndexEntry>(db, (parameter) =>
-    getIndexKysely(db)
-      .insertInto("session_transcript_fts")
-      .values({
-        text: parameter((entry) => entry.text),
-        session_id: sessionId,
-        message_id: parameter((entry) => entry.messageId),
-        role: parameter((entry) => entry.role),
-        // FTS5 aux columns are typeless; preserve the numeric timestamp SQLite stores.
-        timestamp: parameter((entry) => entry.timestamp),
-      }),
-  );
-}
-
-function deleteFtsRows(db: DatabaseSync, sessionId: string): void {
-  // session_id is UNINDEXED in FTS5, so this scans the index; transcript
-  // deletion and rebuilds are rare lifecycle events.
-  executeSqliteQuerySync(
-    db,
-    getIndexKysely(db).deleteFrom("session_transcript_fts").where("session_id", "=", sessionId),
-  );
-}
-
 /**
  * In-transaction batch appender. Forward-indexes the event when it
  * unambiguously extends the active branch and marks the session for rebuild
@@ -274,7 +243,7 @@ export function createTranscriptIndexAppenderInTransaction(
   let watermark = readSessionTranscriptProjectionState(db, sessionId);
   let hasUnclassifiedEvents: boolean | undefined;
   let insertActiveEvent: ReturnType<typeof createActiveEventInserter> | undefined;
-  let insertFts: ReturnType<typeof createFtsInserter> | undefined;
+  let insertFts: ReturnType<typeof createSessionTranscriptFtsInserter> | undefined;
   let updateWatermark: ReturnType<typeof createWatermarkWriter> | undefined;
   return (params) => {
     if (!watermark) {
@@ -323,7 +292,7 @@ export function createTranscriptIndexAppenderInTransaction(
     append: PreparedSessionTranscriptProjectionAppend,
   ): void {
     if (append.ftsRow) {
-      insertFts ??= createFtsInserter(db, sessionId);
+      insertFts ??= createSessionTranscriptFtsInserter(db, sessionId);
       insertFts(append.ftsRow);
     }
     if (append.activeRow) {
@@ -367,7 +336,7 @@ export function deleteSessionTranscriptIndexInTransaction(
   db: DatabaseSync,
   sessionId: string,
 ): void {
-  deleteFtsRows(db, sessionId);
+  deleteSessionTranscriptFtsRowsInTransaction(db, sessionId);
   deleteActiveEventRows(db, sessionId);
   executeSqliteQuerySync(
     db,
@@ -451,18 +420,7 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
         ),
       ];
   if (removedMessageIds.length > 0) {
-    // FTS metadata is unindexed; bind larger sets once instead of rescanning every 400 IDs.
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .deleteFrom("session_transcript_fts")
-        .where("session_id", "=", sessionId)
-        .where(
-          "message_id",
-          "in",
-          removedMessageIds.length <= 400 ? removedMessageIds : sqliteStringSet(removedMessageIds),
-        ),
-    );
+    deleteSessionTranscriptFtsRowsInTransaction(db, sessionId, { messageIds: removedMessageIds });
   }
   executeSqliteQuerySync(
     db,
@@ -473,7 +431,7 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
   );
 
   const insertActive = createActiveEventInserter(db, sessionId);
-  const insertFts = createFtsInserter(db, sessionId);
+  const insertFts = createSessionTranscriptFtsInserter(db, sessionId);
   const rowsToInsert = incremental
     ? params.next.activeRows
     : params.next.activeRows.slice(retainedCount);
@@ -502,11 +460,11 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
  * same append parent the accessor's next append will resolve.
  */
 function rebuildSessionTranscriptIndexInTransaction(db: DatabaseSync, sessionId: string): void {
-  deleteFtsRows(db, sessionId);
+  deleteSessionTranscriptFtsRowsInTransaction(db, sessionId);
   deleteActiveEventRows(db, sessionId);
   const projection = visitSessionTranscriptProjection(db, sessionId, {
     activeRow: createActiveEventInserter(db, sessionId),
-    ftsRow: createFtsInserter(db, sessionId),
+    ftsRow: createSessionTranscriptFtsInserter(db, sessionId),
   });
   if (!projection) {
     return;
@@ -617,7 +575,7 @@ export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): s
 
 const transcriptIndexTables = [
   "session_transcript_active_events",
-  "session_transcript_fts",
+  "session_transcript_fts_rows",
   "session_transcript_index_state",
 ] as const;
 

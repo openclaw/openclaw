@@ -202,7 +202,7 @@ export function attachHarness(
         : { ok: true as const, result: { ackedSeq: LIVE_EVENT.seq } },
     ),
     startInference: vi.fn(
-      (
+      async (
         _identity: WorkerConnectionIdentity,
         _request: WorkerInferenceStartParams,
         sink: InferenceSink,
@@ -214,7 +214,7 @@ export function attachHarness(
         };
       },
     ),
-    cancelInference: vi.fn(() => ({
+    cancelInference: vi.fn(async () => ({
       ok: true as const,
       result: { status: "cancelled" as const },
     })),

@@ -4,7 +4,7 @@ import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import { SessionMetadataUnavailableError } from "../state/openclaw-agent-db-read-error.js";
+import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
   tryResolveCronJobEffectiveAgentId,

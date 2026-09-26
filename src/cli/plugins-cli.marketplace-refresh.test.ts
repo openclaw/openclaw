@@ -306,16 +306,17 @@ describe("plugins marketplace refresh", () => {
 
   it("redacts query-bearing feed URLs from refresh output", async () => {
     mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
+    const result = Object.freeze({
       source: "bundled-fallback",
       entries: [{ name: "@openclaw/acpx" }],
       error:
         "hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
-      metadata: {
+      metadata: Object.freeze({
         url: "https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
         status: 503,
-      },
+      }),
     });
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(result);
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceRefreshCommand({

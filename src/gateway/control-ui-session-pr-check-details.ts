@@ -1,11 +1,17 @@
 import { createRetainedCache } from "../infra/retained-cache.js";
-import type { ControlUiSessionPullRequestCheckDetails } from "./control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequestCheckDetails,
+  ControlUiSessionPullRequests,
+} from "./control-ui-contract.js";
 import {
   fetchSessionPullRequestCheckDetails,
   sessionPullRequestRepositoryApiUrl,
   type SessionPullRequestCheckTarget,
 } from "./control-ui-session-prs-checks.js";
-import { loadControlUiSessionPullRequests, parsePullListItem } from "./control-ui-session-prs.js";
+import {
+  parsePullListItem,
+  type ControlUiSessionPullRequestsParams,
+} from "./control-ui-session-prs.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 
 const checkDetailsCache = createRetainedCache<{
@@ -27,7 +33,10 @@ type LoadSessionCheckDetailsDeps = {
   sessionScope: string;
   assertCurrent: () => void;
   fetchImpl?: typeof fetch;
-  loadPullRequests?: typeof loadControlUiSessionPullRequests;
+  loadPullRequests: (
+    params: ControlUiSessionPullRequestsParams,
+    deps: { fetchImpl?: typeof fetch },
+  ) => Promise<ControlUiSessionPullRequests>;
 };
 
 /** The only details admission path: clients select a PR already resolved for this session. */
@@ -55,7 +64,7 @@ export async function loadControlUiSessionPullRequestChecks(
       );
     }
   };
-  const loadPullRequests = deps.loadPullRequests ?? loadControlUiSessionPullRequests;
+  const { loadPullRequests } = deps;
   const snapshot = await loadPullRequests(
     { sessionKey: params.sessionKey, agentId: params.agentId },
     { fetchImpl: deps.fetchImpl },

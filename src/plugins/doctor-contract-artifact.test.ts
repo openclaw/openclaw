@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
+import { resolve as resolvePackageImport } from "import-meta-resolve";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
@@ -36,6 +38,39 @@ describe("Doctor artifact hash and loading agreement", () => {
       },
       bundle: true,
       packages: "external",
+      plugins: [
+        {
+          name: "fixture-external-import-context",
+          setup(builder) {
+            const resolving = {};
+            builder.onResolve({ filter: /^[^./]/ }, async (args) => {
+              if (args.pluginData === resolving || isBuiltin(args.path)) {
+                return undefined;
+              }
+              const resolved = await builder.resolve(args.path, {
+                importer: args.importer,
+                kind: args.kind,
+                namespace: args.namespace,
+                resolveDir: args.resolveDir,
+                with: args.with,
+                pluginData: resolving,
+              });
+              if (!resolved.external || resolved.errors.length > 0) {
+                return { ...resolved, pluginData: undefined };
+              }
+              const parent = pathToFileURL(args.importer);
+              return {
+                ...resolved,
+                pluginData: undefined,
+                path:
+                  args.kind === "require-call" || args.kind === "require-resolve"
+                    ? createRequire(parent).resolve(args.path)
+                    : resolvePackageImport(args.path, parent.href),
+              };
+            });
+          },
+        },
+      ],
       platform: "node",
       format: "esm",
       write: false,

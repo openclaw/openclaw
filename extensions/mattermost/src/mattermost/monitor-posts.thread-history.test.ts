@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -9,6 +10,7 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import { createMattermostClient, type MattermostPost } from "./client.js";
 import { createMattermostPostHandler } from "./monitor-posts.js";
@@ -33,6 +35,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
   let responseStatus: number;
 
   beforeEach(async () => {
+    setMattermostRuntime(createPluginRuntimeMock());
     dispatch.mockReset();
     directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "mattermost-history-")));
     vi.stubEnv("OPENCLAW_STATE_DIR", directory);

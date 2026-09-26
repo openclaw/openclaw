@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
 import {
+  bindInProcessSessionDeliveryGeneration,
+  readInProcessSessionDeliveryGeneration,
+} from "../../gateway/in-process-session-delivery.js";
+import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
 } from "../../gateway/in-process-subagent-resume.js";
@@ -90,6 +94,7 @@ describe("trusted in-process Gateway session creation", () => {
         forceSyntheticClient: true,
         operatorRoleActor: { kind: "system" },
         sessionCreation: creation,
+        syntheticScopeMode: "minimum",
         syntheticScopes: ["operator.write"],
       },
     );
@@ -104,6 +109,30 @@ describe("trusted in-process Gateway session creation", () => {
       { agentId: "main" },
       { scopes: ["operator.write"] },
     );
+  });
+
+  it("keeps session-bound delivery in its admitted Gateway instead of dropping its binding on transport", async () => {
+    const generation = {
+      agentId: "main",
+      storePath: "/test/agents/main/sessions/sessions.json",
+      sessionKey: "agent:main:main",
+      sessionId: "session-one",
+      lifecycleRevision: null,
+    };
+    const params = bindInProcessSessionDeliveryGeneration(
+      { channel: "telegram", to: "recipient", message: "Ready", idempotencyKey: "result-one" },
+      generation,
+    );
+    await callAgentToolGatewayRequest({ method: "send", params });
+    expect(readInProcessSessionDeliveryGeneration(mocks.dispatch.mock.calls[0]?.[1])).toEqual(
+      generation,
+    );
+    expect(readInProcessSessionDeliveryGeneration({ ...params })).toBeUndefined();
+    mocks.hasContext = false;
+    await expect(callAgentToolGatewayRequest({ method: "send", params })).rejects.toThrow(
+      "Session-bound delivery requires its admitted in-process Gateway",
+    );
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("uses an explicitly bound Gateway when worker creation has no ambient request scope", async () => {
@@ -241,6 +270,7 @@ describe("trusted in-process Gateway session creation", () => {
         resolveGatewayContext: expect.any(Function),
         sessionCreation: creation,
         signal: controller.signal,
+        syntheticScopeMode: "minimum",
         syntheticScopes: ["operator.write"],
         timeoutMs: 2_000,
       });
@@ -376,6 +406,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
         forceSyntheticClient: true,
         operatorRoleActor: { kind: "system" },
         agentToolCaller,
+        syntheticScopeMode: "minimum",
         syntheticScopes: ["operator.write"],
         expectFinal: true,
         onAccepted,

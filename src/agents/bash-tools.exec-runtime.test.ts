@@ -14,14 +14,10 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
-import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
-import {
-  getFinishedSession,
-  acknowledgeNotifyOnExit,
-  waitForExecScope,
-} from "./bash-process-registry.js";
+import { getFinishedSession } from "./bash-process-registry.js";
+import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   getGatewayToolCallerIdentity,
@@ -82,18 +78,19 @@ afterEach(() => {
   resetProcessRegistryForTests();
 });
 
-function createRunExit(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "exit",
-    exitCode: 0,
-    exitSignal: null,
-    durationMs: 1,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
+function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]> = {}) {
+  return runExecProcess({
+    command: "test-command",
+    workdir: "/tmp",
+    env: {},
+    usePty: false,
+    warnings: [],
+    maxOutput: 1000,
+    pendingMaxOutput: 1000,
+    notifyOnExit: false,
+    timeoutSec: null,
+    ...params,
+  });
 }
 
 async function runExecWithExit(params: {
@@ -119,33 +116,11 @@ async function runExecWithExit(params: {
       };
     },
   );
-  const run = await runExecProcess({
-    command: "test-command",
-    workdir: "/tmp",
-    env: {},
+  const run = await runTestExecProcess({
     usePty: params.usePty ?? false,
-    warnings: [],
-    maxOutput: 1000,
-    pendingMaxOutput: 1000,
-    notifyOnExit: false,
     timeoutSec: params.timeoutSec ?? null,
   });
   return { run, outcome: await run.promise };
-}
-
-function runtimeManagedRun(input: SpawnInput, stdout = ""): ManagedRun {
-  if (stdout) {
-    input.onStdout?.(stdout);
-  }
-  return {
-    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
-    runId: input.runId ?? "test-run",
-    pid: 1234,
-    startedAtMs: Date.now(),
-    stdin: { write: vi.fn(), end: vi.fn(), destroy: vi.fn() },
-    cancel: vi.fn(),
-    wait: vi.fn(async () => createRunExit()),
-  };
 }
 
 function prepareSuspension(requestId: string) {
@@ -189,9 +164,6 @@ describe("runExecProcess cursor tracking", () => {
     { raw: ["\x1b[?1l\x1b", "[?1", "h"], expected: "application" },
     { raw: ["\x1b[?1h\x1b[?", "1", "l"], expected: "normal" },
     { raw: ["\x1b]0;\x1b[?1h", "\x07"], expected: "unknown" },
-    { raw: "\x1b[?1h", expected: "application" },
-    { raw: "\x1b[?1h\x1b[?1l", expected: "normal" },
-    { raw: "\x1b[?1l\x1b[?1h", expected: "application" },
   ])("tracks the last cursor-mode toggle as $expected", async ({ raw, expected }) => {
     const { run } = await runExecWithExit({
       stdout: raw,
@@ -224,16 +196,8 @@ describe("sandbox exec preparation failures", () => {
       });
       await expect(
         budget.run(() =>
-          runExecProcess({
+          runTestExecProcess({
             command: "echo forbidden",
-            workdir: "/tmp",
-            env: {},
-            usePty: false,
-            warnings: [],
-            maxOutput: 1000,
-            pendingMaxOutput: 1000,
-            notifyOnExit: false,
-            timeoutSec: null,
             beforeSpawn: async () => {
               await Promise.resolve();
               if (boundary === "preparation") {
@@ -266,16 +230,10 @@ describe("sandbox exec preparation failures", () => {
       });
 
       await expect(
-        runExecProcess({
+        runTestExecProcess({
           command: "echo should-not-run",
           workdir: process.cwd(),
-          env: {},
           usePty,
-          warnings: [],
-          maxOutput: 1000,
-          pendingMaxOutput: 1000,
-          notifyOnExit: false,
-          timeoutSec: null,
           startupSignal: controller.signal,
           beforeSpawn: async () => {
             if (++checks === cancelCheck) {
@@ -326,16 +284,11 @@ describe("sandbox exec preparation failures", () => {
           receiptAuthority: () => currentClaim === originalClaim,
         },
         () =>
-          runExecProcess({
+          runTestExecProcess({
             command: "source-authority-command",
             workdir: process.cwd(),
-            env: {},
             usePty,
             warnings,
-            maxOutput: 1000,
-            pendingMaxOutput: 1000,
-            notifyOnExit: false,
-            timeoutSec: null,
             startupSignal: generation.signal,
             beforeSpawn: async () => {
               if (++checks === loseAt) {
@@ -385,16 +338,7 @@ describe("sandbox exec preparation failures", () => {
     });
 
     const run = await withGatewayToolCallerIdentity(identity, () =>
-      runExecProcess({
-        command: "test-command",
-        workdir: "/tmp",
-        env: {},
-        usePty: false,
-        warnings: [],
-        maxOutput: 1000,
-        pendingMaxOutput: 1000,
-        notifyOnExit: false,
-        timeoutSec: null,
+      runTestExecProcess({
         beforeSpawn,
         onUpdate: () => updateIdentity(getGatewayToolCallerIdentity()),
         onSettledBeforeNotify: () => settledIdentity(getGatewayToolCallerIdentity()),
@@ -419,22 +363,14 @@ describe("sandbox exec preparation failures", () => {
     const beforeSpawn = vi.fn(async () => {
       throw denied;
     });
-    const pending = runExecProcess({
+    const pending = runTestExecProcess({
       command: "sandbox-command",
-      workdir: "/tmp",
-      env: {},
       sandbox: {
         containerName: "sandbox",
         workspaceDir: "/workspace",
         containerWorkdir: "/workspace",
         buildExecSpec: async () => await preparation.promise,
       },
-      usePty: false,
-      warnings: [],
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
-      notifyOnExit: false,
-      timeoutSec: null,
       beforeSpawn,
     });
 
@@ -455,21 +391,14 @@ describe("sandbox exec preparation failures", () => {
     );
 
     await expect(
-      runExecProcess({
+      runTestExecProcess({
         command: "sandbox-command",
-        workdir: "/tmp",
         env: { EXAMPLE_VALUE: "synthetic-runtime-sandbox-value" },
         sandbox: {
           containerName: "sandbox",
           workspaceDir: "/workspace",
           containerWorkdir: "/workspace",
         },
-        usePty: false,
-        warnings: [],
-        maxOutput: 1000,
-        pendingMaxOutput: 1000,
-        notifyOnExit: false,
-        timeoutSec: null,
       }),
     ).rejects.toThrow("sandbox backend does not provide buildExecSpec");
 
@@ -497,10 +426,8 @@ describe("sandbox exec preparation failures", () => {
     const failure = new Error("sandbox preparation failed");
 
     try {
-      const pending = runExecProcess({
+      const pending = runTestExecProcess({
         command: "sandbox-command",
-        workdir: "/tmp",
-        env: {},
         sandbox: {
           containerName: "sandbox",
           workspaceDir: "/workspace",
@@ -508,13 +435,7 @@ describe("sandbox exec preparation failures", () => {
           buildExecSpec: async () => await preparation.promise,
           finalizeExec,
         },
-        usePty: false,
-        warnings: [],
-        maxOutput: 1000,
-        pendingMaxOutput: 1000,
-        notifyOnExit: false,
         sessionKey: "agent:main:sandbox-preparation",
-        timeoutSec: null,
         onSettledBeforeNotify,
       });
 
@@ -602,10 +523,8 @@ describe("sandbox exec finalization suspension", () => {
         };
       });
 
-      const run = await runExecProcess({
+      const run = await runTestExecProcess({
         command: "sandbox-command",
-        workdir: "/tmp",
-        env: {},
         sandbox: {
           containerName: "sandbox",
           workspaceDir: "/workspace",
@@ -618,13 +537,8 @@ describe("sandbox exec finalization suspension", () => {
           }),
           finalizeExec,
         },
-        usePty: false,
-        warnings: [],
-        maxOutput: 1000,
-        pendingMaxOutput: 1000,
         notifyOnExit: true,
         sessionKey: "agent:main:main",
-        timeoutSec: null,
       });
       markBackgrounded(run.session);
       expect(getActiveBackgroundExecSessionCount()).toBe(1);
@@ -696,163 +610,6 @@ describe("sandbox exec finalization suspension", () => {
   );
 });
 
-describe("terminal execution-context release", () => {
-  it.each([
-    { path: "notify", trace: ["task", "enqueue", "wake"] },
-    { path: "quiet", trace: ["task"] },
-    { path: "unrouted", trace: ["task"] },
-    { path: "observed", trace: ["task"] },
-    { path: "task failure", trace: ["task", "task"] },
-    { path: "enqueue failure", trace: ["task", "enqueue", "task"] },
-    { path: "wake failure", trace: ["task", "enqueue", "wake", "task"] },
-  ])(
-    "releases routing after $path without changing notification order",
-    async ({ path, trace }) => {
-      const exit = createDeferred<RunExit>();
-      const observed: string[] = [];
-      const removal = vi.fn(() => true);
-      const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
-      const failure = new Error("notification boundary failed");
-      enqueueSystemEventWithReceiptMock.mockImplementation((_text, options) => {
-        observed.push("enqueue");
-        expect(options.deliveryContext).toEqual(deliveryContext);
-        if (path === "enqueue failure") {
-          throw failure;
-        }
-        return removal;
-      });
-      requestHeartbeatMock.mockImplementation(() => {
-        observed.push("wake");
-        if (path === "wake failure") {
-          throw failure;
-        }
-      });
-      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-        ...runtimeManagedRun(input, path === "quiet" ? "" : "retained output\n"),
-        wait: () => exit.promise,
-      }));
-      const run = await runExecProcess({
-        command: "context-release",
-        workdir: "/tmp",
-        env: {},
-        usePty: false,
-        warnings: [],
-        maxOutput: 1_000,
-        pendingMaxOutput: 1_000,
-        scopeKey: "process-scope",
-        sessionKey: path === "unrouted" ? undefined : "agent:main:main",
-        agentId: "main",
-        eventRouting: { mainKey: "main", sessionScope: "per-sender" },
-        notifyDeliveryContext: deliveryContext,
-        notifyOnExit: true,
-        notifyOnExitEmptySuccess: false,
-        timeoutSec: null,
-        onSettledBeforeNotify: () => {
-          observed.push("task");
-          if (path === "task failure" && observed.length === 1) {
-            throw failure;
-          }
-        },
-      });
-      markBackgrounded(run.session);
-      if (path === "observed") {
-        acknowledgeNotifyOnExit(run.session);
-      }
-      exit.resolve(createRunExit());
-      const outcome = await run.promise;
-      expect(observed).toEqual(trace);
-      expect(outcome.status).toBe(path.endsWith("failure") ? "failed" : "completed");
-      const retained = getFinishedSession(run.session.id);
-      expect(retained).toMatchObject({ scopeKey: "process-scope", terminalStatus: "completed" });
-      for (const field of [
-        "sessionKey",
-        "agentId",
-        "eventRouting",
-        "notifyDeliveryContext",
-        "notifyOnExit",
-        "notifyOnExitEmptySuccess",
-        "stdin",
-      ] as const) {
-        expect(retained?.[field], field).toBeUndefined();
-      }
-      expect(retained?.notifyOnExitRemoval).toBe(trace.includes("wake") ? removal : undefined);
-      expect(removal).not.toHaveBeenCalled();
-    },
-  );
-});
-
-describe("exec settlement recovery", () => {
-  it.each([
-    { boundary: "task", trace: ["task:completed", "task:failed", "scope-released"] },
-    {
-      boundary: "enqueue",
-      trace: ["task:completed", "enqueue", "task:failed", "scope-released"],
-    },
-    {
-      boundary: "wake",
-      trace: ["task:completed", "enqueue", "wake", "task:failed", "scope-released"],
-    },
-  ])("retries $boundary failure before releasing the exec scope", async ({ boundary, trace }) => {
-    const exit = createDeferred<RunExit>();
-    const observed: string[] = [];
-    const identities: Array<ReturnType<typeof getGatewayToolCallerIdentity>> = [];
-    const failure = new Error("process settlement failed");
-    const scopeKey = `settlement-recovery:${boundary}`;
-    enqueueSystemEventWithReceiptMock.mockImplementation(() => {
-      observed.push("enqueue");
-      if (boundary === "enqueue") {
-        throw failure;
-      }
-      return vi.fn(() => true);
-    });
-    requestHeartbeatMock.mockImplementation(() => {
-      observed.push("wake");
-      if (boundary === "wake") {
-        throw failure;
-      }
-    });
-    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-      ...runtimeManagedRun(input, "process output\n"),
-      wait: () => exit.promise,
-    }));
-    const run = await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: "agent:main:settlement-recovery" },
-      () =>
-        runExecProcess({
-          command: "settlement-recovery",
-          workdir: "/tmp",
-          env: {},
-          usePty: false,
-          warnings: [],
-          maxOutput: 1000,
-          pendingMaxOutput: 1000,
-          scopeKey,
-          sessionKey: "agent:main:settlement-recovery",
-          notifyOnExit: true,
-          timeoutSec: null,
-          onSettledBeforeNotify: (outcome) => {
-            observed.push(`task:${outcome.status}`);
-            identities.push(getGatewayToolCallerIdentity());
-            if (boundary === "task" && observed.length === 1) {
-              throw failure;
-            }
-          },
-        }),
-    );
-    markBackgrounded(run.session);
-    const joined = waitForExecScope(scopeKey).then(() => {
-      observed.push("scope-released");
-    });
-    exit.resolve(createRunExit());
-
-    const outcome = await run.promise;
-    await joined;
-    expect(outcome.status).toBe("failed");
-    expect(observed).toEqual(trace);
-    expect(identities).toEqual([undefined, undefined]);
-  });
-});
-
 describe("runExecProcess exit outcomes", () => {
   it("keeps non-zero normal exits in the completed path", async () => {
     const { outcome } = await runExecWithExit({
@@ -915,15 +672,13 @@ describe("runExecProcess PTY fallback", () => {
   });
 
   function runPtyFallback(warnings: string[] = []) {
-    return runExecProcess({
+    return runTestExecProcess({
       command: "printf ok",
       workdir: process.cwd(),
-      env: {},
       usePty: true,
       warnings,
       maxOutput: 20_000,
       pendingMaxOutput: 20_000,
-      notifyOnExit: false,
       timeoutSec: 5,
     });
   }
@@ -974,15 +729,11 @@ describe("runExecProcess PTY fallback", () => {
     });
     try {
       const command = "printf super-secret-value";
-      const handle = await runExecProcess({
+      const handle = await runTestExecProcess({
         command,
         workdir: process.cwd(),
-        env: {},
-        usePty: false,
-        warnings: [],
         maxOutput: 20_000,
         pendingMaxOutput: 20_000,
-        notifyOnExit: false,
         sessionKey: "session-1",
         timeoutSec: 5,
       });

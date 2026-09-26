@@ -5,9 +5,13 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import * as gitWorker from "../infra/git-worker.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
+import { loadTestSessionPullRequests as loadControlUiSessionPullRequests } from "./control-ui-session-prs.test-support.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { controlUiClient } from "./server.sessions.create.projects.test-support.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
@@ -24,7 +28,8 @@ vi.mock("../projects/project-clone.js", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   projectCloneMocks.materialize.mockReset();
   dispatchInboundMessageMock.mockReset();
   closeOpenClawStateDatabaseForTest();
@@ -58,11 +63,14 @@ test("sessions.create retains a cloud repository across replay without creating 
   ]) {
     expect(saved).not.toHaveProperty(field);
   }
+  await disposeSessionReadContexts();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  const replayOptions = { ...controlUiClient, context: {} };
   const replay = await directSessionReq<{ entry: { repositoryWorkspaceId: string } }>(
     "sessions.create",
     { agentId: "main", key, repository },
-    controlUiClient,
+    replayOptions,
   );
   expect(replay.ok, JSON.stringify(replay.error)).toBe(true);
   expect(replay.payload?.entry.repositoryWorkspaceId).toBe(entry.repositoryWorkspaceId);
@@ -72,7 +80,7 @@ test("sessions.create retains a cloud repository across replay without creating 
       repositoryWorkspaceId?: string;
       repository?: { url: string; ref?: string; branch: string };
     }>;
-  }>("sessions.list", { agentId: "main", limit: 100 }, controlUiClient);
+  }>("sessions.list", { agentId: "main", limit: 100 }, replayOptions);
   expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
   expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject({
     repositoryWorkspaceId: entry.repositoryWorkspaceId,

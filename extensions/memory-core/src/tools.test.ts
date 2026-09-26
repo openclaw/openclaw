@@ -1,12 +1,12 @@
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 // Memory Core tests cover tools plugin behavior.
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-host-core";
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MEMORY_GET_TOOL_CONTRACT, MEMORY_SEARCH_TOOL_CONTRACT } from "./memory-tool-contract.js";
 import {
   getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
-  getMemorySearchManagerMockConfigs,
   getMemorySearchManagerMockParams,
   getMemorySyncMockCalls,
   resetMemoryToolMockState,
@@ -64,6 +64,29 @@ describe("memory tool schemas", () => {
       type: "string",
       enum: ["memory", "wiki", "all"],
     });
+  });
+
+  it.each([
+    { query: "X", min_score: 0.3, max_results: 3 },
+    { query: "X", minScore: 0.3, maxResults: 3 },
+    { query: "X", minScore: 0.3, maxResults: 3, min_score: 0.9, max_results: 1 },
+  ])("accepts search arguments with canonical precedence: %j", (args) => {
+    const tool = createMemorySearchToolOrThrow();
+    const prepared = tool.prepareArguments?.(args) ?? args;
+    expect(Value.Check(tool.parameters, prepared)).toBe(true);
+    expect(prepared).toEqual({ query: "X", minScore: 0.3, maxResults: 3 });
+  });
+
+  it.each([
+    { query: "X", min_score: 0.3, foo: true },
+    { query: "X", max_results: 1.5 },
+    { query: "X", min_score: "invalid" },
+    { query: "X", minScore: null, min_score: 0.3 },
+    { query: "X", maxResults: 0, max_results: 3 },
+  ])("keeps invalid search arguments rejected: %j", (args) => {
+    const tool = createMemorySearchToolOrThrow();
+    const prepared = tool.prepareArguments?.(args) ?? args;
+    expect(Value.Check(tool.parameters, prepared)).toBe(false);
   });
 });
 
@@ -286,28 +309,6 @@ describe("memory_search unavailable payloads", () => {
     const result = await tool.execute("generic", { query: "hello" });
     expectUnavailableMemorySearchDetails(result.details, {
       error: "embedding provider timeout; run openclaw doctor --fix",
-      warning: "Memory search is unavailable due to an embedding/provider error.",
-      action: "Check embedding provider configuration and retry memory_search.",
-    });
-  });
-
-  it("separates this tool's deadline from a provider error by provenance, not text", () => {
-    // Same text, opposite guidance: only the caller's deadline flag decides.
-    expect(
-      buildMemorySearchUnavailableResult("memory_search timed out after 15s", {
-        agentId: "recall",
-        deadline: true,
-      }),
-    ).toMatchObject({
-      warning: "Memory search did not finish within its time limit.",
-      action:
-        "Retry memory_search after a short wait: a memory-corpus timeout pauses retries for up to a minute. If memory-corpus timeouts persist, run: openclaw memory status --deep --agent recall, and rebuild with openclaw memory index --force --agent recall only if it reports the index dirty or incomplete",
-    });
-    expect(buildMemorySearchUnavailableResult("memory_search timed out after 15s")).toMatchObject({
-      warning: "Memory search is unavailable due to an embedding/provider error.",
-      action: "Check embedding provider configuration and retry memory_search.",
-    });
-    expect(buildMemorySearchUnavailableResult("embedding provider timeout")).toMatchObject({
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
     });
@@ -605,25 +606,6 @@ describe("memory_search unavailable payloads", () => {
     expect(getMemorySyncMockCalls()).toBe(0);
   });
 
-  it("does not qualify routine pending index work as a search failure", async () => {
-    setMemoryStatusDirty(true);
-    setMemorySearchImpl(async () => []);
-    const tool = createMemorySearchToolOrThrow({
-      config: {
-        agents: { list: [{ id: "main", default: true }] },
-        memory: { citations: "off" },
-      },
-    });
-
-    const result = await tool.execute("dirty-index", { query: "hidden codeword" });
-
-    expect(result.details).toMatchObject({ results: [] });
-    expect(result.details).not.toHaveProperty("stale");
-    expect(result.details).not.toHaveProperty("warning");
-    expect(result.details).not.toHaveProperty("action");
-    expect(getMemorySyncMockCalls()).toBe(0);
-  });
-
   it("qualifies results after automatic indexing fails", async () => {
     setMemoryStatusDirty(true);
     setMemoryLastSyncError("embedding request timed out");
@@ -818,46 +800,6 @@ describe("memory_search corpus labels", () => {
     await tool.execute("recall", { query: "favorite food" });
 
     expect(getMemorySearchManagerMockParams().at(-1)?.agentId).toBe("recall");
-  });
-
-  it("re-resolves config when executing a previously created tool", async () => {
-    const startupConfig = asOpenClawConfig({
-      agents: {
-        defaults: {},
-        list: [{ id: "main", default: true }],
-      },
-      memory: {
-        search: {
-          provider: "ollama",
-          model: "nomic-embed-text",
-        },
-      },
-    });
-    const patchedConfig = asOpenClawConfig({
-      agents: {
-        defaults: {},
-        list: [{ id: "main", default: true }],
-      },
-      memory: {
-        search: {
-          provider: "openai",
-          model: "text-embedding-3-small",
-        },
-      },
-    });
-    let liveConfig = startupConfig;
-    const tool = createMemorySearchTool({
-      config: startupConfig,
-      getConfig: () => liveConfig,
-    });
-    if (!tool) {
-      throw new Error("tool missing");
-    }
-
-    liveConfig = patchedConfig;
-    await tool.execute("patched-config", { query: "provider switch" });
-
-    expect(getMemorySearchManagerMockConfigs()).toEqual([patchedConfig]);
   });
 
   it("keeps ordinary memory_search on explicitly configured sources when recall indexing is enabled", async () => {

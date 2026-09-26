@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { reconcileNodePairingOnConnect } from "../gateway/node-connect-reconcile.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -21,15 +21,17 @@ import {
 } from "./device-pairing.js";
 import { migrateDoctorPairingStores } from "./state-migrations.pairing.js";
 
-const temporary = useAutoCleanupTempDirTracker(afterEach);
+const temporary = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 const nodeId = "openclaw-macos";
 let baseDir: string;
 
 beforeEach(() => {
   baseDir = temporary.make("openclaw-desktop-approval-migration-");
-});
-afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
 });
 
 function database() {
@@ -94,7 +96,7 @@ describe("desktop approval upgrade", () => {
         expect(after.pendingNodeSurface).toBeUndefined();
       }
 
-      closeOpenClawStateDatabaseByPath(database().path);
+      await closeOpenClawStateDatabaseByPathAsync(database().path);
       const pairedNode = expectDefined((await listNodePairing(baseDir)).paired[0], "paired node");
       const reconciled = await reconcileNodePairingOnConnect({
         cfg: {},
@@ -123,7 +125,7 @@ describe("desktop approval upgrade", () => {
         { callerScopes: ["operator.pairing", "operator.admin"] },
         baseDir,
       );
-      closeOpenClawStateDatabaseByPath(database().path);
+      await closeOpenClawStateDatabaseByPathAsync(database().path);
       expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(0);
       expect((await getPairedDevice(nodeId, baseDir))?.nodeSurface?.commands).toContain(
         "desktop.stream",
@@ -133,7 +135,7 @@ describe("desktop approval upgrade", () => {
 
   it("records an empty first startup so newly approved nodes keep the enabled default", async () => {
     expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(0);
-    closeOpenClawStateDatabaseByPath(database().path);
+    await closeOpenClawStateDatabaseByPathAsync(database().path);
     const before = await approveDesktopNode();
     expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(0);
     expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);

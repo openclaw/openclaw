@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render } from "lit";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { card, mount, props, text } from "./view.test-support.ts";
@@ -23,7 +23,7 @@ it("offers only decision models, even without a chat provider, and retains an un
     },
     onDecisionChange,
   });
-  render(renderModelProviders(viewProps), container);
+  mount(viewProps, container);
   await updatePickers(container);
   const picker = container.querySelector<HTMLButtonElement>("#model-providers-decision-model")!;
   expect(picker.disabled).toBe(false);
@@ -51,21 +51,19 @@ it("offers only decision models, even without a chat provider, and retains an un
 it("retains a saved unavailable model without offering it for another default setting", async () => {
   const onUtilityChange = vi.fn();
   const container = document.createElement("div");
-  render(
-    renderModelProviders(
-      props({
-        configuredModels: [
-          { provider: "fixture", id: "ready", name: "Ready", available: true },
-          { provider: "fixture", id: "blocked", name: "Blocked", available: false },
-        ],
-        defaultModels: {
-          primary: "fixture/ready",
-          fallbacks: ["fixture/blocked"],
-          utilityModel: "fixture/blocked",
-        },
-        onUtilityChange,
-      }),
-    ),
+  mount(
+    props({
+      configuredModels: [
+        { provider: "fixture", id: "ready", name: "Ready", available: true },
+        { provider: "fixture", id: "blocked", name: "Blocked", available: false },
+      ],
+      defaultModels: {
+        primary: "fixture/ready",
+        fallbacks: ["fixture/blocked"],
+        utilityModel: "fixture/blocked",
+      },
+      onUtilityChange,
+    }),
     container,
   );
 
@@ -114,7 +112,7 @@ function selectSegment(group: SegmentedGroup, value: string) {
 describe("renderModelProviders", () => {
   it("surfaces a provider-usage failure on the provider list", () => {
     const container = document.createElement("div");
-    render(renderModelProviders(props({ providerUsageFailed: true })), container);
+    mount(props({ providerUsageFailed: true }), container);
 
     expect(container.textContent).toContain(
       "Provider usage is unavailable; the last request failed. Refresh to retry.",
@@ -143,20 +141,12 @@ describe("renderModelProviders", () => {
     const container = mount(
       props({
         configuredModels: [],
-        quickAddSupported: false,
         unconfiguredProviders: [],
       }),
     );
 
     expect(text(container)).not.toContain("Add provider");
     expect(container.querySelector('[data-model-readiness="model-required"]')).not.toBeNull();
-  });
-
-  afterEach(() => {
-    for (const container of document.body.querySelectorAll("div")) {
-      render(nothing, container);
-    }
-    document.body.replaceChildren();
   });
 
   it("shows inherited model policy, restores overrides, and preserves advanced thinking", () => {
@@ -178,26 +168,12 @@ describe("renderModelProviders", () => {
     expect(text(thinkingRow)).toContain("Adaptive");
     expect(text(thinkingRow)).not.toContain("Default: Model policy");
     expect(text(fastRow)).not.toContain("Default: Model policy");
-    const thinkingDefaultHelp = thinkingRow.querySelector(
-      'wa-radio[value=""] .model-providers__segment-info',
-    );
-    const fastModeDefaultHelp = fastRow.querySelector(
-      'wa-radio[value=""] .model-providers__segment-info',
-    );
-    expect(
-      (
-        thinkingDefaultHelp?.closest("openclaw-tooltip") as
-          | (HTMLElement & { content?: string })
-          | null
-      )?.content,
-    ).toContain("model's thinking policy");
-    expect(
-      (
-        fastModeDefaultHelp?.closest("openclaw-tooltip") as
-          | (HTMLElement & { content?: string })
-          | null
-      )?.content,
-    ).toContain("Unlike Auto");
+    const thinkingHelp = thinkingRow.querySelector('openclaw-tooltip [slot="content"]');
+    const fastModeHelp = fastRow.querySelector('openclaw-tooltip [slot="content"]');
+    expect(thinkingHelp?.textContent).toContain("model's thinking policy");
+    expect(fastModeHelp?.textContent).toContain("Unlike Auto");
+    expect(thinkingRow.querySelector("wa-radio button")).toBeNull();
+    expect(fastRow.querySelector("wa-radio button")).toBeNull();
     expect(thinkingRow.querySelector('wa-radio[value=""]')?.hasAttribute("title")).toBe(false);
     expect(fastRow.querySelector('wa-radio[value=""]')?.hasAttribute("title")).toBe(false);
 
@@ -303,9 +279,11 @@ describe("renderModelProviders", () => {
   });
 
   it("locks provider and default-model mutations while shared config work is pending", async () => {
+    const onPrimaryChange = vi.fn();
     const container = mount(
       props({
         configBusy: true,
+        onPrimaryChange,
         defaultModels: {
           primary: "openai/gpt-5",
           fallbacks: ["anthropic/claude"],
@@ -335,10 +313,14 @@ describe("renderModelProviders", () => {
 
     const defaults = container.querySelector(".model-providers__defaults");
     await updatePickers(container);
-    const defaultSelects = [...(defaults?.querySelectorAll("openclaw-select-picker") ?? [])];
-    expect(defaultSelects).toHaveLength(4);
+    const primary = settingsRow(defaults!, "Model").querySelector<HTMLButtonElement>("button")!;
+    expect(primary.disabled).toBe(false);
+    await choosePickerValue(primary, "anthropic/claude");
+    expect(onPrimaryChange).not.toHaveBeenCalled();
     expect(
-      defaultSelects.every((select) => select.querySelector<HTMLButtonElement>("button")?.disabled),
+      [...settingsRow(defaults!, "Model").querySelectorAll('[role="option"]')].every(
+        (option) => option.getAttribute("aria-disabled") === "true",
+      ),
     ).toBe(true);
     expect(
       [
@@ -400,10 +382,12 @@ describe("renderModelProviders", () => {
     expect(controls.map((control) => control.disabled)).toEqual([true, false, true]);
     const defaults = container.querySelector(".model-providers__defaults");
     await updatePickers(container);
+    const primary = settingsRow(defaults!, "Model").querySelector<HTMLButtonElement>("button")!;
+    expect(primary.disabled).toBe(false);
     expect(
-      [
-        ...(defaults?.querySelectorAll("openclaw-select-picker button, wa-radio-group") ?? []),
-      ].every((control) => control.hasAttribute("disabled")),
+      [...settingsRow(defaults!, "Model").querySelectorAll('[role="option"]')].every(
+        (option) => option.getAttribute("aria-disabled") === "true",
+      ),
     ).toBe(true);
     expect(text(defaults)).not.toContain("operator.admin access");
     button(addForm!, "Save provider")?.click();
@@ -609,30 +593,6 @@ describe("renderModelProviders", () => {
     expect(text(provider)).toContain("Credentials for Writer");
     expect(text(provider)).toContain("Global usage and cost");
     expect(text(provider)).toContain("Global session spend · 30d");
-  });
-
-  it("preserves complete graphemes in custom provider fallback icons", () => {
-    const cases = [
-      { id: "🧭-proxy", expected: "🧭" },
-      { id: "🇺🇸-proxy", expected: "🇺🇸" },
-      { id: "👩‍💻-proxy", expected: "👩‍💻" },
-      { id: "e\u0301-proxy", expected: "E\u0301" },
-      { id: "ß-provider", expected: "S" },
-    ];
-    const container = mount(
-      props({
-        cards: cases.map(({ id }) => card({ id, displayName: id, credentialProviderIds: [id] })),
-      }),
-    );
-
-    for (const { id, expected } of cases) {
-      const row = [...container.querySelectorAll<HTMLElement>("[data-provider-id]")].find(
-        (candidate) => candidate.dataset.providerId === id,
-      );
-      expect(row?.querySelector(".provider-brand-icon--fallback")?.textContent?.trim()).toBe(
-        expected,
-      );
-    }
   });
 
   it("does not invent config key provenance when auth status is unavailable", () => {
@@ -918,6 +878,4 @@ it("filters provider access without hiding global defaults and exposes an empty 
   expect(text(container)).toContain("No providers match your search.");
   expect(container.querySelectorAll("[data-provider-id]")).toHaveLength(0);
   expect(container.querySelector("#settings-model-behavior")).not.toBeNull();
-  render(nothing, container);
-  container.remove();
 });

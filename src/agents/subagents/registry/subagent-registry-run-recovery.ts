@@ -12,7 +12,7 @@ import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway
 import { prepareCanonicalTaskActivation } from "../../../tasks/task-backing-authority-write.js";
 import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
-import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
 import {
   clearDeliveryState,
@@ -195,6 +195,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
               source.killReconciliation?.taskCancellationAccepted === true,
           });
 
+    const restoreCompletionAuthority = subagentRuns.transferCompletionAuthority(source, next);
     if (previousRunId !== nextRunId) {
       this.options.runs.delete(previousRunId);
     }
@@ -238,6 +239,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
         this.options.persistOrThrow(...changedRunIds);
       }
     } catch (error) {
+      restoreCompletionAuthority();
       this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
       for (const [member, wake] of wakeSnapshots) {
         member.requesterSettleWake = wake;

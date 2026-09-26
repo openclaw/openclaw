@@ -1,6 +1,7 @@
 import type { PluginManifestContracts } from "./manifest-types.js";
 
 const MANIFEST_CONTRACT_KEYS = [
+  "codeModeExecutors",
   "embeddedExtensionFactories",
   "agentToolResultMiddleware",
   "trustedToolPolicies",

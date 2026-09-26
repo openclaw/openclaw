@@ -6,10 +6,13 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
+import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
+import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import { BrokerChild } from "../process/spawn-broker/child.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { SpawnBrokerError } from "../process/spawn-broker/protocol.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
@@ -166,6 +169,25 @@ describe.each([
               status: "readable",
               raw: { lastGood: {} },
             });
+            const connection = new GatewayConnectionWork();
+            const scheduled = createScheduledGatewayRunner();
+            try {
+              for (const enter of [
+                <T>(run: () => Promise<T>) => connection.track(run),
+                scheduled,
+              ]) {
+                const detachedRows = await runInDetachedAsyncContext(() =>
+                  enter(() => read(source, transport.sourceKind)),
+                );
+                expect(detachedRows).toEqual({
+                  store: { status: "readable", raw: store },
+                  state: { status: "readable", raw: { lastGood: {} } },
+                  cacheable: true,
+                });
+              }
+            } finally {
+              await connection.drain();
+            }
             const child =
               transport.label === "broker"
                 ? brokerSpawn?.mock.results[0]?.value

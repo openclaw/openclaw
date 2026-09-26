@@ -28,11 +28,11 @@ class ChatToolResultProjectionTest {
     val call = ChatToolActivity("call-1", "bash", "command: pwd", null, false)
     val result = ChatToolActivity("call-1", "tool", null, "/workspace", false)
     val built = timeline(listOf(activity("call", "toolCall", call), text("commentary"), activity("result", "toolResult", result), text("final")))
-    assertEquals(listOf("message:final", "message:commentary", "completed-tools:call"), built.items.map(::chatTimelineItemKey))
+    assertEquals(listOf("message:final", "message:commentary", "tools:root"), built.items.map(::chatTimelineItemKey))
     assertEquals(
       listOf(call.copy(result = "/workspace")),
       built.items
-        .filterIsInstance<ChatTimelineItem.CompletedTools>()
+        .filterIsInstance<ChatTimelineItem.ToolActivity>()
         .single()
         .tools,
     )
@@ -54,12 +54,12 @@ class ChatToolResultProjectionTest {
       for (late in listOf(false, true)) {
         val history = listOf(text("prompt", "user"), text("commentary"), activity("earlier", "toolCall", earlier), activity("earlier-result", "toolResult", earlierResult), invocation) + if (late) listOf(answer, result) else listOf(result, answer)
         val built = timeline(history)
-        assertEquals(2, built.items.filterIsInstance<ChatTimelineItem.CompletedTools>().sumOf { it.tools.size })
+        assertEquals(2, built.items.filterIsInstance<ChatTimelineItem.ToolActivity>().sumOf { it.tools.size })
         val collapsed = prepareChatHistory(history, "main", "main").buildTimeline(0, emptyList(), null)
         assertEquals(
           "mixed=$mixed late=$late",
           if (late) (if (mixed) emptyList() else listOf(earlierResult)) + call.copy(result = failure.result, isError = true) else emptyList(),
-          collapsed.items.filterIsInstance<ChatTimelineItem.CompletedTools>().flatMap { it.tools },
+          collapsed.items.filterIsInstance<ChatTimelineItem.ToolActivity>().flatMap { it.tools },
         )
         assertEquals(listOf("final", "prompt"), collapsed.items.filterIsInstance<ChatTimelineItem.Message>().map { it.message.id })
       }
@@ -102,8 +102,8 @@ class ChatToolResultProjectionTest {
             }
           assertEquals("phase=$phase output=$output error=$messageError", expected, collapsed.items.filterIsInstance<ChatTimelineItem.Message>().map { it.message.id })
           assertEquals(if (phase == "final_answer" && messageError) 0 else 1, collapsed.items.filterIsInstance<ChatTimelineItem.WorkedSummary>().size)
-          assertEquals(1, built.items.filterIsInstance<ChatTimelineItem.CompletedTools>().sumOf { it.tools.size })
-          if (!messageError) assertEquals(0, collapsed.items.filterIsInstance<ChatTimelineItem.CompletedTools>().size)
+          assertEquals(1, built.items.filterIsInstance<ChatTimelineItem.ToolActivity>().sumOf { it.tools.size })
+          if (!messageError) assertEquals(0, collapsed.items.filterIsInstance<ChatTimelineItem.ToolActivity>().size)
         }
       }
     }
@@ -126,7 +126,7 @@ class ChatToolResultProjectionTest {
       for (active in listOf(null, "run-b")) {
         val collapsed = prepareChatHistory(history, "main", "main").buildTimeline(0, emptyList(), null, activeRunId = active)
         if (active == null) {
-          assertEquals(listOf(second), collapsed.items.filterIsInstance<ChatTimelineItem.CompletedTools>().flatMap { it.tools })
+          assertEquals(listOf(second), collapsed.items.filterIsInstance<ChatTimelineItem.ToolActivity>().flatMap { it.tools })
         } else {
           assertEquals(built.items, collapsed.items)
         }
@@ -159,7 +159,7 @@ class ChatToolResultProjectionTest {
             (if (reply == null || nonReply.isError) listOf("run-b-work") else emptyList()) +
             (if (reply?.phase == "final_answer") listOf("run-b-final") else emptyList()) + listOf("prompt")
         assertEquals(expected, collapsed.items.filterIsInstance<ChatTimelineItem.Message>().map { it.message.id })
-        assertEquals(listOf(failure), collapsed.items.filterIsInstance<ChatTimelineItem.CompletedTools>().flatMap { it.tools })
+        assertEquals(listOf(failure), collapsed.items.filterIsInstance<ChatTimelineItem.ToolActivity>().flatMap { it.tools })
         assertEquals(1, collapsed.items.filterIsInstance<ChatTimelineItem.WorkedSummary>().size)
       }
     }
@@ -200,8 +200,8 @@ class ChatToolResultProjectionTest {
             )
           }
           val collapsed = prepared.buildTimeline(0, emptyList(), null)
-          assertEquals(1, prepared.rows.filterIsInstance<ChatTimelineItem.CompletedTools>().sumOf { it.tools.size })
-          assertEquals(if (answered) emptyList() else listOf(result), collapsed.items.filterIsInstance<ChatTimelineItem.CompletedTools>().flatMap { it.tools })
+          assertEquals(1, prepared.rows.filterIsInstance<ChatTimelineItem.ToolActivity>().sumOf { it.tools.size })
+          assertEquals(if (answered) emptyList() else listOf(result), collapsed.items.filterIsInstance<ChatTimelineItem.ToolActivity>().flatMap { it.tools })
           val expected =
             listOf("a-final") + (
               if (answered) {
@@ -230,7 +230,7 @@ class ChatToolResultProjectionTest {
         activity("b-result", "toolResult", failed).copy(runId = "run-b"),
         activity("c-result", "toolResult", other).copy(runId = "run-c"),
       )
-    assertEquals(listOf(other, failed), timeline(history).items.filterIsInstance<ChatTimelineItem.CompletedTools>().flatMap { it.tools })
+    assertEquals(listOf(failed, other), timeline(history).items.filterIsInstance<ChatTimelineItem.ToolActivity>().flatMap { it.tools })
   }
 
   @Test
@@ -255,7 +255,7 @@ class ChatToolResultProjectionTest {
         )
         val collapsed = prepared.buildTimeline(0, emptyList(), null)
         val allAnswered = calls.size == 1 || answered.containsAll(calls.map { checkNotNull(it.toolCallId) })
-        assertEquals(if (allAnswered) 0 else calls.size, collapsed.items.filterIsInstance<ChatTimelineItem.CompletedTools>().sumOf { it.tools.size })
+        assertEquals(if (allAnswered) 0 else calls.size, collapsed.items.filterIsInstance<ChatTimelineItem.ToolActivity>().sumOf { it.tools.size })
         assertEquals(1, collapsed.items.filterIsInstance<ChatTimelineItem.Message>().count { it.message.id == "mixed-final" })
       }
     }
@@ -273,8 +273,8 @@ class ChatToolResultProjectionTest {
         activity("a-result", "toolResult", first.copy(result = "First succeeded")).copy(runId = "run-a"),
       )
     assertEquals(
-      listOf(second.copy(result = "Second failed", isError = true), first.copy(result = "First succeeded")),
-      timeline(history).items.filterIsInstance<ChatTimelineItem.CompletedTools>().flatMap { it.tools },
+      listOf(first.copy(result = "First succeeded"), second.copy(result = "Second failed", isError = true)),
+      timeline(history).items.filterIsInstance<ChatTimelineItem.ToolActivity>().flatMap { it.tools },
     )
   }
 
@@ -293,7 +293,7 @@ class ChatToolResultProjectionTest {
     assertEquals(
       listOf("output", "error", "named"),
       built.items
-        .filterIsInstance<ChatTimelineItem.CompletedTools>()
+        .filterIsInstance<ChatTimelineItem.ToolActivity>()
         .flatMap { it.tools }
         .map { it.toolCallId },
     )
@@ -312,7 +312,7 @@ class ChatToolResultProjectionTest {
           activity("call-2", "toolCall", second),
           activity("result-2", "toolResult", second.copy(name = "tool", detail = null, result = "file.txt")),
         ),
-      ).items.filterIsInstance<ChatTimelineItem.CompletedTools>()
+      ).items.filterIsInstance<ChatTimelineItem.ToolActivity>()
     assertEquals(1, groups.size)
     assertEquals(listOf(first.copy(result = "/workspace"), second.copy(result = "file.txt")), groups.single().tools)
   }
@@ -326,7 +326,7 @@ class ChatToolResultProjectionTest {
       val groups =
         timeline(listOf(activity("call", "toolCall", call), marker, activity("result", "toolResult", output)))
           .items
-          .filterIsInstance<ChatTimelineItem.CompletedTools>()
+          .filterIsInstance<ChatTimelineItem.ToolActivity>()
       assertEquals(listOf(output, call), groups.flatMap { it.tools })
     }
   }
@@ -343,7 +343,7 @@ class ChatToolResultProjectionTest {
           text("steering", "user").copy(steerTargetRunId = "run-1"),
           activity("result", "toolResult", output),
         ),
-      ).items.filterIsInstance<ChatTimelineItem.CompletedTools>()
+      ).items.filterIsInstance<ChatTimelineItem.ToolActivity>()
     assertEquals(listOf(call.copy(result = "completed output")), groups.flatMap { it.tools })
   }
 
@@ -358,7 +358,7 @@ class ChatToolResultProjectionTest {
       listOf(oldCall, result.copy(turnBoundary = true)),
       listOf(oldCall, emptyBoundary, result),
     )) {
-      val groups = timeline(history).items.filterIsInstance<ChatTimelineItem.CompletedTools>()
+      val groups = timeline(history).items.filterIsInstance<ChatTimelineItem.ToolActivity>()
       assertEquals(2, groups.size)
       assertEquals(listOf(output, call), groups.flatMap { it.tools })
       assertEquals(listOf(true, false), groups.map { it.turnBoundary })
@@ -376,7 +376,7 @@ class ChatToolResultProjectionTest {
     for (forwarded in listOf(report, report.copy(content = emptyList()))) {
       val history = listOf(activity("call", "toolCall", call), text("previous-final"), forwarded, activity("result", "toolResult", output), text("new-final"))
       val built = timeline(history)
-      val groups = built.items.filterIsInstance<ChatTimelineItem.CompletedTools>()
+      val groups = built.items.filterIsInstance<ChatTimelineItem.ToolActivity>()
       assertEquals(2, groups.size)
       assertEquals(listOf(output, call), groups.flatMap { it.tools })
       assertEquals(forwarded.content.isNotEmpty(), built.items.filterIsInstance<ChatTimelineItem.Message>().any { it.message.id == "forwarded" })
@@ -398,7 +398,7 @@ class ChatToolResultProjectionTest {
     val groups =
       timeline(listOf(activity("call", "toolCall", call), text("next-turn", "user"), activity("result", "toolResult", output)))
         .items
-        .filterIsInstance<ChatTimelineItem.CompletedTools>()
+        .filterIsInstance<ChatTimelineItem.ToolActivity>()
     assertEquals(listOf(output, call), groups.flatMap { it.tools })
   }
 }

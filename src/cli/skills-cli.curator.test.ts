@@ -235,17 +235,6 @@ describe("skills curator cli", () => {
     expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("reports curator retirement locally when the gateway cannot be reached", async () => {
-    mocks.callGateway.mockRejectedValue(createGatewayTransportError("closed"));
-
-    await expect(
-      createProgram().parseAsync(["skills", "curator", "pin", "daily-brief"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Skill lifecycle curation is retired"),
-    );
-  });
-
   const curatorActions = [
     { label: "status", argv: ["status"] },
     { label: "pin", argv: ["pin", "daily-brief"] },
@@ -370,23 +359,6 @@ describe("skills curator cli", () => {
     expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
     expect(mocks.defaultRuntime.error).toHaveBeenCalledTimes(3);
     expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(gatewayError.message);
-  });
-
-  it("releases offline Gateway ownership when the local curator action throws", async () => {
-    mocks.callGateway.mockRejectedValue(createGatewayTransportError("closed"));
-
-    await expect(
-      createProgram().parseAsync(["skills", "curator", "pin", "daily-brief", "--json"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("__exit__:1");
-
-    // The retired local action always throws, so the lock must still be handed back.
-    expect(mocks.acquireGatewayLock).toHaveBeenCalledOnce();
-    expect(mocks.releaseGatewayLock).toHaveBeenCalledOnce();
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Skill lifecycle curation is retired"),
-    );
   });
 
   it.each([

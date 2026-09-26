@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { appendTranscriptEvent } from "../config/sessions/session-accessor.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readMigrationArtifactIdentity } from "./doctor-session-sqlite-artifact.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import {
   createSessionSqliteMigrationRun,
   recordCompletedMigrationMoves,
@@ -11,8 +12,9 @@ import {
   updateMigrationManifestTarget,
   writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationMove,
-} from "./doctor-session-sqlite-migration-run.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -33,7 +35,7 @@ it.each([true, false])(
           type: "message",
           id: "message-1",
           parentId: null,
-          message: { role: "user", content: "canonical history" },
+          message: { role: "user", content: "canonical history 雪🦞 ".repeat(128) },
         },
       ];
       const original = events.map((event) => JSON.stringify(event)).join("\n") + "\n";
@@ -52,6 +54,44 @@ it.each([true, false])(
         storePath,
         sqlitePath: resolveTargetSqlitePath({ agentId: "main", storePath }, state.env),
       };
+      if (complete) {
+        await appendTranscriptEvent(
+          {
+            agentId: "main",
+            env: state.env,
+            storePath,
+            sessionKey: "agent:main:main",
+            sessionId: "session-1",
+          },
+          {
+            type: "custom",
+            id: "later",
+            parentId: "message-1",
+            customType: "later",
+            data: "later data ".repeat(256),
+          },
+        );
+      }
+      const database = openNodeSqliteDatabase(target.sqlitePath);
+      try {
+        expect(
+          database
+            .prepare(`SELECT event_json, event_zstd IS NOT NULL AS compressed
+              FROM transcript_events WHERE session_id = ? AND seq = 1`)
+            .get("session-1"),
+        ).toEqual({ event_json: null, compressed: 1 });
+        if (complete) {
+          // Verification must stop after proving the retained source, before decoding newer history.
+          expect(
+            database
+              .prepare(`UPDATE transcript_events SET event_zstd = x'010203'
+                WHERE session_id = ? AND seq = 2 AND event_zstd IS NOT NULL`)
+              .run("session-1").changes,
+          ).toBe(1);
+        }
+      } finally {
+        database.close();
+      }
       const run = createSessionSqliteMigrationRun(state.env, [target]);
       const move: SessionSqliteMigrationMove = {
         kind: "legacy-store",

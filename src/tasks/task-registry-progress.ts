@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
-  getLatestSubagentRunByChildSessionKey,
+  getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunLive,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
@@ -216,8 +216,66 @@ export async function flushTaskProgressBatch(key: string, batch: TaskProgressBat
   }
 }
 
+/** A confirmed requester final retires only its adopted card, after all edits settle. */
+export async function completeTaskProgressBatch(
+  key: string,
+  batch: TaskProgressBatch,
+): Promise<boolean> {
+  const continuation = batch.requesterContinuation;
+  const { operationId, requesterSessionId, requesterAgentId } = batch;
+  const read = await prepareTaskBackingRead();
+  const current = read && prepareProgressBatch(key, batch, read);
+  if (
+    !read ||
+    !current ||
+    !continuation?.isCurrent() ||
+    !operationId ||
+    !requesterSessionId ||
+    !requesterAgentId ||
+    current.rows.length !== batch.members.size ||
+    !current.rows.every(({ task }) => isTerminalTaskStatus(task.status))
+  ) {
+    return false;
+  }
+  batch.finalReplyDelivered = true;
+  clearTimeout(batch.timer);
+  const assertCurrent = () => {
+    const fresh = prepareProgressBatch(key, batch, read);
+    if (
+      !fresh ||
+      fresh.membersKey !== current.membersKey ||
+      batch.requesterContinuation !== continuation ||
+      !continuation.isCurrent()
+    ) {
+      throw new Error("Completed task progress owner was superseded");
+    }
+  };
+  try {
+    await batch.publication;
+    await runWithGatewayDetachedWorkContinuation(async () => {
+      const { deleteTaskProgressMessage } = await loadProgressRuntime();
+      assertCurrent();
+      const outcome = await deleteTaskProgressMessage({
+        operationId,
+        requesterSessionId,
+        sessionKey: batch.requesterSessionKey,
+        agentId: requesterAgentId,
+        origin: current.origin,
+        signal: AbortSignal.any([batch.abortController.signal, getGatewayRestartDrainSignal()]),
+        assertCurrent,
+      });
+      if (outcome !== "sent") {
+        taskRegistryLog.debug("Completed task progress could not be removed", { outcome });
+      }
+    }, "tasks:progress-cleanup");
+  } finally {
+    retireProgressBatch(key, batch);
+  }
+  return true;
+}
+
 function scheduleProgressBatch(key: string, batch: TaskProgressBatch, immediate = false) {
-  if (batch.publication || (batch.timer && !immediate)) {
+  if (batch.finalReplyDelivered || batch.publication || (batch.timer && !immediate)) {
     return;
   }
   clearTimeout(batch.timer);
@@ -268,7 +326,7 @@ export function reconcileTaskProgressBatches(event?: TaskRegistryObserverEvent):
   if (event?.kind === "upserted") {
     const task = tasks.get(event.task.taskId);
     if (task?.runtime === "subagent" && task.childSessionKey) {
-      const entry = getLatestSubagentRunByChildSessionKey(task.childSessionKey);
+      const entry = getLatestLiveSubagentRunByChildSessionKey(task.childSessionKey);
       if (entry) {
         enqueueYieldedTaskProgress(task, entry.runId);
       }
@@ -363,6 +421,9 @@ async function ensureProgressTyping(key: string, batch: TaskProgressBatch): Prom
 }
 
 function publishProgressBatch(key: string, batch: TaskProgressBatch): Promise<void> {
+  if (batch.finalReplyDelivered) {
+    return batch.publication ?? Promise.resolve();
+  }
   if (batch.publication) {
     return batch.publication;
   }
@@ -397,7 +458,7 @@ async function finalizeProgressBatch(
   revision: number,
 ): Promise<boolean> {
   try {
-    if (taskProgressBatches.get(key) !== batch) {
+    if (taskProgressBatches.get(key) !== batch || batch.finalReplyDelivered) {
       return false;
     }
     const read = await prepareTaskBackingRead();
@@ -430,7 +491,7 @@ async function runProgressPublication(key: string, batch: TaskProgressBatch): Pr
       }
       const assertCurrent = () => {
         const current = prepareProgressBatch(key, batch, read);
-        if (!current || current.membersKey !== fresh.membersKey) {
+        if (batch.finalReplyDelivered || !current || current.membersKey !== fresh.membersKey) {
           throw new Error("Background progress was superseded before delivery");
         }
       };

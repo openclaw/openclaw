@@ -10,7 +10,6 @@ export function canRetryGatewayStatus(kind: GatewayStatus | null): boolean {
 
 export type GatewayStatusProps = {
   kind: GatewayStatus | null;
-  queuedOutboxCount?: number;
   lastError?: string | null;
   onRetry?: () => void;
   announce?: boolean;
@@ -18,15 +17,12 @@ export type GatewayStatusProps = {
 
 export function renderGatewayStatus(props: GatewayStatusProps) {
   const { kind } = props;
-  const count = props.queuedOutboxCount ?? 0;
-  if (!kind && !count) {
+  if (!kind) {
     return nothing;
   }
   const label = kind ? t(`connection.${kind}`) : null;
-  const outbox = count ? t("connection.queuedCount", { count: String(count) }) : null;
   const content = html`
     ${kind ? html`<span class="gateway-status__state"><span class="gateway-status__icon" aria-hidden="true">${kind === "suspending" || kind === "suspended" ? icons.pause : kind === "offline" ? icons.alertTriangle : icons.refresh}</span><span class="gateway-status__label">${label}</span></span>` : nothing}
-    ${outbox ? html`<span class="gateway-status__outbox">${outbox}</span>` : nothing}
   `;
   const className = `gateway-status${kind ? ` gateway-status--${kind}` : ""}`;
   const retry = props.onRetry && canRetryGatewayStatus(kind);
@@ -34,7 +30,7 @@ export function renderGatewayStatus(props: GatewayStatusProps) {
     ? html`<button
         type="button"
         class=${className}
-        aria-label=${[label, outbox, t("connection.retryNow")].filter(Boolean).join(" — ")}
+        aria-label=${[label, t("connection.retryNow")].filter(Boolean).join(" — ")}
         @click=${props.onRetry}
       >
         ${content}

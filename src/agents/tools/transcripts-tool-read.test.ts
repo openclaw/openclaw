@@ -1,5 +1,5 @@
+import assert from "node:assert/strict";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -9,9 +9,13 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
 import { activeSessions } from "../../transcripts/capture.js";
-import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptSourceProvider,
+} from "../../transcripts/provider-types.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import {
@@ -37,6 +41,19 @@ const session = {
   source: { providerId: "voice", guildId: "team" },
   metadata: { agentId: "capture-agent" },
 };
+function registerActiveCapture(descriptor: TranscriptSessionDescriptor = session) {
+  activeSessions.set(descriptor.sessionId, {
+    appends: createTranscriptCaptureAppends(() => {}),
+    session: descriptor,
+    providerId: descriptor.source.providerId,
+    stopProvider: async () => {
+      throw new Error("Reading notes must not stop capture");
+    },
+    releaseProvider: async () => {},
+    phase: "active",
+  });
+}
+
 function tool(channel = false) {
   return createTranscriptsTool({
     stateDir,
@@ -125,13 +142,7 @@ describe("transcripts read actions", () => {
         descriptor,
       );
       if (state === "active") {
-        activeSessions.set(session.sessionId, {
-          appends: createTranscriptCaptureAppends(() => {}),
-          session: descriptor,
-          providerId: "voice",
-          provider: {},
-          phase: "active",
-        });
+        registerActiveCapture(descriptor);
       }
       const entered = createDeferred();
       const release = createDeferred();
@@ -190,13 +201,7 @@ describe("transcripts read actions", () => {
     );
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    const parentCalls = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    const sql = observeMainThreadSql();
     try {
       const listed = await run({ action: "list" });
       expect(listed.details).toMatchObject({
@@ -207,13 +212,9 @@ describe("transcripts read actions", () => {
       expect(shown.content).toEqual([
         { type: "text", text: expect.stringContaining("Ship the design") },
       ]);
-      for (const calls of parentCalls) {
-        expect(calls.mock.calls, "caller-thread SQLite activity during list/show").toHaveLength(0);
-      }
+      sql.expectIdle();
     } finally {
-      for (const calls of parentCalls) {
-        calls.mockRestore();
-      }
+      sql.restore();
     }
     await expect(
       run({ action: "stop", selector: transcriptSessionSelector(session) }),
@@ -263,13 +264,7 @@ describe("transcripts read actions", () => {
         authorize,
       },
     });
-    activeSessions.set(session.sessionId, {
-      appends: createTranscriptCaptureAppends(() => {}),
-      session,
-      providerId: "voice",
-      provider: {},
-      phase: "active",
-    });
+    registerActiveCapture();
     await store.writeSession({ ...session, source: { providerId: "voice", guildId: "other" } });
     await store.writeSummary(
       summarizeTranscripts({ session, utterances: [{ text: "Other guild notes" }] }),
@@ -323,13 +318,7 @@ describe("transcripts read actions", () => {
   });
 
   it("bounds model-facing notes and reports active captures without summaries", async () => {
-    activeSessions.set(session.sessionId, {
-      appends: createTranscriptCaptureAppends(() => {}),
-      session,
-      providerId: "voice",
-      provider: {},
-      phase: "active",
-    });
+    registerActiveCapture();
     await expect(
       readThroughCatalog({ action: "show", sessionId: "meeting" }),
     ).resolves.toMatchObject({
@@ -342,9 +331,7 @@ describe("transcripts read actions", () => {
     );
     const shown = await run({ action: "show", sessionId: "meeting" });
     const text = shown.content[0];
-    if (!text || text.type !== "text") {
-      throw new Error("missing notes text");
-    }
+    assert(text?.type === "text", "missing notes text");
     expect(text.text.length).toBeLessThanOrEqual(12000);
     expect(text.text).toContain(
       `[truncated; run openclaw transcripts show ${transcriptSessionSelector(session)} for the full notes]`,

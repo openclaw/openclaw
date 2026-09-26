@@ -264,6 +264,14 @@ suite.define(() => {
       async ({ page, context }) => {
         await installChatLoadingReadinessObserver(page);
         await page.addInitScript(() => {
+          // Measure short-link resolution, not cached-roster route recovery. Keep
+          // restored Home preferences; clear identity admission in each new document
+          // because the previous document can persist its boot record on pagehide.
+          for (const key of Object.keys(localStorage)) {
+            if (key.startsWith("openclaw.control.bootRecord.v1:")) {
+              localStorage.removeItem(key);
+            }
+          }
           window.localStorage.setItem(
             "openclaw:control-ui:community-invite",
             JSON.stringify({ dismissedAtMs: 1770000000000 }),
@@ -307,6 +315,17 @@ suite.define(() => {
           }).observe({ type: "longtask", buffered: true });
         });
         const pending = new Map<string, RpcMetric>();
+        const waitForResolutionResponse = (requestStart = 0) =>
+          expect
+            .poll(() =>
+              rpc
+                .slice(requestStart)
+                .some(
+                  (metric) =>
+                    metric.method === "sessions.resolve" && metric.receivedMs !== undefined,
+                ),
+            )
+            .toBe(true);
         const waitForStartupCommit = async (
           sessionKey: string,
           pane: Locator,
@@ -471,6 +490,8 @@ suite.define(() => {
         if (captureUiProof) {
           await page.screenshot({ path: path.join(artifactDir, "02-selected-and-home-ready.png") });
         }
+        // An accepted identity publication can render the tail before resolve replies.
+        await waitForResolutionResponse();
         const startupMetrics = structuredClone(rpc);
         const startupIdentity = await page.evaluate(() => window.chatLoadingReadiness);
         const images = await page
@@ -674,6 +695,7 @@ suite.define(() => {
           if (captureUiProof) {
             await page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
           }
+          await waitForResolutionResponse(requestStart);
           return {
             width: 1050,
             homeOpen,

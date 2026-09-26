@@ -223,18 +223,34 @@ describe("Claude native stdio boundary", () => {
   });
 
   it("keeps an interim result open until native background agents report their final answer", async () => {
-    const context = await createContext("background-success", { liveSession: createLiveSession() });
+    const liveSession = createLiveSession();
+    const context = await createContext("background-success", { liveSession });
+    const interim = createDeferred<Record<string, unknown>>();
     let settled = false;
-    const running = collect(context).then((records) => {
+    const running = (async () => {
+      const records: Record<string, unknown>[] = [];
+      for await (const record of executeClaudeCli(context)) {
+        records.push(record);
+        if (record.type === "result") {
+          interim.resolve(record);
+        }
+      }
       settled = true;
       return records;
-    });
-    await vi.waitFor(async () => {
-      expect(await readFile(path.join(context.cwd, "background.ready"), "utf8")).toBe("ready");
-    });
-    expect(settled).toBe(false);
-    await writeFile(path.join(context.cwd, "background.release"), "release");
-    expect(resultDetail(await running).finalBackgroundAnswer).toBe(true);
+    })();
+    try {
+      expect(await interim.promise).toMatchObject({
+        type: "result",
+        openclaw_interim_result: true,
+      });
+      expect(settled).toBe(false);
+      expect(liveSession.current()?.isIdle()).toBe(false);
+    } finally {
+      await writeFile(path.join(context.cwd, "background.release"), "release");
+    }
+    const records = await running;
+    expect(resultDetail(records).finalBackgroundAnswer).toBe(true);
+    expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
   });
 
   it.each([
@@ -799,6 +815,7 @@ describe("Claude native stdio boundary", () => {
       const context = await createContext(scenario, { liveSession });
       const records = await collect(context);
       expect(records.at(-1)).toMatchObject({ type: "result", ...expected });
+      expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
       const firstPid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
       expect(liveSession.current()).toBeUndefined();
       expect(() => process.kill(firstPid, 0)).toThrow();

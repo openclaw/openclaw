@@ -5,21 +5,9 @@ import {
   readQaScenarioExecutionConfig,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
+import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { recentOutboundSummary } from "./suite-runtime-transport.js";
-
-type CatalogScenario = ReturnType<typeof readQaScenarioById>;
-type FlowCatalogScenario = CatalogScenario & {
-  execution: Extract<CatalogScenario["execution"], { kind: "flow" }>;
-};
-
-function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
-  expect(scenario.execution.kind).toBe("flow");
-  if (scenario.execution.kind !== "flow") {
-    throw new Error(`expected ${scenario.id} to be a flow scenario`);
-  }
-  return scenario as FlowCatalogScenario;
-}
 
 const telegramStreamingFinalScenarios = [
   {
@@ -43,19 +31,16 @@ const telegramStreamingFinalScenarios = [
 function runTelegramStreamingFinalScenario(params: {
   scenarioId: string;
   finalTexts: readonly string[];
-  deletedPreview: boolean;
 }) {
   return runLoadedScenarioFlow(params.scenarioId, {
     state: createQaBusState(),
     onWaitForOutboundMessage: ({ state }) => {
-      if (params.deletedPreview) {
-        const preview = state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "channel:telegram-stream-room",
-          text: "deleted streaming preview",
-        });
-        state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
-      }
+      const preview = state.addOutboundMessage({
+        accountId: "qa-channel",
+        to: "channel:telegram-stream-room",
+        text: "deleted streaming preview",
+      });
+      state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
       for (const text of params.finalTexts) {
         state.addOutboundMessage({
           accountId: "qa-channel",
@@ -407,13 +392,8 @@ describe("qa scenario catalog channel contracts", () => {
     expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
   });
 
-  it.each(
-    telegramStreamingFinalScenarios.flatMap((scenario) => [
-      { ...scenario, deletedPreview: false },
-      { ...scenario, deletedPreview: true },
-    ]),
-  )(
-    "counts only visible Telegram finals for $scenarioId (deleted preview: $deletedPreview)",
+  it.each(telegramStreamingFinalScenarios)(
+    "counts only visible Telegram finals for $scenarioId after deleting its preview",
     async (scenario) => {
       await expect(runTelegramStreamingFinalScenario(scenario)).resolves.toMatchObject({
         status: "pass",
@@ -429,7 +409,6 @@ describe("qa scenario catalog channel contracts", () => {
           "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN first",
           "second TELEGRAM-LONG-FINAL-3CHUNK-END",
         ],
-        deletedPreview: true,
       }),
     ).rejects.toThrow("expected three complete final chunks; saw 2");
   });

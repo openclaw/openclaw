@@ -35,12 +35,16 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
+function createStore() {
+  const stateDir = tempDirs.make("transcript-status-");
+  return new TranscriptsStore(path.join(stateDir, "transcripts"), {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+}
+
 describe("transcript library capture health", () => {
   it("does not claim an exact configured URL identity from a sanitized capture locator", async () => {
-    const stateDir = tempDirs.make("transcript-status-url-");
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const store = createStore();
     const url = new URL("https://example.test/room?invitation=first#caption");
     url.username = "synthetic-user";
     url.password = "synthetic-password";
@@ -55,7 +59,10 @@ describe("transcript library capture health", () => {
       appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: source.providerId,
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
       phase: "active",
     });
     const configured = [
@@ -78,10 +85,7 @@ describe("transcript library capture health", () => {
   });
 
   it("uses the successful capture's requested alias even when its provider is absent from the active registry", async () => {
-    const stateDir = tempDirs.make("transcript-status-alias-");
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const store = createStore();
     const source = { providerId: "caption-alias", channelId: "room" };
     const session = { sessionId: "alias-capture", startedAt: "2026-08-20T10:00:00.000Z", source };
     await store.writeSession(session);
@@ -89,7 +93,10 @@ describe("transcript library capture health", () => {
       appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: "canonical-captions",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
       phase: "active",
     });
     const result = await readTranscriptLibraryStatus(store, {
@@ -102,10 +109,7 @@ describe("transcript library capture health", () => {
   });
 
   it("reports a durable source timestamp without inventing persistence time or recording from unstopped rows", async () => {
-    const stateDir = tempDirs.make("transcript-status-");
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const store = createStore();
     const source = {
       providerId: "fixture-voice",
       guildId: "guild",
@@ -131,7 +135,10 @@ describe("transcript library capture health", () => {
       session,
       providerId: source.providerId,
       phase: "active",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
     });
     result = await readTranscriptLibraryStatus(store, cfg);
     expect(result.configuredSources[0]).toMatchObject({
@@ -244,10 +251,7 @@ describe("transcript library capture health", () => {
   it.each([false, true])(
     "bounds settings rows and treats scoped omissions as unknown (immutable=%s)",
     async (immutable) => {
-      const stateDir = tempDirs.make("transcript-status-bound-");
-      const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+      const store = createStore();
       const cfg: OpenClawConfig = {
         transcripts: {
           autoStart: Array.from({ length: 102 }, (_, index) => ({

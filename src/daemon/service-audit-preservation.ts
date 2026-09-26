@@ -11,6 +11,13 @@ import { readManagedServiceEnvKeysFromEnvironment } from "./service-managed-env.
 import { normalizeServicePathEntry } from "./service-path-policy.js";
 import { resolveManagedGatewayServiceCommand, type GatewayServiceEnv } from "./service-types.js";
 
+export function serviceDefinitionPreserved(
+  key: string,
+  sourcePath?: string,
+): ServiceDefinitionDrift {
+  return { kind: "preserved", key, sourcePath, message: `Custom ${key}; not changed.` };
+}
+
 export function serviceDefinitionUnknown(
   key: string,
   reason: string,

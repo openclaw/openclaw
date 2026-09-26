@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { CompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
+import { hasModelFallbackStop } from "../failover-error.js";
 import { extractFailoverHttpStatus } from "../failover/retry-evidence.js";
 
 const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
@@ -19,12 +20,15 @@ function isGenericCompactionCancelledReason(reason: string): boolean {
   return normalized === "compaction cancelled" || normalized === "error: compaction cancelled";
 }
 
-/** Project display text and failure provenance together, without classifying intentional declines. */
+/** Preserve terminal failures; otherwise project display text and failure provenance together. */
 export function resolveCompactionFailure(params: {
   error: unknown;
   safeguardCancellation?: CompactionSafeguardCancellation | null;
   abortSignal?: AbortSignal;
 }): { reason: string; error: unknown } {
+  if (hasModelFallbackStop(params.error)) {
+    throw params.error;
+  }
   const reason = formatErrorMessage(params.error);
   // AgentSessionCompaction wraps hook cancellation in a plain Error("Compaction cancelled").
   // Only that wrapper yields to safeguard provenance; genuine errors and caller aborts win.

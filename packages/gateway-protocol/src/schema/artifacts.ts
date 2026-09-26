@@ -67,7 +67,12 @@ export const ArtifactsGetResultSchema = closedObject({
 });
 
 /** Download request payload for one artifact. */
-export const ArtifactsDownloadParamsSchema = ArtifactGetParamsSchema;
+export const ArtifactsDownloadParamsSchema = closedObject({
+  ...ArtifactQueryParamsProperties,
+  artifactId: NonEmptyString,
+  /** Opt in only when the client can reach the Gateway's HTTP(S) media routes. */
+  transport: Type.Optional(Type.Literal("http")),
+});
 
 /** Download response, either inline base64 bytes, URL, or metadata for unsupported modes. */
 export const ArtifactsDownloadResultSchema = closedObject({

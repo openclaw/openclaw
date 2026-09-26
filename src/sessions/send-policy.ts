@@ -6,7 +6,7 @@ import {
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../utils/delivery-context.read.js";
 import {
   hasAmbiguousCanonicalSessionPeerShape,
   parseCanonicalSessionPeerShape,

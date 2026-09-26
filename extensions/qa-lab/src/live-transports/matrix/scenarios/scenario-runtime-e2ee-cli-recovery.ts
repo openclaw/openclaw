@@ -12,6 +12,7 @@ import {
   isMatrixQaCliBackupUsable,
   parseMatrixQaCliJson,
   registerMatrixQaCliE2eeAccount,
+  runMatrixQaSetupCliJson,
   type MatrixQaCliEncryptionSetupStatus,
   writeMatrixQaCliOutputArtifacts,
 } from "./scenario-runtime-e2ee-cli-shared.js";
@@ -69,17 +70,14 @@ export async function runMatrixQaE2eeCliRecoveryKeySetupScenario(
     }),
   });
   try {
-    const setupResult = await cli.run(
+    const { artifacts: setupArtifacts, payload: setupPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "recovery-key-setup",
       ["matrix", "encryption", "setup", "--account", accountId, "--recovery-key-stdin", "--json"],
       context.timeoutMs,
       `${encodedRecoveryKey}\n`,
     );
-    const setupArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "recovery-key-setup",
-      result: setupResult,
-      rootDir: cli.rootDir,
-    });
-    const setup = parseMatrixQaCliJson(setupResult) as MatrixQaCliEncryptionSetupStatus;
+    const setup = setupPayload as MatrixQaCliEncryptionSetupStatus;
     if (
       setup.accountId !== accountId ||
       setup.success !== true ||

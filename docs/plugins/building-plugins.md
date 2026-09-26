@@ -69,7 +69,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.30"
+    "typebox": "1.3.33"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -196,6 +196,10 @@ local proof.
     `openclaw.extensions` at built JavaScript like `./dist/index.js`, and make
     sure `npm pack` includes that `dist/` output. TypeScript source entries are
     only for source checkouts and local development paths.
+
+    Plugin builds can use TypeScript 7. OpenClaw loads the emitted JavaScript;
+    local TypeScript source entries use OpenClaw's runtime transformer and do
+    not require the plugin to install the TypeScript compiler.
 
     Then pack the plugin and install the tarball with `npm-pack:`:
 

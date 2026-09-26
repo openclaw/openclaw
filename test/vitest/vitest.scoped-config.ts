@@ -183,6 +183,7 @@ export function createScopedVitestConfig(
     env?: Record<string, string | undefined>;
     environment?: string;
     exclude?: string[];
+    execArgv?: string[];
     argv?: string[];
     includeOpenClawRuntimeSetup?: boolean;
     isolate?: boolean;
@@ -245,6 +246,7 @@ export function createScopedVitestConfig(
       ...(options?.deps ? { deps: options.deps } : {}),
       ...(options?.name ? { name: options.name } : {}),
       ...(options?.environment ? { environment: options.environment } : {}),
+      ...(options?.execArgv ? { execArgv: options.execArgv } : {}),
       isolate,
       ...(runner ? { runner } : { runner: undefined }),
       setupFiles,

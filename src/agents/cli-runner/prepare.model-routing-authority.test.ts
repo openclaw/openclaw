@@ -5,8 +5,10 @@ import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
@@ -17,6 +19,7 @@ import {
   createTestMcpLoopbackServer,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
+import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -118,6 +121,62 @@ describe("CLI model-routing receipt authority", () => {
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
     await fixture.cleanup();
+  });
+
+  it("checks the logical model before CLI preparation and retains a current model guard through dispatch", async () => {
+    const config = { agents: { defaults: { model: "fixture/allowed" } } };
+    let policy = prepareOperatorModelPolicy({ cfg: config, policy: {}, manifestPlugins: [] });
+    const source = createAdmittedRunOperatorAuthority({
+      profileId: "fixture-person",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+      get modelPolicy() {
+        return policy;
+      },
+    });
+    const prepareExecution = vi.fn(async () => undefined);
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [{ ...buildDefaultTestCliBackend(), prepareExecution }],
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      config,
+      "cli-policy-run",
+      "main",
+      "test",
+      undefined,
+      source,
+    );
+    try {
+      await expect(
+        fixture.prepare({
+          config,
+          runId: "cli-policy-run",
+          preparedRunAdmission: admission,
+          model: "denied",
+          requesterModel: { provider: "fixture", model: "denied" },
+        }),
+      ).rejects.toThrow("operator role cannot use this model");
+      expect(prepareExecution).not.toHaveBeenCalled();
+      const context = await fixture.prepare({
+        config,
+        runId: "cli-policy-run",
+        preparedRunAdmission: admission,
+        model: "allowed",
+        requesterModel: { provider: "fixture", model: "allowed" },
+      });
+      expect(prepareExecution).toHaveBeenCalledOnce();
+      expect(context.params.assertCurrent).toBeTypeOf("function");
+      expect(context.params.assertCurrent).not.toThrow();
+      policy = prepareOperatorModelPolicy({
+        cfg: config,
+        policy: { allow: [] },
+        manifestPlugins: [],
+      });
+      expect(context.params.assertCurrent).toThrow("operator role cannot use this model");
+    } finally {
+      admission.close();
+    }
   });
 
   it.each<{ kind: AuthorityLoss; producer: Producer }>([

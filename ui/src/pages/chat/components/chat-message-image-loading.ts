@@ -157,15 +157,20 @@ async function fetchManagedImageBlob(
   const artifactDownload =
     requesterSessionKey && artifactId && opts?.resolveArtifactDownload
       ? await opts
-          .resolveArtifactDownload({ sessionKey: requesterSessionKey, artifactId })
+          .resolveArtifactDownload(
+            { sessionKey: requesterSessionKey, artifactId },
+            controller.signal,
+          )
           .catch(() => null)
       : null;
+  if (controller.signal.aborted) {
+    return null;
+  }
+  if (artifactDownload?.blob) {
+    return artifactDownload.blob.type.startsWith("image/") ? artifactDownload.blob : null;
+  }
   const imageSource = artifactDownload?.url ?? source;
-  if (
-    controller.signal.aborted ||
-    !imageSource ||
-    (!source && !imageSource.startsWith("data:image/"))
-  ) {
+  if (!imageSource || (!source && !imageSource.startsWith("data:image/"))) {
     return null;
   }
   const requestUrl = isManagedOutgoingMediaSource(imageSource)

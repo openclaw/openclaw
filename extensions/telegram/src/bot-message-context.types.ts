@@ -39,7 +39,7 @@ export type TelegramMessageContextOptions = {
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
   receivedAtMs?: number;
-  ingressBuffer?: "inbound-debounce" | "text-fragment";
+  ingressBuffer?: "inbound-debounce" | "text-batch";
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   ambientTranscriptBody?: string;
@@ -81,24 +81,11 @@ type ResolveGroupActivation = (params: {
 type ResolveGroupRequireMention = (chatId: string | number, cfg: OpenClawConfig) => boolean;
 
 type TelegramMessageContextRuntimeOverrides = Partial<
-  Pick<
-    typeof import("./bot-message-context.runtime.js"),
-    "createStatusReactionController" | "ensureConfiguredBindingRouteReady" | "recordChannelActivity"
-  >
+  typeof import("./bot-message-context.runtime.js")
 >;
 
 export type TelegramMessageContextSessionRuntimeOverrides = Partial<
-  Pick<
-    typeof import("./bot-message-context.session.runtime.js"),
-    | "buildChannelInboundEventContext"
-    | "readSessionUpdatedAt"
-    | "recordInboundSession"
-    | "readAmbientTranscriptWatermark"
-    | "resolveAmbientTranscriptWatermarkKey"
-    | "resolveInboundLastRouteSessionKey"
-    | "resolvePinnedMainDmOwnerFromAllowlist"
-    | "resolveStorePath"
-  >
+  typeof import("./bot-message-context.session.runtime.js")
 >;
 
 export type BuildTelegramMessageContextParams = {

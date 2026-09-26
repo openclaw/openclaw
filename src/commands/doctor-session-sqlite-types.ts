@@ -1,27 +1,26 @@
+import type { SessionStoreTarget } from "../config/sessions/targets.js";
 /** Shared type contracts for doctor-owned session SQLite migration reports. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
+import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+  type DoctorSessionSqliteRestoreConflict,
+} from "../infra/session-sqlite-migration-issues.js";
+import type { SessionSqliteMigrationTargetInput } from "../infra/session-sqlite-migration-manifest.js";
+import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
 
-export type DoctorSessionSqliteIssue = {
-  code: string;
-  message: string;
-  sessionKey?: string;
+export type LegacyArchiveTarget = {
+  sourceTarget: SessionStoreTarget & { sqlitePath?: string };
+  target: SessionSqliteMigrationTargetInput;
+  report: DoctorSessionSqliteTargetReport;
+  validated: boolean;
+  records: Array<Omit<LegacySessionRecord, "entry"> & { sessionId: string }>;
+  deferredPluginIds: string[];
+  retainedImportVerified: boolean;
+  sourceConflicts?: Map<string, string>;
+  verifiedSources?: DeferredPluginSessionImport["sources"];
 };
-
-const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
-  "entry_invalid",
-  "historical_transcript_deferred",
-  "legacy_index_informational",
-  "plugin_migration_source_retained",
-  "retained_plugin_source_index_rebuilt",
-  "transcript_archive_failed",
-  "transcript_malformed",
-  "transcript_missing",
-  "unreferenced_jsonl_archive_failed",
-]);
-
-export function isSessionSqliteMigrationWarning(issue: DoctorSessionSqliteIssue): boolean {
-  return SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code);
-}
 
 export function countBlockingSessionSqliteIssues(report: DoctorSessionSqliteTargetReport): number {
   return report.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue)).length;
@@ -30,6 +29,7 @@ export function countBlockingSessionSqliteIssues(report: DoctorSessionSqliteTarg
 export function isRetainedSourceIssue(issue: DoctorSessionSqliteIssue): boolean {
   return [
     "entry_invalid",
+    "historical_duplicate_settled",
     "transcript_malformed",
     "transcript_missing",
     "retained_plugin_source_index_rebuilt",
@@ -41,12 +41,6 @@ export function isInformationalMissingSessionIndex(
 ): boolean {
   return report.issues.some((issue) => issue.code === "legacy_index_informational");
 }
-
-export type DoctorSessionSqliteRestoreConflict = {
-  archivePath: string;
-  reason: string;
-  sourcePath: string;
-};
 
 export type DoctorSessionSqliteRestoreReport = {
   conflicts: DoctorSessionSqliteRestoreConflict[];

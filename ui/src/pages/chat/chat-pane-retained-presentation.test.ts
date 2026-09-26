@@ -101,7 +101,10 @@ describe("chat pane retained presentation lifecycle", () => {
     (compact) => {
       vi.stubGlobal("localStorage", createStorageMock());
       const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const { pane, state } = createTestChatPane({
+        client,
+        sessions: createSessionCapabilityFixture(),
+      });
       const layout = promoteSidebarPanel(
         openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
         "companion",
@@ -138,11 +141,11 @@ describe("chat pane retained presentation lifecycle", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const page = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const dock = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const listeners = new Set<(draft: string) => void>();
     page.pane.context.nativeChatDrafts.subscribe = (listener) => {

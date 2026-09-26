@@ -41,10 +41,18 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, { sessionKey: "main" });
+        const gateway = await installMockGateway(page, {
+          sessionKey: "agent:main:main",
+          sessions: [
+            { key: "agent:main:main", kind: "direct", hasActiveRun: true, status: "running" },
+          ],
+        });
 
         await page.goto(`${suite.server.baseUrl}activity?view=live`);
-        await page.getByText("No activity yet.", { exact: true }).waitFor();
+        await page.locator(".activity-empty").waitFor();
+        await gateway.waitForRequest("sessions.messages.subscribe", {
+          match: { key: "agent:main:main" },
+        });
         await screenshot(page, "01-before-empty-activity.png");
 
         const emitCandidate = async (
@@ -58,7 +66,7 @@ suite.define(() => {
             seq,
             stream: "item",
             ts: Date.now(),
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             data: { kind: "answer_candidate", itemId, progressText, status },
           });
         };
@@ -81,7 +89,7 @@ suite.define(() => {
           .poll(() => page.getByText("Authoritative bounded answer.", { exact: true }).count())
           .toBe(0);
         await page.goto(`${suite.server.baseUrl}activity?view=live`);
-        await page.getByText("No activity yet.", { exact: true }).waitFor();
+        await page.locator(".activity-empty").waitFor();
       },
     );
   });

@@ -41,11 +41,8 @@ function createHarness(accountId = "default") {
   vi.spyOn(logger, "error").mockImplementation(() => {});
   const client = new Client(
     {
-      baseUrl: "http://localhost",
       clientId: "test-app",
-      publicKey: "test-public-key",
       token: "test-token",
-      autoDeploy: false,
       requestOptions: { fetch },
       eventQueue: { listenerTimeout: 120_000, slowListenerThreshold: 30_000 },
     },

@@ -4,6 +4,7 @@ import { consumeGoogleGenerateContentStream } from "../../packages/ai/src/provid
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { createAssistantOutput } from "../../packages/ai/src/transports/assistant-output.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
+import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { isAudioPayload } from "../auto-reply/reply/agent-runner-helpers.js";
@@ -200,8 +201,9 @@ const cases = [
   {
     name: "authored indented code after a drained paragraph",
     chunks: ["Intro.\n\n", "    const value = 1;\n    use(value);\n\n"],
-    marker: "    const value = 1;\n    use(value);",
+    marker: "const value = 1;\nuse(value);",
     literal: true,
+    code: true,
   },
   ...inlineDirectiveCases,
   {
@@ -340,6 +342,18 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
         true,
       );
     };
+    const expectCodeContent = () => {
+      if (!("code" in scenario)) {
+        return;
+      }
+      const codeBlocks = delivered.flatMap((payload) => {
+        const ir = markdownToIR(payload.text ?? "");
+        return ir.styles
+          .filter((span) => span.style === "code_block")
+          .map((span) => ir.text.slice(span.start, span.end));
+      });
+      expect.soft(codeBlocks).toEqual([`${scenario.marker}\n`]);
+    };
     const beforeEnd = createDeferred();
     const releaseTerminal = createDeferred();
     const response = new AssistantMessageEventStream();
@@ -412,7 +426,7 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
             response.push({ type: "done", reason: "stop", message: output });
             response.end();
           });
-    let deltas = 0;
+    let receivedText = "";
     const running = runAgentLoop(
       [{ role: "user", content: "Explain the marker syntax.", timestamp: 1 }],
       { systemPrompt: "", messages: [] },
@@ -430,8 +444,8 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
         emit(event);
         await subscription.waitForPendingEvents();
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-          deltas += 1;
-          if (deltas === chunks.length) {
+          receivedText += event.assistantMessageEvent.delta;
+          if (receivedText === chunks.join("")) {
             await pipeline.flush({ force: true });
             beforeEnd.resolve();
           }
@@ -451,8 +465,8 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
       expect(delivered.length).toBeGreaterThan(0);
       const beforeTerminalCount = delivered.length;
       if ("prefixCorrection" in scenario) {
-        expect(delivered.map((payload) => payload.text)).toEqual(
-          scenario.chunks.map((text) => text.trimEnd()),
+        expect(delivered.map((payload) => payload.text).join("\n")).toBe(
+          scenario.chunks.map((text) => text.trimEnd()).join("\n"),
         );
       }
       const text = delivered.map((payload) => payload.text ?? "").join("");
@@ -499,6 +513,7 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
         );
       }
       expectOrdinaryContent("streaming");
+      expectCodeContent();
       releaseTerminal.resolve();
       await settled;
       await subscription.waitForPendingEvents();
@@ -523,6 +538,7 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
         );
       }
       expectOrdinaryContent("final");
+      expectCodeContent();
       if (hasAudio) {
         const audio = delivered.filter(isAudioPayload);
         expect(audio).toHaveLength(1);

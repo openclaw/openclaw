@@ -12,6 +12,7 @@ import type {
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
 const transcriptReadFenceStorage = new AsyncLocalStorage<UserTurnTranscriptAdmissionReceipt>();
 
@@ -182,9 +183,13 @@ export function resolveSqliteSessionTranscriptReadFence(params: {
         "active.message_position",
         "rewrite.generation",
         /* kysely-allow-raw: validate the admission role without acquiring its private payload. */
-        sql<string>`json_extract(event.event_json, '$.type')`.as("event_type"),
+        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.type')`.as(
+          "event_type",
+        ),
         /* kysely-allow-raw: admission validation needs the exact role, not the message body. */
-        sql<string>`json_extract(event.event_json, '$.message.role')`.as("message_role"),
+        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.role')`.as(
+          "message_role",
+        ),
       ])
       .where("identity.session_id", "=", params.sessionId)
       .where("identity.event_id", "=", receipt.entryId)

@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
@@ -41,15 +41,19 @@ const gitAuthor = { name: "Repository Test", email: "repository@example.invalid"
 const token = "synthetic-repository-startup-token";
 let state: OpenClawTestState | undefined;
 let databasePath: string | undefined;
+let nodeDatabasePath: string | undefined;
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  if (databasePath) {
-    closeOpenClawStateDatabaseByPath(databasePath);
+  for (const pathname of [nodeDatabasePath, databasePath]) {
+    if (pathname) {
+      await closeOpenClawStateDatabaseByPathAsync(pathname);
+    }
   }
   await state?.cleanup();
   state = undefined;
   databasePath = undefined;
+  nodeDatabasePath = undefined;
 });
 
 async function fixture(runSetupScript = false, preparedNode = false) {
@@ -260,7 +264,7 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
       runSetupScript: true,
     },
   });
-  closeOpenClawStateDatabaseByPath(f.store.path);
+  await closeOpenClawStateDatabaseByPathAsync(f.store.path);
   const accepted = f.store.get(f.repository.workspaceId);
   expect(accepted).toMatchObject({ manifestHash: result.manifestRef });
   expect(accepted?.checkpointRef).toMatch(/^refs\/openclaw\/worker-results\//u);
@@ -333,6 +337,7 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
     HOME: f.nodeHome,
     OPENCLAW_STATE_DIR: path.join(f.nodeHome, "state"),
   };
+  nodeDatabasePath = resolveOpenClawStateSqlitePath(env);
   let runtime = new NodeWorkerWorkspaceRuntime({ env, ephemeral: true });
   const identity = {
     gatewayNamespace: "gateway-prepared",
@@ -437,7 +442,7 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
     expect(f.store.get(f.repository.workspaceId)).toEqual(accepted);
 
     await fs.writeFile(path.join(f.remote, "unsaved.txt"), "keep across restart\n");
-    closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
     runtime = new NodeWorkerWorkspaceRuntime({ env, ephemeral: true });
     const restarted = createNodeWorkerWorkspaceActions({
       ...actionOptions,
@@ -464,7 +469,7 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
   } finally {
     await server.close();
     await workspaceTransfer.closeAll();
-    closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
   }
   expect(f.syncWorkspace.mock.calls[0]?.[0].source).toMatchObject({
     prepared: preparedRepository,

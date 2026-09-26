@@ -56,6 +56,7 @@ export type SessionChangedEventInfo = {
   reason: string | null;
   sessionId?: string;
   updatedAt: number | null;
+  snapshotAt?: number;
   hasPermissionMode: boolean;
   thinkingLevel?: string | null;
   agentId: string | null;
@@ -128,6 +129,15 @@ function isStaleForActiveSession(
   existing: GatewaySessionRow | undefined,
 ): boolean {
   if (!existing || !isSessionRunActive(existing) || isSessionRunActive(incoming)) {
+    return false;
+  }
+  if (
+    incoming.snapshotAt !== undefined &&
+    existing.snapshotAt !== undefined &&
+    incoming.snapshotAt > existing.snapshotAt
+  ) {
+    // Runtime settlement need not write persisted metadata; its newer Gateway
+    // sample still owns liveness. Field receipts fence late cached snapshots.
     return false;
   }
   const incomingUpdatedAt = incoming.updatedAt ?? 0;
@@ -234,6 +244,7 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
       : recordValue(event, "hasActiveRun");
   const archived = recordValue(source, "archived");
   const updatedAt = recordValue(source, "updatedAt");
+  const snapshotAt = recordValue(source, "snapshotAt");
   const thinkingLevel = recordValue(source, "thinkingLevel");
   const activeRunIds = Object.hasOwn(source, "activeRunIds")
     ? recordValue(source, "activeRunIds")
@@ -244,6 +255,8 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
       reason,
       sessionId: stringValue(recordValue(source, "sessionId")),
       updatedAt: typeof updatedAt === "number" ? updatedAt : null,
+      snapshotAt:
+        typeof snapshotAt === "number" && Number.isFinite(snapshotAt) ? snapshotAt : undefined,
       hasPermissionMode: Object.hasOwn(source, "permissionMode"),
       thinkingLevel:
         typeof thinkingLevel === "string"

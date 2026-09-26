@@ -73,6 +73,72 @@ describe("repository checkpoint GitHub publication", () => {
     expect(mocks.resolveRepository).not.toHaveBeenCalled();
   });
 
+  it.each(["shared", "personal"] as const)(
+    "retains the accepted %s PR response after publication authority closes",
+    async (source) => {
+      const f = await repositoryFixture();
+      const person = source === "personal" ? await createPersonalPublicationFixture() : undefined;
+      if (person) {
+        f.runtime.accountId = personalPublicationAccount.accountId;
+      }
+      let current = true;
+      const transport = mocks.runCommand.getMockImplementation()!;
+      mocks.runCommand.mockImplementation(async (args: string[], options) => {
+        const result = await transport(args, options);
+        if (args.includes("repos/owner/repository/pulls") && args.includes("POST")) {
+          current = false;
+          if (person) {
+            person.runtime.live = false;
+          }
+        }
+        return result;
+      });
+      const coordinator = person?.coordinator ?? f.coordinator;
+      const request = () =>
+        person
+          ? coordinator.requestPersonalForSession(
+              {
+                sessionKey: SESSION_KEY,
+                idempotencyKey: "accepted-before-close",
+                selection: {
+                  source: "personal",
+                  generation: person.generation,
+                  account: personalPublicationAccount,
+                },
+              },
+              person.action,
+            )
+          : coordinator.requestForSession({
+              agentId: "main",
+              sessionKey: SESSION_KEY,
+              idempotencyKey: "accepted-before-close",
+              assertCurrent: () => {
+                if (!current) {
+                  throw new Error("Publication authority closed");
+                }
+              },
+            });
+      const published = await request();
+      expect(published).toMatchObject({ status: "published", url });
+      expect(readRepositoryGitHubPublication(published.requestId)).toMatchObject({
+        status: "published",
+        pull_request_url: url,
+        last_effect: "pull_request",
+        effect_state: "observed",
+        pushed_head_commit: f.runtime.head,
+      });
+      const commandCount = mocks.runCommand.mock.calls.length;
+      await coordinator.resumeSessionRequests();
+      current = true;
+      if (person) {
+        person.runtime.live = true;
+      }
+      expect(await request()).toEqual(published);
+      expect(mocks.runCommand.mock.calls).toHaveLength(commandCount);
+      expect(f.runtime.effects).toEqual(["push", "pull_request"]);
+    },
+  );
+
   it("replays only the original personal selection and content without new repository publication work", async () => {
     const f = await repositoryFixture();
     const person = await createPersonalPublicationFixture();
@@ -520,7 +586,7 @@ describe("repository checkpoint GitHub publication", () => {
       const retained = claimRepositoryGitHubPublication(
         readRepositoryGitHubPublication(first.requestId)!,
         "retained-execution",
-        () => {},
+        { assertCustody: () => {}, assertCurrent: () => {} },
       );
       await stale.closeSession(kind);
       if (kind === "reset") {
@@ -574,8 +640,12 @@ describe("repository checkpoint GitHub publication", () => {
       let held: Promise<void> | undefined;
       try {
         if (blocker === "pending result") {
-          seedPublicationWorker(blocked.placements, "pending-publication-worker", "remote-exec");
-          const pendingClaim = blocked.placements.claimTurn({
+          await seedPublicationWorker(
+            blocked.placements,
+            "pending-publication-worker",
+            "remote-exec",
+          );
+          const pendingClaim = await blocked.placements.claimTurn({
             sessionId: REQUEST.sessionId,
             sessionKey: REQUEST.sessionKey,
             agentId: REQUEST.agentId,
@@ -596,7 +666,7 @@ describe("repository checkpoint GitHub publication", () => {
           void held.catch(entered.reject);
           await entered.promise;
         } else {
-          blocked.placements.startDispatch({ ...REQUEST, agentId: "different-agent" });
+          await blocked.placements.startDispatch({ ...REQUEST, agentId: "different-agent" });
         }
         const validSession = {
           sessionId: "valid-after-blocked",
@@ -639,8 +709,8 @@ describe("repository checkpoint GitHub publication", () => {
     "settles the accepted checkpoint for an in-turn $executionMode request with publication $publication",
     async ({ executionMode, publication }) => {
       const f = await repositoryFixture(undefined, REQUEST);
-      seedPublicationWorker(f.placements, "in-turn-worker", executionMode);
-      const claim = f.placements.claimTurn({
+      await seedPublicationWorker(f.placements, "in-turn-worker", executionMode);
+      const claim = await f.placements.claimTurn({
         sessionId: REQUEST.sessionId,
         sessionKey: REQUEST.sessionKey,
         agentId: REQUEST.agentId,
@@ -708,8 +778,8 @@ describe("repository checkpoint GitHub publication", () => {
     async (executionMode) => {
       const f = await repositoryFixture(undefined, REQUEST);
       if (executionMode) {
-        seedPublicationWorker(f.placements, "run-scoped-worker", executionMode);
-        f.placements.claimTurn({
+        await seedPublicationWorker(f.placements, "run-scoped-worker", executionMode);
+        await f.placements.claimTurn({
           sessionId: REQUEST.sessionId,
           sessionKey: REQUEST.sessionKey,
           agentId: REQUEST.agentId,
@@ -741,7 +811,7 @@ describe("repository checkpoint GitHub publication", () => {
 
   it("does not treat a pure Gateway-local claim as a repository worker owner", async () => {
     const f = await repositoryFixture();
-    const claim = f.placements.claimTurn({
+    const claim = await f.placements.claimTurn({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
@@ -765,7 +835,7 @@ describe("repository checkpoint GitHub publication", () => {
     "rejects a remote-exec publication with a %s before recording an intent",
     async (mismatch) => {
       const f = await repositoryFixture(undefined, REQUEST);
-      seedPublicationWorker(f.placements, "owned-worker", "remote-exec");
+      await seedPublicationWorker(f.placements, "owned-worker", "remote-exec");
       const input = {
         sessionId: REQUEST.sessionId,
         sessionKey: REQUEST.sessionKey,
@@ -774,13 +844,13 @@ describe("repository checkpoint GitHub publication", () => {
         runId: "owned-run",
         owner: { kind: "local" as const, environmentId: "owned-worker", ownerEpoch: 7 },
       };
-      const claim = f.placements.claimTurn(input);
+      const claim = await f.placements.claimTurn(input);
       if (mismatch === "replaced claim") {
         const prepare = mocks.prepareIdentity.getMockImplementation()!;
         mocks.prepareIdentity.mockImplementationOnce(async (...args) => {
           const identity = await prepare(...args);
-          f.placements.releaseTurn(claim);
-          f.placements.claimTurn({
+          await f.placements.releaseTurn(claim);
+          await f.placements.claimTurn({
             ...input,
             claimId: "replacement-claim",
             runId: "replacement-run",
@@ -807,49 +877,20 @@ describe("repository checkpoint GitHub publication", () => {
   it.each(["placement_generation", "environment_id", "owner_epoch"] as const)(
     "does not bind, process, or defer a request whose %s belongs to a different claim",
     async (column) => {
-      const f = await repositoryFixture();
-      seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
-        environmentId: "publication-worker",
-        sessionId: SESSION_ID,
-        ownerEpoch: 7,
-      });
-      let placement = f.placements.startDispatch({
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        executionMode: "worker-turn",
-      });
-      for (const step of [
-        { to: "provisioning", patch: { environmentId: "publication-worker" } },
-        { to: "syncing", patch: { workerBundleHash: "b".repeat(64) } },
-        {
-          to: "starting",
-          patch: {
-            workspaceBaseManifestRef: "sha256:" + "1".repeat(64),
-            remoteWorkspaceDir: "/worker/workspace",
-          },
-        },
-        { to: "active", patch: { activeOwnerEpoch: 7 } },
-      ] as const) {
-        placement = f.placements.transition({
-          sessionId: SESSION_ID,
-          from: placement.state,
-          expectedGeneration: placement.generation,
-          ...step,
-        });
-      }
-      const claim = f.placements.claimTurn({
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
+      const f = await repositoryFixture(undefined, REQUEST);
+      await seedPublicationWorker(f.placements, "publication-worker");
+      const claim = await f.placements.claimTurn({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
         claimId: "publication-claim",
         runId: "publication-run",
         owner: { kind: "worker", environmentId: "publication-worker", ownerEpoch: 7 },
       });
       const accepted = await f.coordinator.requestForClaim({
         claim,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
         idempotencyKey: "different-claim",
       });
       const db = openOpenClawStateDatabase().db;
@@ -917,7 +958,10 @@ describe("repository checkpoint GitHub publication", () => {
         ).requestId;
       }
       const row = readRepositoryGitHubPublication(requestId)!;
-      const execution = claimRepositoryGitHubPublication(row, "current-instance", () => {});
+      const execution = claimRepositoryGitHubPublication(row, "current-instance", {
+        assertCustody: () => {},
+        assertCurrent: () => {},
+      });
       deletePersonalGitHubSessionReceipts({ agentId: "main", sessionKeys: [SESSION_KEY] });
       expect(execution.ownsExecution()).toBe(false);
       expect(() => execution.recordEffect("push")).toThrow();

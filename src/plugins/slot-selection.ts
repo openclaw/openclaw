@@ -66,6 +66,7 @@ export async function applySlotSelectionForPlugin(
         config,
         onlyPluginIds: [plugin.id],
         metadataSnapshot,
+        loadMode: "validate",
       },
       (runtimeReport) => {
         const runtimePlugin = runtimeReport.plugins.find((entry) => entry.id === plugin.id);

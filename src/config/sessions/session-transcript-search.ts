@@ -11,37 +11,34 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import {
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  captureLifecycleDatabaseScope,
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import { hasSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   startSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
+import type {
+  SessionTranscriptSearchParams,
+  SessionTranscriptSearchResult,
+} from "./session-transcript-search.types.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
 const SEARCH_QUERY_MAX_CHARS = 4096;
-
-type SessionTranscriptSearchHit = {
-  sessionKey: string;
-  sessionId: string;
-  messageId: string;
-  role: "assistant" | "user";
-  timestamp: number;
-  snippet: string;
-  score: number;
-};
-
-type SessionTranscriptSearchResult = {
-  hits: SessionTranscriptSearchHit[];
-  indexing: boolean;
-  truncated: boolean;
-  archivedTranscriptsExcluded?: number;
-};
 
 function toFtsQuery(query: string): string {
   return query
@@ -109,38 +106,74 @@ export function readSessionTranscriptSearchVersion(params: {
   return result.found ? result.value : null;
 }
 
-/** Search the per-agent FTS index; kicks off one background reconcile when the index lags. */
-export function searchSessionTranscripts(params: {
-  agentId: string;
-  env?: NodeJS.ProcessEnv;
-  limit?: number;
-  query: string;
-  role?: "assistant" | "user";
-  sessionId?: string;
-  sessionKeys?: string[];
-  order?: "relevance" | "recent";
-  storePath?: string;
-}): SessionTranscriptSearchResult {
-  const query = params.query.trim();
+/** Query a captured disk owner off-thread; reconciliation remains host-owned. */
+export async function searchSessionTranscripts(
+  params: SessionTranscriptSearchParams,
+  preparedDatabase?: { agentId: string; path: string },
+): Promise<SessionTranscriptSearchResult> {
+  validateSearchQuery(params.query);
+  const scope = captureLifecycleDatabaseScope(
+    preparedDatabase
+      ? {
+          agentId: params.agentId,
+          databaseAgentId: preparedDatabase.agentId,
+          path: preparedDatabase.path,
+          env: params.env,
+        }
+      : resolveSqliteReadScope(params),
+  );
+  const options = toDatabaseOptions(scope);
+  const request = {
+    ...params,
+    agentId: scope.agentId,
+    env: scope.env,
+    sessionKeys: params.sessionKeys?.slice(),
+  };
+  const finish = (result: SessionTranscriptSearchResult): SessionTranscriptSearchResult => {
+    if (result.indexing) {
+      startSessionTranscriptIndexReconcile(options);
+    }
+    return {
+      ...result,
+      indexing: result.indexing || isSessionTranscriptIndexReconcileRunning(options),
+    };
+  };
+  if (isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options)) {
+    // Process-local SQLite cannot cross the worker boundary without changing its lifetime.
+    return finish(searchSessionTranscriptsReadOnlySync(request, options));
+  }
+  return await withSessionHistoryWorkerDatabase(options, async (owner) => {
+    const result = await owner.searchTranscripts(request);
+    owner.assertCurrent();
+    return finish(result);
+  });
+}
+
+function validateSearchQuery(input: string): string {
+  const query = input.trim();
   if (!query) {
     throw new Error("query must not be empty");
   }
   if (query.length > SEARCH_QUERY_MAX_CHARS) {
     throw new Error(`query must not exceed ${SEARCH_QUERY_MAX_CHARS} characters`);
   }
-  const scope = resolveSqliteReadScope(params);
-  const databaseOptions = toDatabaseOptions(scope);
+  return query;
+}
+
+/** Native read kernel; indexing reports dirty rows without scheduling a writer. */
+export function searchSessionTranscriptsReadOnlySync(
+  params: SessionTranscriptSearchParams,
+  preparedDatabase?: OpenClawAgentDatabaseOptions,
+): SessionTranscriptSearchResult {
+  const query = validateSearchQuery(params.query);
+  const scope = preparedDatabase ? { agentId: params.agentId } : resolveSqliteReadScope(params);
+  const databaseOptions = preparedDatabase ?? toDatabaseOptions(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       runSqliteDeferredTransactionSync(
         database.db,
         () => {
-          const hasDirtySessions = hasSessionsNeedingTranscriptIndexReconcile(database.db);
-          if (hasDirtySessions) {
-            startSessionTranscriptIndexReconcile(databaseOptions);
-          }
-          const indexing =
-            hasDirtySessions || isSessionTranscriptIndexReconcileRunning(databaseOptions);
+          const indexing = hasSessionsNeedingTranscriptIndexReconcile(database.db);
           const limit = Math.min(Math.max(1, params.limit ?? 10), SEARCH_LIMIT_MAX);
           // Shared databases hold multiple logical agents. Filter before LIMIT;
           // reserved global/unknown sentinels retain their store-wide scope.
@@ -244,7 +277,7 @@ export function searchSessionTranscripts(params: {
               )
               .limit(limit + 1),
           ).rows;
-          const hits = rows.flatMap((row): SessionTranscriptSearchHit[] => {
+          const hits = rows.flatMap((row): SessionTranscriptSearchResult["hits"] => {
             if (
               typeof row.session_key !== "string" ||
               typeof row.session_id !== "string" ||

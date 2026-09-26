@@ -37,6 +37,7 @@ export async function renderPanelFixture(
 ) {
   render(
     renderSidebarRegion({
+      presentationId: "sidebar-layout-fixture",
       availableWidth: 1400,
       availableSlots: ["detail", "workspace", "tasks"],
       callbacks: {

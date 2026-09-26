@@ -30,6 +30,7 @@ export async function executeCodexWebSearchProviderTool(
     modelProvider: "openai",
     timeoutMs: resolveSearchTimeoutSeconds(ctx.searchConfig as SearchConfigRecord) * 1_000,
     signal: executionContext?.signal,
+    assertCurrent: executionContext?.assertCurrent,
     agentDir: ctx.agentDir,
     options,
     taskLabel: "hosted search",

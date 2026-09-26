@@ -481,18 +481,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     }
     const resized = previewItems?.find((item) => item.name === gesture.name);
     if (resized && (resized.w !== gesture.originW || resized.h !== gesture.originH)) {
-      void this.applyOps(
-        [
-          {
-            kind: "widget_resize",
-            name: gesture.name,
-            sizeW: resized.w,
-            sizeH: resized.h,
-            heightMode: "fixed",
-          },
-        ],
-        t("board.announcement.resized", { title: widget.title || widget.name }),
-      ).catch(() => undefined);
+      void this.cellCallbacks.resizeTo(widget, resized.w, resized.h).catch(() => undefined);
     }
   };
 
@@ -689,7 +678,8 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     const fullWidth = widgets.length === 1 && widgets[0]?.sizeW === BOARD_GRID_COLUMNS;
     const page =
       fullWidth &&
-      (widgets[0]?.pluginKind === "session:website" ||
+      (widgets[0]?.name === this.pageWidgetName ||
+        widgets[0]?.pluginKind === "session:website" ||
         widgets[0]?.pluginKind === "browser:dashboard");
     return html`
       <section

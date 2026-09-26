@@ -104,7 +104,7 @@ describe("tree row snapshots", () => {
         ]);
         expect(observer.row).toEqual(settledParent);
         expect(invalidated).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(2_000);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(h.request).not.toHaveBeenCalled();
       } finally {
         observer.dispose();
@@ -156,7 +156,7 @@ describe("tree row snapshots", () => {
         hasPermissionMode: true,
         thinkingLevel: null,
       });
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(h.request).not.toHaveBeenCalled();
     } finally {
       h.sessions.dispose();
@@ -221,7 +221,7 @@ describe("tree row snapshots", () => {
         },
       });
       expect(h.sessions.state.result?.sessions).toEqual([nextParent, settledGrandparent]);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(h.request).not.toHaveBeenCalled();
     } finally {
       h.sessions.dispose();
@@ -270,7 +270,7 @@ describe("tree row snapshots", () => {
         expect(
           h.sessions.state.result?.sessions.find((row) => row.key === parent.key)?.sessionId,
         ).toBe(parent.sessionId);
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(h.request).toHaveBeenCalledTimes(1);
       } finally {
         h.sessions.dispose();

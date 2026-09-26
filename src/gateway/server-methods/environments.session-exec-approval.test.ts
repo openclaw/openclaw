@@ -109,7 +109,7 @@ describe("attached command approval custody", () => {
         context.broadcastToConnIds = (_event, payload, recipients) => {
           expect(recipients).toEqual(new Set(["approval-ui"]));
           expect(payload).toMatchObject({ request: { runId: run.runId } });
-          const record = manager.listPendingRecords()[0];
+          const record = manager.listLocalPendingRecords()[0];
           if (!record) {
             throw new Error("Expected the registered approval before delivery");
           }
@@ -185,23 +185,23 @@ describe("attached command approval custody", () => {
             turnSourceThreadId: "fixture-thread",
             allowedDecisions: ["allow-once", "deny"],
           });
-          expect(manager.listPendingRecords()[0]).toMatchObject({
+          expect((await manager.listPendingRecords())[0]).toMatchObject({
             requestedByConnId: "requester-connection",
             requestedByDeviceId: "requester-device",
             requestedByDeviceTokenAuth: true,
             agentRuntimeDelegatedAuthority: { ...authority, kind: "local" },
           });
           if (outcome === "expire") {
-            manager.expire(event.id);
+            await manager.expire(event.id);
           } else {
             if (outcome === "revoke") {
               lifetime.abort(new Error("run authority ended"));
               releaseAgentRunDelegatedAuthority(authority);
             }
-            manager.resolve(event.id, "allow-once", "reviewer");
+            await manager.resolve(event.id, "allow-once", "reviewer");
           }
           await completion;
-          expect(manager.consumeAllowOnce(event.id)).toBe(false);
+          expect(await manager.consumeAllowOnce(event.id)).toBe(false);
           if (outcome === "expire") {
             expect(expired).toHaveBeenCalledWith(event);
           }
@@ -230,10 +230,10 @@ describe("attached command approval custody", () => {
       const manager = createTestApprovalManager(test, {
         resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
       });
-      const broadcast = vi.fn((_event: string, request: ExecApprovalRequest) => {
+      const broadcast = vi.fn(async (_event: string, request: ExecApprovalRequest) => {
         expect(request.request.command).toContain("script-from-stdin");
         expect(request.request.allowedDecisions).toEqual(["allow-once", "deny"]);
-        manager.resolve(request.id, decision, "reviewer");
+        await manager.resolve(request.id, decision, "reviewer");
       });
       const options = {
         client: null,
@@ -255,7 +255,7 @@ describe("attached command approval custody", () => {
       if (decision === "allow-once") {
         await expect(operation).resolves.toBeUndefined();
         const id = broadcast.mock.calls[0]![1].id;
-        expect(manager.consumeAllowOnce(id)).toBe(false);
+        expect(await manager.consumeAllowOnce(id)).toBe(false);
       } else {
         await expect(operation).rejects.toThrow("not approved");
       }

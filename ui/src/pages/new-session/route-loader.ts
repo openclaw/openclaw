@@ -4,7 +4,8 @@ import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
 import { takeInstantThreadRestore } from "./instant-thread-restore.ts";
-import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import { newSessionModelLocationFromSearch } from "./model-location.ts";
 
 export async function load(
   context: ApplicationContext,
@@ -15,7 +16,7 @@ export async function load(
   if (restored) {
     return restored;
   }
-  const requestedLocation = newSessionLocationFromSearch(search);
+  const requestedLocation = newSessionModelLocationFromSearch(search);
   const requestedAgentId = requestedLocation.agentId.trim();
   let groupCwd = "";
   let groupWorktree = false;
@@ -36,33 +37,22 @@ export async function load(
     groupCwd = group?.cwd ?? "";
     groupWorktree = group?.worktree === true;
   }
-  if (!requestedLocation.catalogId) {
-    return {
-      ...requestedLocation,
-      requestedAgentId,
-      groupStatus,
-      groupCwd,
-      groupWorktree,
-      groupCatalogGeneration,
-      groupDefaultsStatus,
-      model: "",
-      catalogLabel: "",
-      startTerminal: false,
-    };
-  }
-  const unresolved = (agentId = ""): NewSessionRouteData => ({
+  const route: NewSessionRouteData = {
     ...requestedLocation,
-    agentId,
     requestedAgentId,
     groupStatus,
     groupCwd,
     groupWorktree,
     groupCatalogGeneration,
     groupDefaultsStatus,
-    model: "",
+    model: requestedLocation.catalogId ? "" : (requestedLocation.requestedModel ?? ""),
     catalogLabel: "",
     startTerminal: false,
-  });
+  };
+  if (!requestedLocation.catalogId) {
+    return route;
+  }
+  const unresolved = (agentId = ""): NewSessionRouteData => ({ ...route, agentId });
   const initialGateway = context.gateway.snapshot;
   const initialAgentsState = context.agents.state;
   if (
@@ -75,7 +65,10 @@ export async function load(
   }
   // ensureList is fail-closed: offline and request-error paths return cached
   // data or null, allowing the unresolved catalog page to mount and retry.
-  const loadedAgentsList = initialAgentsState.agentsList ?? (await context.agents.ensureList());
+  const loadedAgentsList =
+    !initialAgentsState.agentsList || initialAgentsState.agentsListCached
+      ? await context.agents.ensureList()
+      : initialAgentsState.agentsList;
   const gateway = context.gateway.snapshot;
   const agentsState = context.agents.state;
   if (
@@ -84,14 +77,14 @@ export async function load(
     gateway.client !== initialGateway.client ||
     !agentsState.connected ||
     agentsState.client !== gateway.client ||
+    agentsState.agentsListCached ||
     agentsState.agentsList !== loadedAgentsList
   ) {
     return unresolved();
   }
   const agentsList = loadedAgentsList;
   const availableAgents = listSelectableAgents(agentsList?.agents ?? []);
-  const gatewayDefaultId =
-    gateway.phase === "connected" && gateway.hello ? gateway.assistantAgentId : null;
+  const gatewayDefaultId = gateway.hello ? gateway.assistantAgentId : null;
   if (
     !agentsList &&
     requestedAgentId &&
@@ -110,7 +103,7 @@ export async function load(
       : resolveAgentId(undefined, [], fallbackAgentId)
     : "";
   const plain = unresolved(agentId);
-  if (gateway.phase !== "connected" || !gateway.client || !agentId) {
+  if (!agentId) {
     return plain;
   }
   const target = await resolveCreateTarget(gateway.client, requestedLocation.catalogId, agentId);

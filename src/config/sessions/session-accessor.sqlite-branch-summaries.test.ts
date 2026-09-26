@@ -20,6 +20,7 @@ import { readSessionBranchSummariesInWorker } from "./session-accessor.sqlite-br
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
 import type { SessionBranchListResult } from "./session-accessor.types.js";
+import { prepareTranscriptPayload } from "./transcript-payload.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -338,7 +339,8 @@ it("uses one snapshot for navigation and lazy headline reads", async () => {
         vi.spyOn(connection, "prepare").mockImplementation((sqlText) => {
           if (
             !changed &&
-            sqlText.includes('select "event_json" from "transcript_events"') &&
+            sqlText.includes('from "transcript_events"') &&
+            sqlText.includes('as "event_json"') &&
             sqlText.includes('"seq" = ?')
           ) {
             changed = true;
@@ -348,9 +350,12 @@ it("uses one snapshot for navigation and lazy headline reads", async () => {
                 writer,
                 getSessionKysely(writer)
                   .updateTable("transcript_events")
-                  .set({
-                    event_json: JSON.stringify(message("root", null, "replacement headline")),
-                  })
+                  .set(
+                    prepareTranscriptPayload(
+                      writer,
+                      JSON.stringify(message("root", null, "replacement headline")),
+                    ),
+                  )
                   .where("session_id", "=", scope.sessionId)
                   .where("seq", "=", 2),
               );

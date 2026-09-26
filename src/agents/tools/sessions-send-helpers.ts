@@ -1,8 +1,3 @@
-/**
- * sessions_send helper logic.
- *
- * Resolves announcement targets, channel/session routing metadata, and ping-pong guard prompt text.
- */
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
@@ -20,7 +15,6 @@ export type AnnounceTarget = {
   threadId?: string; // Forum topic/thread ID
 };
 
-/** Resolves a session key into the channel target used for source-reply announcements. */
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
   const parsed = resolveSessionConversationRef(sessionKey);
   if (!parsed) {
@@ -88,19 +82,14 @@ function buildAgentSessionLines(params: {
   ].filter((line): line is string => Boolean(line));
 }
 
-/** Builds the initial prompt context for a sessions_send agent-to-agent request. */
 export function buildAgentToAgentMessageContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
 }) {
-  const lines = ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].filter(
-    Boolean,
-  );
-  return lines.join("\n");
+  return ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].join("\n");
 }
 
-/** Builds the bounded ping-pong reply prompt for the current A2A participant. */
 export function buildAgentToAgentReplyContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -112,17 +101,15 @@ export function buildAgentToAgentReplyContext(params: {
 }) {
   const currentLabel =
     params.currentRole === "requester" ? "Agent 1 (requester)" : "Agent 2 (target)";
-  const lines = [
+  return [
     "Agent-to-agent reply step:",
     `Current agent: ${currentLabel}.`,
     `Turn ${params.turn} of ${params.maxTurns}.`,
     ...buildAgentSessionLines(params),
     `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
-  ].filter(Boolean);
-  return lines.join("\n");
+  ].join("\n");
 }
 
-/** Builds the final announce prompt that decides whether to post back to the target channel. */
 export function buildAgentToAgentAnnounceContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -132,7 +119,7 @@ export function buildAgentToAgentAnnounceContext(params: {
   roundOneReply?: string;
   latestReply?: string;
 }) {
-  const lines = [
+  return [
     "Agent-to-agent announce step:",
     ...buildAgentSessionLines(params),
     `Original request: ${params.originalMessage}`,
@@ -143,6 +130,5 @@ export function buildAgentToAgentAnnounceContext(params: {
     `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
     "Any other reply is recorded in the target session. External delivery is attempted only if the target has a delivery route.",
     "After this reply, the agent-to-agent conversation is over.",
-  ].filter(Boolean);
-  return lines.join("\n");
+  ].join("\n");
 }

@@ -5,6 +5,7 @@ import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-h
 import { loadCronStore } from "../cron/store.js";
 import { getGatewayProcessInstanceId } from "../gateway/process-instance.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.js";
@@ -31,6 +32,8 @@ afterEach(async () => {
 async function createScheduler() {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: false,
     log: createNoopLogger(),
@@ -99,6 +102,9 @@ describe("plugin service scheduler ownership", () => {
     expect(() => first.context.getCron?.()).toThrow("no longer active");
     await expect(service.list()).rejects.toThrow("no longer active");
     await expect(isEnabled()).rejects.toThrow("no longer active");
+    await expect(
+      expectDefined(service.enqueueRun, "service run admission")("retained", "if-enabled"),
+    ).rejects.toThrow("no longer active");
 
     const next = await startService(() => cron);
     const successor = next.context.getCron?.();
@@ -167,7 +173,7 @@ describe("plugin service scheduler ownership", () => {
       const original = await createScheduler();
       const stale = await createScheduler();
       const replacement = await createScheduler();
-      const job = await original.cron.add(createJob());
+      const job = await original.cron.add({ ...createJob(), enabled: true });
       await stale.cron.add(createJob());
       let current = original.cron;
       const { context, handle } = await startService(() => current);
@@ -189,6 +195,7 @@ describe("plugin service scheduler ownership", () => {
         service.update(job.id, { name: "late update" }),
         service.remove(job.id),
         service.removeStaleJobFamily(family),
+        expectDefined(service.enqueueRun, "service run admission")(job.id, "if-enabled"),
       ];
       const results = Promise.allSettled(queued);
       let stopping: ReturnType<PluginServicesHandle["stop"]> | undefined;
@@ -218,6 +225,7 @@ describe("plugin service scheduler ownership", () => {
       }
       await blocker;
       expect((await results).map((result) => result.status)).toEqual([
+        "rejected",
         "rejected",
         "rejected",
         "rejected",

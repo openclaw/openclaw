@@ -12,7 +12,6 @@ import {
   runTaskFlowRegistryWorkerMutation,
 } from "./task-flow-registry.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.test-support.js";
 import { resetTaskFlowRegistryForTests } from "./task-flow-registry.test-support.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
@@ -52,8 +51,6 @@ it.each(["update", "delete", "rollback"] as const)(
           snapshots.push(snapshot.flows.size);
           return snapshot;
         });
-        const events = vi.fn();
-        configureTaskFlowRegistryRuntime({ observers: { onEvent: events } });
         const unrelated = readResidentTaskFlow("flow-1");
         for (let index = 0; index < 5; index += 1) {
           getTaskMirroredFlowIds(["flow-1"]);
@@ -80,7 +77,6 @@ it.each(["update", "delete", "rollback"] as const)(
           );
           expect(snapshots).toEqual(Array(5).fill(operation === "delete" ? 0 : 1));
           expect(readResidentTaskFlow("flow-1")).toBe(unrelated);
-          expect(events).not.toHaveBeenCalled();
         };
         if (operation === "rollback") {
           expect(() =>
@@ -98,7 +94,6 @@ it.each(["update", "delete", "rollback"] as const)(
         expect(getTaskFlowById(initial.flowId)).toEqual(
           operation === "delete" ? undefined : operation === "update" ? next : initial,
         );
-        expect(events).toHaveBeenCalledTimes(operation === "rollback" ? 0 : 1);
         snapshots.length = 0;
         for (let index = 0; index < 5; index += 1) {
           getTaskMirroredFlowIds(["flow-1"]);

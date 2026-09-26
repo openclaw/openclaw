@@ -292,7 +292,7 @@ export async function prepareWorkspaceBuildGroup(
     ].toSorted((left, right) => left.localeCompare(right));
     const staticProviderCatalogStartedAt = performance.now();
     reportStage("static provider catalog");
-    let preparedStaticProviderCatalog = reusablePluginGeneration
+    let preparedStaticProviderCatalog = reuseRuntimeFacts
       ? reusablePluginGeneration.preparedStaticProviderCatalog
       : catalogMode === "static"
         ? await prepareImplicitProviderStaticCatalog({
@@ -327,7 +327,7 @@ export async function prepareWorkspaceBuildGroup(
         ]),
       });
     }
-    const staticProviderCatalogMs = reusablePluginGeneration
+    const staticProviderCatalogMs = reuseRuntimeFacts
       ? 0
       : performance.now() - staticProviderCatalogStartedAt;
     const preparedSyntheticAuthProviders = preparedStaticProviderCatalog?.providers ?? [];

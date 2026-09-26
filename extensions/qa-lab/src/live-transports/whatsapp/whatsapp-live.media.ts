@@ -1,5 +1,44 @@
 // QA Lab WhatsApp media fixtures and structured inbound probes.
 import type { WhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
+import type { WhatsAppQaMessageScenarioContext } from "./whatsapp-live.contracts.js";
+import { callWhatsAppGatewaySend } from "./whatsapp-live.gateway.js";
+import { waitForScenarioObservedMessage } from "./whatsapp-live.observations.js";
+
+export async function sendWhatsAppQaMediaAndObserve(
+  context: WhatsAppQaMessageScenarioContext,
+  params: {
+    kind: "audio" | "document" | "image";
+    label: string;
+    mediaUrl: string;
+    message: string;
+  },
+) {
+  const observedAfter = new Date();
+  await callWhatsAppGatewaySend(context, {
+    ...(params.kind === "audio" ? { asVoice: true } : {}),
+    ...(params.kind === "document" ? { forceDocument: true } : {}),
+    label: params.label,
+    mediaUrl: params.mediaUrl,
+    message: params.message,
+  });
+  await waitForScenarioObservedMessage(context, {
+    observedAfter,
+    match: (message) =>
+      message.kind === "media" &&
+      message.hasMedia === true &&
+      (params.kind === "document"
+        ? message.mediaType === "application/pdf" ||
+          message.mediaFileName?.endsWith(".pdf") === true
+        : message.mediaType?.startsWith(`${params.kind}/`) === true) &&
+      (params.kind === "audio" || message.text.includes(params.message)),
+  });
+  if (params.kind === "audio") {
+    await waitForScenarioObservedMessage(context, {
+      observedAfter,
+      match: (message) => message.text.includes(params.message),
+    });
+  }
+}
 
 export const WHATSAPP_QA_ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lzK4ZQAAAABJRU5ErkJggg==",

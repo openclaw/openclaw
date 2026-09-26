@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as backoff from "../../infra/backoff.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -124,7 +125,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     if (mode === "fallback") {
       vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("clone unavailable"));
     }
-    const available = 16 * 1024 ** 3 + (mode === "small" ? 1 : 24) * 1024 ** 2;
+    const available = 4 * 1024 ** 3 + (mode === "small" ? 1 : 24) * 1024 ** 2;
     const stats = fsSync.statfsSync(repo);
     vi.spyOn(fsSync, "statfsSync").mockReturnValue({
       type: stats.type,
@@ -188,7 +189,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       }
       const before = await service.listRegistryRecords();
       const stats = fsSync.statfsSync(repo);
-      let available = 16 * 1024 ** 3 + 24 * 1024 ** 2;
+      let available = 4 * 1024 ** 3 + 24 * 1024 ** 2;
       vi.spyOn(fsSync, "statfsSync").mockImplementation(() => ({
         type: stats.type,
         files: stats.files,
@@ -225,7 +226,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         });
       }
 
-      available = 16 * 1024 ** 3 + 96 * 1024 ** 2;
+      available = 4 * 1024 ** 3 + 96 * 1024 ** 2;
       vi.mocked(backend.cloneTemplate).mockImplementationOnce(async () => {
         await git(repo, "update-ref", sourceRef, initial, larger);
         throw new Error("clone unavailable after the source ref moved");
@@ -612,7 +613,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     },
   );
 
-  it("rereads template activity after waiting for the allocation lease", async () => {
+  it("rereads template activity after waiting for the allocation lease", async (ctx) => {
     await service.create({ repoRoot: repo, name: "retained", baseRef: "HEAD" });
     const template = listTemplates(env)[0];
     assert(template);
@@ -633,14 +634,34 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       },
     );
     const lease = await held.promise;
-    const allocation = vi.spyOn(stateLease, "withOpenClawStateLease");
+    const allocationRequested = createDeferredCore();
+    const acquireLease = stateLease.withOpenClawStateLease;
+    const allocation = vi
+      .spyOn(stateLease, "withOpenClawStateLease")
+      .mockImplementation((...args) => {
+        allocationRequested.resolve();
+        return acquireLease(...args);
+      });
     const pending = service.gc();
     try {
-      await vi.waitFor(() => expect(allocation).toHaveBeenCalledTimes(1));
+      await racePromiseWithAbortSignal(
+        Promise.race([
+          allocationRequested.promise,
+          pending.then(() => {
+            throw new Error("Collection completed without requesting the allocation lease");
+          }),
+        ]),
+        ctx.signal,
+      );
+      expect(allocation).toHaveBeenCalledTimes(1);
       expect(touchTemplate(env, template.id, now, () => lease.assertOwned())).toBe(true);
     } finally {
       release.resolve();
-      await holder;
+      try {
+        await holder;
+      } finally {
+        await pending;
+      }
     }
     expect((await pending).removed).toEqual([]);
     expect(listTemplates(env)).toEqual([{ ...template, lastUsedAt: now }]);
