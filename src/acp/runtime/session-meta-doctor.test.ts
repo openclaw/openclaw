@@ -106,14 +106,15 @@ it("inspects without creating state and conditionally updates only the proven cu
 });
 
 it.each(["global", "shared-project"])(
-  "migrates %s from explicit ACPX state beside an unrelated free ACP session",
+  "migrates %s from legacy ACPX state beside an unrelated free ACP session",
   async (sessionKey) => {
     await withOpenClawTestState({ label: "acp-doctor-composition" }, async (state) => {
       const acpxStateDir = path.join(state.workspaceDir, "state");
+      const explicit = sessionKey === "shared-project";
       const cfg = {
         agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
         session: { scope: "global" as const },
-        plugins: { entries: { acpx: { config: { stateDir: acpxStateDir } } } },
+        plugins: { entries: { acpx: { config: explicit ? { stateDir: acpxStateDir } : {} } } },
       };
       await state.writeConfig(cfg);
       const peer = state.path("peer");
@@ -218,7 +219,21 @@ it.each(["global", "shared-project"])(
           (claim) => claim.agentId === "free-harness",
         ),
       ).toEqual(before.claims.find((claim) => claim.agentId === "free-harness"));
-      await fs.access(path.join(acpxStateDir, "sessions", `${sessionKey}.json.migrated`));
+      const adoptedStateDir = explicit ? acpxStateDir : path.join(state.stateDir, "acpx");
+      await fs.access(path.join(adoptedStateDir, "sessions", `${sessionKey}.json.migrated`));
+      expect(
+        await createFileSessionStore({ stateDir: adoptedStateDir }).load(
+          migrated!.identity!.acpxRecordId!,
+        ),
+      ).toMatchObject({
+        acpSessionId: handle.backendSessionId,
+      });
+      if (!explicit) {
+        await expect(fs.stat(acpxStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(result.changes).toContainEqual(
+          expect.stringContaining("Migrated ACPX session state"),
+        );
+      }
     });
   },
 );

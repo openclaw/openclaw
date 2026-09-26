@@ -140,15 +140,14 @@ describe("acpx doctor state migration", () => {
           ...migrationParams(),
           serviceWorkspaceDir: stateDir,
           context: {
-            openPluginStateKeyedStore() {
-              throw new Error("No record requires a state store");
-            },
+            ...createDoctorContext(env),
             async inspectAcpSessionClaims() {
               throw new Error("No record requires canonical ownership evidence");
             },
           },
         }),
       ).resolves.toBeNull();
+      expect(await fs.readdir(stateDir)).toEqual(directoryState === "empty" ? ["acpx"] : []);
     },
   );
 
