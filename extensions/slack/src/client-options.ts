@@ -14,7 +14,10 @@ export type SlackProxyDispatcher = ReturnType<typeof createHttp1EnvHttpProxyAgen
 export type SlackLookupClientOptions = Pick<
   WebClientOptions,
   "fetch" | "slackApiUrl" | "teamId" | "timeout"
->;
+> & {
+  /** Caller-owned cancellation for a short-lived provider lookup. */
+  signal?: AbortSignal;
+};
 
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
@@ -231,9 +234,21 @@ export function resolveSlackLookupClientOptions(
   dispatcher = resolveSlackProxyDispatcher(),
   assertDirectAdapterHandoff?: () => void,
 ): WebClientOptions {
-  const resolved: WebClientOptions = Object.assign({}, options);
+  const { signal, ...clientOptions } = options;
+  const resolved: WebClientOptions = Object.assign({}, clientOptions);
   applySlackApiUrlAndProxyOptions(resolved, dispatcher);
   applySlackRequestAuthority(resolved, dispatcher, assertDirectAdapterHandoff);
+  if (signal) {
+    // SAFETY: resolveFetch returns the runtime fetch implementation accepted by WebClient.
+    const fetchFn = resolved.fetch ?? (resolveFetch() as NonNullable<WebClientOptions["fetch"]>);
+    if (fetchFn) {
+      resolved.fetch = (input, init) =>
+        fetchFn(input, {
+          ...init,
+          signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
+        });
+    }
+  }
   // Slack otherwise sleeps through the full Retry-After window after receiving 429,
   // outside the Axios request timeout.
   resolved.rejectRateLimitedCalls = true;

@@ -24,6 +24,8 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   // tsdown builds this private macOS app worker protocol entry by path.
   "src/node-host/mac-worker-entry.ts!",
+  // The PR body invokes this Vitest suite, which runs the loopback proof drivers.
+  "src/agents/subagents/announce/subagent-announce-live-proof.test.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
   // The compiler below exposes this workflow's inline and generated-config imports.

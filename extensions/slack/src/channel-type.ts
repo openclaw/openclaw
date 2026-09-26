@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
-import { createSlackReadClient, createSlackWebClient } from "./client.js";
+import { createSlackLookupClient, createSlackReadClient, createSlackWebClient } from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 
 export type SlackConversationInfo = {
@@ -78,6 +78,7 @@ export async function resolveSlackConversationInfo(params: {
   operation?: "read" | "write";
   requireFreshName?: boolean;
   assertDirectAdapterHandoff?: () => void;
+  signal?: AbortSignal;
 }): Promise<SlackConversationInfo> {
   const channelId = params.channelId.trim();
   if (!channelId) {
@@ -125,12 +126,18 @@ export async function resolveSlackConversationInfo(params: {
         }
         return result;
       }
-      const client = createSlackReadClient(
-        token,
-        { teamId: params.teamId },
-        undefined,
-        params.assertDirectAdapterHandoff,
-      );
+      const client = params.signal
+        ? createSlackLookupClient(
+            token,
+            { teamId: params.teamId, signal: params.signal },
+            params.assertDirectAdapterHandoff,
+          )
+        : createSlackReadClient(
+            token,
+            { teamId: params.teamId },
+            undefined,
+            params.assertDirectAdapterHandoff,
+          );
       const info = await client.conversations.info({ channel: channelId });
       const channel = info.channel as
         | { is_im?: boolean; is_mpim?: boolean; name?: string; user?: string }
@@ -166,6 +173,7 @@ export async function resolveSlackChannelType(params: {
   accountId?: string | null;
   channelId: string;
   teamId?: string;
+  signal?: AbortSignal;
 }): Promise<"channel" | "group" | "dm" | "unknown"> {
   return (await resolveSlackConversationInfo(params)).type;
 }

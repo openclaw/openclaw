@@ -211,6 +211,34 @@ describe("resolveOutboundSessionRoute", () => {
     expect(route?.chatType).toBe("direct");
   });
 
+  it("forwards caller cancellation to the provider route resolver", async () => {
+    const signal = new AbortController().signal;
+    const resolveRoute = vi.fn(() => ({
+      sessionKey: "agent:main:external-channel:direct:u123",
+      baseSessionKey: "agent:main:external-channel:direct:u123",
+      recipientSessionExact: true as const,
+      peer: { kind: "direct" as const, id: "u123" },
+      chatType: "direct" as const,
+      from: "external-channel:u123",
+      to: "user:u123",
+    }));
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "external-channel" }),
+      messaging: { resolveOutboundSessionRoute: resolveRoute },
+    } satisfies ChannelPlugin;
+
+    await resolveOutboundSessionRoute({
+      cfg: baseConfig,
+      channel: "external-channel",
+      plugin,
+      agentId: "main",
+      target: "u123",
+      signal,
+    });
+
+    expect(resolveRoute).toHaveBeenCalledWith(expect.objectContaining({ signal }));
+  });
+
   it.each([
     {
       name: "group binding collapses an exact room into main",
