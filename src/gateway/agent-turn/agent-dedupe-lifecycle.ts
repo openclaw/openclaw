@@ -102,6 +102,25 @@ export function createAgentDedupeLifecycle(params: {
     reserved = true;
   };
 
+  const recordCommittedReset = (completion: CommittedResetCompletion, followUpNotice: string) => {
+    const responsePayload = buildBareSessionResetResponse({
+      runId: params.runId,
+      result: buildBareSessionResetResult({
+        reason: completion.reason,
+        sessionId: completion.sessionId,
+        ackText: completion.followUpPending
+          ? `${sessionResetAckText(completion.reason)} ${followUpNotice}`
+          : undefined,
+      }),
+    });
+    setGatewayDedupeEntries({
+      dedupe: params.context.dedupe,
+      keys: params.agentDedupeKeys,
+      entry: { ts: Date.now(), ok: true, payload: responsePayload },
+    });
+    return responsePayload;
+  };
+
   const clearUnaccepted = () => {
     if (!reserved || accepted) {
       return;
@@ -116,6 +135,19 @@ export function createAgentDedupeLifecycle(params: {
         isAcceptedAgentDedupePayload(entry.payload) &&
         entry.payload.reservationId !== reservationId)
     ) {
+      return;
+    }
+    if (committedResetCompletion) {
+      // Cleanup may follow any failed follow-up admission, not only reset-phase
+      // errors. Reconcile the reset fact without delivering or starting new work.
+      if (!entry?.ok || !isAcceptedAgentDedupePayload(entry.payload)) {
+        return;
+      }
+      recordCommittedReset(
+        committedResetCompletion,
+        "Request ended before the follow-up ran; send the follow-up message again.",
+      );
+      accepted = true;
       return;
     }
     for (const key of params.agentDedupeKeys) {
@@ -168,22 +200,11 @@ export function createAgentDedupeLifecycle(params: {
     }
     if (committedResetCompletion) {
       const completion = committedResetCompletion;
-      const responsePayload = buildBareSessionResetResponse({
-        runId: params.runId,
-        result: buildBareSessionResetResult({
-          reason: completion.reason,
-          sessionId: completion.sessionId,
-          ackText: completion.followUpPending
-            ? `${sessionResetAckText(completion.reason)} Gateway restarted before the follow-up ran; send the follow-up message again.`
-            : undefined,
-        }),
-      });
       accepted = true;
-      setGatewayDedupeEntries({
-        dedupe: params.context.dedupe,
-        keys: params.agentDedupeKeys,
-        entry: { ts: Date.now(), ok: true, payload: responsePayload },
-      });
+      const responsePayload = recordCommittedReset(
+        completion,
+        "Gateway restarted before the follow-up ran; send the follow-up message again.",
+      );
       params.io.emitAcceptance([true, responsePayload, undefined], { runId: params.runId });
       emitSessionsChanged(params.context, {
         sessionKey: completion.sessionKey,
