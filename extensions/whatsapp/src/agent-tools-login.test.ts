@@ -181,6 +181,16 @@ describe("createWhatsAppLoginTool", () => {
     });
   });
 
+  it("rejects unknown actions before starting or waiting for login", async () => {
+    const tool = createOwnerLoginTool();
+
+    await expect(tool.execute("tool-call-unknown", { action: "bogus" })).rejects.toThrow(
+      "Unknown WhatsApp login action: bogus",
+    );
+    expect(startWebLoginWithQrMock).not.toHaveBeenCalled();
+    expect(waitForWebLoginMock).not.toHaveBeenCalled();
+  });
+
   it("rejects fractional timeoutMs before login actions", async () => {
     const tool = createOwnerLoginTool();
 
