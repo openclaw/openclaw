@@ -1,0 +1,37 @@
+--- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift
++++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift
+@@ -104,23 +104,23 @@
+                 remainingResults.firstIndex { _, result in result.id == callID }
+             }
+             let result = resultIndex.map { remainingResults.remove(at: $0).element }
+-            // History may record the call before its outcome. Keep the live owner
+-            // in that same row until the recorded result takes over.
+-            if result == nil, let live = liveTools.first(where: { $0.id == call.id }) {
+-                return ChatToolActivityItem(live: live)
+-            }
++            // History owns recorded inputs; live activity supplies status until
++            // the result arrives, never replacing already-recorded arguments.
++            let live = result == nil
++                ? liveTools.first(where: { $0.id == call.id }).map(ChatToolActivityItem.init(live:)) : nil
+ 
+             return ChatToolActivityItem(
+                 id: id,
+-                name: call.name,
+-                arguments: call.arguments,
++                name: call.name ?? live?.name,
++                arguments: call.arguments ?? live?.arguments,
+                 details: result?.details,
+                 resultText: result?.text,
+                 state: result
+-                    .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ?? .unavailable,
+-                liveDiffStat: nil,
+-                activity: activity?.first { $0.toolCallId == id },
+-                activityPrepared: activity != nil)
++                    .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ??
++                    live?.state ?? .unavailable,
++                liveDiffStat: live?.liveDiffStat,
++                activity: live?.activity ?? activity?.first { $0.toolCallId == id },
++                activityPrepared: live == nil && activity != nil)
+         }
+ 
+         items.append(contentsOf: remainingResults.map { index, result in

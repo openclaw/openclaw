@@ -176,7 +176,7 @@ index 98fc7d0c271..c0217cb15eb 100644
  
  public struct OpenClawGatewayHealthOK: Codable, Sendable {
 diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift
-index 5626bcd27b6..3251ca53d30 100644
+index 5626bcd27b6..5ecc8888069 100644
 --- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift
 +++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift
 @@ -55,6 +55,22 @@ struct ChatToolActivityItem: Identifiable, Equatable {
@@ -218,25 +218,28 @@ index 5626bcd27b6..3251ca53d30 100644
                  remainingResults.firstIndex { _, result in result.id == callID }
              }
              let result = resultIndex.map { remainingResults.remove(at: $0).element }
-+            // History may record the call before its outcome. Keep the live owner
-+            // in that same row until the recorded result takes over.
-+            if result == nil, let live = liveTools.first(where: { $0.id == call.id }) {
-+                return ChatToolActivityItem(live: live)
-+            }
++            // History owns recorded inputs; live activity supplies status until
++            // the result arrives, never replacing already-recorded arguments.
++            let live = result == nil
++                ? liveTools.first(where: { $0.id == call.id }).map(ChatToolActivityItem.init(live:)) : nil
  
              return ChatToolActivityItem(
 -                id: call.id ?? "call-\(index)",
+-                name: call.name,
+-                arguments: call.arguments,
 +                id: id,
-                 name: call.name,
-                 arguments: call.arguments,
++                name: call.name ?? live?.name,
++                arguments: call.arguments ?? live?.arguments,
                  details: result?.details,
                  resultText: result?.text,
                  state: result
-                     .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ?? .unavailable,
+-                    .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ?? .unavailable,
 -                liveDiffStat: nil)
-+                liveDiffStat: nil,
-+                activity: activity?.first { $0.toolCallId == id },
-+                activityPrepared: activity != nil)
++                    .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ??
++                    live?.state ?? .unavailable,
++                liveDiffStat: live?.liveDiffStat,
++                activity: live?.activity ?? activity?.first { $0.toolCallId == id },
++                activityPrepared: live == nil && activity != nil)
          }
  
          items.append(contentsOf: remainingResults.map { index, result in
@@ -668,10 +671,10 @@ index 00000000000..53467d2fd59
 +}
 diff --git a/apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatAssistantRunGroupTests.swift b/apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatAssistantRunGroupTests.swift
 new file mode 100644
-index 00000000000..2fd8b560a8e
+index 00000000000..784cd31bbbe
 --- /dev/null
 +++ b/apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatAssistantRunGroupTests.swift
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,133 @@
 +import Foundation
 +import Testing
 +@testable import OpenClawChatUI
@@ -770,11 +773,12 @@ index 00000000000..2fd8b560a8e
 +    func `recorded call keeps live status until its result takes over`() {
 +        let call = OpenClawChatMessageContent(
 +            type: "toolCall", text: nil, mimeType: nil, fileName: nil,
-+            content: nil, id: "read", name: "read")
++            content: nil, id: "read", name: "read", arguments: .init(["path": "Layout.swift"]))
 +        let live = Self.tool("read", at: 2)
 +        let running = ChatToolActivity.items(calls: [call], results: [], liveTools: [live])
 +        #expect(running.count == 1)
 +        #expect(running.first?.isPending == true)
++        #expect(running.first?.arguments?.dictionaryValue?["path"]?.stringValue == "Layout.swift")
 +        let result = OpenClawChatMessageContent(
 +            type: "tool_result", text: "Read failed", mimeType: nil, fileName: nil,
 +            content: nil, id: "read", name: "read", isError: true)

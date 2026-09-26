@@ -102,6 +102,18 @@ for stage in "${stages[@]}"; do
   ) > "$output/$stage-setup.log" 2>&1
   git -C "$checkout" diff --exit-code -- apps/ios/Sources apps/shared/OpenClawKit/Sources apps/shared/OpenClawKit/Tests
   if [[ "$stage" == after && -n "$grouping_patch" ]]; then
+    if [[ "$device_family" == iPhone ]]; then
+      # Run the argument-preservation regression against the actual pre-fix owner,
+      # then restore the reviewed tree before ordinary positive proof and capture.
+      git -C "$checkout" apply --reverse "$proof_repo/scripts/ios-grouping-handoff-fix.patch"
+      regression_status=0
+      swift test --package-path "$checkout/apps/shared/OpenClawKit" \
+        --filter ChatAssistantRunGroupTests > "$output/$stage-handoff-negative.log" 2>&1 || regression_status=$?
+      git -C "$checkout" apply "$proof_repo/scripts/ios-grouping-handoff-fix.patch"
+      [[ "$regression_status" -ne 0 ]]
+      grep -q 'Expectation failed:.*arguments' "$output/$stage-handoff-negative.log"
+      git -C "$checkout" diff --exit-code -- apps/shared/OpenClawKit/Sources
+    fi
     if ! swift test --package-path "$checkout/apps/shared/OpenClawKit" \
       --filter 'ChatAssistantRunGroupTests|ChatCompletedWorkTests|ChatTranscriptRowTests' \
       > "$output/$stage-shared-tests.log" 2>&1; then
