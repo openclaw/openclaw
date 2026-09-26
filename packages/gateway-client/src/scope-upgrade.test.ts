@@ -70,6 +70,94 @@ describe("GatewayScopeUpgrade", () => {
     },
   );
 
+  it.each(["registration", "approval"] as const)(
+    "retires a cancelled upgrade after its %s response has already settled",
+    async (boundary) => {
+      const requested = createDeferred();
+      const response = createDeferred<unknown>();
+      const request = vi.fn((method: string) => {
+        if (boundary === "approval" && method === "device.scopes.requestUpgrade") {
+          return Promise.resolve({ requestId: "upgrade-1" });
+        }
+        requested.resolve();
+        return response.promise;
+      });
+      const store = vi.fn();
+      const reconnect = vi.fn();
+      const onPending = vi.fn();
+      const client = new GatewayScopeUpgrade({
+        request,
+        tokenStore: { load: vi.fn(), store, clear: vi.fn() },
+        reconnect,
+      });
+      const result = client.requestScopeUpgrade({ binding, scopes, onPending });
+      await requested.promise;
+      response.resolve({
+        status: "approved",
+        requestId: "upgrade-1",
+        deviceToken: "rotated-token",
+        scopes,
+      });
+      client.cancelScopeUpgrade();
+
+      await expect(result).rejects.toMatchObject({ name: "AbortError" });
+      expect(request).toHaveBeenCalledTimes(boundary === "registration" ? 1 : 2);
+      expect(onPending).toHaveBeenCalledTimes(boundary === "registration" ? 0 : 1);
+      expect(store).toHaveBeenCalledTimes(boundary === "approval" ? 1 : 0);
+      expect(reconnect).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not start waiting when onPending cancels the upgrade", async () => {
+    const request = vi.fn().mockResolvedValue({ status: "rejected", requestId: "upgrade-1" });
+    const store = vi.fn();
+    const reconnect = vi.fn();
+    const client = new GatewayScopeUpgrade({
+      request,
+      tokenStore: { load: vi.fn(), store, clear: vi.fn() },
+      reconnect,
+    });
+
+    await expect(
+      client.requestScopeUpgrade({
+        binding,
+        scopes,
+        onPending: () => client.cancelScopeUpgrade(),
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(store).not.toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  it("settles accepted token persistence without reconnecting a cancelled upgrade", async () => {
+    const storing = createDeferred();
+    const persisted = createDeferred();
+    const store = vi.fn(() => {
+      storing.resolve();
+      return persisted.promise;
+    });
+    const reconnect = vi.fn();
+    const client = new GatewayScopeUpgrade({
+      request: vi.fn().mockResolvedValueOnce({ requestId: "upgrade-1" }).mockResolvedValueOnce({
+        status: "approved",
+        requestId: "upgrade-1",
+        deviceToken: "rotated-token",
+        scopes,
+      }),
+      tokenStore: { load: vi.fn(), store, clear: vi.fn() },
+      reconnect,
+    });
+    const result = client.requestScopeUpgrade({ binding, scopes });
+    await storing.promise;
+    client.cancelScopeUpgrade();
+    persisted.resolve();
+
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    expect(store).toHaveBeenCalledTimes(1);
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+
   it("coalesces concurrent requests and allows a cancelled wait to restart", async () => {
     let waitStarted = createDeferred<AbortSignal | undefined>();
     const request = vi.fn(

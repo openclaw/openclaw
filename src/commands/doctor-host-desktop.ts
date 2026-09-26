@@ -45,13 +45,7 @@ export async function noteHostDesktopHealth(
 ): Promise<void> {
   const platform = deps.platform ?? process.platform;
   const inspection = await inspectHostDesktop({ config: cfg.desktop?.host, platform });
-  const finding: HealthFinding = {
-    checkId: "core/doctor/host-desktop",
-    severity: hostDesktopSeverity(inspection.status),
-    message: inspection.detail,
-    path: "desktop.host",
-  };
-  note(finding.message, "Host desktop");
+  note(inspection.detail, "Host desktop");
   if (
     platform !== "darwin" ||
     cfg.desktop?.host?.enabled !== true ||

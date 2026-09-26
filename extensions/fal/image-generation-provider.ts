@@ -1,4 +1,3 @@
-// Fal provider module implements model/runtime integration.
 import type {
   GeneratedImageAsset,
   ImageGenerationProvider,

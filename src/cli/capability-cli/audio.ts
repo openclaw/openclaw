@@ -1,11 +1,9 @@
 import path from "node:path";
 import type { Command } from "commander";
-import { defaultRuntime } from "../../runtime.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
-import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
-import { registerLocalProvidersCommand } from "./providers-command.js";
+import { formatEnvelopeForText, providerSummaryText } from "./output.js";
+import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
 async function runAudioTranscribe(params: {
   file: string;
@@ -72,19 +70,18 @@ export function registerAudioCapabilityCommands(capability: Command): void {
     .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption } = await import("./shared.js");
-        const result = await runAudioTranscribe({
+        return runAudioTranscribe({
           file: String(opts.file),
           agent: resolveCapabilityAgentOption(command, opts.agent),
           language: opts.language as string | undefined,
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
-    });
+      }),
+    );
 
   registerLocalProvidersCommand(
     audio,

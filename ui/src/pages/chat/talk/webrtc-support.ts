@@ -1,4 +1,3 @@
-// Control UI chat module owns low-level WebRTC offer and media-message helpers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeRealtimeVoiceResponseOutcome } from "../../../../../src/talk/provider-types.js";
 import { readResponseTextWithLimit } from "../../../lib/response-body.ts";

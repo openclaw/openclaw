@@ -110,11 +110,7 @@ private final class TalkPushToTalkOnceOperation {
             return result
         }
         return await withCheckedContinuation { continuation in
-            if let result = self.result {
-                continuation.resume(returning: result)
-            } else {
-                self.continuation = continuation
-            }
+            self.continuation = continuation
         }
     }
 
@@ -126,9 +122,6 @@ private final class TalkPushToTalkOnceOperation {
     }
 }
 
-// This file intentionally centralizes talk mode state + behavior.
-// It's large, and splitting would force `private` -> `fileprivate` across many members.
-// We'll refactor into smaller files when the surface stabilizes.
 // swiftlint:disable type_body_length file_length
 @MainActor
 @Observable
@@ -295,12 +288,7 @@ final class TalkModeManager: NSObject {
     private var realtimeVoiceId: String?
     private var configuredVoiceModeDescriptor = TalkVoiceModeDescriptor(
         title: String(localized: "Not loaded"),
-        subtitle: nil,
-        providerId: nil,
-        modelId: nil,
-        voiceId: nil,
-        transport: nil,
-        isRealtime: false)
+        subtitle: nil)
     private var pendingRealtimeIssue: TalkRuntimeIssue?
     private var realtimeRelayStartIssue: TalkRuntimeIssue?
     private var apiKey: String?
@@ -1484,10 +1472,10 @@ final class TalkModeManager: NSObject {
         }
         GatewayDiagnostics.log("talk speech: locale=\(resolvedSpeech.localeID ?? "default")")
 
-        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
-        self.recognitionRequest?.taskHint = .dictation
-        guard let request = recognitionRequest else { return }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.taskHint = .dictation
+        self.recognitionRequest = request
 
         GatewayDiagnostics.log("talk audio: session \(Self.describeAudioSession())")
 
@@ -1614,19 +1602,9 @@ final class TalkModeManager: NSObject {
         GatewayDiagnostics.log("talk speech: error=\(msg)")
         self.speechErrorStatusRevisionPendingRestart = nil
         if !self.isSpeaking {
-            if msg.localizedCaseInsensitiveContains("no speech detected") {
+            if self.isEnabled, msg.localizedCaseInsensitiveContains("no speech detected") {
                 // Treat as transient silence. Don't scare users with an error banner.
-                if self.isEnabled {
-                    self.setStatus(String(localized: "Listening"), phase: .listening)
-                } else {
-                    let errorStatus = String(
-                        format: String(localized: "Speech error: %@"),
-                        msg)
-                    self.speechErrorStatusRevisionPendingRestart = self.setStatus(
-                        errorStatus,
-                        phase: .idle,
-                        watchPresentation: .verbatim(errorStatus))
-                }
+                self.setStatus(String(localized: "Listening"), phase: .listening)
             } else {
                 let errorStatus = String(
                     format: String(localized: "Speech error: %@"),
@@ -1793,22 +1771,13 @@ final class TalkModeManager: NSObject {
     private func checkSilence(pttCaptureId: String? = nil) async {
         if self.captureMode == .continuous {
             guard self.isListening, !self.isSpeechOutputActive else { return }
-            let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !transcript.isEmpty else { return }
-            let lastActivity = [lastHeard, lastAudioActivity].compactMap(\.self).max()
-            guard let lastActivity else { return }
-            if Date().timeIntervalSince(lastActivity) < self.silenceWindow {
-                return
+        } else {
+            guard self.captureMode == .pushToTalk, self.pttAutoStopEnabled else { return }
+            if let pttCaptureId {
+                guard self.activePTTCaptureId == pttCaptureId else { return }
             }
-            await self.processTranscript(transcript, restartAfter: true)
-            return
+            guard self.isListening, !self.isSpeaking, self.isPushToTalkActive else { return }
         }
-
-        guard self.captureMode == .pushToTalk, self.pttAutoStopEnabled else { return }
-        if let pttCaptureId {
-            guard self.activePTTCaptureId == pttCaptureId else { return }
-        }
-        guard self.isListening, !self.isSpeaking, self.isPushToTalkActive else { return }
         let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !transcript.isEmpty else { return }
         let lastActivity = [lastHeard, lastAudioActivity].compactMap(\.self).max()
@@ -1816,7 +1785,9 @@ final class TalkModeManager: NSObject {
         if Date().timeIntervalSince(lastActivity) < self.silenceWindow {
             return
         }
-        if let pttCaptureId {
+        if self.captureMode == .continuous {
+            await self.processTranscript(transcript, restartAfter: true)
+        } else if let pttCaptureId {
             _ = self.endPushToTalk(captureId: pttCaptureId)
         } else {
             _ = self.endPushToTalk()
@@ -2508,7 +2479,7 @@ final class TalkModeManager: NSObject {
                     paramsJSON: String(bytes: data, encoding: .utf8),
                     timeoutSeconds: 70,
                     ifCurrentRoute: route)
-                guard try JSONDecoder().decode(TalkVoiceCompletionResult.self, from: response).ok else {
+                guard try JSONDecoder().decode(TalkClientMutationResult.self, from: response).ok else {
                     throw NSError(domain: "TalkVoiceSelection", code: 2, userInfo: [
                         NSLocalizedDescriptionKey: "Gateway did not confirm the voice change",
                     ])
@@ -2890,9 +2861,9 @@ final class TalkModeManager: NSObject {
         sessionKey: String,
         voiceSessionId: String) async throws
     {
-        let params = TalkRealtimeClientCloseParams(
-            sessionKey: sessionKey,
-            voiceSessionId: voiceSessionId)
+        let params = TalkClientCloseParams(
+            sessionkey: sessionKey,
+            voicesessionid: voiceSessionId)
         let data = try JSONEncoder().encode(params)
         guard let json = String(data: data, encoding: .utf8) else {
             throw NSError(domain: "TalkRealtimeVoiceSession", code: 1, userInfo: [
@@ -3159,30 +3130,15 @@ final class TalkModeManager: NSObject {
                 let errorMessage = error.localizedDescription
                 self.logger.error("gateway TTS failed: \(errorMessage, privacy: .public); falling back to system voice")
                 GatewayDiagnostics.log("talk tts: provider=system (gateway error) msg=\(error.localizedDescription)")
-                do {
-                    try await self.playSystemVoice(text: cleaned, language: languages.systemVoice)
-                } catch {
-                    guard !Task.isCancelled, self.speechGeneration == speechGeneration else { return }
-                    let status = String(
-                        format: String(localized: "Speak failed: %@"),
-                        error.localizedDescription)
-                    self.setStatus(
-                        status,
-                        phase: .idle,
-                        watchPresentation: .verbatim(status))
-                    self.logger.error("system voice failed: \(error.localizedDescription, privacy: .public)")
-                }
+                await self.playSystemVoiceFallback(
+                    text: cleaned, language: languages.systemVoice, generation: speechGeneration)
             }
             return
         }
 
         do {
             let started = Date()
-            let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
-            if requestedVoice?.isEmpty == false, resolvedVoice == nil {
-                self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
-            }
+            let resolvedVoice = self.resolveElevenLabsVoiceAlias(directive?.voiceId)
 
             let apiKey = self.resolvedElevenLabsAPIKey()
             let preferredVoice = resolvedVoice ?? self.currentVoiceId ?? self.defaultVoiceId
@@ -3207,15 +3163,7 @@ final class TalkModeManager: NSObject {
                     voiceId: voiceId,
                     transport: "native",
                     isRealtime: false))
-                let desiredOutputFormat = (directive?.outputFormat ?? self.defaultOutputFormat)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                let requestedOutputFormat = (desiredOutputFormat?.isEmpty == false) ? desiredOutputFormat : nil
-                let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(
-                    requestedOutputFormat ?? self.effectiveDefaultOutputFormat)
-                if outputFormat == nil, let requestedOutputFormat {
-                    self.logger.warning(
-                        "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
-                }
+                let outputFormat = self.resolvedElevenLabsOutputFormat(directive?.outputFormat)
 
                 if let modelId {
                     GatewayDiagnostics.log("talk tts: modelId=\(modelId)")
@@ -3264,19 +3212,8 @@ final class TalkModeManager: NSObject {
             self.logger.error(
                 "tts failed: \(error.localizedDescription, privacy: .public); falling back to system voice")
             GatewayDiagnostics.log("talk tts: provider=system (error) msg=\(error.localizedDescription)")
-            do {
-                try await self.playSystemVoice(text: cleaned, language: languages.systemVoice)
-            } catch {
-                guard !Task.isCancelled, self.speechGeneration == speechGeneration else { return }
-                let status = String(
-                    format: String(localized: "Speak failed: %@"),
-                    error.localizedDescription)
-                self.setStatus(
-                    status,
-                    phase: .idle,
-                    watchPresentation: .verbatim(status))
-                self.logger.error("system voice failed: \(error.localizedDescription, privacy: .public)")
-            }
+            await self.playSystemVoiceFallback(
+                text: cleaned, language: languages.systemVoice, generation: speechGeneration)
         }
     }
 
@@ -3372,6 +3309,19 @@ final class TalkModeManager: NSObject {
         try await TalkSystemSpeechSynthesizer.shared.speak(text: text, language: language)
     }
 
+    private func playSystemVoiceFallback(text: String, language: String?, generation: Int) async {
+        do {
+            try await self.playSystemVoice(text: text, language: language)
+        } catch {
+            guard self.isCurrentSpeechGeneration(generation) else { return }
+            let status = String(
+                format: String(localized: "Speak failed: %@"),
+                error.localizedDescription)
+            self.setStatus(status, phase: .idle, watchPresentation: .verbatim(status))
+            self.logger.error("system voice failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     private func resolvedSpeechLanguages(
         directiveLanguage: String?,
         isSystemVoiceAvailable: (String) -> Bool = TalkSpeechLocale.isSystemVoiceAvailable)
@@ -3395,6 +3345,28 @@ final class TalkModeManager: NSObject {
         let resolvedKey = configuredKey
         #endif
         return resolvedKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func resolveElevenLabsVoiceAlias(_ voice: String?) -> String? {
+        let requestedVoice = voice?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
+        if requestedVoice?.isEmpty == false, resolvedVoice == nil {
+            self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
+        }
+        return resolvedVoice
+    }
+
+    private func resolvedElevenLabsOutputFormat(_ directiveFormat: String?) -> String? {
+        let desiredOutputFormat = (directiveFormat ?? self.defaultOutputFormat)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedOutputFormat = (desiredOutputFormat?.isEmpty == false) ? desiredOutputFormat : nil
+        let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(
+            requestedOutputFormat ?? self.effectiveDefaultOutputFormat)
+        if outputFormat == nil, let requestedOutputFormat {
+            self.logger.warning(
+                "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
+        }
+        return outputFormat
     }
 
     private func startSpeechInterruptionRecognitionIfNeeded() {
@@ -3669,10 +3641,9 @@ final class TalkModeManager: NSObject {
     }
 
     private func failIncrementalPrefetch(id: UUID, error: any Error) {
-        guard let prefetch = incrementalSpeechPrefetch, prefetch.id == id else { return }
+        guard self.incrementalSpeechPrefetch?.id == id else { return }
         self.logger.debug("incremental prefetch failed: \(error.localizedDescription, privacy: .public)")
-        prefetch.task.cancel()
-        self.incrementalSpeechPrefetch = nil
+        self.clearIncrementalPrefetch(id: id)
     }
 
     private func consumeIncrementalPrefetchedAudioIfAvailable(
@@ -3801,16 +3772,10 @@ final class TalkModeManager: NSObject {
     private func updateIncrementalContextIfNeeded(speechGeneration: Int) async -> Bool {
         guard self.isCurrentSpeechGeneration(speechGeneration) else { return false }
         let directive = self.incrementalSpeechBuffer.directive
-        if let existing = incrementalSpeechContext, directive == incrementalSpeechDirective {
+        if var existing = incrementalSpeechContext, directive == incrementalSpeechDirective {
             if existing.language != self.incrementalSpeechLanguages.provider {
-                self.incrementalSpeechContext = IncrementalSpeechContext(
-                    apiKey: existing.apiKey,
-                    voiceId: existing.voiceId,
-                    modelId: existing.modelId,
-                    outputFormat: existing.outputFormat,
-                    language: self.incrementalSpeechLanguages.provider,
-                    directive: existing.directive,
-                    canUseElevenLabs: existing.canUseElevenLabs)
+                existing.language = self.incrementalSpeechLanguages.provider
+                self.incrementalSpeechContext = existing
             }
             return true
         }
@@ -3827,32 +3792,12 @@ final class TalkModeManager: NSObject {
         directive: TalkDirective?,
         speechGeneration: Int) async -> IncrementalSpeechContext
     {
-        let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
-        if requestedVoice?.isEmpty == false, resolvedVoice == nil {
-            self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
-        }
+        let resolvedVoice = self.resolveElevenLabsVoiceAlias(directive?.voiceId)
         let preferredVoice = resolvedVoice ?? self.currentVoiceId ?? self.defaultVoiceId
         let modelId = directive?.modelId ?? self.currentModelId ?? self.defaultModelId
-        let desiredOutputFormat = (directive?.outputFormat ?? self.defaultOutputFormat)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let requestedOutputFormat = (desiredOutputFormat?.isEmpty == false) ? desiredOutputFormat : nil
-        let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(
-            requestedOutputFormat ?? self.effectiveDefaultOutputFormat)
-        if outputFormat == nil, let requestedOutputFormat {
-            self.logger.warning(
-                "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
-        }
+        let outputFormat = self.resolvedElevenLabsOutputFormat(directive?.outputFormat)
 
-        let configuredKey = self.apiKey?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty == false ? self.apiKey : nil
-        #if DEBUG
-        let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"]
-        #else
-        let resolvedKey = configuredKey
-        #endif
-        let apiKey = resolvedKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = self.resolvedElevenLabsAPIKey()
         let voiceId: String? = if let apiKey, !apiKey.isEmpty {
             await resolveVoiceId(
                 preferred: preferredVoice,
@@ -4073,14 +4018,7 @@ private struct IncrementalSpeechBuffer {
     }
 
     private static func commonPrefixCount(_ lhs: String, _ rhs: String) -> Int {
-        let left = Array(lhs)
-        let right = Array(rhs)
-        let limit = min(left.count, right.count)
-        var idx = 0
-        while idx < limit, left[idx] == right[idx] {
-            idx += 1
-        }
-        return idx
+        zip(lhs, rhs).prefix(while: { $0.0 == $0.1 }).count
     }
 
     private mutating func extractSegments(isFinal: Bool) -> [String] {
@@ -4425,23 +4363,6 @@ extension TalkModeManager {
         self.applyVoiceModeDescriptor(self.configuredVoiceModeDescriptor)
     }
 
-    private func buildConfiguredVoiceModeDescriptor(
-        provider: String,
-        providerLabel: String,
-        modelId: String?,
-        voiceId: String?,
-        transport: String,
-        isRealtime: Bool) -> TalkVoiceModeDescriptor
-    {
-        TalkVoiceModeDescriptorBuilder.build(
-            providerId: provider,
-            providerLabel: providerLabel,
-            modelId: modelId,
-            voiceId: voiceId,
-            transport: transport,
-            isRealtime: isRealtime)
-    }
-
     private func ensureTalkConfigLoadedForStart() async {
         if self.gatewayTalkConfigLoaded {
             GatewayDiagnostics.log(
@@ -4555,7 +4476,7 @@ extension TalkModeManager {
         let credentialProvider = routing.route.usesRealtime
             ? (routing.realtimeProvider ?? routing.activeProvider)
             : routing.activeProvider
-        let gatewayOwnedVoiceProvider = self.applyTalkConfigCredentials(
+        self.applyTalkConfigCredentials(
             parsed: parsed,
             activeProvider: routing.activeProvider,
             gatewayOwnsCredentials: routing.route.gatewayOwnsCredentials,
@@ -4568,7 +4489,7 @@ extension TalkModeManager {
             realtimeVoiceId: realtimeVoiceId)
         self.applyTalkPermissionState(
             redactedFallbackMissingScope: redactedFallbackMissingScope,
-            gatewayOwnedVoiceProvider: gatewayOwnedVoiceProvider)
+            gatewayOwnedVoiceProvider: routing.route.gatewayOwnsCredentials)
 
         if let interrupt = parsed.snapshot.interruptOnSpeech {
             self.interruptOnSpeech = interrupt
@@ -4585,23 +4506,22 @@ extension TalkModeManager {
         parsed: TalkModeGatewayConfigState,
         activeProvider: String,
         gatewayOwnsCredentials: Bool,
-        credentialProvider: String) -> Bool
+        credentialProvider: String)
     {
         let rawConfigApiKey = parsed.rawConfigApiKey
         let configApiKey = Self.normalizedTalkApiKey(rawConfigApiKey)
         let localApiKey = Self.normalizedTalkApiKey(
             GatewaySettingsStore.loadTalkProviderApiKey(provider: activeProvider))
         if rawConfigApiKey == Self.redactedConfigSentinel {
-            self.apiKey = (localApiKey?.isEmpty == false) ? localApiKey : nil
+            self.apiKey = localApiKey
             GatewayDiagnostics.log("talk config apiKey redacted; using local override if present")
         } else {
-            self.apiKey = (localApiKey?.isEmpty == false) ? localApiKey : configApiKey
+            self.apiKey = localApiKey ?? configApiKey
         }
         if gatewayOwnsCredentials {
             self.apiKey = nil
             GatewayDiagnostics.log("talk provider '\(credentialProvider)' uses gateway-owned credentials")
         }
-        return gatewayOwnsCredentials
     }
 
     private func applyTalkModeDescriptor(
@@ -4632,8 +4552,8 @@ extension TalkModeManager {
         let voiceModeLabel = usesRealtimeConfig
             ? Self.displayName(forProvider: voiceModeProvider)
             : Self.displayName(forProvider: routing.activeProvider)
-        let voiceModeDescriptor = self.buildConfiguredVoiceModeDescriptor(
-            provider: voiceModeProvider,
+        let voiceModeDescriptor = TalkVoiceModeDescriptorBuilder.build(
+            providerId: voiceModeProvider,
             providerLabel: voiceModeLabel,
             modelId: usesRealtimeConfig ? routing.realtimeModelId : nativeModelId,
             voiceId: usesRealtimeConfig ? realtimeVoiceId : self.defaultVoiceId,
@@ -4655,19 +4575,14 @@ extension TalkModeManager {
             self.gatewayTalkPermissionState = .missingScope(missingScope)
             GatewayDiagnostics.log("talk config missing gateway scope=\(missingScope)")
         } else {
-            self.gatewayTalkPermissionState = (self.gatewayTalkApiKeyConfigured || gatewayOwnedVoiceProvider)
+            self.gatewayTalkPermissionState = self.gatewayTalkApiKeyConfigured
                 ? .ready
                 : .apiKeyMissing
         }
     }
 
     private func applyTalkConfigLoadFailure(_ error: Error) {
-        self.configuredProviderModelId = nil
         self.applyTalkConfigLoadFailureFallback()
-        self.defaultModelId = Self.defaultModelIdFallback
-        if !self.modelOverrideActive {
-            self.currentModelId = self.defaultModelId
-        }
         self.gatewayTalkConfigLoaded = false
         self.talkConfigLoadedAt = nil
         self.gatewaySpeechLocaleID = nil
@@ -4696,12 +4611,7 @@ extension TalkModeManager {
         self.gatewayTalkRealtimeVoiceId = nil
         self.applyVoiceModeDescriptor(TalkVoiceModeDescriptor(
             title: String(localized: "Not loaded"),
-            subtitle: nil,
-            providerId: nil,
-            modelId: nil,
-            voiceId: nil,
-            transport: nil,
-            isRealtime: false), persistAsConfigured: true)
+            subtitle: nil), persistAsConfigured: true)
         self.defaultModelId = Self.defaultModelIdFallback
         if !self.modelOverrideActive {
             self.currentModelId = self.defaultModelId
@@ -5377,7 +5287,7 @@ private struct IncrementalSpeechContext: Equatable {
     let voiceId: String?
     let modelId: String?
     let outputFormat: String?
-    let language: String?
+    var language: String?
     let directive: TalkDirective?
     let canUseElevenLabs: Bool
 }

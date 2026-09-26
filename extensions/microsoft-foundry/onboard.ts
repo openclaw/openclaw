@@ -1,6 +1,5 @@
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-// Microsoft Foundry setup module handles plugin onboarding behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -10,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  azLoginDeviceCode,
   azLoginDeviceCodeWithOptions,
   execAz,
   getAccessTokenResult,
@@ -549,7 +547,7 @@ export async function loginWithTenantFallback(
   ctx: ProviderAuthContext,
 ): Promise<{ account: AzAccount | null; tenantId?: string }> {
   try {
-    await azLoginDeviceCode();
+    await azLoginDeviceCodeWithOptions({});
     return { account: getLoggedInAccount() };
   } catch (error) {
     const message = formatErrorMessage(error);

@@ -1,4 +1,3 @@
-// Microsoft Foundry plugin module implements runtime behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   ProviderPreparedRuntimeAuth,
@@ -20,10 +19,17 @@ import {
   TOKEN_REFRESH_MARGIN_MS,
   buildFoundryProviderBaseUrl,
   extractFoundryEndpoint,
-  getFoundryTokenCacheKey,
   isFoundryProviderApi,
   resolveConfiguredModelNameHint,
-} from "./shared-runtime.js";
+} from "./shared.js";
+
+function getFoundryTokenCacheKey(params?: {
+  scope?: string;
+  subscriptionId?: string;
+  tenantId?: string;
+}): string {
+  return `${params?.scope ?? ""}:${params?.subscriptionId ?? ""}:${params?.tenantId ?? ""}`;
+}
 
 const cachedTokens = new Map<string, CachedTokenEntry>();
 const refreshPromises = new Map<string, Promise<{ apiKey: string; expiresAt: number }>>();

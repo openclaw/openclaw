@@ -1,5 +1,3 @@
-// Minimax setup module handles plugin onboarding behavior.
-
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAgentDefaultModelPrimary,
@@ -51,7 +49,7 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
     api: "anthropic-messages",
     authHeader: true,
     ...(preservedApiKey ? { apiKey: preservedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : [apiModel],
+    models: mergedModels,
   };
 
   const models = { ...cfg.agents?.defaults?.models };

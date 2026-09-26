@@ -126,14 +126,14 @@ describe("plugins cli lazy runtime boundary", () => {
     const program = new Command();
     registerPluginsCli(program);
     await program.parseAsync(
-      ["plugins", "reload", "demo", "other", "--accept-capabilities", "--json"],
+      ["plugins", "reload", "demo", "other", "--accept-capabilities", "--json", "--wait"],
       {
         from: "user",
       },
     );
     expect(reload).toHaveBeenCalledWith(
       ["demo", "other"],
-      expect.objectContaining({ acceptCapabilities: true, json: true }),
+      expect.objectContaining({ acceptCapabilities: true, json: true, wait: true }),
     );
   });
 

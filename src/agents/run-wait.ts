@@ -144,16 +144,15 @@ function isRecoverableAgentWaitError(error: string | undefined): boolean {
   );
 }
 
-function normalizePendingRunIds(runIds: Iterable<string>): string[] {
+function normalizePendingRunIds(runIds: Iterable<string>): Set<string> {
   const seen = new Set<string>();
   for (const runId of runIds) {
     const normalized = runId.trim();
-    if (!normalized || seen.has(normalized)) {
-      continue;
+    if (normalized) {
+      seen.add(normalized);
     }
-    seen.add(normalized);
   }
-  return [...seen];
+  return seen;
 }
 
 function isAssistantReplyTranscriptArtifact(message: unknown): boolean {
@@ -226,16 +225,12 @@ export async function waitForAgentRun(params: {
       timeoutMs: addTimerTimeoutGraceMs(timeoutMs, 2_000),
       ...(params.signal ? { signal: params.signal } : {}),
     });
-    if (wait?.status === "timeout") {
-      return normalizeAgentWaitResult("timeout", params.runId, wait);
-    }
-    if (wait?.status === "pending") {
-      return normalizeAgentWaitResult("pending", params.runId, wait);
-    }
-    if (wait?.status === "error") {
-      return normalizeAgentWaitResult("error", params.runId, wait);
-    }
-    return normalizeAgentWaitResult("ok", params.runId, wait);
+    const status = wait?.status;
+    return normalizeAgentWaitResult(
+      status === "timeout" || status === "pending" || status === "error" ? status : "ok",
+      params.runId,
+      wait,
+    );
   } catch (err) {
     const error = formatErrorMessage(err);
     return {
@@ -309,8 +304,8 @@ export async function waitForAgentRunsToDrain(params: {
   const callGateway = params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
 
   // Runs may finish and spawn more runs, so refresh until no pending IDs remain.
-  let pendingRunIds = new Set<string>(
-    normalizePendingRunIds(params.initialPendingRunIds ?? params.getPendingRunIds()),
+  let pendingRunIds = normalizePendingRunIds(
+    params.initialPendingRunIds ?? params.getPendingRunIds(),
   );
 
   while (pendingRunIds.size > 0 && Date.now() < deadlineAtMs) {
@@ -325,7 +320,7 @@ export async function waitForAgentRunsToDrain(params: {
       ),
     );
     const previousRunIds = pendingRunIds;
-    pendingRunIds = new Set<string>(normalizePendingRunIds(params.getPendingRunIds()));
+    pendingRunIds = normalizePendingRunIds(params.getPendingRunIds());
     const retryDelayMs = Math.min(AGENT_RUN_WAIT_RETRY_DELAY_MS, deadlineAtMs - Date.now());
     if (
       retryDelayMs > 0 &&
@@ -338,7 +333,7 @@ export async function waitForAgentRunsToDrain(params: {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, retryDelayMs);
       });
-      pendingRunIds = new Set<string>(normalizePendingRunIds(params.getPendingRunIds()));
+      pendingRunIds = normalizePendingRunIds(params.getPendingRunIds());
     }
   }
 

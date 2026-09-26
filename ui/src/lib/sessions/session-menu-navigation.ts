@@ -157,6 +157,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
         !window.dispatchEvent(
           new CustomEvent(UI_COMMAND_EVENT, {
             detail: {
+              agentId: params.agentId,
               command: {
                 kind: "split",
                 direction: kind === "split-right" ? "right" : "down",

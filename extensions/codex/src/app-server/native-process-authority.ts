@@ -298,8 +298,15 @@ export class CodexNativeProcessAuthority {
   }
 
   ownsCurrentCommand(client: CodexAppServerClient, receipt: NativeCommand): boolean {
+    return this.findCurrentCommand(client, receipt) !== undefined;
+  }
+
+  private findCurrentCommand(
+    client: CodexAppServerClient,
+    receipt: NativeCommand,
+  ): CommandAdmission | undefined {
     this.assertCurrent();
-    return [...this.commands].some(
+    return [...this.commands].find(
       (command) =>
         command.client === clients.get(client) &&
         command.threadId === receipt.threadId &&
@@ -383,15 +390,7 @@ export class CodexNativeProcessAuthority {
   }
 
   async cancelCommand(client: CodexAppServerClient, receipt: NativeCommand): Promise<boolean> {
-    this.assertCurrent();
-    const command = [...this.commands].find(
-      (candidate) =>
-        candidate.client === clients.get(client) &&
-        candidate.threadId === receipt.threadId &&
-        candidate.turnId === receipt.turnId &&
-        candidate.itemId === receipt.itemId &&
-        candidate.processes.size > 0,
-    );
+    const command = this.findCurrentCommand(client, receipt);
     if (!command) {
       return false;
     }

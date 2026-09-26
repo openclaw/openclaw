@@ -6,6 +6,7 @@ import {
   readDirectoryIdentity,
   type DirectoryIdentity,
 } from "@openclaw/fs-safe/advanced";
+import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 import { assertNoSymlinkParents, pathScope } from "openclaw/plugin-sdk/security-runtime";
 
 type OwnedServiceParent = DirectoryIdentity & {
@@ -168,8 +169,4 @@ function assertPathAtOrInside(rootPath: string, candidatePath: string, label: st
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(`${label} must remain inside ${path.resolve(rootPath)}.`);
   }
-}
-
-function hasNodeErrorCode(error: unknown, code: string): error is NodeJS.ErrnoException {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
 }

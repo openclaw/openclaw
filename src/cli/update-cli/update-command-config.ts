@@ -28,6 +28,19 @@ import { VERSION } from "../../version.js";
 
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
+export function capturePreUpdateSourceConfig(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+): PreUpdateConfigRestoreInput | undefined {
+  return snapshot.valid
+    ? {
+        sourceConfig: snapshot.sourceConfig,
+        authoredConfig: isRecord(snapshot.parsed)
+          ? (snapshot.parsed as OpenClawConfig) // SAFETY: the valid snapshot has validated this authored record.
+          : snapshot.sourceConfig,
+      }
+    : undefined;
+}
+
 /** Preserve captured path ownership while adding the update's original executor. */
 export function withUpdateConfigWriteAuthority(
   writeOptions: ConfigWriteOptions,
@@ -134,9 +147,7 @@ function restoreDroppedPreUpdateChannels(
 
   const authoredChannels = resolveRestoredAuthoredChannels({
     currentChannels: snapshot.sourceConfig.channels,
-    currentAuthoredChannels: isRecord(snapshot.parsed)
-      ? (snapshot.parsed as OpenClawConfig).channels
-      : snapshot.sourceConfig.channels,
+    currentAuthoredChannels: capturePreUpdateSourceConfig(snapshot)?.authoredConfig.channels,
     preUpdateAuthoredChannels: preUpdateConfig.authoredConfig.channels,
     restoredChannelIds,
   });

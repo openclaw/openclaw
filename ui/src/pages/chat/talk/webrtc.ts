@@ -11,6 +11,7 @@ import {
   createRealtimeTalkEventEmitter,
   steerRealtimeTalkActiveConsult,
   shouldAutoControlRealtimeVoiceAgentText,
+  shouldInterruptRealtimeTalkControlResponse,
   submitRealtimeTalkAgentControl,
   submitRealtimeTalkConsult,
   type RealtimeTalkTranscript,
@@ -683,14 +684,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private interruptSuppressedControlResponse(result: unknown): void {
-    if (!this.responseActive || !result || typeof result !== "object") {
-      return;
-    }
-    const record = result as Record<string, unknown>;
-    if (
-      record.ok === true &&
-      (record.mode === "cancel" || (record.suppress === true && record.mode !== "steer"))
-    ) {
+    if (this.responseActive && shouldInterruptRealtimeTalkControlResponse(result)) {
       this.send({ type: "response.cancel" });
     }
   }

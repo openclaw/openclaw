@@ -1,6 +1,4 @@
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-// Codex plugin module implements auth bridge behavior.
-
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -42,6 +40,7 @@ import {
   resolveCodexAppServerAuthProfileStore,
   isCodexAppServerNativeAuthProfile,
   CODEX_APP_SERVER_AUTH_PROVIDER,
+  type CodexAppServerAuthProfileLookup,
 } from "./auth-profile.js";
 import {
   resolveCodexAppServerHomeDir,
@@ -208,13 +207,7 @@ function resolveUnimportedAgentCodexAuthMessage(params: {
   return `A Codex auth file exists at ${authPath}, but agent-scoped Codex runs use OpenClaw's auth store and do not read that file. Preview only that credential import with \`openclaw migrate plan codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai\`, then run \`openclaw migrate apply codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai --yes\`. If the plan finds no credentials, remove the stale auth file.`;
 }
 
-/** Resolves prepared profile login material once so cache identity and RPC login cannot drift. */
-export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
-  authProfileId?: string;
-  authProfileStore?: AuthProfileStore;
-  agentDir?: string;
-  config?: AuthProfileOrderConfig;
-}): Promise<CodexAppServerPreparedAuthProfileSnapshot | undefined> {
+function resolveCodexAppServerAuthProfile(params: CodexAppServerAuthProfileLookup) {
   const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
   const store = resolveCodexAppServerAuthProfileStore({
     agentDir,
@@ -234,6 +227,18 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
   if (!credential || !isCodexAppServerAuthProvider(credential.provider)) {
     return undefined;
   }
+  return { agentDir, store, profileId, credential };
+}
+
+/** Resolves prepared profile login material once so cache identity and RPC login cannot drift. */
+export async function resolveCodexAppServerPreparedAuthProfileSnapshot(
+  params: CodexAppServerAuthProfileLookup,
+): Promise<CodexAppServerPreparedAuthProfileSnapshot | undefined> {
+  const profile = resolveCodexAppServerAuthProfile(params);
+  if (!profile) {
+    return undefined;
+  }
+  const { agentDir, store, profileId, credential } = profile;
   if (isCodexResponsesOAuthCredential(credential)) {
     return {
       inferenceAuth: "host-oauth",
@@ -394,31 +399,14 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   };
 }
 
-export async function resolveCodexAppServerAuthAccountCacheKey(params: {
-  authProfileId?: string;
-  authProfileStore?: AuthProfileStore;
-  agentDir?: string;
-  config?: AuthProfileOrderConfig;
-}): Promise<string | undefined> {
-  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-  const store = resolveCodexAppServerAuthProfileStore({
-    agentDir,
-    authProfileId: params.authProfileId,
-    authProfileStore: params.authProfileStore,
-    config: params.config,
-  });
-  const profileId = resolveCodexAppServerAuthProfileId({
-    authProfileId: params.authProfileId,
-    store,
-    config: params.config,
-  });
-  if (!profileId) {
+export async function resolveCodexAppServerAuthAccountCacheKey(
+  params: CodexAppServerAuthProfileLookup,
+): Promise<string | undefined> {
+  const profile = resolveCodexAppServerAuthProfile(params);
+  if (!profile) {
     return undefined;
   }
-  const credential = store.profiles[profileId];
-  if (!credential || !isCodexAppServerAuthProvider(credential.provider)) {
-    return undefined;
-  }
+  const { agentDir, store, profileId, credential } = profile;
   const accountId = resolveChatgptAccountId(profileId, credential);
   if (credential.type === "oauth") {
     return accountId;

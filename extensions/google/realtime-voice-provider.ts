@@ -55,6 +55,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
+import { resolveGoogleEnvApiKey } from "./gemini-auth.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
 import {
   GOOGLE_REALTIME_DEFAULT_MODEL,
@@ -239,13 +240,6 @@ function normalizeProviderConfig(
     thinkingLevel: asThinkingLevel(raw?.thinkingLevel),
     thinkingBudget: asSafeIntegerInRange(raw?.thinkingBudget, { min: -1, max: 24_576 }),
   };
-}
-
-function resolveEnvApiKey(): string | undefined {
-  return (
-    normalizeOptionalString(process.env.GEMINI_API_KEY) ??
-    normalizeOptionalString(process.env.GOOGLE_API_KEY)
-  );
 }
 
 function buildRealtimeInputConfig(
@@ -1275,7 +1269,7 @@ async function createGoogleRealtimeBrowserSession(
     ...(prefixPaddingMs !== undefined ? { prefixPaddingMs } : {}),
     ...(silenceDurationMs !== undefined ? { silenceDurationMs } : {}),
   };
-  const apiKey = config.apiKey || resolveEnvApiKey();
+  const apiKey = config.apiKey || resolveGoogleEnvApiKey();
   if (!apiKey) {
     throw new Error("Google Gemini API key missing");
   }
@@ -1368,10 +1362,10 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     },
     resolveConfig: ({ cfg, rawConfig }) => normalizeProviderConfig(rawConfig, cfg),
     isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || resolveEnvApiKey()),
+      Boolean(normalizeProviderConfig(providerConfig).apiKey || resolveGoogleEnvApiKey()),
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || resolveEnvApiKey();
+      const apiKey = config.apiKey || resolveGoogleEnvApiKey();
       if (!apiKey) {
         throw new Error("Google Gemini API key missing");
       }

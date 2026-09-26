@@ -47,10 +47,7 @@ final class ContactsService: ContactsServicing {
             }
         }
 
-        let sliced = Array(contacts.prefix(limit))
-        let payload = sliced.map { Self.payload(from: $0) }
-
-        return OpenClawContactsSearchPayload(contacts: payload)
+        return OpenClawContactsSearchPayload(contacts: contacts.prefix(limit).map(Self.payload(from:)))
     }
 
     func add(params: OpenClawContactsAddParams) async throws -> OpenClawContactsAddPayload {
@@ -72,14 +69,12 @@ final class ContactsService: ContactsServicing {
             ])
         }
 
-        if !phoneNumbers.isEmpty || !emails.isEmpty {
-            if let existing = try Self.findExistingContact(
-                store: store,
-                phoneNumbers: phoneNumbers,
-                emails: emails)
-            {
-                return OpenClawContactsAddPayload(contact: Self.payload(from: existing))
-            }
+        if hasDetails, let existing = try Self.findExistingContact(
+            store: store,
+            phoneNumbers: phoneNumbers,
+            emails: emails)
+        {
+            return OpenClawContactsAddPayload(contact: Self.payload(from: existing))
         }
 
         let contact = CNMutableContact()
@@ -111,23 +106,9 @@ final class ContactsService: ContactsServicing {
         return OpenClawContactsAddPayload(contact: Self.payload(from: persisted))
     }
 
-    private static func ensureAuthorization(status: CNAuthorizationStatus) -> Bool {
-        switch status {
-        case .authorized, .limited:
-            return true
-        case .notDetermined:
-            return false
-        case .restricted, .denied:
-            return false
-        @unknown default:
-            return false
-        }
-    }
-
     private func authorizedStore() throws -> CNContactStore {
         let status = self.authorizationStatus()
-        let authorized = Self.ensureAuthorization(status: status)
-        guard authorized else {
+        guard status == .authorized || status == .limited else {
             throw NSError(domain: "Contacts", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "CONTACTS_PERMISSION_REQUIRED: grant Contacts permission",
             ])
@@ -147,10 +128,6 @@ final class ContactsService: ContactsServicing {
         phoneNumbers: [String],
         emails: [String]) throws -> CNContact?
     {
-        if phoneNumbers.isEmpty, emails.isEmpty {
-            return nil
-        }
-
         var matches: [CNContact] = []
 
         for phone in phoneNumbers {

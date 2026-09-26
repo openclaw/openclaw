@@ -96,19 +96,6 @@ describe("lmstudio-models", () => {
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).toBe(contextLength);
   };
-  const expectLoadModelKey = (
-    fetchMock: ReturnType<typeof createModelLoadFetchMock>,
-    modelKey: string,
-  ) => {
-    const loadCall = findModelLoadCall(fetchMock);
-    if (!loadCall) {
-      throw new Error("expected LM Studio model load request");
-    }
-    const loadInit = loadCall[1] as RequestInit;
-    const loadBody = parseJsonRequestBody(loadInit) as { model: string };
-    expect(loadBody.model).toBe(modelKey);
-  };
-
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
@@ -757,8 +744,7 @@ describe("lmstudio-models", () => {
   ])("$name", async ({ canonicalKey, requestedKey, advertisedVariant }) => {
     const fetchMock = createModelLoadFetchMock({
       key: canonicalKey,
-      variants: [advertisedVariant],
-      selectedVariant: advertisedVariant,
+      variants: [null, 42, "", ` ${advertisedVariant} `, advertisedVariant],
     });
     vi.stubGlobal("fetch", asFetch(fetchMock));
     await expect(
@@ -768,7 +754,12 @@ describe("lmstudio-models", () => {
       }),
     ).resolves.toBe(canonicalKey);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expectLoadModelKey(fetchMock, canonicalKey);
+    expect(findModelLoadCall(fetchMock)?.[1]).toEqual({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: expect.any(AbortSignal),
+      body: `{"model":"${canonicalKey}","context_length":64000}`,
+    });
   });
 
   it("keeps the canonical model key on load failures after variant discovery", async () => {

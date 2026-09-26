@@ -18,9 +18,6 @@ import {
   isTurnHandoffAbort,
 } from "./turn-interruption.js";
 import type {
-  AfterToolCallContext,
-  AfterToolCallResult,
-  AfterToolOutcomeContext,
   AgentContext,
   AgentEvent,
   AgentLoopConfig,
@@ -28,8 +25,6 @@ import type {
   AgentMessage,
   AgentState,
   AgentTool,
-  BeforeToolCallContext,
-  BeforeToolCallResult,
   PrepareNextTurnContext,
   QueueMode,
   StreamFn,
@@ -68,11 +63,7 @@ type MutableAgentState = Omit<
   errorMessage?: string;
 };
 
-function createMutableAgentState(
-  initialState?: Partial<
-    Omit<AgentState, "pendingToolCalls" | "isStreaming" | "streamingMessage" | "errorMessage">
-  >,
-): MutableAgentState {
+function createMutableAgentState(initialState?: AgentOptions["initialState"]): MutableAgentState {
   let tools = initialState?.tools?.slice() ?? [];
   let messages = initialState?.messages?.slice() ?? [];
 
@@ -106,36 +97,27 @@ export interface AgentOptions {
     Omit<AgentState, "pendingToolCalls" | "isStreaming" | "streamingMessage" | "errorMessage">
   >;
   /** Convert agent-owned transcript messages into provider-facing messages. */
-  convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+  convertToLlm?: AgentLoopConfig["convertToLlm"];
   /** Optionally rewrite context before each provider request. */
-  transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+  transformContext?: NonNullable<AgentLoopConfig["transformContext"]>;
   /** Injected stream runtime used when streamFn is not supplied. */
   runtime?: AgentCoreStreamRuntimeDeps;
   /** Explicit stream implementation, preferred over runtime.streamSimple. */
   streamFn?: StreamFn;
   /** Resolve provider API keys at request time. */
-  getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+  getApiKey?: NonNullable<AgentLoopConfig["getApiKey"]>;
   /** Inspect the provider payload before it is sent. */
   onPayload?: SimpleStreamOptions["onPayload"];
   /** Inspect the provider response after it returns. */
   onResponse?: SimpleStreamOptions["onResponse"];
   /** Hook that may short-circuit or alter a tool call before execution. */
-  beforeToolCall?: (
-    context: BeforeToolCallContext,
-    signal?: AbortSignal,
-  ) => Promise<BeforeToolCallResult | undefined>;
+  beforeToolCall?: NonNullable<AgentLoopConfig["beforeToolCall"]>;
   /** Hook that may hydrate a deferred authorized tool call into an executable tool. */
   resolveDeferredTool?: AgentLoopConfig["resolveDeferredTool"];
   /** Hook that may alter a tool result after execution. */
-  afterToolCall?: (
-    context: AfterToolCallContext,
-    signal?: AbortSignal,
-  ) => Promise<AfterToolCallResult | undefined>;
+  afterToolCall?: NonNullable<AgentLoopConfig["afterToolCall"]>;
   /** Hook that may alter any finalized tool outcome, including pre-execution failures. */
-  afterToolOutcome?: (
-    context: AfterToolOutcomeContext,
-    signal?: AbortSignal,
-  ) => Promise<AfterToolCallResult | undefined>;
+  afterToolOutcome?: NonNullable<AgentLoopConfig["afterToolOutcome"]>;
   /** Hook that may update model, reasoning, or context after a turn. */
   prepareNextTurn?: (
     signal?: AbortSignal,
@@ -294,36 +276,19 @@ export class Agent {
   private readonly followUpQueue: PendingMessageQueue;
   private readonly toolLoopRecoveryState = { criticalToolLoopSeen: false };
 
-  public convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
-  public transformContext?: (
-    messages: AgentMessage[],
-    signal?: AbortSignal,
-  ) => Promise<AgentMessage[]>;
+  public convertToLlm: NonNullable<AgentOptions["convertToLlm"]>;
+  public transformContext?: NonNullable<AgentOptions["transformContext"]>;
   public runtime?: AgentCoreStreamRuntimeDeps;
   public streamFn: StreamFn;
-  public getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
-  public onPayload?: SimpleStreamOptions["onPayload"];
-  public onResponse?: SimpleStreamOptions["onResponse"];
-  public beforeToolCall?: (
-    context: BeforeToolCallContext,
-    signal?: AbortSignal,
-  ) => Promise<BeforeToolCallResult | undefined>;
-  public resolveDeferredTool?: AgentLoopConfig["resolveDeferredTool"];
-  public afterToolCall?: (
-    context: AfterToolCallContext,
-    signal?: AbortSignal,
-  ) => Promise<AfterToolCallResult | undefined>;
-  public afterToolOutcome?: (
-    context: AfterToolOutcomeContext,
-    signal?: AbortSignal,
-  ) => Promise<AfterToolCallResult | undefined>;
-  public prepareNextTurn?: (
-    signal?: AbortSignal,
-  ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
-  public prepareNextTurnWithContext?: (
-    context: PrepareNextTurnContext,
-    signal?: AbortSignal,
-  ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
+  public getApiKey?: NonNullable<AgentOptions["getApiKey"]>;
+  public onPayload?: AgentOptions["onPayload"];
+  public onResponse?: AgentOptions["onResponse"];
+  public beforeToolCall?: NonNullable<AgentOptions["beforeToolCall"]>;
+  public resolveDeferredTool?: AgentOptions["resolveDeferredTool"];
+  public afterToolCall?: NonNullable<AgentOptions["afterToolCall"]>;
+  public afterToolOutcome?: NonNullable<AgentOptions["afterToolOutcome"]>;
+  public prepareNextTurn?: NonNullable<AgentOptions["prepareNextTurn"]>;
+  public prepareNextTurnWithContext?: NonNullable<AgentOptions["prepareNextTurnWithContext"]>;
   private activeRun?: ActiveRun;
   /** Session identifier forwarded to providers for cache-aware backends. */
   public sessionId?: string;

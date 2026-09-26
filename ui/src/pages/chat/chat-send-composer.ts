@@ -341,7 +341,7 @@ export function settleChatCommandComposer(
   }
 }
 
-type PendingComposerSnapshot = {
+export type PendingComposerSnapshot = {
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
   previousMentions?: readonly HumanMention[];

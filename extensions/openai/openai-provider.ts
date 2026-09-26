@@ -1,4 +1,3 @@
-// Openai provider module implements model/runtime integration.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
@@ -10,6 +9,8 @@ import {
   buildFamilyForwardCompatModel,
   buildManifestModelProviderConfig,
   DEFAULT_CONTEXT_TOKENS,
+  findCatalogTemplate,
+  matchesExactOrPrefix,
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
@@ -25,7 +26,7 @@ import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
   classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
-  isOpenAIHttpsApiBaseUrl,
+  isOpenAIApiBaseUrl,
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
 import {
@@ -62,8 +63,6 @@ import { createOpenAIProvider } from "./provider-contract-api.js";
 import { resolveAuthoredOpenAIProviderConfig } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
-  findCatalogTemplate,
-  matchesExactOrPrefix,
   OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
 } from "./shared.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
@@ -266,7 +265,7 @@ async function buildOpenAILiveProviderConfig(
     normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
   const fallback = buildOpenAIStaticPlatformProviderConfig(params.apiKey, baseUrl);
   const models = fallback.models;
-  if (!isOpenAIHttpsApiBaseUrl(baseUrl)) {
+  if (!isOpenAIApiBaseUrl(baseUrl)) {
     return { provider: fallback };
   }
   const [
@@ -1155,7 +1154,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
           baseUrl: ctx.model?.baseUrl,
         }) ||
         (normalizeProviderId(ctx.provider) === PROVIDER_ID &&
-          (!providerConfig?.baseUrl || isOpenAIHttpsApiBaseUrl(providerConfig.baseUrl)) &&
+          (!providerConfig?.baseUrl || isOpenAIApiBaseUrl(providerConfig.baseUrl)) &&
           resolveConfiguredProviderAuthTransport(providerConfig) === "codex");
       return (useCodexTransport ? nativeResponsesHooks : responsesHooks).prepareExtraParams?.(ctx);
     },

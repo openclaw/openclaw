@@ -1,10 +1,25 @@
 import { CodexCatalogField, type CodexCatalogStatus } from "./session-catalog-index-field.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
+import type { CodexCatalogSettings } from "./session-catalog-settings.js";
 import {
   getCodexCatalogSource,
   hasLiveCodexCatalogSource,
   type CodexCatalogSource,
 } from "./session-catalog-source.js";
+import type { CodexSessionCatalogSession } from "./session-catalog-types.js";
+
+export function applyCodexCatalogLiveFields(
+  { status: _storedStatus, activeFlags: _storedFlags, ...session }: CodexSessionCatalogSession,
+  live: CodexCatalogStatus | undefined,
+  settings: CodexCatalogSettings | undefined,
+): CodexSessionCatalogSession {
+  return {
+    ...session,
+    ...settings,
+    status: live?.status ?? "notLoaded",
+    ...(live?.activeFlags ? { activeFlags: [...live.activeFlags] } : {}),
+  };
+}
 
 type SourcedStatus = { status: CodexCatalogStatus; sources: Set<CodexCatalogSource> };
 const MAX_STATUS_SOURCE_WITNESSES = 64;
