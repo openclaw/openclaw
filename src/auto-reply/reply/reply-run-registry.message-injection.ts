@@ -3,7 +3,7 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isEmbeddedRunHandleCompacting } from "../../agents/embedded-agent-runner/runs.probes.js";
+import { canSteerEmbeddedRunDuringCompaction } from "../../agents/embedded-agent-runner/runs.probes.js";
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
@@ -18,7 +18,7 @@ import {
   MessageInjectionAuthorityError,
 } from "./message-injection-authority.js";
 import {
-  replyMessageInjectionTargetOperation,
+  replyMessageInjectionTargetOwner,
   type ReplyBackendHandle,
   type ReplyBackendMessageInjection,
   type ReplyBackendQueueMessageMismatch,
@@ -27,7 +27,7 @@ import {
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionOptions,
   type ReplyMessageInjectionOutcome,
-  type ReplyMessageInjectionRejectionReason,
+  type ReplyMessageInjectionResolution,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
 } from "./reply-run-registry.contracts.js";
@@ -155,14 +155,7 @@ export function resolveReplyMessageInjectionRejection(params: {
   options?: ReplyBackendQueueMessageOptions;
   allowPendingUserInputAnswer?: false;
   assertCurrent?: () => void;
-}):
-  | {
-      reason: ReplyMessageInjectionRejectionReason;
-      errorMessage?: string;
-      backend?: ReplyBackendHandle;
-      cancelPendingUserInput?: ReplyBackendHandle["cancelPendingUserInput"];
-    }
-  | { backend: ReplyBackendHandle; injection: ReplyBackendMessageInjection } {
+}): ReplyMessageInjectionResolution {
   const { operation } = params;
   if (!operation || replyRunState.activeRunsByKey.get(operation.key) !== operation) {
     return { reason: "no_active_run" };
@@ -175,13 +168,36 @@ export function resolveReplyMessageInjectionRejection(params: {
   }
   const backend = getAttachedBackend(operation);
   const canInject = () => {
-    params.assertCurrent?.();
     return (
       replyRunState.activeRunsByKey.get(operation.key) === operation &&
       !operation.result &&
       operation.phase === "running" &&
       getAttachedBackend(operation) === backend
     );
+  };
+  return resolveReplyBackendMessageInjectionRejection({
+    ...params,
+    sessionId: operation.sessionId,
+    backend,
+    canInject,
+    toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
+  });
+}
+
+/** The source and concrete execution owner compose their authority at the same V2 sink. */
+export function resolveReplyBackendMessageInjectionRejection(params: {
+  sessionId: string;
+  backend: ReplyBackendHandle | undefined;
+  canInject: () => boolean;
+  toolAuthorityFingerprint?: string;
+  options?: ReplyBackendQueueMessageOptions;
+  allowPendingUserInputAnswer?: false;
+  assertCurrent?: () => void;
+}): ReplyMessageInjectionResolution {
+  const { backend } = params;
+  const canInject = () => {
+    params.assertCurrent?.();
+    return params.canInject();
   };
   const injection = backend
     ? resolveReplyBackendMessageInjection(backend, canInject, params.assertCurrent !== undefined)
@@ -190,18 +206,16 @@ export function resolveReplyMessageInjectionRejection(params: {
     return { reason: "injection_unavailable" };
   }
   try {
-    if (
-      !injection.isAvailable() ||
-      isEmbeddedRunHandleCompacting(operation.sessionId, backend) !== false
-    ) {
+    const compactionAllowsSteering = canSteerEmbeddedRunDuringCompaction(params.sessionId, backend);
+    if (!injection.isAvailable() || !compactionAllowsSteering) {
       return { reason: "injection_unavailable" };
     }
   } catch (error) {
     return { reason: "injection_unavailable", errorMessage: String(error) };
   }
-  const mismatch = resolveReplyBackendQueueMessageMismatch(backend, params.options, operation);
+  const mismatch = resolveReplyBackendQueueMessageMismatch(backend, params.options, params);
   const activeFingerprint = normalizeOptionalString(
-    backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint,
+    backend.toolAuthorityFingerprint ?? params.toolAuthorityFingerprint,
   );
   const pendingInputAuthorityProven =
     activeFingerprint !== undefined &&
@@ -305,11 +319,16 @@ export function beginReplyMessageInjectionTarget(
   text: string,
   options?: ReplyMessageInjectionOptions,
 ): ReplyMessageInjectionAttempt {
-  const operation = target[replyMessageInjectionTargetOperation];
-  const { toolAuthorityOverlay, assertCurrent, allowPendingUserInputAnswer, ...backendOptions } =
-    options ?? {};
+  const owner = target[replyMessageInjectionTargetOwner];
+  const {
+    toolAuthorityOverlay,
+    assertCurrent,
+    allowPendingUserInputAnswer,
+    inboundAudio,
+    ...backendOptions
+  } = options ?? {};
   const projectedToolAuthorityFingerprint = toolAuthorityOverlay
-    ? operation.projectToolAuthorityFingerprint(toolAuthorityOverlay)
+    ? owner.projectToolAuthorityFingerprint(toolAuthorityOverlay)
     : backendOptions.toolAuthorityFingerprint;
   const queueOptions: ReplyBackendQueueMessageOptions | undefined = options
     ? {
@@ -319,9 +338,9 @@ export function beginReplyMessageInjectionTarget(
           : {}),
       }
     : undefined;
-  const resolved = resolveReplyMessageInjectionRejection({
-    operation,
+  const resolved = owner.resolve({
     options: queueOptions,
+    inboundAudio,
     allowPendingUserInputAnswer,
     assertCurrent,
   });
@@ -437,7 +456,7 @@ export function beginReplyMessageInjectionTarget(
   };
 }
 
-/** Finalize adoption and cleanup on the captured operation without rediscovery. */
+/** Finalize adoption and cleanup on the captured owner without rediscovery. */
 export async function finalizeReplyMessageInjectionAttempt(params: {
   attempt: ReplyMessageInjectionAttempt;
   target: ReplyMessageInjectionTarget;
@@ -501,19 +520,15 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
   };
 }
 
-/** Abort only the operation captured by this target; never a same-key successor. */
+/** Abort only the captured owner; never a same-key successor. */
 function abortReplyMessageInjectionTarget(target: ReplyMessageInjectionTarget): boolean {
-  return target[replyMessageInjectionTargetOperation].abortByUser();
+  return target[replyMessageInjectionTargetOwner].abort();
 }
 
-/** Record accepted input on the exact operation without rediscovering its session slot. */
+/** Record accepted input on the captured owner without rediscovering its session slot. */
 function recordAcceptedReplyMessageInjectionTarget(
   target: ReplyMessageInjectionTarget,
   options?: { inboundAudio?: boolean },
 ): void {
-  const operation = target[replyMessageInjectionTargetOperation];
-  operation.recordActivity();
-  if (options?.inboundAudio === true) {
-    operation.markAcceptedSteeredInboundAudio();
-  }
+  target[replyMessageInjectionTargetOwner].recordAccepted(options);
 }

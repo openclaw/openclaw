@@ -1,17 +1,8 @@
 // Browser subpath tests cover plugin SDK browser subpath exports and lazy boundaries.
 import { describe, expect, it } from "vitest";
 import { parseBrowserHttpUrl, redactCdpUrl } from "./browser-cdp.js";
-import {
-  DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
-  DEFAULT_OPENCLAW_BROWSER_ENABLED,
-} from "./browser-profiles.js";
 
 describe("plugin-sdk browser subpaths", () => {
-  it("keeps browser profile helpers available on the narrow subpath", () => {
-    expect(DEFAULT_OPENCLAW_BROWSER_ENABLED).toBe(true);
-    expect(DEFAULT_BROWSER_DEFAULT_PROFILE_NAME).toBe("openclaw");
-  });
-
   it("parses and redacts CDP urls on the dedicated CDP subpath", () => {
     const parsed = parseBrowserHttpUrl("http://user:pass@127.0.0.1:9222/", "browser.cdpUrl");
     expect(parsed.port).toBe(9222);

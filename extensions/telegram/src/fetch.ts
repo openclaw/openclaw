@@ -24,7 +24,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
-  captureHttpExchange,
+  captureHttpExchangeAsync,
   resolveEffectiveDebugProxyUrl,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
@@ -716,7 +716,8 @@ export function resolveTelegramTransport(
       try {
         const response = await requestFetch(input, init);
         signal?.throwIfAborted();
-        captureHttpExchange({
+        // Finalization retains capture failures; observe Promises returned by the SDK view.
+        void captureHttpExchangeAsync({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
           requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
@@ -724,7 +725,7 @@ export function resolveTelegramTransport(
           response,
           flowId: randomUUID(),
           meta: { subsystem: "telegram-fetch" },
-        });
+        }).catch(() => {});
         return response;
       } catch (caught) {
         signal?.throwIfAborted();
@@ -757,7 +758,7 @@ export function resolveTelegramTransport(
       try {
         const response = await requestFetch(input, init, attempt.createDispatcher(freshConnection));
         signal?.throwIfAborted();
-        captureHttpExchange({
+        void captureHttpExchangeAsync({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
           requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
@@ -768,7 +769,7 @@ export function resolveTelegramTransport(
             attemptIndex === startIndex
               ? { subsystem: "telegram-fetch" }
               : { subsystem: "telegram-fetch", fallbackAttempt: attemptIndex },
-        });
+        }).catch(() => {});
         recordSuccessfulAttempt(attemptIndex);
         return response;
       } catch (caught) {

@@ -91,16 +91,11 @@ final class DashboardBrowserTab {
 
     func observeNavigationState(onChange: @escaping @MainActor () -> Void) {
         // KVO catches late WebKit updates and same-document SPA navigation.
-        self.observations = [
-            self.webView.observe(\.canGoBack, options: [.new]) { _, _ in
+        self.observations = [\WKWebView.canGoBack, \.canGoForward, \.isLoading].map { keyPath in
+            self.webView.observe(keyPath, options: [.new]) { _, _ in
                 Task { @MainActor in onChange() }
-            },
-            self.webView.observe(\.canGoForward, options: [.new]) { _, _ in
-                Task { @MainActor in onChange() }
-            },
-            self.webView.observe(\.isLoading, options: [.new]) { _, _ in
-                Task { @MainActor in onChange() }
-            },
+            }
+        } + [
             self.webView.observe(\.url, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor in
                     guard let self else { return }

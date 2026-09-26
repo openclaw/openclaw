@@ -92,7 +92,7 @@ filenames in authored links, such as `[Read inventory](inventory.csv)`, and code
 spans also open the file preview. Plain-text and inline-code file detection stays
 conservative to avoid turning prose into links.
 
-While composing text with an input method in model search, Enter, Escape, and arrow keys stay with the input method. They do not select a model, clear the search, or move the highlighted model until composition finishes.
+While composing text with an input method in model search, Enter, Escape, and arrow keys stay with the input method. They do not select a model, clear the search, or move the highlighted model until composition finishes. Open tooltips also leave Escape to the input method.
 
 When authentication status is available, each provider heading in the chat model picker says how that provider is signed in: **API** for an API key (or an explicitly selected API-key account), the plan name for a provider with one subscription, and **Subscription** for a provider with several. With several subscriptions, the heading adds the email of an explicitly selected account when the Gateway supplies it, and the **Account** rows show each account's email; automatic selection shows no account identity. Hover a truncated heading to read the full text.
 
@@ -701,7 +701,9 @@ Automation task transcripts stay tied to the recorded run, including after its
 temporary continuation session is removed or the automation runs again. If that
 recorded transcript is unavailable, the viewer reports an error instead of
 showing a newer run. Select **View transcript** under **Automations → Run history**
-to read that exact run without opening its temporary session.
+to read that exact run without opening its temporary session. Selecting **All
+automations**, opening another automation, or starting a new automation closes the
+run viewer; refreshing the same panel keeps it open.
 
 The automation run viewer displays the supplied transcript. Core session transcripts
 are currently capped at 8,000 characters per text block. The Chat panel's full-text recovery may be unavailable

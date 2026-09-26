@@ -40,7 +40,15 @@ async function runConnectRequest(
   ) => unknown,
   requiredScope: "operator.read" | "operator.write" | "operator.admin" = "operator.write",
 ): Promise<void> {
-  const fail = (error: unknown) => {
+  try {
+    const action = await prepareUserModelAccountAction(options, profileId, requiredScope);
+    const service = options.context.modelAccountConnectService;
+    if (!service) {
+      throw new Error("Model-account service is not running.");
+    }
+    const result = await run(service, action);
+    options.respond(true, result);
+  } catch (error) {
     const responseError =
       error instanceof ModelAccountConnectAuthorityError
         ? errorShape(ErrorCodes.FORBIDDEN, error.message)
@@ -52,17 +60,6 @@ async function runConnectRequest(
               "Model account connect is unavailable right now; try again shortly.",
             );
     options.respond(false, undefined, responseError);
-  };
-  try {
-    const action = await prepareUserModelAccountAction(options, profileId, requiredScope);
-    const service = options.context.modelAccountConnectService;
-    if (!service) {
-      throw new Error("Model-account service is not running.");
-    }
-    const result = await run(service, action);
-    options.respond(true, result);
-  } catch (error) {
-    fail(error);
   }
 }
 

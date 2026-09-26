@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
-  captureWsEvent,
+  captureWsEventAsync,
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
@@ -292,13 +292,14 @@ export function createMattermostConnectOnce(
 
         ws.on("open", () => {
           opened = true;
-          captureWsEvent({
+          // Finalization retains capture failures; observe Promises returned by the SDK view.
+          void captureWsEventAsync({
             url: opts.wsUrl,
             direction: "local",
             kind: "ws-open",
             flowId,
             meta: { subsystem: "mattermost-websocket" },
-          });
+          }).catch(() => {});
           opts.statusSink?.({
             connected: true,
             lifecycle: "starting",
@@ -309,14 +310,14 @@ export function createMattermostConnectOnce(
             action: "authentication_challenge",
             data: { token: opts.botToken },
           });
-          captureWsEvent({
+          void captureWsEventAsync({
             url: opts.wsUrl,
             direction: "outbound",
             kind: "ws-frame",
             flowId,
             payload: authPayload,
             meta: { subsystem: "mattermost-websocket", eventType: "authentication_challenge" },
-          });
+          }).catch(() => {});
           ws.send(authPayload);
           authTimer = setTimeout(() => {
             authTimer = undefined;
@@ -349,14 +350,14 @@ export function createMattermostConnectOnce(
 
         ws.on("message", async (data) => {
           const raw = rawDataToString(data);
-          captureWsEvent({
+          void captureWsEventAsync({
             url: opts.wsUrl,
             direction: "inbound",
             kind: "ws-frame",
             flowId,
             payload: Buffer.from(raw),
             meta: { subsystem: "mattermost-websocket" },
-          });
+          }).catch(() => {});
           const payload = parseMattermostEventPayload(raw);
           if (!payload) {
             return;
@@ -402,7 +403,7 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("close", (code, reason) => {
-          captureWsEvent({
+          void captureWsEventAsync({
             url: opts.wsUrl,
             direction: "local",
             kind: "ws-close",
@@ -410,7 +411,7 @@ export function createMattermostConnectOnce(
             closeCode: code,
             payload: reason,
             meta: { subsystem: "mattermost-websocket" },
-          });
+          }).catch(() => {});
           stopHealthChecks();
           const message = reasonToString(reason);
           opts.statusSink?.({
@@ -438,14 +439,14 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("error", (err) => {
-          captureWsEvent({
+          void captureWsEventAsync({
             url: opts.wsUrl,
             direction: "local",
             kind: "error",
             flowId,
             errorText: String(err),
             meta: { subsystem: "mattermost-websocket" },
-          });
+          }).catch(() => {});
           opts.runtime.error?.(`mattermost websocket error: ${String(err)}`);
           opts.statusSink?.({
             connected: false,

@@ -392,7 +392,7 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
     agentId: string;
     targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
   },
-  prepareReads: (reads: readonly GatewaySessionStoreRead[]) => Promise<void>,
+  prepareReads: <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => Promise<T>,
 ): Promise<GatewaySessionStoreTargetWithStore> {
   const normalized = {
     ...params,
@@ -402,11 +402,12 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
     projection: "list" as const,
   };
   const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
-    await prepareReads(plan.reads);
-    if (plan.reads.some((read) => read.result === undefined)) {
-      throw new Error("Session lookup facts were not prepared");
-    }
-    return plan.resolve();
+    return await prepareReads(plan.reads, () => {
+      if (plan.reads.some((read) => read.result === undefined)) {
+        throw new Error("Session lookup facts were not prepared");
+      }
+      return plan.resolve();
+    });
   };
   const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized);
   if (deletedMain) {

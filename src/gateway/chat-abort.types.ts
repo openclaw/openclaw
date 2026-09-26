@@ -1,5 +1,6 @@
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
+import type { ChatAbortDiagnosticReason } from "./chat-abort-diagnostics.js";
 
 type ChatTerminalProducer = {
   sessionId: string;
@@ -28,6 +29,8 @@ export type ChatAbortControllerEntry = {
   providerId?: string;
   authProviderId?: string;
   abortStopReason?: string;
+  /** Owner-recorded diagnostic cause; does not change terminal lifecycle semantics. */
+  abortDiagnosticReason?: ChatAbortDiagnosticReason;
   /** Latest argument-free validation diagnostic for operator-initiated aborts. */
   toolErrorSummary?: string;
   /**

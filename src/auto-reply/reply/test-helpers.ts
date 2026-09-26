@@ -80,6 +80,7 @@ export function createMockReplyOperation(
         return undefined;
       }
     }),
+    setAutomaticFallbackRoute: vi.fn(),
     bindToolAuthorityRoute: vi.fn((route) => {
       if (replyOperation.result || !toolAuthoritySnapshot) {
         throw new Error("Reply operation has no active tool authority snapshot");

@@ -1,9 +1,4 @@
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-/**
- * Built-in stateful binding target registration.
- *
- * Lazily registers ACP target drivers so non-ACP channel flows avoid ACP runtime imports.
- */
 import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
 const loadAcpStatefulTargetDriverModule = createLazyRuntimeModule(
