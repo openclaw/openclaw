@@ -62,13 +62,22 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
   }
 
   const resolvedSha = readGitText(root, ["rev-parse", resolved]).trim();
+
+  // The CI preflight has already proved that CHECKOUT_BASE_SHA is the first
+  // parent of the two-parent PR merge tree. Trust that verified handoff before
+  // asking merge-base to walk a shallow checkout.
+  if (
+    process.env.RATCHET_PR_HEAD_SHA &&
+    process.env.CHECKOUT_BASE_SHA?.trim() === resolvedSha
+  ) {
+    return resolved;
+  }
+
   const headParents = readGitText(root, ["cat-file", "-p", "HEAD"])
     .split(/\r?\n/u)
     .filter((line) => line.startsWith("parent "))
     .map((line) => line.slice("parent ".length).trim());
   if (headParents.includes(resolvedSha)) {
-    // CI PR checkouts verify this exact prepared base as the first merge parent.
-    // Prefer the verified parent before asking merge-base to walk a shallow graph.
     return resolved;
   }
 
@@ -80,35 +89,11 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
       return mergeBase;
     }
   } catch {
-    // Continue with disconnected-history recovery below.
-  }
-
-  // A disconnected base is recoverable only when the history records that exact
-  // base as the second parent of a first-parent sync merge. Do not guess from the
-  // newest merge: feature/maintenance merges are equally valid Git merges.
-  try {
-    const merges = readGitText(root, [
-      "rev-list",
-      "--first-parent",
-      "--merges",
-      "--parents",
-      "HEAD",
-    ])
-      .trim()
-      .split(/\r?\n/u)
-      .filter(Boolean);
-    for (const line of merges) {
-      const parents = line.split(/\s+/u);
-      if (parents.length >= 3 && parents[2] === resolvedSha) {
-        return resolved;
-      }
-    }
-  } catch {
     // Fall through to the explicit failure below.
   }
 
   throw new Error(
-    `Ratchet base ${resolved} (${resolvedSha}) is disconnected from HEAD; no verified sync merge was found.`,
+    `Ratchet base ${resolved} (${resolvedSha}) is disconnected from HEAD; no verified CI or Git merge base was found.`,
   );
 }
 
