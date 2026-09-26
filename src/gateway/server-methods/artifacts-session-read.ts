@@ -24,10 +24,9 @@ export async function prepareArtifactSessionRead(
   const { sessionKey } = resolved;
   const unscopedAgentId = parseAgentSessionKey(sessionKey) ? undefined : resolved.agentId;
   const readEntry = () =>
-    loadGatewaySessionEntryReadOnly(
-      sessionKey,
-      unscopedAgentId ? { agentId: unscopedAgentId } : {},
-    );
+    unscopedAgentId
+      ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId: unscopedAgentId })
+      : loadGatewaySessionEntryReadOnly(sessionKey);
   const { storePath, entry } = readEntry();
   const sessionId = entry?.sessionId;
   if (!sessionId || !storePath) {
