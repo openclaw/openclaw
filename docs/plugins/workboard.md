@@ -207,6 +207,29 @@ seeing a usable token. Recovery goes through
 `workboard_promote`/`workboard_reassign`/`workboard_reclaim`, which do not
 require the token.
 
+### Claim ownership is session-scoped
+
+A claim made through the agent tools is owned by the calling _session_, not by the
+agent. `workboard_claim` derives the owner from the caller's session key, falling back
+to its session id and then its agent id when no session identity is present; an owner
+longer than the persisted 120-character limit is stored as a stable `owner:<sha256>`
+id. Two concurrent sessions of one agent are therefore independent owners: a sibling
+session holding no claim token is rejected from mutating or completing a card claimed
+by another session. Direct-claim capacity is per session as well, because the active
+claim owner is the worker-capacity slot, so each session serializes onto its own one
+active card instead of sharing a single slot per agent. Dispatcher `maxStarts` and
+agent-runtime concurrency limits are unchanged.
+
+Claims persisted _before_ this change stored a bare agent id as the owner, so a
+token-less heartbeat, release, or completion from that agent's session no longer
+matches the owner and is refused. Recover such a claim by presenting its claim token,
+or through the operator-surface `workboard.cards.reclaim`, `workboard.cards.promote`,
+or `workboard.cards.reassign` Gateway RPCs, which act without a claim scope and so
+bypass the owner check. A legacy claim also becomes re-claimable five minutes after it
+expires. Because `ttlSeconds` is caller-supplied and the mutation guards do not
+consider expiry, waiting out a long TTL is not a timely recovery; the operator surface
+is the reliable path.
+
 ## Dispatch
 
 Dispatch is Gateway-local: it does not spawn arbitrary OS processes. Normal
