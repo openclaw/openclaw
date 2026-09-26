@@ -5,6 +5,7 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
+import type { SenderLabelContext } from "../../../lib/chat/sender-label.ts";
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
@@ -56,18 +57,19 @@ type StreamMessageOptions = Pick<
   | "onOpenWorkspaceFile"
 >;
 
-export type StreamGroupOptions = StreamMessageOptions & {
-  branding?: ThemeBranding;
-  entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
-  onReply?: (target: MessageReplyTarget) => void;
-  onOpenSidebar?: (content: SidebarContent) => void;
-  assistant?: Parameters<typeof renderChatAvatar>[1];
-  showAssistantAvatar?: boolean;
-  startupLabel?: string;
-  waitingApproval?: boolean;
-  runOutputTokens?: number | null;
-  questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
-};
+export type StreamGroupOptions = StreamMessageOptions &
+  Pick<SenderLabelContext, "agents"> & {
+    branding?: ThemeBranding;
+    entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
+    onReply?: (target: MessageReplyTarget) => void;
+    onOpenSidebar?: (content: SidebarContent) => void;
+    assistant?: Parameters<typeof renderChatAvatar>[1];
+    showAssistantAvatar?: boolean;
+    startupLabel?: string;
+    waitingApproval?: boolean;
+    runOutputTokens?: number | null;
+    questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
+  };
 
 export function renderStreamGroupParts(
   parts: StreamGroupPart[],
@@ -151,7 +153,11 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
       <div class="chat-group-messages">
-        ${renderChatReplyAttribution(parts.find((part) => part.kind === "stream")?.replyToSender)}
+        ${renderChatReplyAttribution(parts.find((part) => part.kind === "stream")?.replyToSender, {
+          agentId: assistant?.agentId ?? opts.agentId,
+          assistantName: assistant?.name,
+          agents: opts.agents,
+        })}
         ${renderStreamGroupParts(parts, opts, "standalone")}
       </div>
       ${

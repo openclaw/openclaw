@@ -232,6 +232,128 @@ test("sessions.create can start the first agent turn from an initial task", asyn
   ws.close();
 });
 
+test("spawned initial tasks retain agent authorship and human assignment across isolated and forked creation", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const profile = ensureProfileForEmail("spawn-author@example.test");
+  const client = identifiedClient(profile.id, "Task owner");
+  client.connect.scopes = ["operator.admin", "operator.write"];
+  const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
+  type Created = { key: string; sessionId: string; runStarted: boolean; runId: string };
+  const parent = await directSessionReq<Created>(
+    "sessions.create",
+    {
+      agentId: "main",
+      label: "Parent",
+      task: "Please investigate",
+    },
+    { client, context },
+  );
+  expect(parent.ok, JSON.stringify(parent.error)).toBe(true);
+  expect(parent.payload?.runStarted).toBe(true);
+  await waitForCreatedSessionRun(context, storePath, parent.payload!.key);
+  const parentMessages = await loadTranscriptEvents({
+    agentId: "main",
+    sessionKey: parent.payload!.key,
+    sessionId: parent.payload!.sessionId,
+    storePath,
+  });
+  expect(parentMessages).toContainEqual(
+    expect.objectContaining({
+      message: expect.objectContaining({
+        __openclaw: expect.objectContaining({
+          senderIdentity: { type: "profile", id: profile.id },
+        }),
+      }),
+    }),
+  );
+  const synthetic: GatewayClient = {
+    ...client,
+    internal: {
+      syntheticClient: true,
+      agentToolCaller: { agentId: "main", sessionKey: parent.payload!.key },
+      sessionCreation: {
+        via: "spawn",
+        actor: { type: "agent", id: "main" },
+        requesterSessionKey: parent.payload!.key,
+        requesterProfileId: profile.id,
+      },
+    },
+  };
+  for (const fork of [false, true]) {
+    const created = await directSessionReq<Created>(
+      "sessions.create",
+      {
+        agentId: "main",
+        parentSessionKey: parent.payload!.key,
+        fork,
+        label: fork ? "Forked child" : "Isolated child",
+        task: "Inspect the delegated task",
+      },
+      { client: synthetic, context },
+    );
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.runStarted).toBe(true);
+    const child = created.payload!;
+    await waitForCreatedSessionRun(context, storePath, child.key);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: child.key, storePath })).toMatchObject({
+      owner: { actor: { type: "human", id: profile.id } },
+    });
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionKey: child.key,
+      sessionId: child.sessionId,
+      storePath,
+    });
+    const task = events
+      .map((event) => asNullableRecord(asNullableRecord(event)?.message))
+      .find((message) => message?.idempotencyKey === child.runId + ":user");
+    expect(task).toMatchObject({
+      role: "user",
+      __openclaw: {
+        senderId: "main",
+        senderName: "main",
+        senderIdentity: { type: "agent", id: "main" },
+        senderIsOwner: false,
+      },
+    });
+    expect(synthetic.authenticatedUserProfile).toBe(client.authenticatedUserProfile);
+    if (fork) {
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            __openclaw: expect.objectContaining({
+              senderIdentity: { type: "profile", id: profile.id },
+            }),
+          }),
+        }),
+      );
+    }
+  }
+  const unattributed = await directSessionReq<Created>(
+    "sessions.create",
+    {
+      agentId: "main",
+      label: "Internal task",
+      task: "Internal input without an author",
+    },
+    { client: { ...client, internal: { syntheticClient: true } }, context },
+  );
+  expect(unattributed.ok, JSON.stringify(unattributed.error)).toBe(true);
+  const internal = unattributed.payload!;
+  await waitForCreatedSessionRun(context, storePath, internal.key);
+  const internalEvents = await loadTranscriptEvents({
+    agentId: "main",
+    sessionKey: internal.key,
+    sessionId: internal.sessionId,
+    storePath,
+  });
+  const internalTask = internalEvents
+    .map((event) => asNullableRecord(asNullableRecord(event)?.message))
+    .find((message) => message?.idempotencyKey === internal.runId + ":user");
+  expect(internalTask).toMatchObject({ __openclaw: { senderIsOwner: false } });
+  expect(internalTask?.["__openclaw"]).not.toHaveProperty("senderId");
+});
+
 const mentionCreationOwners = [
   ["main", "per-sender"],
   ["ops", "per-sender"],

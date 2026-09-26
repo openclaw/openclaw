@@ -28,8 +28,57 @@ describe("gateway client identity", () => {
       gatewayClientSenderFields({
         authenticatedUserProfile: profile,
         internal: { syntheticClient: true },
-      } as GatewayClient).sender,
-    ).not.toHaveProperty("identity");
+      } as GatewayClient),
+    ).toEqual({ senderIsOwner: false });
+  });
+
+  it.each(["agentToolCaller", "sessionCreation"] as const)(
+    "attributes synthetic input to its trusted %s, not the authorizing person",
+    (source) => {
+      const client = {
+        authenticatedUserProfile: {
+          profileId: "owner",
+          displayName: "Owner",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        internal: {
+          syntheticClient: true,
+          ...(source === "agentToolCaller"
+            ? { agentToolCaller: { agentId: "worker", sessionKey: "agent:worker:parent" } }
+            : { sessionCreation: { via: "spawn", actor: { type: "agent", id: "worker" } } }),
+        },
+      } as GatewayClient;
+      expect(gatewayClientSenderFields(client)).toEqual({
+        sender: { id: "worker", name: "worker", identity: { type: "agent", id: "worker" } },
+      });
+      expect(client.authenticatedUserProfile?.profileId).toBe("owner");
+      expect(gatewayClientSessionCreator(client)?.id).toBe("owner");
+    },
+  );
+
+  it("attributes native hidden launches to their bound tool caller without borrowing human authority", async () => {
+    const client = {
+      authenticatedUserProfile: {
+        profileId: "owner",
+        displayName: "Owner",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      internal: {
+        syntheticClient: true,
+        agentToolCaller: { agentId: "inherited-parent", sessionKey: "agent:inherited-parent:main" },
+      },
+    } as GatewayClient;
+    await withGatewayToolCallerIdentity(
+      { agentId: "worker", sessionKey: "agent:worker:parent" },
+      async () => {
+        expect(gatewayClientSenderFields(client)).toEqual({
+          sender: { id: "worker", name: "worker", identity: { type: "agent", id: "worker" } },
+        });
+        expect(client.authenticatedUserProfile?.profileId).toBe("owner");
+      },
+    );
   });
 
   it("overrides sender attribution without replacing the authorizing identity", () => {

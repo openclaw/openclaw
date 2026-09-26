@@ -52,6 +52,77 @@ describe("chat transcript replies", () => {
     ] as const;
   }
 
+  it.each([
+    { streaming: false, author: "main", label: "Molty" },
+    { streaming: true, author: "main", label: "Molty" },
+    { streaming: false, author: "research", label: "Research agent" },
+    { streaming: true, author: "research", label: "Research agent" },
+  ])(
+    "keeps the $author task and reply name consistent (streaming=$streaming)",
+    async ({ streaming, author, label }) => {
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const props = threadProps("agent-reply-name", "agent:main:dashboard:task", [
+        {
+          role: "user",
+          content: "Human instruction",
+          timestamp: 1_000,
+          __openclaw: {
+            senderId: "human",
+            senderName: "Human",
+            senderIdentity: { type: "profile", id: "human" },
+          },
+        },
+        {
+          role: "user",
+          content: "Delegated task",
+          timestamp: 2_000,
+          __openclaw: {
+            senderId: author,
+            senderName: author,
+            senderIdentity: { type: "agent", id: author },
+          },
+        },
+        ...(streaming ? [] : [{ role: "assistant", content: "Task result", timestamp: 3_000 }]),
+      ]);
+      Object.assign(props, {
+        currentAgentId: "main",
+        userId: "human",
+        agents: [{ id: "research", identity: { name: "Research agent" } }],
+      });
+      if (streaming) {
+        Object.assign(props, { stream: "Task result", streamStartedAt: 3_000, runActive: true });
+      }
+      const rerender = () => {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostUpdated();
+      };
+      try {
+        rerender();
+        transcript.hostConnected();
+        await flushDeferredRowPrune();
+        const expectLabel = (name: string) => {
+          expect(
+            [...container.querySelectorAll(".chat-group.user .chat-sender-name")].map((node) =>
+              node.textContent?.trim(),
+            ),
+          ).toContain(name);
+          const reply = requireElement(container, ".chat-reply-attribution");
+          expect(reply.textContent?.trim()).toBe(name);
+          expect(reply.getAttribute("title")).toBe("Replying to " + name);
+          expect(reply.getAttribute("aria-label")).toBe("Replying to " + name);
+        };
+        expectLabel(label);
+        props.assistantName = "Renamed Molty";
+        props.agents = [{ id: "research", identity: { name: "Renamed Research" } }];
+        rerender();
+        expectLabel(author === "main" ? "Renamed Molty" : "Renamed Research");
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
   it.each([false, true])(
     "resolves persisted replies and owns their flash lifetime (reduced motion: %s)",
     async (reducedMotion) => {

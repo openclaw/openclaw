@@ -886,14 +886,24 @@ describe("grouped chat rendering", () => {
     });
 
     const userContainer = document.createElement("div");
-    renderGroupedMessage(
+    render(
+      renderTestMessageGroup(
+        prepareMessageGroup(
+          createMessageEntry(
+            "user-message",
+            createUserMessage("User reply context.", {
+              timestamp: 1001,
+              __openclaw: {
+                id: "user-entry-1",
+                senderId: "jason",
+                senderIdentity: { type: "profile", id: "jason" },
+              },
+            }),
+          ),
+        ),
+        { onReply, userId: "jason", userName: "Jason" },
+      ),
       userContainer,
-      createUserMessage("User reply context.", {
-        timestamp: 1001,
-        __openclaw: { id: "user-entry-1" },
-      }),
-      "user",
-      { onReply, userName: "Jason" },
     );
     userContainer.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')?.click();
 
@@ -1968,26 +1978,6 @@ describe("grouped chat rendering", () => {
     expect(statusFor(1_000)).toEqual(expected);
     expect(statusFor(1_500)).toEqual(expected);
     expect(statusFor(8_000)).toEqual(expected);
-  });
-
-  it("renders configured local user names", () => {
-    const renderUser = (opts: Partial<RenderMessageGroupOptions>) => {
-      const container = document.createElement("div");
-      renderGroupedMessage(
-        container,
-        createUserMessage("hello", { timestamp: 1000 }),
-        "user",
-        opts,
-      );
-      return container;
-    };
-
-    const named = renderUser({ userName: "Buns" });
-    const sender = named.querySelector<HTMLElement>(".chat-group.user .chat-sender-name");
-    expect(sender?.textContent).toBe("Buns");
-
-    const avatar = named.querySelector<HTMLElement>(".chat-avatar.user");
-    expect(avatar?.tagName).toBe("DIV");
   });
 
   it.each([

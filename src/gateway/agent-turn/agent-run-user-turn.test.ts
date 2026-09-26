@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as userTurnTranscript from "../../sessions/user-turn-transcript.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import type { GatewayClient } from "../server-methods/types.js";
 import { prepareAgentRunUserTurn } from "./agent-run-user-turn.js";
 import type { AgentTurnContext } from "./types.js";
 
@@ -50,6 +52,78 @@ describe("prepareAgentRunUserTurn", () => {
       };
     });
   });
+
+  it.each(["human", "agent", "unknown"] as const)(
+    "keeps native run authority separate from %s transcript authorship",
+    async (author) => {
+      const createRecorder = userTurnTranscript.createUserTurnTranscriptRecorder;
+      const spy = vi
+        .spyOn(userTurnTranscript, "createUserTurnTranscriptRecorder")
+        .mockImplementationOnce((options) => {
+          const recorder = createRecorder(options);
+          // This test owns admission composition; persistence is covered by the SQLite creation test.
+          recorder.stageApproved = async () => true;
+          return recorder;
+        });
+      const client: GatewayClient = {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+          scopes: ["operator.admin"],
+        },
+        authenticatedUserProfile: {
+          profileId: "owner",
+          displayName: "Owner",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        ...(author === "human"
+          ? {}
+          : {
+              internal: {
+                syntheticClient: true,
+                ...(author === "agent"
+                  ? { agentToolCaller: { agentId: "worker", sessionKey: "agent:worker:parent" } }
+                  : {}),
+              },
+            }),
+      };
+      try {
+        const prepared = await prepareAgentRunUserTurn({
+          assertCurrent: () => {},
+          request: { message: "task", idempotencyKey: "task-run" },
+          cfg: {},
+          resolvedSessionKey: "agent:main:child",
+          admittedSessionId: "child-id",
+          activeSessionAgentId: "main",
+          suppressVisibleSessionEffects: false,
+          requestedPromptPersistenceSuppression: false,
+          canUseInternalRuntimeHandoff: false,
+          message: "task",
+          effectiveTranscriptInputText: "task",
+          images: [],
+          offloadedRefs: [],
+          runId: "task-run",
+          client,
+          context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+        });
+        expect(prepared.senderIsOwner).toBe(true);
+        expect(prepared.recorder?.message?.["__openclaw"]).toMatchObject({
+          senderIsOwner: author === "human",
+        });
+        expect(prepared.recorder?.message?.["__openclaw"]?.senderIdentity).toEqual(
+          author === "human"
+            ? { type: "profile", id: "owner" }
+            : author === "agent"
+              ? { type: "agent", id: "worker" }
+              : undefined,
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
 
   it("fails closed when the admitted session entry disappeared before transcript persistence", async () => {
     const sessionKey = "agent:main:main";

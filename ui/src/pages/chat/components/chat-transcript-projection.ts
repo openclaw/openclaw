@@ -323,6 +323,7 @@ export function projectChatTranscript(
     ...sharedMessageRenderOptions,
     branding: props.branding,
     assistant: assistantIdentity,
+    agents: props.agents,
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
     runOutputTokens,

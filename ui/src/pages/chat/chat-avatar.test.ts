@@ -16,7 +16,9 @@ import {
 import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAvatarUrl } from "./chat-state-route.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import { renderChatAuthorAvatar } from "./components/chat-author-avatar.ts";
+import { renderMessageGroup } from "./components/chat-message-group.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
 
 function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
@@ -550,6 +552,57 @@ describe("refreshSenderAgentAvatars", () => {
       senderAgentAvatars: undefined as ReadonlyMap<string, string | null> | undefined,
     };
   }
+
+  it.each(["agent", "profile", undefined] as const)(
+    "loads a task author's workspace avatar only for qualified agent identity (%s)",
+    async (type) => {
+      const host = senderHost();
+      const fetchAvatar = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(
+          new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+        );
+      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:task-author");
+      const message = {
+        role: "user",
+        content: "Delegated task",
+        __openclaw: {
+          senderId: "research",
+          senderName: "Research",
+          ...(type ? { senderIdentity: { type, id: "research" } } : {}),
+        },
+      };
+      host.chatMessages = [message];
+      await refreshSenderAgentAvatars(host);
+      if (type !== "agent") {
+        expect(host.request).not.toHaveBeenCalled();
+        expect(fetchAvatar).not.toHaveBeenCalled();
+        return;
+      }
+      expect(host.request).toHaveBeenCalledWith("agent.identity.get", { agentId: "research" });
+      expect(host.senderAgentAvatars?.get("research")).toBe("blob:task-author");
+      const [group] = groupMessages([{ kind: "message", key: "task", message }]);
+      if (group?.kind !== "group") {
+        throw new Error("Expected task group");
+      }
+      const container = document.createElement("div");
+      render(
+        renderMessageGroup(group, {
+          showReasoning: true,
+          showToolCalls: true,
+          agentId: "main",
+          agents: host.agentsList.agents,
+          senderAgentAvatars: host.senderAgentAvatars,
+        }),
+        container,
+      );
+      expect(container.querySelector("img.chat-avatar.assistant")?.getAttribute("src")).toBe(
+        "blob:task-author",
+      );
+      render(nothing, container);
+      invalidateChatAvatarCache(host);
+    },
+  );
 
   it.each([200, 404])(
     "keeps forwarded identity visible through pending and HTTP %s",

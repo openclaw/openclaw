@@ -2,10 +2,17 @@ import { html, nothing } from "lit";
 import "./chat-attribution.css";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatSenderLabel, type SenderIdentity } from "../../../lib/chat/sender-label.ts";
+import {
+  formatSenderLabel,
+  type SenderIdentity,
+  type SenderLabelContext,
+} from "../../../lib/chat/sender-label.ts";
 
-export function renderChatReplyAttribution(sender: SenderIdentity | undefined) {
-  const label = formatSenderLabel(sender);
+export function renderChatReplyAttribution(
+  sender: SenderIdentity | undefined,
+  context?: SenderLabelContext,
+) {
+  const label = formatSenderLabel(sender, context);
   if (!label) {
     return nothing;
   }

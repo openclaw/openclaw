@@ -73,6 +73,27 @@ describe("user turn transcript persistence", () => {
       expect(message?.provenance).toEqual(provenance);
     });
 
+    it.each([undefined, "inter_session", "internal_system"] as const)(
+      "preserves agent authorship without human memory authority for %s provenance",
+      (kind) => {
+        const recorder = createUserTurnTranscriptRecorder({
+          input: {
+            text: "Inspect the workspace",
+            senderIsOwner: true,
+            sender: { id: "worker", name: "Worker", identity: { type: "agent", id: "worker" } },
+            ...(kind ? { provenance: { kind, sourceTool: "sessions_spawn" } } : {}),
+          },
+          target: unusedRecorderTarget,
+        });
+        expect(recorder.message?.["__openclaw"]).toMatchObject({
+          senderId: "worker",
+          senderName: "Worker",
+          senderIdentity: { type: "agent", id: "worker" },
+          senderIsOwner: false,
+        });
+      },
+    );
+
     it("normalizes synthetic owner facts after asynchronous input resolution", async () => {
       const provenance = { kind: "inter_session" as const, sourceTool: "sessions_send" };
       const recorder = createUserTurnTranscriptRecorder({

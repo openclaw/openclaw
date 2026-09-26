@@ -489,54 +489,62 @@ describe("typed in-process agent authorization", () => {
     },
   );
 
-  it("preserves the scoped operator identity across synthetic model-initiated session creation", async () => {
-    const owner = createOperatorClient({
-      profileName: "model-spawn-owner",
-      scopes: ["operator.write"],
-    });
-    let dispatched: GatewayRequestOptions["client"] = null;
-    const context = createContext();
-    context.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "sessions.create",
-          scope: "operator.write",
-          owner: { kind: "core", area: "sessions" },
-          handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
-            dispatched = client;
-            respond(true, { key: "agent:guest:dashboard:child" });
-          },
-        },
-      ]);
-
-    await withPluginRuntimeGatewayRequestScope(
-      {
-        client: owner,
-        context,
-        isWebchatConnect: () => false,
-      },
-      async () =>
-        await dispatchGatewayMethodInProcess(
-          "sessions.create",
-          { agentId: "guest" },
+  it.each([false, true])(
+    "preserves authority without human authorship for synthetic creation (fork=%s)",
+    async (fork) => {
+      const owner = createOperatorClient({
+        profileName: "model-spawn-owner",
+        scopes: ["operator.write"],
+      });
+      let dispatched: GatewayRequestOptions["client"] = null;
+      const context = createContext();
+      context.getGatewayMethodRegistry = () =>
+        createGatewayMethodRegistry([
           {
-            forceSyntheticClient: true,
-            syntheticScopes: ["operator.write", "operator.admin"],
-            sessionCreation: {
-              via: "spawn",
-              actor: { type: "agent", id: "main" },
-              requesterSessionKey: "agent:main:main",
+            name: "sessions.create",
+            scope: "operator.write",
+            owner: { kind: "core", area: "sessions" },
+            handler: async ({ client, respond }: GatewayRequestHandlerOptions) => {
+              dispatched = client;
+              const { gatewayClientSenderFields } =
+                await import("./server-methods/gateway-client-identity.js");
+              expect(gatewayClientSenderFields(client)).toEqual({
+                sender: { id: "main", name: "main", identity: { type: "agent", id: "main" } },
+              });
+              respond(true, { key: "agent:guest:dashboard:child" });
             },
           },
-        ),
-    );
+        ]);
 
-    expect(dispatched).toMatchObject({
-      authenticatedUserProfile: owner.authenticatedUserProfile,
-      connect: { scopes: ["operator.write"] },
-      internal: { syntheticClient: true },
-    });
-  });
+      await withPluginRuntimeGatewayRequestScope(
+        {
+          client: owner,
+          context,
+          isWebchatConnect: () => false,
+        },
+        async () =>
+          await dispatchGatewayMethodInProcess(
+            "sessions.create",
+            { agentId: "guest", fork },
+            {
+              forceSyntheticClient: true,
+              syntheticScopes: ["operator.write", "operator.admin"],
+              sessionCreation: {
+                via: "spawn",
+                actor: { type: "agent", id: "main" },
+                requesterSessionKey: "agent:main:main",
+              },
+            },
+          ),
+      );
+
+      expect(dispatched).toMatchObject({
+        authenticatedUserProfile: owner.authenticatedUserProfile,
+        connect: { scopes: ["operator.write"] },
+        internal: { syntheticClient: true },
+      });
+    },
+  );
 
   it("rejects retained tool authority after its owning invocation has completed", async () => {
     const owner = createOperatorClient({ profileName: "expired-owner", scopes: ["operator.read"] });

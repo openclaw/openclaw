@@ -53,10 +53,9 @@ export function createGatewayChatUserTurnController(params: {
   assertOriginalInputCommit?: () => void;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
-  const sender =
-    request.goalOperation?.action === "resume"
-      ? undefined
-      : gatewayClientSenderFields(params.client).sender;
+  const senderFields =
+    request.goalOperation?.action === "resume" ? {} : gatewayClientSenderFields(params.client);
+  const { sender } = senderFields;
   const senderProfileId = params.client?.authenticatedUserProfile?.profileId;
   const selectedMentions = request.mentions;
   const mentionInbox = params.mentionInbox;
@@ -75,9 +74,9 @@ export function createGatewayChatUserTurnController(params: {
     timestamp: session.now,
     idempotencyKey: sourceId,
     ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),
-    ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
     ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
+    ...senderFields,
     ...(request.systemInputProvenance ? { provenance: request.systemInputProvenance } : {}),
   };
   const replyContextFieldsPromise = request.p.replyToId

@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
+import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
@@ -391,10 +392,18 @@ export async function refreshSenderAgentAvatars(
   const ids: string[] = [];
   if (host.connected) {
     for (const message of host.chatMessages) {
-      if (resolveMessageRole(message) !== "assistant") {
-        continue;
-      }
-      const id = readMessageSenderSession(asOptionalRecord(message)?.senderSession)?.agentId;
+      const role = resolveMessageRole(message);
+      const record = asOptionalRecord(message);
+      const author =
+        role === "user"
+          ? readTranscriptSenderIdentity(asOptionalRecord(record?.["__openclaw"])?.senderIdentity)
+          : undefined;
+      const id =
+        role === "assistant"
+          ? readMessageSenderSession(record?.senderSession)?.agentId
+          : author?.type === "agent"
+            ? author.id
+            : undefined;
       if (id && id !== agentId && remainingIds.delete(id)) {
         ids.push(id);
         if (ids.length === CHAT_AVATAR_CACHE_LIMIT - 1) {

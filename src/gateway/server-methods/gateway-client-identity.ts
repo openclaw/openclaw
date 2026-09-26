@@ -7,6 +7,7 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   getCommandSenderAuthority,
   withCommandSenderAuthority,
@@ -64,18 +65,32 @@ export async function authorizeAuthenticatedProfileForMethod(params: {
 
 export function gatewayClientSenderFields(client: GatewayClient | null): {
   sender?: NonNullable<UserTurnInput["sender"]>;
+  senderIsOwner?: false;
 } {
   if (client?.internal?.senderAttribution) {
     return { sender: client.internal.senderAttribution };
+  }
+  const caller =
+    getGatewayToolCallerIdentity() ??
+    client?.internal?.agentRuntimeIdentity ??
+    client?.internal?.agentToolCaller;
+  const creation = client?.internal?.sessionCreation;
+  const agentId =
+    caller?.agentId ??
+    (creation?.via === "spawn" && creation.actor?.type === "agent" ? creation.actor.id : undefined);
+  if (agentId) {
+    return { sender: { id: agentId, name: agentId, identity: { type: "agent", id: agentId } } };
+  }
+  // Delegated authority identifies whose permissions apply, not who wrote the input.
+  if (isSyntheticGatewayCaller(client)) {
+    return { senderIsOwner: false };
   }
   const profile = client?.authenticatedUserProfile;
   if (profile) {
     return {
       sender: {
         id: profile.profileId,
-        ...(!client?.internal?.syntheticClient
-          ? { identity: { type: "profile" as const, id: profile.profileId } }
-          : {}),
+        identity: { type: "profile", id: profile.profileId },
         ...(profile.displayName ? { name: profile.displayName } : {}),
       },
     };

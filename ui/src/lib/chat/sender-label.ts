@@ -18,13 +18,34 @@ type SenderIdentityInput = {
   profileAvatarUrl?: unknown;
 };
 
-/** Formats durable sender identity without assuming ids will always be email addresses. */
-export function formatSenderLabel(sender: SenderIdentity | null | undefined): string | null {
+export type SenderLabelContext = {
+  agentId?: string;
+  assistantName?: string;
+  agents?: readonly { id: string; identity?: { name?: string } }[];
+};
+
+/** Formats qualified agent display facts or the recorded sender, never inferred person identity. */
+export function formatSenderLabel(
+  sender: SenderIdentity | null | undefined,
+  context: SenderLabelContext = {},
+): string | null {
+  const agentId = sender?.identity?.type === "agent" ? sender.identity.id : undefined;
+  if (agentId) {
+    const currentName = normalizeLabelPart(
+      agentId === context.agentId ? context.assistantName : undefined,
+    );
+    const catalogName = normalizeLabelPart(
+      context.agents?.find((agent) => agent.id === agentId)?.identity?.name,
+    );
+    if (currentName || catalogName) {
+      return currentName ?? catalogName;
+    }
+  }
   const displayName = normalizeLabelPart(sender?.name) ?? normalizeLabelPart(sender?.username);
   if (displayName) {
     return displayName;
   }
-  const id = normalizeLabelPart(sender?.id);
+  const id = normalizeLabelPart(sender?.id) ?? agentId;
   if (!id) {
     return null;
   }
