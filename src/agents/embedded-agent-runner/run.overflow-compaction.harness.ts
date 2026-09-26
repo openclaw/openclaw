@@ -30,6 +30,13 @@ import type { AgentHarnessAttemptParams } from "../harness/types.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import {
+  mockedResolveLiveToolResultAggregateMaxChars,
+  mockedResolveLiveToolResultMaxChars,
+  mockedSessionLikelyHasOversizedToolResults,
+  mockedTruncateOversizedToolResultsInSession,
+  resetOverflowToolResultTruncationMocks,
+} from "./run.overflow-tool-result-truncation.test-support.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -264,20 +271,6 @@ const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
 const mockedWaitForDeferredTurnMaintenanceForSession = vi.fn(
   async (_sessionKey?: string) => undefined,
 );
-const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
-const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
-type MockTruncateOversizedToolResultsResult = {
-  truncated: boolean;
-  truncatedCount: number;
-  reason?: string;
-};
-const mockedTruncateOversizedToolResultsInSession = vi.fn<
-  () => MockTruncateOversizedToolResultsResult
->(() => ({
-  truncated: false,
-  truncatedCount: 0,
-  reason: "no oversized tool results",
-}));
 
 type MockFailoverErrorDescription = {
   message: string;
@@ -525,16 +518,7 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
   mockedWaitForDeferredTurnMaintenanceForSession.mockReset();
   mockedWaitForDeferredTurnMaintenanceForSession.mockResolvedValue(undefined);
-  mockedSessionLikelyHasOversizedToolResults.mockReset();
-  mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
-  mockedResolveLiveToolResultMaxChars.mockReset();
-  mockedResolveLiveToolResultMaxChars.mockReturnValue(32_000);
-  mockedTruncateOversizedToolResultsInSession.mockReset();
-  mockedTruncateOversizedToolResultsInSession.mockReturnValue({
-    truncated: false,
-    truncatedCount: 0,
-    reason: "no oversized tool results",
-  });
+  resetOverflowToolResultTruncationMocks();
 
   mockedCoerceToFailoverError.mockReset();
   mockedCoerceToFailoverError.mockReturnValue(null);
@@ -913,6 +897,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./tool-result-truncation.js", () => ({
+    resolveLiveToolResultAggregateMaxChars: mockedResolveLiveToolResultAggregateMaxChars,
     resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
     sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
     truncateOversizedToolResultsInSessionManager: mockedTruncateOversizedToolResultsInSession,

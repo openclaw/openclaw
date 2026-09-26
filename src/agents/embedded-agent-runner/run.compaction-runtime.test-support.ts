@@ -4,6 +4,8 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { ToolResultMessage } from "../../llm/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -23,6 +25,7 @@ type FixtureOptions = {
   historicalTurns?: number;
   contextTokenBudget?: number;
   toolResultText?: string;
+  trailingAssistantText?: string;
 };
 export type RecoveryFixture = Awaited<ReturnType<typeof createRecoveryFixture>>;
 
@@ -99,6 +102,14 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     }),
     toolResult,
   ];
+  if (options.trailingAssistantText) {
+    messages.push(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: options.trailingAssistantText }],
+        timestamp: 6,
+      }),
+    );
+  }
   if (!memoryManager) {
     await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
   }
@@ -304,7 +315,10 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
           sessionIdUsed: sessionId,
           messagesSnapshot: messages,
           ...(mixedPreflight
-            ? { preflightRecovery: { route: "compact_then_truncate", source: "mid-turn" } }
+            ? {
+                promptErrorSource: "precheck" as const,
+                preflightRecovery: { route: "compact_then_truncate", source: "mid-turn" },
+              }
             : {}),
         }),
         runtimeAuthPlan: undefined,
@@ -355,6 +369,19 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
         markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
       });
+    };
+    const holdWriteAdmission = async () => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const reservation = runOpenClawAgentWorkerWrite(
+        { agentId: target.agentId, path: target.storePath, env: state.env },
+        async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      );
+      await entered.promise;
+      return { done: reservation, release: release.resolve };
     };
     const snapshot = async () => {
       await drain();
@@ -435,6 +462,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       recover,
       snapshot,
       invalidate,
+      holdWriteAdmission,
       openWriter,
       expectNoContinuation,
       assertActive,

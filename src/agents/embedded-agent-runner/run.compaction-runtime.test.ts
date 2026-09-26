@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
@@ -15,7 +16,7 @@ describe("embedded compaction recovery authority", () => {
   });
 
   it.each(["compacted", "failed"] as const)(
-    "shrinks current tool output without replaying archived resets after %s compaction",
+    "shrinks current tool output without replaying archived resets during %s recovery",
     async (outcome) => {
       await withRecoveryFixture({ historicalTurns: 4 }, async (fixture) => {
         const before = await fixture.snapshot();
@@ -68,6 +69,40 @@ describe("embedded compaction recovery authority", () => {
         expect(after.eventDigests.slice(0, before.eventDigests.length)).toEqual(
           before.eventDigests,
         );
+      },
+    );
+  });
+
+  it("keeps preflight truncation on live budgets while generic overflow uses recovery budgets", async () => {
+    await withRecoveryFixture(
+      {
+        contextTokenBudget: 200_000,
+        toolResultText: "x".repeat(48_000),
+        trailingAssistantText: "Follow-up answer",
+      },
+      async (fixture) => {
+        const before = await fixture.snapshot();
+
+        await expect(fixture.recover("overflow", true)).resolves.toEqual({ action: "retry" });
+
+        expect(fixture.compact).toHaveBeenCalledOnce();
+        expect((await fixture.snapshot()).toolResultChars).toBe(before.toolResultChars);
+        expect(before.toolResultChars).toBe(48_000);
+      },
+    );
+
+    await withRecoveryFixture(
+      { contextTokenBudget: 200_000, toolResultText: "x".repeat(48_000) },
+      async (fixture) => {
+        const before = await fixture.snapshot();
+
+        await expect(fixture.recover("overflow")).resolves.toEqual({ action: "retry" });
+
+        expect(fixture.compact).not.toHaveBeenCalled();
+        const after = await fixture.snapshot();
+        expect(after.toolResultChars).toBeGreaterThan(0);
+        expect(after.toolResultChars).toBeLessThanOrEqual(32_000);
+        expect(after.toolResultChars).toBeLessThan(before.toolResultChars);
       },
     );
   });
@@ -290,7 +325,6 @@ describe("embedded compaction recovery authority", () => {
 
   it.each([
     { kind: "overflow", oversized: false },
-    { kind: "overflow", oversized: true },
     { kind: "timeout", oversized: true },
   ] as const)(
     "preserves the exact caller error without post-abort work ($kind, oversized=$oversized)",
@@ -323,6 +357,35 @@ describe("embedded compaction recovery authority", () => {
     },
   );
 
+  it("rejects early transcript truncation when cancellation wins during write admission", async () => {
+    await withRecoveryFixture({ oversized: true }, async (fixture) => {
+      const before = await fixture.snapshot();
+      const admission = await fixture.holdWriteAdmission();
+      const recovery = fixture.recover("overflow").then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+
+      try {
+        await nextTurn();
+        fixture.stop();
+        admission.release();
+        await admission.done;
+
+        const outcome = await recovery;
+        expect(outcome).toEqual({ error: fixture.callerError });
+        expect(fixture.recoveryState.toolResultTruncationAttempted).toBe(true);
+        expect(fixture.compact).not.toHaveBeenCalled();
+        expect(await fixture.snapshot()).toEqual(before);
+        expect(fixture.updates).not.toHaveBeenCalled();
+        fixture.expectNoContinuation();
+      } finally {
+        admission.release();
+        await admission.done;
+      }
+    });
+  });
+
   it.each(
     (["overflow", "timeout"] as const).flatMap((kind) =>
       (["closed", "replaced", "writer-replaced"] as const).map((loss) => ({ kind, loss })),
@@ -330,7 +393,7 @@ describe("embedded compaction recovery authority", () => {
   )(
     "stops $kind recovery when authority is $loss without a caller signal",
     async ({ kind, loss }) => {
-      await withRecoveryFixture({}, async (fixture) => {
+      await withRecoveryFixture({ oversized: kind === "timeout" }, async (fixture) => {
         const before = await fixture.snapshot();
         fixture.updates.mockClear();
         fixture.compact.mockImplementationOnce(async () => {
@@ -398,9 +461,9 @@ describe("embedded compaction recovery authority", () => {
   });
 
   it.each(["engine failure", "safety timeout"] as const)(
-    "still truncates overflow after an independent %s while the caller is active",
+    "falls back to truncation after an independent %s while the caller is active",
     async (failure) => {
-      await withRecoveryFixture({}, async (fixture) => {
+      await withRecoveryFixture({ oversized: true }, async (fixture) => {
         const before = await fixture.snapshot();
         fixture.updates.mockClear();
         fixture.compact.mockImplementationOnce(async ({ abortSignal }) => {
@@ -410,8 +473,9 @@ describe("embedded compaction recovery authority", () => {
           return await waitForCompactionAbort(abortSignal);
         });
 
-        await expect(fixture.recover("overflow")).resolves.toEqual({ action: "retry" });
+        await expect(fixture.recover("overflow", true)).resolves.toEqual({ action: "retry" });
 
+        expect(fixture.compact).toHaveBeenCalledOnce();
         fixture.assertActive();
         expect(fixture.controller.signal.aborted).toBe(false);
         const after = await fixture.snapshot();
@@ -438,7 +502,7 @@ describe("embedded compaction recovery authority", () => {
         await import("./run/compaction-accounting-bridge.js");
       const compactionHooks = await import("./compaction-hooks.js");
       const postEffects = vi.spyOn(compactionHooks, "runPostCompactionSideEffects");
-      await withRecoveryFixture({ oversized: true }, async (fixture) => {
+      await withRecoveryFixture({ oversized: false }, async (fixture) => {
         const before = await fixture.snapshot();
         const entryBefore = fixture.loadEntry();
         const targetBefore = fixture.getSessionTarget();
@@ -509,7 +573,7 @@ describe("embedded compaction recovery authority", () => {
   it.each(["active", "closed", "replaced", "writer-replaced"] as const)(
     "binds a retained maintenance rewrite to its %s owner",
     async (owner) => {
-      await withRecoveryFixture({}, async (fixture) => {
+      await withRecoveryFixture({ oversized: false }, async (fixture) => {
         let retainedRewrite: ContextEngineRuntimeContext["rewriteTranscriptEntries"];
         fixture.maintain.mockImplementationOnce(async ({ runtimeContext }) => {
           retainedRewrite = runtimeContext?.rewriteTranscriptEntries;
