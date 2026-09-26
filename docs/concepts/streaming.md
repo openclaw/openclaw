@@ -327,12 +327,14 @@ Slack-only:
 
 - In `partial` mode, streams thinking and partial reply text into a single draft
   preview post that finalizes in place when the final answer is safe to send.
-- In `progress` mode, creates the progress preview atomically as
-  `custom_openclaw_progress`, pins the configured label,
-  sends the final answer as a separate normal post in the same conversation and
-  thread, then deletes progress only after that send succeeds. OpenClaw agents
-  ignore typed progress posts; human posts with the same visible prefix remain
-  normal input. Terminal failures retain a sanitized status post.
+- In `progress` mode, finalizes the editable preview in place by default, preserving
+  existing account behavior. With
+  `streaming.progress.finalDelivery: "separate"`, creates the progress preview
+  atomically as `custom_openclaw_progress`, pins the configured label, sends the
+  final answer as a separate normal post in the same conversation and thread,
+  then deletes progress only after that send succeeds. OpenClaw agents ignore
+  typed progress posts; human posts with the same visible prefix remain normal
+  input. Terminal failures retain a sanitized status post.
 - In `block` mode, rotates between completed text and tool-activity posts;
   parallel and consecutive tool updates share the current tool-activity post.
 - Falls back to sending a fresh final post if the preview post was deleted or

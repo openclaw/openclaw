@@ -7,6 +7,7 @@ import {
   buildMattermostModelPickerSelectMessageSid,
   canFinalizeMattermostPreviewInPlace,
   formatMattermostFinalDeliveryOutcomeLog,
+  resolveMattermostProgressDeliveryPolicy,
   resolveMattermostInteractionReplyRootId,
   resolveMattermostPendingHistoryKey,
   resolveMattermostReactionChannelId,
@@ -243,6 +244,66 @@ describe("shouldUpdateMattermostDraftToolProgress", () => {
           },
         },
       }),
+    ).toBe(false);
+  });
+});
+
+describe("resolveMattermostProgressDeliveryPolicy", () => {
+  type MattermostConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["mattermost"]>;
+
+  function resolvePolicy(mattermostConfig: MattermostConfig) {
+    const account = resolveMattermostAccount({
+      cfg: { channels: { mattermost: mattermostConfig } },
+      accountId: "default",
+    });
+    return resolveMattermostProgressDeliveryPolicy(account, "channel-1");
+  }
+
+  it.each([
+    {
+      name: "an absent finalDelivery value",
+      config: { streaming: { mode: "progress" as const } },
+    },
+    {
+      name: 'finalDelivery="in-place"',
+      config: {
+        streaming: {
+          mode: "progress" as const,
+          progress: { finalDelivery: "in-place" as const },
+        },
+      },
+    },
+  ])("keeps progress finals in place for $name", ({ config }) => {
+    expect(resolvePolicy(config)).toMatchObject({
+      separate: false,
+      postType: undefined,
+      pinnedLabel: undefined,
+    });
+  });
+
+  it('uses typed progress and separate finals only for finalDelivery="separate"', () => {
+    expect(
+      resolvePolicy({
+        streaming: {
+          mode: "progress",
+          progress: { finalDelivery: "separate", label: "Working" },
+        },
+      }),
+    ).toMatchObject({
+      separate: true,
+      postType: "custom_openclaw_progress",
+      pinnedLabel: "Working",
+    });
+  });
+
+  it("does not enable separate finals outside progress mode", () => {
+    expect(
+      resolvePolicy({
+        streaming: {
+          mode: "partial",
+          progress: { finalDelivery: "separate" },
+        },
+      }).separate,
     ).toBe(false);
   });
 });

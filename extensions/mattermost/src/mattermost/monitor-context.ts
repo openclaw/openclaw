@@ -22,7 +22,9 @@ export function resolveMattermostProgressDeliveryPolicy(
   account: Pick<ResolvedMattermostAccount, "accountId" | "config" | "streamingMode">,
   channelId: string,
 ) {
-  const separate = account.streamingMode === "progress";
+  const separate =
+    account.streamingMode === "progress" &&
+    account.config.streaming?.progress?.finalDelivery === "separate";
   const seed = `${account.accountId}:${channelId}`;
   const pinnedLabel = separate
     ? formatChannelProgressDraftText({ entry: account.config, lines: [], seed }).trim() || undefined

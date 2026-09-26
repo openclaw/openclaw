@@ -424,14 +424,14 @@ remain available in the session transcript.
 
 ## Channel behavior
 
-| Channel         | Progress transport                     | Notes                                                                                                                                                     |
-| --------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discord         | Send one message, then edit it.        | `progress` is explicit opt-in; the status draft is deleted after the final answer lands.                                                                  |
-| Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                                                             |
-| Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                           |
-| Slack           | Native stream or editable draft post.  | Card style is the default; `progress.style: "compact"` uses a temporary text draft, deleted after the final answer is delivered.                          |
-| Telegram        | Send one message, then edit it.        | If a message lands between the progress draft and the answer, the draft reposts below it (post-new-then-delete-old) instead of scroll-jumping the client. |
-| Mattermost      | Editable draft post.                   | `progress` sends a fresh final in the same conversation and removes the typed progress post only after success.                                           |
+| Channel         | Progress transport                     | Notes                                                                                                                                                          |
+| --------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discord         | Send one message, then edit it.        | `progress` is explicit opt-in; the status draft is deleted after the final answer lands.                                                                       |
+| Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                                                                  |
+| Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                                |
+| Slack           | Native stream or editable draft post.  | Card style is the default; `progress.style: "compact"` uses a temporary text draft, deleted after the final answer is delivered.                               |
+| Telegram        | Send one message, then edit it.        | If a message lands between the progress draft and the answer, the draft reposts below it (post-new-then-delete-old) instead of scroll-jumping the client.      |
+| Mattermost      | Editable draft post.                   | `progress` finalizes in place by default; `progress.finalDelivery: "separate"` opts into a fresh final and removes the typed progress post only after success. |
 
 Channels without safe edit support fall back to typing indicators or
 final-only delivery. See [Streaming and chunking](/concepts/streaming) for the
@@ -456,11 +456,12 @@ thread routing, and the concrete terminal status update.
   message and the status draft is deleted once that answer is delivered. Busy
   channels keep no orphaned tool log above the reply; error finals keep the draft
   as the visible record of the failed turn.
-- In `progress` mode on Mattermost, OpenClaw creates a typed progress post that
-  peer OpenClaw agents ignore, pins its label,
-  sends the final as a separate normal post in the same conversation and thread,
-  then deletes progress only after confirmed delivery. A failed run or failed
-  final send retains a sanitized status post.
+- In `progress` mode on Mattermost, OpenClaw finalizes the draft in place by
+  default. With `progress.finalDelivery: "separate"`, it creates a typed progress
+  post that peer OpenClaw agents ignore, pins its label, sends the final as a
+  separate normal post in the same conversation and thread, then deletes progress
+  only after confirmed delivery. A failed run or failed final send retains a
+  sanitized status post.
 - If the draft can safely become the final answer (`partial`/`block` modes),
   OpenClaw edits it in place.
 - Slack's compact progress style posts the final answer as a new message and
