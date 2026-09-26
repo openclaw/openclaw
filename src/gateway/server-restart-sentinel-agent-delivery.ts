@@ -186,6 +186,15 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
     await params.persistInternalMedia?.(provenExpectedMediaUrls);
     return;
   }
+  if (params.result.deliveryStatus?.queueCustody === "held") {
+    // A transport no-send is not permission to replay: the outbound queue can
+    // still recover it. Stop this parent without claiming recipient delivery.
+    await deadLetterSessionDelivery(
+      params.entry,
+      "queued generated-media delivery dead-lettered because outbound recovery retains delivery custody",
+      params.queueContext,
+    );
+  }
   const rearmAgentRun = async (
     reason: string,
     updates?: {

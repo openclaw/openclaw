@@ -32,6 +32,8 @@ export type RestartRecoveryTerminalDeliveryEvidenceResult = {
     status: "failed" | "partial_failed" | "sent" | "suppressed";
     resultCount?: number;
     errorMessage?: string;
+    /** Outbound recovery owns the failed send; a parent must not replay it. */
+    queueCustody?: "held";
     payloadOutcomes?: Array<{
       index: number;
       status: "failed" | "sent" | "suppressed";

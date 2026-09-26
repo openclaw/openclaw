@@ -28,6 +28,7 @@ export type AgentDeliveryEvidence = {
     errorMessage?: unknown;
     reason?: unknown;
     payloadOutcomes?: unknown;
+    queueCustody?: unknown;
   };
   didSendViaMessagingTool?: unknown;
   didSendDeterministicApprovalPrompt?: unknown;
