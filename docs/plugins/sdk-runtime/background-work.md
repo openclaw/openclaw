@@ -308,8 +308,9 @@ receipt only from that transition's returned record. Carry the successor through
 later mutations, events, and delivery; never adopt it from a fresh task lookup.
 
 On hosts that provide them, await the scoped runtime's optional
-`finalizeTaskRunByRunIdAsync(...)` and `setDetachedTaskDeliveryStatusByRunIdAsync(...)`
-methods for background completion. Core persistence waits run through its existing
+`createRunningTaskRunAsync(...)`, `finalizeTaskRunByRunIdAsync(...)`, and
+`setDetachedTaskDeliveryStatusByRunIdAsync(...)` methods for task creation and
+background completion. Core persistence waits run through its existing
 worker and retain the same `expectedTask` and `completionCustody` fences. Custom
 runtimes keep their registered exact-assignment adapter; asynchronous callers never
 fall through to core when an adapter is present.
@@ -318,6 +319,9 @@ For admission checks, await `prepareTaskRunRead(runId)` before delivery. Its ret
 accessor reads current resident records without synchronous database I/O. It rejects
 if the runtime, store, or relevant task identity is no longer prepared. Prepare again
 on a later attempt; do not treat a rejected read as proof that the task is absent.
+Custom runtimes keep their synchronous V1 creation and lookup contracts. A custom
+`findTaskRun` hook remains authoritative for adapter-owned records; without that
+hook, an empty core read cannot prove that an adapter-owned task is absent.
 The accessor follows settled updates, but it never grants ownership of a replacement
 assignment. Continue checking the original `expectedTask` on every effect.
 

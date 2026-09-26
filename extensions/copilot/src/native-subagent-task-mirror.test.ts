@@ -38,7 +38,10 @@ function makeEvent<T extends NativeSubagentEventType>(
 function createRuntime() {
   const records = new Map<string, AgentHarnessTaskRecord>();
   const runtime = {
-    tryCreateRunningTaskRun: vi.fn<AgentHarnessTaskRuntime["tryCreateRunningTaskRun"]>((params) => {
+    assertTaskAssignmentSupported: vi.fn(),
+    createRunningTaskRunAsync: vi.fn<
+      NonNullable<AgentHarnessTaskRuntime["createRunningTaskRunAsync"]>
+    >(async (params) => {
       const task: AgentHarnessTaskRecord = {
         taskId: `task-${params.runId}`,
         runtime: "subagent",
@@ -56,7 +59,9 @@ function createRuntime() {
       records.set(task.taskId, task);
       return task;
     }),
-    finalizeTaskRunByRunId: vi.fn<AgentHarnessTaskRuntime["finalizeTaskRunByRunId"]>((params) => {
+    finalizeTaskRunByRunIdAsync: vi.fn<
+      NonNullable<AgentHarnessTaskRuntime["finalizeTaskRunByRunIdAsync"]>
+    >(async (params) => {
       const current = [...records.values()].find((task) => task.runId === params.runId);
       if (!current) {
         return [];
@@ -73,10 +78,17 @@ function createRuntime() {
       records.set(task.taskId, task);
       return [task];
     }),
-    listTaskRecords: vi.fn<AgentHarnessTaskRuntime["listTaskRecords"]>(() => [...records.values()]),
-  } satisfies Pick<
-    AgentHarnessTaskRuntime,
-    "tryCreateRunningTaskRun" | "finalizeTaskRunByRunId" | "listTaskRecords"
+    prepareTaskRunRead: vi.fn<NonNullable<AgentHarnessTaskRuntime["prepareTaskRunRead"]>>(
+      async (runId) => () => [...records.values()].filter((task) => task.runId === runId),
+    ),
+  } satisfies Required<
+    Pick<
+      AgentHarnessTaskRuntime,
+      | "assertTaskAssignmentSupported"
+      | "createRunningTaskRunAsync"
+      | "finalizeTaskRunByRunIdAsync"
+      | "prepareTaskRunRead"
+    >
   >;
   return { ...runtime, records };
 }
@@ -101,11 +113,11 @@ describe("CopilotNativeSubagentTaskMirror", () => {
     expect(createCopilotNativeSubagentTaskMirror({})).toBeUndefined();
   });
 
-  it("mirrors start and completion using agentId with toolCallId fallback", () => {
+  it("mirrors start and completion using agentId with toolCallId fallback", async () => {
     const runtime = createRuntime();
     const mirror = createMirror(runtime, { agentId: "parent-agent", now: () => 100 });
 
-    mirror.handleEvent(
+    await mirror.handleEvent(
       makeEvent(
         "subagent.started",
         {
@@ -117,7 +129,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
         "child-1",
       ),
     );
-    mirror.handleEvent(
+    await mirror.handleEvent(
       makeEvent(
         "subagent.completed",
         {
@@ -131,7 +143,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       ),
     );
 
-    expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledWith({
+    expect(runtime.createRunningTaskRunAsync).toHaveBeenCalledWith({
       sourceId: "call-1",
       agentId: "parent-agent",
       runId: "copilot-agent:child-1",
@@ -144,8 +156,18 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       lastEventAt: 100,
       progressSummary: "Subagent started.",
     });
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
+    expect(runtime.finalizeTaskRunByRunIdAsync).toHaveBeenCalledWith({
       runId: "copilot-agent:child-1",
+      expectedTask: {
+        taskId: "task-copilot-agent:child-1",
+        runId: "copilot-agent:child-1",
+        runtime: "subagent",
+        taskKind: "copilot-native",
+        ownerKey: "agent:parent:session",
+        scopeKind: "session",
+        createdAt: 0,
+        childSessionKey: undefined,
+      },
       status: "succeeded",
       endedAt: 100,
       lastEventAt: 100,
@@ -154,11 +176,11 @@ describe("CopilotNativeSubagentTaskMirror", () => {
     });
   });
 
-  it("uses toolCallId when the SDK omits agentId", () => {
+  it("uses toolCallId when the SDK omits agentId", async () => {
     const runtime = createRuntime();
     const mirror = createMirror(runtime, { now: () => 200 });
 
-    mirror.handleEvent(
+    await mirror.handleEvent(
       makeEvent("subagent.started", {
         agentDescription: "",
         agentDisplayName: "Researcher",
@@ -166,7 +188,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
         toolCallId: "call-2",
       }),
     );
-    mirror.handleEvent(
+    await mirror.handleEvent(
       makeEvent("subagent.failed", {
         agentDisplayName: "Researcher",
         agentName: "researcher",
@@ -175,7 +197,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       }),
     );
 
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+    expect(runtime.finalizeTaskRunByRunIdAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "copilot-agent:call-2",
         status: "failed",
@@ -184,12 +206,12 @@ describe("CopilotNativeSubagentTaskMirror", () => {
     );
   });
 
-  it("keeps parallel subagents distinct when they share a parent tool call", () => {
+  it("keeps parallel subagents distinct when they share a parent tool call", async () => {
     const runtime = createRuntime();
     const mirror = createMirror(runtime, { now: () => 250 });
 
     for (const agentId of ["child-1", "child-2"]) {
-      mirror.handleEvent(
+      await mirror.handleEvent(
         makeEvent(
           "subagent.started",
           {
@@ -203,7 +225,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       );
     }
     for (const agentId of ["child-1", "child-2"]) {
-      mirror.handleEvent(
+      await mirror.handleEvent(
         makeEvent(
           "subagent.completed",
           {
@@ -216,23 +238,23 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       );
     }
 
-    expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledTimes(2);
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(2);
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(
+    expect(runtime.createRunningTaskRunAsync).toHaveBeenCalledTimes(2);
+    expect(runtime.finalizeTaskRunByRunIdAsync).toHaveBeenCalledTimes(2);
+    expect(runtime.finalizeTaskRunByRunIdAsync).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ runId: "copilot-agent:child-1" }),
     );
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(
+    expect(runtime.finalizeTaskRunByRunIdAsync).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ runId: "copilot-agent:child-2" }),
     );
   });
 
-  it("finalizes active tasks when the parent attempt tears down", () => {
+  it("finalizes active tasks when the parent attempt tears down", async () => {
     const runtime = createRuntime();
     const mirror = createMirror(runtime, { now: () => 300 });
 
-    mirror.handleEvent(
+    await mirror.handleEvent(
       makeEvent("subagent.started", {
         agentDescription: "inspect",
         agentDisplayName: "Researcher",
@@ -240,17 +262,19 @@ describe("CopilotNativeSubagentTaskMirror", () => {
         toolCallId: "call-3",
       }),
     );
-    mirror.finalizeActiveRuns();
+    await mirror.finalizeActiveRuns();
 
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
-      runId: "copilot-agent:call-3",
-      status: "cancelled",
-      endedAt: 300,
-      lastEventAt: 300,
-      error: "Subagent ended with its parent attempt.",
-      progressSummary: "Subagent cancelled with its parent attempt.",
-      terminalSummary: "Subagent cancelled.",
-    });
+    expect(runtime.finalizeTaskRunByRunIdAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "copilot-agent:call-3",
+        status: "cancelled",
+        endedAt: 300,
+        lastEventAt: 300,
+        error: "Subagent ended with its parent attempt.",
+        progressSummary: "Subagent cancelled with its parent attempt.",
+        terminalSummary: "Subagent cancelled.",
+      }),
+    );
   });
 
   it.each([
@@ -260,7 +284,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
     { terminal: "subagent.failed", failureMode: "empty" },
   ] as const)(
     "retries the original $terminal result after $failureMode",
-    ({ terminal, failureMode }) => {
+    async ({ terminal, failureMode }) => {
       const runtime = createRuntime();
       let now = 100;
       const mirror = createMirror(runtime, { now: () => now });
@@ -270,13 +294,11 @@ describe("CopilotNativeSubagentTaskMirror", () => {
         agentName: "researcher",
         toolCallId: "call-retry",
       };
-      mirror.handleEvent(makeEvent("subagent.started", data, "child-retry"));
+      await mirror.handleEvent(makeEvent("subagent.started", data, "child-retry"));
       if (failureMode === "throw") {
-        runtime.finalizeTaskRunByRunId.mockImplementationOnce(() => {
-          throw new Error("store unavailable");
-        });
+        runtime.finalizeTaskRunByRunIdAsync.mockRejectedValueOnce(new Error("store unavailable"));
       } else {
-        runtime.finalizeTaskRunByRunId.mockReturnValueOnce([]);
+        runtime.finalizeTaskRunByRunIdAsync.mockResolvedValueOnce([]);
       }
       const completed = makeEvent(
         "subagent.completed",
@@ -288,12 +310,12 @@ describe("CopilotNativeSubagentTaskMirror", () => {
         { ...data, error: "child failed" },
         "child-retry",
       );
-      expect(() =>
+      await expect(
         mirror.handleEvent(terminal === "subagent.completed" ? completed : failed),
-      ).toThrow(failureMode === "throw" ? "store unavailable" : "did not persist");
+      ).rejects.toThrow(failureMode === "throw" ? "store unavailable" : "did not persist");
       expect([...runtime.records.values()][0]?.status).toBe("running");
       now = 200;
-      mirror.handleEvent(terminal === "subagent.completed" ? failed : completed);
+      await mirror.handleEvent(terminal === "subagent.completed" ? failed : completed);
       expect([...runtime.records.values()]).toEqual([
         expect.objectContaining({
           taskId: "task-copilot-agent:child-retry",
@@ -307,18 +329,18 @@ describe("CopilotNativeSubagentTaskMirror", () => {
               : "Subagent failed.",
         }),
       ]);
-      mirror.handleEvent(completed);
-      mirror.finalizeActiveRuns();
-      expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(2);
+      await mirror.handleEvent(completed);
+      await mirror.finalizeActiveRuns();
+      expect(runtime.finalizeTaskRunByRunIdAsync).toHaveBeenCalledTimes(2);
     },
   );
 
-  it("finalizes every active child and retains failed cancellation for retry", () => {
+  it("finalizes every active child and retains failed cancellation for retry", async () => {
     const runtime = createRuntime();
     let now = 100;
     const mirror = createMirror(runtime, { now: () => now });
     for (const toolCallId of ["call-1", "call-2"]) {
-      mirror.handleEvent(
+      await mirror.handleEvent(
         makeEvent("subagent.started", {
           agentDescription: "inspect",
           agentDisplayName: "Researcher",
@@ -327,26 +349,24 @@ describe("CopilotNativeSubagentTaskMirror", () => {
         }),
       );
     }
-    runtime.finalizeTaskRunByRunId.mockImplementationOnce(() => {
-      throw new Error("store unavailable");
-    });
-    expect(() => mirror.finalizeActiveRuns()).toThrow("store unavailable");
+    runtime.finalizeTaskRunByRunIdAsync.mockRejectedValueOnce(new Error("store unavailable"));
+    await expect(mirror.finalizeActiveRuns()).rejects.toThrow("store unavailable");
     expect([...runtime.records.values()].map((task) => task.status)).toEqual([
       "running",
       "cancelled",
     ]);
     now = 200;
-    mirror.finalizeActiveRuns();
+    await mirror.finalizeActiveRuns();
     expect([...runtime.records.values()]).toEqual([
       expect.objectContaining({ status: "cancelled", endedAt: 100 }),
       expect.objectContaining({ status: "cancelled", endedAt: 100 }),
     ]);
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(3);
+    expect(runtime.finalizeTaskRunByRunIdAsync).toHaveBeenCalledTimes(3);
   });
 
-  it.each(["removed", "replacement", "terminal"] as const)(
-    "accepts empty finalization only when the owned task is %s",
-    (disposition) => {
+  it.each(["removed", "replacement", "same-ID replacement", "terminal"] as const)(
+    "skips finalization when the owned task is %s",
+    async (disposition) => {
       const runtime = createRuntime();
       const mirror = createMirror(runtime);
       const data = {
@@ -355,7 +375,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
         agentName: "researcher",
         toolCallId: "call-1",
       };
-      mirror.handleEvent(makeEvent("subagent.started", data));
+      await mirror.handleEvent(makeEvent("subagent.started", data));
       const task = [...runtime.records.values()][0];
       if (!task) {
         throw new Error("Expected persisted native task");
@@ -363,15 +383,40 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       runtime.records.delete(task.taskId);
       if (disposition === "replacement") {
         runtime.records.set("replacement", { ...task, taskId: "replacement" });
+      } else if (disposition === "same-ID replacement") {
+        runtime.records.set(task.taskId, { ...task, createdAt: task.createdAt + 1 });
       } else if (disposition === "terminal") {
         runtime.records.set(task.taskId, { ...task, status: "cancelled", endedAt: 50 });
       }
-      mirror.handleEvent(makeEvent("subagent.completed", data));
-      mirror.finalizeActiveRuns();
-      expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+      await mirror.handleEvent(makeEvent("subagent.completed", data));
+      await mirror.finalizeActiveRuns();
+      expect(runtime.finalizeTaskRunByRunIdAsync).not.toHaveBeenCalled();
       expect([...runtime.records.values()].map((record) => record.status)).toEqual(
         disposition === "removed" ? [] : [disposition === "terminal" ? "cancelled" : "running"],
       );
     },
   );
+
+  it("retains a failed start for teardown and clears it after creation succeeds", async () => {
+    const runtime = createRuntime();
+    const mirror = createMirror(runtime);
+    const data = {
+      agentDescription: "inspect",
+      agentDisplayName: "Researcher",
+      agentName: "researcher",
+      toolCallId: "call-start-retry",
+    };
+    const failure = new Error("creation unavailable");
+    runtime.createRunningTaskRunAsync.mockRejectedValueOnce(failure);
+    await expect(mirror.handleEvent(makeEvent("subagent.started", data))).rejects.toBe(failure);
+    await expect(mirror.finalizeActiveRuns()).rejects.toBe(failure);
+    expect(runtime.records.size).toBe(0);
+
+    await mirror.handleEvent(makeEvent("subagent.started", data));
+    await mirror.handleEvent(makeEvent("subagent.completed", data));
+    await mirror.finalizeActiveRuns();
+    expect([...runtime.records.values()]).toEqual([
+      expect.objectContaining({ runId: "copilot-agent:call-start-retry", status: "succeeded" }),
+    ]);
+  });
 });

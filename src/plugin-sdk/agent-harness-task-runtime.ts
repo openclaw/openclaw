@@ -39,6 +39,7 @@ import {
 import { DetachedTaskAssignmentUnsupportedError } from "../tasks/detached-task-runtime-contract.js";
 import { captureDetachedTaskRuntimeOwner } from "../tasks/detached-task-runtime-state.js";
 import {
+  createRunningTaskRunAsync,
   finalizeTaskRunByRunIdAsync,
   setDetachedTaskDeliveryStatusByRunIdAsync,
   transitionTaskAssignmentAsync,
@@ -171,6 +172,10 @@ export type AgentHarnessTaskRuntime = {
     params: AgentHarnessScopedSetDeliveryStatusParams,
   ): TaskRecord[];
   listTaskRecords(): TaskRecord[];
+  /** Worker-backed creation on hosts that support asynchronous task persistence. */
+  createRunningTaskRunAsync?(
+    params: AgentHarnessScopedCreateRunningTaskRunParams,
+  ): Promise<TaskRecord>;
   /** Worker-backed settlement on hosts that support asynchronous task persistence. */
   finalizeTaskRunByRunIdAsync?(
     params: AgentHarnessScopedFinalizeTaskRunParams,
@@ -271,6 +276,25 @@ export function createAgentHarnessTaskRuntime(
       return task;
     },
     tryCreateRunningTaskRun,
+    async createRunningTaskRunAsync(taskParams) {
+      assertRunId(taskParams.runId);
+      const task = await createRunningTaskRunAsync(
+        {
+          ...projectTaskContentForPersistence(incognito, taskParams),
+          runtime,
+          ...(taskKind ? { taskKind } : {}),
+          requesterSessionKey,
+          ownerKey: requesterSessionKey,
+          scopeKind: "session",
+          executionOwner,
+        },
+        assertRuntimeCurrent,
+      );
+      if (!task) {
+        throw new Error("Task persistence failed.");
+      }
+      return task;
+    },
     recordTaskRunProgressByRunId(taskParams) {
       assertRunId(taskParams.runId);
       const { expectedTask, completionCustody, ...progress } = projectTaskContentForPersistence(
@@ -362,6 +386,21 @@ export function createAgentHarnessTaskRuntime(
     async prepareTaskRunRead(runId) {
       assertRunId(runId);
       assertRuntimeCurrent();
+      const adapter = runtimeOwner.runtime;
+      const findTaskRun = adapter?.findTaskRun?.bind(adapter);
+      if (findTaskRun) {
+        return () => {
+          assertRuntimeCurrent();
+          const task = findTaskRun({
+            runId,
+            runtime,
+            sessionKey: requesterSessionKey,
+            createdAtOrAfter: 0,
+          });
+          assertRuntimeCurrent();
+          return task && task.runId === runId && matchesScope(task) ? [task] : [];
+        };
+      }
       const read = await prepareTaskRegistryRead();
       assertRuntimeCurrent();
       if (!read) {
@@ -369,7 +408,11 @@ export function createAgentHarnessTaskRuntime(
       }
       return () => {
         assertRuntimeCurrent();
-        return read.getTasksByRunId(runId).filter(matchesScope);
+        const tasks = read.getTasksByRunId(runId).filter(matchesScope);
+        if (adapter && tasks.length === 0) {
+          throw new Error("Custom task runtime must provide findTaskRun to confirm task absence");
+        }
+        return tasks;
       };
     },
     listTaskRecords() {

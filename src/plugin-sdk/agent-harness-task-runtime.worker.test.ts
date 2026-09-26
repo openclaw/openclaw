@@ -1,5 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -13,6 +13,7 @@ import { updateTask } from "../tasks/task-registry-mutation.js";
 import { getTaskById } from "../tasks/task-registry-query.js";
 import { prepareTaskRegistryRead } from "../tasks/task-registry-read.js";
 import { getTaskRegistryStore } from "../tasks/task-registry.store.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
@@ -43,7 +44,70 @@ afterEach(() => {
   resetAgentEventsForTest({ preserveListeners: true });
 });
 
-it.each(["terminal", "delivery", "read"] as const)(
+it("keeps custom task creation, reads, refusal, and exact settlement with the captured adapter", async () => {
+  let task: TaskRecord | undefined;
+  const failure = new Error("adapter lookup unavailable");
+  const findTaskRun = vi.fn(() => task);
+  setDetachedTaskLifecycleRuntime({
+    ...getDetachedTaskLifecycleRuntime(),
+    createRunningTaskRun(params) {
+      const created: TaskRecord = {
+        runtime: params.runtime,
+        taskKind: params.taskKind,
+        runId: params.runId,
+        task: params.task,
+        requesterSessionKey,
+        ownerKey: requesterSessionKey,
+        scopeKind: "session",
+        taskId: "adapter-only-task",
+        status: "running",
+        notifyPolicy: "silent",
+        deliveryStatus: "not_applicable",
+        createdAt: 1,
+      };
+      task = created;
+      return created;
+    },
+    findTaskRun,
+    transitionTaskAssignment(params) {
+      params.assertCurrent();
+      expect(params.expectedTask.taskId).toBe("adapter-only-task");
+      if (!task || params.transition.kind !== "state") {
+        throw new Error("Expected an owned state transition");
+      }
+      task = { ...task, status: "succeeded" };
+      return [task];
+    },
+  });
+  try {
+    const runtime = createRuntime();
+    runtime.assertTaskAssignmentSupported();
+    const created = await runtime.createRunningTaskRunAsync!({ runId, task: "Adapter-owned" });
+    const read = await runtime.prepareTaskRunRead!(runId);
+    expect(read()).toEqual([created]);
+    findTaskRun.mockImplementationOnce(() => {
+      throw failure;
+    });
+    expect(read).toThrow(failure);
+    await expect(
+      runtime.finalizeTaskRunByRunIdAsync!({
+        runId,
+        expectedTask: captureAgentHarnessTaskAssignment(created),
+        status: "succeeded",
+        endedAt: 2,
+      }),
+    ).resolves.toMatchObject([{ taskId: "adapter-only-task", status: "succeeded" }]);
+    expect(read()).toMatchObject([{ taskId: "adapter-only-task", status: "succeeded" }]);
+    task = undefined;
+    expect(read()).toEqual([]);
+    resetDetachedTaskLifecycleRuntimeForTests();
+    expect(read).toThrow("owner changed");
+  } finally {
+    resetDetachedTaskLifecycleRuntimeForTests();
+  }
+});
+
+it.each(["creation", "terminal", "delivery", "read"] as const)(
   "keeps the event loop progressing through contended harness %s persistence",
   async (operation) => {
     await withOpenClawTestState({ layout: "split" }, async (state) => {
@@ -79,11 +143,22 @@ it.each(["terminal", "delivery", "read"] as const)(
             1000,
           );
           let settled: Promise<PromiseSettledResult<unknown>[]> | undefined;
+          let observedTaskId = task.taskId;
           try {
             await holder.ready;
             const heartbeat = nextTurn().then(() => Atomics.load(holder.released, 0));
             let pending: Promise<unknown>;
-            if (operation === "read") {
+            if (operation === "creation") {
+              pending = runtime.createRunningTaskRunAsync!({
+                runId: "harness:created",
+                task: "Worker-created mirror",
+                notifyPolicy: "silent",
+                deliveryStatus: "not_applicable",
+              }).then((created) => {
+                observedTaskId = created.taskId;
+                return [created];
+              });
+            } else if (operation === "read") {
               emitAgentEvent({
                 runId,
                 stream: "lifecycle",
@@ -104,16 +179,16 @@ it.each(["terminal", "delivery", "read"] as const)(
             holder.release();
             expect(await pending).toMatchObject([
               {
-                taskId: task.taskId,
-                status: "succeeded",
+                taskId: observedTaskId,
+                status: operation === "creation" ? "running" : "succeeded",
                 ...(operation === "delivery" ? { deliveryStatus: "delivered" } : {}),
               },
             ]);
             const snapshot = await getTaskRegistryStore().loadMutationSnapshotAsync(context, {
-              taskId: task.taskId,
+              taskId: observedTaskId,
             });
-            expect(snapshot.tasks.get(task.taskId)).toMatchObject({
-              status: "succeeded",
+            expect(snapshot.tasks.get(observedTaskId)).toMatchObject({
+              status: operation === "creation" ? "running" : "succeeded",
               ...(operation === "delivery" ? { deliveryStatus: "delivered" } : {}),
             });
           } finally {
