@@ -46,7 +46,7 @@ export async function buildAgentsApiInstructions(
     warn: (message) => embeddedAgentLog.warn(message),
     memoryToolRouted,
     memoryTools: shouldIncludeRuntimeContext(params)
-      ? { toolNames: memoryToolNames, citationsMode: params.config?.memory?.citations }
+      ? { toolNames: [...toolNames], citationsMode: params.config?.memory?.citations }
       : undefined,
   });
   const messageTool = tools.find((tool) => tool.name === "message");
