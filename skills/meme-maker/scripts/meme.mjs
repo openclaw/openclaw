@@ -154,6 +154,18 @@ function extFromUrl(url) {
   return ext && ext.length <= 5 ? ext : ".img";
 }
 
+const MIME_BY_EXT = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+};
+
+function mimeFromExt(ext) {
+  return MIME_BY_EXT[ext] ?? "application/octet-stream";
+}
+
 async function fetchBuffer(url) {
   const response = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
   if (!response.ok) throw new Error(`Fetch failed ${response.status} for ${url}`);
@@ -246,7 +258,7 @@ function defaultBoxes(count) {
 
 async function renderLocal(template, texts, flags) {
   const { buffer } = await cachedTemplateImage(template);
-  const imageMime = extFromUrl(template.imageUrl) === ".png" ? "image/png" : "image/jpeg";
+  const imageMime = mimeFromExt(extFromUrl(template.imageUrl));
   const imageData = `data:${imageMime};base64,${buffer.toString("base64")}`;
   const boxes = template.boxes?.length
     ? template.boxes
@@ -404,6 +416,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`error: ${error.message}`);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`error: ${message}`);
   process.exit(1);
 });
