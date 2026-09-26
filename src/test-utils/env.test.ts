@@ -87,13 +87,16 @@ describe("env test utils", () => {
   it("withEnv can delete a key only inside callback", () => {
     const key = "OPENCLAW_ENV_TEST_SYNC_DELETE";
     const prev = process.env[key];
-    setTestEnvValue(key, "outer");
+    try {
+      setTestEnvValue(key, "outer");
 
-    const seen = withEnv({ [key]: undefined }, () => process.env[key]);
+      const seen = withEnv({ [key]: undefined }, () => process.env[key]);
 
-    expect(seen).toBeUndefined();
-    expect(process.env[key]).toBe("outer");
-    restoreEnvKey(key, prev);
+      expect(seen).toBeUndefined();
+      expect(process.env[key]).toBe("outer");
+    } finally {
+      restoreEnvKey(key, prev);
+    }
   });
 
   it("withEnvAsync restores values when callback throws", async () => {
@@ -123,13 +126,16 @@ describe("env test utils", () => {
   it("withEnvAsync can delete a key only inside callback", async () => {
     const key = "OPENCLAW_ENV_TEST_ASYNC_DELETE";
     const prev = process.env[key];
-    setTestEnvValue(key, "outer");
+    try {
+      setTestEnvValue(key, "outer");
 
-    const seen = await withEnvAsync({ [key]: undefined }, async () => process.env[key]);
+      const seen = await withEnvAsync({ [key]: undefined }, async () => process.env[key]);
 
-    expect(seen).toBeUndefined();
-    expect(process.env[key]).toBe("outer");
-    restoreEnvKey(key, prev);
+      expect(seen).toBeUndefined();
+      expect(process.env[key]).toBe("outer");
+    } finally {
+      restoreEnvKey(key, prev);
+    }
   });
 
   it("createPathResolutionEnv clears leaked path overrides before applying explicit ones", () => {
