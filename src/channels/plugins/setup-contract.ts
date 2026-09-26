@@ -109,7 +109,7 @@ type ChannelSetupContractAdapterParams<Fields extends Record<string, ChannelSetu
     }
   | {
       adapter?: never;
-      legacyAdapter: ChannelSetupAdapter<ChannelSetupInput>;
+      legacyAdapter: ChannelSetupAdapter;
     };
 
 export type ChannelOwnedSetupContract = {
@@ -165,7 +165,7 @@ type ChannelSetupExecutionAdapter = Omit<
 /** Adapts the released shared-bag contract at one explicit compatibility boundary. */
 export function resolveChannelSetupExecutionAdapter(plugin: {
   setupContract?: ChannelOwnedSetupContract;
-  setup?: ChannelSetupAdapter<ChannelSetupInput>;
+  setup?: ChannelSetupAdapter;
 }): ChannelSetupExecutionAdapter | undefined {
   // Legacy callbacks receive the same caller-prepared object as owned contracts;
   // retain their published shape without allocating a parallel wrapper chain.

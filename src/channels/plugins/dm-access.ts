@@ -220,7 +220,7 @@ export function normalizeLegacyDmAliases(params: {
     return { entry: params.entry, changed: false };
   }
   const dm = { ...rawDm };
-  let updated = params.entry;
+  let updated = { ...params.entry };
   let changed = false;
   // Canonical values win; equal aliases are removed so Doctor repairs are idempotent.
   // Some channels still use nested allowlists and opt out of their promotion.
@@ -237,7 +237,7 @@ export function normalizeLegacyDmAliases(params: {
       continue;
     }
     if (canonical === undefined) {
-      updated = { ...updated, [topKey]: legacy };
+      updated[topKey] = legacy;
       params.changes.push(
         `Moved ${params.pathPrefix}.dm.${legacyKey} → ${params.pathPrefix}.${topKey}.`,
       );
