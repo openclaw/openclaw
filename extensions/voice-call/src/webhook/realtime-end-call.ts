@@ -126,9 +126,9 @@ export async function executeRealtimeEndCallTool(params: {
     await params.bridge.submitToolResult(
       params.bridgeCallId,
       toolResult,
-      params.bridge.bridge.supportsToolResultSuppression === false
-        ? undefined
-        : { suppressResponse: true },
+      drainResult === "interrupted" && params.bridge.bridge.supportsToolResultSuppression !== false
+        ? { suppressResponse: true }
+        : undefined,
     );
     params.harness.emit({
       type: "tool.result",

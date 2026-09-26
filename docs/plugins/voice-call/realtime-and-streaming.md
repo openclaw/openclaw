@@ -103,7 +103,8 @@ successful call waits for the carrier to confirm that buffered speech finished
 playing, then ends the current provider session and phone connection. If
 playback is interrupted or the carrier does not confirm it before a bounded
 timeout that accounts for estimated buffered audio duration, the requested hangup is
-canceled and the bridge stays connected. If
+canceled and the bridge stays connected. A timeout lets the realtime model speak
+a recovery response; caller interruption suppresses that unsolicited reply. If
 the carrier later cannot end the call, the bridge also stays connected and the
 model receives an error it can explain to the caller. Configured
 `realtime.tools` cannot replace this built-in by name.

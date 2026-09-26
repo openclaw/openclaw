@@ -1339,7 +1339,7 @@ describe("RealtimeCallHandler path routing", () => {
               "Farewell playback could not be confirmed before the timeout. Keep the phone call connected and continue with the caller.",
             status: "cancelled",
           },
-          { suppressResponse: true },
+          undefined,
         );
       });
       expect(endCall).not.toHaveBeenCalled();
