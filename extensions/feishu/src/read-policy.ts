@@ -6,10 +6,6 @@ import { ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  resolveDefaultGroupPolicy,
-  resolveOpenProviderRuntimeGroupPolicy,
-} from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
 import {
@@ -17,6 +13,7 @@ import {
   normalizeFeishuAllowEntry,
   resolveFeishuGroupConfig,
 } from "./policy.js";
+import { resolveFeishuRuntimeGroupPolicy } from "./runtime-group-policy.js";
 import { detectIdType, normalizeFeishuTarget } from "./targets.js";
 import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
@@ -89,10 +86,9 @@ function isCurrentChat(params: {
 }
 
 function resolveFeishuReadGroupPolicy(cfg: OpenClawConfig, account: ResolvedFeishuAccount) {
-  return resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: cfg.channels?.feishu !== undefined,
+  return resolveFeishuRuntimeGroupPolicy({
+    cfg,
     groupPolicy: account.config.groupPolicy,
-    defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),
   }).groupPolicy;
 }
 
