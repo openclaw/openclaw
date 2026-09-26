@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -131,7 +132,10 @@ describe("scheduleGatewayHandlerPrewarm", () => {
         [{ workspaceDir: workspaces.research, config: cfg, agentId: "research" }],
       ]);
       expect(mocks.ensureSkillsWatcher.mock.invocationCallOrder[0]).toBeLessThan(
-        mocks.prepareWorkspaceSkillEntries.mock.invocationCallOrder[0],
+        expectDefined(
+          mocks.prepareWorkspaceSkillEntries.mock.invocationCallOrder[0],
+          "skill preparation call",
+        ),
       );
       expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
       expect(mocks.loadCombinedSessionStoreForGatewayCore).not.toHaveBeenCalled();
