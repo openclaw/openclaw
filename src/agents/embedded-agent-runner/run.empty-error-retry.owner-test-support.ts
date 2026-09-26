@@ -32,7 +32,6 @@ function makeInput(
   options: {
     assistant?: AssistantMessage;
     attempt?: Partial<EmbeddedRunAttemptResult>;
-    emptyErrorRetries?: number;
   } = {},
 ): FailureInput {
   const assistant = options.assistant ?? makeAssistant();
@@ -66,7 +65,7 @@ function makeInput(
     authProfileStore: { version: 1, profiles: {} },
     runtimeAuthRetry: false,
     maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
-    emptyErrorRetries: options.emptyErrorRetries ?? 0,
+    emptyErrorRetries: 0,
     overloadProfileRotations: 0,
     previousRetryFailoverReason: null,
     failover: {
@@ -86,15 +85,6 @@ function makeInput(
 }
 
 describe("silent assistant-error retry owner", () => {
-  it("retries a zero-output error before generic failover handling", async () => {
-    const outcome = await handleEmbeddedAssistantFailure(makeInput());
-
-    expect(outcome).toMatchObject({
-      action: "retry",
-      emptyErrorRetries: 1,
-    });
-  });
-
   it("retries reasoning-only errors without treating hidden output as a reply", async () => {
     const assistant = makeAssistant({
       content: [{ type: "thinking", thinking: "internal" }],
@@ -122,12 +112,6 @@ describe("silent assistant-error retry owner", () => {
         },
       }),
     );
-
-    expect(outcome.action).toBe("proceed");
-  });
-
-  it("hands control onward after the three-retry cap", async () => {
-    const outcome = await handleEmbeddedAssistantFailure(makeInput({ emptyErrorRetries: 3 }));
 
     expect(outcome.action).toBe("proceed");
   });

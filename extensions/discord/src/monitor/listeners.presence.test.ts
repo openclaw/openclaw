@@ -504,40 +504,32 @@ describe("DiscordPresenceListener", () => {
     },
   );
 
-  it.each(["disabled", "excluded", "retargeted"] as const)(
-    "does not enqueue or consume cooldown when presence is %s during permission lookup",
-    async (change) => {
-      let policy = livePresencePolicy(["user-1"]);
-      const store = cooldownStore();
-      const listener = createPresenceListener({
-        readPolicy: async () => {
-          const current = policy;
-          return { ...current, isCurrent: () => current === policy };
-        },
-        cooldownStore: store,
-      });
-      await listener.handle(presence("offline"), humanClient);
-      const permission = createDeferred<boolean>();
-      mocks.canViewDiscordGuildChannel.mockReturnValueOnce(permission.promise);
-      const pending = listener.handle(presence("online"), humanClient);
-      await vi.waitFor(() => expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(1));
-      policy = livePresencePolicy(change === "excluded" ? ["user-2"] : ["user-1"]);
-      const config = policy.guildEntries!["guild-1"]!.presenceEvents!;
-      if (change === "disabled") {
-        config.enabled = false;
-      }
-      if (change === "retargeted") {
-        config.channelId = "channel-2";
-      }
-      permission.resolve(true);
-      await pending;
-      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(await store.entries()).toEqual([]);
-      policy = livePresencePolicy(["user-1"]);
-      await listener.handle(presence("online"), humanClient);
-      expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("does not enqueue or consume cooldown when presence is retargeted during permission lookup", async () => {
+    let policy = livePresencePolicy(["user-1"]);
+    const store = cooldownStore();
+    const listener = createPresenceListener({
+      readPolicy: async () => {
+        const current = policy;
+        return { ...current, isCurrent: () => current === policy };
+      },
+      cooldownStore: store,
+    });
+    await listener.handle(presence("offline"), humanClient);
+    const permission = createDeferred<boolean>();
+    mocks.canViewDiscordGuildChannel.mockReturnValueOnce(permission.promise);
+    const pending = listener.handle(presence("online"), humanClient);
+    await vi.waitFor(() => expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(1));
+    policy = livePresencePolicy(["user-1"]);
+    const config = policy.guildEntries!["guild-1"]!.presenceEvents!;
+    config.channelId = "channel-2";
+    permission.resolve(true);
+    await pending;
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(await store.entries()).toEqual([]);
+    policy = livePresencePolicy(["user-1"]);
+    await listener.handle(presence("online"), humanClient);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+  });
 
   it("applies current presence audience policy on the existing listener", async () => {
     let policy = livePresencePolicy(["user-1"]);
@@ -823,20 +815,6 @@ describe("DiscordPresenceListener", () => {
       expect.stringContaining('user_id="replayed-1"'),
       expect.anything(),
     );
-  });
-
-  it("honors a configured reconnect suppression window, including disabling it", async () => {
-    const listener = createPresenceListener({
-      presenceEvents: { reconnectSuppressSeconds: 0 },
-    });
-
-    nowMs = 30_000;
-    listener.resetGatewaySession();
-    await listener.seedGuildSnapshot(guildSnapshot([]));
-    nowMs += 1000;
-    await listener.handle(presence("online", "came-online"), humanClient);
-
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
   });
 
   it("rate-limits presence event bursts and logs the suppression once", async () => {

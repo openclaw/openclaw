@@ -27,6 +27,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
+import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
@@ -304,13 +305,30 @@ async function handleChatSendWithOptions(
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
     admitted.value.setPendingInputCleanup(() => {
       try {
-        userTurnRecorder.finishPendingInput?.(
+        const pending =
+          userTurnRecorder.getPendingInputMessage?.() &&
+          !userTurnRecorder.isPendingInputConsumed?.();
+        const disposition =
           activeRunAbort.controller.signal.aborted &&
-            activeRunAbort.entry?.abortStopReason !== "restart" &&
-            !isAgentRunRestartAbortReason(activeRunAbort.controller.signal.reason)
+          activeRunAbort.entry?.abortStopReason !== "restart" &&
+          !isAgentRunRestartAbortReason(activeRunAbort.controller.signal.reason)
             ? "cancelled"
-            : "interrupted",
-        );
+            : "interrupted";
+        userTurnRecorder.finishPendingInput?.(disposition);
+        if (pending && activeRunAbort.controller.signal.aborted) {
+          const reason = resolveChatAbortDiagnosticReason(
+            activeRunAbort.controller.signal,
+            activeRunAbort.entry,
+          );
+          context.logGateway.info(`chat pending input aborted: ${reason} (${disposition})`, {
+            runId: clientRunId,
+            sessionKey,
+            sessionId: admittedSessionId,
+            agentId: selectedAgent.agentId,
+            disposition,
+            reason,
+          });
+        }
       } finally {
         void preparedUserTurn
           .discardUnreferencedMedia(userTurnRecorder.getPendingInputMessage?.())

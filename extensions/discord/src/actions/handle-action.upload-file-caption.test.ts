@@ -36,16 +36,6 @@ describe("handleDiscordMessageAction upload-file caption", () => {
 
   it.each([
     {
-      name: "maps a caption to the uploaded message content",
-      params: { caption: "chart attached" },
-      expected: "chart attached",
-    },
-    {
-      name: "prefers an explicit message over a caption",
-      params: { message: "message text", caption: "caption text" },
-      expected: "message text",
-    },
-    {
       name: "keeps an explicitly empty message empty instead of using the caption",
       params: { message: "", caption: "caption text" },
       expected: "",

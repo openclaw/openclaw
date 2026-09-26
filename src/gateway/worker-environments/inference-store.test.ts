@@ -719,26 +719,24 @@ describe("worker inference SQLite store", async () => {
     ).toEqual({ kind: "rejected", reason: "conflict" });
   });
 
-  it("prunes terminal turns older than maxAge", async () => {
-    await completeTurn("run-old");
-    nowMs += 1_000;
-    store = createWorkerInferenceStore({
-      path: database.path,
-      now: () => nowMs,
+  it.each([
+    {
+      limit: "older than maxAge",
+      elapsedMs: 1_000,
       retention: { maxAgeMs: 500, maxRows: 10, maxBytes: 1_000_000 },
-    });
-
-    await completeTurn("run-current");
-    expect(terminalRunIds()).toEqual(["run-current"]);
-  });
-
-  it("prunes terminal turns beyond maxRows", async () => {
+    },
+    {
+      limit: "beyond maxRows",
+      elapsedMs: 1,
+      retention: { maxAgeMs: 10_000, maxRows: 1, maxBytes: 1_000_000 },
+    },
+  ])("prunes terminal turns $limit", async ({ elapsedMs, retention }) => {
     await completeTurn("run-first");
-    nowMs += 1;
+    nowMs += elapsedMs;
     store = createWorkerInferenceStore({
       path: database.path,
       now: () => nowMs,
-      retention: { maxAgeMs: 10_000, maxRows: 1, maxBytes: 1_000_000 },
+      retention,
     });
 
     await completeTurn("run-second");

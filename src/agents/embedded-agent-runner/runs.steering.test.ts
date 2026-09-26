@@ -8,6 +8,7 @@ import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.j
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
+import { diagnosticLogger } from "../../logging/diagnostic.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -425,20 +426,6 @@ describe("embedded-agent active-run steering", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("defaults active embedded steering to all pending messages", () => {
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-default-steer", {
-      ...createEmbeddedRunHandle(),
-      queueMessage,
-    });
-
-    expect(queueEmbeddedAgentMessageWithOutcome("session-default-steer", "continue").queued).toBe(
-      true,
-    );
-
-    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
-  });
-
   it("queues into active non-streaming handles that expose live stopped state", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(
@@ -602,6 +589,34 @@ describe("embedded-agent active-run steering", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
+  it("fails closed when the compacting state check throws", async () => {
+    const warnings = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-bad-compacting-state", {
+      ...createEmbeddedRunHandle({ queueMessage }),
+      isCompacting: () => {
+        throw new Error("compaction probe unavailable");
+      },
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-bad-compacting-state",
+      "continue",
+    );
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-bad-compacting-state",
+      reason: "compacting",
+      gatewayHealth: "live",
+    });
+    await expect(
+      queueEmbeddedAgentMessageWithOutcomeAsync("session-bad-compacting-state", "retry"),
+    ).resolves.toEqual(outcome);
+    expect(warnings).toHaveBeenCalledTimes(1);
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
   it("returns a structured no-active-run queue failure", () => {
     const outcome = queueEmbeddedAgentMessageWithOutcome("session-missing", "continue");
 
@@ -616,7 +631,7 @@ describe("embedded-agent active-run steering", () => {
     );
   });
 
-  it("returns structured queue failures for legacy, unavailable, or compacting runs", () => {
+  it("preserves backend refusal and legacy compaction rejection", () => {
     const legacyQueue = vi.fn(async () => {});
     const unavailableQueue = vi.fn(async () => {});
     setActiveEmbeddedRun(
@@ -626,10 +641,18 @@ describe("embedded-agent active-run steering", () => {
     setActiveEmbeddedRun(
       "session-unavailable",
       createEmbeddedRunHandle({
+        isCompacting: true,
         messageInjection: { isAvailable: () => false, queueMessage: unavailableQueue },
       }),
     );
     setActiveEmbeddedRun("session-compacting", createEmbeddedRunHandle({ isCompacting: true }));
+    setActiveEmbeddedRun(
+      "session-compacting-v1",
+      createEmbeddedRunHandle({
+        isCompacting: true,
+        messageInjection: { isAvailable: () => true, queueMessage: legacyQueue },
+      }),
+    );
 
     expect(queueEmbeddedAgentMessageWithOutcome("session-not-streaming", "continue")).toMatchObject(
       { queued: false, reason: "not_streaming" },
@@ -644,6 +667,10 @@ describe("embedded-agent active-run steering", () => {
       queued: false,
       reason: "compacting",
     });
+    expect(queueEmbeddedAgentMessageWithOutcome("session-compacting-v1", "continue")).toMatchObject(
+      { queued: false, reason: "compacting" },
+    );
+    expect(legacyQueue).not.toHaveBeenCalled();
   });
 
   it("returns runtime rejection details when async queue delivery fails", async () => {

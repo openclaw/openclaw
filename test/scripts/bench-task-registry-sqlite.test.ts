@@ -6,6 +6,7 @@ import {
   testing,
   WORKER_RESULT_SENTINEL,
   type MemorySample,
+  type RegistrySnapshot,
   type WorkerResult,
 } from "../../scripts/bench-task-registry-sqlite.ts";
 
@@ -19,6 +20,18 @@ function memorySample(cycle: number): MemorySample {
     arrayBuffersBytes: 10 + cycle,
     processPeakRssBytes: 250 + cycle,
   };
+}
+
+function registrySnapshot(size: number, terminal = false): RegistrySnapshot {
+  const counts = {
+    taskCount: size,
+    deliveryStateCount: size,
+    runningTasks: terminal ? 0 : size,
+    succeededTasks: terminal ? size : 0,
+    pendingDeliveryTasks: size,
+    succeededTerminalOutcomes: terminal ? size : 0,
+  };
+  return { memory: { ...counts }, sqlite: { ...counts } };
 }
 
 function workerResult(size: number, cycles = 3, warmup = 1): WorkerResult {
@@ -51,60 +64,9 @@ function workerResult(size: number, cycles = 3, warmup = 1): WorkerResult {
     invariant: {
       ok: true,
       cyclesValidated: cycles + warmup,
-      registration: {
-        memory: {
-          taskCount: size,
-          deliveryStateCount: size,
-          runningTasks: size,
-          succeededTasks: 0,
-          pendingDeliveryTasks: size,
-          succeededTerminalOutcomes: 0,
-        },
-        sqlite: {
-          taskCount: size,
-          deliveryStateCount: size,
-          runningTasks: size,
-          succeededTasks: 0,
-          pendingDeliveryTasks: size,
-          succeededTerminalOutcomes: 0,
-        },
-      },
-      terminal: {
-        memory: {
-          taskCount: size,
-          deliveryStateCount: size,
-          runningTasks: 0,
-          succeededTasks: size,
-          pendingDeliveryTasks: size,
-          succeededTerminalOutcomes: size,
-        },
-        sqlite: {
-          taskCount: size,
-          deliveryStateCount: size,
-          runningTasks: 0,
-          succeededTasks: size,
-          pendingDeliveryTasks: size,
-          succeededTerminalOutcomes: size,
-        },
-      },
-      teardown: {
-        memory: {
-          taskCount: 0,
-          deliveryStateCount: 0,
-          runningTasks: 0,
-          succeededTasks: 0,
-          pendingDeliveryTasks: 0,
-          succeededTerminalOutcomes: 0,
-        },
-        sqlite: {
-          taskCount: 0,
-          deliveryStateCount: 0,
-          runningTasks: 0,
-          succeededTasks: 0,
-          pendingDeliveryTasks: 0,
-          succeededTerminalOutcomes: 0,
-        },
-      },
+      registration: registrySnapshot(size),
+      terminal: registrySnapshot(size, true),
+      teardown: registrySnapshot(0),
       serializedSharedConnection: true,
     },
   };

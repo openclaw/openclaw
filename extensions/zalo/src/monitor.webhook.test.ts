@@ -1,12 +1,12 @@
 // Zalo tests cover monitor.webhook plugin behavior.
 import type { RequestListener } from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import { zaloWebhookRuntime } from "./monitor.webhook.js";
 import type { ResolvedZaloAccount } from "./types.js";

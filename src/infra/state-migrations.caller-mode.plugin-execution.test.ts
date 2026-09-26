@@ -638,7 +638,7 @@ module.exports = { stateMigrations: [{
       command: "openclaw update repair",
       configPaths: [["plugins", "entries", pluginId, "config"]],
     };
-    recordDeferredPluginMigrations({ env: fixture.env, pending: [pending] });
+    await recordDeferredPluginMigrations({ env: fixture.env, pending: [pending] });
     const detected = await detectLegacyStateMigrations({
       cfg,
       env: fixture.env,

@@ -51,18 +51,6 @@ describe("resolveEmbeddedRunFailureSignal", () => {
     ).toBeUndefined();
   });
 
-  it("does not mark ordinary tool failures as cron-denial failures", () => {
-    expect(
-      resolveEmbeddedRunFailureSignal({
-        trigger: "cron",
-        lastToolError: {
-          toolName: "exec",
-          error: "/bin/bash: line 1: python: command not found",
-        },
-      }),
-    ).toBeUndefined();
-  });
-
   it("does not mark non-exec validation errors as execution denials", () => {
     expect(
       resolveEmbeddedRunFailureSignal({

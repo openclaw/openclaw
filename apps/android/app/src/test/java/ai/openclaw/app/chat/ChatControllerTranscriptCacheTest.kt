@@ -1452,7 +1452,7 @@ class ChatControllerTranscriptCacheTest {
       runCurrent()
       firstWriteStarted.await()
       controller.onDefaultAgentChanged("agent-b")
-      val purge = launch { controller.clearGatewayCache("gateway-a") }
+      val purge = launch { controller.clearGatewayCache("gateway-a", cache::clearGateway) }
       runCurrent()
 
       releaseFirstWrite.complete(Unit)

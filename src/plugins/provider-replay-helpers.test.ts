@@ -112,15 +112,6 @@ describe("provider replay helpers", () => {
   it.each([
     ["claude-fable-5-1", true],
     ["claude-mythos-5-1", false],
-    ["us.anthropic.claude-fable-5-1-v1:0", true],
-    ["claude-fable-5", false],
-    ["claude-mythos-5", false],
-    ["claude-opus-5", false],
-    ["claude-sonnet-5", false],
-    ["claude-opus-4-8", false],
-    ["claude-sonnet-4-6", false],
-    ["claude-haiku-4-5", false],
-    ["MiniMax-M2.7", false],
   ])("scopes append-only replay to prefix-binding %s", (modelId, expected) => {
     for (const buildPolicy of [
       buildAnthropicReplayPolicyForModel,

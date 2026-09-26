@@ -191,6 +191,28 @@ async function buildPendingPayload(view: MatrixPendingApprovalView) {
   });
 }
 
+async function deliverPending(
+  view: MatrixPendingApprovalView,
+  pendingPayload: MatrixDeliverPendingParams["pendingPayload"],
+  deps: {
+    sendSingleTextMessage: ReturnType<typeof vi.fn>;
+    reactMessage: ReturnType<typeof vi.fn>;
+    sendMessage?: ReturnType<typeof vi.fn>;
+  },
+) {
+  return await matrixApprovalNativeRuntime.transport.deliverPending({
+    cfg: {} as never,
+    accountId: "default",
+    context: { client: {} as never, deps },
+    request: {} as never,
+    approvalKind: view.approvalKind,
+    plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
+    preparedTarget: { to: "room:!room:example.org", roomId: "!room:example.org" },
+    view,
+    pendingPayload,
+  });
+}
+
 describe("matrixApprovalNativeRuntime", () => {
   beforeEach(async () => {
     await unregisterMatrixApprovalReactionTargetsForApproval({
@@ -216,25 +238,9 @@ describe("matrixApprovalNativeRuntime", () => {
     const view = buildExecApprovalView();
     const pendingPayload = await buildPendingPayload(view);
 
-    await matrixApprovalNativeRuntime.transport.deliverPending({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        client: {} as never,
-        deps: {
-          sendSingleTextMessage,
-          reactMessage,
-        },
-      },
-      request: {} as never,
-      approvalKind: "exec",
-      plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
-      preparedTarget: {
-        to: "room:!room:example.org",
-        roomId: "!room:example.org",
-      },
-      view,
-      pendingPayload,
+    await deliverPending(view, pendingPayload, {
+      sendSingleTextMessage,
+      reactMessage,
     });
 
     const [target, text, options] = mockCall(sendSingleTextMessage) ?? [];
@@ -266,25 +272,9 @@ describe("matrixApprovalNativeRuntime", () => {
     const view = buildPluginApprovalView();
     const pendingPayload = await buildPendingPayload(view);
 
-    await matrixApprovalNativeRuntime.transport.deliverPending({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        client: {} as never,
-        deps: {
-          sendSingleTextMessage,
-          reactMessage,
-        },
-      },
-      request: {} as never,
-      approvalKind: "plugin",
-      plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
-      preparedTarget: {
-        to: "room:!room:example.org",
-        roomId: "!room:example.org",
-      },
-      view,
-      pendingPayload,
+    await deliverPending(view, pendingPayload, {
+      sendSingleTextMessage,
+      reactMessage,
     });
 
     const [target, text, options] = mockCall(sendSingleTextMessage) ?? [];
@@ -346,25 +336,9 @@ describe("matrixApprovalNativeRuntime", () => {
     const view = buildExecApprovalView();
     const pendingPayload = await buildPendingPayload(view);
 
-    await matrixApprovalNativeRuntime.transport.deliverPending({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        client: {} as never,
-        deps: {
-          sendSingleTextMessage,
-          reactMessage,
-        },
-      },
-      request: {} as never,
-      approvalKind: "exec",
-      plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
-      preparedTarget: {
-        to: "room:!room:example.org",
-        roomId: "!room:example.org",
-      },
-      view,
-      pendingPayload,
+    await deliverPending(view, pendingPayload, {
+      sendSingleTextMessage,
+      reactMessage,
     });
 
     expect(reactMessage).toHaveBeenCalled();
@@ -384,25 +358,9 @@ describe("matrixApprovalNativeRuntime", () => {
     const view = buildExecApprovalView();
     const pendingPayload = await buildPendingPayload(view);
 
-    const entry = await matrixApprovalNativeRuntime.transport.deliverPending({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        client: {} as never,
-        deps: {
-          sendSingleTextMessage,
-          reactMessage,
-        },
-      },
-      request: {} as never,
-      approvalKind: "exec",
-      plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
-      preparedTarget: {
-        to: "room:!room:example.org",
-        roomId: "!room:example.org",
-      },
-      view,
-      pendingPayload,
+    const entry = await deliverPending(view, pendingPayload, {
+      sendSingleTextMessage,
+      reactMessage,
     });
 
     expect(sendSingleTextMessage).toHaveBeenCalledTimes(2);
@@ -480,26 +438,10 @@ describe("matrixApprovalNativeRuntime", () => {
     });
     const pendingPayload = await buildPendingPayload(view);
 
-    const entry = await matrixApprovalNativeRuntime.transport.deliverPending({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        client: {} as never,
-        deps: {
-          sendSingleTextMessage,
-          sendMessage,
-          reactMessage,
-        },
-      },
-      request: {} as never,
-      approvalKind: "exec",
-      plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
-      preparedTarget: {
-        to: "room:!room:example.org",
-        roomId: "!room:example.org",
-      },
-      view,
-      pendingPayload,
+    const entry = await deliverPending(view, pendingPayload, {
+      sendSingleTextMessage,
+      sendMessage,
+      reactMessage,
     });
 
     expect(mockCall(sendMessage)?.[0]).toBe("room:!room:example.org");

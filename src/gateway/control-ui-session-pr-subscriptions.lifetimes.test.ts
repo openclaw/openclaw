@@ -1,5 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import type { ControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
 import { createTestControlUiSessionPrSubscriptions } from "./control-ui-session-pr-subscriptions.test-support.js";
@@ -8,9 +12,17 @@ import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-pr
 const CHANGED_EVENT = "controlUi.sessionPullRequests.changed";
 const READY: ControlUiSessionPullRequests = { pullRequests: [], rateLimited: false };
 let active: ReturnType<typeof createTestControlUiSessionPrSubscriptions> | undefined;
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+
+beforeEach(() => {
+  clock = createGatewaySchedulerClock(Date.now());
+  scheduler = createTestGatewayScheduler(clock.clock);
+});
 
 afterEach(async () => {
   await active?.stop();
+  await scheduler.stop();
   active = undefined;
   vi.useRealTimers();
 });
@@ -30,7 +42,6 @@ describe("recipient publication lifetimes", () => {
   it.each(["disconnect", "replace with another key", "replace with the same key"] as const)(
     "tracks shared cache ownership during %s of a preparing watcher",
     async (action) => {
-      vi.useFakeTimers();
       const entered = createDeferred();
       const held = createDeferred<ControlUiSessionPrTarget>();
       let holdPreparation = true;
@@ -40,6 +51,7 @@ describe("recipient publication lifetimes", () => {
           READY,
       );
       active = createTestControlUiSessionPrSubscriptions({
+        scheduler,
         broadcastToConnIds: vi.fn(),
         load,
         prepareRead: async (connId, session) => () => {
@@ -101,6 +113,7 @@ describe("recipient publication lifetimes", () => {
     let snapshot = READY;
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load: async () => snapshot,
       prepareRead: async (connId) => async () => {
@@ -168,6 +181,7 @@ describe("recipient publication lifetimes", () => {
     let holdNormal = false;
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load: async ({ refresh }) => {
         if (refresh) {
@@ -221,6 +235,7 @@ describe("recipient publication lifetimes", () => {
     const load = vi.fn(async ({ refresh }: { refresh?: boolean }) => (refresh ? changed : READY));
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load,
       prepareRead: async (connId) => async () => {
@@ -277,6 +292,7 @@ describe("recipient publication lifetimes", () => {
     });
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load,
       prepareRead: async (_connId, session) => {
@@ -334,6 +350,7 @@ describe("recipient publication lifetimes", () => {
     });
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load,
       prepareRead: async (_connId, session) => {
@@ -377,7 +394,7 @@ describe("recipient publication lifetimes", () => {
       oldRelease.resolve();
       blockedRelease.resolve();
       loadRelease.resolve();
-      await vi.advanceTimersByTimeAsync(10_000);
+      await clock.advanceBy(10_000);
       await Promise.all([old, current]);
     }
   });
@@ -389,6 +406,7 @@ describe("recipient publication lifetimes", () => {
     const load = vi.fn(async () => READY);
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load,
       prepareRead: async (_connId, session) => {
@@ -435,6 +453,7 @@ describe("recipient publication lifetimes", () => {
       let holdLoad = false;
       let authorized = false;
       active = createTestControlUiSessionPrSubscriptions({
+        scheduler,
         broadcastToConnIds,
         isConnectionActive: (connId) => connected.has(connId),
         prepareRead: async (connId) => {
@@ -510,6 +529,7 @@ describe("recipient publication lifetimes", () => {
     let snapshot = READY;
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load: async () => snapshot,
       prepareRead: async (connId) => () => {
@@ -574,6 +594,7 @@ describe("recipient publication lifetimes", () => {
       let cacheSignal: AbortSignal | undefined;
       const broadcastToConnIds = vi.fn();
       active = createTestControlUiSessionPrSubscriptions({
+        scheduler,
         broadcastToConnIds,
         load: async (_params, signal) => {
           cacheSignal = signal;
@@ -635,6 +656,7 @@ describe("recipient publication lifetimes", () => {
     let snapshot = READY;
     const broadcastToConnIds = vi.fn();
     active = createTestControlUiSessionPrSubscriptions({
+      scheduler,
       broadcastToConnIds,
       load: async () => snapshot,
       prepareRead: async (connId) => () => {

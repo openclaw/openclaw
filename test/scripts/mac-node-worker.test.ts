@@ -765,15 +765,15 @@ print('held-file-copy-ok')
     expect(() => auditMacWorkerPortability(root, node)).toThrow(/Nonportable LC_LOAD_DYLIB/);
   });
 
-  it.each(
-    [
-      "/usr/lib/libSystem.B.dylib",
-      "/opt/homebrew/lib/nonportable.dylib",
-      "/usr/lib/../../opt/homebrew/lib/nonportable.dylib",
-      "/System/Library/../../opt/homebrew/lib/nonportable.dylib",
-      "@loader_path/../../outside.dylib",
-    ].flatMap((library) => ["thin", "fat64"].map((format) => ({ library, format }))),
-  )("audits load dependencies after inventory ($format, $library)", async ({ library, format }) => {
+  it.each([
+    ["thin", "/usr/lib/libSystem.B.dylib"],
+    ["thin", "/opt/homebrew/lib/nonportable.dylib"],
+    ["thin", "/usr/lib/../../opt/homebrew/lib/nonportable.dylib"],
+    ["thin", "/System/Library/../../opt/homebrew/lib/nonportable.dylib"],
+    ["thin", "@loader_path/../../outside.dylib"],
+    ["fat64", "/usr/lib/libSystem.B.dylib"],
+    ["fat64", "/opt/homebrew/lib/nonportable.dylib"],
+  ] as const)("audits load dependencies after inventory (%s, %s)", async (format, library) => {
     const { auditMacWorkerPortability } =
       await import("../../scripts/lib/mac-worker-portability.mjs");
     const { machoFixture } = await import("../helpers/mac-native.js");

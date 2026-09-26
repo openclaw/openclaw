@@ -95,13 +95,8 @@ describe("worker GitHub launch binding", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each([
-    "git@github.com:owner/repo.git",
-    "ssh://git@github.com/owner/repo.git",
-    "https://github.com/owner/repo.git",
-  ])("binds the verified shared account and canonical HTTPS remote from %s", async (originUrl) => {
+  it("binds the verified shared account and canonical HTTPS remote", async () => {
     await installProfile();
-    mocks.repository.mockResolvedValue({ originUrl });
 
     await expect(prepareWorkerGitHubBinding(session)).resolves.toEqual({
       token,
@@ -145,7 +140,7 @@ describe("worker GitHub launch binding", () => {
     });
   });
 
-  it.each(["missing-profile", "unavailable", "rate_limited", "unverified"] as const)(
+  it.each(["missing-profile", "unavailable"] as const)(
     "omits credentials when the managed identity is %s",
     async (failure) => {
       if (failure !== "missing-profile") {

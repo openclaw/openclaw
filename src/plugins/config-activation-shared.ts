@@ -71,16 +71,6 @@ const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> =
   "bundled-disabled-by-default": "bundled (disabled by default)",
 };
 
-function resolvePluginActivationReason(
-  cause?: PluginActivationCause,
-  reason?: string,
-): string | undefined {
-  if (reason) {
-    return reason;
-  }
-  return cause ? PLUGIN_ACTIVATION_REASON_BY_CAUSE[cause] : undefined;
-}
-
 export function toPluginActivationState(
   decision: PluginActivationDecision,
 ): PluginActivationStateLike {
@@ -89,7 +79,9 @@ export function toPluginActivationState(
     activated: decision.activated,
     explicitlyEnabled: decision.explicitlyEnabled,
     source: decision.source,
-    reason: resolvePluginActivationReason(decision.cause, decision.reason),
+    reason:
+      decision.reason ||
+      (decision.cause ? PLUGIN_ACTIVATION_REASON_BY_CAUSE[decision.cause] : undefined),
   };
 }
 

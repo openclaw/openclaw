@@ -243,13 +243,6 @@ actor SkillBinsCache {
         }
         return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
     }
-
-    static func _testBuildTrustIndex(
-        report: SkillsStatusReport,
-        searchPaths: [String]) -> SkillBinTrustIndex
-    {
-        self.buildTrustIndex(report: report, searchPaths: searchPaths)
-    }
 }
 
 struct SkillBinTrustIndex: Sendable {

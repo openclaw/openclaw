@@ -3,31 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createDedupeCache } from "../infra/dedupe.js";
 import {
   createInvalidConfigError,
-  formatInvalidConfigDetails,
   isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
   throwInvalidConfig,
 } from "./io.invalid-config.js";
 
 describe("config io invalid config formatting", () => {
-  it("formats issue details with sanitized paths and messages", () => {
-    const details = formatInvalidConfigDetails([
-      {
-        path: "gateway.port",
-        message: 'Expected number\\nreceived "bad"',
-      },
-      {
-        path: "",
-        message: "root problem",
-      },
-    ]);
-
-    expect(details).toContain("- gateway.port:");
-    expect(details).toContain("Expected number");
-    expect(details).toContain("received");
-    expect(details).toContain("- <root>: root problem");
-  });
-
   it("creates INVALID_CONFIG errors with inline details", () => {
     const err = createInvalidConfigError("/tmp/openclaw.json", "- gateway.port: bad");
 

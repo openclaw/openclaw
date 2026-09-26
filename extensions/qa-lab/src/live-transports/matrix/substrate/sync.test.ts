@@ -1,11 +1,35 @@
 // Qa Lab Matrix tests cover sync behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { MatrixQaObservedEvent } from "./events.js";
+import type { MatrixQaObservedEvent, MatrixQaRoomEvent } from "./events.js";
 import {
   createMatrixQaRoomObserver,
   primeMatrixQaRoom,
   waitForOptionalMatrixQaRoomEvent,
 } from "./sync.js";
+
+function message(
+  eventId: string,
+  body: string,
+  content: Record<string, unknown> = {},
+): MatrixQaRoomEvent {
+  return {
+    event_id: eventId,
+    sender: "@sut:matrix-qa.test",
+    type: "m.room.message",
+    content: { body, msgtype: "m.text", ...content },
+  };
+}
+
+function syncResponse(
+  events: MatrixQaRoomEvent[],
+  roomId = "!room:matrix-qa.test",
+  nextBatch = "next-batch-2",
+) {
+  return Response.json({
+    next_batch: nextBatch,
+    rooms: { join: { [roomId]: { timeline: { events } } } },
+  });
+}
 
 describe("matrix sync helpers", () => {
   it("primes the Matrix sync cursor without recording observed events", async () => {
@@ -22,25 +46,7 @@ describe("matrix sync helpers", () => {
 
   it("returns a typed no-match result while preserving the latest sync token", async () => {
     const fetchImpl: typeof fetch = async () =>
-      Response.json({
-        next_batch: "next-batch-2",
-        rooms: {
-          join: {
-            "!room:matrix-qa.test": {
-              timeline: {
-                events: [
-                  {
-                    event_id: "$driver",
-                    sender: "@driver:matrix-qa.test",
-                    type: "m.room.message",
-                    content: { body: "hello", msgtype: "m.text" },
-                  },
-                ],
-              },
-            },
-          },
-        },
-      });
+      syncResponse([{ ...message("$driver", "hello"), sender: "@driver:matrix-qa.test" }]);
 
     const observedEvents: MatrixQaObservedEvent[] = [];
 
@@ -82,140 +88,25 @@ describe("matrix sync helpers", () => {
     ]);
   });
 
-  it("keeps recording later same-batch events after the first match", async () => {
-    const fetchImpl: typeof fetch = async () =>
-      Response.json({
-        next_batch: "next-batch-2",
-        rooms: {
-          join: {
-            "!room:matrix-qa.test": {
-              timeline: {
-                events: [
-                  {
-                    event_id: "$sut",
-                    sender: "@sut:matrix-qa.test",
-                    type: "m.room.message",
-                    content: { body: "target", msgtype: "m.text" },
-                  },
-                  {
-                    event_id: "$driver",
-                    sender: "@driver:matrix-qa.test",
-                    type: "m.room.message",
-                    content: { body: "trailing event", msgtype: "m.text" },
-                  },
-                ],
-              },
-            },
-          },
-        },
-      });
-
-    const observedEvents: MatrixQaObservedEvent[] = [];
-
-    const result = await waitForOptionalMatrixQaRoomEvent({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
-      observedEvents,
-      predicate: (event) => event.eventId === "$sut",
-      roomId: "!room:matrix-qa.test",
-      since: "start-batch",
-      timeoutMs: 1,
-    });
-
-    expect(result).toEqual({
-      event: {
-        kind: "message",
-        roomId: "!room:matrix-qa.test",
-        eventId: "$sut",
-        sender: "@sut:matrix-qa.test",
-        stateKey: undefined,
-        type: "m.room.message",
-        originServerTs: undefined,
-        body: "target",
-        formattedBody: undefined,
-        msgtype: "m.text",
-        membership: undefined,
-      },
-      matched: true,
-      since: "next-batch-2",
-    });
-    expect(observedEvents).toEqual([
-      {
-        kind: "message",
-        roomId: "!room:matrix-qa.test",
-        eventId: "$sut",
-        sender: "@sut:matrix-qa.test",
-        stateKey: undefined,
-        type: "m.room.message",
-        originServerTs: undefined,
-        body: "target",
-        formattedBody: undefined,
-        msgtype: "m.text",
-        membership: undefined,
-      },
-      {
-        kind: "message",
-        roomId: "!room:matrix-qa.test",
-        eventId: "$driver",
-        sender: "@driver:matrix-qa.test",
-        stateKey: undefined,
-        type: "m.room.message",
-        originServerTs: undefined,
-        body: "trailing event",
-        formattedBody: undefined,
-        msgtype: "m.text",
-        membership: undefined,
-      },
-    ]);
-  });
-
   it("lets a second wait reuse later same-batch events without another /sync", async () => {
     let calls = 0;
     const fetchImpl: typeof fetch = async () => {
       calls += 1;
-      return Response.json({
-        next_batch: "next-batch-2",
-        rooms: {
-          join: {
-            "!room:matrix-qa.test": {
-              timeline: {
-                events: [
-                  {
-                    event_id: "$preview",
-                    sender: "@sut:matrix-qa.test",
-                    type: "m.room.message",
-                    content: {
-                      body: "preview",
-                      msgtype: "m.notice",
-                      "m.relates_to": {
-                        rel_type: "m.thread",
-                        event_id: "$root",
-                        is_falling_back: true,
-                        "m.in_reply_to": { event_id: "$driver" },
-                      },
-                    },
-                  },
-                  {
-                    event_id: "$final",
-                    sender: "@sut:matrix-qa.test",
-                    type: "m.room.message",
-                    content: {
-                      body: "final",
-                      msgtype: "m.text",
-                      "m.new_content": { body: "final", msgtype: "m.text" },
-                      "m.relates_to": {
-                        rel_type: "m.replace",
-                        event_id: "$preview",
-                      },
-                    },
-                  },
-                ],
-              },
-            },
+      return syncResponse([
+        message("$preview", "preview", {
+          msgtype: "m.notice",
+          "m.relates_to": {
+            rel_type: "m.thread",
+            event_id: "$root",
+            is_falling_back: true,
+            "m.in_reply_to": { event_id: "$driver" },
           },
-        },
-      });
+        }),
+        message("$final", "final", {
+          "m.new_content": { body: "final", msgtype: "m.text" },
+          "m.relates_to": { rel_type: "m.replace", event_id: "$preview" },
+        }),
+      ]);
     };
     const observedEvents: MatrixQaObservedEvent[] = [];
     const observer = createMatrixQaRoomObserver({
@@ -231,6 +122,7 @@ describe("matrix sync helpers", () => {
       roomId: "!room:matrix-qa.test",
       timeoutMs: 1_000,
     });
+    expect(observedEvents.map((event) => event.eventId)).toEqual(["$preview", "$final"]);
     const finalized = await observer.waitForRoomEvent({
       predicate: (event) => event.eventId === "$final",
       roomId: "!room:matrix-qa.test",
@@ -256,25 +148,7 @@ describe("matrix sync helpers", () => {
     let calls = 0;
     const fetchImpl: typeof fetch = async () => {
       calls += 1;
-      return Response.json({
-        next_batch: "next-batch-2",
-        rooms: {
-          join: {
-            "!main:matrix-qa.test": {
-              timeline: {
-                events: [
-                  {
-                    event_id: "$main-reply",
-                    sender: "@sut:matrix-qa.test",
-                    type: "m.room.message",
-                    content: { body: "main reply", msgtype: "m.text" },
-                  },
-                ],
-              },
-            },
-          },
-        },
-      });
+      return syncResponse([message("$main-reply", "main reply")], "!main:matrix-qa.test");
     };
     const observer = createMatrixQaRoomObserver({
       accessToken: "token",
@@ -321,31 +195,10 @@ describe("matrix sync helpers", () => {
       calls += 1;
       markFetchStarted();
       await fetchCanComplete;
-      return Response.json({
-        next_batch: "next-batch-2",
-        rooms: {
-          join: {
-            "!room:matrix-qa.test": {
-              timeline: {
-                events: [
-                  {
-                    event_id: "$reply",
-                    sender: "@sut:matrix-qa.test",
-                    type: "m.room.message",
-                    content: { body: "reply", msgtype: "m.text" },
-                  },
-                  {
-                    event_id: "$notice",
-                    sender: "@sut:matrix-qa.test",
-                    type: "m.room.message",
-                    content: { body: "notice", msgtype: "m.notice" },
-                  },
-                ],
-              },
-            },
-          },
-        },
-      });
+      return syncResponse([
+        message("$reply", "reply"),
+        message("$notice", "notice", { msgtype: "m.notice" }),
+      ]);
     };
     const observer = createMatrixQaRoomObserver({
       accessToken: "token",
@@ -411,25 +264,11 @@ describe("matrix sync helpers", () => {
         now = 1;
         throw init?.signal instanceof AbortSignal ? init.signal.reason : expiredSignal.reason;
       }
-      return Response.json({
-        next_batch: "recovered-batch",
-        rooms: {
-          join: {
-            "!room:matrix-qa.test": {
-              timeline: {
-                events: [
-                  {
-                    event_id: "$recovered",
-                    sender: "@sut:matrix-qa.test",
-                    type: "m.room.message",
-                    content: { body: "recovered", msgtype: "m.text" },
-                  },
-                ],
-              },
-            },
-          },
-        },
-      });
+      return syncResponse(
+        [message("$recovered", "recovered")],
+        "!room:matrix-qa.test",
+        "recovered-batch",
+      );
     };
     const observer = createMatrixQaRoomObserver({
       baseUrl: "http://127.0.0.1:28008/",

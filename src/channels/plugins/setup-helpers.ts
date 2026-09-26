@@ -1,8 +1,3 @@
-/**
- * Channel setup config mutation helpers.
- *
- * Applies account names and validates setup results for channel onboarding adapters.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveChannelAccountKey,

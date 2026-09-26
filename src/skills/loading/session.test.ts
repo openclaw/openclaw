@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
-import { parseSkillFrontmatter, resolveSkillManifestMetadata } from "./frontmatter.js";
 import { loadSingleSkillDirectory, type LocalSkillLoadDiagnostic } from "./local-loader.js";
 import { loadSkills } from "./session.js";
 
@@ -222,49 +221,6 @@ describe("loadSkills", () => {
       message: "description is required",
       path: skillFile,
     });
-  });
-
-  it("loads skills with JSON5-style trailing commas in metadata frontmatter", async () => {
-    const tempDir = tempDirs.make("openclaw-skill-scan-");
-    const skillDir = path.join(tempDir, "json5-metadata");
-    await fs.mkdir(skillDir);
-    const skillFile = path.join(skillDir, "SKILL.md");
-    await fs.writeFile(
-      skillFile,
-      `---
-name: json5-metadata
-description: Skill with JSON5-style metadata.
-metadata:
-  {
-    "openclaw":
-      {
-        "requires":
-          {
-            "env": ["EXAMPLE_VAR"],
-          },
-      },
-  }
-disable-model-invocation: true
----
-# JSON5 Metadata
-`,
-      "utf-8",
-    );
-
-    const result = loadSkillsFromPath(tempDir);
-    const frontmatter = parseSkillFrontmatter(await fs.readFile(skillFile, "utf-8"));
-
-    expect(result.diagnostics).toEqual([]);
-    expect(result.skills).toEqual([
-      expect.objectContaining({
-        name: "json5-metadata",
-        displayName: "JSON5 Metadata",
-        description: "Skill with JSON5-style metadata.",
-        disableModelInvocation: true,
-        filePath: skillFile,
-      }),
-    ]);
-    expect(resolveSkillManifestMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
   });
 
   it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {

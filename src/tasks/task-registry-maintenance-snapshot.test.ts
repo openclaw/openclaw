@@ -237,10 +237,10 @@ describe("task-registry maintenance snapshot", () => {
       "newer-first",
     ]);
     expect(snapshot.taskIds.at(-1)).toBe("older");
-    expect([...snapshot.cronHistoryOverflowTaskIds]).toEqual([
-      ...collectCronHistoryOverflowTaskIds(listed),
-    ]);
-    expect(snapshot.cronHistoryOverflowTaskIds).toEqual(
+    expect(new Set(snapshot.cronHistoryOverflowSelections.keys())).toEqual(
+      collectCronHistoryOverflowTaskIds(listed),
+    );
+    expect(new Set(snapshot.cronHistoryOverflowSelections.keys())).toEqual(
       new Set(partitions.map(({ prefix }) => `${prefix}-0000`)),
     );
   });

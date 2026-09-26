@@ -1,4 +1,5 @@
 import type { WebClient } from "@slack/web-api";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { createSlackTokenCacheKey } from "./client.js";
 
 const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
@@ -44,13 +45,7 @@ export function cacheSlackDmChannelId(
 ): void {
   const cache = getSlackDmChannelCache(params.cacheOwner);
   const key = createSlackDmCacheKey(params);
-  if (cache.has(key)) {
-    cache.delete(key);
-  } else if (cache.size >= SLACK_DM_CHANNEL_CACHE_MAX) {
-    const oldest = cache.keys().next().value;
-    if (oldest) {
-      cache.delete(oldest);
-    }
-  }
+  cache.delete(key);
   cache.set(key, channelId);
+  pruneMapToMaxSize(cache, SLACK_DM_CHANNEL_CACHE_MAX);
 }

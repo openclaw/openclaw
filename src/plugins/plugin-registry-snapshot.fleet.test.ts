@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
@@ -15,7 +15,7 @@ afterEach(() => {
   clearPluginMetadataLifecycleCaches();
 });
 
-it("checks shared persisted files once per fleet while discovering every workspace and refreshing the next operation", () => {
+it("checks shared persisted files once per fleet while discovering every workspace and refreshing the next operation", async () => {
   const root = tempDirs.make("openclaw-fleet-plugin-registry-");
   const bundled = path.join(root, "bundled");
   const sharedRoot = path.join(bundled, "shared");
@@ -42,7 +42,7 @@ it("checks shared persisted files once per fleet while discovering every workspa
       ),
     },
   });
-  writePersistedInstalledPluginIndexSync(
+  await writePersistedInstalledPluginIndex(
     loadInstalledPluginIndex({ config: configFor(3), env, workspaceDir: workspaces[0] }),
     { env },
   );

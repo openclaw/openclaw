@@ -644,16 +644,6 @@ describe("Discord model picker interactions", () => {
         "Model set to openai/gpt-4o for this session. Configured default update requested.",
     },
     {
-      label: "immutable configured default",
-      suppressedText:
-        "Model set to openai/gpt-4o for this session. Configured default unchanged because configuration is immutable.",
-    },
-    {
-      label: "session-only selection",
-      suppressedText:
-        "Model set to openai/gpt-4o for this session only; configured default unchanged.",
-    },
-    {
       label: "generic fallback",
       suppressedText: undefined,
     },

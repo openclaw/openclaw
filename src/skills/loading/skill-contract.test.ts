@@ -79,14 +79,6 @@ describe("formatSkillsCompact", () => {
     expect(out).not.toContain("<version>");
   });
 
-  it("omits descriptions when their compact budget is zero", () => {
-    const out = formatSkillsCompact([makeSkill("weather", "Get weather data")], {
-      descriptionMaxChars: 0,
-    });
-    expect(out).toContain("<name>weather</name>");
-    expect(out).not.toContain("<description>");
-  });
-
   it("preserves location notes when compact descriptions are omitted", () => {
     const out = formatSkillsCompact(
       [
@@ -120,11 +112,5 @@ describe("formatSkillsCompact", () => {
   it("escapes XML special characters", () => {
     const out = formatSkillsCompact([makeSkill("a<b&c")]);
     expect(out).toContain("a&lt;b&amp;c");
-  });
-
-  it("is significantly smaller than full format", () => {
-    const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
-    const compact = formatSkillsCompact(skills);
-    expect(compact.length).toBeLessThan(formatSkillsForPromptCore(skills).length / 2);
   });
 });

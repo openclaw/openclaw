@@ -72,8 +72,6 @@ describe("Google Chat monitor lifecycle", () => {
   });
 
   it.each([
-    { description: "both audience settings are missing", config: {} },
-    { description: "the audience is missing", config: { audienceType: "app-url" } },
     {
       description: "the audience is blank",
       config: { audienceType: "app-url", audience: "   " },

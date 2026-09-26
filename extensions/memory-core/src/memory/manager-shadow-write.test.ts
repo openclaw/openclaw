@@ -55,7 +55,7 @@ describe("private session source staging", () => {
     "publishes forced $mode memory and session sources without the application-thread kernel",
     async ({ vectorEnabled }) => {
       const { manager, db } = await setup(vectorEnabled);
-      vi.spyOn(MemorySourceIndexKernel.prototype, "replace").mockImplementation(() => {
+      vi.spyOn(MemorySourceIndexKernel.prototype, "replaceRows").mockImplementation(() => {
         throw new Error("source publication reached the application thread");
       });
       await manager.sync({ reason: "cli", force: true });
@@ -327,7 +327,7 @@ describe("private session source staging", () => {
           }
         }
       });
-    vi.spyOn(MemorySourceIndexKernel.prototype, "replace").mockImplementation(() => {
+    vi.spyOn(MemorySourceIndexKernel.prototype, "replaceRows").mockImplementation(() => {
       throw new Error("failed transfer replayed on the application thread");
     });
     await expect(manager.sync({ reason: "cli", force: true })).rejects.toMatchObject({

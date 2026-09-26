@@ -2,8 +2,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
+import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import {
   createUpdateRun,
+  finishUpdateRun,
   getUpdateRun,
   recordUpdateRunStep,
   recordUpdateRunVerification,
@@ -63,6 +65,54 @@ afterEach(() => {
 });
 
 describe("update recovery reporting", () => {
+  it.each([false, true])(
+    "records next action from the admitted row without a cold snapshot (terminal=%s)",
+    async (terminal) => {
+      vi.mocked(isContainerEnvironment).mockReturnValue(false);
+      const env = { OPENCLAW_STATE_DIR: dirs.make("next-action-current-row-") };
+      const run = {
+        runId: createUpdateRun(
+          { trigger: "cli", origin: { nextAction: "previous guidance" } },
+          { env },
+        ).runId,
+        env,
+      };
+      if (terminal) {
+        finishUpdateRun(run.runId, { status: "failed", reason: "build-failed" }, { env });
+      }
+      const before = getUpdateRun(run.runId, { env });
+      closeOpenClawStateDatabaseForTest();
+      const read = vi
+        .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
+        .mockImplementation(() => {
+          throw new Error("SQLite source did not stabilize during update reporting");
+        });
+      let nextAction: string | undefined;
+      try {
+        nextAction = recordUpdateResultNextAction(
+          { opts: { run } },
+          {
+            status: "error",
+            mode: "git",
+            reason: "build-failed",
+            steps: [],
+            durationMs: 1,
+          },
+        );
+      } finally {
+        read.mockRestore();
+      }
+      expect(nextAction).toContain("openclaw triage");
+      const after = getUpdateRun(run.runId, { env });
+      if (terminal) {
+        expect(after).toEqual(before);
+      } else {
+        expect(after?.origin.nextAction).toBe(nextAction);
+        expect(after?.phase).toBe(before?.phase);
+        expect(after?.status).toBe("running");
+      }
+    },
+  );
   it.each([true, false, undefined])(
     "uses raw recovery facts for immediate guidance without replacing history (running=%s)",
     (serviceRunning) => {

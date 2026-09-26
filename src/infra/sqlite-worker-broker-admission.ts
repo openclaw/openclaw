@@ -314,8 +314,15 @@ export function prepareSqliteWorkerLifecycle(
     }
     const stateLifecycle = borrowSqliteWorkerLifecycle(job, actor);
     if (!stateLifecycle && job.requireStateLifecycle) {
+      const budget =
+        typeof job.requireStateLifecycle === "object" ? job.requireStateLifecycle : undefined;
       job.request.workerStateLifecycle = {
-        deadlineNs: process.hrtime.bigint() + BigInt(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) * 1_000_000n,
+        deadlineNs:
+          process.hrtime.bigint() +
+          BigInt(budget?.waitMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) * 1_000_000n,
+        ...(budget?.maxPollIntervalMs === undefined
+          ? {}
+          : { maxPollIntervalMs: budget.maxPollIntervalMs }),
       };
     }
     job.request.stateLifecycle = stateLifecycle;

@@ -1,5 +1,6 @@
 // Restart catchup tests cover cron jobs missed while the service was stopped.
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronEvent } from "./service/state.js";
@@ -29,6 +30,8 @@ describe("CronService restart catch-up", () => {
     startupDeferredMissedAgentJobDelayMs?: number;
   }) {
     return new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath: params.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -71,16 +74,8 @@ describe("CronService restart catch-up", () => {
 
   function createOverdueCronJob(id: string, nextRunAtMs: number): CronJob {
     return {
-      id,
-      name: `job-${id}`,
-      enabled: true,
-      createdAtMs: nextRunAtMs - 60_000,
-      updatedAtMs: nextRunAtMs - 60_000,
+      ...createOverdueEveryJob(id, nextRunAtMs),
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: `tick-${id}` },
-      state: { nextRunAtMs },
     };
   }
 
@@ -207,6 +202,7 @@ describe("CronService restart catch-up", () => {
     await writeStoreJobs(store.storePath, [job]);
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       cronEnabled: true,
       storePath: store.storePath,
       log: noopLogger,
@@ -251,6 +247,7 @@ describe("CronService restart catch-up", () => {
     await writeStoreJobs(store.storePath, [job]);
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
       storePath: store.storePath,
@@ -284,6 +281,7 @@ describe("CronService restart catch-up", () => {
 
     const events: CronEvent[] = [];
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       cronEnabled: true,
       storePath: store.storePath,
       log: noopLogger,
@@ -979,6 +977,7 @@ describe("CronService restart catch-up", () => {
     ]);
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       cronEnabled: true,
       storePath: store.storePath,
       log: noopLogger,
@@ -1023,6 +1022,7 @@ describe("CronService restart catch-up", () => {
     ]);
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       cronEnabled: true,
       storePath: store.storePath,
       log: noopLogger,
@@ -1062,6 +1062,7 @@ describe("CronService restart catch-up", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       cronEnabled: true,
       storePath: store.storePath,
       log: noopLogger,

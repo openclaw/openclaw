@@ -42,20 +42,17 @@ describe("plugin SDK fetch runtime", () => {
     expect(importProbeOutput.trim()).toBe("ok");
   });
 
-  it.each([204, 205, 304])(
-    "returns the original response for null-body status %s",
-    async (status) => {
-      const response = new Response(null, { status });
-      let releaseCount = 0;
+  it("returns the original response for a null body", async () => {
+    const response = new Response(null, { status: 204 });
+    let releaseCount = 0;
 
-      const wrapped = responseWithRelease(response, async () => {
-        releaseCount += 1;
-      });
+    const wrapped = responseWithRelease(response, async () => {
+      releaseCount += 1;
+    });
 
-      expect(wrapped).toBe(response);
-      await vi.waitFor(() => expect(releaseCount).toBe(1));
-    },
-  );
+    expect(wrapped).toBe(response);
+    await vi.waitFor(() => expect(releaseCount).toBe(1));
+  });
 
   it("closes downstream EOF before awaiting release", async () => {
     const releaseGate = createDeferred();

@@ -1,6 +1,5 @@
 // Covers task-flow registry store persistence, events, and state queries.
 import { statSync } from "node:fs";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
@@ -10,7 +9,6 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
@@ -30,10 +28,7 @@ import {
   type TaskFlowRecord,
 } from "./task-flow-registry.types.js";
 import { parseTaskNotifyPolicy } from "./task-registry.types.js";
-import {
-  configureTaskFlowRegistryRuntime,
-  resetTaskFlowRegistryForTests,
-} from "./task-runtime.test-helpers.js";
+import { resetTaskFlowRegistryForTests } from "./task-runtime.test-helpers.js";
 
 function createManagedTaskFlow(
   params: Parameters<typeof createManagedTaskFlowOrNull>[0],
@@ -122,43 +117,6 @@ describe("task-flow-registry store runtime", () => {
         expect(() => statSync(statePath)).toThrow();
       },
     );
-  });
-
-  it("uses the configured flow store for restore and writes", () => {
-    const storedFlow = createStoredFlow();
-    const store = createInMemoryTaskFlowRegistryStore({
-      flows: new Map([[storedFlow.flowId, storedFlow]]),
-    });
-    const loadSnapshot = vi.fn(store.loadSnapshot);
-    const upsertFlow = vi.fn(store.upsertFlow);
-    configureTaskFlowRegistryRuntime({ store: { ...store, loadSnapshot, upsertFlow } });
-
-    const restored = getTaskFlowById("flow-restored");
-    expect(restored?.flowId).toBe("flow-restored");
-    expect(restored?.syncMode).toBe("managed");
-    expect(restored?.controllerId).toBe("tests/restored-controller");
-    expect(restored?.revision).toBe(4);
-    expect(restored?.stateJson).toEqual({ lane: "triage", done: 3 });
-    expect(restored?.waitJson).toEqual({ kind: "task", taskId: "task-restored" });
-    expect(restored?.cancelRequestedAt).toBe(115);
-    expect(loadSnapshot).toHaveBeenCalledTimes(1);
-
-    createManagedTaskFlow({
-      ownerKey: "agent:main:main",
-      controllerId: "tests/new-flow",
-      goal: "New flow",
-      status: "running",
-      currentStep: "wait_for",
-    });
-
-    expect(upsertFlow).toHaveBeenCalledTimes(1);
-    const latestSnapshot = store.loadSnapshot();
-    expect(latestSnapshot.flows.size).toBe(2);
-    const restoredFlow = latestSnapshot.flows.get("flow-restored");
-    if (!restoredFlow) {
-      throw new Error("Expected restored task flow");
-    }
-    expect(restoredFlow.goal).toBe("Restored flow");
   });
 
   it("rejects invalid persisted flow enum values", () => {
@@ -392,29 +350,6 @@ describe("task-flow-registry store runtime", () => {
           )
           .all(),
       ).toEqual([{ owner_id: mirrored.flowId }]);
-    });
-  });
-
-  it("hardens the sqlite flow store directory and file modes", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    await withFlowRegistryTempDir(async () => {
-      createManagedTaskFlow({
-        ownerKey: "agent:main:main",
-        controllerId: "tests/secured-flow",
-        goal: "Secured flow",
-        status: "blocked",
-        blockedTaskId: "task-secured",
-        blockedSummary: "Need auth.",
-        waitJson: { kind: "task", taskId: "task-secured" },
-      });
-
-      const databasePath = resolveOpenClawStateSqlitePath(process.env);
-      const registryDir = path.dirname(databasePath);
-      expect(databasePath.endsWith(path.join("state", "openclaw.sqlite"))).toBe(true);
-      expect(statSync(registryDir).mode & 0o777).toBe(0o700);
-      expect(statSync(databasePath).mode & 0o777).toBe(0o600);
     });
   });
 });

@@ -128,7 +128,10 @@ async function openChatAndSubmitProbe(
 ): Promise<{ runId: string; sendParams: ChatSendParams }> {
   const probeText = opts.probeText ?? PROBE_TEXT;
   await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
-  await currentPage.getByText("Ready.").waitFor({ timeout: 10_000 });
+  await currentPage
+    .locator(".chat-thread")
+    .getByText("Ready.", { exact: true })
+    .waitFor({ timeout: 10_000 });
   await gateway.waitForRequest("sessions.list");
   if (opts.attachImage) {
     await currentPage.locator(".agent-chat__file-input").setInputFiles({

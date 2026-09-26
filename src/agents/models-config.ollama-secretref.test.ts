@@ -61,7 +61,7 @@ describe("registered Ollama catalog SecretRef ownership", () => {
         [true, false].flatMap((explicitModels) =>
           [
             "resolved-ollama-profile-fixture",
-            ...(owner === "config"
+            ...(owner === "config" && baseUrl === "http://127.0.0.1:11434"
               ? ["ollama-local", "OLLAMA_API_KEY", NON_ENV_SECRETREF_MARKER]
               : []),
           ].map((runtimeKey) => ({ owner, baseUrl, explicitModels, runtimeKey })),

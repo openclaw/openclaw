@@ -2,10 +2,7 @@ import Foundation
 import OpenClawProtocol
 
 func gatewayErrorDetails(_ error: ErrorShape?) -> [String: OpenClawProtocol.AnyCodable] {
-    var details: [String: OpenClawProtocol.AnyCodable] = [:]
-    if let nested = error?.details?.value as? [String: OpenClawProtocol.AnyCodable] {
-        details.merge(nested) { _, nestedValue in nestedValue }
-    }
+    var details = error?.details?.value as? [String: OpenClawProtocol.AnyCodable] ?? [:]
     if let error {
         if details["code"] == nil {
             details["code"] = OpenClawProtocol.AnyCodable(error.code)
@@ -110,14 +107,10 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         minimumProbeProtocol: Int? = nil)
     {
         let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedDetailCode = detailCodeRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedRecommendedNextStep =
-            recommendedNextStepRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.message = trimmedMessage.isEmpty ? "gateway connect failed" : trimmedMessage
-        self.detailCodeRaw = trimmedDetailCode?.isEmpty == false ? trimmedDetailCode : nil
+        self.detailCodeRaw = Self.trimmedOrNil(detailCodeRaw)
         self.canRetryWithDeviceToken = canRetryWithDeviceToken
-        self.recommendedNextStepRaw =
-            trimmedRecommendedNextStep?.isEmpty == false ? trimmedRecommendedNextStep : nil
+        self.recommendedNextStepRaw = Self.trimmedOrNil(recommendedNextStepRaw)
         self.requestId = Self.trimmedOrNil(requestId)
         self.detailsReason = Self.trimmedOrNil(detailsReason)
         self.ownerRaw = Self.trimmedOrNil(ownerRaw)

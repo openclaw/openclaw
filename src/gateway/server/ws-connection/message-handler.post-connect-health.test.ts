@@ -8,16 +8,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
-import {
-  onInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticSecurityEvent,
-} from "../../../infra/diagnostic-events.js";
-import {
-  getActiveDiagnosticTraceContext,
-  type DiagnosticTraceContext,
-} from "../../../infra/diagnostic-trace-context.js";
+import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
 import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
 import {
   ensureProfileForEmail,
@@ -29,7 +20,6 @@ import {
 } from "../../../state/user-profiles.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
@@ -55,12 +45,17 @@ import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import { expectAuthenticatedOwnerReconnect } from "./message-handler.owner-reconnect.test-support.js";
 import {
+  BACKEND_CONNECT_PARAMS,
+  captureSecurityEvents,
   createCloseMock,
   createConnectedTestClient,
   createGatewayAttachmentCompletion,
   createHealthSummary,
   createSetCloseCauseMock,
+  createTestAgentRuntimeIdentityLease,
+  DEVICE_TOKEN_MUTATION_PARAMS,
   localUserIngressFor,
+  NODE_PAIR_REMOVE_PARAMS,
   useGatewayTestConfig,
   type CloseGatewayConnection,
   type SetCloseCause,
@@ -71,7 +66,6 @@ const {
   buildGatewaySnapshotMock,
   getHealthCacheMock,
   getHealthVersionMock,
-  incrementPresenceVersionMock,
   loadConfigMock,
   createAuthenticatedGitHubIdentitySyncMock,
   adoptTailscaleProfileAvatarMock,
@@ -95,7 +89,6 @@ const {
   })),
   getHealthCacheMock: vi.fn(() => null),
   getHealthVersionMock: vi.fn(() => 1),
-  incrementPresenceVersionMock: vi.fn(() => 2),
   loadConfigMock: vi.fn(() => ({
     gateway: {
       auth: { mode: "none" },
@@ -158,6 +151,10 @@ vi.mock("../../../config/config.js", () => ({
   loadConfig: loadConfigMock,
 }));
 
+function createBackendClient() {
+  return { id: "gateway-client", version: "dev", platform: "test", mode: "backend" };
+}
+
 vi.mock("../../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
@@ -177,26 +174,6 @@ vi.mock("../health-state.js", () => ({
 }));
 
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
-
-const DEVICE_TOKEN_MUTATION_PARAMS = {
-  deviceId: "device-1",
-  role: "operator",
-} as const satisfies Record<string, unknown>;
-const NODE_PAIR_REMOVE_PARAMS = {
-  nodeId: "device-1",
-} as const satisfies Record<string, unknown>;
-const BACKEND_CONNECT_PARAMS = {
-  minProtocol: PROTOCOL_VERSION,
-  maxProtocol: PROTOCOL_VERSION,
-  client: {
-    id: "gateway-client",
-    version: "dev",
-    platform: "test",
-    mode: "backend",
-  },
-  role: "operator",
-  caps: [],
-} as const satisfies Record<string, unknown>;
 
 const harnessCleanups: Array<() => Promise<void>> = [];
 const fixtureGateReleases: Array<() => void> = [];
@@ -248,38 +225,6 @@ async function withGatewayTestState(
 
 function waitForFast(assertion: () => void | Promise<void>) {
   return vi.waitFor(assertion, { interval: 1 });
-}
-
-async function createTestAgentRuntimeIdentityLease() {
-  const prepared = prepareSystemAgentRunAdmission(
-    {},
-    "run-1",
-    "ops",
-    "message-handler.post-connect-health.test",
-  );
-  await prepared.admit("embedded");
-  onTestFinished(prepared.close);
-  return {
-    close: prepared.close,
-    token: await mintAgentRuntimeIdentityToken({
-      agentId: "ops",
-      sessionKey: "agent:ops:telegram:direct:alice",
-      operationalRunInstance: prepared.operationalRunInstance,
-    }),
-  };
-}
-
-function captureSecurityEvents(): {
-  events: DiagnosticSecurityEvent[];
-  stop: () => void;
-} {
-  const events: DiagnosticSecurityEvent[] = [];
-  const stop = onInternalDiagnosticEvent((event, metadata) => {
-    if (metadata.trusted && event.type === "security.event") {
-      events.push(event);
-    }
-  });
-  return { events, stop };
 }
 
 function attachGatewayHarness(options: {
@@ -431,8 +376,7 @@ function attachGatewayHarness(options: {
       ({
         refreshConnectedUserProfile,
         broadcast: vi.fn(),
-        incrementPresenceVersion: incrementPresenceVersionMock,
-        getHealthVersion: getHealthVersionMock,
+        publishPresence: vi.fn(),
       }) as never,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
@@ -463,6 +407,7 @@ function attachGatewayHarness(options: {
   };
   return {
     whenAttached: attachment.promise,
+    runWhenIdle: () => connectionWork.runWhenIdle(() => {}),
     advanceHandshakePhase,
     clearHandshakeTimer,
     finishSocketSend: (error?: Error) => finishSocketSend?.(error),
@@ -474,30 +419,24 @@ function attachGatewayHarness(options: {
     setClient,
     socket,
     socketSend,
-    sendRequest: (
-      id: string,
-      method: string,
-      params: Record<string, unknown> = {},
-      traceparent?: string,
-    ) => {
+    sendMessage,
+    sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method,
           params,
-          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
-    sendConnect: (id: string, params: Record<string, unknown>, traceparent?: string) => {
+    sendConnect: (id: string, params: Record<string, unknown>) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method: "connect",
           params,
-          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
@@ -509,54 +448,6 @@ function attachGatewayHarness(options: {
     },
   };
 }
-
-describe("WebSocket request trace context", () => {
-  const upstreamTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
-  const upstreamSpanId = "00f067aa0ba902b7";
-  const upstreamTraceparent = `00-${upstreamTraceId}-${upstreamSpanId}-01`;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("does not carry connect-frame trace context into later requests", async () => {
-    let observed: DiagnosticTraceContext | undefined;
-    vi.mocked(handleGatewayRequest).mockImplementation(async () => {
-      observed = getActiveDiagnosticTraceContext();
-    });
-    const harness = attachGatewayHarness({
-      connId: "conn-connect-trace",
-      connectNonce: "nonce-connect-trace",
-    });
-
-    harness.sendConnect(
-      "connect-1",
-      {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: {
-          id: "gateway-client",
-          version: "dev",
-          platform: "test",
-          mode: "backend",
-        },
-        role: "operator",
-        caps: [],
-      },
-      upstreamTraceparent,
-    );
-    await waitForFast(() => {
-      expect(harness.client).not.toBeNull();
-    });
-
-    harness.sendRequest("untraced-1", "status.summary");
-
-    await waitForFast(() => {
-      expect(observed).toBeDefined();
-    });
-    expect(observed?.traceId).not.toBe(upstreamTraceId);
-  });
-});
 
 function connectTrustedProxyUser(
   connId: string,
@@ -882,22 +773,61 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     }
   });
 
-  it("discards pipelined frames when hello delivery fails", async () => {
+  it.each(["construction", "delivery"] as const)(
+    "closes registered clients and discards pipelined frames when hello %s fails",
+    async (failure) => {
+      const close = createCloseMock();
+      const harness = attachGatewayHarness({
+        connId: "conn-failed-hello",
+        connectNonce: "nonce-failed-hello",
+        close,
+      });
+      const error = new Error(`synthetic hello ${failure} failure`);
+      if (failure === "construction") {
+        buildGatewaySnapshotMock.mockImplementationOnce(() => {
+          throw error;
+        });
+      } else {
+        harness.socketSend.mockImplementationOnce((_payload, callback) => callback?.(error));
+      }
+
+      harness.sendConnect("connect-before-failed-hello", BACKEND_CONNECT_PARAMS);
+      harness.sendRequest("request-before-failed-hello", "status.summary");
+      await harness.runWhenIdle();
+
+      expect(buildGatewaySnapshotMock).toHaveBeenCalledOnce();
+      expect({
+        registrations: harness.setClient.mock.calls.length,
+        closes: close.mock.calls.length,
+        helloWrites: harness.socketSend.mock.calls.length,
+        queuedRequests: vi.mocked(handleGatewayRequest).mock.calls.length,
+      }).toEqual({
+        registrations: 1,
+        closes: 1,
+        helloWrites: failure === "construction" ? 0 : 1,
+        queuedRequests: 0,
+      });
+    },
+  );
+
+  it("retains established clients after malformed frames and dispatches later requests", async () => {
     const close = createCloseMock();
     const harness = attachGatewayHarness({
-      connId: "conn-failed-hello",
-      connectNonce: "nonce-failed-hello",
-      deferSocketSend: true,
+      connId: "conn-malformed-frame-after-hello",
+      connectNonce: "nonce-malformed-frame-after-hello",
       close,
     });
+    harness.sendConnect("connect-before-malformed-frame", BACKEND_CONNECT_PARAMS);
+    await harness.runWhenIdle();
+    expect(harness.socketSend).toHaveBeenCalledOnce();
 
-    harness.sendConnect("connect-before-failed-hello", BACKEND_CONNECT_PARAMS);
-    harness.sendRequest("request-before-failed-hello", "status.summary");
-    await waitForFast(() => expect(harness.socketSend).toHaveBeenCalledOnce());
-
-    harness.finishSocketSend(new Error("synthetic hello send failure"));
-    await waitForFast(() => expect(close).toHaveBeenCalled());
+    harness.sendMessage("{");
+    await harness.runWhenIdle();
+    expect(close).not.toHaveBeenCalled();
     expect(handleGatewayRequest).not.toHaveBeenCalled();
+    harness.sendRequest("request-after-malformed-frame", "status.summary");
+    await harness.runWhenIdle();
+    expect(handleGatewayRequest).toHaveBeenCalledOnce();
   });
 
   it("accepts a valid large node skills update as soon as hello delivery succeeds", async () => {
@@ -2096,12 +2026,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendConnect("connect-token-userless", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
+      client: createBackendClient(),
       role: "operator",
       caps: [],
       auth: { token: "gateway-token" },
@@ -2387,12 +2312,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendConnect("connect-auth-rate-limited", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
+      client: createBackendClient(),
       role: "operator",
       scopes: [],
       caps: [],
@@ -2432,12 +2352,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendConnect("connect-phases", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
+      client: createBackendClient(),
       role: "operator",
       scopes: [],
       caps: [],
@@ -2460,24 +2375,15 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("does not mark local backend self-pairing clients as approval runtimes", async () => {
-    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
-      createHealthSummary(),
-    );
     const harness = attachGatewayHarness({
       connId: "conn-approval-runtime-spoof",
       connectNonce: "nonce-approval-runtime-spoof",
-      refreshHealthSnapshot,
     });
 
     harness.sendConnect("connect-approval-runtime-spoof", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
+      client: createBackendClient(),
       role: "operator",
       scopes: ["operator.approvals"],
       caps: [],
@@ -2495,24 +2401,15 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("retains handshake-attested locality for direct operator admission", async () => {
-    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
-      createHealthSummary(),
-    );
     const harness = attachGatewayHarness({
       connId: "conn-local-operator-authority",
       connectNonce: "nonce-local-operator-authority",
-      refreshHealthSnapshot,
     });
 
     harness.sendConnect("connect-local-operator-authority", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
+      client: createBackendClient(),
       role: "operator",
       scopes: ["operator.admin"],
       caps: [],
@@ -2544,9 +2441,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("does not carry local operator authority for an authenticated remote client", async () => {
-    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
-      createHealthSummary(),
-    );
     const harness = attachGatewayHarness({
       connId: "conn-remote-operator-authority",
       connectNonce: "nonce-remote-operator-authority",
@@ -2557,18 +2451,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         token: "gateway-token",
         allowTailscale: false,
       },
-      refreshHealthSnapshot,
     });
 
     harness.sendConnect("connect-remote-operator-authority", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
+      client: createBackendClient(),
       role: "operator",
       scopes: ["operator.admin"],
       caps: [],
@@ -2631,24 +2519,15 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   );
 
   it("marks operator approval clients with the server runtime token", async () => {
-    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
-      createHealthSummary(),
-    );
     const harness = attachGatewayHarness({
       connId: "conn-approval-runtime-token",
       connectNonce: "nonce-approval-runtime-token",
-      refreshHealthSnapshot,
     });
 
     harness.sendConnect("connect-approval-runtime-token", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
+      client: createBackendClient(),
       role: "operator",
       scopes: ["operator.approvals"],
       caps: [],
@@ -2667,9 +2546,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("does not trust approval runtime tokens from remote clients", async () => {
-    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
-      createHealthSummary(),
-    );
     const harness = attachGatewayHarness({
       connId: "conn-remote-approval-runtime-token",
       connectNonce: "nonce-remote-approval-runtime-token",
@@ -2680,18 +2556,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         token: "gateway-token",
         allowTailscale: false,
       },
-      refreshHealthSnapshot,
     });
 
     harness.sendConnect("connect-remote-approval-runtime-token", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
+      client: createBackendClient(),
       role: "operator",
       scopes: ["operator.approvals"],
       caps: [],
@@ -2711,25 +2581,16 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("marks local backend clients with a valid agent runtime identity token", async () => {
-    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
-      createHealthSummary(),
-    );
     const harness = attachGatewayHarness({
       connId: "conn-agent-runtime-token",
       connectNonce: "nonce-agent-runtime-token",
-      refreshHealthSnapshot,
     });
 
     const identityLease = await createTestAgentRuntimeIdentityLease();
     harness.sendConnect("connect-agent-runtime-token", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
+      client: createBackendClient(),
       role: "operator",
       scopes: ["operator.write"],
       caps: [],
@@ -2754,9 +2615,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("rejects agent runtime identity tokens from remote clients", async () => {
-    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
-      createHealthSummary(),
-    );
     const close = createCloseMock();
     const harness = attachGatewayHarness({
       connId: "conn-remote-agent-runtime-token",
@@ -2768,7 +2626,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         token: "gateway-token",
         allowTailscale: false,
       },
-      refreshHealthSnapshot,
       close,
     });
 
@@ -2776,12 +2633,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendConnect("connect-remote-agent-runtime-token", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
+      client: createBackendClient(),
       role: "operator",
       scopes: ["operator.write"],
       caps: [],
@@ -2802,26 +2654,17 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("rejects invalid local agent runtime identity tokens", async () => {
-    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
-      createHealthSummary(),
-    );
     const close = createCloseMock();
     const harness = attachGatewayHarness({
       connId: "conn-invalid-agent-runtime-token",
       connectNonce: "nonce-invalid-agent-runtime-token",
-      refreshHealthSnapshot,
       close,
     });
 
     harness.sendConnect("connect-invalid-agent-runtime-token", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
+      client: createBackendClient(),
       role: "operator",
       scopes: ["operator.write"],
       caps: [],

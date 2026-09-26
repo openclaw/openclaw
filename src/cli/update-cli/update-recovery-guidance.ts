@@ -37,6 +37,8 @@ export function resolveUpdateResultNextAction(params: {
   runningVersion?: string;
   verificationFailure?: string;
   env: NodeJS.ProcessEnv;
+  /** Prepared before ledger writes so formatting performs no filesystem discovery. */
+  environment?: { container: boolean; stateDir: string };
 }): string | undefined {
   const { result, env } = params;
   if (isUpdateGatewayReadinessPending(result)) {
@@ -100,7 +102,7 @@ export function resolveUpdateResultNextAction(params: {
                 failedStep.name,
               ) &&
               /\beacces\b/i.test(failedStep.stderrTail ?? ""))))) &&
-      isContainerEnvironment();
+      (params.environment?.container ?? isContainerEnvironment());
     // Record deployment-specific advice here so CLI output and later reports agree.
     // Keep the recovery constraints: an image change must not roll back migrated state.
     const deployment = containerPackageFailure
@@ -124,7 +126,7 @@ export function resolveUpdateResultNextAction(params: {
     if (params.restart === false && result.postUpdate?.plugins?.changed) {
       return `Plugins updated; Gateway restart skipped (--no-restart). Run \`${command("openclaw gateway restart")}\` to activate them in the running Gateway.`;
     }
-    return `After verifying your history, preview recovery rollback retirement with ${command("openclaw update cleanup --dry-run")} for state ${resolveStateDir(env)}. Keep the same state/config overrides.`;
+    return `After verifying your history, preview recovery rollback retirement with ${command("openclaw update cleanup --dry-run")} for state ${params.environment?.stateDir ?? resolveStateDir(env)}. Keep the same state/config overrides.`;
   }
   return undefined;
 }

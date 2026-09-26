@@ -1,12 +1,11 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 // Zalo test support covers monitor.reply once.lifecycle plugin behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
   postWebhookReplay,
-  settleAsyncWork,
 } from "./test-support/lifecycle-test-support.js";
 import {
   loadCachedLifecycleMonitorModule,
@@ -103,7 +102,7 @@ describe("Zalo reply-once lifecycle", () => {
 
           expect(first.status).toBe(200);
           expect(replay.status).toBe(200);
-          await settleAsyncWork();
+          await monitor.waitForIdle();
         },
       );
 
@@ -165,12 +164,12 @@ describe("Zalo reply-once lifecycle", () => {
               userName: "User One",
               chatId: "dm-chat-1",
             }),
-            settleBeforeReplay: true,
+            beforeReplay: monitor.waitForIdle,
           });
 
           expect(first.status).toBe(200);
           expect(replay.status).toBe(200);
-          await settleAsyncWork();
+          await monitor.waitForIdle();
         },
       );
 

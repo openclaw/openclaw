@@ -22,6 +22,7 @@ import { readConfigMachineState } from "../state/config-machine-state.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
+import type { GatewayScheduler } from "./gateway-scheduler.js";
 import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
@@ -77,9 +78,9 @@ export async function getUpdateEffectiveChannel(): Promise<UpdateChannel> {
   }).channel;
 }
 
-export function resetUpdateAvailableStateForTest(): void {
+export function resetUpdateAvailableStateForTest(scheduler: GatewayScheduler): void {
   resetUpdateStatusState();
-  createGatewayUpdateLifecycle();
+  createGatewayUpdateLifecycle(scheduler);
 }
 
 const UPDATE_CHECK_STATE_KEY = "update.checkState";
@@ -731,7 +732,7 @@ async function runGatewayUpdateCheckOwned(
 }
 
 export function createGatewayUpdateCheck(params: {
-  lifecycle?: UpdateCheckLifecycle;
+  lifecycle: UpdateCheckLifecycle;
   getConfig: () => OpenClawConfig;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
@@ -744,7 +745,7 @@ export function createGatewayUpdateCheck(params: {
   start: () => void;
   stop: () => Promise<void>;
 } {
-  const lifecycle = params.lifecycle ?? createGatewayUpdateLifecycle();
+  const { lifecycle } = params;
   lifecycle.campaign = gatewayUpdateCampaign;
   let started = false;
   let observedCatalog: { sourceUrl: string; generatedAt: number } | undefined;
@@ -756,7 +757,7 @@ export function createGatewayUpdateCheck(params: {
         return;
       }
       started = true;
-      lifecycle.schedule(async () => {
+      lifecycle.schedule("update.check", async () => {
         try {
           await runGatewayUpdateCheck(params, lifecycle);
         } catch {
@@ -764,7 +765,7 @@ export function createGatewayUpdateCheck(params: {
         }
         return resolveCheckIntervalMs(params.getConfig(), getUpdateSchedule()?.install?.kind);
       });
-      lifecycle.schedule(async () => {
+      lifecycle.schedule("update.remote-model-catalog", async () => {
         let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
         try {
           const config = params.getConfig();
@@ -806,7 +807,7 @@ export function createGatewayUpdateCheck(params: {
           }
         }
         return nextCheckInMs;
-      }, true);
+      });
     },
   };
 }

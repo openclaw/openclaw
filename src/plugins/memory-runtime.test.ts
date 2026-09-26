@@ -76,6 +76,27 @@ function createRuntime() {
   } satisfies MemoryPluginRuntime;
 }
 
+function createSearchHits(): MemorySearchResult[] {
+  return [
+    {
+      source: "memory",
+      path: "memory.md",
+      startLine: 1,
+      endLine: 1,
+      score: 1,
+      snippet: "memory",
+    },
+    {
+      source: "sessions",
+      path: "sessions/private.jsonl",
+      startLine: 1,
+      endLine: 1,
+      score: 1,
+      snippet: "private",
+    },
+  ];
+}
+
 type TestRegistry<T extends MemoryPluginRuntime> = {
   registry: ReturnType<typeof createEmptyPluginRegistry>;
   runtime: T;
@@ -653,24 +674,7 @@ describe("memory runtime handles", () => {
       return hits.filter((hit) => hit.source === "memory");
     });
     mocks.loadPluginRegistryHandle.mockReturnValue(registry);
-    const hits: MemorySearchResult[] = [
-      {
-        source: "memory",
-        path: "memory.md",
-        startLine: 1,
-        endLine: 1,
-        score: 1,
-        snippet: "memory",
-      },
-      {
-        source: "sessions",
-        path: "sessions/private.jsonl",
-        startLine: 1,
-        endLine: 1,
-        score: 1,
-        snippet: "private",
-      },
-    ];
+    const hits = createSearchHits();
 
     await expect(
       authorizeActiveMemorySearchHits({
@@ -770,24 +774,7 @@ describe("memory runtime handles", () => {
     mocks.loadPluginRegistryHandle.mockReturnValue(
       createRegistry(runtimeWithoutAuthorizer).registry,
     );
-    const hits: MemorySearchResult[] = [
-      {
-        source: "memory",
-        path: "memory.md",
-        startLine: 1,
-        endLine: 1,
-        score: 1,
-        snippet: "memory",
-      },
-      {
-        source: "sessions",
-        path: "sessions/private.jsonl",
-        startLine: 1,
-        endLine: 1,
-        score: 1,
-        snippet: "private",
-      },
-    ];
+    const hits = createSearchHits();
 
     await expect(
       authorizeActiveMemorySearchHits({

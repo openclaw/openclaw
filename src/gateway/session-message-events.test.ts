@@ -103,6 +103,55 @@ async function createSessionStoreFile(): Promise<string> {
   return storePath;
 }
 
+async function createMainSessionStore(
+  entry: Parameters<typeof writeSessionStore>[0]["entries"][string] = {},
+): Promise<string> {
+  const storePath = await createSessionStoreFile();
+  await writeSessionStore({
+    entries: { main: { sessionId: "sess-main", updatedAt: Date.now(), ...entry } },
+    storePath,
+  });
+  return storePath;
+}
+
+type GatewayWs = Awaited<ReturnType<typeof harness.openWs>>;
+
+async function connectSessionClient(
+  ws: GatewayWs,
+  storePath: string,
+  identityFile: string,
+  kind: "web" | "tui",
+) {
+  await connectOk(ws, {
+    caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+    client: {
+      id: kind === "web" ? GATEWAY_CLIENT_IDS.CONTROL_UI : GATEWAY_CLIENT_IDS.TUI,
+      mode: kind === "web" ? GATEWAY_CLIENT_MODES.UI : GATEWAY_CLIENT_MODES.CLI,
+      platform: kind === "web" ? "web" : "test",
+      version: "test",
+    },
+    deviceIdentityPath: path.join(path.dirname(storePath), identityFile),
+    prePairDevice: true,
+    scopes: ["operator.read"],
+  });
+}
+
+async function writeTranscriptFixture(
+  transcriptPath: string,
+  sessionId: string,
+  messageId: string,
+  message: Record<string, unknown>,
+) {
+  await fs.writeFile(
+    transcriptPath,
+    [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ id: messageId, message }),
+    ].join("\n"),
+    "utf-8",
+  );
+}
+
 async function withOperatorSessionSubscriber<T>(
   run: (ws: NonNullable<typeof subscribedOperatorWs>) => Promise<T>,
 ) {
@@ -812,16 +861,7 @@ describe("session.message websocket events", () => {
   });
 
   test("only sends transcript events to subscribed operator clients", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
-      },
-      storePath,
-    });
+    const storePath = await createMainSessionStore();
 
     const subscribedWs = await harness.openWs();
     const unsubscribedWs = await harness.openWs();
@@ -832,14 +872,7 @@ describe("session.message websocket events", () => {
       await connectOk(unsubscribedWs, { scopes: ["operator.read"] });
       await connectOk(nodeWs, { role: "node", scopes: [] });
 
-      const subscribedEvent = onceMessage(
-        subscribedWs,
-        (message) =>
-          message.type === "event" &&
-          message.event === "session.message" &&
-          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-            "agent:main:main",
-      );
+      const subscribedEvent = waitForSessionMessageEvent(subscribedWs, "agent:main:main");
       const appended = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
         text: "subscribed only",
@@ -887,30 +920,8 @@ describe("session.message websocket events", () => {
     const tuiWs = await harness.openWs();
     let reconnectedTuiWs: Awaited<ReturnType<typeof harness.openWs>> | undefined;
     try {
-      await connectOk(webWs, {
-        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
-        client: {
-          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-          mode: GATEWAY_CLIENT_MODES.UI,
-          platform: "web",
-          version: "test",
-        },
-        deviceIdentityPath: path.join(path.dirname(storePath), "shared-web-device.json"),
-        prePairDevice: true,
-        scopes: ["operator.read"],
-      });
-      await connectOk(tuiWs, {
-        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
-        client: {
-          id: GATEWAY_CLIENT_IDS.TUI,
-          mode: GATEWAY_CLIENT_MODES.CLI,
-          platform: "test",
-          version: "test",
-        },
-        deviceIdentityPath: path.join(path.dirname(storePath), "shared-tui-device.json"),
-        prePairDevice: true,
-        scopes: ["operator.read"],
-      });
+      await connectSessionClient(webWs, storePath, "shared-web-device.json", "web");
+      await connectSessionClient(tuiWs, storePath, "shared-tui-device.json", "tui");
       for (const ws of [webWs, tuiWs]) {
         const subscription = await rpcReq(ws, "sessions.messages.subscribe", {
           key: sessionKey,
@@ -1005,18 +1016,7 @@ describe("session.message websocket events", () => {
     const webWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
     let reconnectedWebWs: Awaited<ReturnType<typeof harness.openWs>> | undefined;
     try {
-      await connectOk(webWs, {
-        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
-        client: {
-          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-          mode: GATEWAY_CLIENT_MODES.UI,
-          platform: "web",
-          version: "test",
-        },
-        deviceIdentityPath: path.join(path.dirname(storePath), "current-cron-web-device.json"),
-        prePairDevice: true,
-        scopes: ["operator.read"],
-      });
+      await connectSessionClient(webWs, storePath, "current-cron-web-device.json", "web");
       await rpcReq(webWs, "sessions.messages.subscribe", { key: sessionKey });
 
       const job: CronJob = {
@@ -1096,18 +1096,12 @@ describe("session.message websocket events", () => {
 
       webWs.close();
       reconnectedWebWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
-      await connectOk(reconnectedWebWs, {
-        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
-        client: {
-          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-          mode: GATEWAY_CLIENT_MODES.UI,
-          platform: "web",
-          version: "test",
-        },
-        deviceIdentityPath: path.join(path.dirname(storePath), "current-cron-web-device.json"),
-        prePairDevice: true,
-        scopes: ["operator.read"],
-      });
+      await connectSessionClient(
+        reconnectedWebWs,
+        storePath,
+        "current-cron-web-device.json",
+        "web",
+      );
       const history = await rpcReq<{ messages?: unknown[] }>(reconnectedWebWs, "chat.history", {
         sessionKey,
       });
@@ -1337,30 +1331,8 @@ describe("session.message websocket events", () => {
     ];
 
     try {
-      await connectOk(webWs, {
-        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
-        client: {
-          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-          mode: GATEWAY_CLIENT_MODES.UI,
-          platform: "web",
-          version: "test",
-        },
-        deviceIdentityPath: path.join(path.dirname(storePath), "committed-web-device.json"),
-        prePairDevice: true,
-        scopes: ["operator.read"],
-      });
-      await connectOk(tuiWs, {
-        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
-        client: {
-          id: GATEWAY_CLIENT_IDS.TUI,
-          mode: GATEWAY_CLIENT_MODES.CLI,
-          platform: "test",
-          version: "test",
-        },
-        deviceIdentityPath: path.join(path.dirname(storePath), "committed-tui-device.json"),
-        prePairDevice: true,
-        scopes: ["operator.read"],
-      });
+      await connectSessionClient(webWs, storePath, "committed-web-device.json", "web");
+      await connectSessionClient(tuiWs, storePath, "committed-tui-device.json", "tui");
       for (const ws of [webWs, tuiWs]) {
         const subscription = await rpcReq(ws, "sessions.messages.subscribe", {
           key: sessionKey,
@@ -1522,30 +1494,8 @@ describe("session.message websocket events", () => {
     const tuiWs = await harness.openWs();
     const wrongSessionWs = await harness.openWs();
     try {
-      await connectOk(webWs, {
-        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
-        client: {
-          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-          mode: GATEWAY_CLIENT_MODES.UI,
-          platform: "web",
-          version: "test",
-        },
-        deviceIdentityPath: path.join(path.dirname(storePath), "identity-only-web-device.json"),
-        prePairDevice: true,
-        scopes: ["operator.read"],
-      });
-      await connectOk(tuiWs, {
-        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
-        client: {
-          id: GATEWAY_CLIENT_IDS.TUI,
-          mode: GATEWAY_CLIENT_MODES.CLI,
-          platform: "test",
-          version: "test",
-        },
-        deviceIdentityPath: path.join(path.dirname(storePath), "identity-only-tui-device.json"),
-        prePairDevice: true,
-        scopes: ["operator.read"],
-      });
+      await connectSessionClient(webWs, storePath, "identity-only-web-device.json", "web");
+      await connectSessionClient(tuiWs, storePath, "identity-only-tui-device.json", "tui");
       await connectOk(wrongSessionWs, { scopes: ["operator.read"] });
       for (const ws of [webWs, tuiWs]) {
         const subscription = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
@@ -1773,15 +1723,7 @@ describe("session.message websocket events", () => {
       );
       await expectNoMessageWithin({
         watch: (timeoutMs) =>
-          onceMessage(
-            ws,
-            (message) =>
-              message.type === "event" &&
-              message.event === "session.message" &&
-              (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-                "agent:main:hidden-runtime",
-            timeoutMs,
-          ),
+          waitForSessionMessageEvent(ws, "agent:main:hidden-runtime", timeoutMs),
         action: () => {
           emitSessionTranscriptUpdate({
             sessionFile: path.join(path.dirname(storePath), "sess-hidden-runtime.jsonl"),
@@ -1808,16 +1750,7 @@ describe("session.message websocket events", () => {
   });
 
   test("does not duplicate displayable transcript updates with sessions.changed", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
-      },
-      storePath,
-    });
+    const storePath = await createMainSessionStore();
 
     await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
@@ -1858,16 +1791,7 @@ describe("session.message websocket events", () => {
   });
 
   test("broadcasts identity-only transcript updates to live session listeners", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
-      },
-      storePath,
-    });
+    await createMainSessionStore();
 
     await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
@@ -1955,11 +1879,7 @@ describe("session.message websocket events", () => {
   });
 
   test("marks display-cap truncation structurally on live session.message events", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
-      entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
-      storePath,
-    });
+    const storePath = await createMainSessionStore();
     const transcriptMessage = {
       role: "assistant",
       content: [{ type: "text", text: "x".repeat(9_000) }],
@@ -1988,16 +1908,7 @@ describe("session.message websocket events", () => {
   });
 
   test("prefers carried transcript sequence for live session events", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
-      },
-      storePath,
-    });
+    const storePath = await createMainSessionStore();
 
     await withOperatorSessionSubscriber(async (ws) => {
       const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
@@ -2058,13 +1969,11 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "work selected global prompt" }],
       timestamp: Date.now(),
     };
-    await fs.writeFile(
+    await writeTranscriptFixture(
       transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-work-global" }),
-        JSON.stringify({ id: "msg-work-global", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
+      "sess-work-global",
+      "msg-work-global",
+      transcriptMessage,
     );
 
     const workWs = await harness.openWs();
@@ -2223,165 +2132,90 @@ describe("session.message websocket events", () => {
     }
   });
 
-  test("routes unscoped global transcript events to default-agent global subscribers", async () => {
-    const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "sess-default-global.jsonl");
-    await writeSessionStore({
-      entries: {
-        global: {
-          sessionId: "sess-default-global",
-          sessionFile: transcriptPath,
-          updatedAt: Date.now(),
+  test.each([
+    { label: "unscoped", agentId: undefined },
+    { label: "default-agent scoped", agentId: "main" },
+  ])(
+    "routes $label global transcript events to matching and legacy subscribers",
+    async ({ agentId }) => {
+      const storePath = await createSessionStoreFile();
+      const transcriptPath = path.join(path.dirname(storePath), "sess-default-global.jsonl");
+      await writeSessionStore({
+        entries: {
+          global: {
+            sessionId: "sess-default-global",
+            sessionFile: transcriptPath,
+            updatedAt: Date.now(),
+          },
         },
-      },
-      storePath,
-    });
-    const transcriptMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "default global prompt" }],
-      timestamp: Date.now(),
-    };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-default-global" }),
-        JSON.stringify({ id: "msg-default-global", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
-    );
+        storePath,
+        ...(agentId ? { agentId } : {}),
+      });
+      const transcriptMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "default global prompt" }],
+        timestamp: Date.now(),
+      };
+      await writeTranscriptFixture(
+        transcriptPath,
+        "sess-default-global",
+        "msg-default-global",
+        transcriptMessage,
+      );
 
-    const workWs = await harness.openWs();
-    const mainWs = await harness.openWs();
-    const bareWs = await harness.openWs();
-    try {
-      await connectOk(workWs, { scopes: ["operator.read"] });
-      await connectOk(mainWs, { scopes: ["operator.read"] });
-      await connectOk(bareWs, { scopes: ["operator.read"] });
-      await rpcReq(workWs, "sessions.messages.subscribe", {
-        key: "global",
-        agentId: "work",
-      });
-      await rpcReq(mainWs, "sessions.messages.subscribe", {
-        key: "global",
-        agentId: "main",
-      });
-      await rpcReq(bareWs, "sessions.messages.subscribe", {
-        key: "global",
-      });
+      const workWs = await harness.openWs();
+      const mainWs = await harness.openWs();
+      const bareWs = await harness.openWs();
+      try {
+        await connectOk(workWs, { scopes: ["operator.read"] });
+        await connectOk(mainWs, { scopes: ["operator.read"] });
+        await connectOk(bareWs, { scopes: ["operator.read"] });
+        await rpcReq(workWs, "sessions.messages.subscribe", {
+          key: "global",
+          agentId: "work",
+        });
+        await rpcReq(mainWs, "sessions.messages.subscribe", {
+          key: "global",
+          agentId: "main",
+        });
+        await rpcReq(bareWs, "sessions.messages.subscribe", {
+          key: "global",
+        });
 
-      const mainMessagePromise = waitForSessionMessageEvent(mainWs, "global");
-      const bareMessagePromise = waitForSessionMessageEvent(bareWs, "global");
-      const workMessagePromise = expectNoMessageWithin({
-        watch: (timeoutMs) => waitForSessionMessageEvent(workWs, "global", timeoutMs),
-        timeoutMs: 250,
-      });
-      emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
-        sessionKey: "global",
-        message: transcriptMessage,
-        messageId: "msg-default-global",
-      });
-
-      const mainMessage = await mainMessagePromise;
-      const bareMessage = await bareMessagePromise;
-      await workMessagePromise;
-      expectRecordFields(mainMessage.payload, {
-        sessionKey: "global",
-        messageId: "msg-default-global",
-      });
-      expectRecordFields(bareMessage.payload, {
-        sessionKey: "global",
-        messageId: "msg-default-global",
-      });
-      expect((mainMessage.payload as { agentId?: unknown }).agentId).toBeUndefined();
-      expect((bareMessage.payload as { agentId?: unknown }).agentId).toBeUndefined();
-    } finally {
-      workWs.close();
-      mainWs.close();
-      bareWs.close();
-    }
-  });
-
-  test("routes default-agent scoped global transcript events to legacy global subscribers", async () => {
-    const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "sess-default-scoped-global.jsonl");
-    await writeSessionStore({
-      entries: {
-        global: {
-          sessionId: "sess-default-scoped-global",
+        const mainMessagePromise = waitForSessionMessageEvent(mainWs, "global");
+        const bareMessagePromise = waitForSessionMessageEvent(bareWs, "global");
+        const workMessagePromise = expectNoMessageWithin({
+          watch: (timeoutMs) => waitForSessionMessageEvent(workWs, "global", timeoutMs),
+          timeoutMs: 250,
+        });
+        emitSessionTranscriptUpdate({
           sessionFile: transcriptPath,
-          updatedAt: Date.now(),
-        },
-      },
-      storePath,
-      agentId: "main",
-    });
-    const transcriptMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "default scoped global prompt" }],
-      timestamp: Date.now(),
-    };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-default-scoped-global" }),
-        JSON.stringify({ id: "msg-default-scoped-global", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
-    );
+          sessionKey: "global",
+          ...(agentId ? { agentId } : {}),
+          message: transcriptMessage,
+          messageId: "msg-default-global",
+        });
 
-    const workWs = await harness.openWs();
-    const mainWs = await harness.openWs();
-    const bareWs = await harness.openWs();
-    try {
-      await connectOk(workWs, { scopes: ["operator.read"] });
-      await connectOk(mainWs, { scopes: ["operator.read"] });
-      await connectOk(bareWs, { scopes: ["operator.read"] });
-      await rpcReq(workWs, "sessions.messages.subscribe", {
-        key: "global",
-        agentId: "work",
-      });
-      await rpcReq(mainWs, "sessions.messages.subscribe", {
-        key: "global",
-        agentId: "main",
-      });
-      await rpcReq(bareWs, "sessions.messages.subscribe", {
-        key: "global",
-      });
-
-      const mainMessagePromise = waitForSessionMessageEvent(mainWs, "global");
-      const bareMessagePromise = waitForSessionMessageEvent(bareWs, "global");
-      const workMessagePromise = expectNoMessageWithin({
-        watch: (timeoutMs) => waitForSessionMessageEvent(workWs, "global", timeoutMs),
-        timeoutMs: 250,
-      });
-      emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
-        sessionKey: "global",
-        agentId: "main",
-        message: transcriptMessage,
-        messageId: "msg-default-scoped-global",
-      });
-
-      const mainMessage = await mainMessagePromise;
-      const bareMessage = await bareMessagePromise;
-      await workMessagePromise;
-      expectRecordFields(mainMessage.payload, {
-        sessionKey: "global",
-        agentId: "main",
-        messageId: "msg-default-scoped-global",
-      });
-      expectRecordFields(bareMessage.payload, {
-        sessionKey: "global",
-        agentId: "main",
-        messageId: "msg-default-scoped-global",
-      });
-    } finally {
-      workWs.close();
-      mainWs.close();
-      bareWs.close();
-    }
-  });
+        const mainMessage = await mainMessagePromise;
+        const bareMessage = await bareMessagePromise;
+        await workMessagePromise;
+        expectRecordFields(mainMessage.payload, {
+          sessionKey: "global",
+          messageId: "msg-default-global",
+        });
+        expectRecordFields(bareMessage.payload, {
+          sessionKey: "global",
+          messageId: "msg-default-global",
+        });
+        expect((mainMessage.payload as { agentId?: unknown }).agentId).toBe(agentId);
+        expect((bareMessage.payload as { agentId?: unknown }).agentId).toBe(agentId);
+      } finally {
+        workWs.close();
+        mainWs.close();
+        bareWs.close();
+      }
+    },
+  );
 
   test("includes spawnedBy metadata on session.message transcript events", async () => {
     const storePath = await createSessionStoreFile();
@@ -2408,28 +2242,14 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "spawn metadata snapshot" }],
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
-        JSON.stringify({ id: "msg-spawn", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
-    );
+    await writeTranscriptFixture(transcriptPath, "sess-child", "msg-spawn", transcriptMessage);
 
     const ws = await harness.openWs();
     try {
       await connectOk(ws, { scopes: ["operator.read"] });
       await rpcReq(ws, "sessions.subscribe");
 
-      const messageEventPromise = onceMessage(
-        ws,
-        (message) =>
-          message.type === "event" &&
-          message.event === "session.message" &&
-          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-            "agent:main:child",
-      );
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:child");
 
       emitSessionTranscriptUpdate({
         sessionFile: transcriptPath,
@@ -2476,14 +2296,7 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "thread route snapshot" }],
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-thread" }),
-        JSON.stringify({ id: "msg-thread", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
-    );
+    await writeTranscriptFixture(transcriptPath, "sess-thread", "msg-thread", transcriptMessage);
 
     await withOperatorSessionSubscriber(async (ws) => {
       const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
@@ -2541,16 +2354,7 @@ describe("session.message websocket events", () => {
       expect(mainAppend.ok).toBe(true);
 
       await expectNoMessageWithin({
-        watch: (timeoutMs) =>
-          onceMessage(
-            ws,
-            (message) =>
-              message.type === "event" &&
-              message.event === "session.message" &&
-              (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-                "agent:main:worker",
-            timeoutMs,
-          ),
+        watch: (timeoutMs) => waitForSessionMessageEvent(ws, "agent:main:worker", timeoutMs),
         action: async () => {
           const workerAppend = await appendAssistantMessageToSessionTranscript({
             sessionKey: "agent:main:worker",
@@ -2568,16 +2372,7 @@ describe("session.message websocket events", () => {
       expect(unsubscribeRes.payload?.subscribed).toBe(false);
 
       await expectNoMessageWithin({
-        watch: (timeoutMs) =>
-          onceMessage(
-            ws,
-            (message) =>
-              message.type === "event" &&
-              message.event === "session.message" &&
-              (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-                "agent:main:main",
-            timeoutMs,
-          ),
+        watch: (timeoutMs) => waitForSessionMessageEvent(ws, "agent:main:main", timeoutMs),
         action: async () => {
           const hiddenAppend = await appendAssistantMessageToSessionTranscript({
             sessionKey: "agent:main:main",

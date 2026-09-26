@@ -147,27 +147,21 @@ type ChatProjection = {
 
 type RunTerminalSource = { kind: "canonical" } | { kind: "chat"; eventType: OpenClawEvent["type"] };
 
-function hasArtifactQueryScope(params: unknown): params is ArtifactQuery {
+function requireArtifactQueryScope(api: string, params: ArtifactQuery): ArtifactQuery {
   const record = asRecord(params);
-  return [record.sessionKey, record.runId, record.taskId].some(
-    (value) => typeof value === "string" && value.trim().length > 0,
-  );
-}
-
-function requireArtifactQueryScope(api: string, params: unknown): ArtifactQuery {
-  if (!hasArtifactQueryScope(params)) {
+  if (
+    ![record.sessionKey, record.runId, record.taskId].some(
+      (value) => typeof value === "string" && value.trim().length > 0,
+    )
+  ) {
     throw new Error(`${api} requires one of sessionKey, runId, or taskId`);
   }
   return params;
 }
 
-function hasToolsEffectiveSessionKey(params: unknown): params is ToolsEffectiveParams {
+function requireToolsEffectiveSessionKey(params: ToolsEffectiveParams): ToolsEffectiveParams {
   const record = asRecord(params);
-  return typeof record.sessionKey === "string" && record.sessionKey.trim().length > 0;
-}
-
-function requireToolsEffectiveSessionKey(params: unknown): ToolsEffectiveParams {
-  if (!hasToolsEffectiveSessionKey(params)) {
+  if (typeof record.sessionKey !== "string" || record.sessionKey.trim().length === 0) {
     throw new Error("oc.tools.effective requires sessionKey");
   }
   return params;
@@ -603,9 +597,7 @@ export class Run {
     );
     const record = asRecord(raw);
     const status = resolveSdkRunWaitStatus(raw);
-    const error = readNonEmptyString(record.error)
-      ? { message: readNonEmptyString(record.error) ?? "run failed" }
-      : undefined;
+    const errorMessage = readNonEmptyString(record.error);
     return {
       runId: this.id,
       status,
@@ -613,7 +605,7 @@ export class Run {
       sessionId: readNonEmptyString(record.sessionId),
       startedAt: readSdkRunTimestamp(record.startedAt),
       endedAt: readSdkRunTimestamp(record.endedAt),
-      ...(error ? { error } : {}),
+      ...(errorMessage ? { error: { message: errorMessage } } : {}),
       raw,
     };
   }

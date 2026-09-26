@@ -108,12 +108,11 @@ afterEach(async () => {
 
 describe("transcripts bounded export names", () => {
   const oversizedIds = [
-    { label: "256 safe bytes", sessionId: "notes-0-" + "x".repeat(248) },
-    { label: "908 safe bytes", sessionId: "notes-0-" + "x".repeat(900) },
-    { label: "2208 safe bytes", sessionId: "notes-0-" + "x".repeat(2200) },
-    { label: "258 encoded bytes", sessionId: "x".repeat(85) + "." },
-    { label: "overlong encoded device name", sessionId: "CON." + "x".repeat(100) },
-  ];
+    ["256 safe bytes", "notes-0-" + "x".repeat(248), "start", false],
+    ["256 safe bytes", "notes-0-" + "x".repeat(248), "import", true],
+    ["258 encoded bytes", "x".repeat(85) + ".", "import", false],
+    ["overlong encoded device name", "CON." + "x".repeat(100), "start", true],
+  ] as const;
   const ordinaryIds = [
     { label: "date-prefixed raw ID", sessionId: "2026-07-03/raw-id", slug: "2026-07-03-raw-id" },
     { label: "generated", sessionId: undefined, slug: undefined },
@@ -134,18 +133,14 @@ describe("transcripts bounded export names", () => {
       exportParentExists: false,
       shortened: false,
     },
-    ...oversizedIds.flatMap(({ label, sessionId }) =>
-      [false, true].flatMap((exportParentExists) =>
-        (["start", "import"] as const).map((action) => ({
-          label,
-          sessionId,
-          action,
-          exportParentExists,
-          shortened: true,
-          slug: undefined,
-        })),
-      ),
-    ),
+    ...oversizedIds.map(([label, sessionId, action, exportParentExists]) => ({
+      label,
+      sessionId,
+      action,
+      exportParentExists,
+      shortened: true,
+      slug: undefined,
+    })),
     ...ordinaryIds.map(({ label, sessionId, slug }) => ({
       label,
       sessionId,

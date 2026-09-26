@@ -1,9 +1,11 @@
 // Coverage for global and per-session command lane normalization.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
+  listCommandLaneTotals,
   setCommandLaneConcurrency,
 } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -78,6 +80,72 @@ describe("subagent session concurrency", () => {
   afterEach(() => {
     resetCommandQueueStateForTest();
   });
+
+  it.each([32, 8])(
+    "executes 60 collectors with an independent group cap of %i",
+    async (maxConcurrent) => {
+      setCommandLaneConcurrency(CommandLane.Subagent, 8);
+      const release = createDeferred();
+      const swarmExecutionLane = {
+        lane: 'subagent:swarm:["main","agent:main:parent","group"]',
+        maxConcurrent,
+      };
+      const context = {
+        sessionId: "collector",
+        spawnedBy: "agent:main:parent",
+        swarmExecutionLane,
+      };
+      const lane = resolveGlobalLane(CommandLane.Subagent, context);
+      const options = { maxConcurrent: swarmExecutionLane.maxConcurrent };
+      const runs = Array.from({ length: 60 }, () =>
+        enqueueCommandInLane(lane, async () => await release.promise, options),
+      );
+      const ordinaryLane = resolveGlobalLane(CommandLane.Subagent, {
+        sessionId: "ordinary",
+        spawnedBy: context.spawnedBy,
+      });
+      runs.push(enqueueCommandInLane(ordinaryLane, async () => await release.promise));
+      const nestedLane = resolveGlobalLane(CommandLane.Subagent, {
+        sessionId: "grandchild",
+        spawnedBy: "agent:main:subagent:collector",
+      });
+      runs.push(enqueueCommandInLane(nestedLane, async () => await release.promise));
+      try {
+        expect(getCommandLaneSnapshot(lane)).toMatchObject({
+          maxConcurrent,
+          activeCount: maxConcurrent,
+          queuedCount: 60 - maxConcurrent,
+        });
+        expect(getCommandLaneSnapshot(ordinaryLane)).toMatchObject({
+          activeCount: 1,
+          queuedCount: 0,
+        });
+        expect(getCommandLaneSnapshot(nestedLane)).toMatchObject({
+          maxConcurrent: 8,
+          activeCount: 1,
+          queuedCount: 0,
+        });
+        const diagnostics = getCommandLaneDiagnostics();
+        expect(diagnostics.lanes.find((entry) => entry.lane === lane)).toMatchObject({
+          concurrencyScope: "swarm",
+          swarmGroupKey: '["main","agent:main:parent","group"]',
+          activeCount: maxConcurrent,
+          queuedCount: 60 - maxConcurrent,
+        });
+        expect(diagnostics.lanes.find((entry) => entry.lane === "subagent")).toMatchObject({
+          concurrencyScope: "session",
+          activeCount: 2,
+          queuedCount: 0,
+        });
+        setCommandLaneConcurrency(CommandLane.Subagent, 4);
+        expect(getCommandLaneSnapshot(lane).maxConcurrent).toBe(maxConcurrent);
+      } finally {
+        release.resolve();
+        await Promise.all(runs);
+      }
+      expect(listCommandLaneTotals().some((entry) => entry.lane === lane)).toBe(false);
+    },
+  );
 
   it("admits another parent's children while saturated siblings remain queued in order", async () => {
     setCommandLaneConcurrency(CommandLane.Subagent, 2);

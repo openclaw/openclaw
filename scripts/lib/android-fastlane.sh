@@ -19,20 +19,12 @@ run_android_fastlane() {
   elif ! BUNDLE_GEMFILE="$gemfile" bundle _4.0.21_ check >/dev/null 2>&1; then
     bundle_error="The Android Fastlane bundle is not installed for ${gemfile}."
   else
-    _OPENCLAW_ANDROID_FASTLANE_EXECUTION_PROVENANCE=locked \
-      BUNDLE_GEMFILE="$gemfile" bundle _4.0.21_ exec fastlane "$@"
+    BUNDLE_GEMFILE="$gemfile" bundle _4.0.21_ exec fastlane "$@"
     return
   fi
 
-  local release_ref_mode="${OPENCLAW_MOBILE_RELEASE_REF_MODE:-}"
-  if [[ "$release_ref_mode" =~ ^[[:space:]]*intent[[:space:]]*$ ]]; then
-    echo "$bundle_error" >&2
-    echo "$setup_hint" >&2
-    return "$bundle_status"
-  fi
-
   if command -v fastlane >/dev/null 2>&1 && fastlane --version >/dev/null 2>&1; then
-    _OPENCLAW_ANDROID_FASTLANE_EXECUTION_PROVENANCE=fallback fastlane "$@"
+    fastlane "$@"
     return
   fi
 
@@ -41,7 +33,6 @@ run_android_fastlane() {
     while IFS= read -r version; do
       if RBENV_VERSION="${version}" rbenv which fastlane >/dev/null 2>&1; then
         RBENV_VERSION="${version}" \
-          _OPENCLAW_ANDROID_FASTLANE_EXECUTION_PROVENANCE=fallback \
           rbenv exec fastlane "$@"
         return
       fi

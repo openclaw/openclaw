@@ -1,8 +1,5 @@
-// Session group catalog and sidebar section order. Split out of
-// `session-organizer-operations.runtime.ts` to keep that module under the
-// max-lines ceiling. These operations write the group catalog directly and
-// never touch session rows, so they carry no `patchSession` dependency — that
-// one-way edge is what keeps the two modules free of an import cycle.
+// Catalog operations never patch session rows; the one-way dependency from
+// session-organizer-operations.runtime.ts keeps group assignment cycle-free.
 import { t } from "../i18n/index.ts";
 import { moveSessionSection, normalizeSessionSectionOrder } from "../lib/sessions/grouping.ts";
 import type { SessionGroupMutationResult } from "../lib/sessions/session-capability.ts";

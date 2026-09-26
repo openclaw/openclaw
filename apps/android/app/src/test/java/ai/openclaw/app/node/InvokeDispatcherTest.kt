@@ -341,7 +341,7 @@ internal fun newInvokeDispatcher(
   return InvokeDispatcher(
     cameraHandler = newCameraHandler(appContext),
     locationHandler =
-      LocationHandler.forTesting(
+      LocationHandler(
         appContext = appContext,
         dataSource = InvokeDispatcherFakeLocationDataSource(),
       ),
@@ -359,7 +359,7 @@ internal fun newInvokeDispatcher(
     motionHandler = MotionHandler(appContext, InvokeDispatcherFakeMotionDataSource()),
     smsHandler = SmsHandler(SmsManager(appContext)),
     debugHandler = DebugHandler(appContext, testDeviceIdentityStore(appContext)),
-    callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
+    callLogHandler = CallLogHandler(appContext),
     mobileUiHandler = MobileUiHandler(),
     isForeground = isForeground,
     cameraEnabled = cameraEnabled,
@@ -510,13 +510,4 @@ private class InvokeDispatcherFakeMotionDataSource : MotionDataSource {
   ): PedometerRecord {
     error("unused in InvokeDispatcherTest")
   }
-}
-
-private class InvokeDispatcherFakeCallLogDataSource : CallLogDataSource {
-  override fun hasReadPermission(context: Context): Boolean = true
-
-  override fun search(
-    context: Context,
-    request: CallLogSearchRequest,
-  ): List<CallLogRecord> = emptyList()
 }

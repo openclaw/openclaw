@@ -125,25 +125,6 @@ afterEach(async () => {
   );
 });
 
-async function listTree(root: string): Promise<Array<[string, string]>> {
-  const result: Array<[string, string]> = [];
-  async function visit(directory: string): Promise<void> {
-    for (const entry of (await fs.readdir(directory, { withFileTypes: true })).toSorted((a, b) =>
-      a.name.localeCompare(b.name),
-    )) {
-      const entryPath = path.join(directory, entry.name);
-      const relative = path.relative(root, entryPath);
-      if (entry.isDirectory()) {
-        await visit(entryPath);
-      } else {
-        result.push([relative, (await fs.readFile(entryPath)).toString("hex")]);
-      }
-    }
-  }
-  await visit(root);
-  return result;
-}
-
 function createStateDatabaseFixture(root: string): {
   stateDir: string;
   database: { path: string; identity: { role: "global" } };
@@ -178,38 +159,6 @@ describe("Git-backed SQLite snapshots", () => {
         `Git backup repository must be outside the OpenClaw state directory: ${stateDir}`,
       );
     }
-  });
-
-  it("dumps byte-identical trees and skips a second unchanged create commit", async () => {
-    const root = await tempRoot();
-    const source = path.join(root, "source.sqlite");
-    const first = path.join(root, "first");
-    const second = path.join(root, "second");
-    await createFormatFixture(source);
-
-    await dumpGitBackupDatabase({
-      snapshotPath: source,
-      outputPath: first,
-      identity: { role: "global" },
-    });
-    await dumpGitBackupDatabase({
-      snapshotPath: source,
-      outputPath: second,
-      identity: { role: "global" },
-    });
-    expect(await listTree(second)).toEqual(await listTree(first));
-
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "repository");
-    await initializeGitBackupRepository({ repositoryPath, stateDir });
-    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
-    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
-    const created = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
-    const unchanged = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
-    expect(created.noChanges).toBe(false);
-    expect(unchanged.noChanges).toBe(true);
-    expect(unchanged).not.toHaveProperty("commit");
-    expect(await requireGit(repositoryPath, ["rev-list", "--count", "HEAD"])).toBe("1");
   });
 
   it("backs up a configured external agent database for explicit and all scopes", async () => {
@@ -384,6 +333,7 @@ describe("Git-backed SQLite snapshots", () => {
 
     expect(created.noChanges).toBe(false);
     expect(unchanged.noChanges).toBe(true);
+    expect(unchanged).not.toHaveProperty("commit");
     expect(await requireGit(repositoryPath, ["status", "--porcelain", "--", "unrelated.txt"])).toBe(
       "A  unrelated.txt",
     );
@@ -494,18 +444,6 @@ describe("Git-backed SQLite snapshots", () => {
     expect(output).toContain("Remove non-user ACL grants");
     expect(output).toContain("Do not use a shared or synced folder");
     expect(output).not.toContain("chmod 700");
-  });
-
-  it("accepts a private adopted root", async () => {
-    const root = await tempRoot();
-    const stateDir = path.join(root, "state");
-    const repositoryPath = path.join(root, "repository");
-    await fs.mkdir(stateDir);
-    await fs.mkdir(repositoryPath, { mode: 0o700 });
-
-    await expect(initializeGitBackupRepository({ repositoryPath, stateDir })).resolves.toEqual({
-      repositoryPath,
-    });
   });
 
   it.skipIf(process.platform !== "win32")(

@@ -32,26 +32,24 @@ describe("native conversation setup preferences", () => {
       expect(selected.plugins?.entries?.fixture?.config).toEqual({ sessionCatalog: { enabled } });
     }
   });
-  it.each(["doctor", "onboard"])(
-    "keeps discovery opt-in available after %s writes machine setup metadata",
-    (command) => {
-      const config = initializeNativeSessionCatalogPreferences(
-        applyWizardMetadata({}, { command, mode: "local" }),
-      );
-      expect(config.wizard?.lastRunAt).toBeTruthy();
-      expect(config.wizard?.lastRunCommand).toBe(command);
-      const required = requiresSetupNativeSessionCatalogConsent({
-        config,
-        configExists: true,
-        catalogs,
-      });
-      expect(required).toBe(true);
-      expect(resolveSetupNativeSessionCatalogPreference({ consentRequired: required })).toBe(false);
-      expect(
-        applySetupNativeSessionCatalogPreference({ config, enabled: false, metadataSnapshot }),
-      ).toBe(config);
-    },
-  );
+  it("keeps discovery opt-in available after doctor writes machine setup metadata", () => {
+    const command = "doctor";
+    const config = initializeNativeSessionCatalogPreferences(
+      applyWizardMetadata({}, { command, mode: "local" }),
+    );
+    expect(config.wizard?.lastRunAt).toBeTruthy();
+    expect(config.wizard?.lastRunCommand).toBe(command);
+    const required = requiresSetupNativeSessionCatalogConsent({
+      config,
+      configExists: true,
+      catalogs,
+    });
+    expect(required).toBe(true);
+    expect(resolveSetupNativeSessionCatalogPreference({ consentRequired: required })).toBe(false);
+    expect(
+      applySetupNativeSessionCatalogPreference({ config, enabled: false, metadataSnapshot }),
+    ).toBe(config);
+  });
 
   it("preserves an authored malformed value for the plugin validator", () => {
     const config = initializeNativeSessionCatalogPreferences({

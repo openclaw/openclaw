@@ -4,6 +4,7 @@ import {
   prepareReplyToolAuthority,
   type ReplyToolAuthorityInput,
 } from "../../auto-reply/reply/reply-tool-authority.js";
+import { readChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import { withSessionTranscriptQuestionAnswers } from "../../config/sessions/session-transcript-read-fence.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -184,6 +185,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
           assertRegistered();
           return {
             source: operation ? "reply" : "attempt",
+            sourceTurnId: readChannelSourceTurnId(internal) ?? runId,
             assertActive: assertRegistered,
             project: (overlay) => {
               assertRegistered();

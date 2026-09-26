@@ -309,14 +309,19 @@ module.exports = {
     emptyBundledRoot,
     config,
     input,
+    runtimeInput: {
+      ...input,
+      loadRuntimePlugins: true,
+      runtimePluginSelections: [{ provider, modelId: pinnedId, agentId: "main" }],
+    },
     inventoryParams,
     connections,
-    pausePreparation: () => {
+    pausePreparation: async () => {
       const manifestPath = path.join(selected.rootDir, "openclaw.plugin.json");
       const manifest: Record<string, unknown> = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
       manifest.syntheticAuthRefs = [provider];
       fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
-      refreshPersistedInstalledPluginIndex({
+      await refreshPersistedInstalledPluginIndex({
         config,
         workspaceDir,
         stateDir: state.stateDir,
@@ -436,11 +441,7 @@ describe("cold dynamic-model effective inventory", () => {
           cache: false,
         });
         const donorCurrent = capturePluginLifecycleAuthority(donor);
-        const lease = await acquireReadOnlyPreparedModelRuntime({
-          ...fixture.input,
-          loadRuntimePlugins: true,
-          runtimePluginSelections: [{ provider, modelId: pinnedId, agentId: "main" }],
-        });
+        const lease = await acquireReadOnlyPreparedModelRuntime(fixture.runtimeInput);
         let closing: Promise<void> | undefined;
         try {
           const effective = expectDefined(lease.snapshot.pluginRegistry, "copied owned registry");
@@ -490,11 +491,7 @@ describe("cold dynamic-model effective inventory", () => {
         cache: false,
       });
       const host = new LegacyPluginSdkResourceHost();
-      const lease = await acquireReadOnlyPreparedModelRuntime({
-        ...fixture.input,
-        loadRuntimePlugins: true,
-        runtimePluginSelections: [{ provider, modelId: pinnedId, agentId: "main" }],
-      });
+      const lease = await acquireReadOnlyPreparedModelRuntime(fixture.runtimeInput);
       const resolve = () =>
         host.run(() =>
           withPluginRuntimeGenerationScope(lease.snapshot, () =>
@@ -555,11 +552,7 @@ describe("cold dynamic-model effective inventory", () => {
 
   it("closes native provider resources after the final coalesced read-only lease", async () => {
     await withColdFixture(async (fixture) => {
-      const input = {
-        ...fixture.input,
-        loadRuntimePlugins: true,
-        runtimePluginSelections: [{ provider, modelId: pinnedId, agentId: "main" }],
-      };
+      const input = fixture.runtimeInput;
       const [first, second] = await Promise.all([
         acquireReadOnlyPreparedModelRuntime(input),
         acquireReadOnlyPreparedModelRuntime(input),
@@ -598,12 +591,8 @@ describe("cold dynamic-model effective inventory", () => {
 
   it("keeps a cancelled build's database until actual preparation settles before its replacement", async () => {
     await withColdFixture(async (fixture) => {
-      const input = {
-        ...fixture.input,
-        loadRuntimePlugins: true,
-        runtimePluginSelections: [{ provider, modelId: pinnedId, agentId: "main" }],
-      };
-      const gate = fixture.pausePreparation();
+      const input = fixture.runtimeInput;
+      const gate = await fixture.pausePreparation();
       const metadata = resolvePluginMetadataSnapshot({
         config: fixture.config,
         workspaceDir: input.workspaceDir,
@@ -669,11 +658,7 @@ describe("cold dynamic-model effective inventory", () => {
 
   it("joins a held read-only lease during global close before disposing its database", async () => {
     await withColdFixture(async (fixture) => {
-      const lease = await acquireReadOnlyPreparedModelRuntime({
-        ...fixture.input,
-        loadRuntimePlugins: true,
-        runtimePluginSelections: [{ provider, modelId: pinnedId, agentId: "main" }],
-      });
+      const lease = await acquireReadOnlyPreparedModelRuntime(fixture.runtimeInput);
       const isRegistryCurrent = capturePluginLifecycleAuthority(
         lease.snapshot.pluginRegistry!,
         undefined,
@@ -708,11 +693,7 @@ describe("cold dynamic-model effective inventory", () => {
 
   it("disposes a displaced published generation while close still waits for its successor", async () => {
     await withColdFixture(async (fixture) => {
-      const input = {
-        ...fixture.input,
-        loadRuntimePlugins: true,
-        runtimePluginSelections: [{ provider, modelId: pinnedId, agentId: "main" }],
-      };
+      const input = fixture.runtimeInput;
       const original = await acquireReadOnlyPreparedModelRuntime(input);
       let successor: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
       let closing: Promise<void> | undefined;
@@ -877,11 +858,7 @@ describe("cold dynamic-model effective inventory", () => {
     await withColdFixture(async (fixture) => {
       const catalogLease = await acquireReadOnlyPreparedModelRuntime(fixture.input);
       try {
-        const lease = await acquireReadOnlyPreparedModelRuntime({
-          ...fixture.input,
-          loadRuntimePlugins: true,
-          runtimePluginSelections: [{ provider, modelId: pinnedId, agentId: "main" }],
-        });
+        const lease = await acquireReadOnlyPreparedModelRuntime(fixture.runtimeInput);
         try {
           expect(ownerCount()).toBe(2);
           const resolve = (snapshot: typeof lease.snapshot) =>

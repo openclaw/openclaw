@@ -3,7 +3,7 @@
  *
  * Assembles runtime, workspace, tooling, memory, delegation, channel, and cache-boundary prompt sections.
  */
-import { createHmac, createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import {
   normalizePromptCapabilityIds,
   normalizeStructuredPromptSection,
@@ -11,6 +11,7 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "@openclaw/ai/internal/shared";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,
@@ -82,19 +83,9 @@ import {
   type PreparedWatchedSessionsPrompt,
 } from "./watched-sessions-prompt.js";
 
-/**
- * Controls which hardcoded sections are included in the system prompt.
- * - "full": All sections (default, for main agent)
- * - "minimal": Reduced sections (Tooling, Workspace, Runtime) - used for subagents
- * - "none": Just basic identity line, no sections
- */
 type OwnerIdDisplay = "raw" | "hash";
 
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
-
-type StablePromptPrefixCacheEntry = {
-  value: string;
-};
 
 export type SystemPromptRuntimeInfo = {
   agentId?: string;
@@ -121,26 +112,24 @@ function normalizeSubagentDelegationMode(mode?: SubagentDelegationMode): Subagen
   return mode === "prefer" ? "prefer" : "suggest";
 }
 
-const stablePromptPrefixCache = new Map<string, StablePromptPrefixCacheEntry>();
+const stablePromptPrefixCache = new Map<string, string>();
 
 function cacheStablePromptPrefix(key: string, build: () => string): string {
   const cached = stablePromptPrefixCache.get(key);
-  if (cached) {
+  if (cached !== undefined) {
     stablePromptPrefixCache.delete(key);
     stablePromptPrefixCache.set(key, cached);
-    return cached.value;
+    return cached;
   }
 
   const value = build();
-  stablePromptPrefixCache.set(key, { value });
+  stablePromptPrefixCache.set(key, value);
   pruneMapToMaxSize(stablePromptPrefixCache, SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT);
   return value;
 }
 
 function hashStablePromptInput(value: unknown): string {
-  const hash = createHash("sha256");
-  hash.update(JSON.stringify(value));
-  return hash.digest("hex");
+  return sha256Hex(JSON.stringify(value));
 }
 
 function buildExecApprovalPromptGuidance(params: {
@@ -243,14 +232,12 @@ function buildAgentBootstrapSystemPromptSections(params: {
   bootstrapTruncationNotice?: string;
   contextFiles?: EmbeddedContextFile[];
 }): string[] {
-  const lines = [
-    ...buildAgentBootstrapSystemContext({
-      bootstrapMode: params.bootstrapMode,
-      hasBootstrapFileInProjectContext:
-        params.bootstrapMode === "full" &&
-        (params.contextFiles?.some((file) => isBootstrapContextFile(file.path)) ?? false),
-    }),
-  ];
+  const lines = buildAgentBootstrapSystemContext({
+    bootstrapMode: params.bootstrapMode,
+    hasBootstrapFileInProjectContext:
+      params.bootstrapMode === "full" &&
+      (params.contextFiles?.some((file) => isBootstrapContextFile(file.path)) ?? false),
+  });
   const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
   if (bootstrapTruncationNotice) {
     lines.push("## Bootstrap Context Notice", bootstrapTruncationNotice, "");
@@ -258,18 +245,11 @@ function buildAgentBootstrapSystemPromptSections(params: {
   return lines;
 }
 
-function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
-  if (!ownerLine || isMinimal) {
-    return [];
-  }
-  return ["## Authorized Senders", ownerLine, ""];
-}
-
 function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
   const hasSecret = ownerDisplaySecret?.trim();
   const digest = hasSecret
     ? createHmac("sha256", hasSecret).update(ownerId).digest("hex")
-    : createHash("sha256").update(ownerId).digest("hex");
+    : sha256Hex(ownerId);
   return digest.slice(0, 12);
 }
 
@@ -1049,7 +1029,6 @@ export function buildAgentSystemPrompt(params: {
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
         ? params.modelAliasLines.join("\n")
         : "",
-      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
       ...directorySection,
       workspaceOnlyGuidance,
       ...workspaceNotes,
@@ -1188,7 +1167,7 @@ export function buildAgentSystemPrompt(params: {
             runtimeCapabilities,
           }),
         ]),
-    ...buildUserIdentitySection(ownerLine, isMinimal),
+    ...(ownerLine ? ["## Authorized Senders", ownerLine, ""] : []),
     ...(!isMinimal
       ? [
           buildUiPresentationPrompt({

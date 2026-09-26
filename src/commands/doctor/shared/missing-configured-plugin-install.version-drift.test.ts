@@ -8,6 +8,7 @@ import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { detectPluginVersionDrift } from "../../../plugins/plugin-version-drift.js";
+import { invokePluginArtifactInstallMock } from "../../../plugins/test-helpers/install-fixtures.js";
 import { convergePluginReleaseCohort } from "../../../plugins/update-cohort.js";
 import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plugin-install.js";
 import {
@@ -25,10 +26,18 @@ vi.mock("../../../infra/install-source-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/install-source-utils.js")>()),
   resolveNpmSpecMetadata: mocks.resolveNpmSpecMetadata,
 }));
-vi.mock("../../../plugins/install.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../plugins/install.js")>()),
-  installPluginFromNpmSpec: mocks.installPluginFromNpmSpec,
-}));
+vi.mock("../../../plugins/install.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../plugins/install.js")>();
+  return {
+    ...actual,
+    installPluginFromNpmSpec: (params: Parameters<typeof actual.installPluginFromNpmSpec>[0]) =>
+      invokePluginArtifactInstallMock<Awaited<ReturnType<typeof actual.installPluginFromNpmSpec>>>(
+        mocks.installPluginFromNpmSpec,
+        params,
+        { manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] } },
+      ),
+  };
+});
 vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/manifest-contract-eligibility.js")>()),
   loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,
@@ -129,8 +138,15 @@ function createDriftedInstalls({
         "installed plugin fixture",
       ).installPath;
       const manifestPath = path.join(expectDefined(targetDir, "fixture path"), "package.json");
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, version }));
+      fs.writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          name: parsed.name,
+          version,
+          dependencies,
+          openclaw: { extensions: ["./index.js"] },
+        }),
+      );
       return successfulInstall({
         pluginId: expectedPluginId,
         npmSpec: parsed.name,
@@ -259,6 +275,55 @@ describe("Doctor official plugin version repair", () => {
     expect(result.warnings).toEqual([]);
     expect(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(result.records);
   });
+
+  it.each([
+    ["@openclaw/codex", coreVersion, coreVersion, coreVersion, "stable"],
+    ["@openclaw/codex@latest", coreVersion, coreVersion, coreVersion, "stable"],
+    ["@openclaw/codex@latest", coreVersion, "2026.9.6", "2026.9.6", "stable"],
+    ["@openclaw/codex@latest", "2026.9.5-beta.2", "2026.9.5-beta.2", "2026.9.6", "beta"],
+    ["@openclaw/codex", coreVersion, oldVersion, coreVersion, "stable"],
+    ["@openclaw/codex@latest", "2026.9.5-beta.2", "2026.9.6", "2026.9.6", "beta"],
+    ["@openclaw/codex@latest", coreVersion, "2026.9.6", coreVersion, "extended-stable"],
+    ["@openclaw/codex@next", coreVersion, "2026.9.6", "2026.9.6", "extended-stable"],
+    ["@openclaw/codex@latest", "2026.9.5-1", "2026.9.5-2", coreVersion, "stable"],
+  ] as const)(
+    "repairs missing runtime payload for %s at host %s from record %s to %s on %s",
+    async (spec, hostVersion, installedVersion, expectedVersion, channel) => {
+      const { cfg, env, records } = createDriftedInstalls({
+        hostVersion,
+        installedVersion,
+        packages: [["codex", "@openclaw/codex"]],
+      });
+      cfg.update = { channel };
+      const record = expectDefined(records.codex, "codex install");
+      record.spec = spec;
+      const manifestPath = path.join(
+        expectDefined(record.installPath, "fixture path"),
+        "package.json",
+      );
+      fs.unlinkSync(manifestPath);
+
+      const result = await repairMissingConfiguredPluginInstalls({
+        cfg,
+        env,
+        onCapabilityConsent: async ({ reviewToken }) => ({ reviewToken }),
+        repairVersionDrift: true,
+        baselineRecords: records,
+      });
+
+      expect(result.records.codex?.version).toBe(expectedVersion);
+      expect(result.records.codex).toMatchObject({
+        spec,
+        version: expectedVersion,
+        resolvedVersion: expectedVersion,
+        resolvedSpec: `@openclaw/codex@${expectedVersion}`,
+      });
+      expect(JSON.parse(fs.readFileSync(manifestPath, "utf8")).version).toBe(expectedVersion);
+      expect(result.repairedPluginIds).toEqual(["codex"]);
+      expect(result.warnings).toEqual([]);
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(result.records);
+    },
+  );
 
   it.each([coreVersion, "2026.9.5-beta.2"])(
     "keeps aligned floating official installs unchanged at core %s when the registry is ahead",

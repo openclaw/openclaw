@@ -28,6 +28,8 @@ export function createSessionRowRefresh(
       registryPrepared: boolean;
     };
     databaseRevision: () => number;
+    registrySnapshot: () => object | undefined;
+    env: NodeJS.ProcessEnv;
     runAsOwner: <T>(operation: () => T) => T;
     lookup: (query: records.Lookup) => records.Row | undefined;
     prepareRegistryFacts: () => Promise<void> | undefined;
@@ -165,7 +167,15 @@ export function createSessionRowRefresh(
   }
   function readExactRows(selected: ReadonlySet<string>) {
     return withSessionRowDatabaseFacts(
-      { rows: owner.rows, dirty: owner.dirty, selected, cfg: owner.state().cfg, revision },
+      {
+        rows: owner.rows,
+        dirty: owner.dirty,
+        selected,
+        cfg: owner.state().cfg,
+        revision,
+        registrySnapshot: owner.registrySnapshot,
+        env: owner.env,
+      },
       {
         refreshPending: materializer.refreshPending,
         accept: (ids, facts) => materializer.accept(ids, facts, true),
@@ -253,7 +263,15 @@ export function createSessionRowRefresh(
     }
     try {
       await withSessionRowDatabaseFacts(
-        { rows: owner.rows, dirty: owner.dirty, selected, cfg: owner.state().cfg, revision },
+        {
+          rows: owner.rows,
+          dirty: owner.dirty,
+          selected,
+          cfg: owner.state().cfg,
+          revision,
+          registrySnapshot: owner.registrySnapshot,
+          env: owner.env,
+        },
         materializer,
       );
     } finally {

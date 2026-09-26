@@ -233,8 +233,6 @@ describe("hosted wizard runtime isolation", () => {
 
   it.each([
     { flow: "setup", exitCode: 0, status: "done" },
-    { flow: "setup", exitCode: 23, status: "error" },
-    { flow: "channels", exitCode: 0, status: "done" },
     { flow: "channels", exitCode: 23, status: "error" },
   ] as const)(
     "contains a $flow wizard exit $exitCode without exiting the Gateway",

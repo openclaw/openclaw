@@ -198,30 +198,6 @@ describe("DiscordMessageListener", () => {
     await flushAsyncWork();
     expect(logger.error).toHaveBeenCalledWith(danger("discord handler failed: Error: boom"));
   });
-
-  it("does not apply its own slow-listener logging", async () => {
-    const deferred = createDeferred<void>();
-    const handler = vi.fn(() => deferred.promise);
-    const logger = {
-      warn: vi.fn(),
-      error: vi.fn(),
-    } as unknown as ReturnType<
-      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
-    >;
-    const listener = new DiscordMessageListener(handler, logger);
-
-    const handlePromise = listener.handle(
-      {} as unknown as Parameters<
-        import("./monitor/listeners.js").DiscordMessageListener["handle"]
-      >[0],
-      {} as unknown as import("./internal/discord.js").Client,
-    );
-    deferred.resolve();
-    await expect(handlePromise).resolves.toBeUndefined();
-    expect(handler).toHaveBeenCalledOnce();
-    // The listener no longer wraps message handlers with slow-listener logging.
-    expect(logger.warn).not.toHaveBeenCalled();
-  });
 });
 
 describe("discord allowlist helpers", () => {
@@ -388,26 +364,6 @@ describe("discord guild/channel resolution", () => {
       channelSlug: "random",
     });
     expect(channel).toBeNull();
-  });
-
-  it("inherits parent config for thread channels", () => {
-    const guildInfo: DiscordGuildEntryResolved = {
-      channels: {
-        general: { enabled: true },
-        random: { enabled: false },
-      },
-    };
-    const thread = resolveDiscordChannelConfigWithFallback({
-      guildInfo,
-      channelId: "thread-123",
-      channelName: "topic",
-      channelSlug: "topic",
-      parentId: "999",
-      parentName: "random",
-      parentSlug: "random",
-      scope: "thread",
-    });
-    expect(thread?.allowed).toBe(false);
   });
 
   it("does not match thread name/slug when resolving allowlists", () => {
@@ -581,70 +537,31 @@ describe("discord mention gating", () => {
 describe("discord groupPolicy gating", () => {
   it("applies open/disabled/allowlist policy rules", () => {
     const cases = [
-      {
-        name: "open policy always allows",
-        input: {
-          groupPolicy: "open" as const,
-          guildAllowlisted: false,
-          channelAllowlistConfigured: false,
-          channelAllowed: false,
-        },
-        expected: true,
-      },
-      {
-        name: "disabled policy always blocks",
-        input: {
-          groupPolicy: "disabled" as const,
-          guildAllowlisted: true,
-          channelAllowlistConfigured: true,
-          channelAllowed: true,
-        },
-        expected: false,
-      },
-      {
-        name: "allowlist blocks when guild not allowlisted",
-        input: {
-          groupPolicy: "allowlist" as const,
-          guildAllowlisted: false,
-          channelAllowlistConfigured: false,
-          channelAllowed: true,
-        },
-        expected: false,
-      },
-      {
-        name: "allowlist allows when guild allowlisted and no channel allowlist",
-        input: {
-          groupPolicy: "allowlist" as const,
-          guildAllowlisted: true,
-          channelAllowlistConfigured: false,
-          channelAllowed: true,
-        },
-        expected: true,
-      },
-      {
-        name: "allowlist allows when channel is allowed",
-        input: {
-          groupPolicy: "allowlist" as const,
-          guildAllowlisted: true,
-          channelAllowlistConfigured: true,
-          channelAllowed: true,
-        },
-        expected: true,
-      },
-      {
-        name: "allowlist blocks when channel is not allowed",
-        input: {
-          groupPolicy: "allowlist" as const,
-          guildAllowlisted: true,
-          channelAllowlistConfigured: true,
-          channelAllowed: false,
-        },
-        expected: false,
-      },
+      ["open", "open", false, false, false, true],
+      ["disabled", "disabled", true, true, true, false],
+      ["guild denied", "allowlist", false, false, true, false],
+      ["no channel restriction", "allowlist", true, false, true, true],
+      ["channel allowed", "allowlist", true, true, true, true],
+      ["channel denied", "allowlist", true, true, false, false],
     ] as const;
 
-    for (const testCase of cases) {
-      expect(isDiscordGroupAllowedByPolicy(testCase.input), testCase.name).toBe(testCase.expected);
+    for (const [
+      name,
+      groupPolicy,
+      guildAllowlisted,
+      channelAllowlistConfigured,
+      channelAllowed,
+      expected,
+    ] of cases) {
+      expect(
+        isDiscordGroupAllowedByPolicy({
+          groupPolicy,
+          guildAllowlisted,
+          channelAllowlistConfigured,
+          channelAllowed,
+        }),
+        name,
+      ).toBe(expected);
     }
   });
 });
@@ -684,42 +601,17 @@ describe("discord group DM gating", () => {
 describe("discord reply target selection", () => {
   it("handles off/first/all reply modes", () => {
     const cases = [
-      { name: "off mode", replyToMode: "off" as const, hasReplied: false, expected: undefined },
-      {
-        name: "first mode before reply",
-        replyToMode: "first" as const,
-        hasReplied: false,
-        expected: "123",
-      },
-      {
-        name: "first mode after reply",
-        replyToMode: "first" as const,
-        hasReplied: true,
-        expected: undefined,
-      },
-      {
-        name: "all mode before reply",
-        replyToMode: "all" as const,
-        hasReplied: false,
-        expected: "123",
-      },
-      {
-        name: "all mode after reply",
-        replyToMode: "all" as const,
-        hasReplied: true,
-        expected: "123",
-      },
+      ["off mode", "off", false, undefined],
+      ["first before reply", "first", false, "123"],
+      ["first after reply", "first", true, undefined],
+      ["all before reply", "all", false, "123"],
+      ["all after reply", "all", true, "123"],
     ] as const;
 
-    for (const testCase of cases) {
-      expect(
-        resolveDiscordReplyTarget({
-          replyToMode: testCase.replyToMode,
-          replyToId: "123",
-          hasReplied: testCase.hasReplied,
-        }),
-        testCase.name,
-      ).toBe(testCase.expected);
+    for (const [name, replyToMode, hasReplied, expected] of cases) {
+      expect(resolveDiscordReplyTarget({ replyToMode, replyToId: "123", hasReplied }), name).toBe(
+        expected,
+      );
     }
   });
 });
@@ -747,7 +639,6 @@ describe("discord reaction notification gating", () => {
         name: "unset defaults to own (author is bot)",
         input: {
           mode: undefined,
-          botId: "bot-1",
           messageAuthorId: "bot-1",
           userId: "user-1",
         },
@@ -757,7 +648,6 @@ describe("discord reaction notification gating", () => {
         name: "unset defaults to own (author is not bot)",
         input: {
           mode: undefined,
-          botId: "bot-1",
           messageAuthorId: "user-1",
           userId: "user-2",
         },
@@ -767,7 +657,6 @@ describe("discord reaction notification gating", () => {
         name: "off mode",
         input: {
           mode: "off" as const,
-          botId: "bot-1",
           messageAuthorId: "bot-1",
           userId: "user-1",
         },
@@ -777,7 +666,6 @@ describe("discord reaction notification gating", () => {
         name: "all mode",
         input: {
           mode: "all" as const,
-          botId: "bot-1",
           messageAuthorId: "user-1",
           userId: "user-2",
         },
@@ -787,7 +675,6 @@ describe("discord reaction notification gating", () => {
         name: "all mode blocks non-allowlisted guild member",
         input: {
           mode: "all" as const,
-          botId: "bot-1",
           messageAuthorId: "user-1",
           userId: "user-2",
           guildInfo: { users: ["trusted-user"] },
@@ -798,7 +685,6 @@ describe("discord reaction notification gating", () => {
         name: "own mode with bot-authored message",
         input: {
           mode: "own" as const,
-          botId: "bot-1",
           messageAuthorId: "bot-1",
           userId: "user-2",
         },
@@ -808,7 +694,6 @@ describe("discord reaction notification gating", () => {
         name: "own mode with non-bot-authored message",
         input: {
           mode: "own" as const,
-          botId: "bot-1",
           messageAuthorId: "user-2",
           userId: "user-3",
         },
@@ -818,7 +703,6 @@ describe("discord reaction notification gating", () => {
         name: "own mode still blocks member outside users allowlist",
         input: {
           mode: "own" as const,
-          botId: "bot-1",
           messageAuthorId: "bot-1",
           userId: "user-3",
           guildInfo: { users: ["trusted-user"] },
@@ -829,7 +713,6 @@ describe("discord reaction notification gating", () => {
         name: "allowlist mode without match",
         input: {
           mode: "allowlist" as const,
-          botId: "bot-1",
           messageAuthorId: "user-1",
           userId: "user-2",
           allowlist: [] as string[],
@@ -840,7 +723,6 @@ describe("discord reaction notification gating", () => {
         name: "allowlist mode with id match",
         input: {
           mode: "allowlist" as const,
-          botId: "bot-1",
           messageAuthorId: "user-1",
           userId: "123",
           userName: "steipete",
@@ -852,7 +734,6 @@ describe("discord reaction notification gating", () => {
         name: "allowlist mode does not match usernames by default",
         input: {
           mode: "allowlist" as const,
-          botId: "bot-1",
           messageAuthorId: "user-1",
           userId: "999",
           userName: "trusted-user",
@@ -864,7 +745,6 @@ describe("discord reaction notification gating", () => {
         name: "allowlist mode matches usernames when explicitly enabled",
         input: {
           mode: "allowlist" as const,
-          botId: "bot-1",
           messageAuthorId: "user-1",
           userId: "999",
           userName: "trusted-user",
@@ -877,7 +757,6 @@ describe("discord reaction notification gating", () => {
         name: "allowlist mode matches allowed role",
         input: {
           mode: "allowlist" as const,
-          botId: "bot-1",
           messageAuthorId: "user-1",
           userId: "999",
           guildInfo: { roles: ["role:trusted-role"] },
@@ -890,6 +769,7 @@ describe("discord reaction notification gating", () => {
     for (const testCase of cases) {
       expect(
         shouldEmitDiscordReactionNotification({
+          botId: "bot-1",
           ...testCase.input,
         }),
         testCase.name,

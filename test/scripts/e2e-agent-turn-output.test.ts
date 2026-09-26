@@ -1,13 +1,14 @@
-// E2E Agent Turn Output tests cover e2e agent turn output script behavior.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
   extractAgentReplyTexts,
 } from "../../scripts/e2e/lib/agent-turn-output.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("scripts/e2e/lib/agent-turn-output", () => {
   it("extracts local and gateway agent reply payload text", () => {
@@ -61,88 +62,72 @@ describe("scripts/e2e/lib/agent-turn-output", () => {
   });
 
   it("does not accept markers that only appear outside reply payloads", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
-    try {
-      const outputPath = join(dir, "agent.log");
-      writeFileSync(
-        outputPath,
-        [
-          "Return marker OPENCLAW_E2E_OK_PROMPT_ECHO",
-          JSON.stringify({ payloads: [{ text: "wrong reply" }] }),
-        ].join("\n"),
-      );
+    const dir = tempDirs.make("openclaw-e2e-agent-output-");
+    const outputPath = join(dir, "agent.log");
+    writeFileSync(
+      outputPath,
+      [
+        "Return marker OPENCLAW_E2E_OK_PROMPT_ECHO",
+        JSON.stringify({ payloads: [{ text: "wrong reply" }] }),
+      ].join("\n"),
+    );
 
-      expect(() =>
-        assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_PROMPT_ECHO", outputPath),
-      ).toThrow(/agent reply payload did not contain marker/u);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(() => assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_PROMPT_ECHO", outputPath)).toThrow(
+      /agent reply payload did not contain marker/u,
+    );
   });
 
   it("does not accept reply-shaped JSON embedded in diagnostic lines", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
-    try {
-      const outputPath = join(dir, "agent.log");
-      writeFileSync(
-        outputPath,
-        [
-          `echo ${JSON.stringify({ payloads: [{ text: "OPENCLAW_E2E_OK_DIAGNOSTIC" }] })}`,
-          JSON.stringify({ payloads: [{ text: "real reply without marker" }] }),
-        ].join("\n"),
-      );
+    const dir = tempDirs.make("openclaw-e2e-agent-output-");
+    const outputPath = join(dir, "agent.log");
+    writeFileSync(
+      outputPath,
+      [
+        `echo ${JSON.stringify({ payloads: [{ text: "OPENCLAW_E2E_OK_DIAGNOSTIC" }] })}`,
+        JSON.stringify({ payloads: [{ text: "real reply without marker" }] }),
+      ].join("\n"),
+    );
 
-      expect(() =>
-        assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_DIAGNOSTIC", outputPath),
-      ).toThrow(/agent reply payload did not contain marker/u);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(() => assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_DIAGNOSTIC", outputPath)).toThrow(
+      /agent reply payload did not contain marker/u,
+    );
   });
 
   it("does not accept markers that only appear in error payload text", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
-    try {
-      const outputPath = join(dir, "agent.log");
-      writeFileSync(
-        outputPath,
-        JSON.stringify({
-          payloads: [
-            { isError: true, text: "OPENCLAW_E2E_OK_ERROR_PAYLOAD" },
-            { text: "regular reply without marker" },
-          ],
-        }),
-      );
+    const dir = tempDirs.make("openclaw-e2e-agent-output-");
+    const outputPath = join(dir, "agent.log");
+    writeFileSync(
+      outputPath,
+      JSON.stringify({
+        payloads: [
+          { isError: true, text: "OPENCLAW_E2E_OK_ERROR_PAYLOAD" },
+          { text: "regular reply without marker" },
+        ],
+      }),
+    );
 
-      expect(() =>
-        assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_ERROR_PAYLOAD", outputPath),
-      ).toThrow(/agent reply payload did not contain marker/u);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(() =>
+      assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_ERROR_PAYLOAD", outputPath),
+    ).toThrow(/agent reply payload did not contain marker/u);
   });
 
   it("does not accept markers that only appear in failed result meta text", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
-    try {
-      const outputPath = join(dir, "agent.log");
-      writeFileSync(
-        outputPath,
-        JSON.stringify({
-          result: {
-            status: "error",
-            meta: { finalAssistantVisibleText: "OPENCLAW_E2E_OK_ERROR_META" },
-            payloads: [{ isError: true, text: "OPENCLAW_E2E_OK_ERROR_META" }],
-          },
-        }),
-      );
+    const dir = tempDirs.make("openclaw-e2e-agent-output-");
+    const outputPath = join(dir, "agent.log");
+    writeFileSync(
+      outputPath,
+      JSON.stringify({
+        result: {
+          status: "error",
+          meta: { finalAssistantVisibleText: "OPENCLAW_E2E_OK_ERROR_META" },
+          payloads: [{ isError: true, text: "OPENCLAW_E2E_OK_ERROR_META" }],
+        },
+      }),
+    );
 
-      expect(() =>
-        assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_ERROR_META", outputPath),
-      ).toThrow(/agent reply payload did not contain marker/u);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(() => assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_ERROR_META", outputPath)).toThrow(
+      /agent reply payload did not contain marker/u,
+    );
   });
 
   it("does not accept markers that only appear in blocked root final text", () => {
@@ -185,134 +170,109 @@ describe("scripts/e2e/lib/agent-turn-output", () => {
   });
 
   it("ignores stale reply markers outside the recent output tail", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
-    try {
-      const outputPath = join(dir, "agent.log");
-      writeFileSync(
-        outputPath,
-        [
-          JSON.stringify({ payloads: [{ text: "OPENCLAW_E2E_OK_STALE" }] }),
-          "x".repeat(2_200_000),
-          JSON.stringify({ payloads: [{ text: "current reply without marker" }] }),
-        ].join("\n"),
-      );
+    const dir = tempDirs.make("openclaw-e2e-agent-output-");
+    const outputPath = join(dir, "agent.log");
+    writeFileSync(
+      outputPath,
+      [
+        JSON.stringify({ payloads: [{ text: "OPENCLAW_E2E_OK_STALE" }] }),
+        "x".repeat(2_200_000),
+        JSON.stringify({ payloads: [{ text: "current reply without marker" }] }),
+      ].join("\n"),
+    );
 
-      expect(() => assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_STALE", outputPath)).toThrow(
-        /agent reply payload did not contain marker/u,
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(() => assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_STALE", outputPath)).toThrow(
+      /agent reply payload did not contain marker/u,
+    );
   });
 
   it("bounds missing marker diagnostics to the recent output tail", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
-    try {
-      const outputPath = join(dir, "agent.log");
-      writeFileSync(
-        outputPath,
-        [
-          "DO_NOT_DUMP_OLD_OUTPUT",
-          "x".repeat(70 * 1024),
-          JSON.stringify({ payloads: [{ text: "wrong reply" }] }),
-        ].join("\n"),
-      );
+    const dir = tempDirs.make("openclaw-e2e-agent-output-");
+    const outputPath = join(dir, "agent.log");
+    writeFileSync(
+      outputPath,
+      [
+        "DO_NOT_DUMP_OLD_OUTPUT",
+        "x".repeat(70 * 1024),
+        JSON.stringify({ payloads: [{ text: "wrong reply" }] }),
+      ].join("\n"),
+    );
 
-      expect(() => assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_MISSING", outputPath)).toThrow(
-        /agent reply payload did not contain marker/u,
-      );
-      try {
-        assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_MISSING", outputPath);
-      } catch (error) {
-        expect(error).toBeInstanceOf(Error);
-        expect((error as Error).message).toContain("Output tail:");
-        expect((error as Error).message).toContain("wrong reply");
-        expect((error as Error).message).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    expect(() => assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_MISSING", outputPath)).toThrow(
+      /agent reply payload did not contain marker/u,
+    );
+    try {
+      assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_MISSING", outputPath);
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("Output tail:");
+      expect((error as Error).message).toContain("wrong reply");
+      expect((error as Error).message).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
     }
   });
 
   it("bounds large reply payload diagnostics", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
-    try {
-      const outputPath = join(dir, "agent.log");
-      writeFileSync(
-        outputPath,
-        JSON.stringify({
-          payloads: [
-            {
-              text: `DO_NOT_DUMP_OLD_REPLY${"x".repeat(70 * 1024)}recent reply tail`,
-            },
-          ],
-        }),
-      );
+    const dir = tempDirs.make("openclaw-e2e-agent-output-");
+    const outputPath = join(dir, "agent.log");
+    writeFileSync(
+      outputPath,
+      JSON.stringify({
+        payloads: [
+          {
+            text: `DO_NOT_DUMP_OLD_REPLY${"x".repeat(70 * 1024)}recent reply tail`,
+          },
+        ],
+      }),
+    );
 
-      try {
-        assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_MISSING", outputPath);
-      } catch (error) {
-        expect(error).toBeInstanceOf(Error);
-        expect((error as Error).message).toContain("Reply payload summary:");
-        expect((error as Error).message).toContain("recent reply tail");
-        expect((error as Error).message).not.toContain("DO_NOT_DUMP_OLD_REPLY");
-        return;
-      }
-      throw new Error("expected missing marker assertion to fail");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    try {
+      assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_MISSING", outputPath);
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("Reply payload summary:");
+      expect((error as Error).message).toContain("recent reply tail");
+      expect((error as Error).message).not.toContain("DO_NOT_DUMP_OLD_REPLY");
+      return;
     }
+    throw new Error("expected missing marker assertion to fail");
   });
 
   it("checks that the mock OpenAI endpoint was actually hit", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-request-log-"));
-    try {
-      mkdirSync(dir, { recursive: true });
-      const logPath = join(dir, "requests.jsonl");
-      writeFileSync(logPath, `${JSON.stringify({ path: "/v1/responses" })}\n`);
-      expect(() => assertOpenAiRequestLogUsed(logPath)).not.toThrow();
+    const dir = tempDirs.make("openclaw-e2e-request-log-");
+    const logPath = join(dir, "requests.jsonl");
+    writeFileSync(logPath, `${JSON.stringify({ path: "/v1/responses" })}\n`);
+    expect(() => assertOpenAiRequestLogUsed(logPath)).not.toThrow();
 
-      writeFileSync(logPath, `${JSON.stringify({ path: "/health" })}\n`);
-      expect(() => assertOpenAiRequestLogUsed(logPath)).toThrow(/was not used/u);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    writeFileSync(logPath, `${JSON.stringify({ path: "/health" })}\n`);
+    expect(() => assertOpenAiRequestLogUsed(logPath)).toThrow(/was not used/u);
   });
 
   it("finds OpenAI request paths split across large log scan chunks", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-request-log-"));
-    try {
-      const logPath = join(dir, "requests.jsonl");
-      const pathPrefix = "/v1/res";
-      writeFileSync(logPath, `${"x".repeat(64 * 1024 - pathPrefix.length)}${pathPrefix}ponses\n`);
+    const dir = tempDirs.make("openclaw-e2e-request-log-");
+    const logPath = join(dir, "requests.jsonl");
+    const pathPrefix = "/v1/res";
+    writeFileSync(logPath, `${"x".repeat(64 * 1024 - pathPrefix.length)}${pathPrefix}ponses\n`);
 
-      expect(() => assertOpenAiRequestLogUsed(logPath)).not.toThrow();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(() => assertOpenAiRequestLogUsed(logPath)).not.toThrow();
   });
 
   it("bounds missing OpenAI request diagnostics to the recent log tail", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-request-log-"));
-    try {
-      const logPath = join(dir, "requests.jsonl");
-      writeFileSync(
-        logPath,
-        ["DO_NOT_DUMP_OLD_REQUESTS", "x".repeat(70 * 1024), '{"path":"/health"}'].join("\n"),
-      );
+    const dir = tempDirs.make("openclaw-e2e-request-log-");
+    const logPath = join(dir, "requests.jsonl");
+    writeFileSync(
+      logPath,
+      ["DO_NOT_DUMP_OLD_REQUESTS", "x".repeat(70 * 1024), '{"path":"/health"}'].join("\n"),
+    );
 
-      try {
-        assertOpenAiRequestLogUsed(logPath, "mock server");
-      } catch (error) {
-        expect(error).toBeInstanceOf(Error);
-        expect((error as Error).message).toContain("mock server was not used");
-        expect((error as Error).message).toContain("Request log tail:");
-        expect((error as Error).message).not.toContain("DO_NOT_DUMP_OLD_REQUESTS");
-        return;
-      }
-      throw new Error("expected missing request log assertion to fail");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    try {
+      assertOpenAiRequestLogUsed(logPath, "mock server");
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("mock server was not used");
+      expect((error as Error).message).toContain("Request log tail:");
+      expect((error as Error).message).not.toContain("DO_NOT_DUMP_OLD_REQUESTS");
+      return;
     }
+    throw new Error("expected missing request log assertion to fail");
   });
 });

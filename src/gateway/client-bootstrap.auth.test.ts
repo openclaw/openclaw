@@ -36,66 +36,39 @@ async function expectInteractiveAuth(
   expect(result).not.toHaveProperty("authFailureReason");
 }
 
+async function loadLocalTokenConfig(token: string, overrides: NodeJS.ProcessEnv = {}) {
+  const root = tempDirs.make("openclaw-client-bootstrap-literal-");
+  const configPath = path.join(root, "openclaw.json");
+  const env: NodeJS.ProcessEnv = {
+    HOME: root,
+    USERPROFILE: root,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: path.join(root, "state"),
+    VITEST: "true",
+    ...overrides,
+  };
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({ gateway: { mode: "local", auth: { mode: "token", token } } }),
+    "utf8",
+  );
+  const context = createConfigIoContext({ configPath, env, homedir: () => root, observe: false });
+  const snapshot = await readConfigFileSnapshotFromContext(context);
+  return { config: snapshot.config, env };
+}
+
 describe("resolveGatewayClientBootstrap interactive auth policy", () => {
   it("preserves an escaped literal credential from config load through client bootstrap", async () => {
-    const root = tempDirs.make("openclaw-client-bootstrap-env-facts-");
-    const configPath = path.join(root, "openclaw.json");
-    const env: NodeJS.ProcessEnv = {
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      VITEST: "true",
-    };
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        gateway: { mode: "local", auth: { mode: "token", token: "$${LITERAL_TOKEN}" } },
-      }),
-      "utf8",
-    );
-    const context = createConfigIoContext({
-      configPath,
-      env,
-      homedir: () => root,
-      observe: false,
-    });
-
-    const snapshot = await readConfigFileSnapshotFromContext(context);
-    const result = await resolveGatewayClientBootstrap({ config: snapshot.config, env });
+    const params = await loadLocalTokenConfig("$${LITERAL_TOKEN}");
+    const result = await resolveGatewayClientBootstrap(params);
 
     expect(result.auth).toEqual({ token: "${LITERAL_TOKEN}", password: undefined });
   });
 
   it("preserves a substituted template-looking literal through interactive client auth", async () => {
-    const root = tempDirs.make("openclaw-client-bootstrap-resolved-literal-");
-    const configPath = path.join(root, "openclaw.json");
-    const env: NodeJS.ProcessEnv = {
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      SOURCE: "${OTHER}",
-      VITEST: "true",
-    };
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        gateway: { mode: "local", auth: { mode: "token", token: "${SOURCE}" } },
-      }),
-      "utf8",
-    );
-    const context = createConfigIoContext({
-      configPath,
-      env,
-      homedir: () => root,
-      observe: false,
-    });
-
-    const snapshot = await readConfigFileSnapshotFromContext(context);
-    const result = await resolveGatewayClientBootstrap({ config: snapshot.config, env: {} });
+    const { config } = await loadLocalTokenConfig("${SOURCE}", { SOURCE: "${OTHER}" });
+    const result = await resolveGatewayClientBootstrap({ config, env: {} });
 
     expect(result.auth).toEqual({ token: "${OTHER}", password: undefined });
   });

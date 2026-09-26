@@ -64,7 +64,6 @@ struct RootTabs: View {
     // Swipe-up hides the toast only until the next problem report.
     @State private var isGatewayToastSwipeDismissed: Bool = false
     @State private var showOnboarding: Bool = false
-    @State private var onboardingAllowSkip: Bool = true
     @State private var didEvaluateOnboarding: Bool = false
     @State private var didAutoOpenSettings: Bool = false
     @State private var didApplyInitialChatSession: Bool = false
@@ -194,7 +193,7 @@ struct RootTabs: View {
                 contentSize: proxy.size,
                 windowSize: self.foregroundKeyWindowSize())
             let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: layoutContainerSize)
-            let sidebarWidth = self.sidebarWidth(
+            let sidebarWidth = Self.sidebarWidth(
                 containerWidth: layoutContainerSize.width,
                 isDrawerLayout: isDrawerLayout)
             RootSidebarShell(
@@ -329,7 +328,6 @@ struct RootTabs: View {
             AgentProTab(
                 directRoute: .agents,
                 headerSidebarAction: self.sidebarHeaderAction,
-                headerTitle: "Agents",
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
         case .sessions:
@@ -340,15 +338,16 @@ struct RootTabs: View {
             AgentProTab(
                 directRoute: .files,
                 headerSidebarAction: self.sidebarHeaderAction,
-                headerTitle: "Files",
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
         case .desktop:
-            DesktopHubScreen(
+            ControlUIHubScreen(
+                page: .desktop(source: nil, session: nil),
                 headerSidebarAction: self.sidebarHeaderAction,
                 gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .terminal:
-            TerminalHubScreen(
+            ControlUIHubScreen(
+                page: .terminal,
                 headerSidebarAction: self.sidebarHeaderAction,
                 gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .docs:
@@ -445,10 +444,6 @@ struct RootTabs: View {
 
     private func shouldUseSidebarDrawer(containerSize: CGSize) -> Bool {
         self.sidebarLayoutMode(containerSize: containerSize) == .drawer
-    }
-
-    private func sidebarWidth(containerWidth: CGFloat, isDrawerLayout: Bool) -> CGFloat {
-        Self.sidebarWidth(containerWidth: containerWidth, isDrawerLayout: isDrawerLayout)
     }
 
     private func foregroundKeyWindowSize() -> CGSize? {
@@ -730,7 +725,7 @@ struct RootTabs: View {
             }
             .fullScreenCover(isPresented: self.$showOnboarding) {
                 OnboardingWizardView(
-                    allowSkip: self.onboardingAllowSkip,
+                    allowSkip: true,
                     onRequestLocalNetworkAccess: { reason in
                         self.requestLocalNetworkAccess(reason: reason)
                     },
@@ -771,7 +766,7 @@ extension RootTabs {
                 agentId: target.agentId)
             guard self.shouldCollapseSidebarAfterSelection else { return }
             withAnimation(self.sidebarAnimation) {
-                self.setSidebarVisible(false)
+                self.isSidebarVisible = false
             }
         }
     }
@@ -784,7 +779,7 @@ extension RootTabs {
         self.activeSettingsRoute = destination.settingsRoute
         guard self.shouldCollapseSidebarAfterSelection else { return }
         withAnimation(self.sidebarAnimation) {
-            self.setSidebarVisible(false)
+            self.isSidebarVisible = false
         }
     }
 
@@ -817,7 +812,7 @@ extension RootTabs {
         self.sidebarNavigationPath = [route]
         guard self.shouldCollapseSidebarAfterSelection else { return }
         withAnimation(self.sidebarAnimation) {
-            self.setSidebarVisible(false)
+            self.isSidebarVisible = false
         }
     }
 
@@ -844,9 +839,6 @@ extension RootTabs {
         self.activeSettingsRoute = route
         if route == nil {
             self.selectedSettingsRoute = nil
-            if self.selectedSidebarDestination == .settings {
-                self.selectedSidebarDestination = .settings
-            }
         }
         self.suppressedExecApprovalForNotificationSettings = nil
     }
@@ -865,14 +857,14 @@ extension RootTabs {
     private func showSidebar() {
         if !self.isSidebarDrawerLayout { self.splitSidebarVisibility = true }
         withAnimation(self.sidebarAnimation) {
-            self.setSidebarVisible(true)
+            self.isSidebarVisible = true
         }
     }
 
     private func hideSidebar() {
         if !self.isSidebarDrawerLayout { self.splitSidebarVisibility = false }
         withAnimation(self.sidebarAnimation) {
-            self.setSidebarVisible(false)
+            self.isSidebarVisible = false
         }
     }
 
@@ -885,13 +877,9 @@ extension RootTabs {
         self.isSidebarDrawerLayout = layoutMode == .drawer
         // A drawer never opens just because the window narrowed. The user's split
         // preference survives the compact interval, including an explicitly hidden sidebar.
-        self.setSidebarVisible(initialVisibility ?? Self.sidebarVisibility(
+        self.isSidebarVisible = initialVisibility ?? Self.sidebarVisibility(
             layoutMode: layoutMode,
-            splitPreference: self.splitSidebarVisibility))
-    }
-
-    private func setSidebarVisible(_ isVisible: Bool) {
-        self.isSidebarVisible = isVisible
+            splitPreference: self.splitSidebarVisibility)
     }
 
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
@@ -927,7 +915,6 @@ extension RootTabs {
 
     private func evaluateOnboardingPresentation(force: Bool) {
         if force {
-            self.onboardingAllowSkip = true
             self.showOnboarding = true
             return
         }
@@ -944,7 +931,6 @@ extension RootTabs {
         case .none:
             self.maybeRequestLocalNetworkAccess(reason: "root_appear")
         case .onboarding:
-            self.onboardingAllowSkip = true
             self.showOnboarding = true
         case .settings:
             self.didAutoOpenSettings = true

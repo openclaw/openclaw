@@ -211,8 +211,7 @@ export async function rewriteTranscriptEventRowsExact(
   await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
   return await runExclusiveSqliteSessionWrite(
     resolved,
-    async () => {
-      let result: { generation: string } | null = null;
+    async () =>
       runOpenClawAgentWriteTransaction((database) => {
         const currentGeneration =
           readTranscriptGenerationInTransaction(database, resolved.sessionId) ?? null;
@@ -220,16 +219,12 @@ export async function rewriteTranscriptEventRowsExact(
           params.allowInitialGenerationMaterialization === true &&
           params.expectedGeneration === null;
         if (currentGeneration !== params.expectedGeneration && !initialGenerationMaterialized) {
-          return;
+          return null;
         }
         rewriteSqliteTranscriptEventRowsInTransaction(database, resolved, params.rows);
         const generation = readTranscriptGenerationInTransaction(database, resolved.sessionId);
-        if (generation) {
-          result = { generation };
-        }
-      }, toDatabaseOptions(resolved));
-      return result;
-    },
+        return generation ? { generation } : null;
+      }, toDatabaseOptions(resolved)),
     "session.transcript.rewrite-exact",
   );
 }
@@ -470,13 +465,11 @@ export async function appendTranscriptMessage<TMessage>(
   await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
   return await runExclusiveSqliteSessionWrite(
     resolved,
-    async () => {
-      let result: TranscriptMessageAppendResult<TMessage> | undefined;
-      runOpenClawAgentWriteTransaction((database) => {
-        result = appendTranscriptMessageInTransaction(database, resolved, options);
-      }, toDatabaseOptions(resolved));
-      return result;
-    },
+    async () =>
+      runOpenClawAgentWriteTransaction(
+        (database) => appendTranscriptMessageInTransaction(database, resolved, options),
+        toDatabaseOptions(resolved),
+      ),
     "session.transcript.message-append",
   );
 }

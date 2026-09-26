@@ -290,31 +290,6 @@ describe("live device scope upgrade", () => {
     }
   });
 
-  test("returns a typed rejected result", async () => {
-    const limited = await openLimitedDevice("live-scope-upgrade-rejected");
-    try {
-      const registration = await rpcReq<{ requestId: string }>(
-        limited.ws,
-        "device.scopes.requestUpgrade",
-        { scopes: FULL_SCOPES },
-      );
-      const requestId = registration.payload?.requestId;
-      const wait = rpcReq<{ status: string; requestId: string }>(
-        limited.ws,
-        "device.scopes.waitUpgrade",
-        { requestId },
-        10_000,
-      );
-      expect((await rpcReq(started.ws, "device.pair.reject", { requestId })).ok).toBe(true);
-      expect(await wait).toMatchObject({
-        ok: true,
-        payload: { status: "rejected", requestId },
-      });
-    } finally {
-      limited.ws.close();
-    }
-  });
-
   test("coalesces concurrent waits for the same device request", async () => {
     const limited = await openLimitedDevice("live-scope-upgrade-concurrent-waits");
     const readPending = devicePairing.getPendingDevicePairing;

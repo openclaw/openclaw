@@ -1,4 +1,3 @@
-/** Owns shared and isolated Codex app-server startup, authentication, leases, and teardown. */
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
@@ -157,14 +156,12 @@ export function readCodexAppServerClientProcessIdentity(
   };
 }
 
-/** Returns the lifecycle fingerprint that owns a managed desktop client. */
 export function readCodexAppServerClientDesktopGenerationFingerprint(
   client: CodexAppServerClient,
 ): string | undefined {
   return readCodexAppServerClientDesktopGeneration(client)?.fingerprint;
 }
 
-/** Returns the lifecycle generation that owns a managed desktop client. */
 export function readCodexAppServerClientDesktopGeneration(
   client: CodexAppServerClient,
 ): CodexDesktopGeneration | undefined {
@@ -250,7 +247,6 @@ export function assertCodexAppServerClientStartSelectionCurrent(params: {
   }
 }
 
-/** Resolves the per-CODEX_HOME key used to serialize native config loading. */
 export function resolveCodexNativeConfigFenceKey(params: {
   client?: CodexAppServerClient;
   startOptions?: CodexAppServerStartOptions;
@@ -496,7 +492,6 @@ export function getLeasedSharedCodexAppServerClient(
   return acquireSharedCodexAppServerClient(options, true);
 }
 
-/** Releases one outstanding lease for a shared Codex app-server client. */
 export function releaseLeasedSharedCodexAppServerClient(client: CodexAppServerClient): boolean {
   const entry = getSharedCodexAppServerClientState().entriesByClient.get(client);
   if (!entry || entry.anonymousLeases === 0) {
@@ -962,11 +957,10 @@ async function startInitializedCodexAppServerClient(
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
   for (const [index, startOptions] of startOptionsCandidates.entries()) {
     params.assertCurrent?.();
+    const desktopCommand = isManagedCodexDesktopCommand(startOptions.command);
     const desktopGeneration =
       params.desktopGeneration ??
-      (isManagedCodexDesktopCommand(startOptions.command)
-        ? await waitForStartup(waitForCodexDesktopGeneration)
-        : undefined);
+      (desktopCommand ? await waitForStartup(waitForCodexDesktopGeneration) : undefined);
     const assertStartupCurrent = () => {
       params.assertCurrent?.();
       if (abandonSignal.aborted) {
@@ -1159,10 +1153,14 @@ async function startInitializedCodexAppServerClient(
       const ownsInference =
         startOptions.transport === "stdio" &&
         nativeCommandAtStart &&
-        !desktopGeneration &&
-        !isManagedCodexDesktopCommand(startOptions.command) &&
         !isCodexAppServerProxyLaunch(startOptions.args);
-      if (isCodexResponsesOAuth(params.preparedAuth) && !ownsInference) {
+      // Desktop binaries launched as our direct stdio child share the same
+      // request-local carrier; attachments and proxy launches are not owned.
+      // Subscription sharing retains its separate managed-package restriction.
+      if (
+        isCodexResponsesOAuth(params.preparedAuth) &&
+        (!ownsInference || desktopGeneration || desktopCommand)
+      ) {
         throw new Error("ChatGPT subscription sharing requires a managed local Codex process.");
       }
       if (ownsInference) {
@@ -1256,7 +1254,6 @@ function shouldTryManagedFallbackStartOption(
   );
 }
 
-/** Clears and closes all shared clients for deterministic tests. */
 export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
   state.startup.controller.abort();
@@ -1276,7 +1273,6 @@ export function resetSharedCodexAppServerClientForTests(): void {
   notifyDesktopGenerationDrainChecks(state);
 }
 
-/** Clears and closes the shared entry only if it still owns the supplied client. */
 export function clearSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
 ): boolean {
@@ -1317,7 +1313,6 @@ function captureSharedClientRegistration(client: CodexAppServerClient): () => bo
     (!generation || isCodexDesktopGenerationCurrent(generation));
 }
 
-/** Retains the matching shared client and returns a release callback. */
 export function retainSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
 ): (() => void) | undefined {
@@ -1431,7 +1426,6 @@ function isOlderDesktopGenerationClientForHome(
   );
 }
 
-/** Clears a matching shared client and waits for its process to exit. */
 export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   client: CodexAppServerClient | undefined,
   options?: {
@@ -1452,7 +1446,6 @@ export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   return true;
 }
 
-/** Clears all shared clients and waits for their processes to exit. */
 export async function clearSharedCodexAppServerClientAndWait(options?: {
   exitTimeoutMs?: number;
   forceKillDelayMs?: number;
@@ -1505,7 +1498,6 @@ function getOrCreateSharedClientEntry(
   return entry;
 }
 
-/** Clears a matching shared client only when no lease or acquire currently claims it. */
 export function clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
   client: CodexAppServerClient | undefined,
 ): { found: boolean; closed: boolean; activeLeases: number; pendingAcquires: number } {

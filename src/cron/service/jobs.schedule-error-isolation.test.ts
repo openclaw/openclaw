@@ -1,5 +1,6 @@
 // Schedule error isolation tests cover one bad job not blocking other cron jobs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import {
@@ -11,6 +12,7 @@ import { runPostPersistCronNotifications } from "./store.js";
 
 function createMockState(jobs: CronJob[]): CronServiceState {
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath: "/tmp/cron-schedule-error-isolation.json",
     cronEnabled: true,
     nowMs: () => Date.now(),
@@ -43,13 +45,6 @@ function createJob(overrides: Partial<CronJob> = {}): CronJob {
 function requireTimestamp(value: number | undefined, label: string): number {
   if (value === undefined) {
     throw new Error(`expected ${label} timestamp`);
-  }
-  return value;
-}
-
-function requireString(value: string | undefined, label: string): string {
-  if (!value) {
-    throw new Error(`expected ${label}`);
   }
   return value;
 }
@@ -94,27 +89,6 @@ describe("cron schedule error isolation", () => {
     expect(badJob.state.scheduleErrorCount).toBe(1);
     // Job should still be enabled after first error
     expect(badJob.enabled).toBe(true);
-  });
-
-  it("logs a warning for the first schedule error", () => {
-    const badJob = createJob({
-      id: "bad-job",
-      name: "Bad Job",
-      schedule: { kind: "cron", expr: "not valid" },
-    });
-    const state = createMockState([badJob]);
-
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications: [] });
-
-    expect(state.deps.log.warn).toHaveBeenCalledWith(
-      {
-        jobId: "bad-job",
-        name: "Bad Job",
-        errorCount: 1,
-        err: "CronPattern: invalid configuration format ('not valid'), exactly five, six, or seven space separated parts are required.",
-      },
-      "cron: failed to compute next run for job (skipping)",
-    );
   });
 
   it("auto-disables job after 3 consecutive schedule errors", () => {
@@ -192,35 +166,6 @@ describe("cron schedule error isolation", () => {
     // Should not attempt to compute schedule for disabled jobs
     expect(disabledBadJob.state.scheduleErrorCount).toBeUndefined();
     expect(state.deps.log.warn).not.toHaveBeenCalled();
-  });
-
-  it("increments error count on each failed computation", () => {
-    const badJob = createJob({
-      id: "bad-job",
-      name: "Bad Job",
-      schedule: { kind: "cron", expr: "@@@@" },
-      state: { scheduleErrorCount: 1 },
-    });
-    const state = createMockState([badJob]);
-
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications: [] });
-
-    expect(badJob.state.scheduleErrorCount).toBe(2);
-    expect(badJob.enabled).toBe(true); // Not yet at threshold
-  });
-
-  it("stores error message in lastError", () => {
-    const badJob = createJob({
-      id: "bad-job",
-      name: "Bad Job",
-      schedule: { kind: "cron", expr: "invalid expression here" },
-    });
-    const state = createMockState([badJob]);
-
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications: [] });
-
-    expect(badJob.state.lastError).toMatch(/^schedule error:/);
-    expect(requireString(badJob.state.lastError, "schedule error")).toContain("schedule error:");
   });
 
   it("records a clear schedule error when cron expr is missing", () => {

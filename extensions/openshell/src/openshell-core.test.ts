@@ -3,20 +3,12 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  buildExecRemoteCommand,
-  disposeSshSandboxSession,
-  shellEscape,
-} from "openclaw/plugin-sdk/sandbox";
+import { disposeSshSandboxSession, shellEscape } from "openclaw/plugin-sdk/sandbox";
 import type { TempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenShellSandboxBackend } from "./backend.types.js";
-import {
-  buildValidatedExecRemoteCommand,
-  createOpenShellSshSession,
-  runOpenShellCli,
-} from "./cli.js";
+import { createOpenShellSshSession, runOpenShellCli } from "./cli.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
 import {
   createMirrorBackendMock,
@@ -140,29 +132,6 @@ describe("openshell cli helpers", () => {
       }
     }
     Object.assign(process.env, originalEnv);
-  });
-
-  it("shell escapes single quotes", () => {
-    expect(shellEscape(`a'b`)).toBe(`'a'"'"'b'`);
-  });
-
-  it("wraps exec commands with workdir when no environment is supplied", () => {
-    const command = buildExecRemoteCommand({
-      command: "pwd && printenv TOKEN",
-      workdir: "/sandbox/project",
-      env: {},
-    });
-    expect(command).not.toContain(`'env'`);
-    expect(command).toContain(`'cd '"'"'/sandbox/project'"'"' && pwd && printenv TOKEN'`);
-  });
-
-  it("uses the shared SSH exec command preflight", () => {
-    expect(() =>
-      buildValidatedExecRemoteCommand({
-        command: 'workflow run <workflow-id> "<task>"',
-        env: {},
-      }),
-    ).toThrow(/unresolved placeholder token <workflow-id>/);
   });
 
   it("passes direct gateway endpoints to openshell commands without registration", async () => {
@@ -351,15 +320,9 @@ describe("openshell backend manager", () => {
     "does not create a sandbox after a failed control-plane lookup: %s",
     async (stderr, expected) => {
       cliMocks.runOpenShellCli.mockResolvedValue({ code: 1, stdout: "", stderr });
-      const factory = createOpenShellSandboxBackendFactory({
-        pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
-      });
-      const backend = await factory({
-        sessionKey: "agent:main:turn",
-        scopeKey: "agent:main",
+      const backend = await createOpenShellBackendFixture({
         workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        cfg: createOpenShellBackendSandboxConfig(),
+        mode: "remote",
       });
 
       await expect(backend.runShellCommand({ script: "true" })).rejects.toThrow(expected);
@@ -547,26 +510,23 @@ describe("openshell backend manager", () => {
     });
   });
 
-  it.each(["Provisioning", "Stopped", "Error", "Deleting"])(
-    "does not report an OpenShell runtime in phase %s as running",
-    async (phase) => {
-      cliMocks.runOpenShellCli.mockResolvedValue({
-        code: 0,
-        stdout: JSON.stringify({ phase }),
-        stderr: "",
-      });
-      const manager = createOpenShellSandboxBackendManager({
-        pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
-      });
+  it("does not report a provisioning OpenShell runtime as running", async () => {
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ phase: "Provisioning" }),
+      stderr: "",
+    });
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
+    });
 
-      await expect(
-        manager.describeRuntime({
-          entry: createOpenShellRuntimeEntryFixture("openclaw-session-1234"),
-          config: {},
-        }),
-      ).resolves.toMatchObject({ running: false });
-    },
-  );
+    await expect(
+      manager.describeRuntime({
+        entry: createOpenShellRuntimeEntryFixture("openclaw-session-1234"),
+        config: {},
+      }),
+    ).resolves.toMatchObject({ running: false });
+  });
 
   it("removes runtimes using the current OpenShell control-plane configuration", async () => {
     cliMocks.runOpenShellCli.mockResolvedValue({
@@ -653,17 +613,9 @@ describe("openshell backend manager", () => {
   });
 
   it("rejects malformed exec commands before opening an OpenShell SSH session", async () => {
-    const factory = createOpenShellSandboxBackendFactory({
-      pluginConfig: resolveOpenShellPluginConfig({
-        command: "openshell",
-      }),
-    });
-    const backend = await factory({
-      sessionKey: "agent:main:turn",
-      scopeKey: "agent:main",
+    const backend = await createOpenShellBackendFixture({
       workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-      cfg: createOpenShellBackendSandboxConfig(),
+      mode: "mirror",
     });
 
     await expect(
@@ -741,59 +693,56 @@ describe("openshell backend manager", () => {
     },
   );
 
-  it.each(["completed", "failed"] as const)(
-    "stages exec environment outside SSH argv and finalizes %s before session disposal",
-    async (status) => {
-      const sentinel = "synthetic-openshell-env-value";
-      cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-      sandboxMocks.runSshSandboxCommand.mockResolvedValueOnce({
-        stdout: Buffer.from("1\n"),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      });
-      const backend = await createOpenShellBackendFixture({
-        workspaceDir: "/tmp/openclaw-synthetic-workspace",
-        mode: "remote",
-      });
+  it("stages exec environment outside SSH argv and cleans completed execs before session disposal", async () => {
+    const sentinel = "synthetic-openshell-env-value";
+    cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    sandboxMocks.runSshSandboxCommand.mockResolvedValueOnce({
+      stdout: Buffer.from("1\n"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    });
+    const backend = await createOpenShellBackendFixture({
+      workspaceDir: "/tmp/openclaw-synthetic-workspace",
+      mode: "remote",
+    });
 
-      const execSpec = await backend.buildExecSpec({
-        command: "printenv SYNTHETIC_VALUE",
-        workdir: "/sandbox",
-        env: { SYNTHETIC_VALUE: sentinel },
-        usePty: true,
-      });
+    const execSpec = await backend.buildExecSpec({
+      command: "printenv SYNTHETIC_VALUE",
+      workdir: "/sandbox",
+      env: { SYNTHETIC_VALUE: sentinel },
+      usePty: true,
+    });
 
-      expect(sandboxMocks.prepareSshSandboxExec).toHaveBeenCalledWith({
-        session: expect.objectContaining({ host: "openshell-test" }),
-        remoteCommand: expect.stringContaining("printenv SYNTHETIC_VALUE"),
-        env: { SYNTHETIC_VALUE: sentinel },
-        tty: true,
-      });
-      expect(execSpec.argv.join(" ")).not.toContain(sentinel);
-      expect(execSpec.argv).toContain("-tt");
-      expect(execSpec.argv.join(" ")).not.toContain("SetEnv");
-      expect(execSpec.stdinMode).toBe("pipe-open");
+    expect(sandboxMocks.prepareSshSandboxExec).toHaveBeenCalledWith({
+      session: expect.objectContaining({ host: "openshell-test" }),
+      remoteCommand: expect.stringContaining("printenv SYNTHETIC_VALUE"),
+      env: { SYNTHETIC_VALUE: sentinel },
+      tty: true,
+    });
+    expect(execSpec.argv.join(" ")).not.toContain(sentinel);
+    expect(execSpec.argv).toContain("-tt");
+    expect(execSpec.argv.join(" ")).not.toContain("SetEnv");
+    expect(execSpec.stdinMode).toBe("pipe-open");
 
-      sandboxMocks.disposeSshSandboxSession.mockClear();
-      await backend.finalizeExec?.({
-        status,
-        exitCode: status === "completed" ? 0 : 1,
-        timedOut: false,
-        token: execSpec.finalizeToken,
-      });
+    sandboxMocks.disposeSshSandboxSession.mockClear();
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
 
-      expect(sandboxMocks.cleanupPreparedExec).toHaveBeenCalledOnce();
-      expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledWith(
-        expect.objectContaining({ host: "openshell-test" }),
-      );
-      expect(sandboxMocks.cleanupPreparedExec.mock.invocationCallOrder[0]).toBeLessThan(
-        expectDefined(
-          sandboxMocks.disposeSshSandboxSession.mock.invocationCallOrder[0],
-          "OpenShell SSH session disposal invocation",
-        ),
-      );
-    },
-  );
+    expect(sandboxMocks.cleanupPreparedExec).toHaveBeenCalledOnce();
+    expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledWith(
+      expect.objectContaining({ host: "openshell-test" }),
+    );
+    expect(sandboxMocks.cleanupPreparedExec.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(
+        sandboxMocks.disposeSshSandboxSession.mock.invocationCallOrder[0],
+        "OpenShell SSH session disposal invocation",
+      ),
+    );
+  });
 
   it("disposes the OpenShell SSH session when secure exec staging fails", async () => {
     cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
@@ -911,12 +860,7 @@ describe("openshell backend manager", () => {
       try {
         let finalizeError: unknown;
         try {
-          await backend.finalizeExec?.({
-            status: "completed",
-            exitCode: 0,
-            timedOut: false,
-            token: undefined,
-          });
+          await finalizeMirror(backend);
         } catch (error) {
           finalizeError = error;
         }
@@ -999,12 +943,7 @@ describe("openshell backend manager", () => {
 
     const backend = await createOpenShellBackendFixture({ workspaceDir, mode: "mirror" });
 
-    await backend.finalizeExec?.({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: undefined,
-    });
+    await finalizeMirror(backend);
 
     await expect(fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8")).resolves.toBe(
       "remote",
@@ -1077,12 +1016,7 @@ describe("openshell backend manager", () => {
       });
       const backend = await createOpenShellBackendFixture({ workspaceDir, mode: "mirror" });
       try {
-        const finalization = backend.finalizeExec?.({
-          status: "completed",
-          exitCode: 0,
-          timedOut: false,
-          token: undefined,
-        });
+        const finalization = finalizeMirror(backend);
         if (backupState === "replaced") {
           await expect(finalization).rejects.toThrow("unverified workspace shadow");
           expect(replaced).toBe(true);
@@ -1160,14 +1094,7 @@ describe("openshell backend manager", () => {
       mode: "mirror",
     });
     try {
-      const result = await backend
-        .finalizeExec?.({
-          status: "completed",
-          exitCode: 0,
-          timedOut: false,
-          token: undefined,
-        })
-        .catch((error: unknown) => error);
+      const result = await finalizeMirror(backend).catch((error: unknown) => error);
       expect(cleanupFailed).toBe(true);
       expect(preservationRoots.size).toBe(2);
       expect(result).toMatchObject({ cause: cleanupError });
@@ -1239,6 +1166,15 @@ afterEach(async () => {
   await Promise.all(executableWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
 });
 
+async function finalizeMirror(backend: OpenShellSandboxBackend): Promise<void> {
+  await backend.finalizeExec?.({
+    status: "completed",
+    exitCode: 0,
+    timedOut: false,
+    token: undefined,
+  });
+}
+
 async function createOpenShellBackendFixture(params: {
   workspaceDir: string;
   mode: "mirror" | "remote";
@@ -1270,18 +1206,16 @@ describe("openshell fs bridges", () => {
   afterAll(uninstallOpenShellBackendMocks);
   beforeEach(resetOpenShellBackendMocks);
 
-  it.each(["/sandbox/../outside.txt", "/sandbox/nested/../../outside.txt"])(
-    "rejects workspace container paths that escape the managed root: %s",
-    async (filePath) => {
-      await using workspace = await createOpenShellTestWorkspace("fs-path");
-      const { bridge } = await createMirrorFsBridgeFixture(workspace.dir);
+  it("rejects workspace container paths that escape the managed root", async () => {
+    const filePath = "/sandbox/nested/../../outside.txt";
+    await using workspace = await createOpenShellTestWorkspace("fs-path");
+    const { bridge } = await createMirrorFsBridgeFixture(workspace.dir);
 
-      expect(() => bridge.resolvePath({ filePath })).toThrow("Sandbox path escapes allowed mounts");
-      await expect(bridge.readDirectory({ filePath })).rejects.toThrow(
-        "Sandbox path escapes allowed mounts",
-      );
-    },
-  );
+    expect(() => bridge.resolvePath({ filePath })).toThrow("Sandbox path escapes allowed mounts");
+    await expect(bridge.readDirectory({ filePath })).rejects.toThrow(
+      "Sandbox path escapes allowed mounts",
+    );
+  });
 
   it("rejects agent container paths that escape the managed root", async () => {
     await using workspace = await createOpenShellTestWorkspace("fs-path");

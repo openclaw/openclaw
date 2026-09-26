@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { runMacFixtureTool } from "../scripts/mac-native-fixtures.test-support.js";
 import type { MacScriptFixture } from "../scripts/mac-script-fixture.test-support.js";
 import { machoFixture } from "./mac-native.js";
 
@@ -135,6 +136,16 @@ type SigningEvent = {
   mutationAttempt?: boolean;
 };
 type FileEvent = { args: string[]; magics: string[] };
+
+export async function writeFat64Fixture(filename: string, mac: MacScriptFixture): Promise<Buffer> {
+  await runMacFixtureTool(
+    "/usr/bin/lipo",
+    ["-create", "-fat64", "/usr/bin/true", "-output", filename],
+    path.dirname(filename),
+    mac,
+  );
+  return readFile(filename);
+}
 
 export async function makeSigningFixture(
   mac: MacScriptFixture,

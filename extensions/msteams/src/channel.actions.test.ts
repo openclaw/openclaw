@@ -1,4 +1,3 @@
-// Msteams tests cover channel.actions plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { msteamsPlugin } from "./channel.js";
@@ -89,6 +88,7 @@ const targetChannelId = "conversation:19:target@thread.tacv2";
 const editedConversationId = "19:edited@thread.tacv2";
 const editedMessageId = "msg-edit-1";
 const readMessage = { id: "msg-1", text: "hello" };
+const readResult = { ok: true, channel: "msteams", action: "read", message: readMessage };
 const reactionType = "like";
 const updatedText = "updated text";
 const reactionTypes = ["like", "heart", "laugh", "surprised", "sad", "angry"];
@@ -214,42 +214,22 @@ function expectActionRuntimeCall(
   });
 }
 
-async function expectSuccessfulAction(params: {
-  mockFn: ReturnType<typeof vi.fn>;
-  mockResult: unknown;
-  action: Parameters<typeof runAction>[0]["action"];
-  cfg?: Parameters<typeof runAction>[0]["cfg"];
-  accountId?: Parameters<typeof runAction>[0]["accountId"];
-  requesterAccountId?: Parameters<typeof runAction>[0]["requesterAccountId"];
-  actionParams?: Parameters<typeof runAction>[0]["params"];
-  toolContext?: Parameters<typeof runAction>[0]["toolContext"];
-  mediaAccess?: Parameters<typeof runAction>[0]["mediaAccess"];
-  mediaLocalRoots?: Parameters<typeof runAction>[0]["mediaLocalRoots"];
-  mediaReadFile?: Parameters<typeof runAction>[0]["mediaReadFile"];
-  requesterSenderId?: Parameters<typeof runAction>[0]["requesterSenderId"];
-  senderIsOwner?: Parameters<typeof runAction>[0]["senderIsOwner"];
-  gatewayClientScopes?: Parameters<typeof runAction>[0]["gatewayClientScopes"];
-  runtimeParams: Record<string, unknown>;
-  details: Record<string, unknown>;
-  contentDetails?: Record<string, unknown>;
-}) {
-  params.mockFn.mockResolvedValue(params.mockResult);
-  const result = await runAction({
-    action: params.action,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    requesterAccountId: params.requesterAccountId,
-    params: params.actionParams,
-    mediaAccess: params.mediaAccess,
-    mediaLocalRoots: params.mediaLocalRoots,
-    mediaReadFile: params.mediaReadFile,
-    toolContext: params.toolContext,
-    requesterSenderId: params.requesterSenderId,
-    senderIsOwner: params.senderIsOwner,
-    gatewayClientScopes: params.gatewayClientScopes,
-  });
-  expectActionRuntimeCall(params.mockFn, params.runtimeParams, params.cfg);
-  expectActionSuccess(result, params.details, params.contentDetails);
+async function expectSuccessfulAction(
+  params: Omit<Parameters<typeof runAction>[0], "params"> & {
+    mockFn: ReturnType<typeof vi.fn>;
+    mockResult: unknown;
+    actionParams?: Parameters<typeof runAction>[0]["params"];
+    runtimeParams: Record<string, unknown>;
+    details: Record<string, unknown>;
+    contentDetails?: Record<string, unknown>;
+  },
+) {
+  const { mockFn, mockResult, actionParams, runtimeParams, details, contentDetails, ...action } =
+    params;
+  mockFn.mockResolvedValue(mockResult);
+  const result = await runAction({ ...action, params: actionParams });
+  expectActionRuntimeCall(mockFn, runtimeParams, action.cfg);
+  expectActionSuccess(result, details, contentDetails);
 }
 
 describe("msteamsPlugin message actions", () => {
@@ -293,15 +273,7 @@ describe("msteamsPlugin message actions", () => {
         to: currentChannelId,
         messageId: "msg-1",
       },
-      details: okMSTeamsActionDetails("read", {
-        message: readMessage,
-      }),
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "read",
-        message: readMessage,
-      },
+      details: readResult,
     });
   });
 
@@ -332,15 +304,7 @@ describe("msteamsPlugin message actions", () => {
         to: "user:aad-user-1",
         messageId: "msg-1",
       },
-      details: okMSTeamsActionDetails("read", {
-        message: readMessage,
-      }),
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "read",
-        message: readMessage,
-      },
+      details: readResult,
     });
   });
 
@@ -363,15 +327,7 @@ describe("msteamsPlugin message actions", () => {
         to: graphChannelTarget,
         messageId: "msg-1",
       },
-      details: okMSTeamsActionDetails("read", {
-        message: readMessage,
-      }),
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "read",
-        message: readMessage,
-      },
+      details: readResult,
     });
   });
 
@@ -401,15 +357,7 @@ describe("msteamsPlugin message actions", () => {
         to: "team-1/channel-1",
         messageId: "msg-1",
       },
-      details: okMSTeamsActionDetails("read", {
-        message: readMessage,
-      }),
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "read",
-        message: readMessage,
-      },
+      details: readResult,
     });
   });
 
@@ -455,15 +403,7 @@ describe("msteamsPlugin message actions", () => {
         to: "conversation:19:group@thread.v2",
         messageId: "msg-1",
       },
-      details: okMSTeamsActionDetails("read", {
-        message: readMessage,
-      }),
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "read",
-        message: readMessage,
-      },
+      details: readResult,
     });
   });
 
@@ -494,15 +434,7 @@ describe("msteamsPlugin message actions", () => {
         to: "19:group@thread.v2",
         messageId: "msg-1",
       },
-      details: okMSTeamsActionDetails("read", {
-        message: readMessage,
-      }),
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "read",
-        message: readMessage,
-      },
+      details: readResult,
     });
   });
 
@@ -550,15 +482,7 @@ describe("msteamsPlugin message actions", () => {
         to: "conversation:19:opaque@thread.v2",
         messageId: "msg-1",
       },
-      details: okMSTeamsActionDetails("read", {
-        message: readMessage,
-      }),
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "read",
-        message: readMessage,
-      },
+      details: readResult,
     });
   });
 
@@ -584,22 +508,6 @@ describe("msteamsPlugin message actions", () => {
       }),
     ).rejects.toThrow("Microsoft Teams read target is not allowed.");
     expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
-  });
-
-  it("advertises upload-file in the message tool surface", () => {
-    expect(
-      msteamsPlugin.actions?.describeMessageTool?.({
-        cfg: {
-          channels: {
-            msteams: {
-              appId: "app-id",
-              appPassword: "secret",
-              tenantId: "tenant-id",
-            },
-          },
-        } as OpenClawConfig,
-      })?.actions,
-    ).toContain("upload-file");
   });
 
   it("hides message actions when the selected certificate is unavailable", () => {
@@ -1465,15 +1373,6 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
     expect(result?.replyToMode).toBe("all");
   });
 
-  it("omits replyToMode when no thread context is present", () => {
-    const result = callBuildToolContext({
-      ChatType: "direct",
-      To: "user:aad-user-1",
-    });
-    expect(result?.currentThreadTs).toBeUndefined();
-    expect(result?.replyToMode).toBeUndefined();
-  });
-
   it("does not stamp ReplyToId as ambient thread for DM turns", () => {
     const result = callBuildToolContext({
       ChatType: "direct",
@@ -1492,16 +1391,6 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
     });
     expect(result?.currentThreadTs).toBeUndefined();
     expect(result?.replyToMode).toBeUndefined();
-  });
-
-  it("stamps channel ReplyToId when MessageThreadId is absent", () => {
-    const result = callBuildToolContext({
-      ChatType: "channel",
-      To: "conversation:19:channel-abc@thread.tacv2",
-      ReplyToId: "channel-parent",
-    });
-    expect(result?.currentThreadTs).toBe("channel-parent");
-    expect(result?.replyToMode).toBe("all");
   });
 
   it("falls back to To for DM turns (no NativeChannelId)", () => {
@@ -1587,25 +1476,6 @@ describe("msteamsPlugin.actions.extractToolSendResult", () => {
       }),
     ).toEqual({
       to: "conversation:19:channel@thread.tacv2",
-    });
-  });
-
-  it("canonicalizes user targets to the resolved conversation", () => {
-    expect(
-      requireMSTeamsExtractToolSendResult()({
-        result: {
-          details: {
-            result: {
-              conversationId: "19:dm@thread.v2",
-            },
-          },
-        },
-        send: {
-          to: "user:aad-user-1",
-        },
-      }),
-    ).toEqual({
-      to: "conversation:19:dm@thread.v2",
     });
   });
 

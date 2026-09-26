@@ -195,24 +195,52 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const highlight = skeleton.locator(".loading-skeleton__composer");
     expect(await page.locator("html").getAttribute("data-theme")).toBe("rose");
     const bounds = (await highlight.boundingBox())!;
+    const duration = await highlight.evaluate(
+      (element) => getComputedStyle(element, "::after").animationDuration,
+    );
     const frames: number[][] = [];
-    for (const progress of [0, 0.5]) {
-      await highlight.evaluate((element, fraction) => {
-        const sweep = element.getAnimations({ subtree: true })[0]!;
-        sweep.pause();
-        sweep.currentTime = Number(sweep.effect!.getComputedTiming().duration) * fraction;
-      }, progress);
-      const frame = decodeProofPng(await page.screenshot());
-      const center =
-        (Math.floor(bounds.y + bounds.height / 2) * frame.width +
-          Math.floor(bounds.x + bounds.width / 2)) *
-        4;
-      frames.push([...frame.data.subarray(center, center + 3)]);
+    const pose = await page.addStyleTag({
+      content: ".connect-splash .loading-skeleton__composer::after { animation-name: none; }",
+    });
+    try {
+      for (const progress of [0, 0.5]) {
+        await pose.evaluate(
+          (style, { duration: sweepDuration, fraction }) => {
+            const selector = ".connect-splash .loading-skeleton__composer::after";
+            // Restart through CSS so the sampled animation keeps its CSS-owned lifecycle.
+            style.textContent = `${selector} { animation-name: none; }`;
+            getComputedStyle(
+              document.querySelector(".loading-skeleton__composer")!,
+              "::after",
+            ).getPropertyValue("animation-name");
+            style.textContent = `${selector} {
+            animation-play-state: paused;
+            animation-delay: calc(-1 * ${sweepDuration} * ${fraction});
+          }`;
+          },
+          { duration, fraction: progress },
+        );
+        const frame = decodeProofPng(await page.screenshot());
+        const center =
+          (Math.floor(bounds.y + bounds.height / 2) * frame.width +
+            Math.floor(bounds.x + bounds.width / 2)) *
+          4;
+        frames.push([...frame.data.subarray(center, center + 3)]);
+      }
+    } finally {
+      await pose.evaluate((style) => style.parentNode?.removeChild(style));
     }
     // An animation name alone passed even when highlight and fill were identical.
     expect(
       Math.max(...frames[0]!.map((value, channel) => Math.abs(value - frames[1]![channel]!))),
     ).toBeGreaterThan(12);
+    expect(
+      await highlight.evaluate((element) =>
+        element
+          .getAnimations({ subtree: true })
+          .some((animation) => animation.playState === "running"),
+      ),
+    ).toBe(true);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     expect(await splash.locator(".connect-splash__sidebar").isVisible()).toBe(false);

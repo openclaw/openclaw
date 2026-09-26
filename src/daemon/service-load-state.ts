@@ -1,3 +1,4 @@
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { findServiceOwnershipRefusal, ServiceInspectionError } from "./service-inspection-error.js";
 import type {
   GatewayServiceEnvArgs,
@@ -12,6 +13,9 @@ export async function readGatewayServiceLoadState(
   try {
     return { status: (await service.isLoaded(args)) ? "loaded" : "not-loaded" };
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     const refusal = findServiceOwnershipRefusal(error);
     if (refusal) {
       throw refusal;

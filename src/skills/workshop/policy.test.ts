@@ -92,6 +92,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
     expect(resolvedByName?.requireApproval?.description).toContain(
       `Proposal ID: ${proposal.record.id}`,
     );
+    expect(resolvedByName?.requireApproval?.title).toBe("Reject Skill Workshop proposal");
   });
 
   it("bounds approval metadata without splitting UTF-16 surrogates", async () => {
@@ -213,21 +214,5 @@ describe("resolveSkillWorkshopToolApproval", () => {
         "The Skill Workshop approval request expired without a decision. This restore call left Workshop-generated skills unchanged. Review the current skills, then request the restore again if it is still wanted. Do not retry this tool call in a loop.",
       allowedDecisions: ["allow-once", "deny"],
     });
-  });
-
-  it("uses the supplied lifecycle hook config", async () => {
-    const result = await resolveSkillWorkshopToolApproval({
-      toolName: "skill_workshop",
-      toolParams: { action: "reject", proposal_id: "weather-20260530-a1b2c3d4e5" },
-      config: {
-        skills: {
-          workshop: {
-            approvalPolicy: "pending",
-          },
-        },
-      },
-    });
-
-    expect(result?.requireApproval?.title).toBe("Reject Skill Workshop proposal");
   });
 });

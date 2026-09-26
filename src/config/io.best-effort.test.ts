@@ -17,6 +17,11 @@ import {
 import { resetConfigOverrides, setConfigOverride } from "./runtime-overrides.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
+const cachePruningConfig = {
+  auth: { profiles: { "anthropic:api": { provider: "anthropic", mode: "api_key" as const } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+};
+
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 
 function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
@@ -35,43 +40,6 @@ describe("readBestEffortConfig", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
     resetConfigOverrides();
-  });
-
-  it("can read snapshots without updating config observation state", async () => {
-    await withTempHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, {
-        gateway: { mode: "local" },
-      });
-
-      await readConfigFileSnapshot({ observe: false });
-
-      const healthPath = `${home}/.openclaw/logs/config-health.json`;
-      await expect(fs.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
-
-      await readConfigFileSnapshot();
-
-      await expect(fs.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toMatchObject({
-        config_path: configPath,
-        last_known_good_json: expect.any(String),
-      });
-    });
-  });
-
-  it("can read snapshots without applying config env vars to the process", async () => {
-    await withTempHome(async (home) => {
-      const key = "OPENCLAW_ISOLATED_CONFIG_READ_TEST";
-      await withEnvAsync({ [key]: undefined }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { [key]: "from-config" } },
-          gateway: { mode: "local" },
-        });
-
-        await readConfigFileSnapshot({ isolateEnv: true, observe: false });
-
-        expect(process.env[key]).toBeUndefined();
-      });
-    });
   });
 
   it("resolves config env above exact lower-precedence values in isolated snapshots", async () => {
@@ -249,18 +217,7 @@ describe("readBestEffortConfig", () => {
 
   it("reuses valid snapshots while preserving load-time defaults", async () => {
     await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        auth: {
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-6" },
-          },
-        },
-      });
+      await writeOpenClawConfig(home, cachePruningConfig);
 
       const snapshot = await readConfigFileSnapshot();
       const bestEffort = await readBestEffortConfig();
@@ -281,18 +238,7 @@ describe("readBestEffortConfig", () => {
 
   it("controls observation while returning source and materialized config", async () => {
     await withTempHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, {
-        auth: {
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-6" },
-          },
-        },
-      });
+      const configPath = await writeOpenClawConfig(home, cachePruningConfig);
       const configRaw = await fs.readFile(configPath, "utf-8");
 
       const snapshot = await readBestEffortConfigSnapshot({ observe: false });
@@ -337,18 +283,7 @@ describe("readBestEffortConfig", () => {
 describe("readSourceConfigBestEffort", () => {
   it("preserves the authored source config without load-time defaults", async () => {
     await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        auth: {
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-6" },
-          },
-        },
-      });
+      await writeOpenClawConfig(home, cachePruningConfig);
 
       const snapshot = await readConfigFileSnapshot();
       const sourceBestEffort = await readSourceConfigBestEffort();

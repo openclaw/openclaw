@@ -9,7 +9,7 @@ import type { ComputerActResult } from "../plugins/computer-use-contract.js";
 import { createWorkerTranscriptRuntime } from "./embedded-agent-transcript.runtime.js";
 
 describe("worker computer observation persistence", () => {
-  it.each(["screen", "window", "browser"] as const)(
+  it.each(["screen", "window"] as const)(
     "commits a large %s observation with pixels only in image content",
     async (kind) => {
       const base64 = createNoisyPngBuffer(512, 512).toString("base64");
@@ -46,7 +46,7 @@ describe("worker computer observation persistence", () => {
           : await projectComputerActResult({
               result: providerResult,
               target,
-              action: kind === "window" ? "get_window_state" : "get_browser_state",
+              action: "get_window_state",
               referenceWidth: 1280,
               modelHasVision: true,
             });

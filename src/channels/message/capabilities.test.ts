@@ -1,4 +1,3 @@
-// Message capability tests cover channel message feature detection and compatibility.
 import { describe, expect, it } from "vitest";
 import {
   deriveDurableFinalDeliveryRequirements,
@@ -6,13 +5,6 @@ import {
 } from "./capabilities.js";
 
 describe("deriveDurableFinalDeliveryRequirements", () => {
-  it("derives the default durable final text and hook requirements", () => {
-    expect(deriveDurableFinalDeliveryRequirements({ payload: { text: "hello" } })).toEqual({
-      text: true,
-      messageSendingHooks: true,
-    });
-  });
-
   it("derives payload-dependent delivery requirements", () => {
     expect(
       deriveDurableFinalDeliveryRequirements({

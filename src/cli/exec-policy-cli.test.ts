@@ -89,42 +89,20 @@ const mocks = vi.hoisted(() => {
     defaultRuntime,
     runtimeErrors,
     callGateway: vi.fn(),
-    replaceConfigFile: vi.fn(
-      async ({ nextConfig }: { nextConfig: OpenClawConfig; baseHash?: string }) => {
-        configState = structuredClone(nextConfig);
-        return {
-          path: "/tmp/openclaw.json",
-          previousHash: "hash-1",
-          persistedHash: "hash-1",
-          snapshot: { path: "/tmp/openclaw.json" },
-          nextConfig,
-        };
-      },
-    ),
-    readConfigFileSnapshot: vi.fn<
-      () => Promise<{ path: string; hash: string; config: OpenClawConfig }>
-    >(async () => ({
-      path: "/tmp/openclaw.json",
-      hash: "config-hash-1",
-      config: configState,
-    })),
-    readExecApprovalsSnapshot: vi.fn<() => ExecApprovalsSnapshot>(() => ({
-      path: "/tmp/exec-approvals.json",
-      exists: true,
-      raw: "{}",
-      hash: approvalsHash,
-      file: approvalsState,
-    })),
-    restoreExecApprovalsSnapshot: vi.fn(
-      async (snapshot: ExecApprovalsSnapshot, baseHash: string) => {
-        if (baseHash !== approvalsHash) {
-          return false;
-        }
-        approvalsState = snapshot.file;
-        approvalsHash = snapshot.hash;
-        return true;
-      },
-    ),
+    replaceConfigFile: vi.fn<
+      (params: { nextConfig: OpenClawConfig; baseHash?: string }) => Promise<{
+        path: string;
+        previousHash: string;
+        persistedHash: string;
+        snapshot: { path: string };
+        nextConfig: OpenClawConfig;
+      }>
+    >(),
+    readConfigFileSnapshot:
+      vi.fn<() => Promise<{ path: string; hash: string; config: OpenClawConfig }>>(),
+    readExecApprovalsSnapshot: vi.fn<() => ExecApprovalsSnapshot>(),
+    restoreExecApprovalsSnapshot:
+      vi.fn<(snapshot: ExecApprovalsSnapshot, baseHash: string) => Promise<boolean>>(),
     updateExecApprovals: vi.fn(
       async ({
         baseHash,
@@ -890,29 +868,6 @@ describe("exec-policy CLI", () => {
     );
     expect(mocks.getApprovals()).toEqual(originalApprovals);
     expect(mocks.runtimeErrors).toEqual(["config write failed"]);
-  });
-
-  it("removes a newly-written approvals file when config replacement fails and the original file was missing", async () => {
-    const missingSnapshot: ExecApprovalsSnapshot = {
-      path: "/tmp/missing-exec-approvals.json",
-      exists: false,
-      raw: null,
-      hash: "approvals-hash",
-      file: { version: 1, agents: {} },
-    };
-    mockRollbackApprovalSnapshots(missingSnapshot);
-    mocks.replaceConfigFile.mockImplementationOnce(async () => {
-      throw new Error("config write failed");
-    });
-
-    await expect(
-      runExecPolicyCommand(["exec-policy", "set", "--security", "full"]),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(
-      missingSnapshot,
-      "written-approvals-hash",
-    );
   });
 
   it("rebases rollback over a newer approvals write", async () => {

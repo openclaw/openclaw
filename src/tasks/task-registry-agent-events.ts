@@ -22,7 +22,7 @@ import {
   retainTaskMutationFlowEffects,
 } from "./task-executor-mutation-effects.async.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
-import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
+import { flushTaskActivity } from "./task-registry-activity.js";
 import { recoverTaskAgentEventPublication } from "./task-registry-agent-event-commit.js";
 import { publishTaskAgentEventDelivery } from "./task-registry-agent-event-delivery.js";
 import {
@@ -51,6 +51,7 @@ import {
   isEquivalentTaskRecord,
 } from "./task-registry-records.js";
 import {
+  clearTaskActivity,
   runTaskRegistryWorkerMutation,
   invalidateTaskRegistryProjection,
   taskFlowSyncOwner,
@@ -370,7 +371,7 @@ async function persist(pending: PendingEvent): Promise<void> {
     runId: input.expectedTask.runId,
     childSessionKey: input.expectedTask.childSessionKey,
   };
-  let flowEffectsSettled = false;
+  let flowHookEntered = false;
   let publicationFailure: { error: unknown } | undefined;
   try {
     try {
@@ -430,12 +431,12 @@ async function persist(pending: PendingEvent): Promise<void> {
               ) {
                 clearTaskActivity(taskId);
               }
+              flowHookEntered = true;
               await finishTaskMutation(context, store, flowStore, taskId, {
                 operation: "update",
                 assertCurrent: assertCurrentOwners,
               });
               assertCurrentOwners();
-              flowEffectsSettled = true;
             }
           },
           forcePublish: () => pending.publication?.task,
@@ -521,7 +522,7 @@ async function persist(pending: PendingEvent): Promise<void> {
       throw publicationFailure.error;
     }
   } finally {
-    if (!flowEffectsSettled && pending.committedTarget && pending.phase.kind !== "consumed") {
+    if (!flowHookEntered && pending.committedTarget && pending.phase.kind !== "consumed") {
       const current = tasks.get(taskId);
       if (
         current &&
