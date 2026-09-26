@@ -46,7 +46,7 @@ import {
   insertChatDbMessage,
   readChatDbMessagesAfter,
   withChatDb,
-} from "./test-support/chat-db.js";
+} from "./test-support/chat-db.test-support.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const ANCHOR_REPAIR_GUID = "11111111-1111-4111-8111-111111111111";
@@ -1090,6 +1090,8 @@ describe("iMessage monitor last-route updates", () => {
 
   it("does not wait for read receipts before dispatching the inbound turn", async () => {
     setAvailablePrivateApiMethods(["watch.subscribe", "read"]);
+    const flushed = createDeferred<void>();
+    debouncerControl.onFlushed = () => flushed.resolve();
     const watchClient = await runMessageCase({
       auxiliaryRequests: { read: () => new Promise(() => {}) },
       message: createInboundMessage({
@@ -1097,11 +1099,7 @@ describe("iMessage monitor last-route updates", () => {
         guid: "read-receipt-guid-11",
         text: "respond without waiting for read receipt",
       }),
-      afterNotify: async () => {
-        await vi.waitFor(() => {
-          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-        });
-      },
+      afterNotify: () => flushed.promise,
     });
     const readClient = watchClient.auxiliaryClient!;
 
