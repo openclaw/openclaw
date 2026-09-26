@@ -27,7 +27,7 @@ export function createMeetingBrowserAudioCaptureSource(
       if (current?.captureId === captureId) await current.stop();
       return JSON.stringify({ closed: true, captureId });
     }
-    current.lastPull = Date.now();
+    current.lastPull = performance.now();
     current.scan();
     if (current.error) throw new Error(current.error);
     const chunks = current.chunks.splice(0);
@@ -69,7 +69,7 @@ export function createMeetingBrowserAudioCaptureSource(
     if (restore && ownsMutedSource(entry)) entry.element.muted = entry.muted;
   };
   const capture = {
-    captureId, sessionId, chunks, lastPull: Date.now(), error: undefined,
+    captureId, sessionId, chunks, lastPull: performance.now(), error: undefined,
     isCurrent: () => !stopped && window.__openclawMeetingRemoteAudio === capture && ownsSession(),
     stop: async () => {
       if (stopped) return;
@@ -135,7 +135,7 @@ export function createMeetingBrowserAudioCaptureSource(
     });
   };
   function scan() {
-    if (!capture.isCurrent() || Date.now() - capture.lastPull > 10000) {
+    if (!capture.isCurrent() || performance.now() - capture.lastPull > 10000) {
       void capture.stop();
       return;
     }
