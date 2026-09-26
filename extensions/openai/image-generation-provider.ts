@@ -12,6 +12,10 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "openclaw/plugin-sdk/provider-onboard";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-policy";
 import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -21,12 +25,18 @@ import {
   isOpenAICodexBaseUrl,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
-import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
+import {
+  OPENAI_CODEX_DEFAULT_MODEL,
+  OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL,
+} from "./default-models.js";
 import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
-const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-6-astra";
+const OPENAI_MODEL_REF_PREFIX = "openai/";
+const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = OPENAI_CODEX_DEFAULT_MODEL.slice(
+  OPENAI_MODEL_REF_PREFIX.length,
+);
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
 const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-1.5";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
@@ -471,6 +481,26 @@ async function resolveOptionalApiKeyForProvider(
   }
 }
 
+// ChatGPT plans do not all offer the Codex default model, so the Responses call that
+// hosts the image_generation tool prefers the OpenAI model the user already runs.
+function resolveCodexImageResponsesModel(cfg: OpenClawConfig | undefined): string {
+  const agentModel = cfg?.agents?.defaults?.model;
+  const configuredRefs = [
+    resolveAgentModelPrimaryValue(agentModel),
+    ...resolveAgentModelFallbackValues(agentModel),
+  ];
+  for (const ref of configuredRefs) {
+    const modelRef = ref?.trim();
+    if (modelRef?.startsWith(OPENAI_MODEL_REF_PREFIX)) {
+      const modelId = modelRef.slice(OPENAI_MODEL_REF_PREFIX.length);
+      if (modelId) {
+        return modelId;
+      }
+    }
+  }
+  return DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL;
+}
+
 async function logCodexImageAuthSelected(params: {
   req: Parameters<ImageGenerationProvider["generateImage"]>[0];
   authMode?: unknown;
@@ -486,7 +516,9 @@ async function logCodexImageAuthSelected(params: {
       params.authMode,
     )} transport=codex-responses requestedModel=${sanitizeLogValue(
       model,
-    )} responsesModel=${DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL} timeoutMs=${params.timeoutMs}`,
+    )} responsesModel=${sanitizeLogValue(
+      resolveCodexImageResponsesModel(params.req.cfg),
+    )} timeoutMs=${params.timeoutMs}`,
   );
 }
 
@@ -556,13 +588,14 @@ async function generateOpenAICodexImage(params: {
       detail: "auto",
     })),
   ];
+  const responsesModel = resolveCodexImageResponsesModel(req.cfg);
   const results: ImageGenerationResult[] = [];
   for (let index = 0; index < count; index += 1) {
     const requestResult = await postJsonRequest({
       url: `${baseUrl}/responses`,
       headers,
       body: {
-        model: DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL,
+        model: responsesModel,
         input: [
           {
             role: "user",

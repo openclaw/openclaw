@@ -1053,6 +1053,33 @@ describe("openai image generation provider", () => {
     });
   });
 
+  it("uses the configured OpenAI chat model for Codex OAuth image generation", async () => {
+    mockCodexAuthOnly();
+    mockCodexImageStream({ imageData: "codex-configured-model-image" });
+
+    const result = await generateOpenAIImage("Draw with the configured ChatGPT model", {
+      authStore: { version: 1, profiles: {} },
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["openai/gpt-6-luna"],
+            },
+          },
+        },
+      },
+    });
+
+    const request = jsonRequestCall();
+    expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect((request.body as Record<string, unknown>).model).toBe("gpt-6-luna");
+    expect(logInfoMock).toHaveBeenCalledWith(
+      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-6-luna timeoutMs=180000",
+    );
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-configured-model-image"));
+  });
+
   it("cancels oversized Codex OAuth image response streams", async () => {
     mockCodexAuthOnly();
     let canceled = false;
