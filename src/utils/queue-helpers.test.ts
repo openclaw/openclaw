@@ -10,6 +10,11 @@ import {
   previewQueueSummaryPrompt,
 } from "./queue-helpers.js";
 
+function createQueue<T>(items: T[], cap: number, dropPolicy: "old" | "summarize" = "old") {
+  const summaryLines: string[] = [];
+  return { items, cap, dropPolicy, droppedCount: 0, summaryLines };
+}
+
 describe("applyQueueRuntimeSettings", () => {
   it("updates runtime queue settings with normalization", () => {
     const target = {
@@ -123,13 +128,7 @@ describe("queue summary helpers", () => {
   });
 
   it("keeps dropped-item previews free of lone surrogates", () => {
-    const queue = {
-      items: [{ text: `${"a".repeat(158)}😀tail` }],
-      cap: 1,
-      dropPolicy: "summarize" as const,
-      droppedCount: 0,
-      summaryLines: [] as string[],
-    };
+    const queue = createQueue([{ text: `${"a".repeat(158)}😀tail` }], 1, "summarize");
 
     applyQueueDropPolicy({ queue, summarize: (item) => item.text });
 
@@ -202,13 +201,7 @@ describe("drainNextQueueItem", () => {
 
   it("keeps overflow survivors when the queue mutates during an awaited drain", async () => {
     type Item = { id: string };
-    const queue = {
-      items: [{ id: "m1" }] as Item[],
-      cap: 3,
-      dropPolicy: "summarize" as const,
-      droppedCount: 0,
-      summaryLines: [] as string[],
-    };
+    const queue = createQueue<Item>([{ id: "m1" }], 3, "summarize");
     const delivered: string[] = [];
     const dropped: string[] = [];
     let release!: () => void;
@@ -265,13 +258,7 @@ describe("drainNextQueueItem", () => {
     const m2: Item = { id: "m2" };
     const m3: Item = { id: "m3" };
     const m4: Item = { id: "m4" };
-    const queue = {
-      items: [m1, m2, m3, m4],
-      cap: 2,
-      dropPolicy: "old" as const,
-      droppedCount: 0,
-      summaryLines: [] as string[],
-    };
+    const queue = createQueue([m1, m2, m3, m4], 2);
     const inFlight = new Set<Item>([m1]);
     const dropped: string[] = [];
 
@@ -294,13 +281,7 @@ describe("drainNextQueueItem", () => {
     const normalA: Item = { id: "a" };
     const normalB: Item = { id: "b" };
     const normalC: Item = { id: "c" };
-    const queue = {
-      items: [protectedItem, normalA, normalB, normalC],
-      cap: 3,
-      dropPolicy: "old" as const,
-      droppedCount: 0,
-      summaryLines: [] as string[],
-    };
+    const queue = createQueue([protectedItem, normalA, normalB, normalC], 3);
     const dropped: string[] = [];
 
     // pending=4, cap=3 → drop 2 oldest unprotected; protected stays.
@@ -322,13 +303,7 @@ describe("drainNextQueueItem", () => {
     type Item = { id: string; protected?: boolean };
     const priority: Item = { id: "priority", protected: true };
     const alsoProtected: Item = { id: "also", protected: true };
-    const queue = {
-      items: [priority, alsoProtected],
-      cap: 1,
-      dropPolicy: "old" as const,
-      droppedCount: 0,
-      summaryLines: [] as string[],
-    };
+    const queue = createQueue([priority, alsoProtected], 1);
     const dropped: string[] = [];
 
     const shouldEnqueue = applyQueueDropPolicy({
@@ -349,13 +324,7 @@ describe("drainNextQueueItem", () => {
     type Item = { id: string; protected?: boolean };
     const active: Item = { id: "active" };
     const priority: Item = { id: "priority", protected: true };
-    const queue = {
-      items: [active, priority],
-      cap: 1,
-      dropPolicy: "old" as const,
-      droppedCount: 0,
-      summaryLines: [] as string[],
-    };
+    const queue = createQueue([active, priority], 1);
     const inFlight = new Set<Item>([active]);
     const dropped: string[] = [];
 

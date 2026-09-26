@@ -353,7 +353,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           >
           <span class="sidebar-update-card__text sidebar-update-card__text--stacked">
             <span class="sidebar-update-card__title">${view.headline}</span>
-            <span class="sidebar-update-card__subtitle">${view.compactLabel}</span>
+            ${view.compactLabel ? html`<span class="sidebar-update-card__subtitle">${view.compactLabel}</span>` : nothing}
           </span>
         </button>
       </div>`;

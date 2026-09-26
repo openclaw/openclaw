@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiSessionListSnapshot } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -35,7 +35,7 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
     runtime,
     agents,
     sessions,
-    dispose() {
+    dispose: () => {
       abort.abort();
       owner.disposers.forEach((dispose) => dispose());
       owner.disposers.clear();
@@ -73,98 +73,92 @@ describe("native UI roster refresh", () => {
       .mockResolvedValueOnce(found)
       .mockResolvedValueOnce(research);
     const fixture = createRosterHost(request);
+    onTestFinished(fixture.dispose);
     const linkedListener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
     const researchListener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
-    try {
-      await fixture.sessions.refresh({ agentId: "main" });
-      fixture.host.sessions.observe(
-        { search: "linked", archived: "all", configuredAgentsOnly: false, limit: 1 },
-        linkedListener,
-      );
-      fixture.host.sessions.observe({ agentId: "research", limit: 2 }, researchListener);
-      await vi.waitFor(() => {
-        expect(linkedListener).toHaveBeenLastCalledWith({
-          loading: false,
-          error: null,
-          result: { sessions: found.sessions, hasMore: true, nextOffset: 1, totalCount: 2 },
-        });
-        expect(researchListener).toHaveBeenLastCalledWith({
-          loading: false,
-          error: null,
-          result: { sessions: research.sessions, hasMore: false, nextOffset: null, totalCount: 1 },
-        });
+    await fixture.sessions.refresh({ agentId: "main" });
+    fixture.host.sessions.observe(
+      { search: "linked", archived: "all", configuredAgentsOnly: false, limit: 1 },
+      linkedListener,
+    );
+    fixture.host.sessions.observe({ agentId: "research", limit: 2 }, researchListener);
+    await vi.waitFor(() => {
+      expect(linkedListener).toHaveBeenLastCalledWith({
+        loading: false,
+        error: null,
+        result: { sessions: found.sessions, hasMore: true, nextOffset: 1, totalCount: 2 },
       });
-      expect(fixture.host.sessions.rows).toEqual(primary.sessions);
-      expect(fixture.sessions.state.agentId).toBe("main");
-      expect(request.mock.calls[1]).toEqual([
-        "sessions.list",
-        {
-          includeGlobal: true,
-          includeUnknown: true,
-          configuredAgentsOnly: false,
-          limit: 1,
-          archived: "all",
-          search: "linked",
-        },
-      ]);
-      const delivered = linkedListener.mock.lastCall?.[0].result?.sessions[0];
-      if (!delivered) {
-        throw new Error("Expected the observer to receive a session row");
-      }
-      Object.assign(delivered, { label: "Plugin-local edit" });
-      expect(
-        fixture.sessions.listSnapshot({
-          search: "linked",
-          archivedFilter: "all",
-          configuredAgentsOnly: false,
-          limit: 1,
-        }).result?.sessions[0]?.label,
-      ).toBe("Linked session");
-      expect(fixture.host.sessions.rows).toEqual(primary.sessions);
-    } finally {
-      fixture.dispose();
+      expect(researchListener).toHaveBeenLastCalledWith({
+        loading: false,
+        error: null,
+        result: { sessions: research.sessions, hasMore: false, nextOffset: null, totalCount: 1 },
+      });
+    });
+    expect(fixture.host.sessions.rows).toEqual(primary.sessions);
+    expect(fixture.sessions.state.agentId).toBe("main");
+    expect(request.mock.calls[1]).toEqual([
+      "sessions.list",
+      {
+        includeGlobal: true,
+        includeUnknown: true,
+        configuredAgentsOnly: false,
+        limit: 1,
+        archived: "all",
+        search: "linked",
+      },
+    ]);
+    const delivered = linkedListener.mock.lastCall?.[0].result?.sessions[0];
+    if (!delivered) {
+      throw new Error("Expected the observer to receive a session row");
     }
+    Object.assign(delivered, { label: "Plugin-local edit" });
+    expect(
+      fixture.sessions.listSnapshot({
+        search: "linked",
+        archivedFilter: "all",
+        configuredAgentsOnly: false,
+        limit: 1,
+      }).result?.sessions[0]?.label,
+    ).toBe("Linked session");
+    expect(fixture.host.sessions.rows).toEqual(primary.sessions);
   });
 
   it("publishes session query errors and rejects failed refreshes while allowing recovery", async () => {
     const found = sessionsResult([{ key: "agent:writer:linked", kind: "direct", updatedAt: 1 }], 1);
     const request = vi.fn().mockRejectedValueOnce(new Error("Query unavailable"));
     const fixture = createRosterHost(request);
+    onTestFinished(fixture.dispose);
     const listener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
-    try {
-      const observer = fixture.host.sessions.observe({ search: "linked" }, listener);
-      await vi.waitFor(() => {
-        expect(listener).toHaveBeenLastCalledWith({
-          result: null,
-          loading: false,
-          error: "Query unavailable",
-        });
-        expect(fixture.runtime.errors).toContainEqual({
-          pluginId: "review",
-          message: "Query unavailable",
-        });
-      });
-      request.mockResolvedValueOnce(found);
-      await observer.refresh();
-      const result = {
-        sessions: found.sessions,
-        hasMore: undefined,
-        nextOffset: undefined,
-        totalCount: undefined,
-      };
-      expect(listener).toHaveBeenLastCalledWith({ result, loading: false, error: null });
-      request.mockRejectedValueOnce(new Error("Refresh unavailable"));
-      await expect(observer.refresh()).rejects.toThrow("Refresh unavailable");
+    const observer = fixture.host.sessions.observe({ search: "linked" }, listener);
+    await vi.waitFor(() => {
       expect(listener).toHaveBeenLastCalledWith({
-        result,
+        result: null,
         loading: false,
-        error: "Refresh unavailable",
+        error: "Query unavailable",
       });
-      expect(fixture.sessions.state.result).toBeNull();
-      expect(fixture.sessions.state.error).toBeNull();
-    } finally {
-      fixture.dispose();
-    }
+      expect(fixture.runtime.errors).toContainEqual({
+        pluginId: "review",
+        message: "Query unavailable",
+      });
+    });
+    request.mockResolvedValueOnce(found);
+    await observer.refresh();
+    const result = {
+      sessions: found.sessions,
+      hasMore: undefined,
+      nextOffset: undefined,
+      totalCount: undefined,
+    };
+    expect(listener).toHaveBeenLastCalledWith({ result, loading: false, error: null });
+    request.mockRejectedValueOnce(new Error("Refresh unavailable"));
+    await expect(observer.refresh()).rejects.toThrow("Refresh unavailable");
+    expect(listener).toHaveBeenLastCalledWith({
+      result,
+      loading: false,
+      error: "Refresh unavailable",
+    });
+    expect(fixture.sessions.state.result).toBeNull();
+    expect(fixture.sessions.state.error).toBeNull();
   });
 
   it("ends session query callbacks and refresh authority when its view is disposed", async () => {
@@ -249,21 +243,18 @@ describe("native UI roster refresh", () => {
         .mockResolvedValueOnce(surface === "agents" ? firstAgents : firstSessions)
         .mockResolvedValueOnce(surface === "agents" ? nextAgents : nextSessions);
       const fixture = createRosterHost(request);
-      try {
-        if (surface === "agents") {
-          await fixture.agents.ensureList();
-        } else {
-          await fixture.sessions.refresh({ agentId: "research", search: "draft", limit: 5 });
-        }
-        await fixture.host[surface].refresh();
-        expect(fixture.host[surface].rows).toEqual(
-          surface === "agents" ? nextAgents.agents : nextSessions.sessions,
-        );
-        expect(request).toHaveBeenCalledTimes(2);
-        expect(request.mock.calls[1]).toEqual(request.mock.calls[0]);
-      } finally {
-        fixture.dispose();
+      onTestFinished(fixture.dispose);
+      if (surface === "agents") {
+        await fixture.agents.ensureList();
+      } else {
+        await fixture.sessions.refresh({ agentId: "research", search: "draft", limit: 5 });
       }
+      await fixture.host[surface].refresh();
+      expect(fixture.host[surface].rows).toEqual(
+        surface === "agents" ? nextAgents.agents : nextSessions.sessions,
+      );
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request.mock.calls[1]).toEqual(request.mock.calls[0]);
     },
   );
 
@@ -272,15 +263,12 @@ describe("native UI roster refresh", () => {
     async (surface) => {
       const request = vi.fn().mockRejectedValue(new Error("Roster unavailable"));
       const fixture = createRosterHost(request);
-      try {
-        await expect(fixture.host[surface].refresh()).rejects.toThrow();
-        expect(request).toHaveBeenCalledOnce();
-        expect(
-          surface === "agents" ? fixture.agents.state.agentsError : fixture.sessions.state.error,
-        ).toBe("Roster unavailable");
-      } finally {
-        fixture.dispose();
-      }
+      onTestFinished(fixture.dispose);
+      await expect(fixture.host[surface].refresh()).rejects.toThrow();
+      expect(request).toHaveBeenCalledOnce();
+      expect(
+        surface === "agents" ? fixture.agents.state.agentsError : fixture.sessions.state.error,
+      ).toBe("Roster unavailable");
     },
   );
 });
@@ -349,18 +337,15 @@ describe("native UI session mutations", () => {
   it("rejects a session patch that its session owner could not complete", async () => {
     const request = vi.fn();
     const fixture = createRosterHost(request);
+    onTestFinished(fixture.dispose);
     fixture.sessions.dispose();
-    try {
-      await expect(
-        fixture.host.sessions.patch(
-          { sessionKey: "global", agentId: "writer" },
-          { label: "Updated" },
-        ),
-      ).rejects.toThrow("The session update did not complete");
-      expect(request).not.toHaveBeenCalled();
-    } finally {
-      fixture.dispose();
-    }
+    await expect(
+      fixture.host.sessions.patch(
+        { sessionKey: "global", agentId: "writer" },
+        { label: "Updated" },
+      ),
+    ).rejects.toThrow("The session update did not complete");
+    expect(request).not.toHaveBeenCalled();
   });
 });
 
@@ -414,6 +399,7 @@ describe("native UI page navigation", () => {
     );
     const request = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(queried);
     const fixture = createRosterHost(request);
+    onTestFinished(fixture.dispose);
     const selection = createAgentSelectionCapability(
       {
         ...fixture.context.gateway,
@@ -429,30 +415,26 @@ describe("native UI page navigation", () => {
     Object.assign(fixture.context, { basePath: "", agentSelection: selection, navigate });
     Object.assign(fixture.context.gateway, { setSessionKey });
     const listener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
-    try {
-      await fixture.sessions.refresh({ agentId: "main" });
-      fixture.host.sessions.observe({ agentId: "writer", includeGlobal: true }, listener);
-      await vi.waitFor(() =>
-        expect(listener.mock.lastCall?.[0].result?.sessions).toEqual(queried.sessions),
-      );
-      const session = listener.mock.lastCall?.[0].result?.sessions[0];
-      if (!session) {
-        throw new Error("Expected the queried global session");
-      }
-
-      fixture.host.sessions.open({ sessionKey: session.key, agentId: session.agentId });
-
-      expect(navigate).toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ pathname: "/chat/writer" }),
-      );
-      expect(setSessionKey).toHaveBeenCalledWith("global");
-      expect(selectedWhenKeyChanged).toBe("writer");
-      expect(fixture.sessions.state.agentId).toBe("main");
-      expect(fixture.host.sessions.rows).toEqual(primary.sessions);
-    } finally {
-      fixture.dispose();
+    await fixture.sessions.refresh({ agentId: "main" });
+    fixture.host.sessions.observe({ agentId: "writer", includeGlobal: true }, listener);
+    await vi.waitFor(() =>
+      expect(listener.mock.lastCall?.[0].result?.sessions).toEqual(queried.sessions),
+    );
+    const session = listener.mock.lastCall?.[0].result?.sessions[0];
+    if (!session) {
+      throw new Error("Expected the queried global session");
     }
+
+    fixture.host.sessions.open({ sessionKey: session.key, agentId: session.agentId });
+
+    expect(navigate).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ pathname: "/chat/writer" }),
+    );
+    expect(setSessionKey).toHaveBeenCalledWith("global");
+    expect(selectedWhenKeyChanged).toBe("writer");
+    expect(fixture.sessions.state.agentId).toBe("main");
+    expect(fixture.host.sessions.rows).toEqual(primary.sessions);
   });
 
   it.each(["native", "generic", "slug"])(

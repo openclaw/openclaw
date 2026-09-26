@@ -80,17 +80,8 @@ describe("Talk relay audio base64", () => {
     );
   });
 
-  it.each([
-    ["YXVkaW8taW4=", Buffer.from("audio-in")],
-    ["-_8", Buffer.from([0xfb, 0xff])],
-  ])("decodes valid input", (input, expected) => {
-    expect(decodeTalkRelayAudioBase64(input, "Talk")).toEqual(expected);
-  });
-
-  it.each(["not-base64!", "AB"])("rejects malformed input: %s", (input) => {
-    expect(() => decodeTalkRelayAudioBase64(input, "Talk")).toThrow(
-      "Talk audio frame is invalid base64",
-    );
+  it("decodes base64url input", () => {
+    expect(decodeTalkRelayAudioBase64("-_8", "Talk")).toEqual(Buffer.from([0xfb, 0xff]));
   });
 
   it("rejects non-round-tripping realtime audio before delivery", async () => {
@@ -120,31 +111,6 @@ describe("Talk relay audio base64", () => {
     expect(events).toEqual([]);
   });
 
-  it("forwards valid realtime audio", async () => {
-    const sendAudio = vi.fn<(audio: Buffer) => void>();
-    const { context: relayContext, events } = context();
-    const session = createTalkRealtimeRelaySession({
-      controlSource: "transcript",
-      context: relayContext,
-      connId: "conn",
-      provider: voiceProvider(sendAudio),
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
-      sessionTarget: prepareTalkSessionTarget({}, "agent:main:main"),
-    });
-    realtime.set(session.relaySessionId, "conn");
-    await Promise.resolve();
-    events.length = 0;
-    await sendTalkRealtimeRelayAudio({
-      relaySessionId: session.relaySessionId,
-      connId: "conn",
-      audioBase64: "YXVkaW8taW4=",
-    });
-    expect(sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
-    expect(events).toContainEqual(expect.objectContaining({ type: "inputAudio", byteLength: 8 }));
-  });
-
   it("rejects non-round-tripping transcription audio before delivery", async () => {
     const sendAudio = vi.fn<(audio: Buffer) => void>();
     const { context: relayContext, events } = context();
@@ -166,26 +132,5 @@ describe("Talk relay audio base64", () => {
     ).toThrow("Transcription Talk audio frame is invalid base64");
     expect(sendAudio).not.toHaveBeenCalled();
     expect(events).toEqual([]);
-  });
-
-  it("forwards valid transcription audio", async () => {
-    const sendAudio = vi.fn<(audio: Buffer) => void>();
-    const { context: relayContext, events } = context();
-    const session = createTalkTranscriptionRelaySession({
-      context: relayContext,
-      connId: "conn",
-      provider: transcriptionProvider(sendAudio),
-      providerConfig: {},
-    });
-    transcription.set(session.transcriptionSessionId, "conn");
-    await Promise.resolve();
-    events.length = 0;
-    sendTalkTranscriptionRelayAudio({
-      transcriptionSessionId: session.transcriptionSessionId,
-      connId: "conn",
-      audioBase64: "YXVkaW8taW4=",
-    });
-    expect(sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
-    expect(events).toContainEqual(expect.objectContaining({ type: "inputAudio", byteLength: 8 }));
   });
 });

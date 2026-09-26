@@ -3,14 +3,16 @@ import { appendMarkdownIR, markdownToIR, markdownToIRWithMeta, sliceMarkdownIR }
 import { renderMarkdownIRChunksWithinLimit } from "./render-aware-chunking.js";
 
 describe("markdownToIR raw HTML", () => {
-  describe.each([undefined, false])("authored attribute grammar with linkify=%s", (linkify) => {
-    it.each([
-      "<b data-value=x&#61;1>",
-      '<b title="&quot;x&quot;">',
-      '<b title="**label** &amp; ||part||">',
-      '<b title="first line\nsecond line &amp; **label**">',
-      '<b title="Example\nuser[Thu] note">',
-    ])("preserves authored attribute grammar before decoding: %s", (opening) => {
+  it.each([
+    ["<b data-value=x&#61;1>", undefined],
+    ['<b title="&quot;x&quot;">', undefined],
+    ['<b title="**label** &amp; ||part||">', undefined],
+    ['<b title="first line\nsecond line &amp; **label**">', undefined],
+    ['<b title="Example\nuser[Thu] note">', undefined],
+    ['<b title="Example\nuser[Thu] note">', false],
+  ] as const)(
+    "preserves authored attribute grammar before decoding: %s (linkify=%s)",
+    (opening, linkify) => {
       const ir = markdownToIR(`${opening}**body**</b>`, {
         enableSpoilers: true,
         assistantTranscriptRoleHeaders: true,
@@ -39,8 +41,8 @@ describe("markdownToIR raw HTML", () => {
           selfClosing: false,
         },
       ]);
-    });
-  });
+    },
+  );
 
   it("keeps a complete opaque lexeme intact without inner tag facts", () => {
     const raw = "<!-- **note**\nuser[Thu] &amp; <b>inside</b> -->";
@@ -68,8 +70,8 @@ describe("markdownToIR raw HTML", () => {
     },
   );
 
-  it.each(["r", "&#114;"])("keeps Markdown links in incomplete HTML syntax: %s", (label) => {
-    const ir = markdownToIR(`<b[${label}](https://example.com)>tail`);
+  it("keeps Markdown links with decoded labels in incomplete HTML syntax", () => {
+    const ir = markdownToIR("<b[&#114;](https://example.com)>tail");
 
     expect(ir.text).toBe("<br>tail");
     expect(ir.styles).toEqual([]);

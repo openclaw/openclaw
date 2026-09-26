@@ -97,7 +97,6 @@ import {
   previewTaskRegistryMaintenance,
   reconcileInspectableTasks,
   runTaskRegistryMaintenance,
-  sweepTaskRegistry,
 } from "./task-registry.maintenance.js";
 import {
   configureTaskRegistryMaintenanceRuntimeForTest,
@@ -3371,7 +3370,7 @@ describe("task-registry", () => {
         lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
 
-      expect(await sweepTaskRegistry()).toEqual({
+      expect(await runTaskRegistryMaintenance()).toEqual({
         reconciled: 0,
         recovered: 0,
         cleanupStamped: 0,
@@ -3554,7 +3553,7 @@ describe("task-registry", () => {
       snapshotTasks: [staleTask],
     });
 
-    expect(await sweepTaskRegistry()).toEqual({
+    expect(await runTaskRegistryMaintenance()).toEqual({
       reconciled: 0,
       recovered: 0,
       cleanupStamped: 0,
@@ -3588,7 +3587,7 @@ describe("task-registry", () => {
       snapshotTasks: [staleTask],
     });
 
-    expect(await sweepTaskRegistry()).toEqual({
+    expect(await runTaskRegistryMaintenance()).toEqual({
       reconciled: 0,
       recovered: 0,
       cleanupStamped: 0,

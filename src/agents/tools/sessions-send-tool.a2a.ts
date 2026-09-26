@@ -1,8 +1,3 @@
-/**
- * sessions_send agent-to-agent reply flow.
- *
- * Runs bounded ping-pong delivery, waits for target replies, and suppresses control-token messages.
- */
 import crypto from "node:crypto";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { bindInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";

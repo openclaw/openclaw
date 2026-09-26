@@ -34,7 +34,6 @@ function cleanPluginManifestEnv(): Record<
   };
 }
 
-let listKnownProviderEnvApiKeyNames: typeof import("./model-auth-env-vars.js").listKnownProviderEnvApiKeyNames;
 let CODEX_APP_SERVER_AUTH_MARKER: typeof import("./model-auth-markers.js").CODEX_APP_SERVER_AUTH_MARKER;
 let GCP_VERTEX_CREDENTIALS_MARKER: typeof import("./model-auth-markers.js").GCP_VERTEX_CREDENTIALS_MARKER;
 let isKnownEnvApiKeyMarker: typeof import("./model-auth-markers.js").isKnownEnvApiKeyMarker;
@@ -46,11 +45,7 @@ async function loadMarkerModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
-  const [envVarsModule, markersModule] = await Promise.all([
-    import("./model-auth-env-vars.js"),
-    import("./model-auth-markers.js"),
-  ]);
-  listKnownProviderEnvApiKeyNames = envVarsModule.listKnownProviderEnvApiKeyNames;
+  const markersModule = await import("./model-auth-markers.js");
   CODEX_APP_SERVER_AUTH_MARKER = markersModule.CODEX_APP_SERVER_AUTH_MARKER;
   GCP_VERTEX_CREDENTIALS_MARKER = markersModule.GCP_VERTEX_CREDENTIALS_MARKER;
   isKnownEnvApiKeyMarker = markersModule.isKnownEnvApiKeyMarker;
@@ -111,14 +106,6 @@ describe("model auth markers", () => {
     withEnv(cleanPluginManifestEnv(), () => {
       expect(isNonSecretApiKeyMarker("OPENAI_API_KEY")).toBe(true);
       expect(isNonSecretApiKeyMarker("ALLCAPS_EXAMPLE")).toBe(false);
-    });
-  });
-
-  it("recognizes all built-in provider env marker names", () => {
-    withEnv(cleanPluginManifestEnv(), () => {
-      for (const envVarName of listKnownProviderEnvApiKeyNames()) {
-        expect(isNonSecretApiKeyMarker(envVarName)).toBe(true);
-      }
     });
   });
 

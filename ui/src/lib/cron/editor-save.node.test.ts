@@ -4,6 +4,7 @@ import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../../../src/c
 import { applyJobPatch, createJob } from "../../../../src/cron/service/jobs.js";
 import { createCronServiceState } from "../../../../src/cron/service/state.js";
 import type { CronStoredJob } from "../../../../src/cron/types.js";
+import { createTestGatewayScheduler } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob } from "../../api/types.ts";
 import { addCronJob, cancelCronEdit, createInitialCronState, startCronEdit } from "./index.ts";
@@ -245,6 +246,7 @@ describe("automation default timing", () => {
     "preserves an unspecified daily window after %s, reopening, and changing to hourly",
     async (operation) => {
       const service = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         nowMs: () => 1_800_000_000_000,
         log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         storePath: "unused-paused-automation-store",

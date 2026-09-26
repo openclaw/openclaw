@@ -1,4 +1,3 @@
-// Control UI app-level operator scope checks.
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 

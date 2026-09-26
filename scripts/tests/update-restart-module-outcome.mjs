@@ -20,6 +20,7 @@ import { createDiskSwap } from "./update-restart-swap-fixture.mjs";
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const root = "/fixture/openclaw"; // Identifier only; never accessed.
+const nextAction = "Retain recovery material until health is verified.";
 const result = () => ({
   status: "ok",
   mode: "npm",
@@ -71,6 +72,8 @@ async function fixture({
       },
     },
   };
+  // Finite ledger I/O: execute the real reporting callback against its admitted row.
+  const ledger = { runId: run.runId, status: "running", origin: {}, verification: {}, steps: [] };
   const opts = { json: true, yes: true, run };
   const assertCurrent = () => run.executorFence.assertCurrent();
   const restartContext = {
@@ -155,6 +158,17 @@ async function fixture({
     GatewayServiceUpdateOwnershipError: class extends Error {},
     DEFINITION_DENIAL: /fixture-definition-denial/,
     resolveGatewayService: () => service,
+    isContainerEnvironment: () => false,
+    resolveStateDir: (env) => {
+      assert.equal(env, run.env);
+      return "/fixture/state";
+    },
+    mutateRun: (runId, update, options) => {
+      assert.equal(runId, ledger.runId);
+      assert.equal(options.env, run.env);
+      update(ledger);
+      return ledger;
+    },
     getUpdateRun: () => undefined,
     recordUpdateRunPhase: (_id, phase) => phases.push(phase),
     recordUpdateRunVerification: (_id, record) => records.push(record),
@@ -203,9 +217,18 @@ async function fixture({
       events.push("rollback-unverified");
       return { result: params.result, rolledBack: false };
     },
-    resolveUpdateResultNextAction: () => "Retain recovery material until health is verified.",
+    resolveUpdateResultNextAction: ({ env, environment }) => {
+      assert.equal(env, run.env);
+      assert.equal(environment.container, false);
+      assert.equal(environment.stateDir, "/fixture/state");
+      return nextAction;
+    },
     completeUpdateCommandRun: (value) => value,
-    printResult: (value) => printed.push(value),
+    printResult: (value, _opts, report) => {
+      assert.equal(report.nextAction, nextAction);
+      assert.equal(ledger.origin.nextAction, nextAction);
+      printed.push(value);
+    },
     writeControlPlaneUpdateRestartSentinel: async () => {},
     markControlPlaneUpdateRestartSentinelFailure: async () => {},
     buildControlPlaneUpdateRestartHealthPendingResult: (value) => value,
@@ -359,6 +382,7 @@ async function fixture({
     records,
     unexpected,
     run,
+    ledger,
     counts: () => ({ verifyCalls, commandCalls, assertions, verifiedCalls }),
   };
 }
@@ -429,6 +453,7 @@ for (const [name, makeError] of thrownCases) {
     assert.equal(f.counts().commandCalls, 1);
     assert.deepEqual(f.completion, [false]);
     assert.equal(f.printed.at(-1).status, "error");
+    assert.equal(f.ledger.origin.nextAction, nextAction);
     assert.ok(f.events.includes("rollback-unverified"));
     assert.ok(f.events.indexOf("complete:false") < f.events.indexOf("recovery-verification"));
     assert.deepEqual(f.unexpected, []);
@@ -445,6 +470,7 @@ void test("production finishUpdate authorizes backup retirement only after verif
   const f = await fixture();
   assert.equal((await f.finish()).status, "ok");
   assert.deepEqual(f.completion, [true]);
+  assert.equal(f.ledger.origin.nextAction, nextAction);
   assert.ok(f.events.indexOf("verification") < f.events.indexOf("complete:true"));
   assert.equal(f.counts().verifyCalls, 1);
   assert.ok(!f.events.includes("rollback-unverified"));

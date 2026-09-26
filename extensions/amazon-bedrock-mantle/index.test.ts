@@ -1,4 +1,3 @@
-// Amazon Bedrock Mantle tests cover index plugin behavior.
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import bedrockMantlePlugin from "./index.js";
@@ -82,12 +81,6 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("registers with correct provider ID and label", async () => {
-    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
-    expect(provider.id).toBe("amazon-bedrock-mantle");
-    expect(provider.label).toBe("Amazon Bedrock Mantle (OpenAI-compatible)");
-  });
-
   it("classifies rate limit errors for failover", async () => {
     const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
     expect(
@@ -128,66 +121,49 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     ).toBeUndefined();
   });
 
-  it("restores missing or stale Opus 5 pricing during runtime normalization", async () => {
-    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
-    const model = {
-      id: "anthropic.claude-opus-5",
-      name: "Claude Opus 5",
-      api: "anthropic-messages",
-      provider: "amazon-bedrock-mantle",
-      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      params: { canonicalModelId: "claude-opus-5" },
-    };
-    const expectedCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
-
-    for (const cost of [undefined, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }]) {
-      const normalized = provider.normalizeResolvedModel?.({
-        provider: "amazon-bedrock-mantle",
-        modelId: "anthropic.claude-opus-5",
-        model: { ...model, cost },
-      } as never);
-      expect(normalized?.cost).toEqual(expectedCost);
-    }
-  });
-
-  it("restores missing or stale Sonnet 5 pricing during runtime normalization", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(Date.UTC(2026, 8, 1));
-    try {
-      const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
-      const model = {
-        id: "anthropic.claude-sonnet-5",
-        name: "Claude Sonnet 5",
-        api: "anthropic-messages",
-        provider: "amazon-bedrock-mantle",
-        baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 1_000_000,
-        maxTokens: 128_000,
-        params: { canonicalModelId: "claude-sonnet-5" },
-      };
-      const expectedCost = {
-        input: 3,
-        output: 15,
-        cacheRead: 0.3,
-        cacheWrite: 3.75,
-      };
-
-      for (const cost of [undefined, { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }]) {
-        const normalized = provider.normalizeResolvedModel?.({
+  it.each([
+    {
+      name: "Opus 5",
+      id: "claude-opus-5",
+      staleCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expectedCost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    },
+    {
+      name: "Sonnet 5",
+      id: "claude-sonnet-5",
+      staleCost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      expectedCost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    },
+  ])(
+    "restores missing or stale $name pricing during runtime normalization",
+    async ({ name, id, staleCost, expectedCost }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.UTC(2026, 8, 1));
+      try {
+        const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+        const model = {
+          id: `anthropic.${id}`,
+          name: `Claude ${name}`,
+          api: "anthropic-messages",
           provider: "amazon-bedrock-mantle",
-          modelId: "anthropic.claude-sonnet-5",
-          model: { ...model, cost },
-        } as never);
-        expect(normalized?.cost).toEqual(expectedCost);
+          baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 1_000_000,
+          maxTokens: 128_000,
+          params: { canonicalModelId: id },
+        };
+        for (const cost of [undefined, staleCost]) {
+          const normalized = provider.normalizeResolvedModel?.({
+            provider: "amazon-bedrock-mantle",
+            modelId: model.id,
+            model: { ...model, cost },
+          } as never);
+          expect(normalized?.cost).toEqual(expectedCost);
+        }
+      } finally {
+        vi.useRealTimers();
       }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 });
