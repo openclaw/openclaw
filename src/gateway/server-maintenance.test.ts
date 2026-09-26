@@ -12,6 +12,10 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { HealthSummary } from "./health/types.js";
@@ -297,23 +301,19 @@ describe("startGatewayMaintenanceTimers", () => {
   it("runs setup-outcome cleanup immediately without overlapping minute ticks", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
-    let resolvePrune = (_deletedCount: number) => {};
-    pruneExpiredDevicePairSetupCompletionsMock.mockImplementationOnce(
-      () =>
-        new Promise<number>((resolve) => {
-          resolvePrune = resolve;
-        }),
-    );
+    const prune = createDeferred<number>();
+    pruneExpiredDevicePairSetupCompletionsMock.mockReturnValueOnce(prune.promise);
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
 
+    await vi.advanceTimersByTimeAsync(0);
     expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledWith({
       nowMs: Date.now(),
     });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(1);
 
-    resolvePrune(0);
+    prune.resolve(0);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenLastCalledWith({
@@ -464,21 +464,23 @@ describe("startGatewayMaintenanceTimers", () => {
   });
 
   it("refreshes automatic health snapshots without live channel probes", async () => {
-    vi.useFakeTimers();
+    const clock = createGatewaySchedulerClock();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
+    deps.scheduler = createTestGatewayScheduler(clock.clock);
     deps.refreshGatewayHealthSnapshot = vi.fn(async () => ({ ok: true }) as HealthSummary);
 
     const timers = startGatewayMaintenanceTimers(deps);
+    try {
+      await clock.advanceBy(0);
+      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
 
-    expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(2);
-    expect(deps.refreshGatewayHealthSnapshot).toHaveBeenLastCalledWith({ probe: false });
-
-    await stopMaintenanceTimers(timers);
+      await clock.advanceBy(60_000);
+      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(2);
+      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenLastCalledWith({ probe: false });
+    } finally {
+      await stopMaintenanceTimers(timers);
+    }
   });
 
   it("keeps managed outgoing cleanup independent of a hung general media sweep", async () => {
@@ -555,13 +557,8 @@ describe("startGatewayMaintenanceTimers", () => {
 
   it("does not overlap default outbound cleanup and drains it on shutdown", async () => {
     vi.useFakeTimers();
-    let resolveCleanup = () => {};
-    pruneOutboundMediaMock.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveCleanup = resolve;
-        }),
-    );
+    const cleanup = createDeferred();
+    pruneOutboundMediaMock.mockReturnValue(cleanup.promise);
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
     timers.startMediaCleanup();
@@ -577,7 +574,7 @@ describe("startGatewayMaintenanceTimers", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(stopped).toBe(false);
-    resolveCleanup();
+    cleanup.resolve();
     await stopping;
     expect(stopped).toBe(true);
 

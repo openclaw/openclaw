@@ -66,28 +66,15 @@ export function resolveModelOverridePolicy(
   overrides: TtsModelOverrideConfig | undefined,
 ): ResolvedTtsModelOverrides {
   const enabled = overrides?.enabled ?? true;
-  if (!enabled) {
-    return {
-      enabled: false,
-      allowText: false,
-      allowProvider: false,
-      allowVoice: false,
-      allowModelId: false,
-      allowVoiceSettings: false,
-      allowNormalization: false,
-      allowSeed: false,
-    };
-  }
-  const allow = (value: boolean | undefined, defaultValue = true) => value ?? defaultValue;
   return {
-    enabled: true,
-    allowText: allow(overrides?.allowText),
-    allowProvider: allow(overrides?.allowProvider, false),
-    allowVoice: allow(overrides?.allowVoice),
-    allowModelId: allow(overrides?.allowModelId),
-    allowVoiceSettings: allow(overrides?.allowVoiceSettings),
-    allowNormalization: allow(overrides?.allowNormalization),
-    allowSeed: allow(overrides?.allowSeed),
+    enabled,
+    allowText: enabled && (overrides?.allowText ?? true),
+    allowProvider: enabled && (overrides?.allowProvider ?? false),
+    allowVoice: enabled && (overrides?.allowVoice ?? true),
+    allowModelId: enabled && (overrides?.allowModelId ?? true),
+    allowVoiceSettings: enabled && (overrides?.allowVoiceSettings ?? true),
+    allowNormalization: enabled && (overrides?.allowNormalization ?? true),
+    allowSeed: enabled && (overrides?.allowSeed ?? true),
   };
 }
 

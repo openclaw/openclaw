@@ -4,7 +4,7 @@ import type { MatrixQaObservedEvent, MatrixQaRoomEvent } from "./events.js";
 import {
   createMatrixQaRoomObserver,
   primeMatrixQaRoom,
-  waitForOptionalMatrixQaRoomEvent,
+  type MatrixQaRoomEventWaitResult,
 } from "./sync.js";
 
 function message(
@@ -51,16 +51,17 @@ describe("matrix sync helpers", () => {
     const observedEvents: MatrixQaObservedEvent[] = [];
 
     const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(1);
-    let result: Awaited<ReturnType<typeof waitForOptionalMatrixQaRoomEvent>>;
+    let result: MatrixQaRoomEventWaitResult;
     try {
-      result = await waitForOptionalMatrixQaRoomEvent({
+      result = await createMatrixQaRoomObserver({
         accessToken: "token",
         baseUrl: "http://127.0.0.1:28008/",
         fetchImpl,
         observedEvents,
+        since: "start-batch",
+      }).waitForOptionalRoomEvent({
         predicate: (event) => event.sender === "@sut:matrix-qa.test",
         roomId: "!room:matrix-qa.test",
-        since: "start-batch",
         timeoutMs: 1,
       });
     } finally {

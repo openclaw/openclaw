@@ -3,52 +3,20 @@ import Foundation
 @MainActor
 struct StatusMenuDescriptor {
     struct Snapshot {
-        var isPaused: Bool
-        var connection: Connection
-        var quickChatEnabled: Bool
-        var voiceWakeSupported: Bool
-        var debugEnabled: Bool
-        var updateReady: Bool
-        var hasUsage: Bool
-        var isUsageStalled: Bool
-        var sessions: [SessionRow]
+        var isPaused = false
+        var connection: Connection = .connected
+        var quickChatEnabled = false
+        var voiceWakeSupported = true
+        var debugEnabled = false
+        var updateReady = false
+        var hasUsage = false
+        var isUsageStalled = false
+        var sessions: [SessionRow] = []
         var sessionError: String?
-        var mainSessionKey: String
-        var approvals: [ExecApprovalQueueItem]
-        var gateways: [DashboardGatewayMenuItem]
-        var now: Date
-
-        init(
-            isPaused: Bool = false,
-            connection: Connection = .connected,
-            quickChatEnabled: Bool = false,
-            voiceWakeSupported: Bool = true,
-            debugEnabled: Bool = false,
-            updateReady: Bool = false,
-            hasUsage: Bool = false,
-            isUsageStalled: Bool = false,
-            sessions: [SessionRow] = [],
-            sessionError: String? = nil,
-            mainSessionKey: String = "main",
-            approvals: [ExecApprovalQueueItem] = [],
-            gateways: [DashboardGatewayMenuItem] = [],
-            now: Date = Date())
-        {
-            self.isPaused = isPaused
-            self.connection = connection
-            self.quickChatEnabled = quickChatEnabled
-            self.voiceWakeSupported = voiceWakeSupported
-            self.debugEnabled = debugEnabled
-            self.updateReady = updateReady
-            self.hasUsage = hasUsage
-            self.isUsageStalled = isUsageStalled
-            self.sessions = sessions
-            self.sessionError = sessionError
-            self.mainSessionKey = mainSessionKey
-            self.approvals = approvals
-            self.gateways = gateways
-            self.now = now
-        }
+        var mainSessionKey = "main"
+        var approvals: [ExecApprovalQueueItem] = []
+        var gateways: [DashboardGatewayMenuItem] = []
+        var now = Date()
     }
 
     enum Connection {

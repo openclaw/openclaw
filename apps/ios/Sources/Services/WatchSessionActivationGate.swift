@@ -181,7 +181,7 @@ final class WatchSessionActivationGate: @unchecked Sendable {
                 }
             }
             if let completedResult {
-                Self.resume(continuation, with: completedResult)
+                continuation.resume(with: completedResult)
             }
         }
     }
@@ -208,7 +208,7 @@ final class WatchSessionActivationGate: @unchecked Sendable {
         let result = Result<Void, WatchSessionActivationError>.failure(
             .failed("active Apple Watch changed"))
         for waiter in waiters {
-            Self.resume(waiter, with: result)
+            waiter.resume(with: result)
         }
     }
 
@@ -231,19 +231,7 @@ final class WatchSessionActivationGate: @unchecked Sendable {
         }
         guard let waiters else { return }
         for waiter in waiters {
-            Self.resume(waiter, with: result)
-        }
-    }
-
-    private static func resume(
-        _ continuation: Waiter,
-        with result: Result<Void, WatchSessionActivationError>)
-    {
-        switch result {
-        case .success:
-            continuation.resume(returning: ())
-        case let .failure(error):
-            continuation.resume(throwing: error)
+            waiter.resume(with: result)
         }
     }
 }

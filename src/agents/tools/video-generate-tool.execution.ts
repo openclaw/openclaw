@@ -16,6 +16,7 @@ import {
   formatGeneratedAttachmentLines,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { ToolInputError } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import {
@@ -35,7 +36,6 @@ import {
   resolveMediaToolSandboxConfig,
   type LoadedMediaToolReference,
 } from "./media-tool-shared.js";
-import type { ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const GENERATED_VIDEO_MEDIA_SUBDIR = "tool-video-generation";
 const GENERATED_VIDEO_PROBE_BUDGET_MS = 3000;
@@ -381,16 +381,10 @@ export async function executeVideoGenerationJob(params: {
     },
   });
   return {
-    provider: executionResult.provider,
-    model: executionResult.model,
+    ...executionResult,
     urlOnlyUrls: deliveredVideos.flatMap((video) =>
       video.kind === "url" ? [video.media.url] : [],
     ),
-    count: executionResult.count,
     mediaUrls: allMediaUrls,
-    attachments,
-    contentText: executionResult.contentText,
-    wakeResult: executionResult.wakeResult,
-    details: executionResult.details,
   };
 }

@@ -42,7 +42,6 @@ internal class TalkAudioPlayer(
     }
   }
 
-  /** Resolves playback mode from the metadata carried with a talk.speak response. */
   internal fun resolvePlaybackMode(audio: TalkSpeakAudio): TalkPlaybackMode =
     resolvePlaybackMode(
       outputFormat = audio.outputFormat,
@@ -51,7 +50,6 @@ internal class TalkAudioPlayer(
     )
 
   companion object {
-    /** Chooses PCM streaming or MediaPlayer-backed playback from provider metadata. */
     internal fun resolvePlaybackMode(
       outputFormat: String?,
       mimeType: String?,

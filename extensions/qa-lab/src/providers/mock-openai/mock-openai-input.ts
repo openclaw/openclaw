@@ -310,13 +310,6 @@ function isResponsesToolCallOutput(item: ResponsesInputItem) {
   return item.type === "function_call_output" || item.type === "custom_tool_call_output";
 }
 
-function extractFunctionCallOutputText(item: ResponsesInputItem) {
-  if (!isResponsesToolCallOutput(item)) {
-    return "";
-  }
-  return stringifyFunctionCallOutput(item.output);
-}
-
 function findCurrentToolOutput(input: ResponsesInputItem[]): ResponsesInputItem | undefined {
   const lastUserIndex = input.findLastIndex(isUserTurn);
   for (const item of input.slice(lastUserIndex + 1).toReversed()) {
@@ -369,17 +362,13 @@ export function extractToolOutputCallId(input: ResponsesInputItem[]) {
 }
 
 export function extractLatestToolOutput(input: ResponsesInputItem[]) {
-  for (const item of input.toReversed()) {
-    if (isResponsesToolCallOutput(item)) {
-      return stringifyFunctionCallOutput(item.output);
-    }
-  }
-  return "";
+  return stringifyFunctionCallOutput(input.findLast(isResponsesToolCallOutput)?.output);
 }
 
 export function extractAllToolOutputText(input: ResponsesInputItem[]) {
   return input
-    .map((item) => extractFunctionCallOutputText(item))
+    .filter(isResponsesToolCallOutput)
+    .map((item) => stringifyFunctionCallOutput(item.output))
     .filter(Boolean)
     .join("\n");
 }

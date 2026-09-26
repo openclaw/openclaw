@@ -1,11 +1,10 @@
 package ai.openclaw.app.wear
 
-import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.voice.RealtimeAgentCoordinator
 import ai.openclaw.app.voice.RealtimeAgentSession
+import ai.openclaw.app.voice.requestPhoneRealtimeSessionWithLanguageFallback
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearRealtimeAudioFrameType
 import ai.openclaw.wear.shared.WearRealtimeTalkEntry
@@ -39,7 +38,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -265,24 +263,14 @@ internal class WearRealtimeTalkController(
   private suspend fun requestRealtimeSession(
     sessionKey: String,
     language: String?,
-  ): String {
-    try {
-      return requestGateway(
+  ): String =
+    requestPhoneRealtimeSessionWithLanguageFallback(language) { requestedLanguage ->
+      requestGateway(
         "talk.session.create",
-        buildSessionCreateParams(sessionKey, language).toString(),
+        buildSessionCreateParams(sessionKey, requestedLanguage).toString(),
         SESSION_CREATE_TIMEOUT_MILLIS,
       )
-    } catch (err: GatewayRequestRejected) {
-      if (language != null && err.gatewayError.isUnsupportedSessionLanguageParam()) {
-        return requestGateway(
-          "talk.session.create",
-          buildSessionCreateParams(sessionKey, language = null).toString(),
-          SESSION_CREATE_TIMEOUT_MILLIS,
-        )
-      }
-      throw err
     }
-  }
 
   private fun buildSessionCreateParams(
     sessionKey: String,
@@ -981,11 +969,5 @@ internal class WearRealtimeTalkController(
 }
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? = (this as? JsonPrimitive)?.booleanOrNull
-
-private fun GatewaySession.ErrorShape.isUnsupportedSessionLanguageParam(): Boolean =
-  code == "INVALID_REQUEST" &&
-    message
-      .lowercase(Locale.ROOT)
-      .contains("invalid talk.session.create params")
 
 private const val PCM_16_BYTES = 2

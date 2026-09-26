@@ -448,6 +448,7 @@ export async function prepareAgentRunDispatch(
     }
   };
   try {
+    assertInputAdmissionCurrent?.();
     userTurn = await prepareAgentRunUserTurn({
       assertCurrent: () => {
         assertInputOwnerCurrent();

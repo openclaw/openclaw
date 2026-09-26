@@ -1,4 +1,3 @@
-// QA Lab WhatsApp Gateway capability and structured-message scenarios.
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";

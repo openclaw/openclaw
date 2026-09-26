@@ -181,6 +181,7 @@ vi.mock("./bot-message-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./bot-message-context.js")>()),
   buildLineMessageContext: buildLineMessageContextMock,
   buildLinePostbackContext: buildLinePostbackContextMock,
+  prepareLineInboundRoute: async () => ({ mentionAgentId: "default" }),
   getLineSourceInfo: (source: {
     type?: string;
     userId?: string;

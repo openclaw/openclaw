@@ -393,6 +393,7 @@ export async function startGatewaySidecars(params: {
     // close cancel it before a replacement generation starts in the same process.
     postReadySidecars.push(
       scheduleGatewayGenerationTimer({
+        scheduler: params.scheduler,
         delayMs: 250,
         origin: "hooks:gateway-startup",
         shouldRun: params.shouldCreatePostReadySidecars,
@@ -477,6 +478,7 @@ export async function startGatewaySidecars(params: {
           return;
         }
         restartSentinelWake = scheduleRestartSentinelWakeAfterReady({
+          scheduler: params.scheduler,
           context: restartSentinelContext,
           deps: params.deps,
           log: params.log,

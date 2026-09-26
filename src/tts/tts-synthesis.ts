@@ -254,15 +254,7 @@ async function synthesizeSpeechInternal(
         prepareProviderRegistry: setup.prepareProviderRegistry,
         selectOperation: ({ resolvedProvider }) => ({
           kind: "ready",
-          synthesize: ({ prepared, cfg: runtimeCfg, target: synthesisTarget, timeoutMs }) =>
-            resolvedProvider.provider.synthesize({
-              text: prepared.text,
-              cfg: runtimeCfg,
-              providerConfig: prepared.providerConfig,
-              target: synthesisTarget,
-              providerOverrides: prepared.providerOverrides,
-              timeoutMs,
-            }),
+          synthesize: (request) => resolvedProvider.provider.synthesize(request),
         }),
         buildSuccess: ({ synthesis, ...metadata }) => ({
           success: true,

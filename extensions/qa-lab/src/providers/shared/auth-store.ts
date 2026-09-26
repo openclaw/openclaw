@@ -5,17 +5,13 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 
-function resolveQaAgentAuthDir(params: { stateDir: string; agentId: string }): string {
-  return path.join(params.stateDir, "agents", params.agentId, "agent");
-}
-
 export async function writeQaAuthProfiles(params: {
   agentId: string;
   profiles: Record<string, AuthProfileCredential>;
   replace?: boolean;
   stateDir: string;
 }): Promise<void> {
-  const agentDir = resolveQaAgentAuthDir(params);
+  const agentDir = path.join(params.stateDir, "agents", params.agentId, "agent");
   // Surface pending legacy-source errors before the locked updater, whose
   // public failure contract is intentionally nullable.
   loadAuthProfileStoreWithoutExternalProfiles(agentDir, { inheritedAuthDir: agentDir });

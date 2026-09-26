@@ -27,7 +27,7 @@ describe("MemoryDB agent isolation", () => {
     }
   });
 
-  test("scopes store, search, list, query, count, delete, and restart reads", async () => {
+  test("scopes store, search, list, query, delete, and restart reads", async () => {
     const db = new MemoryDB(getDbPath(), 2);
     const alpha = await db.store("alpha", {
       text: "alpha private preference",
@@ -46,7 +46,6 @@ describe("MemoryDB agent isolation", () => {
       { entry: { id: alpha.id, text: "alpha private preference" } },
     ]);
     await expect(db.list("beta")).resolves.toMatchObject([{ text: "beta private preference" }]);
-    await expect(db.count("alpha")).resolves.toBe(1);
     await expect(
       db.query("alpha", {
         columns: ["id", "text"],
@@ -55,7 +54,7 @@ describe("MemoryDB agent isolation", () => {
     ).resolves.toMatchObject([{ id: alpha.id, text: "alpha private preference" }]);
 
     await expect(db.delete("beta", alpha.id)).resolves.toBe(false);
-    await expect(db.count("alpha")).resolves.toBe(1);
+    await expect(db.list("alpha")).resolves.toMatchObject([{ id: alpha.id }]);
     db.close();
 
     const reopened = new MemoryDB(getDbPath(), 2);
@@ -101,10 +100,10 @@ describe("MemoryDB agent isolation", () => {
     connection.close();
 
     const db = new MemoryDB(getDbPath(), 2);
-    await expect(db.count("main")).rejects.toThrow(
+    await expect(db.list("main")).rejects.toThrow(
       'Run "openclaw doctor --fix" to assign legacy rows to the default agent',
     );
-    await expect(db.count("main")).rejects.toThrow(
+    await expect(db.list("main")).rejects.toThrow(
       'Run "openclaw doctor --fix" to assign legacy rows to the default agent',
     );
     db.close();

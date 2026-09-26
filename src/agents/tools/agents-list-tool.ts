@@ -1,8 +1,3 @@
-/**
- * agents_list built-in tool.
- *
- * Lists configured or allowed agent ids plus model/runtime metadata for subagent spawn decisions.
- */
 import { Type, type Static } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";

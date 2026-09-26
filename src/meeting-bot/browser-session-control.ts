@@ -1,3 +1,5 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { sleep } from "../utils/sleep.js";
 import { runMeetingBrowserAct } from "./browser-act-lock.js";
 import { asMeetingBrowserTabs } from "./browser-request.js";
 import type {
@@ -93,9 +95,7 @@ async function leaveMeetingInPage<
       return { departed: false, clickedLeave, clickedConfirmation, urlMatched: true };
     }
     if (!step.leaveAction) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 100);
-      });
+      await sleep(100);
     }
   } while (performance.now() < deadline);
   return {
@@ -185,9 +185,7 @@ export async function leaveMeetingWithBrowser<
     } catch (error) {
       return {
         left: false,
-        note: `Browser control could not verify the ${params.adapter.browserLabel} tab before leaving: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        note: `Browser control could not verify the ${params.adapter.browserLabel} tab before leaving: ${coerceErrorMessage(error)}`,
       };
     }
     if (leaveResult.urlMatched === false) {
@@ -232,9 +230,7 @@ export async function leaveMeetingWithBrowser<
   } catch (error) {
     return {
       left: false,
-      note: `Browser control could not leave the ${params.adapter.browserLabel} tab: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      note: `Browser control could not leave the ${params.adapter.browserLabel} tab: ${coerceErrorMessage(error)}`,
     };
   }
 }

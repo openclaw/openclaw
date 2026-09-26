@@ -16,6 +16,7 @@ import {
   listMockCodexModelInfos,
   listMockOpenAiServerModelIds,
 } from "../shared/mock-model-config.js";
+import { resolveMockProviderVariant } from "../shared/mock-provider-variant.js";
 import { registerQaSessionObserver } from "../shared/session-observer-registry.js";
 import {
   buildMessagesPayload,
@@ -31,7 +32,6 @@ import {
 import {
   type ResponsesInputItem,
   type StreamEvent,
-  resolveProviderVariant,
   type MockOpenAiRequestSnapshot,
   type MockOpenAiRequestSnapshotBase,
   type MockOpenAiRequestSnapshotInput,
@@ -390,6 +390,73 @@ function extractFollowthroughEvidenceText(input: ResponsesInputItem[]): string {
     .join("\n");
 }
 
+const PERSONAL_FOLLOWTHROUGH_FIXTURES = [
+  {
+    prompt: /personal share-safe diagnostics check/i,
+    includeUserFollowup: false,
+    requestMarker: "# Personal diagnostics request",
+    evidenceMarker: "# Raw personal diagnostics fixture",
+    requestPath: "DIAGNOSTICS_REQUEST.md",
+    evidencePath: "PERSONAL_DIAGNOSTICS_RAW.md",
+    resultPath: "personal-diagnostics-summary.txt",
+    reply: [
+      "Artifact: personal-diagnostics-summary.txt",
+      "Status: share-safe diagnostics summary ready",
+      "PERSONAL-DIAGNOSTICS-SAFE-OK",
+    ].join("\n"),
+    content: [
+      "Status: blocked waiting for explicit publish approval",
+      "Affected surface: telegram direct message",
+      "Omitted content: raw chat text, raw tool output, account id, message id, and fake secret",
+      "Redaction confirmed: yes",
+      "Next step: ask maintainer whether manually landed commits can count for contributor credit",
+    ].join("\n"),
+  },
+  {
+    prompt: /personal no-fake-progress check/i,
+    includeUserFollowup: true,
+    requestMarker: "# Progress request",
+    evidenceMarker: "# Progress evidence",
+    requestPath: "PROGRESS_REQUEST.md",
+    evidencePath: "PROGRESS_EVIDENCE.md",
+    resultPath: "personal-progress-proof.txt",
+    reply: [
+      "Artifact: personal-progress-proof.txt",
+      "Status: local proof artifact written",
+      "External status: not sent, not published, not uploaded, not merged",
+      "PERSONAL-NO-FAKE-PROGRESS-OK",
+    ].join("\n"),
+    content: [
+      "Personal no-fake-progress",
+      "Status: local proof artifact written",
+      "External status: not sent; not published; not uploaded; not merged",
+      "Evidence: PROGRESS_REQUEST.md and PROGRESS_EVIDENCE.md were read before this artifact was written",
+    ].join("\n"),
+  },
+  {
+    prompt: /personal failure recovery check/i,
+    includeUserFollowup: true,
+    requestMarker: "# Failure recovery request",
+    evidenceMarker: "# Failure recovery evidence",
+    requestPath: "FAILURE_RECOVERY_REQUEST.md",
+    evidencePath: "FAILURE_RECOVERY_EVIDENCE.md",
+    resultPath: "personal-failure-recovery.txt",
+    reply: [
+      "Artifact: personal-failure-recovery.txt",
+      "Failed step: external calendar update was not attempted",
+      "Retry boundary: do not retry until approval is given",
+      "PERSONAL-FAILURE-RECOVERY-OK",
+    ].join("\n"),
+    content: [
+      "Personal failure recovery",
+      "Completed: request reviewed and local evidence captured",
+      "Failed step: external calendar update was not attempted because explicit approval is missing",
+      "Retry boundary: do not retry the external step until approval is given",
+      "Next step: ask for approval before any external update",
+    ].join("\n"),
+  },
+];
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
@@ -401,7 +468,7 @@ async function buildResponsesPayload(
   },
 ) {
   const model = typeof body.model === "string" ? body.model : "";
-  const providerVariant = resolveProviderVariant(model);
+  const providerVariant = resolveMockProviderVariant(model);
   const input = normalizeResponsesInput(body.input);
   const toolDeclarationBody = resolveCurrentToolDeclarationSurface(body, input);
   const prompt = extractLastUserText(input);
@@ -1471,116 +1538,29 @@ async function buildResponsesPayload(
       return buildAssistantEvents("RELEASE-AUDIT-COMPLETE");
     }
   }
-  if (/personal share-safe diagnostics check/i.test(allInputText)) {
-    const diagnosticsEvidenceText = extractAllToolOutputText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(diagnosticsEvidenceText)) {
-      return buildAssistantEvents(
-        [
-          "Artifact: personal-diagnostics-summary.txt",
-          "Status: share-safe diagnostics summary ready",
-          "PERSONAL-DIAGNOSTICS-SAFE-OK",
-        ].join("\n"),
-      );
+  for (const fixture of PERSONAL_FOLLOWTHROUGH_FIXTURES) {
+    if (!fixture.prompt.test(allInputText)) {
+      continue;
     }
-    if (
-      !diagnosticsEvidenceText ||
-      (!diagnosticsEvidenceText.includes("# Personal diagnostics request") &&
-        !diagnosticsEvidenceText.includes("# Raw personal diagnostics fixture"))
-    ) {
-      return buildToolCallEventsWithArgs("read", { path: "DIAGNOSTICS_REQUEST.md" });
+    const evidence = fixture.includeUserFollowup
+      ? extractFollowthroughEvidenceText(input)
+      : extractAllToolOutputText(input);
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(evidence)) {
+      return buildAssistantEvents(fixture.reply);
     }
-    if (
-      diagnosticsEvidenceText.includes("# Personal diagnostics request") &&
-      diagnosticsEvidenceText.includes("# Raw personal diagnostics fixture")
-    ) {
+    const hasRequest = evidence.includes(fixture.requestMarker);
+    const hasEvidence = evidence.includes(fixture.evidenceMarker);
+    if (!hasRequest && !hasEvidence) {
+      return buildToolCallEventsWithArgs("read", { path: fixture.requestPath });
+    }
+    if (hasRequest && hasEvidence) {
       return buildToolCallEventsWithArgs("write", {
-        path: "personal-diagnostics-summary.txt",
-        content: [
-          "Status: blocked waiting for explicit publish approval",
-          "Affected surface: telegram direct message",
-          "Omitted content: raw chat text, raw tool output, account id, message id, and fake secret",
-          "Redaction confirmed: yes",
-          "Next step: ask maintainer whether manually landed commits can count for contributor credit",
-        ].join("\n"),
+        path: fixture.resultPath,
+        content: fixture.content,
       });
     }
-    if (diagnosticsEvidenceText.includes("# Personal diagnostics request")) {
-      return buildToolCallEventsWithArgs("read", { path: "PERSONAL_DIAGNOSTICS_RAW.md" });
-    }
-  }
-  if (/personal no-fake-progress check/i.test(allInputText)) {
-    const progressEvidenceText = extractFollowthroughEvidenceText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(progressEvidenceText)) {
-      return buildAssistantEvents(
-        [
-          "Artifact: personal-progress-proof.txt",
-          "Status: local proof artifact written",
-          "External status: not sent, not published, not uploaded, not merged",
-          "PERSONAL-NO-FAKE-PROGRESS-OK",
-        ].join("\n"),
-      );
-    }
-    if (
-      !progressEvidenceText ||
-      (!progressEvidenceText.includes("# Progress request") &&
-        !progressEvidenceText.includes("# Progress evidence"))
-    ) {
-      return buildToolCallEventsWithArgs("read", { path: "PROGRESS_REQUEST.md" });
-    }
-    if (
-      progressEvidenceText.includes("# Progress request") &&
-      progressEvidenceText.includes("# Progress evidence")
-    ) {
-      return buildToolCallEventsWithArgs("write", {
-        path: "personal-progress-proof.txt",
-        content: [
-          "Personal no-fake-progress",
-          "Status: local proof artifact written",
-          "External status: not sent; not published; not uploaded; not merged",
-          "Evidence: PROGRESS_REQUEST.md and PROGRESS_EVIDENCE.md were read before this artifact was written",
-        ].join("\n"),
-      });
-    }
-    if (progressEvidenceText.includes("# Progress request")) {
-      return buildToolCallEventsWithArgs("read", { path: "PROGRESS_EVIDENCE.md" });
-    }
-  }
-  if (/personal failure recovery check/i.test(allInputText)) {
-    const recoveryEvidenceText = extractFollowthroughEvidenceText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(recoveryEvidenceText)) {
-      return buildAssistantEvents(
-        [
-          "Artifact: personal-failure-recovery.txt",
-          "Failed step: external calendar update was not attempted",
-          "Retry boundary: do not retry until approval is given",
-          "PERSONAL-FAILURE-RECOVERY-OK",
-        ].join("\n"),
-      );
-    }
-    if (
-      !recoveryEvidenceText ||
-      (!recoveryEvidenceText.includes("# Failure recovery request") &&
-        !recoveryEvidenceText.includes("# Failure recovery evidence"))
-    ) {
-      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_REQUEST.md" });
-    }
-    if (
-      recoveryEvidenceText.includes("# Failure recovery request") &&
-      recoveryEvidenceText.includes("# Failure recovery evidence")
-    ) {
-      return buildToolCallEventsWithArgs("write", {
-        path: "personal-failure-recovery.txt",
-        content: [
-          "Personal failure recovery",
-          "Completed: request reviewed and local evidence captured",
-          "Failed step: external calendar update was not attempted because explicit approval is missing",
-          "Retry boundary: do not retry the external step until approval is given",
-          "Next step: ask for approval before any external update",
-        ].join("\n"),
-      });
-    }
-    if (recoveryEvidenceText.includes("# Failure recovery request")) {
-      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_EVIDENCE.md" });
+    if (hasRequest) {
+      return buildToolCallEventsWithArgs("read", { path: fixture.evidencePath });
     }
   }
   if (/lobster invaders/i.test(prompt)) {
@@ -2112,7 +2092,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       instructions: extractInstructionsText(body) || undefined,
       toolOutput: extractToolOutput(input),
       model,
-      providerVariant: resolveProviderVariant(model),
+      providerVariant: resolveMockProviderVariant(model),
       codeModeExecSurface:
         resolveCodeModeExecSurface(resolveCurrentToolDeclarationSurface(body, input)) ?? undefined,
       imageInputCount: countImageInputs(input),

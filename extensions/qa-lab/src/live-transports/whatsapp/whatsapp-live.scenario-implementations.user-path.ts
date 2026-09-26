@@ -1,4 +1,3 @@
-// QA Lab WhatsApp user-path action and inbound media scenarios.
 import { randomUUID } from "node:crypto";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
 import { sendWhatsAppQaMediaAndObserve } from "./whatsapp-live.media.js";

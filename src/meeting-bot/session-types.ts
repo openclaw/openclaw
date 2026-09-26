@@ -1,4 +1,5 @@
 import type { MeetingAudioBackend } from "./audio-backend.js";
+import type { MeetingOutputLoopbackHealth } from "./output-loopback-verifier.js";
 
 /** Generic lifecycle state shared by browser and dial-in meeting sessions. */
 export type MeetingSessionState = "active" | "ended";
@@ -60,21 +61,13 @@ export type MeetingBrowserCandidateTab = {
 export type MeetingBrowserHealth<
   TManualReason extends string = string,
   TSpeechBlockedReason extends string = string,
-> = {
+> = Partial<MeetingOutputLoopbackHealth> & {
   inCall?: boolean;
   micMuted?: boolean;
   manualAction?: { reason: TManualReason; message: string };
   speechReady?: boolean;
   speechBlockedReason?: TSpeechBlockedReason;
   speechBlockedMessage?: string;
-  /** Non-silent sink audio observed again on the meeting microphone capture path. */
-  outputLoopbackSignalBytes?: number;
-  lastOutputLoopbackAt?: string;
-  lastOutputLoopbackCorrelation?: number;
-  lastOutputLoopbackRms?: number;
-  lastOutputLoopbackPeak?: number;
-  outputGeneration?: number;
-  verifiedOutputGeneration?: number;
 };
 
 export type MeetingPluginProbeHealth = MeetingBrowserHealth & {

@@ -48,7 +48,7 @@ describe("config cli integration", () => {
       async ({ configPath, tempDir }) => {
         await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(tempDir, "state") }, async () => {
           try {
-            recordDeferredPluginMigrations({
+            await recordDeferredPluginMigrations({
               pending: [
                 {
                   pluginId: "sample",

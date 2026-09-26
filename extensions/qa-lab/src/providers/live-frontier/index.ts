@@ -5,15 +5,11 @@ function isOpenAiModel(modelRef: string) {
   return modelRef.startsWith("openai/");
 }
 
-function isAnthropicModel(modelRef: string) {
-  return modelRef.startsWith("anthropic/");
-}
-
 // claude-cli is an Anthropic-backed Claude runtime, so it shares the Anthropic
 // turn-timeout floors; mirror the claude-cli==anthropic precedent in the aimock
 // and mock-openai servers.
 function isAnthropicFamilyModel(modelRef: string) {
-  return isAnthropicModel(modelRef) || modelRef.startsWith("claude-cli/");
+  return modelRef.startsWith("anthropic/") || modelRef.startsWith("claude-cli/");
 }
 
 function isGptFiveModel(modelRef: string) {

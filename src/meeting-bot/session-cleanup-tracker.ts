@@ -190,18 +190,14 @@ export class MeetingSessionCleanupTracker {
     onComplete: () => void;
   }): Promise<void> {
     // Try rollback twice before the caller retains an ended session for cleanup retry.
-    let retryFullCleanup = false;
     try {
       await params.leave();
     } catch (error) {
       params.warn(`replacement cleanup failed: ${params.formatError(error)}`);
-      retryFullCleanup = true;
-    }
-    if (retryFullCleanup) {
       try {
         await params.leave();
-      } catch (error) {
-        params.warn(`replacement cleanup retry failed: ${params.formatError(error)}`);
+      } catch (retryError) {
+        params.warn(`replacement cleanup retry failed: ${params.formatError(retryError)}`);
       }
     }
     const retry = await this.retryBrowserAfterFailedJoin(params);

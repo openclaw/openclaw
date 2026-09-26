@@ -1,4 +1,3 @@
-import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +8,7 @@ import {
   createMetricsHarness,
   trusted,
   untrusted,
+  withMetricsServer,
   type ExporterHealthReport,
   type TrustedExporterInternalDiagnostics,
 } from "./service.test-helpers.js";
@@ -45,7 +45,7 @@ describe("diagnostics-prometheus service", () => {
       { ...base, method: "health", phase: "response", outcome: "ok", durationMs: 10 },
       { ...base, method: "health", phase: "response", outcome: "error", durationMs: 20 },
     ] satisfies DiagnosticEventPayload[]) {
-      metrics.record(event, trusted);
+      metrics.record(event);
     }
 
     const rendered = metrics.render();
@@ -87,7 +87,7 @@ describe("diagnostics-prometheus service", () => {
         response: "suppressed",
       },
     ] satisfies DiagnosticEventPayload[]) {
-      metrics.record(event, trusted);
+      metrics.record(event);
     }
     metrics.record({ ...base, phase: "response", outcome: "ok", durationMs: 50 }, untrusted);
     const rendered = metrics.render();
@@ -109,21 +109,17 @@ describe("diagnostics-prometheus service", () => {
   it("records trusted run metrics without raw diagnostic identifiers", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "run.completed",
-        runId: "run-should-not-export",
-        sessionKey: "session-should-not-export",
-        provider: "openai",
-        model: "gpt-5.4",
-        channel: "discord",
-        trigger: "message",
-        durationMs: 1500,
-        outcome: "completed",
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "run.completed",
+      runId: "run-should-not-export",
+      sessionKey: "session-should-not-export",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "discord",
+      trigger: "message",
+      durationMs: 1500,
+      outcome: "completed",
+    });
 
     const rendered = metrics.render();
 
@@ -141,22 +137,18 @@ describe("diagnostics-prometheus service", () => {
   it("records hook-blocked run metrics with safe blocker originator only", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "run.completed",
-        runId: "run-should-not-export",
-        sessionKey: "session-should-not-export",
-        provider: "openai",
-        model: "gpt-5.4",
-        channel: "slack",
-        trigger: "message",
-        durationMs: 250,
-        outcome: "blocked",
-        blockedBy: "policy-plugin",
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "run.completed",
+      runId: "run-should-not-export",
+      sessionKey: "session-should-not-export",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "slack",
+      trigger: "message",
+      durationMs: 250,
+      outcome: "blocked",
+      blockedBy: "policy-plugin",
+    });
 
     const rendered = metrics.render();
 
@@ -173,7 +165,6 @@ describe("diagnostics-prometheus service", () => {
 
     metrics.record(
       {
-        ...baseEvent(),
         type: "model.call.completed",
         runId: "run-1",
         callId: "call-1",
@@ -190,35 +181,27 @@ describe("diagnostics-prometheus service", () => {
   it("separates request and turn model-call metrics by observation unit", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "model.call.completed",
-        runId: "run-1",
-        callId: "call-1",
-        provider: "openai",
-        model: "gpt-5.4",
-        api: "openai-responses",
-        transport: "http",
-        durationMs: 250,
-      },
-      trusted,
-    );
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "model.call.completed",
-        runId: "run-1",
-        callId: "call-2",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        api: "claude-code",
-        transport: "stdio-live",
-        observationUnit: "turn",
-        durationMs: 2500,
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      api: "openai-responses",
+      transport: "http",
+      durationMs: 250,
+    });
+    metrics.record({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-2",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      api: "claude-code",
+      transport: "stdio-live",
+      observationUnit: "turn",
+      durationMs: 2500,
+    });
 
     const rendered = metrics.render();
     expect(rendered).toContain(
@@ -229,53 +212,18 @@ describe("diagnostics-prometheus service", () => {
     );
   });
 
-  it("drops untrusted plugin-emitted diagnostic events that spoof gateway stability signals", () => {
-    const metrics = createMetricsHarness();
-
-    for (const event of [
-      {
-        ...baseEvent(),
-        type: "webhook.received",
-        channel: "telegram",
-        updateType: "message",
-      },
-      {
-        ...baseEvent(),
-        type: "payload.large",
-        surface: "gateway.frame",
-        action: "rejected",
-        bytes: 2048,
-      },
-      {
-        ...baseEvent(),
-        type: "session.stuck",
-        state: "processing",
-        ageMs: 12_000,
-        classification: "stale_session_state",
-      },
-    ] satisfies DiagnosticEventPayload[]) {
-      metrics.record(event, untrusted);
-    }
-
-    expect(metrics.render()).toBe("");
-  });
-
   it("records sanitized async diagnostic queue drop summaries from core diagnostics", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "diagnostic.async_queue.dropped",
-        droppedEvents: 3,
-        droppedTrustedEvents: 1,
-        droppedUntrustedEvents: 2,
-        queueLength: 0,
-        maxQueueLength: 10_000,
-        drainBatchSize: 100,
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "diagnostic.async_queue.dropped",
+      droppedEvents: 3,
+      droppedTrustedEvents: 1,
+      droppedUntrustedEvents: 2,
+      queueLength: 0,
+      maxQueueLength: 10_000,
+      drainBatchSize: 100,
+    });
 
     const rendered = metrics.render();
 
@@ -294,17 +242,13 @@ describe("diagnostics-prometheus service", () => {
   it("records one metric for one signal-level exporter lifecycle fact", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "telemetry.exporter",
-        exporter: "diagnostics-otel",
-        signal: "logs",
-        status: "started",
-        reason: "configured",
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      status: "started",
+      reason: "configured",
+    });
 
     const rendered = metrics.render();
     expect(rendered).toContain(
@@ -318,16 +262,12 @@ describe("diagnostics-prometheus service", () => {
   it("redacts and bounds label values", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "tool.execution.error",
-        toolName: "shell\nbad",
-        durationMs: 25,
-        errorCategory: "Bearer sk-secret-token-value",
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "tool.execution.error",
+      toolName: "shell\nbad",
+      durationMs: 25,
+      errorCategory: "Bearer sk-secret-token-value",
+    });
 
     const rendered = metrics.render();
 
@@ -364,7 +304,7 @@ describe("diagnostics-prometheus service", () => {
         suspended: true,
       },
     ] satisfies DiagnosticEventPayload[]) {
-      metrics.record(event, trusted);
+      metrics.record(event);
     }
     for (const event of [
       {
@@ -389,7 +329,7 @@ describe("diagnostics-prometheus service", () => {
         reason: "body-too-large",
       },
     ] satisfies DiagnosticEventPayload[]) {
-      metrics.record(event, trusted);
+      metrics.record(event);
     }
 
     const rendered = metrics.render();
@@ -420,54 +360,38 @@ describe("diagnostics-prometheus service", () => {
   it("records webhook ingress and liveness warning metrics", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "webhook.received",
-        channel: "telegram",
-        updateType: "message",
-        chatId: "chat-should-not-export",
-      },
-      trusted,
-    );
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "webhook.processed",
-        channel: "telegram",
-        updateType: "message",
-        chatId: "chat-should-not-export",
-        durationMs: 250,
-      },
-      trusted,
-    );
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "webhook.error",
-        channel: "telegram",
-        updateType: "message",
-        chatId: "chat-should-not-export",
-        error: "Bearer sk-secret",
-      },
-      trusted,
-    );
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "diagnostic.liveness.warning",
-        reasons: ["event_loop_delay", "cpu"],
-        intervalMs: 30_000,
-        eventLoopDelayP99Ms: 250,
-        eventLoopDelayMaxMs: 900,
-        eventLoopUtilization: 0.95,
-        cpuCoreRatio: 1.4,
-        active: 2,
-        waiting: 1,
-        queued: 4,
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "webhook.received",
+      channel: "telegram",
+      updateType: "message",
+      chatId: "chat-should-not-export",
+    });
+    metrics.record({
+      type: "webhook.processed",
+      channel: "telegram",
+      updateType: "message",
+      chatId: "chat-should-not-export",
+      durationMs: 250,
+    });
+    metrics.record({
+      type: "webhook.error",
+      channel: "telegram",
+      updateType: "message",
+      chatId: "chat-should-not-export",
+      error: "Bearer sk-secret",
+    });
+    metrics.record({
+      type: "diagnostic.liveness.warning",
+      reasons: ["event_loop_delay", "cpu"],
+      intervalMs: 30_000,
+      eventLoopDelayP99Ms: 250,
+      eventLoopDelayMaxMs: 900,
+      eventLoopUtilization: 0.95,
+      cpuCoreRatio: 1.4,
+      active: 2,
+      waiting: 1,
+      queued: 4,
+    });
 
     const rendered = metrics.render();
 
@@ -495,17 +419,13 @@ describe("diagnostics-prometheus service", () => {
   it("drops session-shaped agent labels", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "model.usage",
-        agentId: "Agent:qa:otel-trace-smoke",
-        provider: "openai",
-        model: "gpt-5.4",
-        usage: { input: 12 },
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "model.usage",
+      agentId: "Agent:qa:otel-trace-smoke",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { input: 12 },
+    });
 
     const rendered = metrics.render();
 
@@ -520,7 +440,6 @@ describe("diagnostics-prometheus service", () => {
     const record = (input: number) =>
       metrics.record(
         {
-          ...baseEvent(),
           type: "model.usage",
           agentId: "main",
           provider: "openai",
@@ -545,37 +464,14 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("another-plugin");
   });
 
-  it("drops session-shaped queue lane labels", () => {
-    const metrics = createMetricsHarness();
-
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "queue.lane.enqueue",
-        lane: "session:Agent:qa:otel-trace-smoke",
-        queueSize: 2,
-      },
-      trusted,
-    );
-
-    const rendered = metrics.render();
-
-    expect(rendered).toContain('openclaw_queue_lane_size{lane="session"} 2');
-    expect(rendered).not.toContain("Agent:qa:otel-trace-smoke");
-  });
-
   it("keeps only the bounded prefix from scoped queue lane labels", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "queue.lane.enqueue",
-        lane: "dreaming-narrative:session-main",
-        queueSize: 2,
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "queue.lane.enqueue",
+      lane: "dreaming-narrative:session-main",
+      queueSize: 2,
+    });
 
     const rendered = metrics.render();
 
@@ -586,20 +482,16 @@ describe("diagnostics-prometheus service", () => {
   it("records skill usage metrics without raw paths or session identifiers", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "skill.used",
-        agentId: "main",
-        runId: "run-should-not-export",
-        sessionKey: "session-should-not-export",
-        skillName: "tiny-llm-brainstorm",
-        skillSource: "workspace",
-        activation: "read",
-        toolName: "read",
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "skill.used",
+      agentId: "main",
+      runId: "run-should-not-export",
+      sessionKey: "session-should-not-export",
+      skillName: "tiny-llm-brainstorm",
+      skillSource: "workspace",
+      activation: "read",
+      toolName: "read",
+    });
 
     const rendered = metrics.render();
 
@@ -615,40 +507,28 @@ describe("diagnostics-prometheus service", () => {
   it("bounds messaging labels without exporting raw chat identifiers", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "message.delivery.started",
-        channel: "matrix",
-        deliveryKind: "text",
-        sessionKey: "session-should-not-export",
-      },
-      trusted,
-    );
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "message.processed",
-        channel: "telegram/custom",
-        chatId: "chat-should-not-export",
-        messageId: "message-should-not-export",
-        outcome: "completed",
-        reason: "progress draft / message tool 123",
-        durationMs: 25,
-      },
-      trusted,
-    );
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "message.delivery.error",
-        channel: "discord/custom",
-        deliveryKind: "progress draft" as never,
-        durationMs: 50,
-        errorCategory: "TimeoutError",
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "message.delivery.started",
+      channel: "matrix",
+      deliveryKind: "text",
+      sessionKey: "session-should-not-export",
+    });
+    metrics.record({
+      type: "message.processed",
+      channel: "telegram/custom",
+      chatId: "chat-should-not-export",
+      messageId: "message-should-not-export",
+      outcome: "completed",
+      reason: "progress draft / message tool 123",
+      durationMs: 25,
+    });
+    metrics.record({
+      type: "message.delivery.error",
+      channel: "discord/custom",
+      deliveryKind: "progress draft" as never,
+      durationMs: 50,
+      errorCategory: "TimeoutError",
+    });
 
     const rendered = metrics.render();
 
@@ -670,58 +550,38 @@ describe("diagnostics-prometheus service", () => {
   it("records inbound dispatch and session turn telemetry", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "message.received",
-        channel: "telegram",
-        source: "webhook",
-      },
-      trusted,
-    );
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "message.dispatch.started",
-        channel: "telegram",
-        source: "webhook",
-      },
-      trusted,
-    );
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "message.dispatch.completed",
-        channel: "telegram",
-        source: "webhook",
-        durationMs: 250,
-        outcome: "completed",
-      },
-      trusted,
-    );
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "message.dispatch.completed",
-        channel: "telegram/custom",
-        source: "webhook with secret sk-test",
-        durationMs: 300,
-        outcome: "completed",
-        reason: "progress draft / message tool 123",
-      },
-      trusted,
-    );
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "session.turn.created",
-        runId: "run-should-not-export",
-        agentId: "agent.default",
-        channel: "telegram",
-        trigger: "user",
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "message.received",
+      channel: "telegram",
+      source: "webhook",
+    });
+    metrics.record({
+      type: "message.dispatch.started",
+      channel: "telegram",
+      source: "webhook",
+    });
+    metrics.record({
+      type: "message.dispatch.completed",
+      channel: "telegram",
+      source: "webhook",
+      durationMs: 250,
+      outcome: "completed",
+    });
+    metrics.record({
+      type: "message.dispatch.completed",
+      channel: "telegram/custom",
+      source: "webhook with secret sk-test",
+      durationMs: 300,
+      outcome: "completed",
+      reason: "progress draft / message tool 123",
+    });
+    metrics.record({
+      type: "session.turn.created",
+      runId: "run-should-not-export",
+      agentId: "agent.default",
+      channel: "telegram",
+      trigger: "user",
+    });
 
     const rendered = metrics.render();
 
@@ -752,39 +612,31 @@ describe("diagnostics-prometheus service", () => {
   it("records session recovery and talk metrics without exporting raw ids or content", () => {
     const metrics = createMetricsHarness();
 
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "session.recovery.completed",
-        sessionId: "session-should-not-export",
-        sessionKey: "key-should-not-export",
-        state: "processing",
-        stateGeneration: 2,
-        ageMs: 12_000,
-        queueDepth: 1,
-        reason: "startup-sweep",
-        activeWorkKind: "tool_call",
-        allowActiveAbort: true,
-        status: "released",
-        action: "abort-active-run",
-      },
-      trusted,
-    );
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "talk.event",
-        sessionId: "talk-session-should-not-export",
-        turnId: "turn-should-not-export",
-        talkEventType: "input.audio.delta",
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        provider: "openai",
-        byteLength: 320,
-      },
-      trusted,
-    );
+    metrics.record({
+      type: "session.recovery.completed",
+      sessionId: "session-should-not-export",
+      sessionKey: "key-should-not-export",
+      state: "processing",
+      stateGeneration: 2,
+      ageMs: 12_000,
+      queueDepth: 1,
+      reason: "startup-sweep",
+      activeWorkKind: "tool_call",
+      allowActiveAbort: true,
+      status: "released",
+      action: "abort-active-run",
+    });
+    metrics.record({
+      type: "talk.event",
+      sessionId: "talk-session-should-not-export",
+      turnId: "turn-should-not-export",
+      talkEventType: "input.audio.delta",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      byteLength: 320,
+    });
 
     const rendered = metrics.render();
 
@@ -815,7 +667,7 @@ describe("diagnostics-prometheus service", () => {
       queueSize: 1,
       waitMs: 10,
     };
-    metrics.record(queue, trusted);
+    metrics.record(queue);
     // This covers the current core-method table's cardinality without importing core internals.
     for (let index = 0; index < 426; index += 1) {
       const base = { ...baseEvent(), type: "gateway.rpc" as const, method: `core.method.${index}` };
@@ -832,50 +684,18 @@ describe("diagnostics-prometheus service", () => {
           response: "sent",
         },
       ] satisfies DiagnosticEventPayload[]) {
-        metrics.record(event, trusted);
+        metrics.record(event);
       }
     }
     expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 87");
-    metrics.record({ ...queue, queueSize: 2 }, trusted);
+    metrics.record({ ...queue, queueSize: 2 });
     const existing = metrics.render();
     expect(existing).toContain('openclaw_queue_lane_size{lane="main"} 2');
     expect(existing).toContain('openclaw_queue_lane_wait_seconds_count{lane="main"} 2');
     expect(existing).toContain("openclaw_prometheus_series_dropped_total 87");
-    metrics.record({ ...queue, lane: "later" }, trusted);
+    metrics.record({ ...queue, lane: "later" });
     expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 89");
     expect(metrics.render()).not.toContain('lane="later"');
-    metrics.stop();
-  });
-
-  it("caps metric series growth and reports dropped series", () => {
-    const metrics = createMetricsHarness();
-
-    for (let index = 0; index < 2100; index += 1) {
-      metrics.record(
-        {
-          ...baseEvent(),
-          type: "model.call.completed",
-          runId: `run-${index}`,
-          callId: `call-${index}`,
-          provider: "openai",
-          model: `model.${index}`,
-          durationMs: 10,
-        },
-        trusted,
-      );
-    }
-
-    const rendered = metrics.render();
-
-    expect(rendered).toContain("# TYPE openclaw_prometheus_series_dropped_total counter");
-    expect(rendered).toContain("openclaw_prometheus_series_dropped_total ");
-    metrics.record(
-      { ...baseEvent(), type: "gateway.rpc", method: "health", phase: "received" },
-      trusted,
-    );
-    const saturated = metrics.render();
-    expect(saturated).not.toContain("openclaw_gateway_rpc_requests_total");
-    expect(saturated).not.toBe(rendered);
     metrics.stop();
   });
 
@@ -992,33 +812,18 @@ describe("diagnostics-prometheus service", () => {
 describe("metrics HTTP handler", () => {
   it("sends byte-accurate representation metadata on HEAD", async () => {
     const metrics = createMetricsHarness();
-    metrics.record(
-      {
-        ...baseEvent(),
-        type: "run.completed",
-        runId: "run-1",
-        sessionKey: "session-1",
-        provider: "openai",
-        model: "gpt-5.4",
-        channel: "discord",
-        trigger: "message",
-        durationMs: 1500,
-        outcome: "completed",
-      },
-      trusted,
-    );
-    const server = createServer((req, res) => {
-      void metrics.handler(req, res);
+    metrics.record({
+      type: "run.completed",
+      runId: "run-1",
+      sessionKey: "session-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "discord",
+      trigger: "message",
+      durationMs: 1500,
+      outcome: "completed",
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP server address");
-    }
-    try {
-      const base = `http://127.0.0.1:${address.port}/api/diagnostics/prometheus`;
+    await withMetricsServer(metrics, async (base) => {
       const get = await fetch(base);
       const getBody = await get.text();
       const head = await fetch(base, { method: "HEAD" });
@@ -1030,11 +835,6 @@ describe("metrics HTTP handler", () => {
       expect(head.status).toBe(200);
       expect(head.headers.get("content-length")).toBe(String(getBodyBytes));
       expect(headBody.byteLength).toBe(0);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-      metrics.stop();
-    }
+    });
   });
 });

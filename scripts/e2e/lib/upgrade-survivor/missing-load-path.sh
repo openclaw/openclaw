@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+missing_load_path_applicability=""
+
 start_missing_load_path_baseline() {
   local start_status=0 exit_status=0
   start_gateway || start_status=$?
@@ -50,6 +52,26 @@ run_missing_load_path_fixture() {
   fi
   { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "missing-load-path" ]; } &&
     [ "$UPDATE_RESTART_MODE" = "manual" ] || return 0
+  if [ -z "$missing_load_path_applicability" ]; then
+    missing_load_path_applicability="$(node --input-type=module -e '
+      import { parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+      import { supportsUpgradeSurvivorScenarioAtBaseline } from "./scripts/lib/upgrade-survivor-policy.mjs";
+      const version = process.argv[1];
+      if (!parseReleaseVersion(version)) throw new Error("Invalid baseline release version");
+      process.stdout.write(supportsUpgradeSurvivorScenarioAtBaseline("missing-load-path", `openclaw@${version}`)
+        ? "supported" : "unsupported-driver");
+    ' "$baseline_version")" || return "$?"
+    if [ "$missing_load_path_applicability" = "unsupported-driver" ]; then
+      printf 'Missing-load-path fixture unavailable for published %s: its CLI rejects invalid plugin paths before candidate staging.\n' "$baseline_version"
+    fi
+  fi
+  if [ "$missing_load_path_applicability" = "unsupported-driver" ]; then
+    if [ "$SCENARIO" = "missing-load-path" ]; then
+      echo "missing-load-path requires a published updater with invalid-config admission; choose a supported baseline." >&2
+      return 2
+    fi
+    return 0
+  fi
   local stage="$1"
   local helper="scripts/e2e/lib/upgrade-survivor/assertions.mjs"
   case "$stage" in

@@ -1,7 +1,7 @@
 // Proxy stream wrapper tests cover wrapper selection and provider passthrough.
 import { buildOpenAICompletionsParams } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../packages/ai/src/utils/system-prompt-cache-boundary.js";
@@ -31,25 +31,32 @@ function runSystemCacheWrapper(model: Partial<Model<"openai-completions">>) {
   return payload;
 }
 
-describe("proxy stream wrappers", () => {
-  it("adds OpenRouter attribution headers to stream options", () => {
-    const calls: Array<{ headers?: Record<string, string> }> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      calls.push({
-        headers: options?.headers,
-      });
-      return createAssistantMessageEventStream();
-    };
-
-    const wrapped = createOpenRouterWrapper(baseStreamFn);
-    const model = {
+function captureHeaders(
+  extraParams?: Record<string, unknown>,
+  model: Partial<Model<"openai-completions">> = {},
+  headers?: Record<string, string>,
+) {
+  const calls: Array<{ headers?: Record<string, string> }> = [];
+  const baseStreamFn: StreamFn = (_model, _context, options) => {
+    calls.push({ headers: options?.headers });
+    return createAssistantMessageEventStream();
+  };
+  void createOpenRouterWrapper(baseStreamFn, undefined, extraParams)(
+    {
       api: "openai-completions",
       provider: "openrouter",
       id: "openrouter/auto",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
+      ...model,
+    } as Model<"openai-completions">,
+    { messages: [] },
+    { headers },
+  );
+  return calls;
+}
 
-    void wrapped(model, context, { headers: { "X-Custom": "1" } });
+describe("proxy stream wrappers", () => {
+  it("adds OpenRouter attribution headers to stream options", () => {
+    const calls = captureHeaders(undefined, {}, { "X-Custom": "1" });
 
     expect(calls).toEqual([
       {
@@ -65,26 +72,9 @@ describe("proxy stream wrappers", () => {
   });
 
   it("adds opt-in OpenRouter response caching headers", () => {
-    const calls: Array<{ headers?: Record<string, string> }> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      calls.push({ headers: options?.headers });
-      return createAssistantMessageEventStream();
-    };
-
-    const wrapped = createOpenRouterWrapper(baseStreamFn, undefined, {
-      responseCache: true,
-      responseCacheTtlSeconds: 900,
-    });
-
-    void wrapped(
-      {
-        api: "openai-completions",
-        provider: "openrouter",
-        id: "openrouter/auto",
-        baseUrl: "https://openrouter.ai/api/v1",
-      } as Model<"openai-completions">,
-      { messages: [] },
-      {},
+    const calls = captureHeaders(
+      { responseCache: true, responseCacheTtlSeconds: 900 },
+      { baseUrl: "https://openrouter.ai/api/v1" },
     );
 
     expect(calls[0]?.headers?.["HTTP-Referer"]).toBe("https://openclaw.ai");
@@ -93,25 +83,9 @@ describe("proxy stream wrappers", () => {
   });
 
   it("sends OpenRouter response cache disables for preset opt-outs", () => {
-    const calls: Array<{ headers?: Record<string, string> }> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      calls.push({ headers: options?.headers });
-      return createAssistantMessageEventStream();
-    };
-
-    const wrapped = createOpenRouterWrapper(baseStreamFn, undefined, {
-      response_cache: false,
-      response_cache_ttl_seconds: 600,
-    });
-
-    void wrapped(
-      {
-        api: "openai-completions",
-        provider: "openrouter",
-        id: "openrouter/@preset/cached-tests",
-      } as Model<"openai-completions">,
-      { messages: [] },
-      {},
+    const calls = captureHeaders(
+      { response_cache: false, response_cache_ttl_seconds: 600 },
+      { id: "openrouter/@preset/cached-tests" },
     );
 
     expect(calls[0]?.headers?.["X-OpenRouter-Cache"]).toBe("false");
@@ -119,26 +93,7 @@ describe("proxy stream wrappers", () => {
   });
 
   it("supports OpenRouter response cache refresh and TTL clamping", () => {
-    const calls: Array<{ headers?: Record<string, string> }> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      calls.push({ headers: options?.headers });
-      return createAssistantMessageEventStream();
-    };
-
-    const wrapped = createOpenRouterWrapper(baseStreamFn, undefined, {
-      response_cache_clear: "true",
-      response_cache_ttl: 999999,
-    });
-
-    void wrapped(
-      {
-        api: "openai-completions",
-        provider: "openrouter",
-        id: "openrouter/auto",
-      } as Model<"openai-completions">,
-      { messages: [] },
-      {},
-    );
+    const calls = captureHeaders({ response_cache_clear: "true", response_cache_ttl: 999999 });
 
     expect(calls[0]?.headers?.["X-OpenRouter-Cache"]).toBe("true");
     expect(calls[0]?.headers?.["X-OpenRouter-Cache-Clear"]).toBe("true");
@@ -146,25 +101,9 @@ describe("proxy stream wrappers", () => {
   });
 
   it("does not add OpenRouter response caching headers to custom proxy routes", () => {
-    const calls: Array<{ headers?: Record<string, string> }> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      calls.push({ headers: options?.headers });
-      return createAssistantMessageEventStream();
-    };
-
-    const wrapped = createOpenRouterWrapper(baseStreamFn, undefined, {
-      responseCache: true,
-    });
-
-    void wrapped(
-      {
-        api: "openai-completions",
-        provider: "openrouter",
-        id: "openrouter/auto",
-        baseUrl: "https://proxy.example.com/v1",
-      } as Model<"openai-completions">,
-      { messages: [] },
-      {},
+    const calls = captureHeaders(
+      { responseCache: true },
+      { baseUrl: "https://proxy.example.com/v1" },
     );
 
     expect(calls[0]?.headers).toBeUndefined();

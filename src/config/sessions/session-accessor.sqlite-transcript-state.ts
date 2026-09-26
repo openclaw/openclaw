@@ -369,10 +369,7 @@ export function touchTranscriptMutationInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): void {
-  const now = normalizeTranscriptMutationAtMs(Date.now());
-  if (now !== undefined) {
-    advanceTranscriptMutationAtInTransaction(database, sessionId, now, { strictly: true });
-  }
+  advanceTranscriptMutationAtInTransaction(database, sessionId, Date.now(), { strictly: true });
 }
 
 export function deleteTranscriptEventsInTransaction(

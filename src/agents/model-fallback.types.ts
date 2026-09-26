@@ -31,5 +31,7 @@ export type ModelFallbackAttemptProvenance = {
   requestedProvider: string;
   requestedModel: string;
   stage: "initial" | "fallback";
+  /** A user switch invalidates automatic routing for the original selection for this cycle. */
+  selectionChanged?: boolean;
   fallbackReason?: FailoverReason;
 };

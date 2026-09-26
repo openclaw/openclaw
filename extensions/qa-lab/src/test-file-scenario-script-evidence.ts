@@ -157,17 +157,6 @@ export async function readScriptProducerEvidence(params: {
 }> {
   const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
   const latestRun = await readJsonFileIfExists(path.join(scenarioOutputDir, "latest-run.json"));
-  if (
-    params.requireCurrentRunEvidence === true &&
-    latestRun !== undefined &&
-    (latestRun === null ||
-      typeof latestRun !== "object" ||
-      !("qaEvidence" in latestRun) ||
-      typeof latestRun.qaEvidence !== "string" ||
-      latestRun.qaEvidence.trim().length === 0)
-  ) {
-    throw new Error("latest-run.json does not identify a producer evidence bundle");
-  }
   const latestEvidencePath =
     latestRun !== null &&
     typeof latestRun === "object" &&
@@ -175,6 +164,13 @@ export async function readScriptProducerEvidence(params: {
     typeof latestRun.qaEvidence === "string"
       ? latestRun.qaEvidence
       : undefined;
+  if (
+    params.requireCurrentRunEvidence === true &&
+    latestRun !== undefined &&
+    !latestEvidencePath?.trim()
+  ) {
+    throw new Error("latest-run.json does not identify a producer evidence bundle");
+  }
   const candidates = [
     latestEvidencePath,
     path.join(scenarioOutputDir, QA_EVIDENCE_FILENAME),

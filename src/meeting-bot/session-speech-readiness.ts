@@ -1,6 +1,6 @@
 import type { MeetingBrowserHealth } from "./session-types.js";
 
-type SpeechMessages<TReason extends string> = {
+export type MeetingSpeechReadinessMessages<TReason extends string> = {
   audioBridgeUnavailable: string;
   audioBridgeUnavailableReason: TReason;
   browserUnverified: string;
@@ -19,23 +19,14 @@ export function evaluateMeetingSpeechReadiness<TReason extends string>(params: {
       }
     | undefined;
   managedBrowser: boolean;
-  speech: SpeechMessages<TReason>;
+  speech: MeetingSpeechReadinessMessages<TReason>;
   talkBack: boolean;
 }): { ready: boolean; reason?: TReason; message?: string } {
   const { browser, speech } = params;
   if (!params.talkBack || !browser) {
     return { ready: true };
   }
-  if (!params.managedBrowser) {
-    return browser.hasAudioBridge
-      ? { ready: true }
-      : {
-          ready: false,
-          reason: speech.audioBridgeUnavailableReason,
-          message: speech.audioBridgeUnavailable,
-        };
-  }
-  const health = browser.health;
+  const health = params.managedBrowser ? browser.health : undefined;
   if (health?.manualAction) {
     return {
       ready: false,
@@ -53,20 +44,20 @@ export function evaluateMeetingSpeechReadiness<TReason extends string>(params: {
         message: muted ? speech.microphoneMuted : speech.browserUnverified,
       };
     }
-    return browser.hasAudioBridge
-      ? { ready: true }
-      : {
-          ready: false,
-          reason: speech.audioBridgeUnavailableReason,
-          message: speech.audioBridgeUnavailable,
-        };
-  }
-  if (health?.inCall === false) {
+  } else if (health?.inCall === false) {
     return { ready: false, reason: speech.notInCallReason, message: speech.notInCall };
+  } else if (params.managedBrowser) {
+    return {
+      ready: false,
+      reason: speech.browserUnverifiedReason,
+      message: speech.browserUnverified,
+    };
   }
-  return {
-    ready: false,
-    reason: speech.browserUnverifiedReason,
-    message: speech.browserUnverified,
-  };
+  return browser.hasAudioBridge
+    ? { ready: true }
+    : {
+        ready: false,
+        reason: speech.audioBridgeUnavailableReason,
+        message: speech.audioBridgeUnavailable,
+      };
 }

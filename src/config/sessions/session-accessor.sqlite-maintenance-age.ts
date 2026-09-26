@@ -167,11 +167,8 @@ function nextEntryAgeAt(
     [activityAt, isDashboardKey(key) ? maintenance.archiveDashboardAfterMs : null],
     [activityAt, maintenance.preserveRecentMs],
   ]) {
-    if (timestamp != null && age != null && age > 0) {
-      const at = timestamp + age + 1;
-      if (at > now) {
-        next = Math.min(next, at);
-      }
+    if (timestamp != null) {
+      next = Math.min(next, nextAgeAt(timestamp, age, now));
     }
   }
   return next;

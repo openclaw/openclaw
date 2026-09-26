@@ -72,6 +72,24 @@ export async function runQaFlowSuiteIsolated(
     transportId,
   });
   const transport = transportFactoryResult.adapter;
+  const artifactParams = {
+    repoRoot,
+    outputDir,
+    startedAt,
+    evidenceMode: params?.evidenceMode,
+    transport,
+    providerMode,
+    primaryModel,
+    alternateModel,
+    fastMode,
+    concurrency,
+    channel: params?.channelId ?? transport.id,
+    channelDriver: transportFactoryResult.driver,
+    isolatedWorkers: true,
+    scenarioIds: params?.scenarioIds?.length
+      ? selectedScenarios.map((scenario) => scenario.id)
+      : undefined,
+  };
   const progress = createQaSuiteProgressController({
     lab,
     scenarios: selectedScenarios,
@@ -99,29 +117,13 @@ export async function runQaFlowSuiteIsolated(
       try {
         const partialFinishedAt = new Date();
         const { report, reportPath } = await writeQaSuiteArtifacts({
+          ...artifactParams,
           status: "running",
-          repoRoot,
-          outputDir,
-          startedAt,
           finishedAt: partialFinishedAt,
           scenarios: partialScenarios,
           scenarioDefinitions: completedScenarioDefinitions,
-          evidenceMode: params?.evidenceMode,
           recordedEvidence: recording.snapshot(),
-          transport,
-          providerMode,
-          primaryModel,
-          alternateModel,
-          fastMode,
-          concurrency,
-          channel: params?.channelId ?? transport.id,
-          channelDriver: transportFactoryResult.driver,
-          isolatedWorkers: true,
           writeEvidenceFile: false,
-          scenarioIds:
-            params?.scenarioIds && params.scenarioIds.length > 0
-              ? selectedScenarios.map((scenario) => scenario.id)
-              : undefined,
         });
         lab.setLatestReport({
           outputPath: reportPath,
@@ -334,29 +336,13 @@ export async function runQaFlowSuiteIsolated(
   }
   const terminalFinishedAt = new Date();
   const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
-    repoRoot,
-    outputDir,
-    startedAt,
+    ...artifactParams,
     finishedAt: terminalFinishedAt,
     scenarios: terminalScenarios,
     scenarioDefinitions: selectedScenarios,
-    evidenceMode: params?.evidenceMode,
     recordedEvidence: recording.snapshot(),
-    transport,
-    providerMode,
-    primaryModel,
-    alternateModel,
-    fastMode,
-    concurrency,
-    channel: params?.channelId ?? transport.id,
-    channelDriver: transportFactoryResult.driver,
     transportArtifacts,
-    isolatedWorkers: true,
     writeEvidenceFile: params?.writeEvidenceFile,
-    scenarioIds:
-      params?.scenarioIds && params.scenarioIds.length > 0
-        ? selectedScenarios.map((scenario) => scenario.id)
-        : undefined,
   });
   lab.setLatestReport({
     outputPath: reportPath,

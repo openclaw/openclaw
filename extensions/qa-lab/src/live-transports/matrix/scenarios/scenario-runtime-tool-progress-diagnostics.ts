@@ -1,4 +1,3 @@
-// QA Lab Matrix tool-progress diagnostics preserve actionable failure evidence.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import { isMatrixQaMessageLikeKind } from "./scenario-runtime-shared.js";
@@ -79,45 +78,47 @@ function describeMatrixQaToolProgressCandidate(event: MatrixQaObservedEvent) {
   ].join(" ");
 }
 
-export function buildMatrixQaToolProgressTimeoutMessage(params: {
+type MatrixQaToolProgressTimeoutContext = {
   cause: unknown;
   events: MatrixQaObservedEvent[];
-  expectedPreviewKind: MatrixQaObservedEvent["kind"];
   previewEventId: string;
   roomId: string;
   startIndex: number;
   sutUserId: string;
-}) {
-  const candidates = params.events
+};
+
+function findToolProgressCandidates(
+  params: MatrixQaToolProgressTimeoutContext,
+  predicate: (event: MatrixQaObservedEvent) => boolean,
+) {
+  return params.events
     .slice(params.startIndex)
-    .filter((event) => {
-      if (
-        event.roomId !== params.roomId ||
-        event.sender !== params.sutUserId ||
-        event.type !== "m.room.message" ||
-        event.kind !== params.expectedPreviewKind
-      ) {
-        return false;
-      }
-      return (
-        event.eventId === params.previewEventId ||
-        event.replacesEventId === params.previewEventId ||
-        event.body !== undefined
-      );
-    })
+    .filter(
+      (event) =>
+        event.roomId === params.roomId &&
+        event.sender === params.sutUserId &&
+        event.type === "m.room.message" &&
+        predicate(event),
+    )
     .slice(-8);
+}
+
+export function buildMatrixQaToolProgressTimeoutMessage(
+  params: MatrixQaToolProgressTimeoutContext & {
+    expectedPreviewKind: MatrixQaObservedEvent["kind"];
+  },
+) {
+  const candidates = findToolProgressCandidates(
+    params,
+    (event) =>
+      event.kind === params.expectedPreviewKind &&
+      (event.eventId === params.previewEventId ||
+        event.replacesEventId === params.previewEventId ||
+        event.body !== undefined),
+  );
   const messageCandidates =
     candidates.length === 0
-      ? params.events
-          .slice(params.startIndex)
-          .filter(
-            (event) =>
-              event.roomId === params.roomId &&
-              event.sender === params.sutUserId &&
-              event.type === "m.room.message" &&
-              isMatrixQaMessageLikeKind(event.kind),
-          )
-          .slice(-8)
+      ? findToolProgressCandidates(params, (event) => isMatrixQaMessageLikeKind(event.kind))
       : [];
   const candidateDetails =
     candidates.length === 0
@@ -140,29 +141,14 @@ export function buildMatrixQaToolProgressTimeoutMessage(params: {
   ].join("\n");
 }
 
-export function buildMatrixQaToolProgressFinalTimeoutMessage(params: {
-  cause: unknown;
-  events: MatrixQaObservedEvent[];
-  previewEventId: string;
-  roomId: string;
-  startIndex: number;
-  sutUserId: string;
-  token: string;
-}) {
-  const candidates = params.events
-    .slice(params.startIndex)
-    .filter((event) => {
-      if (
-        event.roomId !== params.roomId ||
-        event.sender !== params.sutUserId ||
-        event.type !== "m.room.message" ||
-        !isMatrixQaMessageLikeKind(event.kind)
-      ) {
-        return false;
-      }
-      return event.replacesEventId === params.previewEventId;
-    })
-    .slice(-8);
+export function buildMatrixQaToolProgressFinalTimeoutMessage(
+  params: MatrixQaToolProgressTimeoutContext & { token: string },
+) {
+  const candidates = findToolProgressCandidates(
+    params,
+    (event) =>
+      isMatrixQaMessageLikeKind(event.kind) && event.replacesEventId === params.previewEventId,
+  );
   const candidateDetails =
     candidates.length === 0
       ? ["observed final candidates: <none>"]

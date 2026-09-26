@@ -1,4 +1,6 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sleep } from "../utils/sleep.js";
 import { runMeetingBrowserAct } from "./browser-act-lock.js";
 import { isMeetingBrowserTransientNavigationError } from "./browser-navigation-errors.js";
 import { asMeetingBrowserTabs, readMeetingBrowserTab } from "./browser-request.js";
@@ -292,9 +294,7 @@ export async function openMeetingWithBrowser<
           manualAction: { reason: manual.reason, message: manual.message },
           notes: [
             ...permissionNotes,
-            `Browser control could not inspect or auto-join ${params.adapter.browserLabel}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            `Browser control could not inspect or auto-join ${params.adapter.browserLabel}: ${coerceErrorMessage(error)}`,
           ],
         } as unknown as Health;
         break;
@@ -302,9 +302,7 @@ export async function openMeetingWithBrowser<
     }
     const remainingWaitMs = deadline - performance.now();
     if (remainingWaitMs > 0) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, Math.min(750, remainingWaitMs));
-      });
+      await sleep(Math.min(750, remainingWaitMs));
     }
   } while (performance.now() < deadline);
   return { launched: true, browser, tab: tabIdentity };
@@ -456,9 +454,7 @@ async function inspectRecoverableTab<
       navigationNotes.push(
         `${params.adapter.browserLabel} navigated while recovering; retrying browser inspection.`,
       );
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, Math.min(250, remainingMs));
-      });
+      await sleep(Math.min(250, remainingMs));
       if (performance.now() >= inspectionDeadline) {
         throw error;
       }

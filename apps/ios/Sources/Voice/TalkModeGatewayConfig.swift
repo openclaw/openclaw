@@ -224,7 +224,6 @@ enum TalkModeRoutingResolver {
 struct TalkModeGatewayConfigState {
     let snapshot: TalkConfigSnapshot
     let executionMode: TalkModeExecutionMode
-    let requiresGatewayRealtimeTransport: Bool
     let defaultVoiceId: String?
     let configuredModelId: String?
     let defaultModelId: String
@@ -275,7 +274,6 @@ enum TalkModeGatewayConfigParser {
         return TalkModeGatewayConfigState(
             snapshot: snapshot,
             executionMode: executionMode,
-            requiresGatewayRealtimeTransport: requiresGatewayRealtimeTransport,
             defaultVoiceId: defaultVoiceId,
             configuredModelId: model,
             defaultModelId: defaultModelId,

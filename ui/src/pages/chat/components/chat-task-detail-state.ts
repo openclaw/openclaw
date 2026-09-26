@@ -12,8 +12,8 @@ import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
-import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 import { setExpansionState } from "../chat-thread.ts";
+import { mergeChatTranscriptPages } from "../chat-transcript-pages.ts";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 const TASK_TRANSCRIPT_REFRESH_MS = 2_000;
@@ -144,28 +144,6 @@ function scheduleTranscriptLoad(host: TaskTranscriptHost, state: TaskDetailState
   void loadTranscriptPage(host, state);
 }
 
-function transcriptEntryKey(message: unknown): string | undefined {
-  const identity = readChatThreadMessageIdentity(message);
-  if (!identity) {
-    return undefined;
-  }
-  return identity.externalSource
-    ? `external:${identity.externalSource}`
-    : identity.id
-      ? `id:${identity.id}`
-      : identity.sequence == null
-        ? undefined
-        : `seq:${identity.sequence}`;
-}
-
-function transcriptOverlap(earlier: unknown[], later: unknown[]): number {
-  const laterKeys = new Set(later.map(transcriptEntryKey).filter(Boolean));
-  return earlier.findIndex((message) => {
-    const key = transcriptEntryKey(message);
-    return key !== undefined && laterKeys.has(key);
-  });
-}
-
 async function loadTranscriptPage(
   host: TaskTranscriptHost,
   state: TaskDetailState,
@@ -206,8 +184,8 @@ async function loadTranscriptPage(
     const previousMessages = previous?.messages ?? [];
     const earlier = cursor ? messages : previousMessages;
     const later = cursor ? previousMessages : messages;
-    const overlap = transcriptOverlap(earlier, later);
-    const retainPrevious = previous !== undefined && (cursor !== undefined || overlap >= 0);
+    const merged = mergeChatTranscriptPages(earlier, later);
+    const retainPrevious = previous !== undefined && (cursor !== undefined || merged.hasOverlap);
     if (cursor) {
       state.olderCursors.add(cursor);
     } else if (!retainPrevious) {
@@ -217,10 +195,7 @@ async function loadTranscriptPage(
     }
     load = {
       status: "loaded",
-      // Replace whole overlapping entries, including their projected siblings.
-      messages: retainPrevious
-        ? [...earlier.slice(0, overlap < 0 ? earlier.length : overlap), ...later]
-        : messages,
+      messages: retainPrevious ? merged.messages : messages,
       // Only overlapping refreshes preserve the oldest boundary already loaded.
       nextCursor:
         retainPrevious && !cursor

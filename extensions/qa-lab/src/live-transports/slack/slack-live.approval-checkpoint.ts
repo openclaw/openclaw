@@ -1,8 +1,8 @@
-// QA Lab Slack approval checkpoint and gateway decision RPC.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
   SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS,
@@ -59,9 +59,7 @@ async function waitForSlackApprovalCheckpointAck(params: {
         throw error;
       }
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 500);
-    });
+    await sleep(500);
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for ${params.ackPath}`);
 }

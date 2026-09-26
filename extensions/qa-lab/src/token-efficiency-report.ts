@@ -1,4 +1,7 @@
-import { formatCacheMisses } from "./agentic-parity-cache-usage.js";
+import {
+  formatCacheMisses,
+  formatRuntimeCacheCount as formatOptionalCount,
+} from "./agentic-parity-cache-usage.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { normalizeRuntimePair, resolveRuntimeParityUsagePolicy } from "./runtime-parity.js";
 
@@ -63,10 +66,6 @@ function isLiveProviderMode(providerMode: string | undefined) {
 function formatPercent(value: number) {
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(1)}%`;
-}
-
-function formatOptionalCount(value: number | null): string {
-  return value === null ? "N/A" : String(value);
 }
 
 function formatProcessedCount(

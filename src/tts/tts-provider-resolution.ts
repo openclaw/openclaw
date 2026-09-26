@@ -86,7 +86,7 @@ function sortSpeechProvidersForAutoSelection(
   providers?: readonly SpeechProviderPlugin[],
   registry: TtsProviderRegistry = defaultProviderRegistry,
 ) {
-  return [...(providers ?? registry.listSpeechProviders(cfg))].toSorted(compareSpeechProviderOrder);
+  return (providers ?? registry.listSpeechProviders(cfg)).toSorted(compareSpeechProviderOrder);
 }
 
 function canonicalizeSpeechProviderIdFromInventory(
@@ -123,27 +123,6 @@ function resolveConfiguredSpeechVoiceModelRefs(
   });
 }
 
-function resolveConfiguredSpeechVoiceModelForProvider(params: {
-  cfg: OpenClawConfig | undefined;
-  providerId: string;
-  provider?: VoiceModelProvider;
-  voiceModel?: VoiceModelRef;
-  registry?: TtsProviderRegistry;
-}): VoiceModelRef | undefined {
-  const registry = params.registry ?? defaultProviderRegistry;
-  const provider = params.provider ?? registry.getSpeechProvider(params.providerId, params.cfg);
-  if (params.voiceModel) {
-    return voiceProviderSupportsModel(provider, params.voiceModel.model)
-      ? params.voiceModel
-      : undefined;
-  }
-  return resolveSupportedVoiceModelRefs({
-    config: params.cfg?.agents?.defaults?.voiceModel,
-    providers: provider ? [provider] : [],
-    providerId: params.providerId,
-  })[0];
-}
-
 function applyVoiceModelToSpeechProviderConfig(params: {
   cfg: OpenClawConfig | undefined;
   providerId: string;
@@ -152,13 +131,17 @@ function applyVoiceModelToSpeechProviderConfig(params: {
   voiceModel?: VoiceModelRef;
   registry?: TtsProviderRegistry;
 }): SpeechProviderConfig {
-  const voiceModel = resolveConfiguredSpeechVoiceModelForProvider({
-    cfg: params.cfg,
-    providerId: params.providerId,
-    provider: params.provider,
-    voiceModel: params.voiceModel,
-    registry: params.registry,
-  });
+  const registry = params.registry ?? defaultProviderRegistry;
+  const provider = params.provider ?? registry.getSpeechProvider(params.providerId, params.cfg);
+  const voiceModel = params.voiceModel
+    ? voiceProviderSupportsModel(provider, params.voiceModel.model)
+      ? params.voiceModel
+      : undefined
+    : resolveSupportedVoiceModelRefs({
+        config: params.cfg?.agents?.defaults?.voiceModel,
+        providers: provider ? [provider] : [],
+        providerId: params.providerId,
+      })[0];
   if (!voiceModel) {
     return params.providerConfig;
   }
@@ -326,31 +309,19 @@ function resolveSpeechProviderConfig(
   providerId: string,
   cfg: OpenClawConfig | undefined,
   registry: TtsProviderRegistry,
+  voiceModel?: VoiceModelRef,
 ): SpeechProviderConfig {
   const effectiveCfg = cfg ? resolveProviderRuntimeConfig(cfg, registry) : config.sourceConfig;
   const canonical =
     registry.canonicalizeSpeechProviderId(providerId, effectiveCfg) ??
     normalizeConfiguredSpeechProviderId(providerId) ??
     normalizeLowercaseStringOrEmpty(providerId);
-  return resolveLazyProviderConfig(config, canonical, effectiveCfg, undefined, undefined, registry);
-}
-
-function getResolvedSpeechProviderConfigFromInventory(params: {
-  config: ResolvedTtsConfig;
-  provider: SpeechProviderPlugin;
-  cfg?: OpenClawConfig;
-  registry?: TtsProviderRegistry;
-}): SpeechProviderConfig {
-  const registry = params.registry ?? defaultProviderRegistry;
-  const effectiveCfg = params.cfg
-    ? resolveProviderRuntimeConfig(params.cfg, registry)
-    : params.config.sourceConfig;
   return resolveLazyProviderConfig(
-    params.config,
-    params.provider.id,
+    config,
+    canonical,
     effectiveCfg,
+    voiceModel,
     undefined,
-    params.provider,
     registry,
   );
 }
@@ -362,22 +333,12 @@ export function getResolvedSpeechProviderConfigForVoiceModel(params: {
   voiceModel?: VoiceModelRef;
   registry?: TtsProviderRegistry;
 }): SpeechProviderConfig {
-  const registry = params.registry ?? defaultProviderRegistry;
-  if (!params.voiceModel) {
-    return resolveSpeechProviderConfig(params.config, params.providerId, params.cfg, registry);
-  }
-  const effectiveCfg = resolveProviderRuntimeConfig(params.cfg, registry);
-  const canonical =
-    registry.canonicalizeSpeechProviderId(params.providerId, effectiveCfg) ??
-    normalizeConfiguredSpeechProviderId(params.providerId) ??
-    normalizeLowercaseStringOrEmpty(params.providerId);
-  return resolveLazyProviderConfig(
+  return resolveSpeechProviderConfig(
     params.config,
-    canonical,
-    effectiveCfg,
+    params.providerId,
+    params.cfg,
+    params.registry ?? defaultProviderRegistry,
     params.voiceModel,
-    undefined,
-    registry,
   );
 }
 
@@ -555,12 +516,14 @@ function isSpeechProviderConfigured(
         providerConfig:
           typeof provider === "string"
             ? resolveSpeechProviderConfig(config, resolvedProvider.id, effectiveCfg, registry)
-            : getResolvedSpeechProviderConfigFromInventory({
+            : resolveLazyProviderConfig(
                 config,
-                provider: resolvedProvider,
-                cfg: effectiveCfg,
+                resolvedProvider.id,
+                effectiveCfg,
+                undefined,
+                resolvedProvider,
                 registry,
-              }),
+              ),
         timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: resolvedProvider }),
       }) ?? false
     );

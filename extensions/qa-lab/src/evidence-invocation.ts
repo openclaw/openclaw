@@ -86,10 +86,7 @@ export function createQaEvidenceInvocation(params: {
       throw new Error("continued evidence requires recorded v3 invocation custody");
     }
     const containment = resolveQaEvidenceContainment(continued.occurrences, continued.entries);
-    const continuedAnchors = continued.occurrences.filter(
-      (occurrence) =>
-        occurrence.scenario?.kind === "instance" && !containment.parentById.has(occurrence.id),
-    );
+    const continuedAnchors = containment.rootInstances;
     if (!params.anchors || JSON.stringify(continuedAnchors) !== JSON.stringify(anchors)) {
       throw new Error("continued evidence does not match the captured invocation");
     }

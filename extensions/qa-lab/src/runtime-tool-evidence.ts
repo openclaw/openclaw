@@ -1,4 +1,5 @@
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readQaMessageFunctionCalls, readQaTranscriptMessages } from "./runtime-transcript.js";
 import { projectQaToolMessages } from "./tool-activity.js";
 
 type QaRuntimeToolFixtureTranscriptToolCall = {
@@ -106,28 +107,10 @@ function extractTranscriptToolCalls(
     }
   }
 
-  const rawToolCalls =
-    message.tool_calls ?? message.toolCalls ?? message.function_call ?? message.functionCall;
-  const toolCalls = Array.isArray(rawToolCalls) ? rawToolCalls : rawToolCalls ? [rawToolCalls] : [];
-  for (const call of toolCalls) {
-    if (!isRecord(call)) {
-      continue;
+  for (const call of readQaMessageFunctionCalls(message)) {
+    if (call.tool) {
+      calls.push({ ...call, tool: call.tool });
     }
-    const functionRecord = isRecord(call.function) ? call.function : undefined;
-    const tool =
-      normalizeOptionalString(call.name) ?? normalizeOptionalString(functionRecord?.name);
-    if (!tool) {
-      continue;
-    }
-    calls.push({
-      id:
-        normalizeOptionalString(call.id) ??
-        normalizeOptionalString(call.toolCallId) ??
-        normalizeOptionalString(call.toolUseId),
-      tool,
-      args:
-        call.arguments ?? functionRecord?.arguments ?? call.input ?? functionRecord?.input ?? null,
-    });
   }
   return calls;
 }
@@ -246,25 +229,10 @@ function transcriptToolResultLinksCall(params: {
 export function readTranscriptToolEvidence(transcriptBytes: string, toolName: string) {
   const calls: QaRuntimeToolFixtureTranscriptToolCall[] = [];
   const results: QaRuntimeToolFixtureTranscriptToolResult[] = [];
-  for (const line of transcriptBytes.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      const message = isRecord(parsed) && isRecord(parsed.message) ? parsed.message : undefined;
-      if (!message) {
-        continue;
-      }
-      for (const projected of projectQaToolMessages([message])) {
-        calls.push(
-          ...extractTranscriptToolCalls(projected).filter((call) => call.tool === toolName),
-        );
-        results.push(...extractTranscriptToolResults(projected));
-      }
-    } catch {
-      // Ignore malformed transcript rows and keep live fixture evidence deterministic.
+  for (const message of readQaTranscriptMessages(transcriptBytes)) {
+    for (const projected of projectQaToolMessages([message])) {
+      calls.push(...extractTranscriptToolCalls(projected).filter((call) => call.tool === toolName));
+      results.push(...extractTranscriptToolResults(projected));
     }
   }
   const linkedEvidence = calls

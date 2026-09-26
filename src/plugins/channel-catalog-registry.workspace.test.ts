@@ -24,7 +24,7 @@ afterEach(() => {
   tempDirs.cleanup();
 });
 
-it("keeps the published install generation across ledger writes until restart", () => {
+it("keeps the published install generation across ledger writes until restart", async () => {
   const root = tempDirs.make("openclaw-channel-ledger-");
   const env = { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
   const initialRoot = path.join(root, "initial");
@@ -33,8 +33,8 @@ it("keeps the published install generation across ledger writes until restart", 
   for (const rootDir of [initialRoot, replacementRoot]) {
     writeChannelPlugin(rootDir, "managed-channel");
   }
-  const install = (rootDir: string, installEnv = env) => {
-    refreshPersistedInstalledPluginIndex({
+  const install = async (rootDir: string, installEnv = env) => {
+    await refreshPersistedInstalledPluginIndex({
       config,
       env: installEnv,
       reason: "source-changed",
@@ -44,17 +44,17 @@ it("keeps the published install generation across ledger writes until restart", 
     });
     databasePaths.add(resolveInstalledPluginIndexStorePath({ env: installEnv }));
   };
-  install(initialRoot);
+  await install(initialRoot);
   const snapshot = resolveConfigWidePluginMetadataSnapshot({ config, env });
   setGatewayPluginMetadataSnapshot(snapshot, { config, env });
   const read = () => listChannelCatalogEntries({ env }).map((entry) => entry.rootDir);
   expect(read()).toEqual([initialRoot]);
 
-  install(replacementRoot);
+  await install(replacementRoot);
   expect(read()).toEqual([initialRoot]);
   const foreign = tempDirs.make("openclaw-channel-foreign-ledger-");
   const foreignEnv = { ...env, HOME: foreign, OPENCLAW_STATE_DIR: foreign };
-  install(replacementRoot, foreignEnv);
+  await install(replacementRoot, foreignEnv);
   expect(listChannelCatalogEntries({ env: foreignEnv }).map((entry) => entry.rootDir)).toEqual([
     replacementRoot,
   ]);

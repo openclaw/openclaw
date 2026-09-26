@@ -1,4 +1,3 @@
-import { setImmediate } from "node:timers/promises";
 import { err } from "@openclaw/normalization-core/result";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -16,6 +15,7 @@ import type { DetachedTaskTerminalState } from "./detached-task-runtime-contract
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
 import {
   createTaskFlowEffectsFixture as fixture,
+  drainTaskFlowRetry as drainRetry,
   flow,
   ownerKey,
 } from "./task-executor-create.flow-effects.test-support.js";
@@ -54,13 +54,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await state.cleanup();
 });
-
-async function drainRetry(delayMs = 1_000) {
-  await vi.advanceTimersByTimeAsync(delayMs);
-  await setImmediate();
-  // Observe root settlement without consuming the next fake retry deadline.
-  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { interval: 0 });
-}
 
 it("retains deferred flow work without admitting a run owner past it", async () => {
   const f = await fixture();
@@ -394,12 +387,18 @@ it.each([
   }
   expect(f.store.loadSnapshot().tasks.get(second.task.taskId)?.status).toBe("running");
   expect(f.commands.filter((command) => command === "tasks.finalizeActive")).toHaveLength(1);
+  const cancellationCommands = f.commands.filter(
+    (command) => command === "flows.finalizeTaskCancellation",
+  ).length;
   await drainRetry();
   if (failure.endsWith("flow publication")) {
     const commands = f.commands.length;
     const read = await prepareTaskFlowRegistryRead();
     expect(read?.getTaskFlowById(flow.flowId)?.status).toBe(managed ? "cancelled" : "succeeded");
     expect(f.commands).toHaveLength(commands);
+    expect(
+      f.commands.filter((command) => command === "flows.finalizeTaskCancellation"),
+    ).toHaveLength(cancellationCommands);
   }
   expect(f.store.loadSnapshot().tasks.get(first.task.taskId)?.status).toBe("succeeded");
   expect(f.store.loadSnapshot().tasks.get(second.task.taskId)?.status).toBe("running");
@@ -530,9 +529,12 @@ it.each([
         status: "running",
         cancelRequestedAt: Date.now(),
       });
-      f.beforeFinalize.mockImplementationOnce(() => {
+      const rejectCancellation = () => {
         throw new Error("Synthetic managed cancellation write failure");
-      });
+      };
+      f.beforeFinalize
+        .mockImplementationOnce(rejectCancellation)
+        .mockImplementationOnce(rejectCancellation);
     }
 
     expect(await runTaskRegistryMaintenance()).toMatchObject({ cleanupStamped: 1, pruned: 0 });
@@ -559,6 +561,14 @@ it.each([
     expect(sync).toHaveBeenCalledOnce();
     await drainRetry(1);
     expect(sync).toHaveBeenCalledTimes(owner === "current" ? 2 : 1);
+    if (failure === "managed cancellation" && owner === "current") {
+      expect(f.flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe("running");
+      expect(f.beforeFinalize).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(f.beforeFinalize).toHaveBeenCalledTimes(2);
+      await drainRetry(1);
+      expect(sync).toHaveBeenCalledTimes(3);
+    }
     expect(f.flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe(
       owner === "current"
         ? failure === "managed cancellation"
@@ -567,7 +577,7 @@ it.each([
         : "running",
     );
     if (failure === "managed cancellation") {
-      expect(f.beforeFinalize).toHaveBeenCalledTimes(owner === "current" ? 2 : 1);
+      expect(f.beforeFinalize).toHaveBeenCalledTimes(owner === "current" ? 3 : 1);
     }
     expect(f.store.loadSnapshot()).toEqual(committed);
     expect(f.commands.filter((command) => command === "tasks.applyRetention")).toHaveLength(1);
@@ -836,9 +846,15 @@ it("keeps cancellation overload inside the existing finite retry budget", async 
   expect(f.flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe("running");
 });
 
-it.each(["settleUnstarted", "finalizeActive"] as const)(
-  "does not retry uncertain cancellation outcomes (%s)",
-  async (finalize) => {
+it.each([
+  ["settleUnstarted", "initial", "direct"],
+  ["finalizeActive", "initial", "direct"],
+  ["retention", "initial", "direct"],
+  ["retention", "retry", "direct"],
+  ["retention", "retry", "wrapped"],
+] as const)(
+  "does not retry uncertain cancellation outcomes (%s, %s, %s)",
+  async (finalize, stage, envelope) => {
     const f = await fixture("managed");
     const created = await f.create();
     if (!created) {
@@ -851,15 +867,46 @@ it.each(["settleUnstarted", "finalizeActive"] as const)(
       status: "running",
       cancelRequestedAt: Date.now(),
     });
+    if (stage === "retry") {
+      f.beforeFinalize.mockImplementationOnce(() => {
+        throw new Error("Synthetic rolled-back cancellation failure");
+      });
+    }
     f.beforeFinalize.mockImplementation(() => {
-      throw new SqliteWorkerError("Synthetic uncertain cancellation outcome", "outcome-unknown");
+      const unknown = new SqliteWorkerError(
+        "Synthetic uncertain cancellation outcome",
+        "outcome-unknown",
+      );
+      throw envelope === "wrapped"
+        ? new AggregateError([new Error("Synthetic cleanup failure", { cause: unknown })])
+        : unknown;
     });
-    expect(await created[finalize]({ status: "failed", endedAt: Date.now() }, () => true)).toBe(
-      finalize === "settleUnstarted" ? true : undefined,
-    );
+    if (finalize === "retention") {
+      const terminal: TaskRecord = {
+        ...created.task,
+        status: "succeeded",
+        endedAt: Date.now(),
+        lastEventAt: Date.now(),
+      };
+      delete terminal.cleanupAfter;
+      f.store.upsertTaskWithDeliveryState({ task: terminal });
+      publishTaskRecordAfterAtomicStore(terminal);
+      expect(await runTaskRegistryMaintenance()).toMatchObject({ cleanupStamped: 1 });
+      if (stage === "retry") {
+        await drainRetry();
+      }
+    } else {
+      expect(await created[finalize]({ status: "failed", endedAt: Date.now() }, () => true)).toBe(
+        finalize === "settleUnstarted" ? true : undefined,
+      );
+    }
     await drainRetry(751_000);
-    expect(f.beforeFinalize).toHaveBeenCalledTimes(1);
-    expect(f.commands.filter((command) => command === `tasks.${finalize}`)).toHaveLength(1);
+    expect(f.beforeFinalize).toHaveBeenCalledTimes(stage === "retry" ? 2 : 1);
+    expect(
+      f.commands.filter(
+        (command) => command === `tasks.${finalize === "retention" ? "applyRetention" : finalize}`,
+      ),
+    ).toHaveLength(1);
   },
 );
 
@@ -926,6 +973,7 @@ it.each(
         },
         () => assertCallbackOwner(context, f.store),
       );
+      return true;
     });
     const replacement = createInMemoryTaskFlowRegistryStore({
       flows: new Map([[flow.flowId, { ...flow, syncMode: "managed", controllerId: "proof" }]]),

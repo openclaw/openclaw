@@ -322,11 +322,8 @@ export async function prepareQaGatewayChild(
     : gatewayExecutablePath
       ? [...runtimePreloadArgs, ...gatewayArgsPrefix]
       : [...runtimePreloadArgs, distEntryPath, ...gatewayArgsPrefix];
-  const gatewayLaunchArgsPrefix = gatewayCommand?.processBoundary
-    ? gatewayArgsPrefix
-    : cliArgsPrefix;
   const buildGatewayArgs = () => [
-    ...gatewayLaunchArgsPrefix,
+    ...cliArgsPrefix,
     "gateway",
     "run",
     "--port",

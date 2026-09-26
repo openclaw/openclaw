@@ -2,7 +2,7 @@ import { formatErrorMessage as formatSharedErrorMessage } from "openclaw/plugin-
 import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
-import { getJson, getJsonNoStore, postJson, QaLabHttpError } from "./http.js";
+import { getJson, postJson, QaLabHttpError } from "./http.js";
 import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
 import { captureEventKey } from "./ui-render-capture-events.js";
 import { redactSensitiveText } from "./ui-render-capture-redaction.js";
@@ -73,18 +73,10 @@ function defaultModelsForProviderMode(
   mode: RunnerSelection["providerMode"],
   bootstrap?: Bootstrap | null,
 ): Pick<RunnerSelection, "primaryModel" | "alternateModel" | "fastMode"> {
-  const preferredLiveModel = bootstrap?.runnerCatalog.real[0]?.key;
-  if (mode === "live-frontier") {
-    const primaryModel = defaultQaModelForMode(mode, { preferredLiveModel });
-    const alternateModel = defaultQaModelForMode(mode, { alternate: true, preferredLiveModel });
-    return {
-      primaryModel,
-      alternateModel,
-      fastMode: isQaFastModeEnabled({ primaryModel, alternateModel }),
-    };
-  }
-  const primaryModel = defaultQaModelForMode(mode);
-  const alternateModel = defaultQaModelForMode(mode, { alternate: true });
+  const preferredLiveModel =
+    mode === "live-frontier" ? bootstrap?.runnerCatalog.real[0]?.key : undefined;
+  const primaryModel = defaultQaModelForMode(mode, { preferredLiveModel });
+  const alternateModel = defaultQaModelForMode(mode, { alternate: true, preferredLiveModel });
   return {
     primaryModel,
     alternateModel,
@@ -409,7 +401,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       return;
     }
     try {
-      const payload = await getJsonNoStore<{ version: string | null }>("/api/ui-version");
+      const payload = await getJson<{ version: string | null }>("/api/ui-version", "no-store");
       if (!currentUiVersion) {
         currentUiVersion = payload.version;
         return;
@@ -711,6 +703,15 @@ export async function createQaLabApp(root: HTMLDivElement) {
       el.scrollTop = el.scrollHeight;
     }
     previousMessageCount = newCount;
+  }
+
+  function clearCaptureTimelineWindow() {
+    state.captureTimelineWindowStartPct = null;
+    state.captureTimelineWindowEndPct = null;
+    state.captureTimelineBrushAnchorPct = null;
+    state.captureTimelineBrushCurrentPct = null;
+    state.selectedCaptureEventKey = null;
+    render();
   }
 
   function bindEvents() {
@@ -1047,12 +1048,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.captureViewMode = value === "timeline" ? "timeline" : "list";
       state.captureCollapsedLaneIds = [];
       state.capturePinnedLaneIds = [];
-      state.captureTimelineWindowStartPct = null;
-      state.captureTimelineWindowEndPct = null;
-      state.captureTimelineBrushAnchorPct = null;
-      state.captureTimelineBrushCurrentPct = null;
-      state.selectedCaptureEventKey = null;
-      render();
+      clearCaptureTimelineWindow();
     });
     bindValue("#capture-group-mode", "change", (value) => {
       state.captureGroupMode =
@@ -1096,14 +1092,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     });
     root
       .querySelector<HTMLButtonElement>("#capture-timeline-clear-window")
-      ?.addEventListener("click", () => {
-        state.captureTimelineWindowStartPct = null;
-        state.captureTimelineWindowEndPct = null;
-        state.captureTimelineBrushAnchorPct = null;
-        state.captureTimelineBrushCurrentPct = null;
-        state.selectedCaptureEventKey = null;
-        render();
-      });
+      ?.addEventListener("click", clearCaptureTimelineWindow);
     root
       .querySelector<HTMLInputElement>("#capture-timeline-focus-flow")
       ?.addEventListener("change", (e) => {
@@ -1225,38 +1214,27 @@ export async function createQaLabApp(root: HTMLDivElement) {
         Object.assign(state, createCaptureFilters());
         render();
       });
-    root.querySelectorAll<HTMLElement>("[data-capture-lane-toggle]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const laneId = node.dataset.captureLaneToggle;
-        if (!laneId) {
-          return;
-        }
-        const collapsed = new Set(state.captureCollapsedLaneIds);
-        if (collapsed.has(laneId)) {
-          collapsed.delete(laneId);
-        } else {
-          collapsed.add(laneId);
-        }
-        state.captureCollapsedLaneIds = [...collapsed];
-        render();
+    for (const [attribute, field] of [
+      ["data-capture-lane-toggle", "captureCollapsedLaneIds"],
+      ["data-capture-lane-pin", "capturePinnedLaneIds"],
+    ] as const) {
+      root.querySelectorAll<HTMLElement>(`[${attribute}]`).forEach((node) => {
+        node.addEventListener("click", () => {
+          const laneId = node.getAttribute(attribute);
+          if (!laneId) {
+            return;
+          }
+          const selected = new Set(state[field]);
+          if (selected.has(laneId)) {
+            selected.delete(laneId);
+          } else {
+            selected.add(laneId);
+          }
+          state[field] = [...selected];
+          render();
+        });
       });
-    });
-    root.querySelectorAll<HTMLElement>("[data-capture-lane-pin]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const laneId = node.dataset.captureLanePin;
-        if (!laneId) {
-          return;
-        }
-        const pinned = new Set(state.capturePinnedLaneIds);
-        if (pinned.has(laneId)) {
-          pinned.delete(laneId);
-        } else {
-          pinned.add(laneId);
-        }
-        state.capturePinnedLaneIds = [...pinned];
-        render();
-      });
-    });
+    }
     root.querySelectorAll<HTMLElement>("[data-capture-event]").forEach((node) => {
       node.addEventListener("click", () => {
         state.selectedCaptureEventKey = node.dataset.captureEvent ?? null;
@@ -1456,12 +1434,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
             state.captureTimelineBrushAnchorPct != null
           ) {
             event.preventDefault();
-            state.captureTimelineWindowStartPct = null;
-            state.captureTimelineWindowEndPct = null;
-            state.captureTimelineBrushAnchorPct = null;
-            state.captureTimelineBrushCurrentPct = null;
-            state.selectedCaptureEventKey = null;
-            render();
+            clearCaptureTimelineWindow();
           }
           return;
         }

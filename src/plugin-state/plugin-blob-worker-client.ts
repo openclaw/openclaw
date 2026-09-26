@@ -19,14 +19,13 @@ type Scope = Pick<SqliteWorkerStore<PluginBlobWorkerOperations>, "execute">;
 type Input<Key extends keyof PluginBlobWorkerOperations> =
   PluginBlobWorkerOperations[Key]["input"] & { env?: NodeJS.ProcessEnv };
 
-async function execute<T>(
+async function execute<Key extends keyof PluginBlobWorkerOperations>(
   env: NodeJS.ProcessEnv | undefined,
-  name: keyof PluginBlobWorkerOperations,
-  dispatch: (scope: Scope) => Promise<T>,
+  command: { type: Key; input: PluginBlobWorkerOperations[Key]["input"] },
   prepare?: () => SqliteWorkerInputPreparation,
-): Promise<T> {
+): Promise<PluginBlobWorkerOperations[Key]["output"]> {
   const databasePath = resolveOpenClawStateSqlitePath(env ?? process.env);
-  const description = pluginBlobWorkerOperations[name];
+  const description = pluginBlobWorkerOperations[command.type];
   let dispatched = false;
   let preparation: SqliteWorkerInputPreparation | undefined;
   try {
@@ -38,7 +37,9 @@ async function execute<T>(
       context,
       async (scope: Scope) => {
         dispatched = true;
-        return await (preparation ? preparation.handoff(() => dispatch(scope)) : dispatch(scope));
+        return await (preparation
+          ? preparation.handoff(() => scope.execute<Key>(command))
+          : scope.execute<Key>(command));
       },
       { requireStateLifecycle: true, assertCurrent: preparation?.assertCurrent },
     );
@@ -76,11 +77,8 @@ function captureRegistrationInput(
 
 export function registerPluginBlobInWorker(params: Input<"pluginBlob.register">): Promise<void> {
   const { env, ...input } = params;
-  return execute(
-    env,
-    "pluginBlob.register",
-    (scope) => scope.execute({ type: "pluginBlob.register", input }),
-    () => captureRegistrationInput("pluginBlob.register", input),
+  return execute(env, { type: "pluginBlob.register", input }, () =>
+    captureRegistrationInput("pluginBlob.register", input),
   );
 }
 
@@ -88,28 +86,21 @@ export function registerPluginBlobIfAbsentInWorker(
   params: Input<"pluginBlob.registerIfAbsent">,
 ): Promise<boolean> {
   const { env, ...input } = params;
-  return execute(
-    env,
-    "pluginBlob.registerIfAbsent",
-    (scope) => scope.execute({ type: "pluginBlob.registerIfAbsent", input }),
-    () => captureRegistrationInput("pluginBlob.registerIfAbsent", input),
+  return execute(env, { type: "pluginBlob.registerIfAbsent", input }, () =>
+    captureRegistrationInput("pluginBlob.registerIfAbsent", input),
   );
 }
 
 export function deletePluginBlobInWorker(params: Input<"pluginBlob.delete">): Promise<boolean> {
   const { env, ...input } = params;
-  return execute(env, "pluginBlob.delete", (scope) =>
-    scope.execute({ type: "pluginBlob.delete", input }),
-  );
+  return execute(env, { type: "pluginBlob.delete", input });
 }
 
 export async function deleteExpiredPluginBlobKeyInWorker<TMetadata>(
   params: Input<"pluginBlob.deleteExpiredKey">,
 ): Promise<PluginBlobEntryInfo<TMetadata> | undefined> {
   const { env, ...input } = params;
-  const entry = await execute(env, "pluginBlob.deleteExpiredKey", (scope) =>
-    scope.execute({ type: "pluginBlob.deleteExpiredKey", input }),
-  );
+  const entry = await execute(env, { type: "pluginBlob.deleteExpiredKey", input });
   // SAFETY: The plugin namespace owns the metadata type; its kernel validates stored JSON.
   return entry as PluginBlobEntryInfo<TMetadata> | undefined;
 }
@@ -118,18 +109,14 @@ export async function deleteExpiredPluginBlobsInWorker<TMetadata>(
   params: Input<"pluginBlob.deleteExpired">,
 ): Promise<PluginBlobEntryInfo<TMetadata>[]> {
   const { env, ...input } = params;
-  const entries = await execute(env, "pluginBlob.deleteExpired", (scope) =>
-    scope.execute({ type: "pluginBlob.deleteExpired", input }),
-  );
+  const entries = await execute(env, { type: "pluginBlob.deleteExpired", input });
   // SAFETY: The plugin namespace owns the metadata type; its kernel validates stored JSON.
   return entries as PluginBlobEntryInfo<TMetadata>[];
 }
 
 export function clearPluginBlobsInWorker(params: Input<"pluginBlob.clear">): Promise<void> {
   const { env, ...input } = params;
-  return execute(env, "pluginBlob.clear", (scope) =>
-    scope.execute({ type: "pluginBlob.clear", input }),
-  );
+  return execute(env, { type: "pluginBlob.clear", input });
 }
 
 function readPluginBlob(command: PluginBlobReadCommand, env?: NodeJS.ProcessEnv) {
