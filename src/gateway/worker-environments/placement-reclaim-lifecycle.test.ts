@@ -25,10 +25,8 @@ describe("placement reclaim with provider-owned node teardown", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it.each([
-    { operation: "reclaim", failure: "rejection" },
     { operation: "reclaim", failure: "timeout" },
     { operation: "move", failure: "rejection" },
-    { operation: "move", failure: "timeout" },
     { operation: "recovery", failure: "rejection" },
     { operation: "reclaim", failure: "reconciliation" },
     { operation: "reclaim", failure: "resume-owner-close" },

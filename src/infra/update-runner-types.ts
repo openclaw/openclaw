@@ -26,6 +26,8 @@ export type UpdateRunResult = {
   /** The executing owner's terminal failure; steps also retain superseded attempts. */
   failedStep?: UpdateStepResult;
   gitRuntime?: GitRuntimeArtifactIdentity;
+  /** The preparation owner verified that completion needs no runtime regeneration. */
+  sourceRuntimePrepared?: boolean;
   before?: { sha?: string | null; version?: string | null; buildId?: string | null };
   after?: {
     sha?: string | null;
@@ -108,6 +110,7 @@ type GitUpdateTarget = {
 };
 
 export type UpdateRunnerOptions = {
+  sourceRuntimePrepared?: boolean;
   channel?: UpdateChannel;
   devTarget?: DevUpdateTarget;
   /** Expose a new checkout only after target admission; subsequent work uses the published path. */

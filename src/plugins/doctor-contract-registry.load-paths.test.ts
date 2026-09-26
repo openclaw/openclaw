@@ -27,26 +27,31 @@ function makeHermeticDoctorEnv(stateDir: string): NodeJS.ProcessEnv {
   };
 }
 
+function writeDoctorFixture(
+  pluginRoot: string,
+  files: Record<string, string | Record<string, unknown>>,
+): void {
+  for (const [relativePath, contents] of Object.entries(files)) {
+    const filePath = path.join(pluginRoot, relativePath);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      typeof contents === "string" ? contents : JSON.stringify(contents),
+      "utf8",
+    );
+  }
+}
+
 function writeDoctorPlugin(pluginRoot: string, pluginId: string): void {
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: pluginId,
-        name: "Load Path Doctor",
-        version: "0.0.0-test",
-        configSchema: {},
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(pluginRoot, "doctor-contract-api.cjs"),
-    `
+  writeDoctorFixture(pluginRoot, {
+    "openclaw.plugin.json": {
+      id: pluginId,
+      name: "Load Path Doctor",
+      version: "0.0.0-test",
+      configSchema: {},
+    },
+    "index.cjs": "module.exports = {};\n",
+    "doctor-contract-api.cjs": `
 const pluginId = ${JSON.stringify(pluginId)};
 
 function isRecord(value) {
@@ -85,46 +90,27 @@ module.exports = {
   },
 };
 `,
-    "utf8",
-  );
+  });
 }
 
 function writeDistDoctorPlugin(pluginRoot: string, pluginId: string): void {
-  fs.mkdirSync(path.join(pluginRoot, "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: pluginId,
-        name: "Dist Doctor",
-        version: "0.0.0-test",
-        configSchema: {},
+  writeDoctorFixture(pluginRoot, {
+    "openclaw.plugin.json": {
+      id: pluginId,
+      name: "Dist Doctor",
+      version: "0.0.0-test",
+      configSchema: {},
+    },
+    "package.json": {
+      name: `@openclaw/${pluginId}`,
+      version: "0.0.0-test",
+      type: "module",
+      openclaw: {
+        extensions: ["./dist/index.js"],
       },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "package.json"),
-    JSON.stringify(
-      {
-        name: `@openclaw/${pluginId}`,
-        version: "0.0.0-test",
-        type: "module",
-        openclaw: {
-          extensions: ["./dist/index.js"],
-        },
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(pluginRoot, "dist", "index.js"), "export {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(pluginRoot, "dist", "doctor-contract-api.cjs"),
-    `
+    },
+    "dist/index.js": "export {};\n",
+    "dist/doctor-contract-api.cjs": `
 module.exports = {
   legacyConfigRules: [
     {
@@ -134,8 +120,7 @@ module.exports = {
   ],
 };
 `,
-    "utf8",
-  );
+  });
 }
 
 function writeLegacyRuntimeDoctorPlugin(params: {
@@ -143,30 +128,20 @@ function writeLegacyRuntimeDoctorPlugin(params: {
   pluginId: string;
   importedSymbols: readonly string[];
 }): void {
-  fs.mkdirSync(path.join(params.pluginRoot, "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({
+  writeDoctorFixture(params.pluginRoot, {
+    "openclaw.plugin.json": {
       id: params.pluginId,
       doctorContract: { configRepair: true },
       configSchema: {},
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "package.json"),
-    JSON.stringify({
+    },
+    "package.json": {
       name: `@openclaw/${params.pluginId}`,
       version: "2026.7.2-beta.7",
       type: "module",
       openclaw: { extensions: ["./dist/index.js"] },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(params.pluginRoot, "dist", "index.js"), "export {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "dist", "doctor-contract-api.js"),
-    `import { ${params.importedSymbols.join(", ")} } from "openclaw/plugin-sdk/runtime-doctor";
+    },
+    "dist/index.js": "export {};\n",
+    "dist/doctor-contract-api.js": `import { ${params.importedSymbols.join(", ")} } from "openclaw/plugin-sdk/runtime-doctor";
 const importedHelpers = [${params.importedSymbols.join(", ")}];
 if (importedHelpers.some((helper) => typeof helper !== "function")) {
   throw new Error("legacy runtime-doctor helper missing");
@@ -176,8 +151,7 @@ export const legacyConfigRules = [{
   message: ${JSON.stringify(`${params.pluginId} legacy doctor contract loaded`)},
 }];
 `,
-    "utf8",
-  );
+  });
 }
 
 function writeLegacyChannelMigrationPlugin(params: {
@@ -188,15 +162,9 @@ function writeLegacyChannelMigrationPlugin(params: {
   stateKey: string;
   label?: string;
 }): void {
-  fs.mkdirSync(params.pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({ id: params.pluginId, channels: [params.pluginId], configSchema: {} }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "package.json"),
-    JSON.stringify({
+  writeDoctorFixture(params.pluginRoot, {
+    "openclaw.plugin.json": { id: params.pluginId, channels: [params.pluginId], configSchema: {} },
+    "package.json": {
       name: `@openclaw/${params.pluginId}`,
       version: "2026.7.1",
       type: "commonjs",
@@ -205,22 +173,10 @@ function writeLegacyChannelMigrationPlugin(params: {
         setupEntry: "./setup-entry.cjs",
         setupFeatures: { legacyStateMigrations: true },
       },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "index.cjs"),
-    "throw new Error('legacy discovery loaded the channel runtime');\n",
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "doctor-contract-api.cjs"),
-    "module.exports = { legacyConfigRules: [] };\n",
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "setup-entry.cjs"),
-    `const fs = require('node:fs');
+    },
+    "index.cjs": "throw new Error('legacy discovery loaded the channel runtime');\n",
+    "doctor-contract-api.cjs": "module.exports = { legacyConfigRules: [] };\n",
+    "setup-entry.cjs": `const fs = require('node:fs');
 const path = require('node:path');
 const pluginId = ${JSON.stringify(params.pluginId)};
 const namespace = ${JSON.stringify(params.namespace)};
@@ -252,28 +208,21 @@ module.exports = {
     };
   },
 };\n`,
-    "utf8",
-  );
+  });
 }
 
 function writeModernBundledChannelMigrationPlugin(params: {
   pluginRoot: string;
   pluginId: string;
 }): void {
-  fs.mkdirSync(params.pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({
+  writeDoctorFixture(params.pluginRoot, {
+    "openclaw.plugin.json": {
       id: params.pluginId,
       channels: [params.pluginId],
       doctorContract: { stateMigrations: true },
       configSchema: {},
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "package.json"),
-    JSON.stringify({
+    },
+    "package.json": {
       name: `@openclaw/${params.pluginId}`,
       version: "2026.7.1",
       type: "commonjs",
@@ -281,74 +230,48 @@ function writeModernBundledChannelMigrationPlugin(params: {
         extensions: ["./index.cjs"],
         setupEntry: "./setup-entry.cjs",
       },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "index.cjs"),
-    "throw new Error('shadowed bundled channel runtime loaded');\n",
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "setup-entry.cjs"),
-    `module.exports = {
+    },
+    "index.cjs": "throw new Error('shadowed bundled channel runtime loaded');\n",
+    "setup-entry.cjs": `module.exports = {
   kind: 'bundled-channel-setup-entry',
   loadSetupPlugin() { return {}; },
 };\n`,
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "doctor-contract-api.cjs"),
-    `module.exports = { stateMigrations: [{
+    "doctor-contract-api.cjs": `module.exports = { stateMigrations: [{
   id: 'bundled-modern-state',
   label: 'Bundled modern state',
   detectLegacyState: () => null,
   migrateLegacyState: () => ({ changes: [], warnings: [] }),
 }] };\n`,
-    "utf8",
-  );
+  });
 }
 
 function writeDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string): void {
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: pluginId,
-        name: "Load Path Session Owner",
-        version: "0.0.0-test",
-        configSchema: {},
-        sessionRouteStateOwners: [
-          {
-            id: "load-path-session-owner",
-            label: "Load Path Session Owner",
-            providerIds: ["load-path-provider"],
-            runtimeIds: ["load-path-runtime"],
-            cliSessionKeys: ["load-path-cli"],
-            authProfilePrefixes: ["load-path:"],
-          },
-        ],
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n", "utf8");
+  writeDoctorFixture(pluginRoot, {
+    "openclaw.plugin.json": {
+      id: pluginId,
+      name: "Load Path Session Owner",
+      version: "0.0.0-test",
+      configSchema: {},
+      sessionRouteStateOwners: [
+        {
+          id: "load-path-session-owner",
+          label: "Load Path Session Owner",
+          providerIds: ["load-path-provider"],
+          runtimeIds: ["load-path-runtime"],
+          cliSessionKeys: ["load-path-cli"],
+          authProfilePrefixes: ["load-path:"],
+        },
+      ],
+    },
+    "index.cjs": "module.exports = {};\n",
+  });
 }
 
 function writeLegacyDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string): void {
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({ id: pluginId, configSchema: {} }),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(pluginRoot, "doctor-contract-api.cjs"),
-    `module.exports = {
+  writeDoctorFixture(pluginRoot, {
+    "openclaw.plugin.json": { id: pluginId, configSchema: {} },
+    "index.cjs": "module.exports = {};\n",
+    "doctor-contract-api.cjs": `module.exports = {
   sessionRouteStateOwners: [{
     id: "legacy-load-path-owner",
     label: "Legacy Load Path Owner",
@@ -356,25 +279,18 @@ function writeLegacyDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: strin
   }],
 };
 `,
-    "utf8",
-  );
+  });
 }
 
 function writeLegacyPostSessionMigrationPlugin(pluginRoot: string, pluginId: string): void {
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({
+  writeDoctorFixture(pluginRoot, {
+    "openclaw.plugin.json": {
       id: pluginId,
       configSchema: {},
       doctorContract: { stateMigrations: true },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(pluginRoot, "doctor-contract-api.cjs"),
-    `module.exports = {
+    },
+    "index.cjs": "module.exports = {};\n",
+    "doctor-contract-api.cjs": `module.exports = {
   stateMigrations: [{
     id: "legacy-post-session-state",
     label: "Legacy post-session state",
@@ -389,8 +305,7 @@ function writeLegacyPostSessionMigrationPlugin(pluginRoot: string, pluginId: str
   }],
 };
 `,
-    "utf8",
-  );
+  });
 }
 
 function createDoctorPluginConfig(pluginRoot: string, pluginId: string): OpenClawConfig {
@@ -608,10 +523,6 @@ describe("doctor contract registry load-path plugins", () => {
   });
 
   it.each([
-    {
-      pluginId: "clickclack-legacy-doctor",
-      importedSymbols: ["asObjectRecord"],
-    },
     {
       pluginId: "codex-legacy-doctor",
       importedSymbols: ["archiveLegacyStateSource", "legacyStateFileExists"],

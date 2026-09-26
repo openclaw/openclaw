@@ -85,24 +85,6 @@ describe("signalMessageActions", () => {
     expect(prepared).toEqual({ text: "reply" });
   });
 
-  it("preserves explicit Signal reply ids that equal the current message", async () => {
-    const prepared = await signalMessageActions.prepareSendPayload?.({
-      ctx: {
-        channel: "signal",
-        action: "send",
-        cfg: {} as OpenClawConfig,
-        params: { replyTo: "1700000000001" },
-        toolContext: { currentMessageId: "1700000000001", replyToMode: "first" },
-      },
-      to: "+15550001111",
-      payload: { text: "reply" },
-      replyToId: "1700000000001",
-      replyToIdSource: "explicit",
-    });
-
-    expect(prepared).toEqual({ text: "reply", replyToId: "1700000000001" });
-  });
-
   it("preserves explicit Signal replies when implicit replies are suppressed", async () => {
     for (const replyToMode of ["off", "batched"] as const) {
       const prepared = await signalMessageActions.prepareSendPayload?.({

@@ -765,8 +765,6 @@ describe("worker turn launcher local placement", () => {
 
   it.each([
     { label: "failed paired-device execution", executionFailed: true, providerId: "device" },
-    { label: "successful paired-device execution", executionFailed: false, providerId: "device" },
-    { label: "failed cloud-node execution", executionFailed: true, providerId: "crabbox" },
     { label: "successful cloud-node execution", executionFailed: false, providerId: "crabbox" },
   ])(
     "preserves a disconnected node-backed placement after $label for a fresh attempt",

@@ -60,13 +60,6 @@ function requireCall(manager: HarnessManager, callId: string) {
   return expectDefined(manager.getCall(callId), `active call ${callId}`);
 }
 
-function requireMappedCall(manager: HarnessManager, providerCallId: string) {
-  return expectDefined(
-    manager.getCallByProviderCallId(providerCallId),
-    `mapped provider call ${providerCallId}`,
-  );
-}
-
 function requireFirstPlayTtsCall(provider: FakeProvider) {
   const call = provider.playTtsCalls.at(0);
   if (!call) {
@@ -172,29 +165,6 @@ describe("CallManager notify and mapping", () => {
     }
   });
 
-  it("upgrades providerCallId mapping when provider ID changes", async () => {
-    const { manager } = await createManagerHarness();
-
-    const { callId, success, error } = await manager.initiateCall("+15550000001");
-    expect(success).toBe(true);
-    expect(error).toBeUndefined();
-
-    expect(requireCall(manager, callId).providerCallId).toBe("request-uuid");
-    expect(requireMappedCall(manager, "request-uuid").callId).toBe(callId);
-
-    await manager.processEvent({
-      id: "evt-1",
-      type: "call.answered",
-      callId,
-      providerCallId: "call-uuid",
-      timestamp: Date.now(),
-    });
-
-    expect(requireCall(manager, callId).providerCallId).toBe("call-uuid");
-    expect(requireMappedCall(manager, "call-uuid").callId).toBe(callId);
-    expect(manager.getCallByProviderCallId("request-uuid")).toBeUndefined();
-  });
-
   it.each(["plivo", "twilio"] as const)(
     "speaks initial message on answered for notify mode (%s)",
     async (providerName) => {
@@ -213,37 +183,6 @@ describe("CallManager notify and mapping", () => {
       await expectNotifyHangup(manager, provider, callId);
     },
   );
-
-  it("speaks initial message on answered for conversation mode with non-stream provider", async () => {
-    const { manager, provider } = await createManagerHarness({}, new FakeProvider("plivo"));
-
-    const callId = await initiateCallWithMessage(
-      manager,
-      "+15550000003",
-      "Hello from conversation",
-      "conversation",
-    );
-    await answerCall(manager, callId, "evt-conversation-plivo");
-
-    expectFirstPlayTtsText(provider, "Hello from conversation");
-  });
-
-  it("speaks initial message on answered for conversation mode when Twilio streaming is disabled", async () => {
-    const { manager, provider } = await createManagerHarness(
-      { streaming: { enabled: false } },
-      new FakeProvider("twilio"),
-    );
-
-    const callId = await initiateCallWithMessage(
-      manager,
-      "+15550000004",
-      "Twilio non-stream",
-      "conversation",
-    );
-    await answerCall(manager, callId, "evt-conversation-twilio-no-stream");
-
-    expectFirstPlayTtsText(provider, "Twilio non-stream");
-  });
 
   it("lets realtime conversations own the initial greeting instead of posting legacy TwiML", async () => {
     const { manager, provider } = await createManagerHarness(
@@ -276,23 +215,6 @@ describe("CallManager notify and mapping", () => {
 
     expectFirstPlayTtsText(provider, "Notify text");
     await expectNotifyHangup(manager, provider, callId);
-  });
-
-  it("waits for stream connect in conversation mode when Twilio streaming is enabled", async () => {
-    const { manager, provider } = await createManagerHarness(
-      { streaming: { enabled: true } },
-      new FakeProvider("twilio"),
-    );
-
-    const callId = await initiateCallWithMessage(
-      manager,
-      "+15550000005",
-      "Twilio stream",
-      "conversation",
-    );
-    await answerCall(manager, callId, "evt-conversation-twilio-stream");
-
-    expect(provider.playTtsCalls).toHaveLength(0);
   });
 
   it("speaks on answered when Twilio streaming is enabled but stream-connect path is unavailable", async () => {

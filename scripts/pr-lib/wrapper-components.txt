@@ -544,6 +544,7 @@ src/gateway/control-ui-session-prs-git.runtime.ts
 src/gateway/control-ui-session-prs-landing.ts
 src/gateway/github-remote.ts
 src/gateway/operator-scopes.ts
+src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/workspace-actual-manifest.ts
@@ -950,6 +951,8 @@ src/plugins/host-hook-cleanup-timeout.ts
 src/plugins/host-hook-json.ts
 src/plugins/host-hook-runtime.ts
 src/plugins/host-hooks.ts
+src/plugins/http-path.ts
+src/plugins/http-route-owner.ts
 src/plugins/install-channel-specs.ts
 src/plugins/install-paths.ts
 src/plugins/install-root-context.ts

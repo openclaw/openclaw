@@ -62,4 +62,16 @@ export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
   metadata?: TCompletedMetadata;
 };
 
+/** Retention options for pending, completed, and failed ingress queue rows. */
+export type ChannelIngressQueuePruneOptions = {
+  pendingTtlMs?: number;
+  completedTtlMs?: number;
+  failedTtlMs?: number;
+  pendingMaxEntries?: number;
+  completedMaxEntries?: number;
+  failedMaxEntries?: number;
+  protectIds?: Iterable<string>;
+  now?: number;
+};
+
 export type ChannelIngressRow = Selectable<ChannelIngressEvents>;

@@ -1,14 +1,8 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import type { ZoomMeetingsConfig, ZoomMeetingsMode, ZoomMeetingsTransport } from "./config.js";
-import { testZoomMeetingListening, testZoomMeetingSpeech } from "./runtime-probes.js";
+import { zoomMeetingsProbes } from "./runtime-probes.js";
 import { getZoomMeetingsSetupStatus } from "./runtime-setup.js";
-import {
-  launchZoomMeetingInChrome,
-  launchZoomMeetingOnNode,
-  leaveZoomMeetingInBrowser,
-  readZoomMeetingTranscript,
-  recoverCurrentZoomMeetingTab,
-} from "./transports/chrome.js";
+import { zoomMeetingsChrome } from "./transports/chrome.js";
 import type { ZoomMeetingsChromeHealth } from "./transports/types.js";
 import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./transports/zoom-meetings-platform-adapter.js";
 import { hasSameZoomMeetingJoinCredential } from "./transports/zoom-meetings-urls.js";
@@ -20,22 +14,15 @@ export const ZoomMeetingsRuntime = MeetingPlatformAdapter.createRuntimeFacade<
   ZoomMeetingsChromeHealth,
   {
     setup: Awaited<ReturnType<typeof getZoomMeetingsSetupStatus>>;
-    listening: Awaited<ReturnType<typeof testZoomMeetingListening>>;
-    speech: Awaited<ReturnType<typeof testZoomMeetingSpeech>>;
+    listening: Awaited<ReturnType<typeof zoomMeetingsProbes.testListening>>;
+    speech: Awaited<ReturnType<typeof zoomMeetingsProbes.testSpeech>>;
   }
 >({
   platform: ZOOM_MEETINGS_PLATFORM_ADAPTER,
-  transport: {
-    launchInChrome: launchZoomMeetingInChrome,
-    launchOnNode: launchZoomMeetingOnNode,
-    leaveInBrowser: leaveZoomMeetingInBrowser,
-    readTranscript: readZoomMeetingTranscript,
-    recoverCurrentTab: recoverCurrentZoomMeetingTab,
-  },
+  transport: zoomMeetingsChrome,
   probes: {
     setupStatus: getZoomMeetingsSetupStatus,
-    testListening: testZoomMeetingListening,
-    testSpeech: testZoomMeetingSpeech,
+    ...zoomMeetingsProbes,
   },
   hooks: {
     // Normalize before locking so credential reuse sees the exact launched request.

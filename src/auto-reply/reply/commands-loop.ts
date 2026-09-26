@@ -5,6 +5,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply as directReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const LOOP_COMMAND_PREFIX = "/loop";
@@ -83,16 +84,7 @@ function buildLoopStopWorkOrder(name: string, sessionKey: string): string {
 export const handleLoopCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: LOOP_COMMAND_PREFIX,
-    match: (body) => {
-      const trimmed = body.trim();
-      const commandEnd = trimmed.search(/\s/u);
-      const token = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
-      return token.toLowerCase() === LOOP_COMMAND_PREFIX
-        ? commandEnd === -1
-          ? ""
-          : trimmed.slice(commandEnd).trim()
-        : null;
-    },
+    match: (body) => matchSlashCommandToken(body, LOOP_COMMAND_PREFIX),
     ownerOnly: true,
   },
   (params, spec) => {

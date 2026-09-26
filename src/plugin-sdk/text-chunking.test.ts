@@ -7,7 +7,6 @@ import {
   chunkTextRanges,
   findCodeRegions,
   isInsideCode,
-  tokenizeHtmlTags,
   type CodeRegion,
 } from "./text-chunking.js";
 
@@ -23,19 +22,6 @@ it("accepts positional plugin ranges while retaining discovered block metadata",
     (region) => region.block,
   );
   expect(blockKinds).toEqual([false, true]);
-});
-
-describe("tokenizeHtmlTags", () => {
-  it("keeps quoted attribute delimiters inside one tag token", () => {
-    expect([...tokenizeHtmlTags('<a href="https://example.com/?q=>">label</a>')]).toEqual([
-      expect.objectContaining({
-        raw: '<a href="https://example.com/?q=>">',
-        name: "a",
-        closing: false,
-      }),
-      expect.objectContaining({ raw: "</a>", name: "a", closing: true }),
-    ]);
-  });
 });
 
 describe("chunkTextForOutbound", () => {

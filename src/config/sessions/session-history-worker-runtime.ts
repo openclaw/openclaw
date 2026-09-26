@@ -301,20 +301,7 @@ export function readSessionHistoryPageInWorker(
 export async function readSessionHistoryPageInWorker(
   request: SessionHistoryWorkerRequest,
   signal?: AbortSignal,
-): Promise<
-  | SessionHistoryTranscriptBinding
-  | SessionArtifactReadResult
-  | ReadRecentSessionMessagesResult
-  | ReadSessionMessagesAroundIdResult
-  | ReadSessionMessagesResult
-  | undefined
-  | ChatHistoryPage
-  | SessionHistorySnapshot
-  | AdmittedSessionHistoryDelta
-  | ReadSessionMessageByIdResult
-  | number
-  | unknown[]
-> {
+) {
   signal?.throwIfAborted();
   const capturedRequest = captureHistoryRequest(request);
   const scope: SessionTranscriptReadScope =
@@ -510,15 +497,17 @@ export async function readSessionHistoryPageInWorker(
     if ("result" in result) {
       return result.result;
     }
+    if (result.kind === "delta") {
+      const delta: AdmittedSessionHistoryDelta = { ...result, assertCurrent };
+      return delta;
+    }
     return result.kind === "rpc"
       ? result.page
       : result.kind === "http"
         ? result.snapshot
-        : result.kind === "delta"
-          ? { ...result, assertCurrent }
-          : result.kind === "message-count"
-            ? result.count
-            : result.messages;
+        : result.kind === "message-count"
+          ? result.count
+          : result.messages;
   } catch (error) {
     if (resolved && isSessionTranscriptProjectionUnavailableError(error)) {
       startSessionTranscriptIndexReconcile({

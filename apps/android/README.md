@@ -237,13 +237,22 @@ build timestamp shared by every debug variant in that invocation. Release
 tasks still require explicit `openclawBuildCommit` and
 `openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
-Prepare and finalize Android release metadata through the shared mobile cutter:
+Android release archives use the pinned version in `apps/android/version.json`.
+Run **Android Store Release** from `main` without input parameters, or run
+`pnpm android:release:upload` from a clean local `main` matching `origin/main`.
+The pipeline selects unused phone and Wear build numbers from Google Play and
+generates OpenAI release notes from changes since each form factor's public
+release. It saves the plan and notes as release artifacts and uploads the selected
+clean source commit. Tracked version defaults and notes stay unchanged; the flow
+creates no preparation commits or follow-up PRs.
+
+For local preparation or inspection:
 
 ```bash
-node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
-pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
+pnpm android:version
 pnpm android:version:check
+pnpm android:version:pin -- --from-gateway
+pnpm android:version:sync
 ```
 
 Release-owner signing sync:
@@ -295,7 +304,7 @@ Start a fresh app process between scenes.
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
 
-Regular final and correction OpenClaw releases publish the signed third-party APK as `OpenClaw-Android.apk` with a checksum manifest and GitHub Actions provenance. `.github/workflows/android-release.yml` is the only automated GitHub Release upload path. When the tagged Android pin matches the stable release train, `OpenClaw Release Publish` qualifies Android independently and dispatches it after core npm succeeds. A mismatched pin records an explicit skip. Android does not hold npm or GitHub release finalization, so verified APK assets may attach after the release is public.
+Regular final and correction OpenClaw releases publish the signed third-party APK as `OpenClaw-Android.apk` with a checksum manifest and GitHub Actions provenance. The **Android APK Artifact Publish** workflow at `.github/workflows/android-release.yml` is the only automated GitHub Release upload path. When the tagged Android pin matches the stable release train, `OpenClaw Release Publish` qualifies Android independently and dispatches it after core npm succeeds. A mismatched pin records an explicit skip. Android does not hold npm or GitHub release finalization, so verified APK assets may attach after the release is public.
 
 The protected `android-release` environment supplies `MATCH_PASSWORD`; the repository's read-only GitHub App token checks out encrypted material from `openclaw/apps-signing`. The workflow builds the exact release tag, refuses to replace different existing bytes, and re-downloads the APK for checksum, certificate, and provenance verification.
 
@@ -304,8 +313,10 @@ fallback upload path after `pnpm android:release:upload` fails.
 
 Agent-driven Google Play uploads must use `pnpm android:release:upload` as the
 only release path. If that command fails, stop and fix the failing screenshot,
-metadata, signing, validation, archive, or upload step before trying again. Do
-not upload archived artifacts through direct Fastlane lanes, Gradle artifacts,
+metadata, signing, validation, archive, or upload step and inspect the store
+outcome before trying again. Keep the saved plan and generated notes for
+investigation or [local archive replay](VERSIONING.md#archive-a-saved-store-release).
+Do not upload archived artifacts through direct Fastlane lanes, Gradle artifacts,
 Google Play API commands, or Play Console mutation commands.
 
 The release lane uploads the phone and Wear bundles in one atomic Google Play

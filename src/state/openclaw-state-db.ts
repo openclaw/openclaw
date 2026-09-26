@@ -270,12 +270,9 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   const existingSchema = isExistingOpenClawStateSchema(pathname);
   const cached = stateDbCache.getCachedOpenClawStateDatabase(pathname);
   if (cached?.db.isOpen) {
-    try {
-      stateDbCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
-    } catch (error) {
-      stateDbCache.recordOpenClawStateDatabaseLifecycleOpenError(pathname, error);
-      throw error;
-    }
+    // A refused cache borrow did not open or damage the database. Failure owners
+    // publish their own retirement events; caller admission must not retire it.
+    stateDbCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
     assertStateDatabaseSchemaAdmission(cached);
     assertOpenClawStateWriteAllowed({
       database: cached.db,

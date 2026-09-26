@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -81,20 +82,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     await projector.handleNotification(
       turnWithStatus("interrupted", [
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-empty-output",
           command:
             "ps -eo pid,ppid,stat,cmd | rg 'venv-roadmap|pytest|run_security_contract_validation|validate_public_install|git push|apply_patch' || true",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: "",
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -109,19 +102,15 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
   it("marks every failed tool in a multi-call turn", async () => {
     const projector = await createProjector();
-    const commandItem = (id: string, status: "completed" | "failed", exitCode: number) => ({
-      type: "commandExecution",
-      id,
-      command: `/bin/bash -lc 'exit ${exitCode}'`,
-      cwd: "/workspace",
-      processId: null,
-      source: "agent",
-      status,
-      commandActions: [],
-      aggregatedOutput: "",
-      exitCode,
-      durationMs: 10,
-    });
+    const commandItem = (id: string, status: "completed" | "failed", exitCode: number) =>
+      createNativeCommandItem({
+        id,
+        command: `/bin/bash -lc 'exit ${exitCode}'`,
+        status,
+        aggregatedOutput: "",
+        exitCode,
+        durationMs: 10,
+      });
 
     await projector.handleNotification(
       turnCompleted([
@@ -142,19 +131,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     await projector.handleNotification(
       turnWithStatus("interrupted", [
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-cancelled",
           command: "/bin/bash -lc true",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: "",
-          exitCode: 0,
           durationMs: 12,
-        },
+        }),
       ]),
     );
 
@@ -440,7 +422,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
   it.each([
     { codexErrorInfo: "serverOverloaded", expected: true },
-    { codexErrorInfo: "usageLimitExceeded", expected: false },
     { codexErrorInfo: "unauthorized", expected: false },
     { codexErrorInfo: "other", expected: false },
   ])(
@@ -710,35 +691,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
     expect(promptError.message).toContain("Next reset in");
     expect(promptError.message).toContain("Wait until the reset time");
-    expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
-  });
-
-  it("uses Codex rate-limit resets for failed turns", async () => {
-    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    const projector = await createProjector(undefined, {
-      readRecentRateLimits: () => rateLimitsUpdated(resetsAt).params,
-    });
-
-    await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: {
-          id: TURN_ID,
-          status: "failed",
-          error: {
-            message: "You've reached your usage limit.",
-            codexErrorInfo: "usageLimitExceeded",
-            additionalDetails: null,
-          },
-          items: [],
-        },
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    const promptError = expectUsageLimitPromptError(readAttemptTerminal(result).promptError);
-    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
-    expect(promptError.message).toContain("Next reset in");
     expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
   });
 

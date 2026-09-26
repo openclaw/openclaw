@@ -7,6 +7,10 @@ import type {
   SandboxRegistryWrite,
 } from "../agents/sandbox/registry.kernel.js";
 import type { SubagentRegistryWrite } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import type {
+  WorkspaceAttestation,
+  WorkspaceAttestationInput,
+} from "../agents/workspace-state-store.kernel.js";
 import type { WorktreeRegistryReadOperations } from "../agents/worktrees/registry-read.worker.js";
 import type { WorktreeRetirementOperations } from "../agents/worktrees/registry-retirement.worker.js";
 import type { AuditEventListQuery, AuditEventListPage } from "../audit/audit-event-types.js";
@@ -72,6 +76,7 @@ import type { PluginBindingApprovalEntry } from "../plugins/conversation-binding
 import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
 import type { HostedCatalogSnapshotWorkerOperations } from "../plugins/official-external-plugin-catalog-snapshot-store.worker-contract.js";
 import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
+import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
@@ -143,6 +148,10 @@ export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
     "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
     "sandboxRegistry.write": { input: SandboxRegistryWrite; output: void };
+    "workspace.replaceAttestation": {
+      input: WorkspaceAttestationInput;
+      output: WorkspaceAttestation;
+    };
     "updateRuns.reconcileInterrupted": {
       input: InterruptedUpdateSettlement;
       output: InterruptedUpdateSettlementResult;
@@ -198,6 +207,10 @@ export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
     };
     "agentProvenance.list": { input: undefined; output: AgentProvenance[] };
     "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
+    "secrets.writeForConfigRef": {
+      input: SecretStoreConfigRefWrite;
+      output: { name: string };
+    };
     "promotions.markNotified": { input: { slugs: string[]; now: number }; output: true };
     "promotions.recordClaim": { input: PreparedPromotionClaim; output: void };
     "managedImages.read": { input: { attachmentId: string }; output: ManagedImageRecord | null };
