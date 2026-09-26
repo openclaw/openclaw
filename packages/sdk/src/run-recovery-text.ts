@@ -35,7 +35,7 @@ export async function recoverTerminalReply(params: {
       ? receipt.assistantTranscriptIdempotencyKey
       : undefined;
   const matches = (message: Record<string, unknown>) => {
-    const metadata = asRecord(message.__openclaw);
+    const metadata = asRecord(message["__openclaw"]);
     return (
       message.role === "assistant" &&
       (idempotencyKey !== undefined
@@ -69,7 +69,7 @@ export async function recoverTerminalReply(params: {
       const messages = Array.isArray(page.messages) ? page.messages.map(asRecord) : [];
       let message = messages.findLast(matches);
       if (message) {
-        const metadata = asRecord(message.__openclaw);
+        const metadata = asRecord(message["__openclaw"]);
         if (metadata.truncated === true) {
           if (typeof metadata.id !== "string") {
             return { unavailable: "message-identity-unavailable" };
@@ -80,9 +80,9 @@ export async function recoverTerminalReply(params: {
           message = asRecord(full.message);
           if (
             full.ok !== true ||
-            asRecord(message.__openclaw).id !== metadata.id ||
+            asRecord(message["__openclaw"]).id !== metadata.id ||
             !matches(message) ||
-            asRecord(message.__openclaw).truncated === true
+            asRecord(message["__openclaw"]).truncated === true
           ) {
             return { unavailable: "full-message-unavailable" };
           }

@@ -4,6 +4,7 @@ import {
   type GatewayProtocolRequestOptions,
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 
 type RequestClient = {
   request<T>(method: string, params?: unknown, options?: GatewayProtocolRequestOptions): Promise<T>;
@@ -35,9 +36,13 @@ export class GatewayChatEvents {
     const result = await client.request<T>(method, params, options);
     if (method === "sessions.messages.unsubscribe" && generation === this.generation) {
       const key = asNullableRecord(result)?.key;
-      const agentId = asNullableRecord(params)?.agentId;
+      const agentId =
+        asNullableRecord(params)?.agentId ??
+        (typeof key === "string" ? parseAgentSessionKeyParts(key)?.agentId : undefined);
       for (const [runId, stream] of this.messages) {
-        if (stream.sessionKey === key && (agentId === undefined || stream.agentId === agentId)) {
+        const streamAgentId =
+          stream.agentId ?? parseAgentSessionKeyParts(stream.sessionKey)?.agentId;
+        if (stream.sessionKey === key && streamAgentId === agentId) {
           this.messages.delete(runId);
         }
       }

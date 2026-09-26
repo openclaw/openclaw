@@ -422,20 +422,25 @@ describe("SDK run reconciliation over reconnect", () => {
     const waited: string[] = [];
     handleAcceptedRuns(waited);
     const connection = await connect();
-    for (let index = 0; index < 150; index++) {
-      const target =
-        index % 3 === 0
-          ? { sessionKey: "review", agentId: "ops" }
-          : { sessionKey: index % 3 === 1 ? scope.sessionKey : "review" };
-      await oc.request("chat.send", {
-        ...target,
-        message: "hello",
-        idempotencyKey: `run-${index}`,
-      });
-      await oc.request("sessions.messages.unsubscribe", {
-        key: index % 6 === 0 ? "agent:ops:review" : target.sessionKey,
-        ...(target.agentId ? { agentId: target.agentId } : {}),
-      });
+    const targets = [
+      { sessionKey: "review", agentId: "ops" },
+      { sessionKey: scope.sessionKey },
+      { sessionKey: "review" },
+      { sessionKey: "global" },
+      { sessionKey: "unknown" },
+    ];
+    for (const [caseIndex, target] of targets.entries()) {
+      for (let index = 0; index < 30; index++) {
+        await oc.request("chat.send", {
+          ...target,
+          message: "hello",
+          idempotencyKey: `run-${caseIndex}-${index}`,
+        });
+        await oc.request("sessions.messages.unsubscribe", {
+          key: caseIndex === 0 && index % 2 === 0 ? "agent:ops:review" : target.sessionKey,
+          ...(target.agentId ? { agentId: target.agentId } : {}),
+        });
+      }
     }
     for (const [runId, address] of [
       ["default-canonical", { key: "agent:main:review" }],
@@ -507,23 +512,24 @@ describe("SDK run reconciliation over reconnect", () => {
     }
   });
 
-  it.each(["ops", "main"])(
-    "preserves another agent's global baseline when agent:%s:main collapses to global",
-    async (owner) => {
+  it.each(["agent:ops:main", "agent:main:main", "global", "unknown"])(
+    "preserves another agent's baseline when unsubscribing %s",
+    async (key) => {
+      const sessionKey = key === "unknown" ? "unknown" : "global";
       gateway.setRequestHandler((socket, request) => {
-        gateway.reply(socket, request.id, { key: "global", subscribed: false });
+        gateway.reply(socket, request.id, { key: sessionKey, subscribed: false });
       });
       await connect();
       const events = oc.runEvents("research-run")[Symbol.asyncIterator]();
       const first = events.next();
-      const target = { runId: "research-run", sessionKey: "global", agentId: "research" };
+      const target = { runId: "research-run", sessionKey, agentId: "research" };
       gateway.sendEvent(gateway.socket(), "agent", {
         ...target,
         stream: "assistant",
         data: { text: "research", delta: "research" },
       });
       await expect(first).resolves.toMatchObject({ value: { data: { text: "research" } } });
-      await oc.request("sessions.messages.unsubscribe", { key: `agent:${owner}:main` });
+      await oc.request("sessions.messages.unsubscribe", { key });
       gateway.sendEvent(gateway.socket(), "agent", {
         ...target,
         stream: "assistant",

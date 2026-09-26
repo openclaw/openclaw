@@ -46,11 +46,13 @@ export function matchesUnsubscribedSession(
 ): boolean {
   const key = normalizeSessionKeyPreservingOpaquePeerIds(scope.sessionKey);
   const owner = scope.agentId ?? parseAgentSessionKey(key)?.agentId;
-  if (subscription.agentId && (!owner || normalizeAgentId(owner) !== subscription.agentId)) {
+  if (owner && normalizeAgentId(owner) !== subscription.agentId) {
+    return false;
+  }
+  if (subscription.agentId && !owner) {
     // An ACK can bind the same default-agent address, but cannot infer an owner
     // for a differently addressed request or a qualified sentinel literal.
     return (
-      !owner &&
       subscription.requestedAgentId === undefined &&
       key === subscription.requestKey &&
       key !== "global" &&

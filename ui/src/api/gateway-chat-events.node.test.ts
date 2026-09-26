@@ -88,13 +88,59 @@ describe("GatewayBrowserClient chat delivery", () => {
     }
   });
 
-  it.each(["final", "error", "aborted", "disconnect", "unsubscribe"] as const)(
-    "retires the chat baseline on %s and recovers an orphan append",
-    async (boundary) => {
+  it.each([
+    ...(["final", "error", "aborted", "disconnect", "unsubscribe"] as const).map((boundary) => ({
+      name: boundary,
+      boundary,
+      sessionKey: "agent:main:chat",
+      eventAgentId: undefined,
+      unsubscribeAgentId: undefined,
+      retained: false,
+    })),
+    {
+      name: "explicit unsubscribe with qualified stream ownership",
+      boundary: "unsubscribe",
+      sessionKey: "agent:work:chat",
+      eventAgentId: undefined,
+      unsubscribeAgentId: "work",
+      retained: false,
+    },
+    {
+      name: "unqualified unsubscribe with unknown owner",
+      boundary: "unsubscribe",
+      sessionKey: "global",
+      eventAgentId: "research",
+      unsubscribeAgentId: undefined,
+      retained: true,
+    },
+    {
+      name: "explicit unsubscribe with unowned raw stream",
+      boundary: "unsubscribe",
+      sessionKey: "global",
+      eventAgentId: undefined,
+      unsubscribeAgentId: "work",
+      retained: true,
+    },
+    {
+      name: "explicit unsubscribe with matching raw stream ownership",
+      boundary: "unsubscribe",
+      sessionKey: "global",
+      eventAgentId: "work",
+      unsubscribeAgentId: "work",
+      retained: false,
+    },
+  ])(
+    "retires only an owned baseline on $name",
+    async ({ boundary, sessionKey, eventAgentId, unsubscribeAgentId, retained }) => {
       const onEvent = vi.fn();
       const listener = vi.fn();
       const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL, onEvent });
-      const payload = { sessionKey: "agent:main:chat", runId: "run-1", state: "delta" };
+      const payload = {
+        sessionKey,
+        runId: "run-1",
+        state: "delta",
+        ...(eventAgentId ? { agentId: eventAgentId } : {}),
+      };
       try {
         client.addEventListener(listener);
         client.start();
@@ -111,6 +157,7 @@ describe("GatewayBrowserClient chat delivery", () => {
         } else if (boundary === "unsubscribe") {
           const unsubscribe = client.request("sessions.messages.unsubscribe", {
             key: payload.sessionKey,
+            ...(unsubscribeAgentId ? { agentId: unsubscribeAgentId } : {}),
           });
           const request = JSON.parse(ws.sent.at(-1) ?? "{}");
           ws.emitMessage({
@@ -135,9 +182,18 @@ describe("GatewayBrowserClient chat delivery", () => {
           event: "chat",
           payload: { ...payload, deltaText: "suffix" },
         });
-        expect(onEvent).not.toHaveBeenCalled();
-        expect(listener).not.toHaveBeenCalled();
-        expect(ws.lastClose).toEqual({ code: 4000, reason: "chat stream baseline missing" });
+        if (retained) {
+          expect(onEvent.mock.lastCall?.[0].payload.message).toEqual({
+            role: "assistant",
+            content: "Beforesuffix",
+          });
+          expect(listener.mock.lastCall?.[0]).toBe(onEvent.mock.lastCall?.[0]);
+          expect(ws.lastClose).toBeNull();
+        } else {
+          expect(onEvent).not.toHaveBeenCalled();
+          expect(listener).not.toHaveBeenCalled();
+          expect(ws.lastClose).toEqual({ code: 4000, reason: "chat stream baseline missing" });
+        }
       } finally {
         client.stop();
       }

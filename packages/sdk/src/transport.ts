@@ -1,6 +1,7 @@
 import { GatewayClient, type GatewayClientOptions } from "@openclaw/gateway-client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { EventHub } from "./event-hub.js";
+import type { RecoveryRequest } from "./run-recovery-text.js";
 import type {
   ConnectableOpenClawTransport,
   GatewayEvent,
@@ -20,7 +21,7 @@ export type GatewayReconnectContext = {
   epoch: GatewayConnectionEpoch;
   signal: AbortSignal;
   previousEvent?: GatewayEvent;
-  request(method: string, params: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
+  request: RecoveryRequest;
 };
 type GatewayResponseReceipt = GatewayEventReceipt & { event?: GatewayEvent };
 const eventReceipts = new WeakMap<GatewayEvent, GatewayEventReceipt>();

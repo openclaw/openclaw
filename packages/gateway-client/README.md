@@ -232,6 +232,9 @@ it also releases unobserved runs accepted before their first output. The
 acknowledgment cannot retire a newer acceptance or subscription's snapshot. The concrete
 Gateway transport preserves acknowledgment and event order. Custom transports
 must preserve that ordering or end their retired event stream.
+For raw `global` or `unknown` session keys, pass `agentId` when unsubscribing
+to identify an agent-owned baseline. An unscoped acknowledgment cannot retire
+a baseline with a known agent owner.
 
 ## Bundled internals
 

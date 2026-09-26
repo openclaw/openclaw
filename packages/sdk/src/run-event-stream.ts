@@ -101,7 +101,10 @@ export async function* iterateSdkRunEvents(
       }
       yield runEvent;
     }
-    while (!signal?.aborted) {
+    while (true) {
+      if (signal?.aborted) {
+        break;
+      }
       const next = await live.next();
       if (next.done) {
         break;
