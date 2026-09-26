@@ -37,6 +37,7 @@ export function createCliPluginWatchdog(
     getActiveAskUserDeadline?: () => number | undefined;
     activeToolCount: () => number;
     backgroundTaskCount: () => number;
+    compactionActive: () => boolean;
     hasObservedActivity: () => boolean;
     hasReplayUnsafeActivity: () => boolean;
     onNoOutputTimeout: (error: FailoverError) => void;
@@ -124,6 +125,7 @@ export function createCliPluginWatchdog(
           observedActivity: params.hasObservedActivity(),
           activeToolCount: params.activeToolCount(),
           backgroundTaskCount: params.backgroundTaskCount(),
+          compactionActive: params.compactionActive(),
         },
         hasOutputText: false,
         useResume: params.useResume,
