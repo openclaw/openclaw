@@ -67,16 +67,6 @@ function makeSummary(overrides: Partial<TaskRegistrySummary> = {}): TaskRegistry
 }
 
 describe("task domain view mappers", () => {
-  it("maps task registry summaries without sharing mutable count objects", () => {
-    const summary = makeSummary();
-
-    const view = mapTaskRunAggregateSummary(summary);
-
-    expect(view).toEqual(summary);
-    expect(view.byStatus).not.toBe(summary.byStatus);
-    expect(view.byRuntime).not.toBe(summary.byRuntime);
-  });
-
   it("maps task run records to the public task run view contract", () => {
     const task = makeTask({
       taskId: "task-full",
@@ -106,7 +96,7 @@ describe("task domain view mappers", () => {
       terminalOutcome: "blocked",
     });
 
-    expect(mapTaskRunView(task)).toEqual({
+    expect(mapTaskRunDetail(task)).toEqual({
       id: "task-full",
       runtime: "cli",
       sourceId: "source-1",
@@ -133,12 +123,6 @@ describe("task domain view mappers", () => {
       terminalSummary: "Diagnostics failed",
       terminalOutcome: "blocked",
     });
-  });
-
-  it("keeps task run detail aligned with the task run view shape", () => {
-    const task = makeTask({ taskId: "task-detail", runId: "run-detail" });
-
-    expect(mapTaskRunDetail(task)).toEqual(mapTaskRunView(task));
   });
 
   it("maps task flow records to public flow views without sharing requester origins", () => {

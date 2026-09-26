@@ -206,6 +206,7 @@ it.each<ScopeCase>([
       KillMode: property("s", "control-group"),
       TasksCurrent: property("t", running ? 1 : 0),
       MemoryCurrent: property("t", 0),
+      ControlGroup: property("s", `/system.slice/${target.unitName}`),
     };
     const otherObject = "/org/freedesktop/systemd1/unit/other_2eservice";
     const otherProperties: Record<string, unknown> = {

@@ -9,14 +9,12 @@ import type {
   ImageGenerationOutputFormat,
   ImageGenerationQuality,
 } from "../../image-generation/types.js";
-import { defaultRuntime } from "../../runtime.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
-import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
-import { registerLocalProvidersCommand } from "./providers-command.js";
+import { formatEnvelopeForText, providerSummaryText } from "./output.js";
+import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
@@ -302,9 +300,9 @@ export function registerImageCapabilityCommands(capability: Command): void {
       generate.requiredOption("--file <path>", "Input file", collectOption);
     }
     addImageGenerationOptions(generate.requiredOption("--prompt <text>", "Prompt text")).action(
-      async (opts, command) => {
-        await runCommandWithRuntime(defaultRuntime, async () => {
-          const result = await runImageGenerate({
+      (opts, command) =>
+        runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
+          return runImageGenerate({
             capability: `image.${commandName}`,
             prompt: String(opts.prompt),
             ...(commandName === "edit"
@@ -312,9 +310,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
               : {}),
             ...(await resolveImageGenerationOptions(opts, command)),
           });
-          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-        });
-      },
+        }),
     );
   }
 
@@ -338,11 +334,11 @@ export function registerImageCapabilityCommands(capability: Command): void {
         "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
       )
       .option("--json", "Output JSON", false)
-      .action(async (opts, command) => {
-        await runCommandWithRuntime(defaultRuntime, async () => {
+      .action((opts, command) =>
+        runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
           const { parseOptionalTimeoutMs, resolveCapabilityAgentOption } =
             await import("./shared.js");
-          const result = await runImageDescribe({
+          return runImageDescribe({
             capability: `image.${commandName}`,
             files: multiple ? (opts.file as string[]) : [String(opts.file)],
             model: opts.model as string | undefined,
@@ -350,9 +346,8 @@ export function registerImageCapabilityCommands(capability: Command): void {
             timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
             agent: resolveCapabilityAgentOption(command, opts.agent),
           });
-          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-        });
-      });
+        }),
+      );
   }
 
   registerLocalProvidersCommand(

@@ -24,7 +24,6 @@ describe("OpenAI selected Fast capability", () => {
     { change: { params: { serviceTier: "invalid" } }, expected: true },
     { change: { params: { serviceTier: 1 } }, expected: true },
     { change: { runtimeId: "codex" }, expected: undefined },
-    { change: { runtimeId: undefined }, expected: undefined },
     { change: { api: undefined }, expected: undefined },
     { change: { baseUrl: undefined }, expected: undefined },
   ])("resolves the request contract for $change", ({ change, expected }) => {

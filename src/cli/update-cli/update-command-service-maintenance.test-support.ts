@@ -5,6 +5,7 @@ import { buildTaskScript } from "../../daemon/schtasks-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import * as processAncestry from "../../infra/restart-stale-pids.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
@@ -27,6 +28,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 export { mocks };
+export const fixtureGatewayPid = Math.max(process.pid, process.ppid) + 1;
+
+vi.mock("../../daemon/service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: vi.fn(() => "outside"),
+}));
 
 type NativeOfflineCase = {
   platform: NodeJS.Platform;
@@ -138,6 +144,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 beforeEach(() => {
   mockSystemAccountHome();
+  // Simulated service platforms must not read the host's native ancestry.
+  vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+    pids: new Set([process.pid, process.ppid, 1]),
+    complete: true,
+  });
   mocks.prepareStop.mockReset().mockResolvedValue(false);
   mocks.drain.mockReset().mockImplementation(async (_params, stop) => await stop());
 });

@@ -517,17 +517,19 @@ describe("login-qr", () => {
     const start = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
     expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const waiting = waitForWebLogin({
+      timeoutMs: 5000,
+      currentQrDataUrl: start.qrDataUrl,
+      accountId,
+    });
+    expect(vi.getTimerCount()).toBe(1);
     finishLogin();
-    await expect(
-      waitForWebLogin({
-        timeoutMs: 5000,
-        currentQrDataUrl: start.qrDataUrl,
-        accountId,
-      }),
-    ).resolves.toEqual({
+    await expect(waiting).resolves.toEqual({
       connected: true,
       message: "✅ Linked! WhatsApp is ready.",
     });
+    expect(vi.getTimerCount()).toBe(0);
 
     logoutWebMock.mockClear();
     getActiveWebListenerMock.mockReturnValue({} as never);

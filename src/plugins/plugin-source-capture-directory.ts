@@ -252,7 +252,17 @@ export function sweepPluginSourceCaptureDirectories(stateDir = resolveStateDir()
 
 function createCaptureDirectory(instance: Instance, stateDir: string, prefix: string): string {
   if (instance.root) {
-    return fs.mkdtempSync(path.join(instance.root, "captures", prefix));
+    const captures = path.join(instance.root, "captures");
+    try {
+      return fs.mkdtempSync(path.join(captures, prefix));
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      // Repair only the payload directory; recreating its parent would lose native custody.
+      fs.mkdirSync(captures, { mode: 0o700 });
+      return fs.mkdtempSync(path.join(captures, prefix));
+    }
   }
   const prepare = (fallback: boolean): string => {
     let directory: string | undefined;

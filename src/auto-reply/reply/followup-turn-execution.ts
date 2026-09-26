@@ -67,7 +67,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     InputProvenance: run.inputProvenance,
     InboundEventKind: queued.currentInboundEventKind,
     media: queued.media,
-  } as TemplateContext;
+  };
 }
 
 /** Adapts an admitted queued turn to the canonical agent execution owner. */
@@ -249,19 +249,11 @@ export async function executeFollowupTurn(params: {
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
     onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitStructuredProgress),
     onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitStructuredProgress),
-    onCompactionStart: sourceOpts?.onCompactionStart
-      ? wrapVisibility(() => sourceOpts.onCompactionStart!())
-      : undefined,
-    onCompactionEnd: sourceOpts?.onCompactionEnd
-      ? wrapVisibility((payload: Parameters<NonNullable<typeof sourceOpts.onCompactionEnd>>[0]) =>
-          sourceOpts.onCompactionEnd!(payload),
-        )
-      : undefined,
+    onCompactionStart: wrapVisibility(sourceOpts?.onCompactionStart),
+    onCompactionEnd: wrapVisibility(sourceOpts?.onCompactionEnd),
     onReasoningStream: wrapVisibility(sourceOpts?.onReasoningStream),
     onReasoningProgress: wrap(sourceOpts?.onReasoningProgress),
-    onReasoningEnd: sourceOpts?.onReasoningEnd
-      ? wrapVisibility(() => sourceOpts.onReasoningEnd!())
-      : undefined,
+    onReasoningEnd: wrapVisibility(sourceOpts?.onReasoningEnd),
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
         if (!progressAllowed()) {

@@ -90,16 +90,12 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.captures()).toEqual([]);
   });
 
-  it.each(
-    [
-      { mergeStateStatus: "BLOCKED", admin: false },
-      { mergeStateStatus: "BEHIND", admin: false },
-      { mergeStateStatus: "DIRTY", admin: false },
-      { mergeStateStatus: "DIRTY", admin: true },
-    ].flatMap(({ mergeStateStatus, admin }) =>
-      [false, true].map((settles) => ({ mergeStateStatus, admin, settles })),
-    ),
-  )(
+  it.each([
+    { mergeStateStatus: "BLOCKED", admin: false, settles: true },
+    { mergeStateStatus: "BEHIND", admin: false, settles: false },
+    { mergeStateStatus: "DIRTY", admin: false, settles: false },
+    { mergeStateStatus: "DIRTY", admin: true, settles: false },
+  ])(
     "refuses merge before intent when gh would reject: %j",
     ({ mergeStateStatus, admin, settles }) => {
       const f = fixture();

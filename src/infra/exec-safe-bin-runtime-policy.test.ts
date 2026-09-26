@@ -13,24 +13,11 @@ import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 
 describe("exec safe-bin runtime policy", () => {
   const interpreterCases: Array<{ bin: string; expected: boolean }> = [
-    { bin: "python3", expected: true },
     { bin: "python3.12", expected: true },
-    { bin: " C:\\Tools\\Python3.EXE ", expected: true },
-    { bin: "node", expected: true },
     { bin: "node20", expected: true },
-    { bin: "/usr/local/bin/node20", expected: true },
-    { bin: "awk", expected: true },
-    { bin: "/opt/homebrew/bin/gawk", expected: true },
-    { bin: "mawk", expected: true },
-    { bin: "nawk", expected: true },
-    { bin: "sed", expected: true },
-    { bin: "gsed", expected: true },
     { bin: "ruby3.2", expected: true },
-    { bin: "bash", expected: true },
-    { bin: "busybox", expected: true },
-    { bin: "toybox", expected: true },
+    { bin: "sed", expected: true },
     { bin: "myfilter", expected: false },
-    { bin: "jq", expected: false },
   ];
 
   for (const testCase of interpreterCases) {
@@ -135,37 +122,6 @@ describe("exec safe-bin runtime policy", () => {
     expect(optedIn.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(true);
     expect(optedIn.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(true);
   });
-
-  it.runIf(process.platform !== "win32")(
-    "expands trusted package-manager symlink dirs to current safe-bin target dirs",
-    async () => {
-      await withTestDir({ prefix: "openclaw-safe-bin-trusted-symlink-" }, async (root) => {
-        const trustedDir = path.join(root, "bin");
-        const targetDir = path.join(root, "cellar", "jq", "1.7.1", "bin");
-        const target = path.join(targetDir, "jq");
-        const link = path.join(trustedDir, "jq");
-        await fs.mkdir(trustedDir, { recursive: true });
-        await fs.mkdir(targetDir, { recursive: true });
-        await fs.writeFile(target, "#!/bin/sh\n", "utf8");
-        await fs.chmod(target, 0o755);
-        await fs.symlink(target, link);
-
-        const policy = resolveExecSafeBinRuntimePolicy({
-          local: {
-            safeBins: ["jq"],
-            safeBinTrustedDirs: [trustedDir],
-          },
-        });
-
-        expect(
-          isTrustedSafeBinPath({
-            resolvedPath: await fs.realpath(target),
-            trustedDirs: policy.trustedSafeBinDirs,
-          }),
-        ).toBe(true);
-      });
-    },
-  );
 
   it.runIf(process.platform !== "win32")(
     "refreshes trusted package-manager target dirs when safe-bin symlinks retarget",

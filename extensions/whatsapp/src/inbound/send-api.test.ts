@@ -12,7 +12,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareWhatsAppOutboundMedia } from "../outbound-media-contract.js";
-import { markdownToWhatsApp } from "../text-runtime.js";
+import { markdownToWhatsApp } from "../targets-runtime.js";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
 import { normalizeWhatsAppSendResult, type WhatsAppSendResult } from "./send-result.js";

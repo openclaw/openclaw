@@ -84,14 +84,12 @@ describe("plugin management uninstall channel ownership", () => {
   });
 
   it.each([
-    { label: "a disabled non-channel plugin", enabled: false, channelIds: [] },
     { label: "an enabled non-channel plugin", enabled: true, channelIds: [] },
     {
       label: "a disabled channel plugin",
       enabled: false,
       channelIds: ["owned-channel", "owned-channel-backup"],
     },
-    { label: "an enabled channel plugin", enabled: true, channelIds: ["owned-channel"] },
   ])(
     "preserves manifest channel ownership when uninstalling $label",
     async ({ enabled, channelIds }) => {

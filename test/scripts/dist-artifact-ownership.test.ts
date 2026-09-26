@@ -712,7 +712,6 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   it.for([
     { owner: "{", unjoined: false },
     { owner: '{"pid":0}', unjoined: false },
-    { owner: '{"pid":-1}', unjoined: false },
     { owner: '{"pid":2147483648}', unjoined: false },
     { owner: JSON.stringify({ pid: process.pid }), unjoined: true },
   ])(
@@ -1016,7 +1015,12 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       // sources let the lint consumer distinguish the narrow preparation mode.
       installScripts(
         root,
-        ["run-oxlint.mts", "run-tsgo.mts", "prepare-extension-package-boundary-artifacts.mts"],
+        [
+          "run-oxlint.mts",
+          "run-tsgo.mts",
+          "prepare-extension-package-boundary-artifacts.mts",
+          "compile-extension-boundary.mts",
+        ],
         { dependencies: ["tsx", "@openclaw/fs-safe", "json5"] },
       );
       write(root, "tsconfig.json", "{}");

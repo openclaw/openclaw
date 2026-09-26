@@ -75,6 +75,8 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
     throw new GatewayServiceUpdateOwnershipError(
       "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
       undefined,
+      undefined,
+      "service-ownership-changed",
     );
   }
   // Shipped handoffs and package root swaps retain the exact launcher fingerprint.
@@ -127,6 +129,7 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
         : "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
       undefined,
       inspection.kind === "unavailable" ? inspection.inspectionReason : undefined,
+      inspection.kind === "unavailable" ? undefined : "service-ownership-changed",
     );
   }
   return inspection.kind === "owned" && verdict?.kind === "owned" && !verdict.refreshDefinition

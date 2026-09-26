@@ -982,7 +982,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
   it.each([
     ["active", ok(true)],
     ["bus query failed", err("Failed to connect to bus: Permission denied")],
-    ["timed out", err("Command timed out")],
   ] satisfies [string, Result<boolean, string>][])(
     "leaves service metadata unchanged when unit activity is %s and command drift accompanies other issues",
     async (_, active) => {

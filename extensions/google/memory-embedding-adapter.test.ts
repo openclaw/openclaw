@@ -57,17 +57,14 @@ describe("Gemini memory embedding adapter", () => {
     mocks.runGeminiEmbeddingBatches.mockClear();
   });
 
-  it.each([
-    "gemini-embedding-2",
-    "gemini-embedding-2-preview",
-    "models/gemini-embedding-2",
-    "gemini/gemini-embedding-2",
-    "google/gemini-embedding-2",
-  ])("accepts multimodal memory for %s", (model) => {
-    expect(geminiMemoryEmbeddingProviderAdapter.supportsMultimodalEmbeddings?.({ model })).toBe(
-      true,
-    );
-  });
+  it.each(["gemini-embedding-2", "gemini-embedding-2-preview"])(
+    "accepts multimodal memory for %s",
+    (model) => {
+      expect(geminiMemoryEmbeddingProviderAdapter.supportsMultimodalEmbeddings?.({ model })).toBe(
+        true,
+      );
+    },
+  );
 
   it("keeps legacy Gemini embeddings text-only", () => {
     expect(

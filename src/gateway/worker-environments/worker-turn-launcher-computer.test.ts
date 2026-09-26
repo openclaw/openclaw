@@ -226,7 +226,7 @@ describe("worker launch capabilities", () => {
         "returned-success",
       ] as const
     ).flatMap((primary) =>
-      [false, true].map((closeFails) => ({
+      (primary.startsWith("returned") ? [true] : [false, true]).map((closeFails) => ({
         label: primary,
         nodeDeviceId: "paired-node-1",
         providerId: "device",

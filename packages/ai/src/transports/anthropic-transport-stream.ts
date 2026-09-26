@@ -390,7 +390,8 @@ function createAnthropicTransportClient(params: {
     isKimiAnthropicProvider(model.provider) && options?.thinkingEnabled === true
       ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
       : buildGuardedModelFetch(model);
-  if (model.provider === "github-copilot") {
+  const copilot = model.provider === "github-copilot";
+  if (copilot || usesFoundryBearerAuth(resolveModelHeaderSentinels(model))) {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
       client: createAnthropicMessagesClient({
@@ -403,29 +404,8 @@ function createAnthropicTransportClient(params: {
             "anthropic-dangerous-direct-browser-access": "true",
             ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
           },
-          model.headers,
-          getAiTransportHost().buildCopilotDynamicHeaders(context.messages),
-          optionHeaders,
-        ),
-        fetch,
-      }),
-      isOAuthToken: false,
-    };
-  }
-  if (usesFoundryBearerAuth(resolveModelHeaderSentinels(model))) {
-    const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
-    return {
-      client: createAnthropicMessagesClient({
-        apiKey: null,
-        authToken: apiKey,
-        baseURL: model.baseUrl,
-        defaultHeaders: mergeTransportHeaders(
-          {
-            accept: "application/json",
-            "anthropic-dangerous-direct-browser-access": "true",
-            ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-          },
-          omitFoundryBearerCredentialHeaders(model.headers),
+          copilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
+          copilot ? getAiTransportHost().buildCopilotDynamicHeaders(context.messages) : undefined,
           optionHeaders,
         ),
         fetch,

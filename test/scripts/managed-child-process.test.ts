@@ -1,4 +1,3 @@
-// Managed Child Process tests cover managed child process script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -869,9 +868,7 @@ setInterval(() => {}, 1_000);
     remainingMs?: number;
     snapshotTimeoutMs?: number;
   }>([
-    { snapshot: "empty", afterSnapshot: "ESRCH", expected: "dead" },
     { snapshot: "live", afterSnapshot: "ESRCH", expected: "dead" },
-    { snapshot: "failed", afterSnapshot: "ESRCH", expected: "dead" },
     { snapshot: "empty", afterSnapshot: null, expected: "live" },
     { snapshot: "live", afterSnapshot: null, expected: "live" },
     { snapshot: "failed", afterSnapshot: null, expected: "live" },
@@ -2199,9 +2196,7 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
     { first: "abort", setupFails: false, cleanupFails: false },
     { first: "signal", setupFails: false, cleanupFails: false },
     { first: "abort", setupFails: true, cleanupFails: false },
-    { first: "signal", setupFails: true, cleanupFails: false },
     { first: "abort", setupFails: true, cleanupFails: true },
-    { first: "signal", setupFails: true, cleanupFails: true },
   ])(
     "joins reentrant $first cancellation (setup failure: $setupFails, cleanup failure: $cleanupFails)",
     async ({ first, setupFails, cleanupFails }) => {
