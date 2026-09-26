@@ -79,6 +79,7 @@ const codexAppServerNetworkProxySchema = z
     unixSockets: z
       .record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema)
       .optional(),
+    readOnlyPaths: z.array(z.string().min(1)).optional(),
     proxyUrl: z.string().trim().min(1).optional(),
     socksUrl: z.string().trim().min(1).optional(),
     enableSocks5: z.boolean().optional(),

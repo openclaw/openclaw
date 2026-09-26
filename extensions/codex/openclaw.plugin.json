@@ -452,6 +452,10 @@
                   "enum": ["allow", "none"]
                 }
               },
+              "readOnlyPaths": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
               "proxyUrl": { "type": "string" },
               "socksUrl": { "type": "string" },
               "enableSocks5": { "type": "boolean" },
@@ -773,6 +777,11 @@
     "appServer.networkProxy.unixSockets": {
       "label": "Unix Sockets",
       "help": "Unix socket allow and none rules for Codex sandboxed networking.",
+      "advanced": true
+    },
+    "appServer.networkProxy.readOnlyPaths": {
+      "label": "Read-Only Paths",
+      "help": "Additional literal absolute filesystem paths to grant read access in the generated Codex permissions profile.",
       "advanced": true
     },
     "appServer.networkProxy.proxyUrl": {

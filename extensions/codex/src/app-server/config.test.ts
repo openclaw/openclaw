@@ -165,21 +165,28 @@ describe("Codex app-server config", () => {
           networkProxy: {
             enabled: true,
             profileName: "mock-proxy",
-            mode: "limited",
+            mode: "full",
             domains: {
+              " git.123-control.svc ": "allow",
               " api.openai.com ": "allow",
               "blocked.example.com": "deny",
+              "169.254.169.254": "deny",
             },
             unixSockets: {
               " /tmp/mock-proxy.sock ": "allow",
               "/tmp/blocked.sock": "none",
             },
+            readOnlyPaths: [
+              "/opt/openclaw/repository-credentials",
+              "/app/node_modules/openclaw",
+              "/app/node_modules/openclaw/",
+            ],
             proxyUrl: "http://127.0.0.1:3128",
             socksUrl: "socks5h://127.0.0.1:8081",
             enableSocks5: true,
             enableSocks5Udp: false,
             allowUpstreamProxy: true,
-            allowLocalBinding: false,
+            allowLocalBinding: true,
           },
         },
       },
@@ -199,16 +206,20 @@ describe("Codex app-server config", () => {
           "mock-proxy": {
             filesystem: {
               ":minimal": "read",
+              "/app/node_modules/openclaw": "read",
+              "/opt/openclaw/repository-credentials": "read",
               ":project_roots": {
                 ".": "write",
               },
             },
             network: {
               enabled: true,
-              mode: "limited",
+              mode: "full",
               domains: {
+                "git.123-control.svc": "allow",
                 "api.openai.com": "allow",
                 "blocked.example.com": "deny",
+                "169.254.169.254": "deny",
               },
               unix_sockets: {
                 "/tmp/mock-proxy.sock": "allow",
@@ -219,7 +230,7 @@ describe("Codex app-server config", () => {
               enable_socks5: true,
               enable_socks5_udp: false,
               allow_upstream_proxy: true,
-              allow_local_binding: false,
+              allow_local_binding: true,
             },
           },
         },
