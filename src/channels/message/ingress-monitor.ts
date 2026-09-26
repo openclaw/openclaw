@@ -761,8 +761,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         await waitForPending(() => activeInspections);
         await waitForActiveDeliveries();
         await drain?.waitForIdle();
+        // A settled claim may still own a wake for the next queued event.
+        await drainIdleWake;
         await restartFenceWake;
-        if (!pumping && activeInspections.size === 0 && activeDeliveries.size === 0 && !requested) {
+        if (
+          !drainIdleWake &&
+          !pumping &&
+          activeInspections.size === 0 &&
+          activeDeliveries.size === 0 &&
+          !requested
+        ) {
           return;
         }
       }
