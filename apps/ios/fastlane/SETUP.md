@@ -181,6 +181,11 @@ the stock gate. Existing compatibility admission still excludes historical and
 pinned-target CI paths; this does not claim universal pinned-target FRV coverage.
 Local direct upload behavior is unchanged.
 
+Manual dispatch of `iOS Release E2E` qualifies the selected workflow revision;
+it does not accept an alternate target SHA. Ordinary CI callers must also use
+their own revision. Only the protected beta workflow can pass a different
+candidate, after its existing release authorization succeeds.
+
 Compare runs four serial matched pairs in stock/slim, slim/stock, stock/slim,
 slim/stock order, with both tests fresh in every arm. SimSlim keeps the existing
 conservative search/family-only profile. Neither failures nor skipped tests are

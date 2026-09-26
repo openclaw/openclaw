@@ -11,10 +11,6 @@ on:
         default: stock
   workflow_dispatch:
     inputs:
-      target_sha:
-        description: Exact full commit SHA to qualify
-        type: string
-        required: true
       mode:
         description: Stock qualification or four matched stock/SimSlim pairs
         type: choice
@@ -29,7 +25,7 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 240
     env:
-      TARGET_SHA: ${{ inputs.target_sha }}
+      TARGET_SHA: ${{ inputs.target_sha || github.sha }}
       E2E_MODE: ${{ inputs.mode }}
     steps:
       - name: Initialize failure proof and validate inputs
@@ -51,20 +47,29 @@ jobs:
                          "mode": mode if mode in ("stock", "compare") else None,
                          "errors": ["workflow-setup-incomplete"]}, out)
           PY
-          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
-          [[ "$E2E_MODE" == stock || "$E2E_MODE" == compare ]]
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$E2E_MODE" == stock || "$E2E_MODE" == compare ]] || exit 1
+          # Only the protected beta caller admits a separately authorized release target.
+          # Other callers must execute their own revision in their own cache context.
+          if [[ "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
+            [[ "$GITHUB_REPOSITORY" == openclaw/openclaw ]] || exit 1
+            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] || exit 1
+            [[ "$GITHUB_REF" == refs/heads/main ]] || exit 1
+            [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/ios-beta-release.yml@refs/heads/main" ]] || exit 1
+          fi
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact qualification target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.target_sha }}
+          ref: ${{ steps.start.outputs.target_sha }}
           persist-credentials: false
 
       - name: Verify target and require target-owned harness
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || exit 1
           test -f scripts/ios-release-e2e.ts
           test -f scripts/lib/ios-release-e2e-native.ts
           test -f test/helpers/openclaw-test-instance.ts

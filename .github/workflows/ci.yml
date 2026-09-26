@@ -7521,6 +7521,7 @@ jobs:
       - macos-node
       - macos-swift
       - ios-build
+      - ios-release-e2e
       - ios-screenshot-shard
       - ios-screenshot-evidence
       - android

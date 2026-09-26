@@ -365,6 +365,63 @@ describe("release qualification workflow authority", () => {
   const workflow = parse(readFileSync(".github/workflows/ios-release-e2e.yml", "utf8"));
   const beta = parse(readFileSync(".github/workflows/ios-beta-release.yml", "utf8"));
   const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+  it.each([
+    ["manual current revision", {}, true],
+    ["CI current revision", { caller: "ci" }, true],
+    ["manual arbitrary target", { target: "b".repeat(40) }, false],
+    ["CI arbitrary target", { caller: "ci", target: "b".repeat(40) }, false],
+    ["approved beta target", { caller: "ios-beta-release", target: "b".repeat(40) }, true],
+    [
+      "beta branch caller",
+      { caller: "ios-beta-release", target: "b".repeat(40), ref: "refs/heads/feature" },
+      false,
+    ],
+    [
+      "beta fork caller",
+      { caller: "ios-beta-release", target: "b".repeat(40), repository: "example/fork" },
+      false,
+    ],
+    [
+      "beta non-dispatch caller",
+      { caller: "ios-beta-release", target: "b".repeat(40), event: "schedule" },
+      false,
+    ],
+    ["invalid SHA", { target: "main" }, false],
+    ["invalid mode", { mode: "unknown" }, false],
+  ])("checks %s before checkout", (_name, options, admitted) => {
+    const root = tempDirs.make("ios-e2e-workflow-authority-");
+    const output = path.join(root, "outputs");
+    const sha = "a".repeat(40);
+    const target = "target" in options ? options.target : sha;
+    const repository = "repository" in options ? options.repository : "openclaw/openclaw";
+    const ref = "ref" in options ? options.ref : "refs/heads/main";
+    const caller = "caller" in options ? options.caller : "ios-release-e2e";
+    const first = workflow.jobs.qualify.steps[0];
+    expect(first.id).toBe("start");
+    const execution = spawnSync("/bin/bash", ["-c", first.run], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        RUNNER_TEMP: root,
+        GITHUB_ENV: path.join(root, "env"),
+        GITHUB_OUTPUT: output,
+        GITHUB_SHA: sha,
+        GITHUB_REPOSITORY: repository,
+        GITHUB_REF: ref,
+        GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/${caller}.yml@${ref}`,
+        GITHUB_EVENT_NAME: "event" in options ? options.event : "workflow_dispatch",
+        TARGET_SHA: target,
+        E2E_MODE: "mode" in options ? options.mode : "stock",
+      },
+    });
+    expect(execution.status === 0).toBe(admitted);
+    expect(readFileSync(output, "utf8").includes(`target_sha=${target}\n`)).toBe(admitted);
+    const proof = JSON.parse(readFileSync(path.join(root, "ios-release-e2e-proof.json"), "utf8"));
+    expect(proof).toMatchObject({
+      status: "failed",
+      trials: [],
+    });
+  });
   it("requires exact approved SHA qualification before beta release, without signing authority", () => {
     expect(beta.jobs.qualify.with).toEqual({
       target_sha: "${{ needs.authorize.outputs.target_sha }}",
@@ -376,13 +433,16 @@ describe("release qualification workflow authority", () => {
     expect(beta.jobs.qualify.secrets).toBeUndefined();
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.qualify.environment).toBeUndefined();
+    expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
+    expect(workflow.jobs.qualify.env.TARGET_SHA).toBe("${{ inputs.target_sha || github.sha }}");
+    expect(beta.jobs.qualify.if).toContain("needs.authorize.outputs.approved == 'true'");
   });
   it("fails missing target harnesses and uses a step-scoped compare binary", () => {
     const steps = workflow.jobs.qualify.steps;
     const checkout = steps.find((step: { uses?: string }) =>
       step.uses?.startsWith("actions/checkout@"),
     );
-    expect(checkout.with.ref).toBe("${{ inputs.target_sha }}");
+    expect(checkout.with.ref).toBe("${{ steps.start.outputs.target_sha }}");
     expect(checkout.with["persist-credentials"]).toBe(false);
     const verify = steps.find((step: { name: string }) => step.name.startsWith("Verify target"));
     expect(verify.run).toContain('[[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]');
