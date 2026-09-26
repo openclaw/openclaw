@@ -466,4 +466,57 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(registeredRun?.requesterOrigin?.channel).toBe("matrix");
     expect(registeredRun?.requesterOrigin?.to).toBe("room:parent");
   });
+
+  it("rejects a CLI-runtime thread spawn before binding when spawns are disabled for the current channel", async () => {
+    // The wider CLI origin (currentChannelId with no agentTo) must still pass
+    // through the same channel thread-binding authority gate as agentTo origins:
+    // when thread-bound spawns are disabled for the resolved channel, the bind
+    // service must never be reached.
+    const sessionConfig = currentConfig.session as
+      | { threadBindings?: { spawnSessions?: boolean } }
+      | undefined;
+    currentConfig.session = {
+      ...sessionConfig,
+      threadBindings: { ...sessionConfig?.threadBindings, spawnSessions: false },
+    };
+    const bindCalls: Array<Record<string, unknown>> = [];
+    currentSessionBindingService = {
+      getCapabilities: () => ({
+        adapterAvailable: true,
+        bindSupported: true,
+        placements: ["child"],
+      }),
+      bind: async (request) => {
+        bindCalls.push(request as unknown as Record<string, unknown>);
+        throw new Error("bind must not be reached when spawns are disabled");
+      },
+      listBySession: () => [],
+    };
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "reply with a marker",
+        thread: true,
+        mode: "session",
+        context: "isolated",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        agentAccountId: "default",
+        agentTo: undefined,
+        agentThreadId: undefined,
+        currentMessagingTarget: undefined,
+        currentChannelId: "room:parent",
+        currentThreadTs: undefined,
+      },
+    );
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.error).toContain("Thread-bound session spawns are disabled for matrix");
+    }
+    expect(bindCalls).toHaveLength(0);
+    expect(hoisted.registerSubagentRunMock.mock.calls).toHaveLength(0);
+  });
 });
