@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { ContextProvider } from "@lit/context";
+import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -21,6 +22,12 @@ import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
 } from "../../test-helpers/gateway-methods.ts";
+import {
+  loadSessionsPagePreferences,
+  type SessionsPagePreferences,
+  SessionsPagePreferencesState,
+} from "./page-state.ts";
+import { page as sessionsRoutePage, type SessionsRouteData } from "./route.ts";
 import {
   createContext,
   createGateway,
@@ -44,6 +51,19 @@ async function createPage(context: ApplicationContext): Promise<TestSessionsPage
   document.body.append(page);
   await page.updateComplete;
   return page;
+}
+
+type TestPreferencesPage = TestSessionsPage &
+  Pick<SessionsPagePreferences, "searchQuery"> & {
+    preferences: Pick<SessionsPagePreferencesState, "update">;
+  };
+
+async function createPreferencesPage(): Promise<TestPreferencesPage> {
+  const gateway = createGateway({} as GatewayBrowserClient);
+  return (await createRenderedPage(
+    createContext(gateway.gateway, createSessions()),
+    sessionsResult([], 0),
+  )) as TestPreferencesPage;
 }
 
 async function createDeletionPage(rows: GatewaySessionRow[], agentId = "main") {
@@ -89,11 +109,120 @@ async function createDeletionPage(rows: GatewaySessionRow[], agentId = "main") {
 
 afterEach(() => {
   document.body.replaceChildren();
+  localStorage.clear();
   vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
 describe("sessions page lifecycle", () => {
+  it("merges ordered preference updates from two page owners", async () => {
+    const first = await createPreferencesPage();
+    const second = await createPreferencesPage();
+    first.preferences.update({ activeMinutes: "5" });
+    second.preferences.update({ groupBy: "person" });
+
+    expect(loadSessionsPagePreferences()).toMatchObject({ activeMinutes: "5", groupBy: "person" });
+  });
+
+  it("does not replay a failed old field on a later write", async () => {
+    const first = await createPreferencesPage();
+    const second = await createPreferencesPage();
+    const storage = localStorage;
+    const storedBeforeFailure = storage.getItem("openclaw:sessions:preferences:v1");
+    const setItem = vi.spyOn(storage, "setItem").mockImplementationOnce(() => {
+      throw new Error("storage unavailable");
+    });
+    first.preferences.update({ groupBy: "agent" });
+    expect(setItem).toHaveBeenCalledTimes(1);
+    expect(storage.getItem("openclaw:sessions:preferences:v1")).toBe(storedBeforeFailure);
+    second.preferences.update({ groupBy: "person" });
+    first.preferences.update({ activeMinutes: "5" });
+
+    expect(setItem).toHaveBeenCalledTimes(5);
+    expect(loadSessionsPagePreferences()).toMatchObject({ activeMinutes: "5", groupBy: "person" });
+  });
+
+  it("keeps grouping readable after rolling back to the legacy key", () => {
+    localStorage.setItem("openclaw:sessions:group-by", "agent");
+    const preferences = new SessionsPagePreferencesState();
+    preferences.update({ groupBy: "person" });
+
+    expect(localStorage.getItem("openclaw:sessions:group-by")).toBe("person");
+    localStorage.removeItem("openclaw:sessions:preferences:v1");
+    expect(loadSessionsPagePreferences().groupBy).toBe("person");
+  });
+
+  it("keeps a grouping change made while rolled back", () => {
+    const preferences = new SessionsPagePreferencesState();
+    preferences.update({ groupBy: "person" });
+
+    localStorage.setItem("openclaw:sessions:group-by", "agent");
+
+    expect(loadSessionsPagePreferences().groupBy).toBe("agent");
+  });
+
+  it("keeps a failed preference write through a route update", async () => {
+    const page = await createPreferencesPage();
+    const storage = localStorage;
+    page.preferences.update({ searchQuery: "stored value" });
+    const storedBeforeFailure = storage.getItem("openclaw:sessions:preferences:v1");
+    const setItem = vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
+    page.searchQuery = "keep me";
+    page.preferences.update({ searchQuery: "keep me" });
+
+    page.routeData = { expandedSessionKey: null, statusFilter: "archived" };
+    await page.updateComplete;
+
+    expect(setItem).toHaveBeenCalled();
+    expect(storage.getItem("openclaw:sessions:preferences:v1")).toBe(storedBeforeFailure);
+    expect(page.searchQuery).toBe("keep me");
+  });
+
+  it("restores preferences after leaving a direct-session route", async () => {
+    const page = await createPreferencesPage();
+    page.searchQuery = "before deep link";
+    page.preferences.update({ searchQuery: "before deep link" });
+    page.routeData = {
+      expandedSessionKey: "agent:main:direct",
+      statusFilter: "active",
+    };
+    await page.updateComplete;
+    expect(page.searchQuery).toBe("");
+
+    page.routeData = { expandedSessionKey: null, statusFilter: "active" };
+    await page.updateComplete;
+
+    expect(page.searchQuery).toBe("before deep link");
+  });
+
+  it("persists only the filter edited while a direct-session route is active", async () => {
+    new SessionsPagePreferencesState().update({
+      limit: "25",
+      includeGlobal: false,
+      includeUnknown: false,
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(
+      createContext(gateway, createSessions()),
+      sessionsResult([], 0),
+      "active",
+      "agent:main:direct",
+    );
+    const minutes = page.querySelector<HTMLInputElement>(".session-filter-input--minutes");
+    expect(minutes).not.toBeNull();
+    minutes!.value = "15";
+    minutes!.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(loadSessionsPagePreferences()).toMatchObject({
+      activeMinutes: "15",
+      limit: "25",
+      includeGlobal: false,
+      includeUnknown: false,
+    });
+  });
+
   it("switches between Active and Archived with the route parameter", async () => {
     const { gateway } = createGateway({} as GatewayBrowserClient);
     const context = createContext(gateway, createSessions());
@@ -129,6 +258,62 @@ describe("sessions page lifecycle", () => {
       )?.checked,
     ).toBe(true);
   });
+
+  it.each(["archived", "all"] as const)(
+    "keeps an Active navigation explicit when saving a %s preference fails",
+    async (storedStatusFilter) => {
+      const storage = localStorage;
+      storage.setItem(
+        "openclaw:sessions:preferences:v1",
+        JSON.stringify({ version: 1, statusFilter: storedStatusFilter }),
+      );
+      const { gateway } = createGateway({} as GatewayBrowserClient);
+      const context = createContext(gateway, createSessions());
+      Object.assign(context.runtimeConfig, { ensureLoaded: vi.fn(async () => undefined) });
+      const page = await createRenderedPage(context, sessionsResult([], 0), storedStatusFilter);
+      const setItem = vi.spyOn(storage, "setItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+      const active = [
+        ...page.querySelectorAll<HTMLElement & { checked: boolean }>("wa-radio"),
+      ].find((radio) => radio.textContent?.trim() === "Active");
+      const group = active?.closest<HTMLElement & { value: string }>("wa-radio-group");
+      expect(group).toBeDefined();
+      group!.value = "active";
+      group!.dispatchEvent(new Event("change", { bubbles: true }));
+      await page.updateComplete;
+
+      expect(setItem).toHaveBeenCalled();
+      expect(setItem).toHaveBeenCalledTimes(1);
+      expect(loadSessionsPagePreferences().statusFilter).toBe(storedStatusFilter);
+      expect(context.navigate).toHaveBeenCalledWith("sessions", { search: "?status=active" });
+
+      const navigation = vi.mocked(context.navigate).mock.calls.at(-1);
+      const routeData = await sessionsRoutePage.loader?.(context, {
+        signal: new AbortController().signal,
+        shouldRun: () => true,
+        revalidating: false,
+        location: {
+          pathname: "/sessions",
+          search: navigation?.[1]?.search ?? "",
+          hash: "",
+        },
+        deps: "",
+        cause: "navigation",
+      } satisfies RouteLoaderOptions);
+      if (
+        !routeData ||
+        typeof routeData !== "object" ||
+        !("expandedSessionKey" in routeData) ||
+        !("statusFilter" in routeData)
+      ) {
+        throw new Error("sessions route loader did not return route data");
+      }
+      page.routeData = routeData as SessionsRouteData;
+      await page.updateComplete;
+      expect(page.statusFilter).toBe("active");
+    },
+  );
 
   it("reports a connection error instead of silently dropping a patch", async () => {
     const patch = vi.fn();

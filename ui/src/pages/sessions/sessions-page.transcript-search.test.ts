@@ -21,6 +21,7 @@ type TranscriptSearchResponse = SessionsSearchResult & { sessions: GatewaySessio
 
 afterEach(() => {
   document.body.replaceChildren();
+  localStorage.clear();
   vi.restoreAllMocks();
 });
 

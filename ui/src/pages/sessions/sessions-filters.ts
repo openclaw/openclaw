@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
@@ -117,6 +118,9 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
     !includeGlobal ||
     includeUnknown ||
     props.groupBy !== "none";
+  // Popover reattachment can reset the native select without changing props;
+  // live() restores the component-owned grouping instead of keeping that drift.
+  const selectedGroup = live(props.groupBy);
   return html`
     <button
       id="sessions-filter-popover-trigger"
@@ -180,6 +184,7 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
           <span class="session-groupby__label">${t("sessionsView.groupBy")}</span>
           <select
             class="session-groupby__select"
+            .value=${selectedGroup}
             @change=${(event: Event) => {
               if (event.currentTarget instanceof HTMLSelectElement) {
                 props.onGroupByChange(normalizeSessionsGroupBy(event.currentTarget.value));

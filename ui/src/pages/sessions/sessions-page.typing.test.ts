@@ -92,6 +92,7 @@ async function mountTypingPage(initialResult = result("agent:main:initial")) {
 
 afterEach(() => {
   document.body.replaceChildren();
+  localStorage.clear();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });

@@ -28,6 +28,7 @@ async function createPage(context: ApplicationContext): Promise<TestSessionsPage
 
 afterEach(() => {
   document.body.replaceChildren();
+  localStorage.clear();
   vi.restoreAllMocks();
 });
 
