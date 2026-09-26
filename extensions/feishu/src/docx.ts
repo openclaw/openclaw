@@ -106,17 +106,6 @@ type DriveMediaUploadAllPayload = NonNullable<
 >;
 type DriveMediaUploadFile = NonNullable<NonNullable<DriveMediaUploadAllPayload["data"]>["file"]>;
 
-function normalizeInsertedChildBlocks(
-  children: string[] | FeishuDocxBlockChild[] | undefined,
-): FeishuDocxBlockChild[] {
-  if (!Array.isArray(children)) {
-    return [];
-  }
-  return children.filter(
-    (child): child is FeishuDocxBlockChild => typeof child === "object" && child !== null,
-  );
-}
-
 // Convert API may return `blocks` in a non-render order.
 // Reconstruct the document tree using first_level_block_ids plus children/parent links,
 // then emit blocks in pre-order so Descendant/Children APIs receive one normalized tree contract.
@@ -821,7 +810,11 @@ async function createTable(
       cells_written: written.cells_written,
     };
   }
-  const cells = normalizeInsertedChildBlocks(tableBlock?.children);
+  const cells = Array.isArray(tableBlock?.children)
+    ? tableBlock.children.map((child: string | FeishuDocxBlockChild) =>
+        typeof child === "string" ? child : child?.block_id,
+      )
+    : [];
 
   return {
     success: true,
@@ -829,7 +822,7 @@ async function createTable(
     row_size: rowSize,
     column_size: columnSize,
     // row-major cell ids, if API returns them directly
-    table_cell_block_ids: cells.map((c) => c.block_id).filter(Boolean),
+    table_cell_block_ids: normalizeChildIds(cells).filter(Boolean),
     raw_children_count: res.data?.children?.length ?? 0,
   };
 }
