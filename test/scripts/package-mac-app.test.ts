@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -451,7 +452,7 @@ function runHelper(script: string, shell = process.platform === "win32" ? "bash"
 function getPackageManagerHelperBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("PNPM_CMD=()");
-  const end = script.indexOf("merge_framework_machos()");
+  const end = script.indexOf("thin_macho_for_arch()");
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -459,15 +460,25 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
-function getMergeFrameworkMachOsBlock(): string {
+function getFrameworkMachOsBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf("merge_framework_machos()");
+  const start = script.indexOf("thin_macho_for_arch()");
   const end = script.indexOf('PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"');
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
 
   return script.slice(start, end);
+}
+
+// Inert mach_header_64 dylibs (mach-o/loader.h and mach/machine.h).
+// Own the CPU/subtype bytes independently of the host compiler and SDK.
+function thinMachO(cpu: number, subtype: number) {
+  const bytes = Buffer.alloc(32);
+  [0xfeedfacf, cpu, subtype, 6, 0, 0, 0, 0].forEach((value, index) =>
+    bytes.writeUInt32LE(value, index * 4),
+  );
+  return bytes;
 }
 
 function getSwiftToolchainBlock(): string {
@@ -1430,7 +1441,7 @@ describe("package-mac-app plist stamping", () => {
         description,
         "Mach-O universal binary with 2 architectures\n" + "architecture detail\n".repeat(65536),
       );
-      const helper = getMergeFrameworkMachOsBlock()
+      const helper = getFrameworkMachOsBlock()
         .replaceAll("/usr/bin/file", "fixture_file")
         .replaceAll("/usr/bin/lipo", "fixture_lipo");
       const result = runHelper(`
@@ -1457,7 +1468,7 @@ describe("package-mac-app plist stamping", () => {
           esac
         }
         ${helper}
-        merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
+        assemble_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} "" ${JSON.stringify(secondary)}
       `);
 
       expect(result.status, result.stderr).toBe(0);
@@ -1501,16 +1512,6 @@ describe("package-mac-app plist stamping", () => {
         mkdirSync(path.dirname(path.join(framework, relativeBinary)), { recursive: true });
       }
 
-      // Inert mach_header_64 dylibs (mach-o/loader.h and mach/machine.h).
-      // Own the CPU/subtype bytes so host executables and compiler SDKs cannot
-      // change this fixture's slice set; real file/lipo still classify and merge it.
-      const thinMachO = (cpu: number, subtype: number) => {
-        const bytes = Buffer.alloc(32);
-        [0xfeedfacf, cpu, subtype, 6, 0, 0, 0, 0].forEach((value, index) =>
-          bytes.writeUInt32LE(value, index * 4),
-        );
-        return bytes;
-      };
       const intel = thinMachO(0x01000007, 3);
       const arm = thinMachO(0x0100000c, secondaryArchitecture === "arm64e" ? 2 : 0);
       const primaryBinary = path.join(primary, relativeBinary);
@@ -1529,8 +1530,8 @@ describe("package-mac-app plist stamping", () => {
 
       const result = runHelper(`
         set -euo pipefail
-        ${getMergeFrameworkMachOsBlock()}
-        merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
+        ${getFrameworkMachOsBlock()}
+        assemble_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} "" ${JSON.stringify(secondary)}
         /usr/bin/lipo -archs ${JSON.stringify(destinationBinary)}
       `);
 
@@ -1553,6 +1554,122 @@ describe("package-mac-app plist stamping", () => {
       }
     },
   );
+
+  it.runIf(process.platform === "darwin").each([
+    { arch: "arm64", input: "universal" },
+    { arch: "x86_64", input: "universal" },
+    { arch: "arm64", input: "thin" },
+    { arch: "x86_64", input: "thin" },
+    { arch: "universal", input: "universal" },
+    { arch: "arm64", input: "missing-helper-slice" },
+    { arch: "arm64", input: "missing-compat-slice" },
+    { arch: "arm64", input: "absent-framework" },
+  ])("assembles $arch embedded frameworks from $input inputs", ({ arch, input }) => {
+    const root = tempDirs.make("openclaw-package-embedded-[fixture]-");
+    const framework = path.join(root, "source", "Sparkle.framework");
+    const app = path.join(root, "OpenClaw.app");
+    const destination = path.join(app, "Contents", "Frameworks");
+    const compatRelative =
+      "Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx/libswiftCompatibilitySpan.dylib";
+    const compatSource = path.join(root, compatRelative);
+    const binaries = [
+      "Sparkle",
+      "Autoupdate",
+      "Updater.app/Contents/MacOS/Updater",
+      "XPCServices/Downloader.xpc/Contents/MacOS/Downloader",
+      "XPCServices/Installer.xpc/Contents/MacOS/Installer",
+    ].map((file) => `Versions/B/${file}`);
+    const slices = {
+      arm64: thinMachO(0x0100000c, 0),
+      x86_64: thinMachO(0x01000007, 3),
+    };
+    for (const [name, bytes] of Object.entries(slices)) {
+      writeFileSync(path.join(root, name), bytes);
+    }
+    const universalPath = path.join(root, "universal");
+    const created = spawnSync(
+      "/usr/bin/lipo",
+      ["-create", path.join(root, "arm64"), path.join(root, "x86_64"), "-output", universalPath],
+      { encoding: "utf8" },
+    );
+    expect(created.status, created.stderr).toBe(0);
+    const universal = readFileSync(universalPath);
+    const selected = arch === "x86_64" ? slices.x86_64 : slices.arm64;
+    const sourceBytes = input === "thin" ? selected : universal;
+    const sourceFiles = new Map<string, Buffer>();
+    const writeSource = (file: string, bytes: Buffer) => {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, bytes, { mode: 0o755 });
+      sourceFiles.set(file, bytes);
+    };
+    if (input !== "absent-framework") {
+      for (const file of binaries) {
+        writeSource(
+          path.join(framework, file),
+          input === "missing-helper-slice" && file.endsWith("/Installer")
+            ? slices.x86_64
+            : sourceBytes,
+        );
+      }
+      writeSource(
+        path.join(framework, "Versions/B/Resources/fixture.txt"),
+        Buffer.from("resource"),
+      );
+      symlinkSync("B", path.join(framework, "Versions/Current"));
+      symlinkSync("Versions/Current/Sparkle", path.join(framework, "Sparkle"));
+      symlinkSync("Versions/Current/Resources", path.join(framework, "Resources"));
+    }
+    writeSource(compatSource, input === "missing-compat-slice" ? slices.x86_64 : sourceBytes);
+    mkdirSync(destination, { recursive: true });
+    const script = readFileSync(scriptPath, "utf8");
+    const start = script.indexOf('SPARKLE_FRAMEWORK_PRIMARY="');
+    const end = script.indexOf('echo "🖼  Compiling app icon"', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const result = runHelper(`
+      set -euo pipefail
+      ${getFrameworkMachOsBlock()}
+      APP_ROOT=${JSON.stringify(app)}
+      BUILD_CONFIG=release
+      PRIMARY_ARCH=${arch === "x86_64" ? "x86_64" : "arm64"}
+      BUILD_ARCHS=(${arch === "universal" ? "arm64 x86_64" : arch})
+      sparkle_framework_for_arch() { printf '%s\\n' ${JSON.stringify(framework)}; }
+      xcode-select() { printf '%s\\n' ${JSON.stringify(root)}; }
+      ${script.slice(start, end)}
+    `);
+    // Fail before signing when a nested helper or toolchain library cannot run
+    // on the requested architecture; never mutate the dependency's source copy.
+    const missingSlice = input.startsWith("missing-");
+    expect(result.status, result.stderr).toBe(missingSlice ? 1 : 0);
+    for (const [file, bytes] of sourceFiles) {
+      expect(readFileSync(file), file).toEqual(bytes);
+    }
+    expect(
+      readdirSync(destination, { recursive: true }).some((file) => /\.thin\./u.test(String(file))),
+    ).toBe(false);
+    if (missingSlice) {
+      expect(result.stderr).toContain("lipo:");
+      return;
+    }
+    const expected = arch === "universal" ? universal : selected;
+    const copiedBinaries = [path.join(destination, "libswiftCompatibilitySpan.dylib")];
+    if (input === "absent-framework") {
+      expect(existsSync(path.join(destination, "Sparkle.framework"))).toBe(false);
+    } else {
+      const copied = path.join(destination, "Sparkle.framework");
+      copiedBinaries.push(...binaries.map((file) => path.join(copied, file)));
+      expect(readFileSync(path.join(copied, "Resources/fixture.txt"), "utf8")).toBe("resource");
+      for (const link of ["Versions/Current", "Sparkle", "Resources"]) {
+        expect(readlinkSync(path.join(copied, link))).toBe(
+          readlinkSync(path.join(framework, link)),
+        );
+      }
+    }
+    for (const file of copiedBinaries) {
+      expect(readFileSync(file), file).toEqual(expected);
+      expect(statSync(file).mode & 0o777, file).toBe(0o755);
+    }
+  });
 
   it.each(["arm64", "x86_64"])(
     "builds and locates the MLX helper with SwiftBuild on %s without a legacy output alias",
