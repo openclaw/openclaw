@@ -146,4 +146,42 @@ describe("parent-object blank agentDir authoring is still rejected", () => {
     const persisted = fs.readFileSync(path.join(root, "openclaw.json"), "utf-8");
     expect(persisted).not.toContain('"agentDir"');
   });
+
+  it("a saved blank agentDir re-authored via an explicit whole-list replacement is rejected (preserved)", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "proof-151013-saved-wholelist-"));
+    // The saved config carries a historically accepted blank agentDir in the
+    // legacy list form.
+    fs.writeFileSync(
+      path.join(root, "openclaw.json"),
+      JSON.stringify({
+        agents: { list: [{ id: "alpha", model: "openai/gpt-5.6", agentDir: " " }] },
+        gateway: { mode: "local", port: 18799, auth: { mode: "none" } },
+      }),
+    );
+    const ctx = makeContext(root);
+    const base = await readConfigFileSnapshotInternal(ctx, {});
+    const next = JSON.parse(JSON.stringify(base.snapshot.config));
+    // The operator replaces the whole legacy list and re-authors the blank
+    // agentDir. That is explicit authoring, so the field error must surface —
+    // the whole-list explicit path must be remapped to the entries form so the
+    // write migration preserves the re-authored blank instead of migrating the
+    // saved one.
+    next.agents = { list: [{ id: "alpha", model: "openai/gpt-5.6", agentDir: " " }] };
+    let threw = false;
+    let message = "";
+    try {
+      await writeConfigFileFromContext(
+        ctx,
+        next,
+        { explicitSetPaths: [["agents", "list"]] },
+        async () => base,
+      );
+    } catch (e) {
+      threw = true;
+      message = (e as Error).message;
+    }
+    expect(threw).toBe(true);
+    expect(message).toContain("agentDir");
+    expect(message).toContain("blank");
+  });
 });
