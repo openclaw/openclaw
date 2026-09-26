@@ -616,6 +616,72 @@ it("shows the remembered session label during startup before remote validation",
   }
 }, 65_000);
 
+it.each([
+  { choice: "different", selectedKey: "agent:main:mode-target", steps: ["agent:main:mode-target"] },
+  {
+    choice: "return to original",
+    selectedKey: "agent:main:main",
+    steps: ["agent:main:mode-target", "agent:main:main"],
+  },
+  { choice: "same", selectedKey: "agent:main:main", steps: ["agent:main:main"] },
+])(
+  "keeps the $choice choice visible and selected while remembered-session validation is pending",
+  async ({ selectedKey, steps }) => {
+    const stateDir = tempDirs.make("openclaw-tui-superseded-restore-");
+    await seedRememberedSession(stateDir);
+    const fixture = await startTuiFixture({
+      holdSessionDescription: true,
+      env: {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+        OPENCLAW_TUI_PTY_MAIN_SESSION_KEY: "agent:main:main",
+        OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
+      },
+    });
+    try {
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sessionDescriptionPending" &&
+          objectFieldEquals(entry, "sessionKey", REMEMBERED_SESSION_KEY),
+        STARTUP_TIMEOUT_MS,
+      );
+      for (const sessionKey of steps) {
+        await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
+        await fixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
+          STARTUP_TIMEOUT_MS,
+        );
+      }
+      const selectedRows = await waitForSynchronizedFrameRows(
+        fixture.run,
+        (frame) => frame.some((row) => row.trim() === `session ${selectedKey}`),
+        STARTUP_TIMEOUT_MS,
+      );
+      const label = `session ${selectedKey.split(":").at(-1)}`;
+      expect(selectedRows.slice(0, 2).join(" ").replace(/\s+/gu, " ")).toContain(label);
+      expect(selectedRows.find((row) => row.includes("| session "))).toContain(label);
+      await fixture.releaseStartup();
+      const rows = await waitForSynchronizedFrameRows(
+        fixture.run,
+        (frame) => frame.some((row) => row.includes("local ready")),
+        STARTUP_TIMEOUT_MS,
+      );
+      expect(rows.join("\n")).toContain(`session ${selectedKey.split(":").at(-1)}`);
+      const marker = "superseded restore target proof";
+      await fixture.run.write(`${marker}\r`, { delay: false });
+      const sent = await fixture.waitForLogEntry(
+        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", marker),
+        STARTUP_TIMEOUT_MS,
+      );
+      expect(sent.payload).toMatchObject({ sessionKey: selectedKey });
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+  65_000,
+);
+
 it("clears the provisional label after a failed remembered-session lookup", async () => {
   const stateDir = tempDirs.make("openclaw-tui-provisional-failure-");
   await seedRememberedSession(stateDir);
@@ -766,5 +832,31 @@ it("starts normally when the pre-render state read throws", async () => {
     expect(rows.join("\n")).not.toContain("session picker-target");
   } finally {
     await fixture.cleanup();
+  }
+}, 65_000);
+
+it("persists the selected session before returning from Ctrl+D exit with empty input", async () => {
+  const stateDir = tempDirs.make("openclaw-tui-exit-session-");
+  const scopeKey = buildTuiLastSessionScopeKey({
+    connectionUrl: "pty-fixture://local",
+    agentId: "main",
+    sessionScope: "per-sender",
+  });
+  const emptyFixture = await startTuiFixture({
+    env: {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TUI_PTY_RETURN_STATE_KEY: `tui.lastSession.${scopeKey}`,
+    },
+  });
+  try {
+    await emptyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    await emptyFixture.run.write("/session agent:main:mode-target\r", { delay: false });
+    await emptyFixture.run.waitForOutput("session mode-target");
+    await emptyFixture.run.write("\u0004", { delay: false });
+    const returned = await emptyFixture.waitForLogEntry((entry) => entry.method === "returned");
+    expect(returned.payload).toEqual({ rememberedSessionKey: "agent:main:mode-target" });
+    expect((await emptyFixture.run.waitForExit()).exitCode).toBe(0);
+  } finally {
+    await emptyFixture.cleanup();
   }
 }, 65_000);

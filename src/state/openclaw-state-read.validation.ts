@@ -222,6 +222,11 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
       (input.command.type === "operatorApprovals.history" && isRecord(input.command.input)) ||
+      (input.command.type === "tui.lastSession.read" &&
+        typeof input.command.stateKey === "string") ||
+      (input.command.type === "tui.lastSession.retiredPointers" &&
+        Array.isArray(input.command.retiredSessionKeys) &&
+        input.command.retiredSessionKeys.every((key) => typeof key === "string")) ||
       input.command.type === "nodeHost.config" ||
       input.command.type === "operator.channelPolicy" ||
       (input.command.type === "onboardingRecommendations.read" &&

@@ -208,6 +208,13 @@ configuration reads also use their asynchronous owner. Process-held incognito
 stores retain their existing native reader and remain separate migration work.
 Schemas, stored bytes, retention, public APIs, and update behavior are unchanged.
 
+TUI remembered-session reads and retired-pointer scans use the shared-state
+read worker; writes and per-pointer compare-and-delete transactions use the
+shared-state writer. Normal terminal exit closes persistence admission and joins
+accepted writes. A newer conversation choice or reset invalidates a pending
+remembered-session restore. The existing scope keys, heartbeat filtering,
+SQLite rows, missing-store behavior, and update behavior are unchanged.
+
 ## Migrate a caller
 
 1. Trace the registered request, event, or timer through the store owner. Check
