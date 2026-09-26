@@ -20,6 +20,7 @@ import type {
 } from "../../harness/types.js";
 import { observeReplyDelivery } from "../../reply-completion.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -58,6 +59,9 @@ type CreateAttemptControls = ReturnType<
 const MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS = 2;
 const SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT =
   "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
+// A scheduled report and a heartbeat poll the same channel on a cadence nobody is
+// waiting on, so the host placeholder is noise there exactly as it is for cron.
+const UNATTENDED_RUN_TRIGGERS = new Set<EmbeddedRunTrigger | undefined>(["cron", "heartbeat"]);
 type TerminalPreparationBase = Omit<
   TerminalPreparationInput,
   | "attempt"
@@ -270,9 +274,11 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     };
   }
   if (finalizationOutcome !== "answered" && terminalFallbackAllowed) {
-    // Scheduled runs have no useful announcement when only a host placeholder remains.
-    const fallbackText =
-      runParams.trigger === "cron" ? SILENT_REPLY_TOKEN : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT;
+    // Unattended runs have no useful announcement when only a host placeholder remains.
+    const unattendedRun = UNATTENDED_RUN_TRIGGERS.has(runParams.trigger);
+    const fallbackText = unattendedRun
+      ? SILENT_REPLY_TOKEN
+      : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT;
     const transcriptIdempotencyKey = await persistSettledToolFallbackTranscript({
       text: fallbackText,
       attempt: input.finalization.preparedAttempt,
@@ -302,7 +308,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       runtimePlan: input.finalization.preparedAttempt.runtimePlan,
       transcriptIdempotencyKey,
     });
-    if (runParams.trigger === "cron") {
+    if (unattendedRun) {
       finalizationOutcome = "silent-fallback";
     }
   }
