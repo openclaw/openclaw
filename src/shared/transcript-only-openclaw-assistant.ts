@@ -84,10 +84,15 @@ export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): bool
 }
 
 export function isOpenClawSubagentCompletionMirrorAssistantMessage(message: unknown): boolean {
-  if (!isOpenClawDeliveryMirrorAssistantMessage(message)) {
+  if (
+    !isOpenClawDeliveryMirrorAssistantMessage(message) ||
+    typeof message !== "object" ||
+    message === null ||
+    !("openclawDeliveryMirror" in message)
+  ) {
     return false;
   }
-  const marker = (message as { openclawDeliveryMirror?: unknown }).openclawDeliveryMirror;
+  const marker = message.openclawDeliveryMirror;
   return (
     typeof marker === "object" &&
     marker !== null &&
