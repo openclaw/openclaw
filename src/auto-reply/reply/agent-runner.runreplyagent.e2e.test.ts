@@ -4934,7 +4934,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
       expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
       expect(payload?.text).toContain("no visible reply");
-      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
     } finally {
       fallbackSpy.mockRestore();
     }

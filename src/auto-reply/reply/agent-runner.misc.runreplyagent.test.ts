@@ -684,7 +684,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     async (_label, agentResult) => {
       const onAgentRunTerminalOutcome = vi.fn();
       const result = await runEmptyDirectReply(agentResult, { onAgentRunTerminalOutcome });
-      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
       expectRecordFields(result, { isError: true }, "empty interactive fallback");
     },
   );
