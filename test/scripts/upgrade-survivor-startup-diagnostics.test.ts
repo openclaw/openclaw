@@ -45,7 +45,7 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv = process.e
       { env, timeout: 15_000, maxBuffer: 256 * 1024 },
       (error, stdout, stderr) => {
         if (error && typeof error.code !== "number") {
-          reject(error);
+          reject(new Error("Diagnostic fixture command could not complete", { cause: error }));
           return;
         }
         resolve({ status: typeof error?.code === "number" ? error.code : 0, stdout, stderr });
