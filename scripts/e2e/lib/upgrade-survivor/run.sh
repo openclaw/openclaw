@@ -788,60 +788,8 @@ NODE
 
   if configured_plugin_installs_enabled; then
     mkdir -p "$package_dir"
-    FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="$candidate_version" node <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-const root = process.env.FIXTURE_PACKAGE_DIR;
-const version = process.env.FIXTURE_PACKAGE_VERSION;
-if (!version) {
-  throw new Error("missing fixture package version");
-}
-fs.mkdirSync(root, { recursive: true });
-fs.writeFileSync(
-  path.join(root, "package.json"),
-  `${JSON.stringify(
-    {
-      name: "@openclaw/brave-plugin",
-      version,
-      openclaw: { extensions: ["./index.js"] },
-    },
-    null,
-    2,
-  )}\n`,
-);
-fs.writeFileSync(
-  path.join(root, "openclaw.plugin.json"),
-  `${JSON.stringify(
-    {
-      id: "brave",
-      activation: { onStartup: false },
-      setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
-      contracts: { webSearchProviders: ["brave"] },
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          webSearch: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              apiKey: { type: ["string", "object"] },
-              mode: { type: "string", enum: ["web", "llm-context"] },
-              baseUrl: { type: ["string", "object"] },
-            },
-          },
-        },
-      },
-    },
-    null,
-    2,
-  )}\n`,
-);
-fs.writeFileSync(
-  path.join(root, "index.js"),
-  `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
-);
-NODE
+    FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="$candidate_version" \
+      node scripts/e2e/lib/upgrade-survivor/brave-plugin-fixture.mjs
     tar -czf "$tarball" -C "$fixture_root" package
     registry_args+=("@openclaw/brave-plugin" "$candidate_version" "$tarball")
   fi

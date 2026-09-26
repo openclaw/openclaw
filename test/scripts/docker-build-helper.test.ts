@@ -2976,7 +2976,27 @@ docker_e2e_docker_run_cmd run demo
       'local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"',
     );
     expect(publishedRunner).toContain('FIXTURE_PACKAGE_VERSION="$candidate_version"');
-    expect(publishedRunner).toContain("version,");
+    const braveFixtureRoot = tempDirs.make("survivor-brave-fixture-");
+    execFileSync(testNodeExecPath, ["scripts/e2e/lib/upgrade-survivor/brave-plugin-fixture.mjs"], {
+      env: {
+        ...process.env,
+        FIXTURE_PACKAGE_DIR: braveFixtureRoot,
+        FIXTURE_PACKAGE_VERSION: "2026.9.4-beta.2",
+      },
+    });
+    expect(JSON.parse(readFileSync(join(braveFixtureRoot, "package.json"), "utf8"))).toEqual({
+      name: "@openclaw/brave-plugin",
+      version: "2026.9.4-beta.2",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    expect(
+      JSON.parse(readFileSync(join(braveFixtureRoot, "openclaw.plugin.json"), "utf8")),
+    ).toMatchObject({
+      id: "brave",
+      activation: { onStartup: false },
+      setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
+      contracts: { webSearchProviders: ["brave"] },
+    });
     expect(publishedRunner).toContain(
       'registry_args+=("@openclaw/brave-plugin" "$candidate_version" "$tarball")',
     );
@@ -8442,9 +8462,10 @@ bash "$ROOT_DIR/scripts/e2e/doctor-install-switch-docker.sh"
       'export USERPROFILE="$account_home"',
       "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH",
       'openclaw_test_state_create "switch-${name}" empty\n  use_default_service_identity',
-      'openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd"',
-      'openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd"',
-      'openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force',
+      'openclaw_e2e_maybe_timeout "$command_timeout" "$@" >"$log_path" 2>&1',
+      'run_logged_command "$install_log" "$command_timeout" bash -c "$install_cmd"',
+      'run_logged_command "$doctor_log" "$command_timeout" bash -c "$doctor_cmd"',
+      'run_logged_command "$install_log" "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force',
     ]);
 
     expect(
@@ -8515,19 +8536,16 @@ bash "$ROOT_DIR/scripts/e2e/doctor-install-switch-docker.sh"
     const scenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
     expectTextToIncludeAll(scenario, [
       'openclaw_e2e_print_log "$npm_log"',
-      'openclaw_e2e_print_log "$install_log"',
       'openclaw_e2e_print_log "$doctor_log"',
-      'openclaw_e2e_print_log "$reinstall_log"',
-      'openclaw_e2e_print_log "$env_repair_log"',
-      'openclaw_e2e_print_log "$clear_log"',
     ]);
-
+    const command = scenario.match(/run_logged_command\(\) \{[\s\S]*?\n\}/u)?.[0];
+    expect(command).toContain('openclaw_e2e_print_log "$log_path"');
+    expect(command).not.toContain('cat "$log_path"');
+    for (const name of ["install", "doctor", "reinstall", "env_repair", "clear"]) {
+      expect(scenario).toContain(`run_logged_command "$${name}_log" "$command_timeout"`);
+      expect(scenario).not.toContain(`cat "$${name}_log"`);
+    }
     expect(scenario).not.toContain('cat "$npm_log"');
-    expect(scenario).not.toContain('cat "$install_log"');
-    expect(scenario).not.toContain('cat "$doctor_log"');
-    expect(scenario).not.toContain('cat "$reinstall_log"');
-    expect(scenario).not.toContain('cat "$env_repair_log"');
-    expect(scenario).not.toContain('cat "$clear_log"');
   });
 
   it("prepares pnpm workspace package fixtures without package dependencies", () => {

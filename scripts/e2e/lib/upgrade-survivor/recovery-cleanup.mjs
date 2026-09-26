@@ -154,6 +154,10 @@ async function gateway(name, method, params) {
   ]);
 }
 
+function readChatHistory(name, { agentId, sessionKey }) {
+  return gateway(name, "chat.history", { agentId, sessionKey, limit: 20 });
+}
+
 async function readHistory(name, fixture) {
   const listing = await gateway(`${name}-list`, "sessions.list", {
     agentId: fixture.agentId,
@@ -163,11 +167,7 @@ async function readHistory(name, fixture) {
   assert.equal(listing.sessions.length, 1, "conversation not uniquely listed");
   assert.equal(listing.sessions[0].key, fixture.sessionKey);
   assert.equal(listing.sessions[0].sessionId, fixture.sessionId);
-  return await gateway(name, "chat.history", {
-    agentId: fixture.agentId,
-    sessionKey: fixture.sessionKey,
-    limit: 20,
-  });
+  return await readChatHistory(name, fixture);
 }
 
 async function inspect(name) {
@@ -249,11 +249,7 @@ async function proveHistory(stage, append) {
       message: newMessage,
     });
     assert(newInjected.ok && newInjected.messageId, "new conversation append failed");
-    const history = await gateway("new-history", "chat.history", {
-      agentId: fresh.agentId,
-      sessionKey: fresh.sessionKey,
-      limit: 20,
-    });
+    const history = await readChatHistory("new-history", fresh);
     const messages = [
       {
         id: newInjected.messageId,
@@ -265,11 +261,7 @@ async function proveHistory(stage, append) {
     saveEvidence({ histories: saved, newHistory: { ...fresh, messages } });
   } else {
     const fresh = evidence.newHistory;
-    const history = await gateway(`${stage}-new-history`, "chat.history", {
-      agentId: fresh.agentId,
-      sessionKey: fresh.sessionKey,
-      limit: 20,
-    });
+    const history = await readChatHistory(`${stage}-new-history`, fresh);
     assertRecoveryHistory(history, fresh.sessionId, fresh.messages);
     const hashes = [...saved, fresh].map((entry) => ({
       sessionKey: entry.sessionKey,
