@@ -7,8 +7,8 @@ scenario:
     primary:
       - channels.native-threads-thread-isolation
     secondary:
-      - channels.outbound-delivery-and-reply-pipeline
-      - channels.session-routing
+      - microsoft-teams.deterministic-channel-replies
+      - microsoft-teams.session-routing
   objective: Verify the real Microsoft Teams Gateway debounce key includes the channel thread root, so replies in distinct thread roots dispatch separately (two agent turns, replies placed in each thread) while replies in the same thread root still batch into one dispatch.
   gatewayConfigPatch:
     messages:
@@ -123,9 +123,9 @@ flow:
           value:
             expr: "crossOutbound.filter((message) => String(message.text ?? '').includes('QA-DEB-THREAD-B-OK'))"
         - assert:
-            expr: "crossA.length === 1 && crossB.length === 1 && crossA[0]?.threadId && crossB[0]?.threadId && crossA[0].threadId !== crossB[0].threadId"
+            expr: "crossA.length === 1 && crossB.length === 1 && crossA[0]?.threadId === threadARoot.id && crossB[0]?.threadId === threadBRoot.id"
             message:
-              expr: "`expected one isolated marker per distinct thread root with distinct placement; saw A=${JSON.stringify(crossA)} B=${JSON.stringify(crossB)}; transcript=${formatTransportTranscript(state, { conversationId: 'debounce-channel' })}`"
+              expr: "`expected one isolated marker per distinct thread root placed on its own saved root (A=${threadARoot.id}, B=${threadBRoot.id}); saw A=${JSON.stringify(crossA)} B=${JSON.stringify(crossB)}; transcript=${formatTransportTranscript(state, { conversationId: 'debounce-channel' })}`"
 
         # Same-thread batching preserved: two messages in the SAME thread root
         # within one debounce window must still batch into a single dispatch.
@@ -172,6 +172,6 @@ flow:
           value:
             expr: "state.getSnapshot().messages.slice(sameStart).filter((message) => message.direction === 'outbound' && message.conversation.id === 'debounce-channel' && (String(message.text ?? '').includes('QA-DEB-THREAD-Z1-OK') || String(message.text ?? '').includes('QA-DEB-THREAD-Z2-OK')))"
         - assert:
-            expr: "sameOutbound.length === 1 && sameOutbound[0]?.threadId"
+            expr: "sameOutbound.length === 1 && sameOutbound[0]?.threadId === threadZRoot.id"
             message:
-              expr: "`expected one merged same-thread marker; saw ${JSON.stringify(sameOutbound)}; transcript=${formatTransportTranscript(state, { conversationId: 'debounce-channel' })}`"
+              expr: "`expected one merged same-thread marker placed on its saved root ${threadZRoot.id}; saw ${JSON.stringify(sameOutbound)}; transcript=${formatTransportTranscript(state, { conversationId: 'debounce-channel' })}`"
