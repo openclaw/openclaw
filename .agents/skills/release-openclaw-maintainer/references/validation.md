@@ -5,6 +5,23 @@ recovery. Select the phase below; deferred or omitted checks are not passed.
 Every selected child needs terminal evidence. A required failure cannot be
 waived by success on another surface.
 
+## Older updater checks
+
+Before freezing a release, refresh `scripts/lib/update-compat-inventory.json`
+from every release in the supported upgrade window. Verify each downloaded npm
+tarball against its published `dist.integrity` before extraction, then run
+`pnpm update:compat:gen --release '<unpacked-dir>=<verified-integrity>'`, repeating
+`--release` for every supported version. Generation replaces the recorded set:
+keep empty entries, drop expired versions and their historical corrections, and
+never hand-edit recorded origins. Run `pnpm update:compat:check`; both npm
+`latest` and `beta` must be covered. Repeat the generation arguments with
+`--check` for an offline regeneration check.
+
+Run every recorded `update-first-hop-compat*` lane and the upgrade survivor lane
+from the oldest supported release. Native Windows proof must invoke the old
+updater with a registered Scheduled Task and verify that it restarts the Gateway
+without a later manual `gateway start`.
+
 ## Source and package gates
 
 Before tagging or publishing, complete the relevant source/package checks:
@@ -61,6 +78,20 @@ uses `--video-providers fal`. Full transform modes require intentional
 `OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES=1`. Use `$one-password` before
 credentialed tests. Local live model/Parallels rosters require both OpenAI and
 Anthropic keys; missing either blocks those lanes, never print their values.
+
+### Bundled Chrome MCP artifacts
+
+The bundled Chrome MCP artifact checker selects a trusted, exact patch-byte
+contract from the candidate's declared dependency pin and requires the bundled
+manifest to match it. The supported contracts are `1.8.0` (shipped in
+`v2026.9.6` at `eb377ac59e6c9fd6c7705028034812becf00271b`) and `1.9.0`.
+Both retain their original runtime hashes, required assets, ESM manifest, and
+bundled CLI resolution checks. Ranges, unknown versions, mixed contracts, and
+artifact-supplied hash tables cannot authorize a payload. Retain the `1.8.0`
+contract while supported frozen release targets pin it; retire it explicitly
+when those targets retire or migrate to a qualified newer pin, not merely when
+main updates its dependency. This does not change the candidate dependency or
+waive any package acceptance gate.
 
 ## Beta and stable qualification
 
@@ -139,3 +170,27 @@ PR preparation/landing or observed hosted-runner stalls, use
 `$openclaw-pr-maintainer` / `$openclaw-ci-limits`; never synthesize prepare
 artifacts or replace canonical `scripts/pr` with PR-controlled scripts. Record
 unrelated main failures instead of adopting them into release scope.
+
+## Immutable runtime generation proposal
+
+A durable replacement would install each version in an immutable generation
+directory and switch an installation pointer. Launchers must resolve that
+pointer before starting Node so lazy imports keep the process's original tree.
+Retain generations until their processes have exited. This is a proposal, not
+the current update layout.
+
+The design must preserve npm's ownership and bookkeeping: `npm ls -g`, later
+global installs and uninstall, lifecycle scripts, and generated launchers must
+still work. Unix uses `<prefix>/lib/node_modules` and `<prefix>/bin`; Windows
+uses `<prefix>/node_modules` and prefix-root launchers. A mutable junction alone
+does not pin old imports, and Windows pointer replacement must respect open
+handles and junction semantics. npm must not replace or orphan the retained
+generation anchor during its next install.
+
+pnpm owns a global project, manifests, lockfiles, virtual-store links, and
+version-dependent package groups; its cleanup must not collect live generations.
+Bun also owns a shared global project and separate binary directory, and its
+Windows binary launchers currently cannot be relocated by this updater.
+Generation activation must preserve sibling packages and the existing
+concurrent-project checks for both managers. These constraints need separate
+design approval and package-manager integration proof before implementation.

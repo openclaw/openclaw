@@ -6,6 +6,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
@@ -48,6 +49,7 @@ type ChannelRuntime = ReturnType<
 
 export async function prepareGatewayKernelState(params: {
   bootstrap: GatewayBootstrap;
+  scheduler: GatewayScheduler;
   bootId: string;
   pluginRegistryOwner: ReturnType<typeof createPluginRegistryOwner>;
   getPluginReloadStatus: () => GatewayPluginReloadStatus | undefined;
@@ -68,6 +70,7 @@ export async function prepareGatewayKernelState(params: {
 }) {
   const {
     bootstrap,
+    scheduler,
     bootId,
     port,
     opts,
@@ -530,6 +533,7 @@ export async function prepareGatewayKernelState(params: {
 
   return {
     ...bootstrap,
+    scheduler,
     bootId,
     pluginRuntime,
     workerEnvironmentService,

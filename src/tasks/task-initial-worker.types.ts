@@ -35,7 +35,7 @@ export type TaskInitialWorkerOperations = {
     input: {
       taskId: string;
       expectedTask: TaskPersistenceReceipt;
-      params: { runId: string; executionOwner?: TaskExecutionOwner };
+      params: { runId: string; executionOwner?: TaskExecutionOwner; clearLastToolName?: true };
       now: number;
     };
     output: TaskRecordTransitionReceipt | null;

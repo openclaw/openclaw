@@ -10,8 +10,8 @@ const dns = vi.hoisted(() => ({
   beforeResolve: undefined as (() => Promise<void>) | undefined,
 }));
 
-vi.mock("./transport-runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./transport-runtime-api.js")>();
+vi.mock("openclaw/plugin-sdk/ssrf-dispatcher", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-dispatcher")>();
   return {
     ...actual,
     resolvePinnedHostnameWithPolicy: async (

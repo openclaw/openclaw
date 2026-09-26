@@ -16,6 +16,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../infra/agent-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   createChatRunState,
@@ -44,6 +45,7 @@ export function createSubscriptionTestFixture() {
     createParams: (): Parameters<typeof startGatewayEventSubscriptions>[0] => {
       const chatRunState = createChatRunState();
       return {
+        scheduler: createTestGatewayScheduler(),
         signal: new AbortController().signal,
         log,
         broadcast: vi.fn(),

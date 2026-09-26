@@ -301,6 +301,7 @@ export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingE
     sessionId: entry.sessionId,
     updatedAt: entry.updatedAt,
     lifecycleRevision: entry.lifecycleRevision,
+    archivedAt: entry.archivedAt,
     visibility: entry.visibility,
     incognito: entry.incognito,
     createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,

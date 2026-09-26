@@ -359,7 +359,9 @@ describe("worker environment service", () => {
     const { promise: identityPending, resolve: finishIdentity } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async ({ installation, resolveIdentity, signal }) => {
       signal.addEventListener("abort", () => void events.push("abort"), { once: true });
-      await resolveIdentity(support.SSH_ENDPOINT.keyRef);
+      await resolveIdentity(support.SSH_ENDPOINT.keyRef, {
+        assertCurrent: () => signal.throwIfAborted(),
+      });
       return {
         bundleHash: installation.bundleHash,
         openclawVersion: installation.openclawVersion,
