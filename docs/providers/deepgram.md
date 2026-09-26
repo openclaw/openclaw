@@ -138,6 +138,7 @@ for the Voice Call plugin.
 | Encoding        | `...deepgram.encoding`                                                  | `mulaw`                                      |
 | Sample rate     | `...deepgram.sampleRate`                                                | `8000`                                       |
 | Endpointing     | `...deepgram.endpointingMs`                                             | `800`                                        |
+| Idle flush      | `...deepgram.idleFlushMs`                                               | `0` (disabled)                               |
 | Interim results | `...deepgram.interimResults`                                            | `true`                                       |
 
 ```json5
