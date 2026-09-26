@@ -387,8 +387,7 @@ it.each(["while queued", "during safe-open"] as const)(
           ? {
               ...authorized,
               hasCurrentClientAuthority: () =>
-                !revokedRequests.has(params.req) &&
-                authorized.hasCurrentClientAuthority?.() !== false,
+                !revokedRequests.has(params.req) && authorized.hasCurrentClientAuthority(),
             }
           : authorized;
       },

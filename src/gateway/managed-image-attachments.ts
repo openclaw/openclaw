@@ -1473,6 +1473,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
               kind: mediaKind,
               signal: params.abortSignal,
               assertCurrent: params.assertCurrent,
+              admission: "immediate",
             });
             playback = metadata.playback;
           } catch (error) {

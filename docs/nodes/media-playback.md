@@ -116,7 +116,9 @@ reports temporary unavailability that you can retry, and playback remains
 preparing. Disconnected requests stop waiting, and queued probes with no remaining
 viewers release their queue slots immediately. Queued reads recheck current access
 before opening and probing the file. A busy inspector does not discard outgoing
-attachments; their optional playback metadata can remain absent.
+attachments; their optional playback metadata can remain absent. Outgoing reply
+creation uses immediate inspection admission and does not wait behind queued
+viewer requests.
 
 Gateway-managed assistant attachments use these per-file caps:
 

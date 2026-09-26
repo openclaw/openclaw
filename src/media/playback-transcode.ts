@@ -52,6 +52,7 @@ type PlaybackSourceParams = PlaybackInspectionWaiter & {
   sourceStat: PlaybackSourceStat;
   mimeType: string;
   kind: PlaybackMediaKind;
+  admission?: "wait" | "immediate";
 };
 
 type PlaybackTranscodeResolution =
@@ -267,8 +268,16 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
     return inspection;
   };
   let job = playbackInspectionJobs.get(cacheKey);
+  if (job?.pending && params.admission === "immediate") {
+    throw new PlaybackInspectionBusyError();
+  }
   if (!job) {
     if (playbackInspectionPermits.pendingCount >= MAX_PENDING_PLAYBACK_INSPECTIONS) {
+      throw new PlaybackInspectionBusyError();
+    }
+    const immediatePermit =
+      params.admission === "immediate" ? playbackInspectionPermits.tryAcquire() : undefined;
+    if (immediatePermit === null) {
       throw new PlaybackInspectionBusyError();
     }
     const waiters = new Set<PlaybackInspectionWaiter>();
@@ -281,7 +290,8 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
         return pending;
       },
       result: (async () => {
-        const release = await playbackInspectionPermits.acquire({ signal: controller.signal });
+        const release = await (immediatePermit ??
+          playbackInspectionPermits.acquire({ signal: controller.signal }));
         if (!release) {
           throw createAbortError("Playback inspection abandoned");
         }
