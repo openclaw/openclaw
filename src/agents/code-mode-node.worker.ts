@@ -22,7 +22,7 @@ import {
   USER_SOURCE_FILE,
   type SourceLocation,
 } from "./code-mode-source-location.js";
-import { prepareSource } from "./code-mode-source.js";
+import { CODE_MODE_MODULE_ACCESS_ERROR, prepareSource } from "./code-mode-source.js";
 import type {
   CodeModeConfig,
   CodeModeWorkerContinuation,
@@ -313,7 +313,7 @@ function formatGuestFailure(
     value.name === "ReferenceError" &&
     /^(?:require|module|process) is not defined$/u.test(value.message)
   ) {
-    return { code: "invalid_input", error: "code mode module access is disabled." };
+    return { code: "invalid_input", error: CODE_MODE_MODULE_ACCESS_ERROR };
   }
   return {
     code: "internal_error",
