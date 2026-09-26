@@ -190,9 +190,11 @@ describe("createWhatsAppLoginTool", () => {
     startWebLoginWithQrMock.mockResolvedValueOnce({ message: "login started" });
     const signal = new AbortController().signal;
 
-    await expect(tool.execute("tool-call-unknown", { action }, signal)).rejects.toThrow(
-      `Unknown WhatsApp login action: ${rendered}`,
-    );
+    await expect(tool.execute("tool-call-unknown", { action }, signal)).rejects.toMatchObject({
+      name: "ToolInputError",
+      status: 400,
+      message: `Unknown WhatsApp login action: ${rendered}`,
+    });
     expect(startWebLoginWithQrMock).not.toHaveBeenCalled();
     expect(waitForWebLoginMock).not.toHaveBeenCalled();
   });
