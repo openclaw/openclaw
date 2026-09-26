@@ -32,7 +32,10 @@ import {
 } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
-import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
+import {
+  releaseGatewaySessionStoreFixture,
+  settleGatewaySessionStoreFixture,
+} from "./test/server-sessions-resources.test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
@@ -419,6 +422,8 @@ test("automatic list and search projection reuse conventional state-directory pr
                 }
                 const warm = await directSessionReq("sessions.list", request);
                 expect(warm.ok).toBe(true);
+                // Fixture writes also refresh the suite Gateway outside the measured request.
+                await settleGatewaySessionStoreFixture(stateDir);
                 const existsSync = fsSync.existsSync;
                 const exists = vi.spyOn(fsSync, "existsSync").mockImplementation((pathname) => {
                   // Retain bounded provenance for probes that only reproduce in shared CI shards.
