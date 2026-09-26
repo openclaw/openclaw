@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import {
   inputRichBlocksToPlainText,
-  maxInputRichBlockNesting,
+  measureInputRichBlocks,
   normalizeRichText,
   type InputRichBlock,
   type InputRichBlockParagraph,
@@ -344,26 +344,22 @@ function renderTableBlock(table: MarkdownTableMeta): {
       degradation: "table-ascii",
     };
   }
-  const headerRow: RichBlockTableCell[] = table.headerCells.map((cell, index) => {
-    const align = table.aligns?.[index];
+  const renderCell = (
+    cell: MarkdownTableCell | undefined,
+    index: number,
+    header = false,
+  ): RichBlockTableCell => {
     const text = cellToRichText(cell);
     return {
-      is_header: true,
-      align: align ?? "left",
+      ...(header ? { is_header: true as const } : {}),
+      align: table.aligns?.[index] ?? "left",
       valign: "middle",
       ...(text !== undefined ? { text } : {}),
     };
-  });
+  };
+  const headerRow = table.headerCells.map((cell, index) => renderCell(cell, index, true));
   const bodyRows: RichBlockTableCell[][] = table.rowCells.map((row) =>
-    Array.from({ length: columnCount }, (_value, index) => {
-      const align = table.aligns?.[index];
-      const text = cellToRichText(row[index]);
-      return {
-        align: align ?? "left",
-        valign: "middle",
-        ...(text !== undefined ? { text } : {}),
-      };
-    }),
+    Array.from({ length: columnCount }, (_value, index) => renderCell(row[index], index)),
   );
   const cells = headerRow.length > 0 ? [headerRow, ...bodyRows] : bodyRows;
   return {
@@ -635,6 +631,11 @@ export function markdownToTelegramRichBlocks(
     headingStyle: "rich",
     blockquotePrefix: "",
     tableMode,
+    // resolveTelegramLinkAction already collapses unsupported hrefs (file:,
+    // data:, ...) to their label; let the parser tokenize them instead of
+    // leaking raw `[label](href)` source when markdown-it's own scheme
+    // denylist rejects it.
+    allowAllLinkSchemes: true,
   });
 
   let degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
@@ -643,7 +644,7 @@ export function markdownToTelegramRichBlocks(
   const hasMarkdownLists = segments.some((segment) => segment.kind === "list");
   const flattenedSegments = segments.filter((segment) => segment.kind !== "list");
   let blocks = emitSegments(ir, segments, 0, ir.text.length, degradationReasons, htmlNodes);
-  if (hasMarkdownLists && maxInputRichBlockNesting(blocks) > 16) {
+  if (hasMarkdownLists && measureInputRichBlocks(blocks).nesting > 16) {
     degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
     degradationReasons.add("list-limit");
     blocks = emitSegments(ir, flattenedSegments, 0, ir.text.length, degradationReasons, htmlNodes);

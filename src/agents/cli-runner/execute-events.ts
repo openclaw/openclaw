@@ -1,6 +1,9 @@
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import { emitAgentEvent, type AgentEventStream } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import { markToolExecutionLivenessDiagnosticEvent } from "../../infra/diagnostic-tool-execution-liveness.js";
+import { projectProgressCardChannelUpdate } from "../../session-cards/progress-card-channel-summary.js";
+import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
 import type {
   CliCompactionDelta,
   CliStreamingDelta,
@@ -9,11 +12,16 @@ import type {
   CliToolUseStartDelta,
 } from "../cli-output-contracts.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
-import { sanitizeToolArgs, sanitizeToolResult } from "../embedded-agent-tool-results.js";
+import {
+  extractToolErrorMessage,
+  sanitizeToolArgs,
+  sanitizeToolResult,
+} from "../embedded-agent-tool-results.js";
+import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
-import { stripOpenClawMcpToolPrefix } from "./tool-policy.js";
+import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 type CliToolResult = {
@@ -35,14 +43,25 @@ export function createCliEventHandlers(params: {
   const context = params.context;
   const runParams = context.params;
   const emitLiveEvents = runParams.executionMode !== "side-question";
+  const emitLiveEvent = (stream: AgentEventStream, data: () => Record<string, unknown>) => {
+    if (emitLiveEvents) {
+      emitAgentEvent({ runId: runParams.runId, stream, data: data() });
+    }
+  };
   let observedCliActivity = false;
   let signaledToolExecutionStarted = false;
   let signaledAssistantOutputStarted = false;
   let commentaryCounter = 0;
-  const toolSummaryById = new Map<string, { name: string; failed: boolean }>();
+  const toolSummaryById = new Map<
+    string,
+    { name: string; failed: boolean; terminalObserved?: boolean }
+  >();
   // CLI results report an outcome without repeating the request, so the terminal
   // progress event would otherwise describe the output instead of the command.
-  const toolArgsByCallId = new Map<string, Record<string, unknown>>();
+  const toolArgsByCallId = new Map<
+    string,
+    { args: Record<string, unknown>; tracked: boolean; startedAt: number }
+  >();
   const emitToolEvent = (
     data: Parameters<typeof projectAgentToolActivity>[0] & {
       result?: unknown;
@@ -64,51 +83,37 @@ export function createCliEventHandlers(params: {
       emitAgentEvent(activity);
     }
   };
-  const toolSummaryNames: string[] = [];
-  const toolSummaryNameSet = new Set<string>();
+  const toolSummaryNames = new Set<string>();
   const activeParsedTools = new Map<
     string,
     { startedAt: number; toolName: string; kind: CliToolUseStartDelta["kind"] }
   >();
-  const rememberToolName = (name: string) => {
-    if (!name || toolSummaryNameSet.has(name)) {
-      return;
-    }
-    toolSummaryNameSet.add(name);
-    toolSummaryNames.push(name);
-  };
-  const recordToolStart = (event: CliToolUseStartDelta) => {
-    if (event.args && Object.keys(event.args).length > 0) {
-      toolArgsByCallId.set(event.toolCallId, event.args);
-    }
-    const current = toolSummaryById.get(event.toolCallId);
-    if (!current) {
-      toolSummaryById.set(event.toolCallId, { name: event.name, failed: false });
-    } else if (!current.name && event.name) {
-      current.name = event.name;
-    }
-    rememberToolName(event.name);
-  };
-  const recordToolResult = (event: CliToolResult) => {
-    const current = toolSummaryById.get(event.toolCallId);
+  const recordToolSummary = (event: { toolCallId: string; name: string }, failed: boolean) => {
+    let current = toolSummaryById.get(event.toolCallId);
     if (current) {
-      current.failed ||= event.isError;
+      current.failed ||= failed;
       if (!current.name && event.name) {
         current.name = event.name;
       }
     } else {
-      toolSummaryById.set(event.toolCallId, { name: event.name, failed: event.isError });
+      current = { name: event.name, failed };
+      toolSummaryById.set(event.toolCallId, current);
     }
-    rememberToolName(event.name);
+    if (event.name) {
+      toolSummaryNames.add(event.name);
+    }
+    return current;
   };
   const getToolSummary = (): ToolSummaryTrace => ({
     calls: toolSummaryById.size,
-    tools: toolSummaryNames.slice(),
+    tools: [...toolSummaryNames],
     failures: Array.from(toolSummaryById.values()).filter((entry) => entry.failed).length,
   });
-  const emitCliToolUseStart = (event: CliToolUseStartDelta) => {
+  const emitToolUseStart = (event: CliToolUseStartDelta, tracked: boolean) => {
     observedCliActivity = true;
-    recordToolStart(event);
+    // Empty arguments are meaningful: progress-card calls use {} to clear the card.
+    toolArgsByCallId.set(event.toolCallId, { args: event.args, tracked, startedAt: Date.now() });
+    recordToolSummary(event, false);
     if (!signaledToolExecutionStarted) {
       signaledToolExecutionStarted = true;
       runParams.onExecutionPhase?.({
@@ -118,7 +123,9 @@ export function createCliEventHandlers(params: {
         backend: context.backendResolved.id,
       });
     }
-    params.toolTracking.handleCliToolUseStart(event);
+    if (tracked) {
+      params.toolTracking.handleCliToolUseStart(event);
+    }
     if (emitLiveEvents) {
       emitToolEvent({
         phase: "start",
@@ -128,16 +135,68 @@ export function createCliEventHandlers(params: {
       });
     }
   };
-  const emitCliToolResult = (event: CliToolResult) => {
+  const emitToolResult = (event: CliToolResult, tracked: boolean) => {
     observedCliActivity = true;
-    recordToolResult(event);
-    const executedArgs = params.toolTracking.handleCliToolResult(event);
+    const summary = recordToolSummary(event, event.isError);
+    const firstTerminal = !summary.terminalObserved;
+    summary.terminalObserved = true;
+    const loopbackOutcome = tracked
+      ? params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId)
+      : undefined;
+    const executedArgs = tracked ? params.toolTracking.handleCliToolResult(event) : undefined;
+    const startedCall = toolArgsByCallId.get(event.toolCallId);
+    toolArgsByCallId.delete(event.toolCallId);
+    // Gateway owns loopback completion even when CLI correlation is absent or ambiguous.
+    if (
+      event.name.trim() &&
+      firstTerminal &&
+      !runParams.isolatedCompletion &&
+      !loopbackOutcome &&
+      stripOpenClawMcpToolPrefix(event.name) === event.name
+    ) {
+      const result = sanitizeToolResult(event.result);
+      void runAgentHarnessAfterToolCallHook({
+        toolName: normalizeCliToolName(event.name),
+        toolCallId: event.toolCallId,
+        runId: runParams.runId,
+        agentId: runParams.agentId,
+        sessionId: runParams.sessionId,
+        sessionKey: runParams.sessionKey,
+        channelId: runParams.currentChannelId,
+        startArgs: executedArgs ?? startedCall?.args ?? {},
+        result,
+        ...(event.isError
+          ? { error: extractToolErrorMessage(result) ?? "CLI tool execution failed" }
+          : {}),
+        startedAt: startedCall?.startedAt,
+      }).catch(() => {});
+    }
     if (emitLiveEvents) {
-      const resultContentSource = context.resultContentSourceByToolName?.get(
-        stripOpenClawMcpToolPrefix(event.name),
-      );
-      const startedArgs = toolArgsByCallId.get(event.toolCallId);
-      toolArgsByCallId.delete(event.toolCallId);
+      const strippedName = stripOpenClawMcpToolPrefix(event.name);
+      const resultContentSource = tracked
+        ? context.resultContentSourceByToolName?.get(strippedName)
+        : undefined;
+      const startedArgs = startedCall?.args;
+      const planUpdate =
+        tracked &&
+        startedCall?.tracked &&
+        !event.isError &&
+        (!loopbackOutcome || loopbackOutcome.outcome === "completed") &&
+        isAgentPlanProgressToolName(strippedName)
+          ? projectProgressCardChannelUpdate(executedArgs ?? startedArgs)
+          : undefined;
+      if (planUpdate) {
+        emitAgentEvent({
+          runId: runParams.runId,
+          stream: "plan",
+          data: {
+            phase: "update",
+            title: "Plan updated",
+            source: "openclaw",
+            ...planUpdate,
+          },
+        });
+      }
       emitToolEvent(
         {
           phase: "result",
@@ -145,54 +204,19 @@ export function createCliEventHandlers(params: {
           toolCallId: event.toolCallId,
           isError: event.isError,
           result: sanitizeToolResult(event.result),
-          ...(startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
+          ...(tracked && startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
-        { args: executedArgs },
+        { args: tracked ? executedArgs : startedArgs },
       );
     }
   };
-  // Plugin-parsed events describe native work already performed by the backend.
-  // Render and summarize them without host-tool correlation or delivery evidence.
-  const emitCliDisplayToolUseStart = (event: CliToolUseStartDelta) => {
-    observedCliActivity = true;
-    recordToolStart(event);
-    if (!signaledToolExecutionStarted) {
-      signaledToolExecutionStarted = true;
-      runParams.onExecutionPhase?.({
-        phase: "tool_execution_started",
-        provider: runParams.provider,
-        model: context.modelId,
-        backend: context.backendResolved.id,
-      });
-    }
-    if (emitLiveEvents) {
-      emitToolEvent({
-        phase: "start",
-        name: event.name,
-        toolCallId: event.toolCallId,
-        args: sanitizeToolArgs(event.args),
-      });
-    }
-  };
-  const emitCliDisplayToolResult = (event: CliToolResult) => {
-    observedCliActivity = true;
-    recordToolResult(event);
-    if (emitLiveEvents) {
-      const startedArgs = toolArgsByCallId.get(event.toolCallId);
-      toolArgsByCallId.delete(event.toolCallId);
-      emitToolEvent(
-        {
-          phase: "result",
-          name: event.name,
-          toolCallId: event.toolCallId,
-          isError: event.isError,
-          result: sanitizeToolResult(event.result),
-        },
-        { args: startedArgs },
-      );
-    }
-  };
+  // Display-only native events never enter host-tool correlation or delivery accounting.
+  const emitCliToolUseStart = (event: CliToolUseStartDelta) => emitToolUseStart(event, true);
+  const emitCliToolResult = (event: CliToolResult) => emitToolResult(event, true);
+  const emitCliDisplayToolUseStart = (event: CliToolUseStartDelta) =>
+    emitToolUseStart(event, false);
+  const emitCliDisplayToolResult = (event: CliToolResult) => emitToolResult(event, false);
   const emitParsedToolUseStart = (event: CliToolUseStartDelta) => {
     const startedAt = Date.now();
     activeParsedTools.set(event.toolCallId, {
@@ -200,7 +224,7 @@ export function createCliEventHandlers(params: {
       toolName: event.name,
       kind: event.kind,
     });
-    emitTrustedDiagnosticEvent({
+    const diagnosticEvent = {
       type: "tool.execution.started",
       runId: runParams.runId,
       sessionId: runParams.sessionId,
@@ -210,7 +234,17 @@ export function createCliEventHandlers(params: {
       toolSource: resolveCliToolSource(event.name, event.kind),
       toolOwner: "cli-runner",
       toolCallId: event.toolCallId,
-    });
+    } as const;
+    // Claude enforces this MCP response timeout. Keep recovery behind that
+    // deadline while the request is still in the CLI's own tool runtime.
+    const timeoutMs = context.managedMcpToolTimeoutMs;
+    emitTrustedDiagnosticEvent(
+      timeoutMs !== undefined && event.name.startsWith("mcp__openclaw__")
+        ? markToolExecutionLivenessDiagnosticEvent(diagnosticEvent, {
+            deadlineAtMs: startedAt + timeoutMs,
+          })
+        : diagnosticEvent,
+    );
     emitCliToolUseStart(event);
   };
   const emitParsedToolTerminal = (event: {
@@ -256,16 +290,10 @@ export function createCliEventHandlers(params: {
       toolCallId: event.toolCallId,
       durationMs: Math.max(0, now - (activeTool?.startedAt ?? now)),
     };
-    if (trustedOutcome?.outcome === "unknown" && !useEnclosingTerminalReason) {
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.error",
-        ...diagnosticBase,
-        errorCategory: "cli_tool_ambiguous",
-        errorCode: "tool_outcome_unknown",
-      });
-      return;
-    }
-    if (event.incomplete && activeTool?.kind === "server_tool_use" && !trustedOutcome) {
+    if (
+      (trustedOutcome?.outcome === "unknown" && !useEnclosingTerminalReason) ||
+      (event.incomplete && activeTool?.kind === "server_tool_use" && !trustedOutcome)
+    ) {
       emitTrustedDiagnosticEvent({
         type: "tool.execution.error",
         ...diagnosticBase,
@@ -304,16 +332,7 @@ export function createCliEventHandlers(params: {
   };
   const emitCliCompaction = (event: CliCompactionDelta) => {
     observedCliActivity = true;
-    if (emitLiveEvents) {
-      emitAgentEvent({
-        runId: runParams.runId,
-        stream: "compaction",
-        data: {
-          ...event,
-          backend: context.backendResolved.id,
-        },
-      });
-    }
+    emitLiveEvent("compaction", () => ({ ...event, backend: context.backendResolved.id }));
   };
   const finalizeParsedTools = () => {
     for (const [toolCallId, activeTool] of Array.from(activeParsedTools)) {
@@ -330,23 +349,19 @@ export function createCliEventHandlers(params: {
       return;
     }
     commentaryCounter += 1;
-    emitAgentEvent({
-      runId: runParams.runId,
-      stream: "item",
-      data: {
-        kind: "preamble",
-        itemId: `commentary-${runParams.runId}-${commentaryCounter}`,
-        // The JSONL parser flushes a complete pre-tool text segment here.
-        // Mark its boundary so channels can safely create their first notification.
-        phase: "end",
-        title: "commentary",
-        status: "running",
-        progressText: applyPluginTextReplacements(
-          text,
-          context.backendResolved.textTransforms?.output,
-        ),
-      },
-    });
+    emitLiveEvent("item", () => ({
+      kind: "preamble",
+      itemId: `commentary-${runParams.runId}-${commentaryCounter}`,
+      // The JSONL parser flushes a complete pre-tool text segment here.
+      // Mark its boundary so channels can safely create their first notification.
+      phase: "end",
+      title: "commentary",
+      status: "running",
+      progressText: applyPluginTextReplacements(
+        text,
+        context.backendResolved.textTransforms?.output,
+      ),
+    }));
   };
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
     if (text || delta) {
@@ -361,16 +376,22 @@ export function createCliEventHandlers(params: {
         });
       }
     }
-    if (emitLiveEvents) {
-      emitAgentEvent({
-        runId: runParams.runId,
-        stream: "assistant",
-        data: {
-          text: applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output),
-          delta: applyPluginTextReplacements(delta, context.backendResolved.textTransforms?.output),
-        },
-      });
+    emitLiveEvent("assistant", () => ({
+      text: applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output),
+      delta: applyPluginTextReplacements(delta, context.backendResolved.textTransforms?.output),
+    }));
+  };
+  const emitCliCompletedReply = (text: string, assistantMessageIndex: number) => {
+    if (text) {
+      observedCliActivity = true;
     }
+    emitLiveEvent("assistant", () => ({
+      assistantMessageIndex,
+      completedText: applyPluginTextReplacements(
+        text,
+        context.backendResolved.textTransforms?.output,
+      ),
+    }));
   };
 
   // Emit-always: thinking reaches the event bus and session archive like the
@@ -379,24 +400,16 @@ export function createCliEventHandlers(params: {
     if (text || delta) {
       observedCliActivity = true;
     }
-    if (emitLiveEvents) {
-      emitAgentEvent({
-        runId: runParams.runId,
-        stream: "thinking",
-        data: { text, delta, ...(isReasoningSnapshot ? { isReasoningSnapshot } : {}) },
-      });
-    }
+    emitLiveEvent("thinking", () => ({
+      text,
+      delta,
+      ...(isReasoningSnapshot ? { isReasoningSnapshot } : {}),
+    }));
   };
 
   const emitCliThinkingProgress = ({ progressTokens }: CliThinkingProgress) => {
     observedCliActivity = true;
-    if (emitLiveEvents) {
-      emitAgentEvent({
-        runId: runParams.runId,
-        stream: "thinking",
-        data: { progressTokens },
-      });
-    }
+    emitLiveEvent("thinking", () => ({ progressTokens }));
   };
 
   return {
@@ -411,6 +424,7 @@ export function createCliEventHandlers(params: {
     finalizeParsedTools,
     emitCliCommentaryText,
     emitCliAssistantDelta,
+    emitCliCompletedReply,
     emitCliThinkingDelta,
     emitCliThinkingProgress,
     hasObservedCliActivity: () => observedCliActivity,

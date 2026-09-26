@@ -5,7 +5,7 @@ import {
   requestProviderUsage,
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
-import { buildSessionUsageDateParams, requestSessionUsage } from "../../lib/sessions/usage.ts";
+import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
 
 type UsageSnapshotValue = {
   result: Awaited<ReturnType<typeof requestSessionUsage>>;
@@ -32,33 +32,25 @@ export function providerUsageFromSnapshotResult(
 
 export async function requestUsageSnapshot(
   client: GatewayBrowserClient,
-  query: {
-    startDate: string;
-    endDate: string;
-    scope: "instance" | "family";
-    timeZone: "local" | "utc";
-    agentId?: string;
-  },
+  query: SessionUsageQuery,
   signal?: AbortSignal,
 ): Promise<UsageSnapshotResult> {
-  const costParams = {
-    startDate: query.startDate,
-    endDate: query.endDate,
-    ...(query.agentId ? { agentId: query.agentId } : { agentScope: "all" as const }),
-    ...buildSessionUsageDateParams(query.timeZone),
-  };
   let settledProviderUsage: ProviderUsageSnapshot | undefined;
   const providerUsagePromise = requestProviderUsage(client, signal ? { signal } : undefined).then(
     (result): ProviderUsageSnapshot => (settledProviderUsage = { state: "settled", result }),
   );
   try {
-    const [result, costSummary, providerUsage] = await Promise.all([
+    const [result, providerUsage] = await Promise.all([
       requestSessionUsage(client, query, { signal }),
-      signal
-        ? client.request<CostUsageSummary>("usage.cost", costParams, { signal })
-        : client.request<CostUsageSummary>("usage.cost", costParams),
       providerUsagePromise,
     ]);
+    const costSummary: CostUsageSummary = {
+      updatedAt: result.updatedAt,
+      days: (Date.parse(result.endDate) - Date.parse(result.startDate)) / 86_400_000 + 1,
+      daily: result.aggregates.costDaily ?? [],
+      totals: result.totals,
+      cacheStatus: result.cacheStatus,
+    };
     return ok({ result, costSummary, providerUsage });
   } catch (cause) {
     if (signal?.aborted) {

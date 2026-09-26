@@ -35,6 +35,33 @@ vi.mock("../agents/model-auth.js", async () => {
   return createAvailableModelAuthMockModule();
 });
 
+function createMoonshotAutoVideoConfig() {
+  return {
+    models: {
+      providers: {
+        moonshot: {
+          auth: "api-key",
+          apiKey: "moonshot-key", // pragma: allowlist secret
+          models: [],
+        },
+      },
+    },
+    tools: {
+      media: {
+        video: {
+          enabled: true,
+        },
+      },
+    },
+  };
+}
+
+function createVideoProviderRegistry(
+  provider: MediaUnderstandingProvider,
+): Map<string, MediaUnderstandingProvider> {
+  return new Map([[provider.id, provider]]);
+}
+
 describe("runCapability video provider wiring", () => {
   it("truncates provider output without splitting a boundary emoji", async () => {
     await withVideoFixture("openclaw-video-utf16-output", async ({ ctx, media, cache }) => {
@@ -69,19 +96,14 @@ describe("runCapability video provider wiring", () => {
         ctx,
         attachments: cache,
         media,
-        providerRegistry: new Map<string, MediaUnderstandingProvider>([
-          [
-            "moonshot",
-            {
-              id: "moonshot",
-              capabilities: ["video"],
-              describeVideo: async (req) => ({
-                text: `${prefix}${String.fromCodePoint(0x1f600)}tail`,
-                model: req.model,
-              }),
-            },
-          ],
-        ]),
+        providerRegistry: createVideoProviderRegistry({
+          id: "moonshot",
+          capabilities: ["video"],
+          describeVideo: async (req) => ({
+            text: `${prefix}${String.fromCodePoint(0x1f600)}tail`,
+            model: req.model,
+          }),
+        }),
       });
 
       const output = expectDefined(result.outputs[0], "media output 0");
@@ -135,20 +157,15 @@ describe("runCapability video provider wiring", () => {
           agentDir: isolatedAgentDir,
           attachments: cache,
           media,
-          providerRegistry: new Map<string, MediaUnderstandingProvider>([
-            [
-              "moonshot",
-              {
-                id: "moonshot",
-                capabilities: ["video"],
-                describeVideo: async (req) => {
-                  seenBaseUrl = req.baseUrl;
-                  seenHeaders = req.headers;
-                  return { text: "video ok", model: req.model };
-                },
-              },
-            ],
-          ]),
+          providerRegistry: createVideoProviderRegistry({
+            id: "moonshot",
+            capabilities: ["video"],
+            describeVideo: async (req) => {
+              seenBaseUrl = req.baseUrl;
+              seenHeaders = req.headers;
+              return { text: "video ok", model: req.model };
+            },
+          }),
         });
 
         const output = expectDefined(result.outputs[0], "media output 0");
@@ -175,24 +192,7 @@ describe("runCapability video provider wiring", () => {
         },
         async () => {
           await withVideoFixture("openclaw-video-auto-moonshot", async ({ ctx, media, cache }) => {
-            const cfg = {
-              models: {
-                providers: {
-                  moonshot: {
-                    auth: "api-key",
-                    apiKey: "moonshot-key", // pragma: allowlist secret
-                    models: [],
-                  },
-                },
-              },
-              tools: {
-                media: {
-                  video: {
-                    enabled: true,
-                  },
-                },
-              },
-            } as unknown as OpenClawConfig;
+            const cfg = createMoonshotAutoVideoConfig() as unknown as OpenClawConfig;
 
             const result = await runCapability({
               capability: "video",
@@ -237,24 +237,7 @@ describe("runCapability video provider wiring", () => {
 
     await withTestDir({ prefix: "openclaw-video-active-provider-" }, async (isolatedAgentDir) => {
       await withVideoFixture("openclaw-video-active-default", async ({ ctx, media, cache }) => {
-        const cfg = {
-          models: {
-            providers: {
-              moonshot: {
-                auth: "api-key",
-                apiKey: "moonshot-key", // pragma: allowlist secret
-                models: [],
-              },
-            },
-          },
-          tools: {
-            media: {
-              video: {
-                enabled: true,
-              },
-            },
-          },
-        } as unknown as OpenClawConfig;
+        const cfg = createMoonshotAutoVideoConfig() as unknown as OpenClawConfig;
 
         const result = await runCapability({
           capability: "video",
@@ -263,20 +246,15 @@ describe("runCapability video provider wiring", () => {
           agentDir: isolatedAgentDir,
           attachments: cache,
           media,
-          providerRegistry: new Map<string, MediaUnderstandingProvider>([
-            [
-              "moonshot",
-              {
-                id: "moonshot",
-                capabilities: ["video"],
-                defaultModels: { video: "kimi-k2.5" },
-                describeVideo: async (req) => {
-                  seenModel = req.model;
-                  return { text: "moonshot", model: req.model };
-                },
-              },
-            ],
-          ]),
+          providerRegistry: createVideoProviderRegistry({
+            id: "moonshot",
+            capabilities: ["video"],
+            defaultModels: { video: "kimi-k2.5" },
+            describeVideo: async (req) => {
+              seenModel = req.model;
+              return { text: "moonshot", model: req.model };
+            },
+          }),
           activeModel: { provider: "moonshot" },
         });
 
@@ -296,24 +274,7 @@ describe("runCapability video provider wiring", () => {
       { prefix: "openclaw-video-no-default-provider-" },
       async (isolatedAgentDir) => {
         await withVideoFixture("openclaw-video-no-default", async ({ ctx, media, cache }) => {
-          const cfg = {
-            models: {
-              providers: {
-                moonshot: {
-                  auth: "api-key",
-                  apiKey: "moonshot-key", // pragma: allowlist secret
-                  models: [],
-                },
-              },
-            },
-            tools: {
-              media: {
-                video: {
-                  enabled: true,
-                },
-              },
-            },
-          } as unknown as OpenClawConfig;
+          const cfg = createMoonshotAutoVideoConfig() as unknown as OpenClawConfig;
 
           const result = await runCapability({
             capability: "video",
@@ -322,19 +283,14 @@ describe("runCapability video provider wiring", () => {
             agentDir: isolatedAgentDir,
             attachments: cache,
             media,
-            providerRegistry: new Map<string, MediaUnderstandingProvider>([
-              [
-                "moonshot",
-                {
-                  id: "moonshot",
-                  capabilities: ["video"],
-                  describeVideo: async (req) => {
-                    seenModel = req.model;
-                    return { text: "moonshot", model: "provider-default" };
-                  },
-                },
-              ],
-            ]),
+            providerRegistry: createVideoProviderRegistry({
+              id: "moonshot",
+              capabilities: ["video"],
+              describeVideo: async (req) => {
+                seenModel = req.model;
+                return { text: "moonshot", model: "provider-default" };
+              },
+            }),
             activeModel: { provider: "moonshot" },
           });
 
@@ -376,20 +332,15 @@ describe("runCapability video provider wiring", () => {
           agentDir: isolatedAgentDir,
           attachments: cache,
           media,
-          providerRegistry: new Map<string, MediaUnderstandingProvider>([
-            [
-              "moonshot",
-              {
-                id: "moonshot",
-                capabilities: ["video"],
-                defaultModels: { video: "kimi-k2.5" },
-                describeVideo: async (req) => {
-                  seenModel = req.model;
-                  return { text: "moonshot", model: req.model };
-                },
-              },
-            ],
-          ]),
+          providerRegistry: createVideoProviderRegistry({
+            id: "moonshot",
+            capabilities: ["video"],
+            defaultModels: { video: "kimi-k2.5" },
+            describeVideo: async (req) => {
+              seenModel = req.model;
+              return { text: "moonshot", model: req.model };
+            },
+          }),
         });
 
         expect(result.decision.outcome).toBe("success");
@@ -435,19 +386,14 @@ describe("runCapability video provider wiring", () => {
           agentDir: isolatedAgentDir,
           attachments: cache,
           media,
-          providerRegistry: new Map<string, MediaUnderstandingProvider>([
-            [
-              "openai",
-              {
-                id: "openai",
-                capabilities: ["video"],
-                describeVideo: async (req) => {
-                  seenApiKey = req.apiKey;
-                  return { text: "video ok", model: req.model };
-                },
-              },
-            ],
-          ]),
+          providerRegistry: createVideoProviderRegistry({
+            id: "openai",
+            capabilities: ["video"],
+            describeVideo: async (req) => {
+              seenApiKey = req.apiKey;
+              return { text: "video ok", model: req.model };
+            },
+          }),
         });
 
         expect(result.decision.outcome).toBe("success");

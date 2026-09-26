@@ -1,4 +1,5 @@
 /** Regression coverage for ACP background-task summary truncation boundaries. */
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
@@ -6,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
@@ -13,6 +15,7 @@ import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/detached-task-runtime.test-support.js";
+import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
 import { findTaskByRunId, getTaskById, listTaskRecords } from "../../tasks/task-registry.js";
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import {
@@ -36,7 +39,8 @@ import type { AcpSessionManagerDeps } from "./manager.types.js";
 // U+1F99E (🦞) is a surrogate pair in UTF-16; a raw .slice() boundary can split it.
 const LOBSTER = "🦞";
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
@@ -121,6 +125,7 @@ describe("resolveBackgroundTaskFailureStatus", () => {
 describe("ACP background task execution binding", () => {
   it("keeps distinct execution tasks and routes late same-instance mirrors to the original task", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
+      using deliveries = captureTaskDeliveryWork();
       const runtime = getDetachedTaskLifecycleRuntime();
       const start = vi.fn(runtime.startTaskRunByRunId);
       const fail = vi.fn(runtime.failTaskRunByRunId);
@@ -199,68 +204,80 @@ describe("ACP background task execution binding", () => {
       expect(findTaskByRunId("run-later-acp")?.taskId).toBe(otherRun?.taskId);
       expect(findTaskByRunId(context.runId)?.taskId).toBe(second.taskId);
       expect(getTaskById(first.taskId)).toEqual(original);
+      await deliveries.settle();
     });
   });
 
-  it("binds the exact admitted execution only at prompt submission", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-acp-execution-binding-" },
-      async () => {
-        resetTaskRegistryForTests();
-        resetTaskFlowRegistryForTests();
-        const admitted: AdmittedRunContext = {
-          operationalRunInstance: { instanceId: "instance-acp", runId: "run-acp" },
-          executionIdentityToken: createExecutionIdentityAdmissionToken("run-acp", {
-            contextId: "context-acp",
-            executionId: "execution-acp",
-          }),
-        };
-        const record = createBackgroundTaskRecord(
-          {
-            agentId: "qa",
-            requesterAgentId: "main",
-            requesterSessionKey: "agent:main:main",
-            childSessionKey: "agent:qa:child",
-            runId: "run-acp",
-            task: "private",
-          },
-          100,
-          admitted.operationalRunInstance.instanceId,
-        );
-        const task = findTaskByRunId("run-acp");
-        if (!record || !task?.parentFlowId) {
-          throw new Error("expected ACP task and owner flow");
-        }
-        const db = openOpenClawStateDatabase().db;
-        expect(tableExists(db, "execution_owner_lifecycle_bindings")).toBe(false);
+  it.each([false, true])(
+    "binds the exact admitted execution at prompt submission (state directory changes: %s)",
+    async (changeStateDir) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-acp-execution-binding-" },
+        async (state) => {
+          resetTaskRegistryForTests();
+          resetTaskFlowRegistryForTests();
+          const admitted: AdmittedRunContext = {
+            operationalRunInstance: { instanceId: "instance-acp", runId: "run-acp" },
+            executionIdentityToken: createExecutionIdentityAdmissionToken("run-acp", {
+              contextId: "context-acp",
+              executionId: "execution-acp",
+            }),
+          };
+          const record = createBackgroundTaskRecord(
+            {
+              agentId: "qa",
+              requesterAgentId: "main",
+              requesterSessionKey: "agent:main:main",
+              childSessionKey: "agent:qa:child",
+              runId: "run-acp",
+              task: "private",
+            },
+            100,
+            admitted.operationalRunInstance.instanceId,
+          );
+          const task = findTaskByRunId("run-acp");
+          if (!record || !task?.parentFlowId) {
+            throw new Error("expected ACP task and owner flow");
+          }
+          const db = openOpenClawStateDatabase().db;
+          expect(tableExists(db, "execution_owner_lifecycle_bindings")).toBe(false);
 
-        bindBackgroundTaskExecution(record, admitted);
+          const binding = bindBackgroundTaskExecution(record, admitted);
+          if (changeStateDir) {
+            process.env.OPENCLAW_STATE_DIR = path.join(state.stateDir, "replacement");
+          }
+          try {
+            await binding;
+          } finally {
+            process.env.OPENCLAW_STATE_DIR = state.stateDir;
+          }
 
-        expect(
-          db
-            .prepare(
-              `SELECT owner_kind, owner_id, context_id, execution_id
+          expect(
+            db
+              .prepare(
+                `SELECT owner_kind, owner_id, context_id, execution_id
                FROM execution_owner_lifecycle_bindings
                ORDER BY owner_kind`,
-            )
-            .all(),
-        ).toEqual([
-          {
-            owner_kind: "flow",
-            owner_id: task.parentFlowId,
-            context_id: "context-acp",
-            execution_id: "execution-acp",
-          },
-          {
-            owner_kind: "task",
-            owner_id: task.taskId,
-            context_id: "context-acp",
-            execution_id: "execution-acp",
-          },
-        ]);
-      },
-    );
-  });
+              )
+              .all(),
+          ).toEqual([
+            {
+              owner_kind: "flow",
+              owner_id: task.parentFlowId,
+              context_id: "context-acp",
+              execution_id: "execution-acp",
+            },
+            {
+              owner_kind: "task",
+              owner_id: task.taskId,
+              context_id: "context-acp",
+              execution_id: "execution-acp",
+            },
+          ]);
+        },
+      );
+    },
+  );
 
   it.each(["missing", "mismatched"] as const)(
     "does not bind a live parent flow when the task owner is %s",
@@ -298,7 +315,7 @@ describe("ACP background task execution binding", () => {
             db.prepare("DELETE FROM task_runs WHERE task_id = ?").run(task.taskId);
           } else {
             expect(
-              bindTaskRunExecution({
+              await bindTaskRunExecution({
                 taskId: task.taskId,
                 admitted: {
                   operationalRunInstance: { instanceId: "instance-other", runId: "run-other" },
@@ -311,7 +328,7 @@ describe("ACP background task execution binding", () => {
             ).toBe("bound");
           }
 
-          bindBackgroundTaskExecution(record, admitted);
+          await bindBackgroundTaskExecution(record, admitted);
 
           if (taskOwnerState === "missing") {
             expect(tableExists(db, "execution_owner_lifecycle_bindings")).toBe(false);

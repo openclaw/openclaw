@@ -71,3 +71,69 @@ describe("scheduled exec target recovery", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
   });
 });
+
+describe("scheduled agent admission", () => {
+  it.each<{
+    name: string;
+    overrides: Partial<CronStoredJob>;
+    admissionSource: "operator-schedule" | "requester-schedule";
+  }>([
+    { name: "operator", overrides: {}, admissionSource: "operator-schedule" },
+    {
+      name: "account requester",
+      overrides: {
+        owner: { agentId: "main", accountId: "work" },
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:work",
+          ownerAccountId: "work",
+        },
+      },
+      admissionSource: "requester-schedule",
+    },
+    {
+      name: "channel requester",
+      overrides: {
+        toolsAllowProvenance: {
+          version: 1,
+          source: "authenticated-requester",
+          channelRequester: {
+            version: 1,
+            channel: "discord",
+            accountId: "work",
+            senderId: "requester",
+          },
+        },
+      },
+      admissionSource: "requester-schedule",
+    },
+    {
+      name: "external content",
+      overrides: {
+        payload: { kind: "agentTurn", message: "run", externalContentSource: "webhook" },
+      },
+      admissionSource: "requester-schedule",
+    },
+  ])(
+    "records $name admission without an audit identity",
+    async ({ overrides, admissionSource }) => {
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const state = createCronServiceState({
+        storePath: "/tmp/cron-admission-source.json",
+        cronEnabled: true,
+        log: createNoopLogger(),
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+      const job: CronStoredJob = { ...makeCronJob({}), ...overrides };
+
+      await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
+
+      expect(runIsolatedAgentJob).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ job, admissionSource, executionIdentity: undefined }),
+      );
+    },
+  );
+});

@@ -2,13 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import "./onboarding-memory-import.ts";
 
 type OnboardingMemoryImportElement = HTMLElement & {
   active: boolean;
-  context: ApplicationContext<RouteId>;
+  context: ApplicationContext;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
 };
@@ -127,11 +126,11 @@ function createContext(
       subscribe,
     },
     navigate: vi.fn(),
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
 }
 
 async function mount(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   active = true,
 ): Promise<OnboardingMemoryImportElement> {
   const element = document.createElement(

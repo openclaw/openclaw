@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createTestRegistry,
   setActivePluginRegistry,
+  useBundledProviderPolicyArtifactsForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -19,9 +20,10 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { discordPlugin } from "../channel.js";
 import type { CommandInteraction } from "../internal/discord.js";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { createMockCommandInteraction } from "./native-command.test-helpers.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const directories: string[] = [];
 const userId = "100000000000000003";
@@ -126,3 +128,7 @@ describe.each(["new", "reset"] as const)(
     });
   },
 );
+
+installDiscordIngressTestRuntime();
+
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);

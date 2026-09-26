@@ -122,7 +122,7 @@ describe("OpenAI thinking contract", () => {
 
     const levels = profile.levels.map(({ id }) => id);
     expect(levels).not.toContain("max");
-    expect(levels.includes("ultra")).toBe(nativeUltra);
+    expect(levels).toContain("ultra");
     expect(levels).toContain("high");
   });
 

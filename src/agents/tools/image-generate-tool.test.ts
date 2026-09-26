@@ -246,6 +246,28 @@ function createToolWithPrimaryImageModel(
   );
 }
 
+function createSingleImageResult(params: {
+  provider: string;
+  model: string;
+  bytes: string;
+  mimeType: string;
+  fileName: string;
+}): Awaited<ReturnType<typeof imageGenerationRuntime.generateImage>> {
+  return {
+    provider: params.provider,
+    model: params.model,
+    attempts: [],
+    ignoredOverrides: [],
+    images: [
+      {
+        buffer: Buffer.from(params.bytes),
+        mimeType: params.mimeType,
+        fileName: params.fileName,
+      },
+    ],
+  };
+}
+
 function stubEditedImageFlow(params?: { width?: number; height?: number }) {
   const maxDimension = Math.max(params?.width ?? 0, params?.height ?? 0);
   const appliedResolution =
@@ -799,19 +821,15 @@ describe("createImageGenerateTool", () => {
         ];
       },
     );
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "microsoft-foundry",
-      model: "prod-image",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("png-out"),
-          mimeType: "image/png",
-          fileName: "foundry.png",
-        },
-      ],
-    });
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+      createSingleImageResult({
+        provider: "microsoft-foundry",
+        model: "prod-image",
+        bytes: "png-out",
+        mimeType: "image/png",
+        fileName: "foundry.png",
+      }),
+    );
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
       path: "/tmp/foundry.png",
       id: "foundry.png",
@@ -856,19 +874,15 @@ describe("createImageGenerateTool", () => {
   it("starts image generation asynchronously and keeps the selected filename on completion", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "openai",
-      model: "gpt-image-1",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("png-out"),
-          mimeType: "image/png",
-          fileName: "cat.png",
-        },
-      ],
-    });
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+      createSingleImageResult({
+        provider: "openai",
+        model: "gpt-image-1",
+        bytes: "png-out",
+        mimeType: "image/png",
+        fileName: "cat.png",
+      }),
+    );
     const savedId = "poster---a1b2c3d4-e5f6-4789-abcd-ef1234567890.png";
     const savedPath = `/tmp/${savedId}`;
     const save = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
@@ -1068,19 +1082,15 @@ describe("createImageGenerateTool", () => {
         phase: "running",
       },
     });
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "openai",
-      model: "gpt-image-1",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("png-out"),
-          mimeType: "image/png",
-          fileName: "cron.png",
-        },
-      ],
-    });
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+      createSingleImageResult({
+        provider: "openai",
+        model: "gpt-image-1",
+        bytes: "png-out",
+        mimeType: "image/png",
+        fileName: "cron.png",
+      }),
+    );
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
       path: "/tmp/generated-cron.png",
       id: "generated-cron.png",
@@ -1138,19 +1148,15 @@ describe("createImageGenerateTool", () => {
   it("starts a distinct image request while another image task is active", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "openai",
-      model: "gpt-image-1",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("png-out"),
-          mimeType: "image/png",
-          fileName: "second.png",
-        },
-      ],
-    });
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+      createSingleImageResult({
+        provider: "openai",
+        model: "gpt-image-1",
+        bytes: "png-out",
+        mimeType: "image/png",
+        fileName: "second.png",
+      }),
+    );
     taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
       taskId: "task-second-image",
     });
@@ -1490,19 +1496,15 @@ describe("createImageGenerateTool", () => {
 
   it("uses configured timeoutMs for image generation and lets calls override it", async () => {
     stubImageGenerationProviders();
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "openai",
-      model: "gpt-image-1",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("png-out"),
-          mimeType: "image/png",
-          fileName: "cat.png",
-        },
-      ],
-    });
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+      createSingleImageResult({
+        provider: "openai",
+        model: "gpt-image-1",
+        bytes: "png-out",
+        mimeType: "image/png",
+        fileName: "cat.png",
+      }),
+    );
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
       path: "/tmp/generated.png",
       id: "generated.png",
@@ -1542,19 +1544,15 @@ describe("createImageGenerateTool", () => {
   it.each(["low", "xhigh", "max"])(
     "forwards %s quality and OpenAI provider options",
     async (quality) => {
-      const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-        provider: "openai",
-        model: "gpt-image-2",
-        attempts: [],
-        ignoredOverrides: [],
-        images: [
-          {
-            buffer: Buffer.from("jpg-out"),
-            mimeType: "image/jpeg",
-            fileName: "preview.jpg",
-          },
-        ],
-      });
+      const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+        createSingleImageResult({
+          provider: "openai",
+          model: "gpt-image-2",
+          bytes: "jpg-out",
+          mimeType: "image/jpeg",
+          fileName: "preview.jpg",
+        }),
+      );
       vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
         path: "/tmp/generated.jpg",
         id: "generated.jpg",
@@ -1593,19 +1591,15 @@ describe("createImageGenerateTool", () => {
   );
 
   it("forwards generic fal provider options", async () => {
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "fal",
-      model: "krea/v2/medium/text-to-image",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("krea-out"),
-          mimeType: "image/png",
-          fileName: "krea.png",
-        },
-      ],
-    });
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+      createSingleImageResult({
+        provider: "fal",
+        model: "krea/v2/medium/text-to-image",
+        bytes: "krea-out",
+        mimeType: "image/png",
+        fileName: "krea.png",
+      }),
+    );
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
       path: "/tmp/krea.png",
       id: "krea.png",
@@ -1995,19 +1989,15 @@ describe("createImageGenerateTool", () => {
   });
 
   it.each([60.5, "60px", null])("rejects malformed OpenAI output compression %s", async (value) => {
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "openai",
-      model: "gpt-image-2",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("jpg-out"),
-          mimeType: "image/jpeg",
-          fileName: "preview.jpg",
-        },
-      ],
-    });
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+      createSingleImageResult({
+        provider: "openai",
+        model: "gpt-image-2",
+        bytes: "jpg-out",
+        mimeType: "image/jpeg",
+        fileName: "preview.jpg",
+      }),
+    );
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
       path: "/tmp/generated.jpg",
       id: "generated.jpg",
@@ -2029,19 +2019,15 @@ describe("createImageGenerateTool", () => {
   });
 
   it("forwards transparent OpenAI background requests with a PNG output format", async () => {
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "openai",
-      model: "gpt-image-1.5",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("png-out"),
-          mimeType: "image/png",
-          fileName: "transparent.png",
-        },
-      ],
-    });
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+      createSingleImageResult({
+        provider: "openai",
+        model: "gpt-image-1.5",
+        bytes: "png-out",
+        mimeType: "image/png",
+        fileName: "transparent.png",
+      }),
+    );
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
       path: "/tmp/transparent.png",
       id: "transparent.png",
@@ -2103,19 +2089,15 @@ describe("createImageGenerateTool", () => {
         }),
       },
     ]);
-    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "google",
-      model: "gemini-3.1-flash-image-preview",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("jpg-data"),
-          mimeType: "image/jpeg",
-          fileName: "kodo_sawaki_zazen.jpg",
-        },
-      ],
-    });
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+      createSingleImageResult({
+        provider: "google",
+        model: "gemini-3.1-flash-image-preview",
+        bytes: "jpg-data",
+        mimeType: "image/jpeg",
+        fileName: "kodo_sawaki_zazen.jpg",
+      }),
+    );
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
       path: "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
       id: "kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
@@ -2196,19 +2178,15 @@ describe("createImageGenerateTool", () => {
   });
 
   it.each([2.5, "2cats", null])("rejects malformed image count %s", async (count) => {
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "google",
-      model: "gemini-3.1-flash-image-preview",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("png-out"),
-          mimeType: "image/png",
-          fileName: "cat.png",
-        },
-      ],
-    });
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+      createSingleImageResult({
+        provider: "google",
+        model: "gemini-3.1-flash-image-preview",
+        bytes: "png-out",
+        mimeType: "image/png",
+        fileName: "cat.png",
+      }),
+    );
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
       path: "/tmp/generated.png",
       id: "generated.png",
@@ -2402,19 +2380,15 @@ describe("createImageGenerateTool", () => {
         }),
       },
     ]);
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "openai",
-      model: "gpt-image-1",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("png-out"),
-          mimeType: "image/png",
-          fileName: "edited.png",
-        },
-      ],
-    });
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
+      createSingleImageResult({
+        provider: "openai",
+        model: "gpt-image-1",
+        bytes: "png-out",
+        mimeType: "image/png",
+        fileName: "edited.png",
+      }),
+    );
     vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       kind: "image",
       buffer: Buffer.from("input-image"),

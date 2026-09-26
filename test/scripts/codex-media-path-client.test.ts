@@ -1,5 +1,6 @@
 // Codex Media Path Client tests cover codex media path client script behavior.
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -174,6 +175,8 @@ describe("codex media path fake app-server", () => {
     child.stderr.on("data", (chunk: string) => {
       stderr.append(chunk);
     });
+    // Reproduce independent pipe delivery: stdout can arrive before stderr.
+    child.stderr.pause();
 
     try {
       const responseLine = readStdoutLine(child);
@@ -186,6 +189,11 @@ describe("codex media path fake app-server", () => {
         },
         id: "request-1",
       });
+      // Closing stdin lets the fixture exit; close joins both output streams.
+      const closed = once(child, "close");
+      child.stdin.end();
+      child.stderr.resume();
+      await closed;
       expect(stderr.text()).toContain("fake Codex app-server request log write failed");
     } finally {
       await stopChild(child);

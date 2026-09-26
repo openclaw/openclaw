@@ -21,6 +21,21 @@ export {
   partitionSessionFileEntries,
 } from "../../config/sessions/session-entry-codec.js";
 
+export function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
+  if (
+    entry.type !== "message" ||
+    (entry.message.role !== "user" && entry.message.role !== "assistant")
+  ) {
+    return false;
+  }
+  const provenance: unknown = Reflect.get(entry.message, "provenance");
+  return (
+    isRecord(provenance) &&
+    provenance.kind === "realtime_voice" &&
+    provenance.sourceChannel === "talk"
+  );
+}
+
 export function isSessionContextMetadataEntry(entry: SessionEntry): boolean {
   return (
     entry.type === "thinking_level_change" ||

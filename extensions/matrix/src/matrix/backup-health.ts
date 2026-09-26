@@ -1,4 +1,3 @@
-// Matrix plugin module implements backup health behavior.
 type MatrixRoomKeyBackupStatusLike = {
   serverVersion: string | null;
   activeVersion: string | null;

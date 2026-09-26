@@ -1,7 +1,10 @@
 // Firecrawl plugin module implements firecrawl client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
+import { parseDateStringTimestampMs, parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  ProviderHttpError,
+  readProviderJsonObjectResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
@@ -27,7 +30,10 @@ import {
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
@@ -258,7 +264,10 @@ async function postFirecrawlJson<T>(
           truncateSanitizedExternalContent(detail, 1_000).text,
           "web_fetch",
         );
-        throw new Error(`${params.errorLabel} API error (${response.status}): ${safeDetail}`);
+        throw new ProviderHttpError(
+          `${params.errorLabel} API error (${response.status}): ${safeDetail}`,
+          { status: response.status },
+        );
       }
       return await parse(response);
     },
@@ -286,8 +295,16 @@ function normalizeFirecrawlResultUrl(value: unknown): string | undefined {
   }
 }
 
+function isValidFirecrawlPublishedDate(value: string): boolean {
+  if (!FIRECRAWL_PUBLISHED_DATE_RE.test(value)) {
+    return false;
+  }
+  const calendarDate = value.slice(0, 10);
+  const timestamp = parseDateStringTimestampMs(calendarDate);
+  return timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate);
+}
+
 const optionalFirecrawlStringSchema = z.string().optional().catch(undefined);
-const invalidFirecrawlSearchItemSchema = z.unknown().transform(() => null);
 const firecrawlSearchMetadataSchema = z
   .object({
     sourceURL: optionalFirecrawlStringSchema,
@@ -312,43 +329,37 @@ const firecrawlSearchItemSchema = z.object({
   published: optionalFirecrawlStringSchema,
   metadata: firecrawlSearchMetadataSchema,
 });
-const firecrawlSearchItemsSchema = z
-  .array(z.union([firecrawlSearchItemSchema, invalidFirecrawlSearchItemSchema]))
-  .transform((items) => items.filter((item) => item !== null));
-const firecrawlNestedSearchDataSchema = z.looseObject({
-  results: firecrawlSearchItemsSchema.optional().catch(undefined),
-  data: firecrawlSearchItemsSchema.optional().catch(undefined),
-  web: firecrawlSearchItemsSchema.optional().catch(undefined),
-});
-const firecrawlSearchPayloadSchema = z.looseObject({
-  data: z
-    .union([firecrawlSearchItemsSchema, firecrawlNestedSearchDataSchema])
-    .optional()
-    .catch(undefined),
-  results: firecrawlSearchItemsSchema.optional().catch(undefined),
-  web: z
-    .looseObject({ results: firecrawlSearchItemsSchema.optional().catch(undefined) })
-    .optional()
-    .catch(undefined),
-});
 
-function resolveSearchItems(payload: Record<string, unknown>): FirecrawlSearchItem[] {
-  const parsed = firecrawlSearchPayloadSchema.parse(payload);
-  const nestedData = Array.isArray(parsed.data) ? undefined : parsed.data;
+function resolveSearchItems(
+  payload: Record<string, unknown>,
+  count: number,
+): FirecrawlSearchItem[] {
+  const nestedData = asOptionalRecord(payload.data);
   const candidates = [
-    Array.isArray(parsed.data) ? parsed.data : undefined,
-    parsed.results,
+    payload.data,
+    payload.results,
     nestedData?.results,
     nestedData?.data,
     nestedData?.web,
-    parsed.web?.results,
+    asOptionalRecord(payload.web)?.results,
   ];
-  const rawItems = candidates.find((candidate) => candidate !== undefined);
+  const rawItems = candidates.find((candidate): candidate is unknown[] => Array.isArray(candidate));
   if (!rawItems) {
     return [];
   }
   const items: FirecrawlSearchItem[] = [];
-  for (const entry of rawItems.slice(0, FIRECRAWL_SEARCH_MAX_RESULTS)) {
+  let inspectedObjects = 0;
+  for (const rawItem of rawItems) {
+    if (inspectedObjects >= FIRECRAWL_SEARCH_MAX_RESULTS || items.length >= count) {
+      break;
+    }
+    const record = asOptionalRecord(rawItem);
+    if (!record) {
+      continue;
+    }
+    // The scan cap counts objects, including invalid URLs, after discarding non-object rows.
+    inspectedObjects += 1;
+    const entry = firecrawlSearchItemSchema.parse(record);
     const metadata = entry.metadata;
     const rawUrl = entry.url || entry.sourceURL || entry.sourceUrl || metadata?.sourceURL || "";
     const url = normalizeFirecrawlResultUrl(rawUrl);
@@ -365,7 +376,7 @@ function resolveSearchItems(payload: Record<string, unknown>): FirecrawlSearchIt
       metadata?.publishedDate ||
       undefined;
     const published =
-      rawPublished && FIRECRAWL_PUBLISHED_DATE_RE.test(rawPublished) ? rawPublished : undefined;
+      rawPublished && isValidFirecrawlPublishedDate(rawPublished) ? rawPublished : undefined;
     items.push({
       title,
       url,
@@ -545,7 +556,7 @@ export async function runFirecrawlSearch(
   const result = buildSearchPayload({
     query: params.query,
     provider: providerId,
-    items: resolveSearchItems(payload).slice(0, count),
+    items: resolveSearchItems(payload, count),
     tookMs: Date.now() - start,
     scrapeResults,
   });

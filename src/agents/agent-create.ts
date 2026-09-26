@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { applyAgentBindings, parseBindingSpecs } from "../commands/agents.bindings.js";
@@ -16,14 +17,24 @@ import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
 import type { LegacyMainSessionMigrationOutcome } from "../config/sessions/legacy-main-session-migration.contract.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
+import {
+  readAgentDeletionRecoveryHolds,
+  resolveAgentDeletionRecoveryHolds,
+} from "../state/agent-deletion-journal-recovery.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import type { HeldAgentDatabase } from "../state/agent-deletion-journal.types.js";
 import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
+import { normalizeAgentDirRegistryPath } from "./agent-dir-registry.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
 import { listAgentRoles, loadAgentRole } from "./agent-roles.js";
 import { toAgentEntriesRecord } from "./agent-scope-config.js";
@@ -83,6 +94,7 @@ type ConfigCommitReceipt = {
 type CreateAgentParams = {
   name?: string;
   role?: string;
+  purpose?: string;
   entry?: CreateAgentEntry;
   /** Internal authorization for onboarding to materialize the sole implicit `main` agent. */
   bootstrapMain?: boolean;
@@ -113,6 +125,38 @@ type CreateAgentParams = {
 class DuplicateAgentError extends Error {}
 class InvalidAgentBindingsError extends Error {}
 class UnfinishedRoleBootstrapError extends Error {}
+
+function selectedRecoveryPaths(
+  config: OpenClawConfig,
+  agentId: string,
+  held: readonly HeldAgentDatabase[],
+  samePath: ReturnType<typeof createOpenClawAgentDatabasePathMatcher>,
+  explicitAgentDir?: string,
+): string[] {
+  if (!held.some((entry) => entry.agentId === agentId)) {
+    return [];
+  }
+  const currentDir = resolveAgentDir(config, agentId);
+  const changedDir =
+    explicitAgentDir !== undefined &&
+    normalizeAgentDirRegistryPath(explicitAgentDir) !== normalizeAgentDirRegistryPath(currentDir);
+  if (changedDir && findAgentEntryIndex(listAgentEntries(config), agentId) >= 0) {
+    return [];
+  }
+  const selectedDir = explicitAgentDir ?? currentDir;
+  const targets = resolveConfiguredAgentDatabaseTargets(
+    applyAgentConfig(config, { agentId, agentDir: selectedDir }),
+    { env: process.env, registeredDatabases: held },
+  );
+  return held
+    .filter(
+      (entry) =>
+        entry.agentId === agentId &&
+        statSync(entry.path, { throwIfNoEntry: false })?.isFile() &&
+        targets.some((target) => target.agentId === agentId && samePath(target.path, entry.path)),
+    )
+    .map((entry) => entry.path);
+}
 
 function createError(
   reason: CreateError["reason"],
@@ -265,6 +309,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   }
   const agentId = validation.agentId;
   const isBootstrapMain = agentId === BOOTSTRAP_AGENT_ID && params.bootstrapMain === true;
+  const automaticBootstrap = params.bootstrapMain === true || params.bootstrapFirstAgent === true;
 
   const template = params.role ? await loadAgentRole(params.role) : undefined;
   const safeName = sanitizeAgentIdentityLine(rawName);
@@ -286,15 +331,66 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     : undefined;
   const transformConfig = params.transformConfig ?? transformConfigFileWithRetry;
   let configCommitReceipt: ConfigCommitReceipt | undefined;
+  let creating = false;
+  let held: HeldAgentDatabase[] = [];
+  const readCurrentHolds = () =>
+    withExistingOpenClawStateDatabaseCurrentReadOnly(readAgentDeletionRecoveryHolds) ?? [];
+  const recoveryPathMatcher = createOpenClawAgentDatabasePathMatcher();
+  const assertRecoveryCurrent = () => {
+    if (!recoveryPathMatcher.isCurrent()) {
+      throw new DuplicateAgentError(
+        `Agent ${agentId} preserved database changed during restoration; its hold remains. Restore the original database and retry agents add.`,
+      );
+    }
+    if (
+      (creating || !automaticBootstrap) &&
+      readCurrentHolds().some(
+        (entry) =>
+          entry.agentId === agentId &&
+          !held.some((previous) => previous.agentId === agentId && previous.path === entry.path),
+      )
+    ) {
+      throw new DuplicateAgentError(
+        `Agent ${agentId} has held databases. Restore its original agentDir and session.store configuration, then run agents add explicitly to restore the preserved store.`,
+      );
+    }
+  };
+  const hasBootstrapHold = () =>
+    automaticBootstrap && readCurrentHolds().some((entry) => entry.agentId === agentId);
+  const beforePersistentApply = () => {
+    params.beforePersistentApply?.();
+    assertRecoveryCurrent();
+  };
 
   try {
     return await withConfigMutationExclusive(async (lockedConfig) => {
-      const gateError = await evaluateMainCreationGate(lockedConfig, agentId);
+      held = automaticBootstrap ? [] : readCurrentHolds();
+      const recoveryPaths = selectedRecoveryPaths(
+        lockedConfig,
+        agentId,
+        held,
+        recoveryPathMatcher,
+        explicitAgentDir,
+      );
+      if (recoveryPaths.length === 0 && held.some((entry) => entry.agentId === agentId)) {
+        return createError(
+          "already-exists",
+          `Agent ${agentId} has held databases. Restore its original agentDir and session.store configuration, then rerun agents add to restore the preserved store.`,
+          agentId,
+        );
+      }
+      const gateError =
+        recoveryPaths.length > 0 || hasBootstrapHold()
+          ? undefined
+          : await evaluateMainCreationGate(lockedConfig, agentId);
       if (gateError) {
         return gateError;
       }
-      params.beforePersistentApply?.();
-      const deletion = readAgentDeletionJournal(agentId);
+      beforePersistentApply();
+      // Held bootstrap can still be a no-op; never claim its journal before that decision.
+      const deletion = hasBootstrapHold()
+        ? undefined
+        : readAgentDeletionJournal(agentId, {}, "runtime");
       if (deletion && !deletion.cleanupCompleted) {
         return createError(
           "deletion-pending",
@@ -322,7 +418,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             : {}),
           assertConfigPathForWrite: () => {
             params.stagedConfig?.writeSnapshot.writeOptions.assertConfigPathForWrite?.();
-            params.beforePersistentApply?.();
+            beforePersistentApply();
           },
         },
         transform: async (currentConfig, context) => {
@@ -352,16 +448,17 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             // Never inject implicit bootstrap main into a concurrently authored fleet.
             throw new DuplicateAgentError();
           }
-          if (existingIndex >= 0 && !isBootstrapMain) {
+          if (existingIndex >= 0 && !isBootstrapMain && recoveryPaths.length === 0) {
             throw new DuplicateAgentError();
           }
 
           if (
             existingIndex >= 0 &&
-            isBootstrapMain &&
-            (currentEntries.length !== 1 ||
-              !isInjectedBootstrapMainEntry(existingEntry) ||
-              context.snapshot.exists)
+            (recoveryPaths.length > 0 ||
+              (isBootstrapMain &&
+                (currentEntries.length !== 1 ||
+                  !isInjectedBootstrapMainEntry(existingEntry) ||
+                  context.snapshot.exists)))
           ) {
             return {
               nextConfig: currentConfig,
@@ -376,6 +473,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             };
           }
 
+          creating = true;
           const workspaceDir =
             explicitWorkspace ?? resolveAgentWorkspaceDir(currentConfig, agentId);
           const agentDir = explicitAgentDir ?? resolveAgentDir(currentConfig, agentId);
@@ -460,11 +558,12 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           if (template && (await isWorkspaceBootstrapPending(workspaceDir))) {
             throw new UnfinishedRoleBootstrapError();
           }
-          params.beforePersistentApply?.();
+          beforePersistentApply();
           const workspace = await ensureAgentWorkspace({
             dir: workspaceDir,
-            beforePersistentApply: params.beforePersistentApply,
+            beforePersistentApply,
             ensureBootstrapFiles: !skipBootstrap,
+            purpose: params.purpose,
             ...(template
               ? {
                   templates: params.entry?.identity
@@ -500,7 +599,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
               };
             }
           }
-          params.beforePersistentApply?.();
+          beforePersistentApply();
           await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
           // A creation-time name is config, not proof that the fresh workspace hatched.
           // Keep IDENTITY.md templated until BOOTSTRAP completes its first-turn ceremony.
@@ -508,11 +607,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             await writeIdentityFile({
               workspaceDir: workspace.dir,
               identity,
-              beforePersistentApply: params.beforePersistentApply,
+              beforePersistentApply,
             });
           }
           // The receipt owns compensation until the config transform publishes this result.
-          params.beforePersistentApply?.();
+          beforePersistentApply();
           const preparedReceipt = await params.prepareConfigCommit?.();
           configCommitReceipt = preparedReceipt ? preparedReceipt : undefined;
 
@@ -556,6 +655,20 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       if (result.status === "created") {
         recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
       }
+      if (recoveryPaths.length > 0) {
+        assertRecoveryCurrent();
+        const confirmedPaths = selectedRecoveryPaths(
+          result.config,
+          agentId,
+          held,
+          recoveryPathMatcher,
+        );
+        const selectedPaths = recoveryPaths.filter((pathname) => confirmedPaths.includes(pathname));
+        runOpenClawStateWriteTransaction((database) => {
+          assertRecoveryCurrent();
+          resolveAgentDeletionRecoveryHolds(database, agentId, selectedPaths);
+        });
+      }
       return result;
     });
   } catch (error) {
@@ -570,7 +683,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       }
     }
     if (error instanceof DuplicateAgentError) {
-      return createError("already-exists", `agent "${agentId}" already exists`, agentId);
+      return createError(
+        "already-exists",
+        error.message || `agent "${agentId}" already exists`,
+        agentId,
+      );
     }
     if (error instanceof InvalidAgentBindingsError) {
       return createError("invalid-bindings", error.message, agentId);

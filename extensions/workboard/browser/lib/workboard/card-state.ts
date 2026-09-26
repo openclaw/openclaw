@@ -1,4 +1,4 @@
-import { normalizeNullableString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { matchesBoardFilter } from "./board-filter.ts";
 import type {
@@ -10,8 +10,7 @@ import type {
   WorkboardTemplateId,
   WorkboardUiState,
 } from "./types.ts";
-
-export { normalizeString };
+export { normalizeNullableString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 

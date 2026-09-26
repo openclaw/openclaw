@@ -1,35 +1,22 @@
 /** Public cron store load/save API backed entirely by shared SQLite state. */
-import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
-import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
 import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
-import { loadCronStoreFromDatabase } from "./store/load.kernel.js";
 import { resolveCronJobsStorePath } from "./store/paths.js";
 import {
   deleteCronQuarantinedJobsFromDatabase,
   saveCronQuarantinedJobs,
 } from "./store/quarantine.js";
-import {
-  assertCronStoreCanPersist,
-  deleteStaleCronJobFamilyRows,
-  readCronJobsFingerprint,
-} from "./store/row-codec.js";
+import { assertCronStoreCanPersist, readCronJobsFingerprint } from "./store/row-codec.js";
 import type { CronJobFamilyIdentity } from "./store/row-codec.js";
 import { CronJobsStoreChangedError, restoreCronSaveError } from "./store/save-error.js";
 import type {
@@ -48,6 +35,7 @@ import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.
 import type { LoadedCronStore } from "./store/types.js";
 import type { CronStoreFile } from "./types.js";
 export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
+export { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 export { CronJobsStoreChangedError } from "./store/save-error.js";
 export type {
   CronConfigJobRuntimeEntry,
@@ -107,16 +95,6 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
   }
 }
 
-function loadMutableCronStore(storePath: string): LoadedCronStore {
-  const database = openOpenClawStateDatabase();
-  const storeKey = cronStoreKey(path.resolve(storePath));
-  return loadCronStoreFromDatabase(database.db, storeKey, {
-    write: (operation, operationLabel) =>
-      runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }, { operationLabel }),
-    committed: () => noteCronJobsStoreCommit(storeKey),
-  });
-}
-
 export function assertCronJobsStoreUnchanged(
   db: DatabaseSync,
   storePath: string,
@@ -129,73 +107,30 @@ export function assertCronJobsStoreUnchanged(
 }
 
 /** Removes an owned declarative job family left under obsolete absolute store keys. */
-export function removeStaleCronJobFamilyRows(
+export async function removeStaleCronJobFamilyRows(
   storePath: string,
   family: CronJobFamilyIdentity,
-): number {
-  const activeStoreKey = cronStoreKey(path.resolve(storePath));
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => deleteStaleCronJobFamilyRows(db, activeStoreKey, family),
-    {},
-    { operationLabel: "cron.job-family-adoption" },
-  );
-}
-
-function emptyLoadedCronStore(): LoadedCronStore {
-  return {
-    store: { version: 1, jobs: [] },
-    configJobs: [],
-    configJobIndexes: [],
-    configJobRuntimeEntries: [],
-    invalidConfigRows: [],
-  };
-}
-
-/** Loads cron jobs from an existing SQLite store without creating or migrating state. */
-export async function loadCronJobsStoreWithConfigJobsReadOnly(
-  storePath: string,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<LoadedCronStore> {
-  const statePath = resolveOpenClawStateSqlitePath(env);
-  if (!fs.existsSync(statePath)) {
-    return emptyLoadedCronStore();
-  }
-  const resolvedStorePath = path.resolve(storePath);
-  const storeKey = cronStoreKey(resolvedStorePath);
-  // Preserve the caller's source artifacts without changing ordinary cron read admission.
-  const prepared = isArtifactPreservingStateRead()
-    ? prepareSqliteReadOnlyLocationSync(statePath)
-    : undefined;
-  let loaded = emptyLoadedCronStore();
-  let snapshotRemoved = true;
-  try {
-    const db = openNodeSqliteDatabase(prepared?.location ?? statePath, { readOnly: true });
-    try {
-      if (tableExists(db, "cron_jobs")) {
-        loaded = loadCronStoreFromDatabase(db, storeKey);
-      }
-    } finally {
-      db.close();
-    }
-  } finally {
-    if (prepared) {
-      snapshotRemoved = prepared.cleanup();
-    }
-  }
-  if (!snapshotRemoved) {
-    throw new Error("Cron read-only state snapshot cleanup failed.");
-  }
-  return loaded;
+  opts?: { commitGuard?: () => void },
+): Promise<number> {
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  const context = captureOpenClawStateWorkerContext();
+  let removed = 0;
+  await runCronRuntimeMutation({
+    context,
+    type: "cron.removeStaleFamily",
+    input: { storeKey, family: { ...family } },
+    assertCurrent: () => opts?.commitGuard?.(),
+    prepare: () => ({ value: {}, assertCurrent() {} }),
+    publish: (outcome) => {
+      removed = outcome.removed;
+    },
+  });
+  return removed;
 }
 
 /** Loads only the persisted cron job store payload. */
 export async function loadCronJobsStore(storePath: string): Promise<CronStoreFile> {
   return (await loadCronJobsStoreWithConfigJobs(storePath)).store;
-}
-
-/** Synchronously loads only the persisted cron job store payload. */
-export function loadCronJobsStoreSync(storePath: string): CronStoreFile {
-  return loadMutableCronStore(storePath).store;
 }
 
 type SaveCronStoreOptions = {

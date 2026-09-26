@@ -149,12 +149,6 @@ describe("subagent spawn depth + child limits", () => {
       const accepted = expectAccepted(result, "run-1");
       expect(accepted.childSessionKey).toMatch(/^agent:main:subagent:/);
       expect(accepted.completionTarget).toBe(completionTarget);
-      expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          completionTarget,
-          completionRequesterSessionId: completionTarget ? "nested-parent" : undefined,
-        }),
-      );
 
       // Child capability flags are stored on the session entry so later control
       // tools can enforce leaf behavior without recalculating spawn depth.

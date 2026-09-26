@@ -40,7 +40,8 @@ export function createTrackedTempDirs() {
       const state = await ensurePrefixRoot(prefix);
       const dir = path.join(state.root, `dir-${String(globalDirIndex)}`);
       globalDirIndex += 1;
-      await fs.mkdir(dir, { recursive: true });
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      await fs.chmod(dir, 0o700);
       return dir;
     },
     async cleanup(): Promise<void> {

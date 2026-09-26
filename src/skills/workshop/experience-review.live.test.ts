@@ -10,16 +10,14 @@ import {
 import { SessionManager } from "../../agents/sessions/index.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import type { Message } from "../../llm/types.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import {
-  readSkillCuratorReviewStatus,
-  recordSkillExperienceReviewOutcome,
-} from "./collection-review-state.js";
+import { recordSkillExperienceReviewOutcome } from "./collection-review-state.js";
+import { readSkillCuratorReviewStatus } from "./collection-review-state.test-support.js";
 import { assertExperienceReviewDecision } from "./experience-review-decision.test-support.js";
 import { observeExperienceReview } from "./experience-review-observation.test-support.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
@@ -123,7 +121,7 @@ describe("skill experience review diagnostics", () => {
     const diagnosticStore = { path: path.join(diagnosticWorkspace, "openclaw.sqlite") };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
-      recordSkillExperienceReviewOutcome(
+      await recordSkillExperienceReviewOutcome(
         "main",
         diagnosticWorkspace,
         {
@@ -147,7 +145,7 @@ describe("skill experience review diagnostics", () => {
       expect(readSkillCuratorReviewStatus()).toEqual(liveOutcomesBefore);
     } finally {
       log.mockRestore();
-      closeOpenClawStateDatabaseByPath(diagnosticStore.path);
+      await closeOpenClawStateDatabaseByPathAsync(diagnosticStore.path);
     }
   });
 });

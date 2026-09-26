@@ -52,6 +52,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (this.sources.has("memory")) {
       try {
         const inspection = await inspectMemorySourceState({
+          files: this.memoryFiles,
           db: this.db,
           workspaceDir: this.workspaceDir,
           settings: this.settings,
@@ -399,17 +400,34 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       return files;
     }
     const corpusEntries = knownCorpusEntries ?? (await this.listSessionCorpusEntries());
+    const normalizedAgentId = normalizeAgentId(this.agentId);
+    let entriesBySessionId: Map<string, SessionTranscriptCorpusEntry[]> | undefined;
+    if (targets.length > 1) {
+      entriesBySessionId = new Map();
+      for (const target of targets) {
+        const sessionId = target.sessionId.trim();
+        if (sessionId) {
+          entriesBySessionId.set(sessionId, []);
+        }
+      }
+      for (const entry of corpusEntries) {
+        entriesBySessionId.get(entry.sessionId)?.push(entry);
+      }
+    }
     for (const rawSession of targets) {
       const sessionId = rawSession.sessionId.trim();
       const agentId = rawSession.agentId?.trim() || this.agentId;
-      if (!sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
+      if (!sessionId || normalizeAgentId(agentId) !== normalizedAgentId) {
         continue;
       }
       const sessionKey = rawSession.sessionKey?.trim();
-      const matchingEntries = corpusEntries.filter(
+      const candidates = entriesBySessionId
+        ? (entriesBySessionId.get(sessionId) ?? [])
+        : corpusEntries;
+      const matchingEntries = candidates.filter(
         (entry) =>
-          normalizeAgentId(entry.agentId) === normalizeAgentId(this.agentId) &&
           entry.sessionId === sessionId &&
+          normalizeAgentId(entry.agentId) === normalizedAgentId &&
           (!sessionKey || entry.sessionKey === sessionKey),
       );
       for (const entry of matchingEntries) {

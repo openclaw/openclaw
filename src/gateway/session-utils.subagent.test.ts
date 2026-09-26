@@ -4,7 +4,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
@@ -25,18 +24,15 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { claimAgentRunContext } from "../infra/agent-run-registry.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   createResidentSessionRowReader,
   createSessionRowProjectionFixture,
 } from "./session-row-projection.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
+import { useSessionStoreFixture } from "./session-utils.test-support.js";
 const rowReader = createResidentSessionRowReader();
 async function withStateDirEnv<T>(
   prefix: string,
@@ -54,13 +50,10 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
-  loadGatewaySessionEntryReadOnly,
   resolveGatewayModelSupportsImages,
 } from "./session-utils.js";
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
+const fixtureStorePath = useSessionStoreFixture("openclaw-session-subagent-list-");
 
 async function seedSessionEntry(
   storePath: string,
@@ -86,176 +79,6 @@ describe("session list subagent metadata", () => {
     session: { mainKey: "main" },
     agents: { list: [{ id: "main", default: true }] },
   } as OpenClawConfig;
-
-  test("loads direct children without repeated or unrelated retained-payload validation", async () => {
-    await withStateDirEnv("openclaw-controller-registry-projection-", async () => {
-      await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
-        const parentKey = "agent:main:main";
-        const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-        const runs = new Map<string, SubagentRunFixture>();
-        setRuntimeConfigSnapshot(cfg, cfg);
-        const nativeJson = new DatabaseSync(":memory:");
-        try {
-          await seedSessionEntry(storePath, parentKey, { sessionId: "parent", updatedAt: 1 });
-          for (const runId of ["explicit", "fallback", "redirected", "unrelated", "alias"]) {
-            const childSessionKey = `agent:main:subagent:${runId}`;
-            await seedSessionEntry(storePath, childSessionKey, { sessionId: runId, updatedAt: 1 });
-            runs.set(runId, {
-              runId,
-              childSessionKey,
-              requesterSessionKey:
-                runId === "explicit" || runId === "unrelated"
-                  ? "agent:main:other"
-                  : runId === "alias"
-                    ? "main"
-                    : parentKey,
-              controllerSessionKey:
-                runId === "fallback" || runId === "alias"
-                  ? undefined
-                  : runId === "explicit"
-                    ? parentKey
-                    : "agent:main:other",
-              requesterDisplayKey: "parent",
-              task:
-                runId === "unrelated"
-                  ? "unrelated-retained-payload".repeat(1_024)
-                  : `selected-retained-payload:${runId}:${"x".repeat(16_384)}`,
-              cleanup: "keep",
-              createdAt: runId === "alias" ? 0 : 1,
-              startedAt: 2,
-            });
-          }
-          saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
-          subagentRegistryState.clearSubagentRunsReadCacheForTest();
-          const validateJson = nativeJson.prepare("SELECT json_valid(?) AS value");
-          let unrelatedInspections = 0;
-          let retainedValidationBytes = 0;
-          openOpenClawStateDatabase().db.function(
-            "json_valid",
-            { deterministic: true },
-            (value) => {
-              if (typeof value === "string" && value.includes("unrelated-retained-payload")) {
-                unrelatedInspections += 1;
-              }
-              if (typeof value === "string" && value.includes("selected-retained-payload:")) {
-                retainedValidationBytes += Buffer.byteLength(value);
-              }
-              return validateJson.get(value)?.value ?? 0;
-            },
-          );
-
-          const { store } = loadGatewaySessionEntryReadOnly("main", {
-            includeStoreChildEntries: true,
-          });
-          expect(Object.keys(store)).toEqual([
-            parentKey,
-            "agent:main:subagent:explicit",
-            "agent:main:subagent:fallback",
-            "agent:main:subagent:alias",
-          ]);
-          expect(unrelatedInspections).toBe(0);
-          // Work stays proportional to selected payload bytes, not metadata fields per payload.
-          const selectedPayloadBytes = openOpenClawStateDatabase()
-            .db.prepare(
-              "SELECT sum(length(CAST(payload_json AS BLOB))) AS bytes FROM subagent_runs WHERE run_id IN ('explicit', 'fallback', 'alias')",
-            )
-            .get()?.bytes;
-          expect(typeof selectedPayloadBytes).toBe("number");
-          expect(retainedValidationBytes).toBeLessThanOrEqual(Number(selectedPayloadBytes) * 2);
-          await (await rowReader.ready()).ensureMaterialized();
-          const startupInspections = unrelatedInspections;
-          expect((await rowReader.row(parentKey))?.key).toBe(parentKey);
-          expect(unrelatedInspections).toBe(startupInspections);
-        } finally {
-          await rowReader.dispose();
-          await closeOpenClawStateDatabaseAsync();
-          nativeJson.close();
-          resetConfigRuntimeState();
-        }
-      });
-    });
-  });
-
-  test("projects lifecycle ownership and lineage without parsing retained task payloads", async () => {
-    await withStateDirEnv("openclaw-lifecycle-registry-projection-", async () => {
-      await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
-        const now = Date.now();
-        // Stack formatting can parse this test’s source map; only runtime bytes identify stored tasks.
-        const retainedTaskMarker = `retained-task-payload:${now}:`;
-        const parentKey = "agent:main:main";
-        const childKey = "agent:main:subagent:lifecycle-child";
-        const navigationKey = "agent:main:dashboard:navigation-parent";
-        const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-        setRuntimeConfigSnapshot(cfg, cfg);
-        try {
-          await seedSessionEntry(storePath, parentKey, { sessionId: "parent", updatedAt: now });
-          await seedSessionEntry(storePath, childKey, {
-            sessionId: "child",
-            updatedAt: now,
-            parentSessionKey: navigationKey,
-            spawnedBy: "agent:main:subagent:old-controller",
-          });
-          const runs = new Map<string, SubagentRunFixture>();
-          for (let index = 0; index < 20; index += 1) {
-            const runId = `retained-${index}`;
-            runs.set(runId, {
-              runId,
-              childSessionKey: `agent:main:subagent:${runId}`,
-              requesterSessionKey: parentKey,
-              requesterDisplayKey: "main",
-              task: `${retainedTaskMarker}${"x".repeat(16_384)}`,
-              cleanup: "keep",
-              createdAt: now - 10_000,
-              startedAt: now - 9_000,
-              endedAt: now - 8_000,
-              outcome: { status: "ok" },
-            });
-          }
-          saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
-          addSubagentRunForTests({
-            runId: "live-child",
-            childSessionKey: childKey,
-            controllerSessionKey: parentKey,
-            requesterSessionKey: parentKey,
-            requesterDisplayKey: "main",
-            task: "live child",
-            cleanup: "keep",
-            createdAt: now - 100,
-            startedAt: now - 50,
-          });
-          claimAgentRunContext(
-            "live-child",
-            { sessionKey: childKey },
-            { trackOwner: true, ownsContext: true },
-          );
-          subagentRegistryState.clearSubagentRunsReadCacheForTest();
-          await (await rowReader.ready()).ensureMaterialized();
-          const parse = vi.spyOn(JSON, "parse");
-          try {
-            const parent = (await rowReader.snapshot(parentKey, { now })).row;
-            const child = (await rowReader.snapshot(childKey, { now })).row;
-            expect(parent).toMatchObject({ hasActiveSubagentRun: true, childSessions: [childKey] });
-            expect(child).toMatchObject({
-              subagentRunState: "active",
-              hasActiveSubagentRun: true,
-              controlOwnerSessionKey: parentKey,
-              parentSessionKey: navigationKey,
-            });
-            expect(parent?.swarm).toBeUndefined();
-            expect(child?.swarm).toBeUndefined();
-            expect(parse.mock.calls.some(([value]) => value.includes(retainedTaskMarker))).toBe(
-              false,
-            );
-          } finally {
-            parse.mockRestore();
-          }
-        } finally {
-          await rowReader.dispose();
-          resetConfigRuntimeState();
-        }
-      });
-    });
-  });
 
   test("keeps exact rows equivalent through descendant retention, moves, generations, and deletion", async () => {
     await withStateDirEnv("openclaw-exact-tree-parity-", async () => {
@@ -381,7 +204,7 @@ describe("session list subagent metadata", () => {
   test("searches channel-derived display names before row enrichment", async () => {
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store: {
         "agent:main:slack:group:general": {
           sessionId: "slack-general-session",
@@ -424,7 +247,7 @@ describe("session list subagent metadata", () => {
     const projection = createSessionRowProjectionFixture({
       cfg,
       store,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
     });
     const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     try {
@@ -479,7 +302,7 @@ describe("session list subagent metadata", () => {
     const listForOwner = async (ownerSessionKey: string) =>
       await listSessionFixture({
         cfg,
-        storePath: "/tmp/sessions.json",
+        storePath: fixtureStorePath(),
         store,
         opts: { spawnedBy: ownerSessionKey },
       });
@@ -495,7 +318,7 @@ describe("session list subagent metadata", () => {
 
     const all = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -585,7 +408,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -652,7 +475,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -738,7 +561,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -827,7 +650,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -916,7 +739,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {
         spawnedBy: "agent:main:subagent:old-parent-filter",
@@ -964,7 +787,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1012,7 +835,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1058,7 +881,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1111,7 +934,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1170,7 +993,7 @@ describe("session list subagent metadata", () => {
           saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
           const result = await listSessionFixture({
             cfg,
-            storePath: "/tmp/sessions.json",
+            storePath: fixtureStorePath(),
             store: {
               [childSessionKey]: {
                 sessionId: "sess-disk-live",
@@ -1216,7 +1039,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1244,7 +1067,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -1274,7 +1097,7 @@ describe("session list subagent metadata", () => {
 
     const all = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1283,7 +1106,7 @@ describe("session list subagent metadata", () => {
 
     const filtered = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -1310,7 +1133,7 @@ describe("session list subagent metadata", () => {
 
     const all = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1319,7 +1142,7 @@ describe("session list subagent metadata", () => {
 
     const filtered = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -1355,7 +1178,7 @@ describe("session list subagent metadata", () => {
       const list = (spawnedBy?: string) =>
         listSessionFixture({
           cfg,
-          storePath: "/tmp/sessions.json",
+          storePath: fixtureStorePath(),
           store,
           opts: { spawnedBy },
         });
@@ -1403,7 +1226,7 @@ describe("session list subagent metadata", () => {
 
     const all = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1412,7 +1235,7 @@ describe("session list subagent metadata", () => {
 
     const filtered = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -1469,7 +1292,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1497,7 +1320,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1538,7 +1361,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });

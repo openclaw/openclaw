@@ -1,17 +1,14 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   createBuiltRuntime,
-  createSourceRuntime,
   runBuiltRuntime,
-  runSourceRuntime,
 } from "../commands/doctor-config-preflight.process.test-support.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -24,10 +21,18 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
-import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
+import { cliRecoveryEntrypoints, doctorOutputEntrypoints } from "./cli-entrypoint.test-support.js";
 import { getCliProcessTestTimeout } from "./cli-process-child.test-helpers.js";
 
 const DOCTOR_CHILD_TIMEOUT_MS = 60_000;
+const doctorEntrypoint = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
+beforeAll(() => {
+  if (!doctorEntrypoint.pathname.endsWith(".js")) {
+    throw new Error(
+      "Doctor process tests require the prepared runtime; run pnpm test src/cli/doctor-output.process.test.ts",
+    );
+  }
+});
 const tempDirs = createFixtureLifetime();
 afterEach(() => tempDirs.cleanup());
 const runtimeDirs = createFixtureLifetime();
@@ -39,30 +44,21 @@ afterAll(() => {
 });
 
 function createDoctorRuntime(root: string) {
-  const entryPath = fileURLToPath(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli));
-  const source = /\.[cm]?ts$/u.test(entryPath);
-  const runtimeRoot = source
-    ? createSourceRuntime(root)
-    : createBuiltRuntime(root, path.dirname(entryPath));
-  // Keep package discovery and real UI checks inside the fixture in both modes.
+  const entryPath = fileURLToPath(doctorEntrypoint);
+  const runtimeRoot = createBuiltRuntime(root, path.dirname(entryPath));
+  // Keep package discovery and real UI checks inside the fixture.
   return (env: NodeJS.ProcessEnv, args: string[]) =>
-    source
-      ? tempDirs.track(
-          runtimeDirs.track(
-            runSourceRuntime(
-              runtimeRoot,
-              env,
-              [path.join(runtimeRoot, "src", "entry.ts"), ...args],
-              DOCTOR_CHILD_TIMEOUT_MS,
-              4 * 1024 * 1024,
-            ),
-          ),
-        )
-      : tempDirs.track(
-          runtimeDirs.track(
-            runBuiltRuntime(runtimeRoot, env, args, DOCTOR_CHILD_TIMEOUT_MS, 4 * 1024 * 1024),
-          ),
-        );
+    tempDirs.track(
+      runtimeDirs.track(
+        runBuiltRuntime(runtimeRoot, env, args, DOCTOR_CHILD_TIMEOUT_MS, 4 * 1024 * 1024),
+      ),
+    );
+}
+
+function runDoctorRuntime(env: NodeJS.ProcessEnv, args: string[]) {
+  // Only the immutable package is shared across cases; scenario state stays separate.
+  doctorRuntime ??= createDoctorRuntime(runtimeDirs.createTempDir("openclaw-doctor-runtime-"));
+  return doctorRuntime(env, args);
 }
 
 function runDoctor(params: {
@@ -71,9 +67,7 @@ function runDoctor(params: {
   repair?: boolean;
   env?: NodeJS.ProcessEnv;
 }) {
-  // Only the immutable package is shared across cases; scenario state stays separate.
-  doctorRuntime ??= createDoctorRuntime(runtimeDirs.createTempDir("openclaw-doctor-runtime-"));
-  return doctorRuntime(
+  return runDoctorRuntime(
     {
       ...process.env,
       HOME: params.root,
@@ -264,7 +258,7 @@ describe("Doctor report process output", () => {
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const original = Buffer.from('{"agent:main:legacy":');
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(configPath, `${JSON.stringify({ heartbeat: { every: "30m" } })}\n`);
+    fs.writeFileSync(configPath, `${JSON.stringify({ session: { typingMode: "thinking" } })}\n`);
     fs.writeFileSync(storePath, original);
 
     const result = await runDoctor({ root, configPath, repair: true });
@@ -277,9 +271,11 @@ describe("Doctor report process output", () => {
     expect(output).not.toContain("Doctor complete.");
     expect(fs.readFileSync(storePath)).toEqual(original);
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
-      agents: { defaults: { heartbeat: { every: "30m" } } },
+      agents: { defaults: { typingMode: "thinking" } },
     });
-    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("heartbeat");
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty(
+      "session.typingMode",
+    );
   }, 120_000);
 
   it(
@@ -380,7 +376,7 @@ describe("Doctor report process output", () => {
     getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS, DOCTOR_CHILD_TIMEOUT_MS),
   );
 
-  it("omits backup tips for Git-backed nested agent workspaces", () => {
+  it("omits backup tips for Git-backed nested agent workspaces", async () => {
     const root = tempDirs.createTempDir("openclaw-doctor-workspace-git-");
     const repoRoot = path.join(root, "repo");
     const nestedWorkspace = path.join(
@@ -411,11 +407,23 @@ describe("Doctor report process output", () => {
       }),
     );
 
-    const entryUrl = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
-    const result = spawnSync(
-      process.execPath,
+    const result = await runDoctorRuntime(
+      {
+        ...process.env,
+        HOME: root,
+        USERPROFILE: root,
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        NODE_ENV: undefined,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_HIDE_BANNER: "1",
+        OPENCLAW_HOME: root,
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        VITEST_WORKER_ID: undefined,
+      },
       [
-        ...resolveRuntimeWorkerArgv(entryUrl),
         "doctor",
         "--lint",
         "--only",
@@ -425,32 +433,10 @@ describe("Doctor report process output", () => {
         "--json",
         "--no-color",
       ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          HOME: root,
-          USERPROFILE: root,
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          NODE_ENV: undefined,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_HIDE_BANNER: "1",
-          OPENCLAW_HOME: root,
-          OPENCLAW_NO_RESPAWN: "1",
-          OPENCLAW_STATE_DIR: stateDir,
-          VITEST: undefined,
-          VITEST_POOL_ID: undefined,
-          VITEST_WORKER_ID: undefined,
-        },
-        maxBuffer: 4 * 1024 * 1024,
-        timeout: 60_000,
-      },
     );
 
-    expect(result.error).toBeUndefined();
     expect(result.signal).toBeNull();
-    expect(result.status, result.stderr).toBe(1);
+    expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(1);
     expect(result.stderr).toBe("");
     expect(result.stdout).not.toContain("back up the agent workspace");
     expect(result.stdout).toContain('"target":"direct"');
@@ -464,7 +450,8 @@ describe("Doctor report process output", () => {
   ])("drains the whole pipe before exiting for $name", ({ args, exitCode }) => {
     const root = tempDirs.createTempDir("openclaw-doctor-output-");
     const payload = { ok: false, findings: [{ level: "error", message: "x".repeat(1024 * 1024) }] };
-    const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
+    const maintenance = resolveRuntimeWorkerUrl(doctorOutputEntrypoints.maintenance);
+    const oneShotExit = resolveRuntimeWorkerUrl(doctorOutputEntrypoints.oneShotExit);
     // Keep the parser, runtime, and exit lifecycle real. Synthetic report
     // producers exercise the output boundary without accessing operator state.
     const script = `
@@ -488,8 +475,8 @@ describe("Doctor report process output", () => {
           return nextResolve(specifier, context);
         },
       });
-      const { registerMaintenanceCommands } = await import(${JSON.stringify(sourceUrl("./program/register.maintenance.ts"))});
-      const { runCliWithExitFinalization } = await import(${JSON.stringify(sourceUrl("./one-shot-exit.ts"))});
+      const { registerMaintenanceCommands } = await import(${JSON.stringify(maintenance.href)});
+      const { runCliWithExitFinalization } = await import(${JSON.stringify(oneShotExit.href)});
       process.argv = [process.execPath, "openclaw", "doctor", ...${JSON.stringify(args)}];
       await runCliWithExitFinalization({
         run: async () => {
@@ -501,9 +488,7 @@ describe("Doctor report process output", () => {
       });
     `;
     const result = spawnNodeEvalSync(script, {
-      imports: ["tsx"],
       env: {
-        ESBUILD_WORKER_THREADS: "0",
         PATH: path.dirname(process.execPath),
         HOME: root,
         USERPROFILE: root,

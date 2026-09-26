@@ -317,11 +317,11 @@ describe("inbound media-store references in the attachment url field", () => {
           timeoutMs: 1000,
         });
 
-        expect(result.path).toBe(await fs.realpath(saved.path));
-        expect(result.cleanup).toBeUndefined();
+        expect(result).toBe(await fs.realpath(saved.path));
       } finally {
         await cache.cleanup();
       }
+      expect((await fs.stat(saved.path)).isFile()).toBe(true);
     });
   });
 
@@ -348,11 +348,11 @@ describe("inbound media-store references in the attachment url field", () => {
           timeoutMs: 1000,
         });
 
-        expect(result.path).toBe(await fs.realpath(saved.path));
-        expect(result.cleanup).toBeUndefined();
+        expect(result).toBe(await fs.realpath(saved.path));
       } finally {
         await cache.cleanup();
       }
+      expect((await fs.stat(saved.path)).isFile()).toBe(true);
     });
   });
 

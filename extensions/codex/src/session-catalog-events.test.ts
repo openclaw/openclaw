@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CodexAppServerMessageDecoder } from "./app-server/client-message-decoder.js";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexServerNotification, CodexThread } from "./app-server/protocol.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./app-server/test-support.js";
@@ -12,7 +13,7 @@ import {
 import { codexCatalogHomeIdFromCanonicalPath } from "./session-catalog-home-id.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const disposers: Array<() => void> = [];
+const disposers: Array<() => void | Promise<void>> = [];
 
 function startOptions(home: string): CodexAppServerStartOptions {
   return {
@@ -25,14 +26,57 @@ function startOptions(home: string): CodexAppServerStartOptions {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const dispose of disposers.splice(0)) {
-    dispose();
+    await dispose();
   }
   vi.restoreAllMocks();
 });
 
 describe("Codex catalog events", () => {
+  it.each(["thread/start", "thread/fork", "thread/resume", "thread/read"] as const)(
+    "publishes ephemeral %s acknowledgements before resolving the request",
+    async (method) => {
+      const options = startOptions(tempDirs.make("codex-catalog-ephemeral-ack-"));
+      const excluded = vi.fn();
+      const otherHome = vi.fn();
+      const stop = subscribeCodexCatalogEvents(
+        await codexCatalogResidentHomeKey({ startOptions: options }),
+        () => {},
+        { onEphemeralThread: excluded },
+      );
+      disposers.push(
+        stop,
+        subscribeCodexCatalogEvents("unrelated-home", () => {}, { onEphemeralThread: otherHome }),
+      );
+      let ephemeral = true;
+      const harness = createClientHarness({
+        onWrite(line, send) {
+          const request = JSON.parse(line);
+          send({ id: request.id, result: { thread: { id: "helper-thread", ephemeral } } });
+        },
+      });
+      disposers.push(async () => {
+        await harness.client.closeAndWait();
+      });
+      await observeCodexCatalogClient(harness.client, { startOptions: options });
+
+      await expect(harness.client.request(method, {})).resolves.toEqual({
+        thread: { id: "helper-thread", ephemeral: true },
+      });
+      expect(excluded).toHaveBeenCalledExactlyOnceWith("helper-thread");
+      expect(otherHome).not.toHaveBeenCalled();
+
+      ephemeral = false;
+      await harness.client.request(method, {});
+      expect(excluded).toHaveBeenCalledOnce();
+      stop();
+      ephemeral = true;
+      await harness.client.request(method, {});
+      expect(excluded).toHaveBeenCalledOnce();
+    },
+  );
+
   it("reports physical local closure once and removes close callbacks with their subscription", async () => {
     const options = startOptions(tempDirs.make("codex-catalog-close-"));
     const closed = vi.fn();
@@ -180,9 +224,16 @@ describe("Codex catalog events", () => {
   it("reads only the requested thread metadata when a catalog listener needs it", async () => {
     const options = startOptions(tempDirs.make("codex-catalog-events-"));
     const homeKey = await codexCatalogResidentHomeKey({ startOptions: options });
-    const thread = { id: "thread-1", name: "Updated title" };
+    const thread = {
+      id: "thread-1",
+      name: "Updated title",
+      preview: "x".repeat(40 * 1024),
+      extra: { discarded: "native payload ".repeat(4_096) },
+    };
     const harness = createClientHarness();
-    disposers.push(() => harness.client.close());
+    disposers.push(async () => {
+      await harness.client.closeAndWait();
+    });
     let reading: Promise<CodexThread> | undefined;
     disposers.push(
       subscribeCodexCatalogEvents(homeKey, (_event, readThread) => {
@@ -197,8 +248,15 @@ describe("Codex catalog events", () => {
       method: "thread/read",
       params: { threadId: thread.id, includeTurns: false },
     });
+    const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
     harness.send({ id: request.id, result: { thread } });
-    await expect(reading).resolves.toEqual(thread);
+    await expect(reading).resolves.toEqual({
+      id: thread.id,
+      name: thread.name,
+      projectId: null,
+      preview: "x".repeat(500),
+    });
+    expect(parse).not.toHaveBeenCalled();
     expect(harness.writes).toHaveLength(1);
   });
 });

@@ -3,17 +3,19 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   buildNativeHookRelayCommand,
-  registerNativeHookRelay,
+  registerOwnedNativeHookRelay,
   testing as nativeHookRelayTesting,
 } from "../agents/harness/native-hook-relay.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
@@ -413,19 +415,17 @@ describe("hooks CLI process lifecycle", () => {
   it.each(["src/entry.ts", "src/cli/native-hook-relay-entry.ts"])(
     "%s uses the explicit relay database and exits despite a lingering handle",
     async (entryPath) => {
-      const relay = registerNativeHookRelay({
+      const relay = registerOwnedNativeHookRelay({
         provider: "codex",
         relayId: "process-explicit-state-db",
         sessionId: "session-1",
         runId: "run-1",
         allowedEvents: ["post_tool_use"],
       });
-      await expect
-        .poll(
-          async () =>
-            await nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId),
-        )
-        .toBeDefined();
+      await relay.ready;
+      expect(
+        await nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId),
+      ).toBeDefined();
 
       const fixture = await createRelayPreloadFixture();
       const result = await runHooksCli({
@@ -471,6 +471,7 @@ describe("hooks CLI process lifecycle", () => {
     const unavailableGatewayPort = await getFreePort();
 
     const listResult = await runHooksCli({
+      entryPath: fileURLToPath(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
       args: ["hooks", "list", "--json"],
       completion: "output-then-exit",
       label: "hooks list",

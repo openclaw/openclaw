@@ -72,9 +72,10 @@ type StartedTuiPtyFixture = {
   run: PtyRun;
   logPath: string;
   waitForLogEntry: (predicate: FixtureLogPredicate, timeoutMs?: number) => Promise<FixtureLogEntry>;
+  releaseReconnect: () => Promise<void>;
   cleanup: () => Promise<void>;
 };
-type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv };
+type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv; holdReconnect?: boolean };
 export type StartTuiPtyFixture = (opts?: TuiPtyFixtureOptions) => Promise<StartedTuiPtyFixture>;
 type TerminalAttackPayload = {
   text: string;
@@ -556,6 +557,7 @@ async function exerciseGatewayOutputSafety(
   ];
   const idlePayload = buildCompactTerminalAttackPayload("T08I", "\x1b[?7775h");
   const fixture = await startFixture({
+    holdReconnect: true,
     env: {
       OPENCLAW_TUI_PTY_COLS: "120",
       OPENCLAW_TUI_PTY_ROWS: "18",
@@ -567,9 +569,7 @@ async function exerciseGatewayOutputSafety(
   try {
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
     await fixture.run.write("/gateway-status\r", { delay: false });
-    await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
     await fixture.waitForLogEntry((entry) => entry.method === "disconnect");
-    await fixture.run.waitForOutput("(no output)", startupTimeoutMs);
     // Replay omits zero-width bidi isolates but preserves authenticated cells.
     // The complete disconnect row must exist before reconnect replaces it.
     await assertHistoricalTerminalAttackSanitized(
@@ -579,6 +579,13 @@ async function exerciseGatewayOutputSafety(
       `local runtime stopped: ${idlePayload.expectedLine} | idle`,
       startupTimeoutMs,
     );
+    await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) => rows.some((row) => row.includes("(no output)")),
+      startupTimeoutMs,
+    );
+    // Reconnect rebuilds history; release it only after both sanitized outputs were painted.
+    await fixture.releaseReconnect();
     await waitForSynchronizedFrameRows(
       fixture.run,
       (rows) =>

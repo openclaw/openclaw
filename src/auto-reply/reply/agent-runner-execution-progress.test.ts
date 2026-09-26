@@ -17,7 +17,6 @@ import {
   requireRecord,
   expectRecordFields,
   expectNoMockCallWithFields,
-  requireMockCallArgWithFields,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type {
@@ -664,14 +663,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
 
     expect(result.kind).toBe("success");
     expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
-    const lifecycleEvent = requireRecord(
-      requireMockCallArgWithFields(
-        emitAgentEvent,
-        { runId: "run-timeout", sessionKey: "main", stream: "lifecycle" },
-        "agent event",
-      ),
-      "agent event",
-    );
+    const terminalEvents = terminalEventsForRun(emitAgentEvent.mock.calls, "run-timeout");
+    expect(terminalEvents).toHaveLength(1);
+    const lifecycleEvent = requireRecord(terminalEvents[0], "terminal event");
+    expectRecordFields(lifecycleEvent, { sessionKey: "main" });
     const lifecycleData = requireRecord(lifecycleEvent.data, "lifecycle data");
     expectRecordFields(lifecycleData, {
       phase: "error",
@@ -807,14 +802,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
       expect(result.runResult.payloads).toEqual([{ text: "recovered" }]);
     }
     expect(onBlockReply).not.toHaveBeenCalled();
-    const lifecycleEvent = requireRecord(
-      requireMockCallArgWithFields(
-        emitAgentEvent,
-        { runId: "run-recovered", sessionKey: "main", stream: "lifecycle" },
-        "agent event",
-      ),
-      "agent event",
-    );
+    const terminalEvents = terminalEventsForRun(emitAgentEvent.mock.calls, "run-recovered");
+    expect(terminalEvents).toHaveLength(1);
+    const lifecycleEvent = requireRecord(terminalEvents[0], "terminal event");
+    expectRecordFields(lifecycleEvent, { sessionKey: "main" });
     expectRecordFields(requireRecord(lifecycleEvent.data, "lifecycle data"), {
       phase: "end",
       startedAt: 2_000,

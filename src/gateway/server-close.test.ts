@@ -845,7 +845,7 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["media", "telemetry"] as const)(
+  it.each(["media", "stopPeriodicTasks", "skillUsageCleanup"] as const)(
     "waits for in-flight %s cleanup before shared state closes",
     async (owner) => {
       const stopped = createDeferredCore();
@@ -863,7 +863,7 @@ describe("createGatewayCloseHandler", () => {
           return "drained";
         };
       } else {
-        deps.maintenance!.stopTelemetryChecks = async () => {
+        deps.maintenance![owner] = async () => {
           await stop();
         };
       }
@@ -1841,7 +1841,7 @@ describe("createGatewayCloseHandler", () => {
       boundaryNewlines: 0,
       separatorLength: 0,
     };
-    run.deltaLastBroadcastText = "par";
+    chatRunState.takeBufferDelta("run-1", "par");
     run.agentText = {
       assistant: {
         lastSentAt: Date.now(),
@@ -1904,7 +1904,7 @@ describe("createGatewayCloseHandler", () => {
     expect(chatRunState.runs.get("run-1")?.buffer).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.deltaSentAt).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.assistantScope).toBeUndefined();
-    expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastText).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.display).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>

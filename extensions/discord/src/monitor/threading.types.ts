@@ -47,7 +47,7 @@ export type DiscordThreadStarterRestAuthor = {
   discriminator?: string | null;
 };
 
-export type DiscordThreadStarterRestMember = {
+type DiscordThreadStarterRestMember = {
   nick?: string | null;
   displayName?: string | null;
   roles?: string[];

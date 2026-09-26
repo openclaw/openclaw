@@ -48,6 +48,7 @@ export function renderPluginStateStatus(
 export function renderPluginOfficialBadge(): TemplateResult {
   return html`<span
     class="plugin-official-badge"
+    role="img"
     aria-label=${t("pluginsPage.official")}
     title=${t("pluginsPage.official")}
     >${icons.badgeCheck}</span

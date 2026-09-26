@@ -53,7 +53,7 @@ title: "Configuration — workplace chat channels"
       allowFrom: ["U123", "U456", "*"],
       dm: { enabled: true, groupEnabled: false, groupChannels: ["G123"] },
       channels: {
-        C123: { enabled: true, requireMention: true, allowBots: false },
+        C123: { enabled: true, requireMention: true },
         C456: {
           enabled: true,
           requireMention: true,
@@ -64,7 +64,7 @@ title: "Configuration — workplace chat channels"
         },
       },
       historyLimit: 50,
-      allowBots: false,
+      allowBots: true,
       reactionNotifications: "own",
       reactionAllowlist: ["U123"],
       replyToMode: "off", // off | first | all | batched
@@ -110,6 +110,7 @@ title: "Configuration — workplace chat channels"
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
+- `allowBots` defaults to `true` and controls whether other bots can trigger turns. Explicit `false` remains an opt-out; room settings override account and root settings. Normal access, mention, bot-room authorization, self-message filtering, and [bot loop protection](/channels/bot-loop-protection) still apply. Bot-authored history and thread context remain subject to context visibility rules independently of this flag. See [Slack access control](/channels/slack/access-control#access-control-and-routing).
 - `channels.slack.joinIntro` defaults to `true`. When the bot joins an allowed channel, it posts one introduction using the channel name, purpose or topic, and available recent messages. Set this option to `false` to disable introductions, or use `channels.slack.accounts.<accountId>.joinIntro` for an account-specific override. Up to 100 recent messages are read, once per channel; see [group join introductions](/channels#group-join-introductions). Introductions never run in direct messages.
 - **User identity** (`postAs: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack/setup#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
 - Slack detects Enterprise Grid org-wide installations automatically from the

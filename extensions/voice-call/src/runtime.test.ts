@@ -1,10 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Voice Call tests cover runtime plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
+import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
 const mocks = vi.hoisted(() => ({
   resolveVoiceCallConfig: vi.fn(),
@@ -22,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   webhookGetStreamDisconnectLifecycle: vi.fn(),
   webhookCtorArgs: [] as unknown[][],
   realtimeHandlerCtorArgs: [] as unknown[][],
-  realtimeHandlerRegisterToolHandler: vi.fn(),
+  realtimeHandlerRegisterToolHandler: vi.fn<RealtimeCallHandler["registerToolHandler"]>(),
   realtimeHandlerSetPublicUrl: vi.fn(),
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
   resolveRealtimeFastContextConsult: vi.fn(),
@@ -157,25 +159,6 @@ function createExternalProviderConfig(params: {
   return config;
 }
 
-type RealtimeConsultToolHandler = (
-  args: unknown,
-  callId: string,
-  context: { partialUserTranscript?: string; abortSignal?: AbortSignal },
-) => Promise<unknown>;
-
-function firstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
-function firstCallParam(calls: readonly unknown[][], label: string) {
-  const call = firstMockCall(calls, label);
-  return call[0];
-}
-
 type MockSessionEntry = {
   sessionId?: string;
   updatedAt?: number;
@@ -216,16 +199,16 @@ function createMockSessionRuntime(sessionStore: Record<string, unknown>) {
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
-function requireRealtimeConsultToolHandler(): RealtimeConsultToolHandler {
-  const registeredToolHandler = firstMockCall(
-    mocks.realtimeHandlerRegisterToolHandler.mock.calls,
-    "realtime tool handler registration",
+function requireRealtimeConsultToolHandler() {
+  const registeredToolHandler = expectDefined(
+    mocks.realtimeHandlerRegisterToolHandler.mock.calls.at(0),
+    "realtime tool handler registration call",
   );
   expect(registeredToolHandler[0]).toBe("openclaw_agent_consult");
   if (typeof registeredToolHandler[1] !== "function") {
     throw new Error("expected realtime tool handler callback");
   }
-  return registeredToolHandler[1] as RealtimeConsultToolHandler;
+  return registeredToolHandler[1];
 }
 
 describe("createVoiceCallRuntime lifecycle", () => {
@@ -647,7 +630,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
     ];
     const sessionStore: Record<string, unknown> = {};
-    const runEmbeddedAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async (_params: unknown) => ({
       payloads: [{ text: "Use the shipment status." }],
       meta: {},
     }));
@@ -701,7 +684,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(runEmbeddedAgent.mock.calls as unknown[][], "embedded OpenClaw consult"),
+      expectDefined(runEmbeddedAgent.mock.calls.at(0), "embedded OpenClaw consult call")[0],
       "embedded OpenClaw consult params",
     );
     expect(consultParams.agentId).toBe("support");
@@ -818,7 +801,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
     config.sessionScope = "per-call";
-    const runEmbeddedAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async (_params: unknown) => ({
       payloads: [{ text: "Per-call consult answer." }],
       meta: {},
     }));
@@ -855,10 +838,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(
-        runEmbeddedAgent.mock.calls as unknown[][],
-        "per-call embedded OpenClaw consult",
-      ),
+      expectDefined(
+        runEmbeddedAgent.mock.calls.at(0),
+        "per-call embedded OpenClaw consult call",
+      )[0],
       "per-call embedded OpenClaw consult params",
     );
     expect(consultParams.sessionKey).toBe("agent:main:voice:call:call-1");
@@ -990,7 +973,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     config.realtime.consultThinkingLevel = "ultra";
     config.realtime.consultFastMode = true;
     const sessionStore: Record<string, unknown> = {};
-    const runEmbeddedAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async (_params: unknown) => ({
       payloads: [{ text: "Done." }],
       meta: {},
     }));
@@ -1027,10 +1010,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(
-        runEmbeddedAgent.mock.calls as unknown[][],
-        "configured embedded OpenClaw consult",
-      ),
+      expectDefined(
+        runEmbeddedAgent.mock.calls.at(0),
+        "configured embedded OpenClaw consult call",
+      )[0],
       "configured embedded OpenClaw consult params",
     );
     expect(consultParams.thinkLevel).toBe("ultra");

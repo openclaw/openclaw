@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements self check scenario behavior.
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import type { QaTransportState } from "./qa-transport.js";
 import type { QaBusMessage } from "./runtime-api.js";

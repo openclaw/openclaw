@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  inheritSessionGitContributorProfileIds,
+} from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../../utils.js";
 import {
@@ -12,7 +16,6 @@ import {
   normalizeInheritedToolDenylist,
 } from "../../inherited-tool-deny.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import {
   loadSessionEntry,
@@ -38,23 +41,17 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (patch.incognito === true) {
     entry.incognito = true;
   }
-  if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
-    entry.spawnedBy = patch.spawnedBy.trim();
-  }
-  if (
-    typeof patch.completionOwnerSessionKey === "string" &&
-    patch.completionOwnerSessionKey.trim()
-  ) {
-    entry.completionOwnerSessionKey = patch.completionOwnerSessionKey.trim();
-  }
-  if (typeof patch.parentSessionKey === "string" && patch.parentSessionKey.trim()) {
-    entry.parentSessionKey = patch.parentSessionKey.trim();
-  }
-  if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
-    entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
-  }
-  if (typeof patch.spawnedCwd === "string" && patch.spawnedCwd.trim()) {
-    entry.spawnedCwd = patch.spawnedCwd.trim();
+  for (const key of [
+    "spawnedBy",
+    "completionOwnerSessionKey",
+    "parentSessionKey",
+    "spawnedWorkspaceDir",
+    "spawnedCwd",
+  ] as const) {
+    const value = normalizeOptionalString(patch[key]);
+    if (value) {
+      entry[key] = value;
+    }
   }
   const inheritedToolDeny = normalizeInheritedToolDenylist(patch.inheritedToolDeny);
   if (inheritedToolDeny.length > 0) {
@@ -108,10 +105,6 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   return entry;
 }
 
-export function loadSubagentConfig() {
-  return getSubagentSpawnDeps().getRuntimeConfig();
-}
-
 export async function createInitialSubagentSession(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -156,6 +149,12 @@ export async function createInitialSubagentSession(params: {
       cfg: params.cfg,
       key: params.requesterInternalKey,
     });
+    await waitForSessionParticipantRecording({
+      agentId: parentTarget.agentId,
+      sessionKey: parentTarget.canonicalKey,
+      storePath: parentTarget.storePath,
+    });
+    params.assertActive?.();
     const parentEntry = loadSessionEntry({
       storePath: parentTarget.storePath,
       sessionKey: parentTarget.canonicalKey,
@@ -205,6 +204,12 @@ export async function createInitialSubagentSession(params: {
         ...buildSessionCreationStamp({
           via: "spawn",
           ...params.creationPolicy,
+          ...(!params.incognito
+            ? {
+                inheritedGitContributorProfileIds:
+                  inheritSessionGitContributorProfileIds(parentEntry),
+              }
+            : {}),
         }),
       },
       {

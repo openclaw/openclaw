@@ -11,7 +11,6 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
 import * as sessionPersistence from "./session-entry-persistence.js";
@@ -25,8 +24,11 @@ const { handleCommandsMock, buildStatusReplyMock } = vi.hoisted(() => ({
 
 // Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
 vi.mock("../../agents/model-runtime-choice.js", () => ({
-  preparePublishedModelRuntimeChoice: vi.fn(async () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<
+    typeof import("../../agents/model-runtime-choice.js").preparePublishedModelRuntimeChoice
+  >(async ({ runtimeId, preferredRuntimeId }) => ({
     kind: "ready",
+    runtimeId: runtimeId ?? preferredRuntimeId ?? "openclaw",
     validate: () => undefined,
   })),
 }));
@@ -472,7 +474,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       locked: false,
       overrideProvider: "claude-cli",
       hasBoundCli: true,
-      expectedProvider: "anthropic",
+      expectedProvider: "claude-cli",
     },
     {
       source: "user" as const,
@@ -654,88 +656,18 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         model:
           resolvedModel !== undefined
             ? resolvedModel
-            : expectedProvider === "anthropic"
-              ? "claude-fable-5"
-              : "gpt-5.5",
+            : expectedProvider === "openai"
+              ? "gpt-5.5"
+              : "claude-fable-5",
         contextTokens:
           "expectedContextTokens" in testCase
             ? testCase.expectedContextTokens
-            : expectedProvider === "anthropic"
-              ? 1_000_000
-              : 200_000,
+            : expectedProvider === "openai"
+              ? 200_000
+              : 1_000_000,
       });
     },
   );
-
-  it.each([
-    { selection: "user override", source: "user" as const },
-    { selection: "automatic fallback", source: "auto" as const },
-    { selection: "channel override", source: undefined },
-  ])("preserves canonical native /status $selection", async (testCase) => {
-    vi.spyOn(preparedModelCatalog, "readPreparedModelCatalog").mockResolvedValueOnce([]);
-    const targetSessionKey = "agent:main:main";
-    const storePath = path.join(tempDirs.make("openclaw-native-status-"), "sessions.json");
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: targetSessionKey, storePath },
-      {
-        sessionId: "status-session",
-        updatedAt: Date.now(),
-        contextTokens: 1_000_000,
-        ...(testCase.source
-          ? {
-              providerOverride: "anthropic",
-              modelOverride: "claude-fable-5",
-              modelOverrideSource: testCase.source,
-              ...(testCase.source === "auto"
-                ? {
-                    modelOverrideFallbackOriginProvider: "openai",
-                    modelOverrideFallbackOriginModel: "gpt-5.5",
-                    modelProvider: "openai",
-                    model: "gpt-5.5",
-                  }
-                : {}),
-            }
-          : {
-              delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
-              groupId: "123",
-            }),
-      },
-    );
-
-    const result = await runTestNativeSlashFastReply({
-      ctx: buildNativeCommandCtx("/status", {
-        SessionKey: "telegram:slash:123",
-        CommandTargetSessionKey: targetSessionKey,
-      }),
-      cfg: markCompleteReplyConfig({
-        session: { store: storePath },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            modelPolicy: { allow: ["openai/*"] },
-          },
-        },
-        channels: { modelByChannel: { telegram: { "123": "openai/gpt-5.5" } } },
-      } as OpenClawConfig),
-      agentId: "main",
-      commandAuthorized: true,
-      typing: createTypingController(),
-    });
-
-    const statusCall = buildStatusReplyMock.mock.calls[0]?.[0];
-    expect(statusCall).toMatchObject({ provider: "openai", model: "gpt-5.5" });
-    if (testCase.source) {
-      expect(statusCall.sessionEntry).toMatchObject({
-        providerOverride: "anthropic",
-        modelOverride: "claude-fable-5",
-        modelOverrideSource: testCase.source,
-      });
-    } else {
-      expect(statusCall.sessionEntry).not.toHaveProperty("providerOverride");
-      expect(statusCall.sessionEntry).not.toHaveProperty("modelOverride");
-    }
-    expect(result).toMatchObject({ reply: { text: "selected model status" } });
-  });
 
   it("keeps model-independent /status plugins available under an invalid model policy", async () => {
     const { result } = await resolveNativeDirectiveCommand(

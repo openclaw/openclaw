@@ -409,9 +409,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const normalized = nextMode === ACCESS_MODE_ALL ? ACCESS_MODE_ALL : ACCESS_MODE_SELECTED;
     if (normalized !== mode) {
       mode = normalized;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
     return mode;
   }
@@ -420,18 +418,14 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const normalized = nextEnabled === true;
     if (normalized !== enabled) {
       enabled = normalized;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
   }
 
   function beginTransition() {
     if (!transitioning) {
       transitioning = true;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
   }
 

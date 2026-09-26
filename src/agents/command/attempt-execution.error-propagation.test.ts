@@ -22,7 +22,7 @@ import {
   emitAcpPromptSubmitted,
   emitAcpRuntimeEvent as emitAcpRuntimeEventBase,
   resolveAcpLifecycleEndFields,
-} from "./attempt-execution.js";
+} from "./acp-lifecycle.js";
 
 let captured: AgentEventPayload[] = [];
 let capturedTools: TrustedToolExecutionEvent[] = [];

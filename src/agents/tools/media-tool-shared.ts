@@ -1,5 +1,6 @@
 /** Shared media tool routing, auth, path, and reference helpers. */
 import path from "node:path";
+import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
@@ -13,9 +14,7 @@ import {
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { safeFileURLToPath } from "../../infra/local-file-access.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import type { Model } from "../../llm/types.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
 import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
 import {
@@ -23,8 +22,10 @@ import {
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
 import type { WebMediaResult } from "../../media/web-media.js";
-import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
-import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
+import {
+  listAvailableManifestContractValues,
+  loadManifestContractSnapshot,
+} from "../../plugins/manifest-contract-eligibility.js";
 import { resolveUserPath } from "../../utils.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -40,7 +41,7 @@ import {
   readStringArrayParam,
   readToolStringParam,
 } from "./common.js";
-import type { decodeDataUrl, ImageModelConfig } from "./image-tool.helpers.js";
+import type { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   getCurrentCapabilityMetadataSnapshot,
   hasSnapshotCapabilityAvailability,
@@ -53,11 +54,7 @@ import {
   resolveDefaultModelRef,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import {
-  getApiKeyForModelCore,
-  normalizeWorkspaceDir,
-  requireApiKey,
-} from "./tool-runtime.helpers.js";
+import { normalizeWorkspaceDir } from "./tool-runtime.helpers.js";
 
 type TextToolAttempt = {
   provider: string;
@@ -87,53 +84,12 @@ type TaskRunDetailHandle = {
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
 
 /**
- * Applies an image-editing model as the agent default without mutating the loaded config.
- */
-export function applyImageModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  imageModelConfig: ImageModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "imageModel", imageModelConfig);
-}
-
-/**
  * Reads an optional generation timeout while preserving common tool parameter validation.
  */
 export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
   return readPositiveIntegerParam(args, "timeoutMs", {
     message: "timeoutMs must be a positive integer in milliseconds.",
   });
-}
-
-/**
- * Resolves the shared remote-media SSRF policy used by media tools that fetch URLs.
- */
-export function resolveRemoteMediaSsrfPolicy(
-  cfg: OpenClawConfig | undefined,
-): SsrFPolicy | undefined {
-  return cfg?.tools?.web?.fetch?.ssrfPolicy;
-}
-
-export function applyAgentDefaultModelConfig(
-  cfg: OpenClawConfig | undefined,
-  key: "imageModel" | "image" | "video" | "music",
-  modelConfig: ToolModelConfig,
-): OpenClawConfig | undefined {
-  if (!cfg) {
-    return undefined;
-  }
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        ...(key === "imageModel"
-          ? { imageModel: modelConfig }
-          : { mediaModels: { ...cfg.agents?.defaults?.mediaModels, [key]: modelConfig } }),
-      },
-    },
-  };
 }
 
 type CapabilityProvider = {
@@ -403,9 +359,9 @@ export function hasGenerationToolAvailability(params: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
     }) ??
-    loadCapabilityManifestSnapshot({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
+    loadManifestContractSnapshot({
+      config: params.cfg,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     });
   if (
     hasSnapshotCapabilityAvailability({
@@ -584,6 +540,12 @@ export async function resolveMediaToolReferenceAccess(params: {
 
 type LoadedToolReferenceMedia = WebMediaResult | ReturnType<typeof decodeDataUrl>;
 
+export type LoadedMediaToolReference<T> = {
+  source: T;
+  resolvedInput: string;
+  rewrittenFrom?: string;
+};
+
 export type MediaToolSandbox = Pick<
   SandboxedBridgeMediaPathConfig,
   "root" | "bridge" | "stagedMediaPaths" | "readOnlyResourceMounts"
@@ -615,8 +577,8 @@ export async function loadMediaToolReferences<T>(params: {
   signal?: AbortSignal;
   mapMedia: (media: LoadedToolReferenceMedia) => T;
   mapRemote?: (url: string) => T;
-}): Promise<Array<{ source: T; resolvedInput: string; rewrittenFrom?: string }>> {
-  const loaded: Array<{ source: T; resolvedInput: string; rewrittenFrom?: string }> = [];
+}): Promise<LoadedMediaToolReference<T>[]> {
+  const loaded: LoadedMediaToolReference<T>[] = [];
   for (const rawInput of params.inputs) {
     params.signal?.throwIfAborted();
     const input = normalizeMediaReferenceSource(rawInput.trim().replace(/^@\s*/, ""));
@@ -756,35 +718,4 @@ export function buildTextToolResult(
       attempts: result.attempts,
     },
   };
-}
-
-/**
- * Loads the runtime API key for a resolved model and caches it in per-run auth storage.
- */
-export async function resolveModelRuntimeApiKey(params: {
-  model: Model;
-  cfg: OpenClawConfig | undefined;
-  agentDir: string;
-  authStorage: {
-    setRuntimeApiKey: (provider: string, apiKey: string) => void;
-  };
-}): Promise<string> {
-  const apiKeyInfo = await getApiKeyForModelCore({
-    model: params.model,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    secretSentinels: true,
-  });
-  // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
-  // empty sentinel out of auth storage and pass it through to the stream.
-  if (
-    !apiKeyInfo.apiKey?.trim() &&
-    apiKeyInfo.mode === "aws-sdk" &&
-    params.model.api === "bedrock-converse-stream"
-  ) {
-    return "";
-  }
-  const apiKey = requireApiKey(apiKeyInfo, params.model.provider);
-  params.authStorage.setRuntimeApiKey(params.model.provider, apiKey);
-  return apiKey;
 }

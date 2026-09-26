@@ -3,7 +3,6 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import { compactApprovalCommand } from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
@@ -17,25 +16,24 @@ import {
 import { t } from "../i18n/index.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import { uiConversationMatches } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
   summarizeSidebarSessionAttention,
-  type SidebarKnownSessionAttention,
   type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
 
 interface SessionAttentionControllerHost extends ReactiveControllerHost {
   readonly isConnected: boolean;
-  readonly sessionAttentionContext: ApplicationContext<RouteId> | undefined;
+  readonly sessionAttentionContext: ApplicationContext | undefined;
 }
 
 /** Session-scoped question, approval, and failed-run attention ownership. */
 export class SessionAttentionController implements ReactiveController {
   private readonly attentionSubscriptions: SubscriptionsController;
   private readonly questionPromptState: ReturnType<typeof createQuestionPromptState>;
-  private attentionGateway: ApplicationContext<RouteId>["gateway"] | null = null;
+  private attentionGateway: ApplicationContext["gateway"] | null = null;
   private attentionGatewayClient: GatewayBrowserClient | null = null;
   private attentionGatewayConnected = false;
   private agentStatusExpiryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -76,7 +74,7 @@ export class SessionAttentionController implements ReactiveController {
     disposeQuestionPromptState(this.questionPromptState);
   }
 
-  private synchronizeAttentionGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
+  private synchronizeAttentionGateway(gateway: ApplicationContext["gateway"]) {
     const connected = gateway.snapshot.phase === "connected";
     const client =
       connected &&
@@ -108,35 +106,9 @@ export class SessionAttentionController implements ReactiveController {
     }
   }
 
-  resolveSessionAttention(row: GatewaySessionRow): SidebarSessionAttention {
-    const knownAttention = summarizeSidebarSessionAttention(
-      this.knownSessionAttention()
-        .filter((entry) => areUiSessionKeysEquivalent(entry.sessionKey, row.key))
-        .map((entry) => entry.attention),
-    );
-    if (knownAttention.kind !== "none") {
-      return knownAttention;
-    }
-    const agentStatus = this.resolveSessionAgentStatus(row);
-    if (agentStatus?.attention) {
-      return { kind: "agent", note: agentStatus.note, icon: agentStatus.attention };
-    }
-    if (row.status !== "failed" && row.status !== "timeout") {
-      return SIDEBAR_SESSION_NO_ATTENTION;
-    }
-    const failureAt = row.endedAt ?? row.updatedAt ?? 0;
-    if (row.lastReadAt != null && failureAt <= row.lastReadAt) {
-      return SIDEBAR_SESSION_NO_ATTENTION;
-    }
-    const reason =
-      formatUiExternalText(row.lastRunError) ||
-      t(
-        row.status === "timeout" ? "sessionsView.runErrorTimedOut" : "sessionsView.runErrorUnknown",
-      );
-    return { kind: "error", reason };
-  }
-
-  resolveSessionAgentStatus(row: GatewaySessionRow): SessionAgentStatus | undefined {
+  resolveSessionAgentStatus(
+    row: Pick<GatewaySessionRow, "agentStatus">,
+  ): SessionAgentStatus | undefined {
     const status = row.agentStatus;
     if (!status || status.expiresAt <= Date.now() || !status.note.trim()) {
       return undefined;
@@ -146,6 +118,10 @@ export class SessionAttentionController implements ReactiveController {
   }
 
   private scheduleAgentStatusExpiry(expiresAt: number): void {
+    // Lit can finish a queued render after disconnect has retired this timer.
+    if (!this.host.isConnected) {
+      return;
+    }
     // The gateway owns expiry; this timer only invalidates an otherwise-idle
     // sidebar so it stops rendering the declaration at the server timestamp.
     if (this.agentStatusExpiryAt !== null && this.agentStatusExpiryAt <= expiresAt) {
@@ -165,55 +141,74 @@ export class SessionAttentionController implements ReactiveController {
     );
   }
 
-  knownSessionAttention(): readonly SidebarKnownSessionAttention[] {
-    const questions = listQuestionPrompts(this.questionPromptState).flatMap((prompt) =>
-      prompt.status === "pending" && prompt.sessionKey !== undefined
-        ? [
-            {
-              sessionKey: prompt.sessionKey,
-              attention: {
-                kind: "question",
-                requests: [
-                  {
-                    kind: "question",
-                    id: prompt.id,
-                    preview: attentionPreview(prompt.questions[0]?.question ?? ""),
-                    count: prompt.questions.length,
-                    createdAtMs: prompt.createdAtMs,
-                  },
-                ],
-              } as const,
-            },
-          ]
-        : [],
-    );
-    const approvals = (
-      this.host.sessionAttentionContext?.overlays?.snapshot.approvalQueue ?? []
-    ).flatMap((approval) =>
-      typeof approval.request.sessionKey === "string"
-        ? [
-            {
-              sessionKey: approval.request.sessionKey,
-              attention: {
-                kind: "approval",
-                requests: [
-                  {
-                    kind: "approval",
-                    id: approval.id,
-                    preview:
-                      approval.kind === "exec"
-                        ? compactApprovalCommand(approval.request.command)
-                        : attentionPreview(approval.pluginTitle ?? approval.request.command),
-                    count: 1,
-                    createdAtMs: approval.createdAtMs,
-                  },
-                ],
-              } as const,
-            },
-          ]
-        : [],
-    );
-    return [...questions, ...approvals];
+  createResolver(): (row: Partial<GatewaySessionRow> & { key: string }) => SidebarSessionAttention {
+    const context = this.host.sessionAttentionContext;
+    const identity = {
+      hello: context?.gateway.snapshot.hello,
+      agentsList: context?.agents.state.agentsList,
+    };
+    const requests = [
+      ...listQuestionPrompts(this.questionPromptState)
+        .filter((prompt) => prompt.status === "pending")
+        .map((prompt) => ({
+          sessionKey: prompt.sessionKey,
+          agentId: prompt.agentId,
+          kind: "question" as const,
+          id: prompt.id,
+          preview: attentionPreview(prompt.questions[0]?.question ?? ""),
+          count: prompt.questions.length,
+          createdAtMs: prompt.createdAtMs,
+        })),
+      ...(context?.overlays?.snapshot.approvalQueue ?? []).map((approval) => ({
+        sessionKey: approval.request.sessionKey,
+        agentId: approval.request.agentId,
+        kind: "approval" as const,
+        id: approval.id,
+        preview:
+          approval.kind === "exec"
+            ? compactApprovalCommand(approval.request.command)
+            : attentionPreview(approval.pluginTitle ?? approval.request.command),
+        count: 1,
+        createdAtMs: approval.createdAtMs,
+      })),
+    ];
+    return (row) => {
+      const knownAttention = summarizeSidebarSessionAttention(
+        requests
+          .filter((request) =>
+            uiConversationMatches(
+              identity,
+              row.key,
+              request.sessionKey,
+              request.agentId,
+              row.agentId,
+            ),
+          )
+          .map((request) => ({ kind: request.kind, requests: [request] })),
+      );
+      if (knownAttention.kind !== "none") {
+        return knownAttention;
+      }
+      const agentStatus = this.resolveSessionAgentStatus(row);
+      if (agentStatus?.attention) {
+        return { kind: "agent", note: agentStatus.note, icon: agentStatus.attention };
+      }
+      const failureAt = row.endedAt ?? row.updatedAt ?? 0;
+      if (
+        (row.status !== "failed" && row.status !== "timeout") ||
+        (row.lastReadAt != null && failureAt <= row.lastReadAt)
+      ) {
+        return SIDEBAR_SESSION_NO_ATTENTION;
+      }
+      const reason =
+        formatUiExternalText(row.lastRunError) ||
+        t(
+          row.status === "timeout"
+            ? "sessionsView.runErrorTimedOut"
+            : "sessionsView.runErrorUnknown",
+        );
+      return { kind: "error", reason };
+    };
   }
 }
 

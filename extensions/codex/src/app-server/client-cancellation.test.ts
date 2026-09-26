@@ -1,8 +1,9 @@
 import { once } from "node:events";
+import { createAgentHarnessAttemptDeadlineController } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { createCodexAttemptDeadlineController } from "./attempt-deadlines.js";
+import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
 import {
   CodexAppServerClient,
   isCodexAppServerIndeterminateRequestCancellationError,
@@ -125,9 +126,10 @@ describe("Codex app-server cancellation diagnostics", () => {
         .catch((error: unknown) => error);
       await turnReceived;
       const onTimeout = vi.fn(() => controller.abort(reason));
-      const deadline = createCodexAttemptDeadlineController({
+      const deadline = createAgentHarnessAttemptDeadlineController({
         startedAtMs: Date.now() - 15_000,
         timeoutMs: 1_000,
+        settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
         signal: controller.signal,
         onTimeout,
       });

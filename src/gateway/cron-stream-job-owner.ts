@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import {
   CronStreamOutput,
   type CronStreamFireDisposition,
@@ -353,14 +354,17 @@ export class CronStreamJobOwner {
   }
 
   private enqueue(label: string, operation: () => Promise<void>): Promise<void> {
-    const result = this.opTail.then(operation, operation);
-    this.opTail = result.catch((error: unknown) => {
-      this.params.logger.warn(
-        { jobId: this.job.id, operation: label, err: formatErrorMessage(error) },
-        "cron-stream: owner operation failed",
-      );
+    // The owner queue outlives whichever request submitted this operation.
+    return runInDetachedAsyncContext(() => {
+      const result = this.opTail.then(operation, operation);
+      this.opTail = result.catch((error: unknown) => {
+        this.params.logger.warn(
+          { jobId: this.job.id, operation: label, err: formatErrorMessage(error) },
+          "cron-stream: owner operation failed",
+        );
+      });
+      return result;
     });
-    return result;
   }
 
   private async awaitBoundedStop(stop: Promise<void>): Promise<void> {

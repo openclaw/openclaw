@@ -4,6 +4,9 @@
  */
 import type { Command } from "commander";
 import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { danger, defaultRuntime, info } from "openclaw/plugin-sdk/runtime-env";
+import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
 import type {
   BrowserCreateProfileResult,
@@ -20,14 +23,12 @@ import type { BrowserDoctorReport } from "../browser/doctor.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
-  parseBrowserPositiveIntegerValue,
   printBrowserJsonResult as printJsonResult,
   resolveBrowserProfileQuery as resolveProfileQuery,
   runBrowserCliCommand as runBrowserCommand,
   runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { danger, defaultRuntime, info, shortenHomePath } from "./core-api.js";
 
 const BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
 
@@ -85,7 +86,7 @@ async function runBrowserToggle(
 }
 
 function parseTabIndex(value: string): number {
-  return parseBrowserPositiveIntegerValue(value) ?? Number.NaN;
+  return parseStrictPositiveInteger(value) ?? Number.NaN;
 }
 
 function logBrowserTabs(tabs: BrowserTab[]) {
@@ -288,13 +289,6 @@ function usesChromeMcpTransport(params: {
   return params.transport === "chrome-mcp" || params.driver === "existing-session";
 }
 
-function usesExtensionTransport(params: {
-  transport?: BrowserTransport;
-  driver?: BrowserProfileDriver;
-}): boolean {
-  return params.transport === "extension" || params.driver === "extension";
-}
-
 function formatBrowserConnectionSummary(params: {
   transport?: BrowserTransport;
   driver?: BrowserProfileDriver;
@@ -312,7 +306,7 @@ function formatBrowserConnectionSummary(params: {
       ? `transport: chrome-mcp, userDataDir: ${userDataDir}`
       : "transport: chrome-mcp";
   }
-  if (usesExtensionTransport(params)) {
+  if (params.transport === "extension" || params.driver === "extension") {
     return `transport: extension, relayPort: ${params.cdpPort ?? "(unset)"}`;
   }
   if (params.isRemote) {
@@ -573,35 +567,15 @@ export function registerBrowserManageCommands(
     .description("Close a tab (tab reference optional)")
     .argument("[targetId]", `${BROWSER_TAB_REFERENCE_HELP} (optional)`)
     .action(async (targetId: string | undefined, _opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserCommand(async () => {
-        if (targetId?.trim()) {
-          await callBrowserRequest(
-            parent,
-            {
-              method: "DELETE",
-              path: `/tabs/${encodeURIComponent(targetId.trim())}`,
-              query: resolveProfileQuery(profile),
-            },
-            { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
-          );
-        } else {
-          await callBrowserRequest(
-            parent,
-            {
-              method: "POST",
-              path: "/act",
-              query: resolveProfileQuery(profile),
-              body: { kind: "close" },
-            },
-            { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
-          );
-        }
-        if (printJsonResult(parent, { ok: true })) {
-          return;
-        }
-        defaultRuntime.log("closed tab");
+      const target = targetId?.trim();
+      await runBrowserCliRequest({
+        parent: parentOpts(cmd),
+        method: target ? "DELETE" : "POST",
+        path: target ? `/tabs/${encodeURIComponent(target)}` : "/act",
+        body: target ? undefined : { kind: "close" },
+        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+        json: () => ({ ok: true }),
+        successMessage: "closed tab",
       });
     });
 
@@ -764,19 +738,17 @@ export function registerBrowserManageCommands(
     .description("Delete a browser profile")
     .requiredOption("--name <name>", "Profile name to delete")
     .action(async (opts: { name: string }, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserCommand(async () => {
-        const result = await callBrowserRequest<BrowserDeleteProfileResult>(parent, {
-          method: "DELETE",
-          path: `/profiles/${encodeURIComponent(opts.name)}`,
-        });
-        if (printJsonResult(parent, result)) {
-          return;
-        }
-        const msg = result.deleted
-          ? `🦞 Deleted profile "${result.profile}" (user data removed)`
-          : `🦞 Deleted profile "${result.profile}" (user data removal not confirmed)`;
-        defaultRuntime.log(info(msg));
+      await runBrowserCliRequest<BrowserDeleteProfileResult>({
+        parent: parentOpts(cmd),
+        profile: null,
+        method: "DELETE",
+        path: `/profiles/${encodeURIComponent(opts.name)}`,
+        successMessage: (result) =>
+          info(
+            result.deleted
+              ? `🦞 Deleted profile "${result.profile}" (user data removed)`
+              : `🦞 Deleted profile "${result.profile}" (user data removal not confirmed)`,
+          ),
       });
     });
 }

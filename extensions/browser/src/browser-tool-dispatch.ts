@@ -11,8 +11,7 @@ import {
   executeConsoleAction,
   executeDownloadAction,
   executeEmulateAction,
-  executeRequestsAction,
-  executeErrorsAction,
+  executeDebugLogAction,
   executeTextAction,
   executeTabsAction,
   formatBrowserExternalToolResult,
@@ -99,6 +98,7 @@ export async function executeBrowserTabAction(context: {
     touchTab(readStringValue(asNullableRecord(result)?.targetId) ?? targetId);
     return jsonResult(result);
   };
+  const actionOptions = { input: params, baseUrl, profile, proxyRequest, signal };
   switch (action) {
     case "tabs":
       return await executeTabsAction({
@@ -171,21 +171,13 @@ export async function executeBrowserTabAction(context: {
     }
     case "snapshot":
       return await executeSnapshotAction({
-        input: params,
-        baseUrl,
-        profile,
-        proxyRequest,
-        signal,
+        ...actionOptions,
         onTabActivity: touchTab,
       });
     case "screenshot":
       return await executeScreenshotAction({
-        input: params,
-        baseUrl,
-        profile,
+        ...actionOptions,
         requestedTimeoutMs,
-        proxyRequest,
-        signal,
         onTabActivity: touchTab,
         opts,
       });
@@ -220,13 +212,7 @@ export async function executeBrowserTabAction(context: {
       });
     }
     case "console": {
-      const result = await executeConsoleAction({
-        input: params,
-        baseUrl,
-        profile,
-        proxyRequest,
-        signal,
-      });
+      const result = await executeConsoleAction(actionOptions);
       const targetId = readStringParam(params, "targetId");
       const canonicalTargetId = readStringValue(asNullableRecord(result.details)?.targetId);
       touchTab(canonicalTargetId ?? targetId);
@@ -236,13 +222,10 @@ export async function executeBrowserTabAction(context: {
     case "errors":
     case "text":
     case "emulate": {
-      const execute = {
-        requests: executeRequestsAction,
-        errors: executeErrorsAction,
-        text: executeTextAction,
-        emulate: executeEmulateAction,
-      }[action];
-      const result = await execute({ input: params, baseUrl, profile, proxyRequest, signal });
+      const result =
+        action === "requests" || action === "errors"
+          ? await executeDebugLogAction(action, actionOptions)
+          : await (action === "text" ? executeTextAction : executeEmulateAction)(actionOptions);
       touchTab(
         readStringValue(asNullableRecord(result.details)?.targetId) ??
           readStringValue(params.targetId),
@@ -261,12 +244,8 @@ export async function executeBrowserTabAction(context: {
     case "download":
     case "waitfordownload":
       return await executeDownloadAction({
+        ...actionOptions,
         action,
-        input: params,
-        baseUrl,
-        profile,
-        proxyRequest,
-        signal,
         onTabActivity: touchTab,
       });
     case "upload": {

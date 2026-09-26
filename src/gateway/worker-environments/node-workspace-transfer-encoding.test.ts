@@ -4,7 +4,7 @@ import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
-import { openNodeWorkerTransferHttpRequest } from "../../node-host/node-worker-transfer-http.js";
+import { withNodeWorkerTransferHttpRequest } from "../../node-host/node-worker-transfer-http.js";
 import { nodeWorkspaceTransferManifestPath } from "../../worker/node-workspace-transfer-protocol.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
@@ -46,6 +46,25 @@ describe("workspace manifest HTTP negotiation", () => {
         method: "GET" as const,
         token,
       };
+      const requestManifest = async (header?: string, requestToken = token) =>
+        await withNodeWorkerTransferHttpRequest(
+          {
+            ...request,
+            token: requestToken,
+            headers: header ? { "accept-encoding": header } : undefined,
+          },
+          async (response) => {
+            const chunks: Buffer[] = [];
+            for await (const chunk of response) {
+              chunks.push(Buffer.from(chunk));
+            }
+            return {
+              statusCode: response.statusCode,
+              headers: response.headers,
+              bytes: Buffer.concat(chunks),
+            };
+          },
+        );
       for (const { header, encoding, code } of [
         { header: "gzip", encoding: "gzip", code: 200 },
         { header: undefined, encoding: undefined, code: 200 },
@@ -58,32 +77,20 @@ describe("workspace manifest HTTP negotiation", () => {
         { header: "*;q=1, identity;q=0", encoding: "gzip", code: 200 },
         { header: "gzip;q=0, identity;q=0", encoding: undefined, code: 406 },
       ]) {
-        const response = await openNodeWorkerTransferHttpRequest({
-          ...request,
-          headers: header ? { "accept-encoding": header } : undefined,
-        });
-        const chunks: Buffer[] = [];
-        for await (const chunk of response) {
-          chunks.push(Buffer.from(chunk));
-        }
+        const response = await requestManifest(header);
         expect(response.statusCode).toBe(code);
         expect(response.headers["content-encoding"]).toBe(encoding);
         expect(response.headers.vary).toBe("Accept-Encoding");
         if (code === 200) {
-          const bytes = Buffer.concat(chunks);
+          const bytes = response.bytes;
           expect((encoding === "gzip" ? gunzipSync(bytes) : bytes).toString()).toBe(
             snapshot.rawManifest,
           );
         }
       }
-      const invalid = await openNodeWorkerTransferHttpRequest({
-        ...request,
-        token: "invalid-token",
-        headers: { "accept-encoding": "gzip" },
-      });
+      const invalid = await requestManifest("gzip", "invalid-token");
       expect(invalid.statusCode).toBe(404);
       expect(invalid.headers["content-encoding"]).toBeUndefined();
-      invalid.resume();
 
       const workspaceDir = path.join(root, "download");
       await expect(
@@ -105,13 +112,9 @@ describe("workspace manifest HTTP negotiation", () => {
         queueMicrotask(() => service.revoke("environment", token));
         return captured;
       });
-      const revoked = await openNodeWorkerTransferHttpRequest({
-        ...request,
-        headers: { "accept-encoding": "gzip" },
-      });
+      const revoked = await requestManifest("gzip");
       expect(revoked.statusCode).toBe(404);
       expect(revoked.headers["content-encoding"]).toBeUndefined();
-      revoked.resume();
     } finally {
       await service.closeAll();
       await server.close();

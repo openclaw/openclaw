@@ -149,6 +149,13 @@ function stubbornProcessTreeShellLines(params: {
   ];
 }
 
+async function writeCommandShim(shimPath: string, script: string) {
+  // Execute an immutable inode: a concurrent fork can retain a generated script's
+  // write descriptor and make direct execution fail with ETXTBSY even after close.
+  await fs.writeFile(`${shimPath}.sh`, script, "utf8");
+  await fs.symlink(new URL("../../test-fixtures/mantis-command.sh", import.meta.url), shimPath);
+}
+
 async function runGit(repoRoot: string, args: readonly string[]) {
   const result = await runCommandWithTimeout(["git", ...args], {
     cwd: repoRoot,
@@ -415,21 +422,11 @@ process.exit(result.status ?? 1);
       const descendantPidPath = path.join(repoRoot, "abort-descendant.pid");
       const gitShimPath = path.join(binDir, "git");
       await fs.mkdir(binDir, { recursive: true });
-      await fs.writeFile(
+      await writeCommandShim(
         gitShimPath,
         [
           "#!/bin/sh",
-          'if [ "$1" = worktree ] && [ "$2" = remove ]; then',
-          "  worktree_path=",
-          "  previous_arg=",
-          '  for arg in "$@"; do',
-          '    if [ "$previous_arg" = -- ]; then worktree_path=$arg; break; fi',
-          "    previous_arg=$arg",
-          "  done",
-          '  if [ -z "$worktree_path" ]; then worktree_path=$5; fi',
-          '  rm -rf -- "$worktree_path"',
-          "  exit 0",
-          "fi",
+          'if [ "$1" = worktree ] && [ "$2" = remove ]; then exit 1; fi',
           'if [ "$1" = worktree ] && [ "$2" = list ]; then exit 0; fi',
           'if [ "$1" != worktree ] || [ "$2" != add ]; then',
           "  printf 'unexpected git shim invocation:' >&2",
@@ -439,7 +436,6 @@ process.exit(result.status ?? 1);
           "fi",
           ...stubbornProcessTreeShellLines({ descendantPidPath, parentPidPath }),
         ].join("\n"),
-        { encoding: "utf8", mode: 0o755 },
       );
 
       const previousPath = process.env.PATH;
@@ -520,7 +516,7 @@ process.exit(result.status ?? 1);
         "seed",
       ]);
       await fs.mkdir(binDir, { recursive: true });
-      await fs.writeFile(
+      await writeCommandShim(
         pnpmShimPath,
         [
           "#!/bin/sh",
@@ -530,7 +526,6 @@ process.exit(result.status ?? 1);
             parentPidPath,
           }),
         ].join("\n"),
-        { encoding: "utf8", mode: 0o755 },
       );
 
       const previousPath = process.env.PATH;
@@ -618,11 +613,11 @@ process.exit(result.status ?? 1);
       const descendantPidPath = path.join(repoRoot, "descendant.pid");
       const gitShimPath = path.join(binDir, "git");
       await fs.mkdir(binDir, { recursive: true });
-      await fs.writeFile(
+      await writeCommandShim(
         gitShimPath,
         [
           "#!/bin/sh",
-          'if [ "$1" = worktree ] && [ "$2" = remove ]; then rm -rf -- "$5"; exit 0; fi',
+          'if [ "$1" = worktree ] && [ "$2" = remove ]; then exit 1; fi',
           'if [ "$1" = worktree ] && [ "$2" = list ]; then exit 0; fi',
           ...stubbornProcessTreeShellLines({
             descendantPidPath,
@@ -630,7 +625,6 @@ process.exit(result.status ?? 1);
             parentPidPath,
           }),
         ].join("\n"),
-        { encoding: "utf8", mode: 0o755 },
       );
 
       const previousPath = process.env.PATH;

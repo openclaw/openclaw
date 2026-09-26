@@ -165,22 +165,6 @@ export function collectSecretInputAssignment(params: {
   apply: (value: unknown) => void;
   applyUnavailable?: () => void;
 }): void {
-  collectRuntimeSecretInputAssignment(params);
-}
-
-/** Internal owner-aware variant used while migrating runtime surfaces to isolation. */
-export function collectRuntimeSecretInputAssignment(params: {
-  value: unknown;
-  path: string;
-  expected: SecretAssignment["expected"];
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-  active?: boolean;
-  inactiveReason?: string;
-  owner?: SecretAssignmentOwner;
-  apply: (value: unknown) => void;
-  applyUnavailable?: () => void;
-}): void {
   const ref = resolveConfigSecretRef({
     config: params.context.sourceConfig,
     path: params.path,

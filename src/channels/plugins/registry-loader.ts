@@ -19,15 +19,9 @@ export function createChannelRegistryLoader<TValue>(
   resolveValue: ChannelRegistryValueResolver<TValue>,
 ): (id: ChannelId) => Promise<TValue | undefined> {
   return async (id: ChannelId): Promise<TValue | undefined> => {
-    const resolveFromRegistry = (
-      registry: ReturnType<typeof getActivePluginRegistry>,
-    ): TValue | undefined => {
-      const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
-      return pluginEntry ? resolveValue(pluginEntry) : undefined;
-    };
-
-    return resolveFromRegistry(
-      getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry(),
-    );
+    const registry =
+      getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
+    const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
+    return pluginEntry ? resolveValue(pluginEntry) : undefined;
   };
 }

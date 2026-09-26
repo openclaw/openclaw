@@ -7,14 +7,8 @@ import {
 } from "../admitted-run-context.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
-import {
-  createContextEngineLogicalTurnLease,
-  selectContextEngineForTranscriptHost,
-} from "../harness/context-engine-logical-turn.js";
-import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { log } from "./logger.js";
@@ -30,6 +24,7 @@ import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { createAttemptCarryover } from "./run/attempt-result.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
+import { admitEmbeddedContextEngine } from "./run/context-engine-admission.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { resolveRunFailoverDecision } from "./run/failover-policy.js";
@@ -42,6 +37,7 @@ import {
 } from "./run/incomplete-turn-recovery.js";
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
 import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
+import { createProviderReviewRun } from "./run/provider-review-run.js";
 import {
   beginRunAttempt,
   createRunRetryBudget,
@@ -212,6 +208,12 @@ export async function runPreparedEmbeddedLoop(
     lifecycleGeneration,
     onInterrupt: (reason) => input.laneController.laneTaskAbortController.abort(reason),
   });
+  const providerReview = createProviderReviewRun({
+    run: admittedRunInput,
+    runtime: preparedRuntime,
+    session: sessionPromptState,
+    assertCurrent: assertAdmittedActive,
+  });
   input.onInitialWriterPrepared(sessionPromptState);
   const originalCompactionTarget = { ...sessionPromptState.sessionTarget };
   const durableCompactionAccounting =
@@ -233,41 +235,12 @@ export async function runPreparedEmbeddedLoop(
     getApiKeyInfo,
     advanceAuthProfile: preparedRuntime.advanceAttemptAuthProfile,
   });
-  const ownsContextEngineLogicalTurnLease = params.contextEngineLogicalTurnLease === undefined;
-  const contextEngineLogicalTurnLease =
-    params.contextEngineLogicalTurnLease ??
-    (await measureEmbeddedAgentPreparation(
-      "context-engine",
-      () =>
-        createContextEngineLogicalTurnLease({
-          identity: params,
-          config: params.config,
-          agentDir,
-          workspaceDir: resolvedWorkspace,
-        }),
-      { config: params.config },
-    ));
-  selectContextEngineForTranscriptHost({
-    lease: contextEngineLogicalTurnLease,
-    host: {
-      id: `agent-harness:${agentHarness.id}`,
-      label: `agent harness "${agentHarness.id}"`,
-      capabilities: agentHarness.contextEngineHostCapabilities ?? [],
-    },
-    operation: "agent-run",
-    recorder: params.userTurnTranscriptRecorder,
-  });
-  await drainPendingContextEngineTurnsBeforeRun({
-    admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-    isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
-    lease: contextEngineLogicalTurnLease,
-    recorder: params.userTurnTranscriptRecorder,
-    sessionTarget: params.sessionTarget,
-  });
-  const contextEngine = contextEngineLogicalTurnLease.begin().engine;
+  const { contextEngine, contextEngineLogicalTurnLease, ownsContextEngineLogicalTurnLease } =
+    await admitEmbeddedContextEngine(admittedRunInput, agentHarness);
   startupStages.mark("context-engine");
   notifyExecutionPhase("context_engine", { provider, model: modelId });
   try {
+    await providerReview.admit();
     const compactionRuntime = createEmbeddedRunCompactionRuntime({
       runParams: params,
       contextEngine,
@@ -285,6 +258,7 @@ export async function runPreparedEmbeddedLoop(
         throw new Error("embedded run requires an active admitted run");
       }
       assertAdmittedActive();
+      providerReview.beginAttempt();
       refreshPreparedRuntimeSnapshot();
       if (isRunRetryBudgetExhausted(runRetryBudget)) {
         const message =
@@ -300,24 +274,26 @@ export async function runPreparedEmbeddedLoop(
           fallbackConfigured,
           failoverReason: lastRetryFailoverReason,
         });
-        return handleRetryLimitExhaustion({
-          message,
-          decision: retryLimitDecision,
-          provider,
-          model: modelId,
-          profileId: lastProfileId,
-          durationMs: Date.now() - started,
-          agentMeta: buildErrorAgentMeta({
-            sessionId: sessionPromptState.sessionId,
-            sessionFile: sessionPromptState.sessionFile,
-            ...(attemptCarryover.modelAttempt ?? { provider, model: model.id }),
-            ...outerContextTokenMeta,
-            usageAccumulator,
-            lastRunPromptUsage,
+        return providerReview.finish(
+          handleRetryLimitExhaustion({
+            message,
+            decision: retryLimitDecision,
+            provider,
+            model: modelId,
+            profileId: lastProfileId,
+            durationMs: Date.now() - started,
+            agentMeta: buildErrorAgentMeta({
+              sessionId: sessionPromptState.sessionId,
+              sessionFile: sessionPromptState.sessionFile,
+              ...(attemptCarryover.modelAttempt ?? { provider, model: model.id }),
+              ...outerContextTokenMeta,
+              usageAccumulator,
+              lastRunPromptUsage,
+            }),
+            replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
+            livenessState: "blocked",
           }),
-          replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
-          livenessState: "blocked",
-        });
+        );
       }
       params.assistantErrorTranscript?.clear();
       beginRunAttempt(runRetryBudget);
@@ -385,6 +361,7 @@ export async function runPreparedEmbeddedLoop(
         );
       } catch (error) {
         acceptsRequestBudget = false;
+        providerReview.failure(error);
         const retryTrace = await failoverRetryController.recoverThrownHarnessAuthFailure(error);
         if (!retryTrace) {
           throw error;
@@ -397,6 +374,7 @@ export async function runPreparedEmbeddedLoop(
       }
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
+      const refusal = await providerReview.settle(dispatchedAttempt.rawAttempt);
       failoverRetryController.observeAttempt(dispatchedAttempt.rawAttempt);
       attemptCarryover.apply(refresh.applyDeliveryState(dispatchedAttempt.rawAttempt));
       const normalization = {
@@ -422,10 +400,10 @@ export async function runPreparedEmbeddedLoop(
         turnTaintState.isTainted,
       );
       if (continuation) {
-        return continuation;
+        return providerReview.finish(continuation);
       }
       if (normalizedAttempt.action === "complete") {
-        return normalizedAttempt.result;
+        return providerReview.finish(normalizedAttempt.result);
       }
       bootstrapPromptWarningSignaturesSeen = normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
       lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
@@ -434,7 +412,7 @@ export async function runPreparedEmbeddedLoop(
         recordRunRetry(runRetryBudget, normalizedAttempt.retryKind);
         continue;
       }
-      if (permissionChanges.prepareRestart()) {
+      if (refusal?.category !== "misalignment" && permissionChanges.prepareRestart()) {
         input.laneController.throwIfAborted();
         sessionPromptState.continueFromCurrentTranscript();
         // Operator-directed continuation is not a failed-model retry. The old
@@ -492,7 +470,7 @@ export async function runPreparedEmbeddedLoop(
         sessionAgentId,
       });
       if (recovery.action === "complete") {
-        return recovery.result;
+        return providerReview.finish(recovery.result);
       }
       if (recovery.action === "retry") {
         thinkLevel = recovery.thinkLevel;
@@ -605,6 +583,7 @@ export async function runPreparedEmbeddedLoop(
         finalAssistantVisibleText,
         finalAssistantRawText,
         payloadsWithToolMedia,
+        replyDeliveryState,
         recoveredFinalAssistantPayloadsAfterPromptTimeout,
         attemptToolSummary,
         failureSignal,
@@ -620,7 +599,7 @@ export async function runPreparedEmbeddedLoop(
         startedAtMs: started,
       });
       if (terminalTimeoutResult) {
-        return terminalTimeoutResult;
+        return providerReview.finish(terminalTimeoutResult);
       }
 
       const terminalAuthPlan = preparedRuntime.snapshot().activePreparedAuthPlan;
@@ -638,6 +617,7 @@ export async function runPreparedEmbeddedLoop(
         executionContract,
         terminalState: resolvedTerminalState,
         payloadsWithToolMedia,
+        replyDeliveryState,
         recoveredFinalAssistantPayloadsAfterPromptTimeout,
         finalAssistantVisibleText,
         finalAssistantRawText,
@@ -651,6 +631,7 @@ export async function runPreparedEmbeddedLoop(
         replayState: accumulatedReplayState,
         activePromptPersisted: sessionPromptState.activePrompt.persisted,
         activateInternalPrompt: sessionPromptState.activateInternalPrompt,
+        markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
         activateCompactionContinuation: sessionPromptState.activateCompactionContinuation,
         clearCompactionContinuation: sessionPromptState.clearCompactionContinuation,
         setSuppressNextUserMessagePersistence: (value) => {
@@ -687,7 +668,7 @@ export async function runPreparedEmbeddedLoop(
       if (terminalResolution.action === "retry") {
         continue;
       }
-      return terminalResolution.result;
+      return providerReview.finish(terminalResolution.result);
     }
   } finally {
     // Successful registration already cleared the marker; every earlier exit

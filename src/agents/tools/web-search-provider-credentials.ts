@@ -22,11 +22,7 @@ export function resolveWebSearchProviderCredential(params: {
       // Web-search providers only accept concrete env-backed values at runtime.
       return undefined;
     }
-    const fromEnvRef = normalizeSecretInput(process.env[credentialRef.id]);
-    if (fromEnvRef) {
-      return fromEnvRef;
-    }
-    return undefined;
+    return normalizeSecretInput(process.env[credentialRef.id]) || undefined;
   }
 
   const fromConfigRaw = normalizeSecretInputString(params.credentialValue);

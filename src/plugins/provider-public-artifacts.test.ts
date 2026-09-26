@@ -35,6 +35,9 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function writeExternalPolicyFixture(): string {
   const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-external-"));
+  // Shipped policy artifacts are ESM in a "type": "module" package; an ambiguous
+  // .js file would depend on the host loader's syntax detection instead.
+  fs.writeFileSync(path.join(pluginRoot, "package.json"), '{ "type": "module" }\n', "utf8");
   fs.writeFileSync(
     path.join(pluginRoot, "provider-policy-api.js"),
     [
@@ -164,7 +167,7 @@ describe("provider public artifacts", () => {
           baseUrl: "https://api.openai.com/v1",
           authRequirement: "api-key",
           requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+          runtimePolicy: { compatibleIds: ["openclaw", "codex", "agentsapi"] },
         },
         {
           api: "openai-chatgpt-responses",
@@ -619,28 +622,32 @@ describe("provider public artifacts", () => {
     }
   });
 
-  it("does not load public policy code from untrusted external plugins", () => {
-    const pluginRoot = writeExternalPolicyFixture();
-    try {
-      expect(
-        resolveProviderPolicySurface("fixture-provider", {
-          manifestRegistry: {
-            plugins: [
-              {
-                id: "fixture-provider",
-                origin: "external",
-                rootDir: pluginRoot,
-                providers: ["fixture-provider"],
-                cliBackends: [],
-              } as never,
-            ],
-          },
-        }),
-      ).toBeNull();
-    } finally {
-      fs.rmSync(pluginRoot, { recursive: true, force: true });
-    }
-  });
+  it.each([false, true])(
+    "does not load public policy code from untrusted external plugins (configured=%s)",
+    (configured) => {
+      const pluginRoot = writeExternalPolicyFixture();
+      try {
+        expect(
+          resolveProviderPolicySurface("fixture-provider", {
+            config: configured ? { plugins: { allow: ["fixture-provider"] } } : undefined,
+            manifestRegistry: {
+              plugins: [
+                {
+                  id: "fixture-provider",
+                  origin: "external",
+                  rootDir: pluginRoot,
+                  providers: ["fixture-provider"],
+                  cliBackends: [],
+                } as never,
+              ],
+            },
+          }),
+        ).toBeNull();
+      } finally {
+        fs.rmSync(pluginRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("resolves multi-provider policy artifacts by manifest-owned provider id", async () => {
     const bundledPluginsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-"));

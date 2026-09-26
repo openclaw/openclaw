@@ -51,7 +51,7 @@ import {
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
-import type { PreparedCliRunContext } from "./types.js";
+import { captureCliRunStartTime, type PreparedCliRunContext } from "./types.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
@@ -143,7 +143,7 @@ function buildPreparedCliRunContext(params: {
       timeoutMs: 1_000,
       runId,
     },
-    started: Date.now(),
+    ...captureCliRunStartTime(),
     workspaceDir: "/tmp",
     backendResolved: {
       id: provider,
@@ -695,14 +695,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
       input.onStdout?.(largeToolEvent);
       input.onStdout?.(resultEvent);
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : `${largeToolEvent}${resultEvent}`,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -745,14 +739,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
       input.onStdout?.(largeToolEvent);
       input.onStdout?.(resultEvent);
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : `${largeToolEvent}${resultEvent}`,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -806,14 +794,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
           );
         }
         return createManagedRun({
-          reason: "exit",
+          ...createSuccessfulProcessExit(),
           exitCode: 1,
-          exitSignal: null,
-          durationMs: 50,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
         });
       });
 
@@ -836,14 +818,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(stdout);
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -879,14 +855,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(stdout);
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -919,14 +889,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(stdout);
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -968,14 +932,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(stdout);
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
         stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1013,14 +972,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(stdout);
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
         stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1363,14 +1317,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
         input.onStdout?.(chunk);
       }
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : chunks.join(""),
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1929,14 +1877,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(toolStart);
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
         stderr: "failed",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -2320,14 +2263,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
         input.onStdout?.(chunk);
       }
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
         stderr: "failed",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -2367,14 +2305,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(chunk);
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
         stderr: "failed",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -2415,14 +2348,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(chunk);
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
         stderr: "failed",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -2799,14 +2727,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
         });
         input.onStdout?.("done");
         return createManagedRun({
-          reason: "exit",
+          ...createSuccessfulProcessExit(),
           exitCode,
-          exitSignal: null,
-          durationMs: 50,
-          stdout: "",
           stderr: exitCode === 0 ? "" : "CLI failed after delivery",
-          timedOut: false,
-          noOutputTimedOut: false,
         });
       });
 

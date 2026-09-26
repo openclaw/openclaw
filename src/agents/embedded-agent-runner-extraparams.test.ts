@@ -828,12 +828,12 @@ describe("applyExtraParamsToAgent", () => {
   it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "opencode",
-      applyModelId: "xiaomi/mimo-v2.6-pro",
+      applyModelId: "xiaomi/mimo-v2.6-flash",
       thinkingLevel: "high",
       model: {
         api: "openai-completions",
         provider: "opencode",
-        id: "xiaomi/mimo-v2.6-pro",
+        id: "xiaomi/mimo-v2.6-flash",
       } as Model<"openai-completions">,
       payload: {
         messages: [

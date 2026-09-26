@@ -1,4 +1,3 @@
-// Imessage plugin module implements deliver behavior.
 import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,

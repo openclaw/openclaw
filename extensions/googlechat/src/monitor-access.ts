@@ -1,8 +1,8 @@
 // Googlechat plugin module implements monitor access behavior.
 import {
   channelIngressRoutes,
-  createChannelIngressResolver,
   type ChannelIngressContextBinding,
+  type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -157,9 +157,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
 }): Promise<
   | {
       ok: true;
-      channelIngress: Awaited<
-        ReturnType<ReturnType<typeof createChannelIngressResolver>["message"]>
-      >;
+      channelIngress: ResolvedChannelMessageIngress;
       commandAuthorized: boolean | undefined;
       effectiveWasMentioned: boolean | undefined;
       groupBotLoopProtection: ChannelBotLoopProtectionConfig | undefined;
@@ -275,51 +273,53 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
         blockReason: groupEntry ? "sender_empty_allowlist" : "route_not_allowlisted",
       },
   );
-  const resolvedAccess = await createChannelIngressResolver({
-    channelId: "googlechat",
-    accountId: account.accountId,
-    identity: googleChatIngressIdentity,
-    cfg: config,
-    readStoreAllowFrom: pairing.readAllowFromStore,
-  }).message({
-    subject: {
-      stableId: senderId,
-      aliases: { email: senderEmail },
-    },
-    conversation: {
-      kind: isGroup ? "group" : "direct",
-      id: spaceId,
-    },
-    contextBinding: params.contextBinding,
-    route,
-    allowFrom: rawConfigAllowFrom,
-    groupAllowFrom,
-    dmPolicy,
-    groupPolicy: senderGroupPolicy,
-    policy: {
-      groupAllowFromFallbackToAllowFrom: false,
-      mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
-      ...(groupActivation
-        ? {
-            activation: {
-              requireMention: groupActivation.requireMention,
-              allowTextCommands: groupActivation.allowTextCommands,
+  const resolvedAccess = await core.channel.inbound.ingress
+    .createResolver({
+      channelId: "googlechat",
+      accountId: account.accountId,
+      identity: googleChatIngressIdentity,
+      cfg: config,
+      readStoreAllowFrom: pairing.readAllowFromStore,
+    })
+    .message({
+      subject: {
+        stableId: senderId,
+        aliases: { email: senderEmail },
+      },
+      conversation: {
+        kind: isGroup ? "group" : "direct",
+        id: spaceId,
+      },
+      contextBinding: params.contextBinding,
+      route,
+      allowFrom: rawConfigAllowFrom,
+      groupAllowFrom,
+      dmPolicy,
+      groupPolicy: senderGroupPolicy,
+      policy: {
+        groupAllowFromFallbackToAllowFrom: false,
+        mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
+        ...(groupActivation
+          ? {
+              activation: {
+                requireMention: groupActivation.requireMention,
+                allowTextCommands: groupActivation.allowTextCommands,
+              },
+            }
+          : {}),
+      },
+      ...(groupActivation == null
+        ? {}
+        : {
+            mentionFacts: {
+              canDetectMention: true,
+              wasMentioned: groupActivation.wasMentioned,
+              hasAnyMention: groupActivation.hasAnyMention,
+              implicitMentionKinds: [],
             },
-          }
-        : {}),
-    },
-    ...(groupActivation == null
-      ? {}
-      : {
-          mentionFacts: {
-            canDetectMention: true,
-            wasMentioned: groupActivation.wasMentioned,
-            hasAnyMention: groupActivation.hasAnyMention,
-            implicitMentionKinds: [],
-          },
-        }),
-    command,
-  });
+          }),
+      command,
+    });
   const senderAccess = resolvedAccess.senderAccess;
   const commandAuthorized = resolvedAccess.commandAccess.requested
     ? resolvedAccess.commandAccess.authorized

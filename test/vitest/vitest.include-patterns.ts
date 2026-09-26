@@ -2,6 +2,32 @@ import path from "node:path";
 
 type GlobMatcher = (value: string, pattern: string) => boolean;
 
+export function filterFilesByPatterns(
+  files: readonly string[],
+  include: readonly string[],
+  exclude: readonly string[],
+  matchesGlob: GlobMatcher,
+): string[] {
+  const selected = new Set<string>();
+  // Finish each pattern before advancing so large inventories do not churn
+  // the runtime's bounded compiled-glob cache for every candidate file.
+  for (const pattern of include) {
+    for (const file of files) {
+      if (!selected.has(file) && matchesGlob(file, pattern)) {
+        selected.add(file);
+      }
+    }
+  }
+  for (const pattern of exclude) {
+    for (const file of selected) {
+      if (matchesGlob(file, pattern)) {
+        selected.delete(file);
+      }
+    }
+  }
+  return files.filter((file) => selected.has(file));
+}
+
 function literalPrefixForGlobPattern(value: string): string {
   const normalized = value.replaceAll("\\", "/");
   const globIndex = normalized.search(/[?*[\]{}]/u);

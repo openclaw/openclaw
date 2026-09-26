@@ -17,7 +17,6 @@ import {
 import { findGitRoot } from "../infra/git-root.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
-import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveAgentIdentity } from "./identity.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
@@ -63,13 +62,6 @@ export function buildSystemPromptParams(params: {
   const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
     ? (params.preparedRepoRoot ?? undefined)
     : resolveSystemPromptRepoRoot(params);
-  const gitCoauthorPrompt = Object.hasOwn(params, "preparedGitCoauthorPrompt")
-    ? (params.preparedGitCoauthorPrompt ?? undefined)
-    : resolveSessionGitCoauthorPrompt({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.runtime.sessionKey,
-      });
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
   const userDate = formatDateStamp(Date.now(), userTimezone);
   const { runId } = parseCronRunScopeSuffix(params.runtime.sessionKey);
@@ -91,14 +83,13 @@ export function buildSystemPromptParams(params: {
           ? resolveRuntimeAgentName(params.config, params.agentId)
           : undefined,
       ...params.runtime,
-      gitCoauthorPrompt,
+      gitCoauthorPrompt: params.preparedGitCoauthorPrompt ?? undefined,
       // Published links must be externally usable and bounded before entering model context.
       sessionUrl:
         sessionUrl?.startsWith("https://") && sessionUrl.length <= MAX_RUNTIME_SESSION_URL_CHARS
           ? sessionUrl
           : undefined,
-      activeNode:
-        formatActiveNodeContextLabel(getCurrentActiveNodeContext()) ?? params.runtime.activeNode,
+      activeNode: formatActiveNodeContextLabel(getCurrentActiveNodeContext()),
       repoRoot,
     },
     userTimezone,

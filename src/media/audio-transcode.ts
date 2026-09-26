@@ -1,8 +1,8 @@
 // Audio transcode helpers run ffmpeg to convert audio for provider requirements.
 import path from "node:path";
+import { tempWorkspaceSync, withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
-import { tempWorkspaceSync, withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";

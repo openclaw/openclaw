@@ -165,7 +165,12 @@ function writePersistedInstalledPluginIndexRow(
           : {}),
       };
     }),
-    diagnostics: index.diagnostics,
+    // Keep v1 readable by v2026.9.6 until a format migration; the code retains info severity.
+    diagnostics: index.diagnostics.map((diagnostic) =>
+      diagnostic.level === "info" && diagnostic.code === "explicit-config-plugin-selection"
+        ? { ...diagnostic, level: "warn" }
+        : diagnostic,
+    ),
   };
   const valueJson = JSON.stringify({
     revision,

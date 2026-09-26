@@ -1,25 +1,43 @@
-import type { WorkerDesktopAppId } from "@openclaw/gateway-protocol";
-import type { TemplateResult } from "lit";
+import type { EnvironmentSummary, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
+import { html, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { DockLayoutController } from "../dock-layout-controller.ts";
 import { renderDesktopDocumentView } from "./desktop-document-view.ts";
+import { openDesktopFocus } from "./desktop-focus-window.ts";
 import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import type { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
-import { renderDesktopPanelView, type DesktopSizingOptions } from "./desktop-panel-view.ts";
+import { renderDesktopPanelRecovery, type DesktopPanelState } from "./desktop-panel-state.ts";
+import {
+  renderDesktopCredentials,
+  renderDesktopPicker,
+  renderDesktopNotice,
+  renderDesktopPanelView,
+  type DesktopSizingOptions,
+} from "./desktop-panel-view.ts";
+import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
 type DesktopPresentation = {
   documentMode: boolean;
   embedded: boolean;
   workspaceControls: boolean;
-  content: Parameters<typeof renderDesktopPanelView>[0]["content"];
+  content: {
+    state: DesktopPanelState;
+    loading: boolean;
+    automaticSource: boolean;
+    hasTarget: boolean;
+    notice: Parameters<typeof renderDesktopPanelView>[0]["content"]["notice"];
+    picker: Omit<Parameters<typeof renderDesktopPicker>[0], "loading">;
+    credentials: Parameters<typeof renderDesktopCredentials>[0];
+    recovery: Omit<Parameters<typeof renderDesktopPanelRecovery>[0], "inventoryError">;
+  };
   controlling: boolean;
   desktopApps: WorkerDesktopAppId[];
-  environmentSelected: boolean;
   launchingApp: WorkerDesktopAppId | null;
-  showApps: boolean;
+  startup: EnvironmentSummary | undefined;
   sizing: DesktopSizingOptions;
   mobileKeyboard: DesktopMobileKeyboard;
   pictureInPictureControl: TemplateResult;
+  audioControl?: TemplateResult;
   dockLayout: DockLayoutController<"bottom" | "right">;
   fullscreenMode: DesktopPanelFullscreenController;
   onControlToggle: () => void;
@@ -27,19 +45,45 @@ type DesktopPresentation = {
   onLaunch: (app: WorkerDesktopAppId) => void;
   onClose: () => void;
   onDocumentClose: () => void;
-  onOpenWindow: () => void;
+  focusTarget: () => {
+    basePath: string;
+    source: string | null;
+    control: boolean;
+    workspaceControls: boolean;
+  };
   onDisconnect: () => void;
 };
 
 /** Compose the existing document and dock views without owning connection state. */
 export function renderDesktopPresentation(view: DesktopPresentation) {
+  const content: Parameters<typeof renderDesktopPanelView>[0]["content"] = {
+    // Source lookup and RFB authentication share the same loading stage.
+    state:
+      view.content.state === "picker" &&
+      view.content.loading &&
+      view.content.automaticSource &&
+      view.content.hasTarget
+        ? "connecting"
+        : view.content.state,
+    notice: view.startup
+      ? html`${view.content.notice}${renderDesktopNotice(null, t(view.startup.worker?.state === "bootstrapping" ? "desktop.preparing" : "desktop.starting"))}`
+      : view.content.notice,
+    picker: renderDesktopPicker({ ...view.content.picker, loading: view.content.loading }),
+    credentials: renderDesktopCredentials(view.content.credentials),
+    recovery: renderDesktopPanelRecovery({
+      ...view.content.recovery,
+      inventoryError: view.content.state === "inventory-error",
+    }),
+  };
+  const focus = view.focusTarget();
   if (view.documentMode) {
     return renderDesktopDocumentView({
-      ...view.content,
+      ...content,
       controlling: view.controlling,
       sizing: view.sizing,
       keyboardInputValue: view.mobileKeyboard.value,
       pictureInPictureControl: view.pictureInPictureControl,
+      audioControl: view.audioControl,
       onControlToggle: view.onControlToggle,
       onKeyboardFocus: (event) => view.mobileKeyboard.focus(event),
       onKeyboardEvent: (event) => view.mobileKeyboard.handleKeyboardEvent(event),
@@ -57,19 +101,31 @@ export function renderDesktopPresentation(view: DesktopPresentation) {
     renderResizer: () => view.dockLayout.renderResizer("bp", t("desktop.resize")),
     renderFullscreenControl: () => view.fullscreenMode.renderButton(),
     onDock: (dock) => view.dockLayout.setDock(dock),
-    onOpenWindow: view.onOpenWindow,
+    onOpenWindow: () => {
+      const target = view.focusTarget();
+      // Read the current target at click time; workspace pop-outs never take input.
+      openDesktopFocus(
+        target.basePath,
+        target.source,
+        target.workspaceControls ? false : target.control,
+      );
+    },
     onClose: view.onClose,
-    content: view.content,
+    content,
     connection: {
       controlling: view.controlling,
       desktopApps: view.desktopApps,
-      environmentSelected: view.environmentSelected,
+      environmentSelected: focus.source !== null,
       launchingApp: view.launchingApp,
-      showApps: view.showApps,
+      showApps:
+        focus.source !== null &&
+        desktopSourceForEnvironment({ id: focus.source }).kind === "environment",
       sizing: view.sizing,
       pictureInPictureControl: view.pictureInPictureControl,
+      audioControl: view.audioControl,
       onLaunch: view.onLaunch,
       onTakeControl: view.onTakeControl,
+      onControlToggle: view.onControlToggle,
       onDisconnect: view.onDisconnect,
     },
   });

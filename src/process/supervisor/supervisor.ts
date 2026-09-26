@@ -367,6 +367,16 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       lastOutputAtMs = Date.now();
       outputDeadline.reset();
     };
+    const settleResult = (adapter?: SpawnProcessAdapter) => {
+      resultSettled = true;
+      outputCompletion.resolve();
+      overallDeadline.clear();
+      outputDeadline.clear();
+      detachOutput();
+      if (cleanupSettled) {
+        adapter?.dispose();
+      }
+    };
 
     try {
       // Reserve the join before construction: a timeout result does not release
@@ -382,43 +392,36 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       };
       overallDeadline.reset();
       outputDeadline.reset();
+      const construction = {
+        assertCurrent: input.assertCurrent,
+        beforeSpawn: input.beforeSpawn,
+        cwd: input.cwd,
+        env: input.env,
+        abortSignal: constructionAbort.signal,
+        onSpawnCleanup,
+      };
       const startupPromise =
         input.mode === "pty"
           ? createPtyAdapter({
-              assertCurrent: input.assertCurrent,
-              beforeSpawn: input.beforeSpawn,
+              ...construction,
               shell: expectDefined(input.argv[0], "spawn executable"),
               args: input.argv.slice(1),
-              cwd: input.cwd,
-              env: input.env,
-              abortSignal: constructionAbort.signal,
-              onSpawnCleanup,
             }).then((adapter) => ({ adapter, ready: Promise.resolve() }))
           : input.mode === "anchored-shell"
             ? createChildAdapter({
-                assertCurrent: input.assertCurrent,
-                beforeSpawn: input.beforeSpawn,
+                ...construction,
                 anchoredShellCommand: input.command,
-                cwd: input.cwd,
-                env: input.env,
-                abortSignal: constructionAbort.signal,
-                onSpawnCleanup,
               })
             : createChildAdapter({
-                assertCurrent: input.assertCurrent,
-                beforeSpawn: input.beforeSpawn,
+                ...construction,
                 ...(requireProcessTree && !external ? { ownProcessTree: true as const } : {}),
                 argv: resolvedArgs ? [...input.argv, ...resolvedArgs] : input.argv,
                 argv0: input.argv0,
-                cwd: input.cwd,
-                env: input.env,
                 exactEnv: input.exactEnv,
                 windowsVerbatimArguments: input.windowsVerbatimArguments,
                 input: input.input,
                 stdinMode: input.stdinMode,
                 secretInput: input.secretInput,
-                abortSignal: constructionAbort.signal,
-                onSpawnCleanup,
               });
       const nativeExtinctionPromise = startupPromise
         .then(
@@ -500,14 +503,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         },
       );
       const settleAbortedConstruction = (reason: TerminationReason) => {
-        resultSettled = true;
-        outputCompletion.resolve();
-        overallDeadline.clear();
-        outputDeadline.clear();
-        detachOutput();
-        if (cleanupSettled) {
-          ownedAdapter?.dispose();
-        }
+        settleResult(ownedAdapter);
         return settleConstructionResult(reason, cleanup.promise, { ...captured, lastOutputAtMs });
       };
       let startup: Awaited<typeof startupPromise>;
@@ -520,17 +516,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         return settleAbortedConstruction(forcedReason);
       }
       const adapter = startup.adapter;
-
-      const settleResult = () => {
-        resultSettled = true;
-        outputCompletion.resolve();
-        overallDeadline.clear();
-        outputDeadline.clear();
-        detachOutput();
-        if (cleanupSettled) {
-          adapter.dispose();
-        }
-      };
 
       const withOutputFence =
         <Chunk>(deliver?: (chunk: Chunk) => void, recordsOutput = true) =>
@@ -572,7 +557,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         if (error === constructionAbortError && forcedReason) {
           return settleAbortedConstruction(forcedReason);
         }
-        settleResult();
+        settleResult(adapter);
         throw error;
       }
 
@@ -622,7 +607,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
             noOutputTimeoutDeadlineMs: outputDeadline.deadlineMs,
           });
           const terminalReason = forcedReason ?? deadlineReason;
-          settleResult();
+          settleResult(adapter);
 
           const reason: TerminationReason =
             terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
@@ -639,7 +624,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
           return exit;
         })().finally(() => {
           if (!resultSettled) {
-            settleResult();
+            settleResult(adapter);
           }
         }),
       ]);
@@ -681,11 +666,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       }
       return managedRun;
     } catch (err) {
-      resultSettled = true;
-      outputCompletion.resolve();
-      overallDeadline.clear();
-      outputDeadline.clear();
-      detachOutput();
+      settleResult();
       const { warnProcessSupervisorSpawnFailure } = await loadSupervisorLogRuntime();
       warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
       throw err;

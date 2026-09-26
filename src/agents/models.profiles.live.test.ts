@@ -33,6 +33,10 @@ import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
+  isChatGPTUsageLimitErrorMessage,
+  isOllamaUnavailableErrorMessage,
+  isAudioOnlyModelErrorMessage,
+  isUnsupportedThinkingToggleErrorMessage,
 } from "./live-test-provider-drift.test-support.js";
 import {
   getApiKeyForModelCore,
@@ -40,7 +44,7 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
 import { normalizeDiscoveredAgentModel } from "./model-discovery-normalize.js";
-import { shouldSuppressBuiltInModelCore } from "./model-suppression.js";
+import { resolveBuiltInModelSuppressionFromManifest } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import type { StreamFn } from "./runtime/index.js";
 import {
@@ -589,11 +593,6 @@ describe("isModelNotFoundErrorMessage", () => {
   });
 });
 
-function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
-  const msg = raw.toLowerCase();
-  return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
-}
-
 function isRefreshTokenReused(raw: string): boolean {
   return /refresh_token_reused/i.test(raw);
 }
@@ -614,29 +613,12 @@ function isOpenAiCodexHtmlInterruption(raw: string): boolean {
   );
 }
 
-function isOllamaUnavailableErrorMessage(raw: string): boolean {
-  const msg = raw.toLowerCase();
-  return (
-    msg.includes("ollama could not be reached") ||
-    (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
-    (msg.includes("localhost:11434") && msg.includes("econnrefused"))
-  );
-}
-
-function isAudioOnlyModelErrorMessage(raw: string): boolean {
-  return /requires that either input content or output modality contain audio/i.test(raw);
-}
-
 function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
   return (
     /does not support parameter reasoningeffort/i.test(raw) ||
     /invalid reasoning effort/i.test(raw) ||
     /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
   );
-}
-
-function isUnsupportedThinkingToggleErrorMessage(raw: string): boolean {
-  return /does not support parameter [`"]?enable_thinking[`"]?/i.test(raw);
 }
 
 function isUnsupportedPlanErrorMessage(raw: string): boolean {
@@ -1736,7 +1718,10 @@ describeLive("live models (profile keys)", () => {
       let eligibleModelCount = 0;
 
       for (const model of models) {
-        if (shouldSuppressBuiltInModelCore({ provider: model.provider, id: model.id })) {
+        if (
+          resolveBuiltInModelSuppressionFromManifest({ provider: model.provider, id: model.id })
+            ?.suppress
+        ) {
           continue;
         }
         if (!targetMatcher.matchesProvider(model.provider)) {

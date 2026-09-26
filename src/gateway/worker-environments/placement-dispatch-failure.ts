@@ -39,7 +39,6 @@ type WorkerReconcilingDispatchPlacement = Extract<
 export type WorkerDispatchPlacementStore = Pick<
   ReturnType<typeof createWorkerSessionPlacementStore>,
   | "adoptActive"
-  | "acceptIdleWorkspaceReconciliation"
   | "claimReclaimWorkspaceResult"
   | "claimTurn"
   | "closeWorkerTurnToolState"
@@ -90,8 +89,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "assertPreparedIntentCurrent"
   | "getPreparedCandidates"
   | "schedulePreparedRefill"
-  | "create"
-  | "createFromProfileSnapshot"
+  | "createWithRequest"
   | "destroy"
   | "get"
   | "reconcileEnvironment"

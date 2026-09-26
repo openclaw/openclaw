@@ -100,12 +100,15 @@ function createRegistry(
     enabled: true,
     configSchema: false,
   });
+  record.kind = "memory";
+  record.memorySlotSelected = true;
   const instance = new PluginInstance(record.id, { record, registry });
   instances.push(instance);
   registry.plugins.push(record);
   registry.memoryCapabilities.push({
     pluginId: record.id,
     capability: instance.wrap({ runtime }),
+    memorySlotSelected: true,
   });
   return { registry, runtime, instance };
 }
@@ -217,7 +220,7 @@ describe("memory runtime handles", () => {
 
     await expect(
       getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
-    ).resolves.toEqual({ manager: null, error: "no index" });
+    ).resolves.toMatchObject({ manager: null, error: "no index" });
 
     expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledWith({
       activate: false,
@@ -275,7 +278,7 @@ describe("memory runtime handles", () => {
 
       await expect(
         getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         manager: null,
         error: capability === "missing" ? "memory plugin unavailable" : "no index",
       });
@@ -285,7 +288,7 @@ describe("memory runtime handles", () => {
       for (let query = 0; query < 2; query += 1) {
         await expect(
           getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
-        ).resolves.toEqual({ manager: null, error: "no index" });
+        ).resolves.toMatchObject({ manager: null, error: "no index" });
       }
       expect(replacement.runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
       expect(replacement.instance.lifecycle.signal.aborted).toBe(false);
@@ -439,6 +442,42 @@ describe("memory runtime handles", () => {
     ).resolves.toEqual({ manager: null, error: "memory plugin unavailable" });
     expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
+
+  it.each(["unregistered", "non-search", "sidecar", "failed", "missing"] as const)(
+    "diagnoses search support from a %s owner without masking failures",
+    async (state) => {
+      const { registry } = createRegistry();
+      registry.memoryCapabilities = [];
+      if (state === "non-search" || state === "sidecar") {
+        registry.memoryCapabilities.push({
+          pluginId: state === "sidecar" ? "dreaming-sidecar" : "memory-core",
+          memorySlotSelected: state !== "sidecar",
+          capability: { publicArtifacts: { listArtifacts: async () => [] } },
+        });
+      }
+      if (state === "failed") {
+        for (const record of registry.plugins) {
+          record.status = "error";
+          record.error = "memory plugin import failed";
+        }
+      } else if (state === "missing") {
+        registry.plugins = [];
+      }
+      mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+      const result = await getActiveMemorySearchManagerCore({
+        cfg: memoryConfig,
+        agentId: "main",
+      });
+      expect(result.manager).toBeNull();
+      expect(result.searchRuntimeRegistered).toBe(
+        state === "failed" || state === "missing" ? undefined : false,
+      );
+      expect(result.error).toBe(
+        state === "failed" ? "memory plugin import failed" : "memory plugin unavailable",
+      );
+    },
+  );
 
   it("prefers an already-registered runtime", () => {
     const runtime = createRuntime();
@@ -688,6 +727,37 @@ describe("memory runtime handles", () => {
         relativePaths: ["MEMORY.md", "USER.md"],
       }),
     ).resolves.toEqual({ status: "unsupported" });
+  });
+
+  it("does not ask a legacy classifier to reinterpret remote read sources", async () => {
+    const { registry, runtime } = createRegistry();
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+    await expect(
+      classifyActiveMemoryWorkspacePaths({
+        cfg: memoryConfig,
+        agentId: "main",
+        workspaceDir: "/gateway/workspace",
+        relativePaths: ["USER.md"],
+        readSources: [{ relativePath: "USER.md", canonicalRelativePath: "USER.md" }],
+      }),
+    ).resolves.toEqual({ status: "unsupported" });
+    expect(runtime.classifyWorkspaceMemoryPaths).not.toHaveBeenCalled();
+  });
+
+  it("forwards pinned read sources only to a runtime that supports them", async () => {
+    const runtime = { ...createRuntime(), supportsWorkspaceMemoryReadSources: true as const };
+    mocks.loadPluginRegistryHandle.mockReturnValue(createRegistry(runtime).registry);
+    const params = {
+      cfg: memoryConfig,
+      agentId: "main",
+      workspaceDir: "/gateway/workspace",
+      relativePaths: ["USER.md"],
+      readSources: [{ relativePath: "USER.md", canonicalRelativePath: "memory/profile.md" }],
+    };
+    await expect(classifyActiveMemoryWorkspacePaths(params)).resolves.toMatchObject({
+      status: "classified",
+    });
+    expect(runtime.classifyWorkspaceMemoryPaths).toHaveBeenCalledExactlyOnceWith(params);
   });
 
   it("fails closed on session hits when a memory runtime has no authorizer", async () => {

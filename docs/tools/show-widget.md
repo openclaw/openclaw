@@ -143,7 +143,7 @@ choose libraries accordingly. CDN requests reveal the client's IP and requested
 asset to the CDN; widget documents use a no-referrer policy.
 
 Existing stored inline documents retain their original document policy. Recreate
-an older widget to use external libraries; changing the host policy does not
+an older widget to use external libraries or HTTPS media; changing the host policy does not
 rewrite chat history.
 
 ## Use the tool
@@ -235,6 +235,31 @@ Reuse the same `name` and `pin: true` with a new `report` object to replace a re
 When a widget presenter plugin is active, `presentation.target` also offers `node_panel`. OpenClaw creates the same hosted widget document, selects a connected widget-panel-capable Mac, and opens its native panel at that document. The tool result names the selected Mac.
 
 If no eligible Mac is connected or the node command fails, the widget still appears inline in chat and the result explains how to recover. Pair a Mac running OpenClaw or open the macOS app, then retry. Widgets shown in a native panel are render-only. Widget actions are disabled there.
+
+## Audio and video
+
+HTML widgets can play direct HTTPS audio and video URLs in `<audio>` or `<video>`
+elements. This works in inline previews, pinned dashboards, and native panels.
+Small embedded `data:` clips and generated `blob:` media are also supported.
+Include playback controls so the user can start playback when the browser blocks
+autoplay. The format must be supported by the browser or native web view.
+
+```html
+<video controls playsinline src="https://example.com/video.mp4"></video>
+```
+
+Media playback has its own content policy. It does not grant `fetch`, WebSocket,
+remote images, external scripts, or nested frames. API connections, including
+script-driven streaming that fetches media segments, still need the existing
+pinned-widget `capabilities.netOrigins` declaration and grant. Ordinary HTTP
+media URLs are not allowed; use HTTPS, including across redirects. Media hosts
+receive the client's request; keep private data and credentials out of media
+URLs. Widget documents use a no-referrer policy.
+
+Embedded media counts toward the existing `widget_code` limit of 262,144
+characters, including base64 encoding and the surrounding HTML. Pinned HTML
+also has a 256 KiB UTF-8 limit after OpenClaw adds its wrapper. For larger clips,
+use a direct HTTPS URL or a normal media attachment instead of base64.
 
 ## Interactive widgets
 

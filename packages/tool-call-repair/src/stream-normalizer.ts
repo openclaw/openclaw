@@ -1876,7 +1876,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
         return;
       }
 
-      if (pending?.kind === "suppressing") {
+      if (pending) {
         if (!pending.entries) {
           const sanitized = sanitizeEventPartial(record, true);
           if (sanitized) {
@@ -1886,31 +1886,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
         }
         queuePendingEvent(pending, record);
         if (pendingQueueOverCap(pending)) {
-          forceScrubTerminal = true;
-          if (!sawStreamStart) {
-            yield { type: "start", partial: { role: "assistant", content: [] } };
-            sawStreamStart = true;
-          }
-          yield* forceProjectPendingAux(pending);
-          pending.entries = undefined;
-          pending.entryBytes = 0;
-        }
-      } else if (pending?.kind === "candidate") {
-        if (!pending.entries) {
-          const sanitized = sanitizeEventPartial(record, true);
-          if (sanitized) {
-            yield sanitized;
-          }
-          continue;
-        }
-        queuePendingEvent(pending, record);
-        if (pendingQueueOverCap(pending)) {
-          const classification = classifyPending(
-            pending,
-            options.matcher,
-            options.resolveProtectedRanges,
-          );
-          if (classification.kind === "false-positive") {
+          const classification =
+            pending.kind === "candidate"
+              ? classifyPending(pending, options.matcher, options.resolveProtectedRanges)
+              : undefined;
+          if (pending.kind === "candidate" && classification?.kind === "false-positive") {
             yield* replayFalsePositiveCandidate(pending);
             // Replayed text becomes ordinary visible text going forward, same as the
             // false-positive branch in the main delta loop above -- without this, the
@@ -1922,7 +1902,9 @@ export async function* normalizePlainTextToolCallStreamEvents(
             continue;
           }
           forceScrubTerminal = true;
-          scrubFuturePartials = true;
+          if (pending.kind === "candidate") {
+            scrubFuturePartials = true;
+          }
           if (!sawStreamStart) {
             yield { type: "start", partial: { role: "assistant", content: [] } };
             sawStreamStart = true;
@@ -1930,7 +1912,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
           yield* forceProjectPendingAux(pending);
           pending.entries = undefined;
           pending.entryBytes = 0;
-          if (classification.kind === "suppress") {
+          if (classification?.kind === "suppress") {
             pending = {
               entryBytes: 0,
               kind: "suppressing",

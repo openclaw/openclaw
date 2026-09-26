@@ -40,7 +40,7 @@ export type PersonDay = {
   reviewComments: number;
   discordMessages: number;
 };
-export type RunPeriod = { period: Period; key: string };
+type RunPeriod = { period: Period; key: string };
 export type ReportRun = {
   id: string;
   kind: "closed-day" | "intraday" | "manual";
@@ -58,6 +58,10 @@ export type TeamReportsOperations = {
     output: void;
   };
   getPeriod: { input: { period: Period; key: string }; output: StoredPeriod | undefined };
+  getPeriodDocument: {
+    input: { period: Period; key: string };
+    output: Pick<StoredPeriod, "report" | "summary"> | undefined;
+  };
   listPeriods: {
     input: { period?: Period; status?: "partial" | "closed"; limit?: number };
     output: PeriodListEntry[];

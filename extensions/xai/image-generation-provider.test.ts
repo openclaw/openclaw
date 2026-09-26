@@ -8,7 +8,6 @@ type GenerateImageParams = Parameters<
 
 const {
   resolveApiKeyForProviderMock,
-  isProviderApiKeyConfiguredMock,
   postJsonRequestMock,
   postMultipartRequestMock,
   assertOkOrThrowHttpErrorMock,
@@ -18,7 +17,6 @@ const {
   sanitizeConfiguredModelProviderRequestMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "xai-key" })),
-  isProviderApiKeyConfiguredMock: vi.fn(() => true),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
@@ -50,10 +48,6 @@ const {
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-http", async () => {
@@ -116,7 +110,7 @@ function requirePostJsonCall(index = 0): {
 describe("xai image generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
-    isProviderApiKeyConfiguredMock.mockClear();
+    vi.unstubAllEnvs();
     postJsonRequestMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
@@ -154,11 +148,23 @@ describe("xai image generation provider", () => {
     if (!isConfigured) {
       throw new Error("expected XAI image provider config predicate");
     }
-    expect(isConfigured({ agentDir: "/tmp/openclaw-xai-test" })).toBe(true);
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
-      provider: "xai",
-      agentDir: "/tmp/openclaw-xai-test",
-    });
+    vi.stubEnv("XAI_API_KEY", undefined);
+    expect(isConfigured({})).toBe(false);
+    expect(
+      isConfigured({
+        cfg: {
+          models: {
+            providers: {
+              xai: {
+                apiKey: "xai-image-test-key",
+                baseUrl: "https://api.x.ai/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("uses main provider URL and resolves auth for generation", async () => {
@@ -277,7 +283,6 @@ describe("xai image generation provider", () => {
     expect(request.headers?.get("user-agent")).toBe("openclaw/2026.3.22");
     expect(request.headers?.get("originator")).toBe("openclaw");
     expect(request.headers?.get("version")).toBe("2026.3.22");
-    vi.unstubAllEnvs();
   });
 
   it("uses the plural xAI images payload for multiple edit inputs", async () => {

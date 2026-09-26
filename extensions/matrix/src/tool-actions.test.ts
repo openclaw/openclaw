@@ -400,6 +400,152 @@ describe("Matrix public message actions", () => {
     });
   });
 
+  it("reads exactly the requested message id instead of room history", async () => {
+    mocks.readMatrixMessage.mockResolvedValueOnce({
+      eventId: "$older",
+      sender: "@alice:example.org",
+      body: "older",
+      timestamp: 1000,
+    });
+    const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+    const result = await runMatrixAction(
+      "read",
+      {
+        roomId: "room:!room:example",
+        messageId: "  $older  ",
+        limit: 5,
+        before: "before",
+        after: "after",
+        threadId: "$thread",
+      },
+      cfg,
+      { accountId: "ops" },
+    );
+
+    expect(mocks.readMatrixMessage).toHaveBeenCalledWith("!room:example", "$older", {
+      cfg,
+      accountId: "ops",
+      client: mocks.matrixClient,
+    });
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+    expect(result.details).toEqual({
+      ok: true,
+      roomId: "!room:example",
+      messages: [
+        {
+          eventId: "$older",
+          sender: "@alice:example.org",
+          body: "older",
+          timestamp: 1000,
+          ts: "1970-01-01T00:00:01.000Z",
+          id: "$older",
+          authorTag: "@alice:example.org",
+          content: "older",
+        },
+      ],
+    });
+  });
+
+  it("does not fall back to history when the exact event cannot be summarized", async () => {
+    mocks.readMatrixMessage.mockRejectedValueOnce(
+      new Error("Matrix message $missing was not found in room !room:example."),
+    );
+    await expect(
+      runMatrixAction("read", { roomId: "!room:example", messageId: "$missing" }, {} as CoreConfig),
+    ).rejects.toThrow("was not found");
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+  });
+
+  it("rejects disabled exact reads before authorization or event fetch", async () => {
+    await expect(
+      runMatrixAction("read", { roomId: "!room:example", messageId: "$older" }, {
+        channels: { matrix: { actions: { messages: false } } },
+      } as CoreConfig),
+    ).rejects.toThrow("Matrix messages are disabled.");
+    expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
+    expect(mocks.readMatrixMessage).not.toHaveBeenCalled();
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+  });
+
+  it("retains the read-policy gate before exact event selection", async () => {
+    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
+      new Error("Matrix read target is not allowed."),
+    );
+    await expect(
+      runMatrixAction(
+        "read",
+        { roomId: "!blocked:example", messageId: "$older" },
+        {} as CoreConfig,
+        {
+          accountId: "ops",
+          requesterAccountId: "other",
+          toolContext: { currentChannelId: "!current:example", currentChannelProvider: "matrix" },
+        },
+      ),
+    ).rejects.toThrow("Matrix read target is not allowed.");
+    expect(mocks.readMatrixMessage).not.toHaveBeenCalled();
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -1, 1.5, "not-a-number"])(
+    "still validates limit %s before exact selection",
+    async (limit) => {
+      await expect(
+        runMatrixAction(
+          "read",
+          { roomId: "!room:example", messageId: "$older", limit },
+          {} as CoreConfig,
+        ),
+      ).rejects.toThrow("limit must be a positive integer.");
+      expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
+      expect(mocks.readMatrixMessage).not.toHaveBeenCalled();
+      expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "", "   "])(
+    "keeps absent/blank ID %s on the history path",
+    async (messageId) => {
+      const cfg = {} as CoreConfig;
+      mocks.readMatrixMessages.mockResolvedValueOnce({
+        messages: [{ eventId: "$newer" }],
+        nextBatch: "next",
+        prevBatch: "previous",
+      });
+      const result = await runMatrixAction(
+        "read",
+        {
+          roomId: "room:!room:example",
+          messageId,
+          limit: 7,
+          before: "before",
+          after: "after",
+          threadId: "$thread",
+        },
+        cfg,
+        { accountId: "ops" },
+      );
+      expect(mocks.readMatrixMessages).toHaveBeenCalledWith("!room:example", {
+        cfg,
+        accountId: "ops",
+        client: mocks.matrixClient,
+        limit: 7,
+        before: "before",
+        after: "after",
+        threadId: "$thread",
+      });
+      expect(mocks.readMatrixMessage).not.toHaveBeenCalled();
+      expect(result.details).toEqual({
+        ok: true,
+        roomId: "!room:example",
+        threadId: "$thread",
+        messages: [{ eventId: "$newer", id: "$newer" }],
+        nextBatch: "next",
+        prevBatch: "previous",
+      });
+    },
+  );
+
   it("projects Matrix message summaries for human-readable CLI output", async () => {
     mocks.readMatrixMessages.mockResolvedValueOnce({
       messages: [

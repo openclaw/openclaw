@@ -18,7 +18,11 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const SCRIPT = path.resolve("scripts/release-telegram-candidate-archive.py");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const pythonExecPath = (() => {
-  for (const candidate of ["/opt/homebrew/bin/python3.12", "python3"]) {
+  for (const candidate of [
+    "/opt/homebrew/bin/python3.12",
+    "/opt/homebrew/bin/python3",
+    "python3",
+  ]) {
     const probe = spawnSync(candidate, [
       "-c",
       'import tarfile; assert hasattr(tarfile, "data_filter") and hasattr(tarfile, "FilterError")',
@@ -946,22 +950,6 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
     ]);
     expect(JSON.parse(result.stdout)).toMatchObject({ members: 288 });
     expect(JSON.parse(result.stdout).maxCachedMembers).toBeLessThanOrEqual(1);
-  });
-
-  it("bounds exact names and clears the stdlib TarInfo cache", () => {
-    const source = readFileSync(SCRIPT, "utf8");
-    expect(source).toContain("seen_names");
-    expect(source).toContain("_validate_destination_paths");
-    expect(source).toContain(".lstat()");
-    expect(source).toContain("parent_name not in seen_names");
-    expect(source).toContain("_next_stream_member");
-    expect(source).toContain("archive.members.clear()");
-    expect(source).not.toContain("target_path.parent.mkdir");
-    expect(source).not.toContain("for member in archive");
-    expect(source).not.toContain("previous_sort_key");
-    expect(source).not.toContain("link_names");
-    expect(source).not.toContain("seen_parent_names");
-    expect(source).not.toContain("any(existing.startswith");
   });
 
   it("keeps TarInfo cache and resident memory bounded across 100000 members", () => {

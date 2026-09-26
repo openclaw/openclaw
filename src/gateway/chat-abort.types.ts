@@ -1,8 +1,16 @@
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 
+type ChatTerminalProducer = {
+  sessionId: string;
+  sessionKey: string;
+  handoff: (settle: (producerCompleted: Promise<void>) => Promise<void>) => boolean;
+};
+
 export type ChatAbortControllerEntry = {
   controller: AbortController;
+  /** Captures this run's canonical producer before cancellation releases its live slot. */
+  resolveTerminalProducer?: () => ChatTerminalProducer | undefined;
   sessionId: string;
   sessionKey: string;
   lifecycleGeneration?: string;

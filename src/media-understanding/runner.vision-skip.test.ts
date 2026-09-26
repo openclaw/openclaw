@@ -634,9 +634,7 @@ describe("runCapability image skip", () => {
               },
             ],
           ]),
-          config: {
-            _requestPromptOverride: "Use this request prompt",
-          },
+          request: { prompt: "Use this request prompt" },
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 
@@ -644,26 +642,6 @@ describe("runCapability image skip", () => {
         expect(seenPrompt).toBe("Use this request prompt");
       },
     );
-  });
-
-  it("keeps agents.defaults.imageModel available to exported auto image resolution", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          imageModel: { primary: "openrouter/google/gemini-2.5-flash" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    await expect(
-      resolveAutoImageModel({
-        cfg,
-        activeModel: { provider: "openai", model: "gpt-4.1" },
-      }),
-    ).resolves.toEqual({
-      provider: "openrouter",
-      model: "google/gemini-2.5-flash",
-    });
   });
 
   it("uses a valid imageModel fallback after a malformed primary", async () => {

@@ -23,8 +23,6 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { getActiveSessionWorkAdmissionCount } from "../../../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import {
   authorizeClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
@@ -38,6 +36,7 @@ import {
 } from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
 import { runWithGatewayHttpWorkAdmission } from "../../server/http-work-admission.js";
 import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
@@ -262,8 +261,7 @@ describe("talk.client.transcript", () => {
     clientVoiceSessionTesting.reset();
     resetClientVoiceConfirmationStateForTest();
     vi.useRealTimers();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await cleanupSessionStateForTest({ stateDir: tempDir });
     envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });
     expect(remainingRootWork).toBe(0);

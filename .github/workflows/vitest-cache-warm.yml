@@ -3,32 +3,34 @@ name: Vitest Cache Warm
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   workflow_dispatch:
   repository_dispatch:
     types: [vitest-cache-warm]
   schedule:
-    - cron: "17 8 * * *"
+    - cron: "17 * * * *"
 
 permissions:
   contents: read
 
-concurrency:
-  group: vitest-cache-warm-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  warm:
+  dependencies:
     # Shared CI cache publication is isolated from pull-request execution.
     # Trusted release/proof workflows may save only through the same authority contract.
-    if: github.repository == 'openclaw/openclaw'
+    if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (github.event_name != 'push' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     runs-on: ${{ matrix.platform == 'macos' && 'macos-15' || ((matrix.platform == 'linux-hosted' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'github') && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
-    timeout-minutes: 60
+    timeout-minutes: 20
+    concurrency:
+      group: ${{ format('vitest-cache-warm-dependencies-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, format('{0}-{1}', github.event_name, github.ref)) }}
+      cancel-in-progress: false
     strategy:
       # Each platform publishes its own cache namespace independently.
       fail-fast: false
       matrix:
         # Hybrid's hosted lanes cannot read Blacksmith's backend-local cache.
-        # Seed their store without duplicating build or transform warming.
+        # Dependency publication must not queue behind long code warming.
         platform: ${{ fromJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && '["linux", "linux-hosted", "macos"]' || '["linux", "macos"]') }}
     steps:
       - name: Checkout
@@ -38,13 +40,9 @@ jobs:
         id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
-          build-all-cache-scope: ${{ matrix.platform == 'linux' && 'full' || '' }}
           cache-mode: read-write
           dependency-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
           install-bun: "false"
-          node-compile-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
-          node-compile-cache-scope: "test"
-          vitest-fs-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
 
       # Setup owns the completed toolchain and dependency trees. Publish them
       # before build and transform warming delay unrelated readers.
@@ -78,11 +76,59 @@ jobs:
           path: ${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}
           key: ${{ steps.setup-node-env.outputs.pnpm-store-cache-key }}
 
+  warm:
+    if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (github.event_name != 'push' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
+    runs-on: ${{ (matrix.platform == 'linux-hosted' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'github') && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    timeout-minutes: 60
+    concurrency:
+      group: ${{ format('vitest-cache-warm-code-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, format('{0}-{1}', github.event_name, github.ref)) }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && '["linux", "linux-hosted"]' || '["linux"]') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Independent setup consumes the latest completed dependency seed. This
+      # job never publishes dependencies, even if their short publisher is busy.
+      - name: Setup Node environment
+        id: setup-node-env
+        uses: ./.github/actions/setup-node-env
+        with:
+          build-all-cache-scope: ${{ matrix.platform == 'linux' && 'full' || '' }}
+          cache-mode: read-write
+          dependency-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
+          install-bun: "false"
+          node-compile-cache: "true"
+          vitest-fs-cache: "true"
+          vitest-worker-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
+
+      - name: Setup pinned Bun test runtime
+        uses: ./.github/actions/setup-test-bun
+
+      # Match source-only shards before SDK/runtime builds change resolution topology.
+      - name: Prepare compiled Vitest workers
+        if: ${{ matrix.platform == 'linux' }}
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
+        run: node scripts/prepare-vitest-worker-cache.mts
+
+      - name: Save compiled Vitest workers
+        if: ${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.vitest-worker-cache-key != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/vitest-worker-cache
+          key: ${{ steps.setup-node-env.outputs.vitest-worker-cache-key }}
+
       # Seal this owner before the full build creates sibling package dist trees.
       # Those trees are resolution topology, but intentionally are not in this payload.
       - name: Restore native SDK boundary cache
         id: extension-package-boundary-cache
-        if: ${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' }}
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -95,11 +141,10 @@ jobs:
             ${{ runner.os }}-extension-package-boundary-v4-
 
       - name: Prepare native SDK boundary cache
-        if: ${{ matrix.platform == 'linux' }}
         run: node --import ./scripts/tsx.mjs scripts/prepare-extension-package-boundary-artifacts.mts --mode=package-boundary
 
       - name: Save native SDK boundary cache
-        if: ${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.extension-package-boundary-cache.outputs.cache-hit != 'true' }}
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.extension-package-boundary-cache.outputs.cache-hit != 'true' }}
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -143,33 +188,12 @@ jobs:
             extensions/*/src/host/**/*.bundle.js
           key: ${{ runner.os }}-dist-build-v3-${{ github.sha }}
 
-      - name: Select broad cache seed
-        if: ${{ matrix.platform == 'linux' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --import tsx --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
-          import { createVitestCacheWarmGroups } from "./scripts/lib/ci-node-test-plan.mts";
-
-          // Warm the selected planner envelopes for the striped unit-fast graph
-          // plus import-bound graphs that remained cold in protected-cache readers.
-          const groups = createVitestCacheWarmGroups();
-          appendFileSync(
-            process.env.GITHUB_ENV,
-            [
-              `OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`,
-              "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1",
-              "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1",
-            ].join("\n") + "\n",
-          );
-          EOF
-
       - name: Warm transform and compile caches
         id: warm-caches
-        if: ${{ matrix.platform == 'linux' }}
         continue-on-error: true
+        shell: bash
         env:
+          CACHE_WARM_PLATFORM: ${{ matrix.platform }}
           # Match the CI shard lanes running the same envelopes: without the
           # raised ceiling a heavy suite's worker can die under default heap
           # (run 31874567859), skipping every cache save for the day.
@@ -177,10 +201,7 @@ jobs:
           # Only the publisher prunes restored entries before saving a new seed.
           OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "1"
           OPENCLAW_NODE_COMPILE_CACHE_WRITER: "1"
-          # Keep compiled imports and per-file cleanup in the normal runner;
-          # ordinary CI owns test-body validation.
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--testNamePattern=(?!)"]'
-        run: node --import tsx scripts/ci-run-node-test-shard.mts
+        run: node --import tsx scripts/ci-warm-vitest-caches.mts
 
       - name: Save Vitest transform cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.vitest-cache-key != '' }}
@@ -199,7 +220,7 @@ jobs:
           key: ${{ steps.setup-node-env.outputs.node-compile-cache-key }}
 
       - name: Assert cache warming succeeded
-        if: ${{ always() && matrix.platform == 'linux' }}
+        if: ${{ always() }}
         run: |
           if [ "${{ steps.warm-caches.outcome }}" != "success" ]; then
             echo "::error::Vitest cache warming failed"

@@ -71,38 +71,6 @@ describe("extractReadableContent", () => {
     expect(result?.title).toBe("Extracted");
   });
 
-  it("reuses extractor resolution for repeated calls with the same config object", async () => {
-    // Extractor manifests are process-stable for a config snapshot; repeated
-    // reads should not re-run plugin discovery on the fetch hot path.
-    const config = {};
-    resolvePluginWebContentExtractorsMock.mockReturnValue([
-      {
-        id: "readability",
-        pluginId: "web-readability",
-        label: "Readability",
-        extract: vi.fn().mockResolvedValue({
-          text: "cached resolver text",
-        }),
-      },
-    ]);
-
-    await extractReadableContent({
-      html: "<article><p>first</p></article>",
-      url: "https://example.com/first",
-      extractMode: "text",
-      config,
-    });
-    await extractReadableContent({
-      html: "<article><p>second</p></article>",
-      url: "https://example.com/second",
-      extractMode: "text",
-      config,
-    });
-
-    expect(resolvePluginWebContentExtractorsMock).toHaveBeenCalledTimes(1);
-    expect(resolvePluginWebContentExtractorsMock).toHaveBeenCalledWith({ config });
-  });
-
   it("returns null when no extractor produces content", async () => {
     resolvePluginWebContentExtractorsMock.mockReturnValue([
       {

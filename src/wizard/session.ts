@@ -11,6 +11,8 @@ import {
   WizardCancelledError,
   type WizardProgress,
   type WizardPrompter,
+  type WizardSelectParams,
+  type WizardMultiSelectParams,
 } from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
@@ -155,11 +157,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       });
     },
 
-    async select<T>(params: {
-      message: string;
-      options: Array<{ value: T; label: string; hint?: string }>;
-      initialValue?: T;
-    }): Promise<T> {
+    async select<T>(params: WizardSelectParams<T>): Promise<T> {
       const res = await prompt({
         type: "select",
         message: params.message,
@@ -174,11 +172,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       return res as T;
     },
 
-    async multiselect<T>(params: {
-      message: string;
-      options: Array<{ value: T; label: string; hint?: string }>;
-      initialValues?: T[];
-    }): Promise<T[]> {
+    async multiselect<T>(params: WizardMultiSelectParams<T>): Promise<T[]> {
       const res = await prompt({
         type: "multiselect",
         message: params.message,
@@ -206,15 +200,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
         params.validate,
         params.signal,
       );
-      const value =
-        res === null || res === undefined
-          ? ""
-          : typeof res === "string"
-            ? res
-            : typeof res === "number" || typeof res === "boolean" || typeof res === "bigint"
-              ? String(res)
-              : "";
-      return value;
+      return normalizeTextAnswer(res) ?? "";
     },
 
     async confirm(params: Parameters<WizardPrompter["confirm"]>[0]): Promise<boolean> {
@@ -442,6 +428,14 @@ export class WizardSession {
       this.finishPreparation();
     }
     this.cancellationLocked = true;
+  }
+
+  /** A retained write callback cannot outlive the runner that owns setup. */
+  assertPersistentEffectCurrent(): void {
+    this.signal.throwIfAborted();
+    if (this.status !== "running" || this.settled) {
+      throw new Error("Setup session is no longer active");
+    }
   }
 
   /** Protect preparation until the next client checkpoint or final commit. */

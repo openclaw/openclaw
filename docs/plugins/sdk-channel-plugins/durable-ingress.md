@@ -65,6 +65,16 @@ fences are unrelated to this rule. Stable outbound message IDs use the shared
 outbound-echo registry from `openclaw/plugin-sdk/channel-outbound` instead of a
 channel-local TTL cache.
 
+Persistent replay guards await SQLite reads, comparisons, writes, and legacy-file
+migration in the shared state worker. Competing records are compared again in the
+write transaction; clearing memory or forgetting a key fences older asynchronous
+cache fills. Await commits and deletions before acknowledging adoption or finishing
+cleanup. Error hooks retain their existing policy: a throwing hook rejects the
+operation, while a nonthrowing hook permits the guard's memory fallback. Worker
+failures never switch persistence to synchronous SQLite. Multi-key commits and
+deletions settle every accepted write before returning an error, so rollback and
+shutdown cannot race a still-running sibling mutation.
+
 ### Transport classes and retention
 
 Classify a transport by the recovery guarantee at its receive boundary:
@@ -191,6 +201,21 @@ must first settle all accepted transport admissions, then dispose and await its
 drain. Starting the account opens the same account-keyed queue, whose initial
 drain recovers undispatched durable rows. Do not add a second reload-specific
 replay pass; queue recovery is the canonical restart path.
+
+When replacing a known transport identity whose event IDs can overlap the previous
+identity, await the core-provided queue's `purge()` before resetting its transport
+cursor. The operation deletes all pending, claimed, completed, and failed rows
+for that queue's channel and account in one transaction and returns the deleted
+row count. Stop the account's producers and drain before calling it. Keep the
+previous identity marker until the purge commits so an interrupted reset is
+detected again on startup. Same-identity restarts and token rotations retain the
+queue, as do legacy offsets without a known previous identity. `purge` is optional
+on the structural queue type for compatibility with plugin-supplied queues; a
+caller requiring an identity reset must fail rather than skip an unavailable purge.
+Runtime-provided purge handles recheck plugin lifecycle authority immediately
+before deletion and reject after their plugin runtime is retired.
+Account monitors must also check cancellation before purge and before resetting
+the cursor, retaining the old identity if cancellation interrupts the reset.
 
 Treat this flag as a capability claim, not a performance preference. Contract
 tests should prove that adding and editing one named account leaves a sibling's

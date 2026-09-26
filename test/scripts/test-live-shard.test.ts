@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import {
   LIVE_TEST_SHARDS,
   RELEASE_LIVE_TEST_SHARDS,
@@ -29,8 +30,10 @@ import {
   selectLiveShardFiles,
   validateLiveShardReportPayload,
 } from "../../scripts/test-live-shard.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { waitForPidFile } from "../helpers/process-wait.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
@@ -117,7 +120,10 @@ describe("scripts/test-live-shard", () => {
         "src/gateway/fixture.live.test.ts",
         "src/system-agent/fixture.live.test.ts",
       ],
-      "native-live-src-infra": ["src/infra/fixture.live.test.ts"],
+      "native-live-src-infra": [
+        "src/cli/update-cli/update-command-node-runtime.live.test.ts",
+        "src/infra/fixture.live.test.ts",
+      ],
       "native-live-test": ["test/fixture.live.test.ts"],
       "native-live-extensions-a-k": [
         "extensions/a-provider/model.live.test.ts",
@@ -179,6 +185,12 @@ describe("scripts/test-live-shard", () => {
     const result = spawnSync(process.execPath, ["scripts/test-live-shard.mjs", "--help"], {
       cwd: process.cwd(),
       encoding: "utf8",
+      env: preparedScriptWrapperEnv([
+        [
+          new URL("../../scripts/test-live-shard.mts", import.meta.url),
+          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.liveShard),
+        ],
+      ]),
     });
 
     expect(result.status).toBe(0);
@@ -715,14 +727,22 @@ describe("scripts/test-live-shard", () => {
           [path.resolve("scripts/test-live-shard.mjs"), "native-live-src-infra"],
           {
             cwd: root,
-            env: {
-              ...process.env,
-              OPENCLAW_FAKE_PNPM_ARGS_PATH: argsPath,
-              OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
-              OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
-              OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
-              npm_execpath: fakePnpmPath,
-            },
+            env: preparedScriptWrapperEnv(
+              [
+                [
+                  new URL("../../scripts/test-live-shard.mts", import.meta.url),
+                  resolveRuntimeWorkerUrl(scriptModuleEntrypoints.liveShard),
+                ],
+              ],
+              {
+                ...process.env,
+                OPENCLAW_FAKE_PNPM_ARGS_PATH: argsPath,
+                OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
+                OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
+                OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
+                npm_execpath: fakePnpmPath,
+              },
+            ),
             stdio: "ignore",
           },
         );

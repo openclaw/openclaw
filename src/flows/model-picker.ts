@@ -1,4 +1,3 @@
-// Model picker flow lets users select provider models for config defaults.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -554,20 +553,6 @@ async function promptManualModel(params: {
   return { model: normalizeAgentModelRefForConfig(model) };
 }
 
-function buildModelProviderFilterOptions(
-  models: Array<{ provider: string }>,
-): Array<{ value: string; label: string; hint: string }> {
-  const providerIds = sortUniqueStrings(models.map((entry) => entry.provider));
-  return providerIds.map((provider) => {
-    const count = models.filter((entry) => entry.provider === provider).length;
-    return {
-      value: provider,
-      label: provider,
-      hint: t("wizard.model.modelCount", { count, plural: count === 1 ? "" : "s" }),
-    };
-  });
-}
-
 async function maybeFilterModelsByProvider(params: {
   models: Array<{
     provider: string;
@@ -584,10 +569,13 @@ async function maybeFilterModelsByProvider(params: {
   isVisibleProvider: (provider: string) => boolean;
 }): Promise<typeof params.models> {
   let next = params.models.filter((entry) => params.isVisibleProvider(entry.provider));
-  const providerIds = sortUniqueStrings(next.map((entry) => entry.provider));
+  const providerCounts = new Map<string, number>();
+  for (const { provider } of next) {
+    providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
+  }
   const hasPreferredProvider = Boolean(params.preferredProvider);
   const shouldPromptProvider =
-    !hasPreferredProvider && providerIds.length > 1 && next.length > PROVIDER_FILTER_THRESHOLD;
+    !hasPreferredProvider && providerCounts.size > 1 && next.length > PROVIDER_FILTER_THRESHOLD;
   const matchesPreferredProvider = params.preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider: params.preferredProvider,
@@ -601,7 +589,14 @@ async function maybeFilterModelsByProvider(params: {
       message: t("wizard.model.filterByProvider"),
       options: [
         { value: "*", label: t("wizard.model.allProviders") },
-        ...buildModelProviderFilterOptions(next),
+        ...sortUniqueStrings(providerCounts.keys()).map((provider) => {
+          const count = providerCounts.get(provider)!;
+          return {
+            value: provider,
+            label: provider,
+            hint: t("wizard.model.modelCount", { count, plural: count === 1 ? "" : "s" }),
+          };
+        }),
       ],
       searchable: true,
     });
@@ -1370,33 +1365,18 @@ export function applyModelAllowlist(
     };
   }
 
+  const nextModels = { ...existingModels };
+  for (const key of normalized) {
+    nextModels[key] = existingModels[key] ?? {};
+  }
+  let nextAllow = normalized;
   if (scopeKeySet) {
-    const nextModels = { ...existingModels };
-    for (const key of normalized) {
-      nextModels[key] = existingModels[key] ?? {};
-    }
-    const nextAllow = existingAllow.filter((key) => !isPolicyRefInScope(key));
+    nextAllow = existingAllow.filter((key) => !isPolicyRefInScope(key));
     for (const key of normalized) {
       if (!nextAllow.includes(key)) {
         nextAllow.push(key);
       }
     }
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...defaults,
-          models: nextModels,
-          modelPolicy: { ...defaults?.modelPolicy, allow: nextAllow },
-        },
-      },
-    };
-  }
-
-  const nextModels: Record<string, { alias?: string }> = { ...existingModels };
-  for (const key of normalized) {
-    nextModels[key] = existingModels[key] ?? {};
   }
 
   return {
@@ -1406,7 +1386,7 @@ export function applyModelAllowlist(
       defaults: {
         ...defaults,
         models: nextModels,
-        modelPolicy: { ...defaults?.modelPolicy, allow: normalized },
+        modelPolicy: { ...defaults?.modelPolicy, allow: nextAllow },
       },
     },
   };

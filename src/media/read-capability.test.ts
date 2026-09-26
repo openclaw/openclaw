@@ -38,35 +38,31 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     channelPluginMocks.getLoadedChannelPlugin.mockReset();
   });
 
-  it("preserves caller-provided workspaceDir from mediaAccess", () => {
+  it.each([false, true])("reads from the selected workspace (explicit=%s)", async (explicit) => {
+    const base = tempDirs.make("media-workspace-selection-");
+    const provided = path.join(base, "provided");
+    const override = path.join(base, "override");
+    for (const directory of [provided, override]) {
+      await fs.mkdir(directory);
+      await fs.writeFile(path.join(directory, "report.txt"), path.basename(directory));
+    }
     const result = resolveAgentScopedOutboundMediaAccess({
-      cfg: {} as OpenClawConfig,
-      mediaAccess: { workspaceDir: "/tmp/media-workspace" },
+      cfg: {},
+      mediaAccess: { workspaceDir: provided },
+      ...(explicit ? { workspaceDir: override } : {}),
     });
-
-    expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
-    expect(result.localRoots).toStrictEqual([
-      ...getDefaultMediaLocalRoots().filter((root) => path.basename(root) !== "sandboxes"),
-      "/tmp/media-workspace",
-    ]);
-    expect(typeof result.readFile).toBe("function");
-    expect(result.workspaceDir).toBe("/tmp/media-workspace");
-  });
-
-  it("prefers explicit workspaceDir over mediaAccess.workspaceDir", () => {
-    const result = resolveAgentScopedOutboundMediaAccess({
-      cfg: {} as OpenClawConfig,
-      workspaceDir: "/tmp/explicit-workspace",
-      mediaAccess: { workspaceDir: "/tmp/media-workspace" },
-    });
-
-    expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
-    expect(result.localRoots).toStrictEqual([
-      ...getDefaultMediaLocalRoots().filter((root) => path.basename(root) !== "sandboxes"),
-      "/tmp/explicit-workspace",
-    ]);
-    expect(typeof result.readFile).toBe("function");
-    expect(result.workspaceDir).toBe("/tmp/explicit-workspace");
+    expect(result.workspaceDir).toBe(explicit ? override : provided);
+    const bytes = await readOutboundMediaFile(result.readFile!, "report.txt", { maxBytes: 1024 });
+    expect(bytes.toString()).toBe(explicit ? "override" : "provided");
+    await expect(
+      readOutboundMediaFile(
+        result.readFile!,
+        path.join(explicit ? provided : override, "report.txt"),
+        {
+          maxBytes: 1024,
+        },
+      ),
+    ).rejects.toThrow(/not under an allowed directory/i);
   });
 
   it("keeps explicit workspaceDir in localRoots when agent id is unavailable", () => {
@@ -306,6 +302,59 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     expect(loaded.buffer.toString()).toBe("generated");
     expect(workspaceReadFile).not.toHaveBeenCalled();
   });
+
+  it.each(["overlapping", "unrelated"] as const)(
+    "enforces the approved temp boundary with missing sentinel directories and %s state",
+    async (stateLocation) => {
+      const preferredTmpRoot = getDefaultMediaLocalRoots()[0];
+      if (!preferredTmpRoot) {
+        throw new Error("preferred temp media root is unavailable");
+      }
+      await fs.mkdir(preferredTmpRoot, { recursive: true });
+      const runtimeRoot = tempDirs.make(
+        "media-missing-sentinels-",
+        await fs.realpath(preferredTmpRoot),
+      );
+      const aliasParent = tempDirs.make("media-state-alias-");
+      const aliasRoot = path.join(aliasParent, "runtime");
+      await fs.symlink(runtimeRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+      const stateDir = path.join(
+        stateLocation === "overlapping" ? aliasRoot : aliasParent,
+        "state",
+      );
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const workspaceDir = path.join(runtimeRoot, "state", "worktrees", "selected");
+      const outsidePath = path.join(runtimeRoot, "sibling", "private.txt");
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(path.dirname(outsidePath));
+      await fs.writeFile(path.join(workspaceDir, "selected.txt"), "selected workspace");
+      await fs.writeFile(outsidePath, "approved temp content");
+      for (const sentinel of ["workspace", "sandboxes"]) {
+        await expect(fs.stat(path.join(stateDir, sentinel))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+        cfg: { tools: { fs: { workspaceOnly: true } } },
+        workspaceDir,
+        sessionWorkspaceDir: workspaceDir,
+        workspaceOnly: true,
+        mediaSources: [outsidePath],
+      });
+      const options = buildOutboundMediaLoadOptions({ mediaAccess });
+      const selected = await loadWebMediaRaw(path.join(workspaceDir, "selected.txt"), options);
+      expect(selected.buffer.toString()).toBe("selected workspace");
+      if (stateLocation === "overlapping") {
+        await expect(loadWebMediaRaw(outsidePath, options)).rejects.toMatchObject({
+          code: "path-not-allowed",
+        });
+      } else {
+        const approved = await loadWebMediaRaw(outsidePath, options);
+        expect(approved.buffer.toString()).toBe("approved temp content");
+      }
+    },
+  );
 
   it("rejects sibling sandbox media for a workspace-only agent", async () => {
     const baseDir = tempDirs.make("workspace-only-sibling-sandbox-");

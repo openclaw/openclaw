@@ -362,7 +362,7 @@ describe("executeAgentTurn: terminal failures", () => {
             replyOperation: "supersededError" in testCase ? undefined : replyOperation,
           }),
           opts: { abortSignal: upstreamAbort.signal },
-          isRestartRecoveryArmed: () => true,
+          isRestartRecoveryArmed: async () => true,
         });
 
         expect(result.outcome).toEqual({ kind: "aborted", reason });
@@ -411,7 +411,7 @@ describe("executeAgentTurn: terminal failures", () => {
       opts: {},
       typingSignals: createMockTypingSignaler(),
       ...createAgentTurnExecutionDefaults(),
-      isRestartRecoveryArmed: () => true,
+      isRestartRecoveryArmed: async () => true,
     });
 
     expect(result).toEqual({
@@ -434,6 +434,7 @@ describe("executeAgentTurn: terminal failures", () => {
   it.each([
     {
       label: "settled result",
+      armed: true,
       result: {
         payloads: [{ text: "completed before the restart marker was observed" }],
         meta: {},
@@ -441,6 +442,7 @@ describe("executeAgentTurn: terminal failures", () => {
     },
     {
       label: "client-close error result",
+      armed: true,
       result: {
         payloads: [
           {
@@ -451,7 +453,12 @@ describe("executeAgentTurn: terminal failures", () => {
         meta: { error: { message: "codex app-server client closed before turn completed" } },
       },
     },
-  ])("hands an armed restart recovery owner the $label", async ({ label, result }) => {
+    {
+      label: "unarmed completed result",
+      armed: false,
+      result: { payloads: [{ text: "completed normally" }], meta: {} },
+    },
+  ])("settles $label after awaiting restart recovery", async ({ label, result, armed }) => {
     const runId = `armed-restart-${label.replaceAll(" ", "-")}`;
     const { replyOperation, failMock } = createMockReplyOperation();
     let operationResult: typeof replyOperation.result = null;
@@ -476,9 +483,18 @@ describe("executeAgentTurn: terminal failures", () => {
     const execution = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ replyOperation: restartReplyOperation }),
       opts: { runId } as GetReplyOptions,
-      isRestartRecoveryArmed: () => true,
+      isRestartRecoveryArmed: async () => armed,
     });
 
+    if (!armed) {
+      expect(execution).toMatchObject({
+        runId,
+        outcome: { kind: "settled", status: "ok", result },
+      });
+      expect(abortForRestart).not.toHaveBeenCalled();
+      expect(failMock).not.toHaveBeenCalled();
+      return;
+    }
     expect(execution).toEqual({
       runId,
       outcome: { kind: "aborted", reason: "restart" },

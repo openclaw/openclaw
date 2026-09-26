@@ -183,6 +183,8 @@ function asControlFactory(
       control: forRequest("main"),
       sourceHomeId: "node-native",
       codexHome: resolveCodexAppServerUserHomeDir(),
+      transport: "stdio",
+      assertCurrent: () => {},
     }),
     homesForAgent: async () => [],
     forUpstream: async (agentId) => forRequest(agentId),

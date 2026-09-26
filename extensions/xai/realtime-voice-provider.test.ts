@@ -5,89 +5,7 @@ import { XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS } from "./realtime-voice-config
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const { FakeWebSocket, isProviderAuthProfileConfiguredMock, resolveApiKeyForProviderMock } =
-  vi.hoisted(() => {
-    type Listener = (...args: unknown[]) => void;
-
-    class MockWebSocket {
-      static readonly OPEN = 1;
-      static readonly CLOSED = 3;
-      static instances: MockWebSocket[] = [];
-
-      readonly listeners = new Map<string, Listener[]>();
-      readyState = 0;
-      sent: string[] = [];
-      closed = false;
-      terminated = false;
-      deferClose = false;
-      pendingClose: { code: number; reason: Buffer } | undefined;
-      args: unknown[];
-
-      constructor(...args: unknown[]) {
-        this.args = args;
-        MockWebSocket.instances.push(this);
-      }
-
-      on(event: string, listener: Listener): this {
-        const listeners = this.listeners.get(event) ?? [];
-        listeners.push(listener);
-        this.listeners.set(event, listeners);
-        return this;
-      }
-
-      emit(event: string, ...args: unknown[]): void {
-        for (const listener of this.listeners.get(event) ?? []) {
-          listener(...args);
-        }
-      }
-
-      emitServer(event: unknown): void {
-        this.emit("message", Buffer.from(JSON.stringify(event)));
-      }
-
-      open(): void {
-        this.readyState = MockWebSocket.OPEN;
-        this.emit("open");
-      }
-
-      send(payload: string): void {
-        this.sent.push(payload);
-      }
-
-      close(code?: number, reason?: string): void {
-        this.closed = true;
-        this.readyState = MockWebSocket.CLOSED;
-        const closeEvent = { code: code ?? 1000, reason: Buffer.from(reason ?? "") };
-        if (this.deferClose) {
-          this.pendingClose = closeEvent;
-          return;
-        }
-        this.emit("close", closeEvent.code, closeEvent.reason);
-      }
-
-      terminate(): void {
-        this.terminated = true;
-        this.close(1006, "terminated");
-      }
-
-      flushClose(): void {
-        const closeEvent = this.pendingClose;
-        this.pendingClose = undefined;
-        if (closeEvent) {
-          this.emit("close", closeEvent.code, closeEvent.reason);
-        }
-      }
-    }
-
-    return {
-      FakeWebSocket: MockWebSocket,
-      isProviderAuthProfileConfiguredMock: vi.fn((_params: { agentDir?: string }) => false),
-      resolveApiKeyForProviderMock: vi.fn(
-        async (_params: { agentDir?: string }): Promise<{ apiKey: string | undefined }> => ({
-          apiKey: undefined,
-        }),
-      ),
-    };
-  });
+  await vi.hoisted(() => import("./realtime-voice-socket.test-support.js"));
 
 vi.mock("./ws-runtime.js", () => ({
   WebSocket: FakeWebSocket,
@@ -101,91 +19,15 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
-type TestBridgeOptions = Parameters<
-  ReturnType<typeof buildXaiRealtimeVoiceProvider>["createBridge"]
->[0];
-type TestBridge = ReturnType<ReturnType<typeof buildXaiRealtimeVoiceProvider>["createBridge"]>;
-type SentRealtimeEvent = {
-  type: string;
-  audio?: string;
-  item?: {
-    type?: string;
-  };
-  session?: {
-    voice?: string;
-    model?: string;
-    turn_detection?: {
-      type?: string;
-      threshold?: number;
-      silence_duration_ms?: number;
-      prefix_padding_ms?: number;
-    };
-    audio?: {
-      input?: { format?: Record<string, unknown>; transcription?: Record<string, unknown> };
-      output?: { format?: Record<string, unknown> };
-    };
-    resumption?: {
-      enabled?: boolean;
-    };
-    reasoning?: {
-      effort?: string;
-    };
-    tools?: unknown[];
-    tool_choice?: string;
-  };
-};
-
-function waitForRealtimeState<T>(assertion: () => T | Promise<T>): Promise<T> {
-  return vi.waitFor(assertion, { interval: 1 });
-}
-
-function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
-  return socket.sent.map((payload: string) => JSON.parse(payload) as SentRealtimeEvent);
-}
-
-function requireSocket(index = 0): FakeWebSocketInstance {
-  const socket = FakeWebSocket.instances[index];
-  if (!socket) {
-    throw new Error(`expected xAI realtime socket at index ${index}`);
-  }
-  return socket;
-}
-
-function requireSession(socket: FakeWebSocketInstance, index = 0): Record<string, unknown> {
-  const session = parseSent(socket)[index]?.session;
-  if (!session || typeof session !== "object") {
-    throw new Error("expected session.update payload");
-  }
-  return session as Record<string, unknown>;
-}
-
-function createTestBridge(options: Partial<TestBridgeOptions> = {}): TestBridge {
-  return buildXaiRealtimeVoiceProvider().createBridge({
-    providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
-    onAudio: vi.fn(),
-    onClearAudio: vi.fn(),
-    ...options,
-  });
-}
-
-async function startRealtimeBridge(bridge: TestBridge, index = 0, conversationId?: string) {
-  const connecting = bridge.connect();
-  await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(index + 1));
-  const socket = requireSocket(index);
-  socket.open();
-  if (conversationId) {
-    socket.emitServer({ type: "conversation.created", conversation: { id: conversationId } });
-  }
-  socket.emitServer({ type: "session.updated" });
-  return { connecting, socket };
-}
-
-async function openRealtimeBridge(bridge: TestBridge, index = 0, conversationId?: string) {
-  const { connecting, socket } = await startRealtimeBridge(bridge, index, conversationId);
-  await connecting;
-  return socket;
-}
+import {
+  createTestBridge,
+  openRealtimeBridge,
+  parseSent,
+  requireSession,
+  requireSocket,
+  startRealtimeBridge,
+  waitForRealtimeState,
+} from "./realtime-voice-provider.test-support.js";
 
 describe("buildXaiRealtimeVoiceProvider", () => {
   it.each([false, true])(
@@ -1047,10 +889,13 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       item_id: "item_1",
       transcript: "OpenClaw",
     });
+    socket.emitServer({ type: "response.done", response: { status: "completed" } });
     await bridge.close();
 
-    expect(onTranscript).toHaveBeenCalledOnce();
-    expect(onTranscript).toHaveBeenCalledWith("user", "OpenClaw", true);
+    expect(onTranscript.mock.calls).toEqual([
+      ["user", "OpenClaw", false, { textMode: "snapshot" }],
+      ["user", "OpenClaw", true, { textMode: "snapshot" }],
+    ]);
   });
 
   it("forwards standard incremental input-transcription events", async () => {

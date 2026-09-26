@@ -119,6 +119,22 @@ describe("daemon install verification", () => {
     expect(params.emit).not.toHaveBeenCalled();
   });
 
+  it("reports registration separately from readiness for a still-starting service", async () => {
+    const params = {
+      ...createInstallParams(vi.fn(async () => true)),
+      successMessage:
+        "Gateway service installed. Runtime readiness has not been checked; startup may still be in progress.",
+    };
+    await installDaemonServiceAndEmit(params);
+    expect(params.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: true,
+        result: "installed",
+        message: params.successMessage,
+      }),
+    );
+  });
+
   it("emits success only after the service-manager verification succeeds", async () => {
     const params = createInstallParams(vi.fn(async () => true));
 
@@ -164,5 +180,88 @@ describe("daemon install verification", () => {
       "Gateway post-install check failed: Error: post-check boom",
     );
     expect(params.emit).not.toHaveBeenCalled();
+  });
+});
+
+describe("daemon output contract", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([false, true])("keeps emit JSON-only even with a message (json=%s)", (json) => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const context = createDaemonActionContext({ action: "install", json });
+    context.warnings.push("", "repeat", "repeat");
+
+    context.emit({ ok: true, message: "machine-only detail" });
+
+    expect(log).not.toHaveBeenCalled();
+    expect(writeJson.mock.calls).toEqual(
+      json
+        ? [
+            [
+              {
+                action: "install",
+                ok: true,
+                message: "machine-only detail",
+                hintItems: undefined,
+                warnings: ["", "repeat", "repeat"],
+              },
+            ],
+          ]
+        : [],
+    );
+    expect(context.warnings).toEqual(["", "repeat", "repeat"]);
+  });
+
+  it.each([false, true])("emits failure and ordered hints before exit (json=%s)", (json) => {
+    const events: unknown[][] = [];
+    const failure = new Error("fixture exit");
+    vi.spyOn(defaultRuntime, "log").mockImplementation((...args) => {
+      events.push(["log", ...args]);
+    });
+    vi.spyOn(defaultRuntime, "error").mockImplementation((...args) => {
+      events.push(["error", ...args]);
+    });
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
+      events.push(["json", value]);
+    });
+    vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      events.push(["exit", code]);
+      throw failure;
+    });
+    const context = createDaemonActionContext({ action: "restart", json });
+    context.warnings.push("first", "", "first");
+
+    expect(() =>
+      context.fail("not healthy", ["inspect", "retry"], "restart-health-failed"),
+    ).toThrow(failure);
+
+    expect(events).toEqual(
+      json
+        ? [
+            [
+              "json",
+              {
+                action: "restart",
+                ok: false,
+                error: "not healthy",
+                hints: ["inspect", "retry"],
+                result: "restart-health-failed",
+                hintItems: [
+                  { kind: "generic", text: "inspect" },
+                  { kind: "generic", text: "retry" },
+                ],
+                warnings: ["first", "", "first"],
+              },
+            ],
+            ["exit", 1],
+          ]
+        : [
+            ["error", "not healthy"],
+            ["log", "Tip: inspect"],
+            ["log", "Tip: retry"],
+            ["exit", 1],
+          ],
+    );
   });
 });

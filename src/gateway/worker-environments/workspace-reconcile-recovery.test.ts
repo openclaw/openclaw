@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 import {
   parseWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
@@ -14,7 +15,6 @@ import {
 import {
   applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
-  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
   changedPaths,
@@ -666,6 +666,21 @@ describe("worker workspace reconciliation recovery", () => {
     await fs.mkdir(path.join(local, "__pycache__"));
     await fs.writeFile(path.join(local, "__pycache__/file.pyc"), "local cache");
 
+    await expect(
+      recoverWorkerWorkspaceReconciliation({
+        root: local,
+        journal: {
+          ...legacyJournal,
+          baseEntries: legacyJournal.baseEntries.map((entry) =>
+            entry.path === ":literal.ts" && entry.type === "file"
+              ? { ...entry, sha256: "0".repeat(64) }
+              : entry,
+          ),
+        },
+      }),
+    ).rejects.toThrow();
+    expect(await fs.readFile(path.join(local, ":literal.ts"), "utf8")).toBe("remote literal");
+
     await recoverWorkerWorkspaceReconciliation({ root: local, journal: legacyJournal });
 
     expect(await fs.readFile(path.join(local, "file.txt"), "utf8")).toBe("remote");
@@ -874,7 +889,7 @@ describe("worker workspace reconciliation recovery", () => {
   });
 
   it("counts only changed payload bytes and includes UTF-8 symlink targets", () => {
-    const entries: WorkerWorkspaceManifestEntry[] = Array.from({ length: 4 }, (_, index) => ({
+    const entries: WorkerWorkspaceManifestEntry[] = Array.from({ length: 12 }, (_, index) => ({
       path: `file-${index}`,
       type: "file",
       mode: 0o644,
@@ -893,76 +908,36 @@ describe("worker workspace reconciliation recovery", () => {
       ...current,
       entries: [...entries, { path: "link", type: "symlink", mode: 0o777, target: "a" }],
     };
-    const lastFile = entries[3]!;
+    const lastIndex = entries.length - 1;
+    const lastFile = entries[lastIndex]!;
     if (lastFile.type === "file") {
-      extra.entries[3] = { ...lastFile, size: lastFile.size - 1 };
+      extra.entries[lastIndex] = { ...lastFile, size: lastFile.size - 1 };
     }
     expect(workerWorkspaceTransferPaths(extra, empty)).toEqual([
-      "file-0",
-      "file-1",
-      "file-2",
-      "file-3",
+      ...entries.map((entry) => entry.path),
       "link",
     ]);
-    extra.entries[4] = { path: "link", type: "symlink", mode: 0o777, target: "é" };
+    extra.entries[entries.length] = { path: "link", type: "symlink", mode: 0o777, target: "é" };
     expect(() => workerWorkspaceTransferPaths(extra, empty)).toThrow(
       "staged result exceeds its byte limit",
     );
-    expect(workerWorkspaceTransferPaths(extra, current)).toEqual(["file-3", "link"]);
+    expect(workerWorkspaceTransferPaths(extra, current)).toEqual([lastFile.path, "link"]);
   });
 
-  it("counts serialized reconciliation records at the exact transfer boundary", () => {
-    const entries = (count: number, hash: string) =>
-      Array.from({ length: count }, (_, index) => ({
-        path: `entry-${index.toString().padStart(5, "0")}`,
-        type: "file" as const,
-        mode: 0o644,
-        size: 1,
-        sha256: hash.repeat(64),
-      }));
-    const manifest = (values: WorkerWorkspaceManifestEntry[]): WorkerWorkspaceManifest => ({
+  it("accepts a directory replacement spanning two complete supported inventories", () => {
+    const manifest = (prefix: string): WorkerWorkspaceManifest => ({
       version: 1,
       baseCommit: null,
-      entries: values,
-    });
-    const modificationBoundary = MAX_RECONCILIATION_ENTRIES / 2;
-    const base = manifest(entries(modificationBoundary, "a"));
-    const current = manifest(entries(modificationBoundary, "b"));
-    expect(workerWorkspaceTransferPaths(current, base)).toHaveLength(modificationBoundary);
-
-    const overBase = manifest(entries(modificationBoundary + 1, "a"));
-    const overCurrent = manifest(entries(modificationBoundary + 1, "b"));
-    expect(() => workerWorkspaceTransferPaths(overCurrent, overBase)).toThrow(
-      `exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-    );
-
-    const additions = manifest(entries(MAX_RECONCILIATION_ENTRIES, "c"));
-    const empty = manifest([]);
-    expect(workerWorkspaceTransferPaths(additions, empty)).toHaveLength(MAX_RECONCILIATION_ENTRIES);
-    expect(workerWorkspaceTransferPaths(empty, additions)).toEqual([]);
-    expect(() =>
-      workerWorkspaceTransferPaths(empty, manifest(entries(MAX_RECONCILIATION_ENTRIES + 1, "c"))),
-    ).toThrow("entry limit");
-    const replacedPath = base.entries.at(-1)!.path;
-    const directoryReplacement = {
-      ...current,
-      entries: current.entries.slice(0, -1),
-      directories: [replacedPath],
-    };
-    expect(workerWorkspaceTransferPaths(directoryReplacement, base)).toHaveLength(
-      modificationBoundary - 1,
-    );
-    expect(() =>
-      workerWorkspaceTransferPaths(
-        {
-          ...directoryReplacement,
-          entries: [
-            ...directoryReplacement.entries,
-            { ...current.entries[0]!, path: `${replacedPath}/child` },
-          ],
-        },
-        base,
+      entries: [],
+      directories: Array.from(
+        { length: MAX_WORKSPACE_INVENTORY_ENTRIES },
+        (_, index) => `${prefix}-${index.toString().padStart(6, "0")}`,
       ),
-    ).toThrow("entry limit");
+    });
+    const base = manifest("removed");
+    const current = manifest("added");
+
+    expect(workerWorkspaceTransferPaths(current, base)).toEqual([]);
+    expect(changedPaths(base, current).size).toBe(2 * MAX_WORKSPACE_INVENTORY_ENTRIES);
   });
 });

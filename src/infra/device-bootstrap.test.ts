@@ -15,6 +15,7 @@ import {
 import { tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -82,6 +83,7 @@ afterEach(async () => {
   vi.useRealTimers();
   resetLogger();
   setLoggerOverride(null);
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
 });
@@ -181,11 +183,13 @@ describe("device bootstrap tokens", () => {
     const databaseOptions = { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } };
     const initial = openOpenClawStateDatabase(databaseOptions);
     initial.db.exec("ALTER TABLE device_bootstrap_tokens DROP COLUMN setup_id;");
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     await issueDeviceBootstrapToken({ baseDir });
     const afterGenericIssue = openOpenClawStateDatabase(databaseOptions);
     expect(tableHasColumn(afterGenericIssue.db, "device_bootstrap_tokens", "setup_id")).toBe(false);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const setup = await issueDevicePairSetupBootstrapToken({
@@ -450,31 +454,6 @@ describe("device bootstrap tokens", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("rejects a setup credential that expires after verification but before consumption", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-14T12:00:00Z"));
-    const baseDir = await createTempDir();
-    const issued = await issueDevicePairSetupBootstrapToken({
-      baseDir,
-      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-    });
-    await verifyBootstrapToken(baseDir, issued.token);
-
-    vi.setSystemTime(new Date(Date.now() + 10 * 60 * 1000 + 1));
-    await expect(
-      consumeDeviceBootstrapTokenWithSetupCompletion({
-        token: issued.token,
-        deviceId: "device-123",
-        completedAtMs: Date.now(),
-        baseDir,
-      }),
-    ).resolves.toBeNull();
-
-    await expect(
-      readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
-    ).resolves.toBeNull();
   });
 
   // Databases written before this table shipped stay at the same schema

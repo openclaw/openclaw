@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import * as dispatcherWorkspace from "./dispatcher-workspace.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
 } from "./test/sqlite-store.js";
+import * as workspaceAccess from "./workspace-access.js";
 
 const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
 
@@ -180,6 +182,116 @@ describe("Workboard dispatcher ownership", () => {
       await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
     }
   });
+
+  it.each([
+    { stage: "authority", error: "workspace authority unavailable" },
+    { stage: "implicit", error: "implicit workspace denied" },
+    { stage: "explicit", error: "explicit workspace denied" },
+    {
+      stage: "missing-target",
+      error: "target agent workspace is unavailable for restricted dispatch",
+    },
+    { stage: "non-error", error: "non-Error authority failure" },
+  ])(
+    "keeps $stage preflight failures unclaimed and continues to a healthy card",
+    async ({ stage, error }) => {
+      const store = createWorkboardSqliteTestStore();
+      const rejected = [];
+      const workspace: Parameters<typeof store.create>[0]["workspace"] =
+        stage === "explicit" ? { kind: "dir", path: "/workspace/denied" } : undefined;
+      for (const [index, priority] of (["urgent", "high"] as const).entries()) {
+        rejected.push(
+          await store.create({
+            title: `Rejected worker ${index + 1}`,
+            status: "ready",
+            priority,
+            agentId: `rejected-worker-${index + 1}`,
+            workspaceAccess: { unrestricted: true },
+            ...(workspace ? { workspace } : {}),
+          }),
+        );
+      }
+      const healthy = await store.create({
+        title: "Healthy worker",
+        status: "ready",
+        agentId: "healthy-worker",
+        workspaceAccess: { unrestricted: true },
+      });
+      const rejectedIds = new Set(rejected.map((card) => card.id));
+      const before = await Promise.all(rejected.map((card) => store.get(card.id)));
+      const resolveAccess = dispatcherWorkspace.resolveDispatchWorkspaceAccess;
+      const resolve = vi
+        .spyOn(dispatcherWorkspace, "resolveDispatchWorkspaceAccess")
+        .mockImplementation(async (params) => {
+          if (!rejectedIds.has(params.card.id)) {
+            return await resolveAccess(params);
+          }
+          if (stage === "authority") {
+            throw new Error("workspace authority unavailable");
+          }
+          if (stage === "non-error") {
+            return await vi
+              .fn<() => Promise<never>>()
+              .mockRejectedValue("non-Error authority failure")();
+          }
+          return {
+            workspaceAccess: {
+              unrestricted: false,
+              roots: ["/workspace/denied"],
+              writable: true,
+            },
+            ...(stage === "missing-target" ? {} : { targetWorkspace: "/workspace/denied" }),
+            persistWorkspaceAccess: false,
+          };
+        });
+      const implicit = vi
+        .spyOn(workspaceAccess, "assertCanonicalWorkboardRootAccess")
+        .mockRejectedValue(new Error("implicit workspace denied"));
+      const explicit = vi
+        .spyOn(workspaceAccess, "assertWorkboardWorkspaceSourceAccess")
+        .mockRejectedValue(new Error("explicit workspace denied"));
+      const claim = vi.spyOn(store, "claim");
+      const prepare = vi.spyOn(store, "prepareExecutionLaunch");
+      const block = vi.spyOn(store, "block");
+      const fail = vi.spyOn(store, "failPreparedLaunch");
+      const run = vi.fn().mockResolvedValue({ runId: "run-healthy-worker" });
+
+      try {
+        const result = await dispatchAndStartWorkboardCards({
+          store,
+          subagent: { run },
+          options: { now: 10, maxStarts: 1 },
+        });
+
+        expect(result.startFailures).toEqual(
+          rejected.map((card) => ({ cardId: card.id, title: card.title, error })),
+        );
+        expect(result.started).toEqual([
+          {
+            cardId: healthy.id,
+            title: healthy.title,
+            sessionKey: expect.any(String),
+            runId: "run-healthy-worker",
+          },
+        ]);
+        expect(claim.mock.calls.map(([cardId]) => cardId)).toEqual([healthy.id]);
+        expect(prepare.mock.calls.map(([cardId]) => cardId)).toEqual([healthy.id]);
+        expect(run).toHaveBeenCalledOnce();
+        expect(block).not.toHaveBeenCalled();
+        expect(fail).not.toHaveBeenCalled();
+        const after = await Promise.all(rejected.map((card) => store.get(card.id)));
+        expect(after).toEqual(before);
+        await expect(store.get(healthy.id)).resolves.toMatchObject({
+          status: "running",
+          execution: { runId: "run-healthy-worker" },
+        });
+      } finally {
+        for (const spy of [resolve, implicit, explicit, claim, prepare, block, fail]) {
+          spy.mockRestore();
+        }
+      }
+    },
+  );
 
   it("tries a healthy owner before retrying a failed owner's queued cards", async () => {
     const store = createWorkboardSqliteTestStore();

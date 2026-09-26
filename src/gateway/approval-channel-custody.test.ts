@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
   listAccountIds: vi.fn(),
   defaultAccountId: vi.fn(),
+  hasApproverSettings: { value: true },
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -15,7 +16,17 @@ vi.mock("../channels/plugins/index.js", () => ({
       defaultAccountId: mocks.defaultAccountId,
     },
   }),
-  resolveChannelApprovalCapability: () => ({ authorizeActorAction: mocks.authorize }),
+  resolveChannelApprovalCapability: () =>
+    mocks.hasApproverSettings.value ? { authorizeActorAction: mocks.authorize } : undefined,
+}));
+
+// Owner matching needs loaded channel plugins; the qa-channel scenario covers it for real.
+vi.mock("../auto-reply/command-auth.js", () => ({
+  isConfiguredCommandOwner: (
+    cfg: OpenClawConfig,
+    requester: { channel: string; senderId: string },
+  ) =>
+    cfg.commands?.ownerAllowFrom?.includes(`${requester.channel}:${requester.senderId}`) === true,
 }));
 
 const reviewer = (accountId: string) => ({
@@ -35,6 +46,7 @@ describe("prepareApprovalChannelCustody", () => {
     mocks.authorize.mockReset().mockReturnValue({ authorized: true });
     mocks.listAccountIds.mockReset().mockReturnValue(["default", "ops"]);
     mocks.defaultAccountId.mockReset().mockReturnValue("default");
+    mocks.hasApproverSettings.value = true;
   });
 
   it("authorizes only the account recorded by the request source", () => {
@@ -109,5 +121,40 @@ describe("prepareApprovalChannelCustody", () => {
         reviewer: reviewer("ops"),
       })?.authorizes(request({ command: "printf approval" })),
     ).toBe(false);
+  });
+
+  describe("channels without approver settings", () => {
+    const ircSender = { channel: "irc", accountId: "default", senderId: "alice" };
+    const ownerCfg = { commands: { ownerAllowFrom: ["irc:alice"] } } as OpenClawConfig;
+    const change = request({ command: "set config logging.level to info" });
+
+    beforeEach(() => {
+      mocks.hasApproverSettings.value = false;
+    });
+
+    it("lets only a configured owner decide an OpenClaw change", () => {
+      expect(
+        prepareApprovalChannelCustody({
+          cfg: ownerCfg,
+          approvalKind: "system-agent",
+          reviewer: ircSender,
+        })?.authorizes(change),
+      ).toBe(true);
+      expect(
+        prepareApprovalChannelCustody({
+          cfg: ownerCfg,
+          approvalKind: "system-agent",
+          reviewer: { ...ircSender, senderId: "bob" },
+        }),
+      ).toBeNull();
+    });
+
+    it("grants no owner custody for exec or plugin approvals", () => {
+      for (const approvalKind of ["exec", "plugin"] as const) {
+        expect(
+          prepareApprovalChannelCustody({ cfg: ownerCfg, approvalKind, reviewer: ircSender }),
+        ).toBeNull();
+      }
+    });
   });
 });

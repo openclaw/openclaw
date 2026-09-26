@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
   createGatewayBroadcaster,
@@ -22,6 +23,7 @@ import {
   subscribePluginSessionsChanged,
 } from "./server-session-events.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
@@ -231,6 +233,167 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledOnce();
     expect(broadcastToConnIds).not.toHaveBeenCalled();
     expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "marker first",
+    "keyed first",
+    "keyed after resolution",
+    "different store",
+    "conflicting agent",
+  ])("joins an unresolved marker to its keyed lane: %s", async (scenario) => {
+    const hasEarlierKeyedUpdate = scenario === "keyed first";
+    const keyedAfterResolution = scenario === "keyed after resolution";
+    const differentStore = scenario === "different store";
+    const markerAgentId = scenario === "conflicting agent" ? "work" : undefined;
+    const storePath = "/tmp/marker-queue-order.sqlite";
+    const otherStorePath = "/tmp/marker-queue-other.sqlite";
+    const otherEntry = { sessionId: "sess-other", updatedAt: 1 };
+    const projection = createSessionRowProjectionFixture({
+      cfg: runtimeConfigState.value,
+      agentId: "main",
+      storePath,
+      store: {
+        global: { sessionId: "sess-main", updatedAt: 1 },
+        "agent:main:independent": { sessionId: "sess-independent", updatedAt: 1 },
+        ...(differentStore ? { "agent:main:global": otherEntry } : {}),
+      },
+      targetsBySessionKey: differentStore
+        ? new Map([
+            [
+              "agent:main:global",
+              {
+                agentId: "main",
+                storeKey: "global",
+                storeTarget: { agentId: "main", storePath: otherStorePath },
+                entry: otherEntry,
+                readSourceEntry: () => undefined,
+                resolveSourceKey: (key) => key,
+              },
+            ],
+          ])
+        : undefined,
+    });
+    const membershipEntered = createDeferred();
+    const releaseMembership = createDeferred();
+    const markerResolved = createDeferred();
+    let markerReady = false;
+    const findBySessionId = projection.findBySessionId.bind(projection);
+    vi.spyOn(projection, "findBySessionId").mockImplementation((query) => {
+      if (!markerReady) {
+        return [];
+      }
+      const rows = findBySessionId(query);
+      markerResolved.resolve();
+      return rows;
+    });
+    vi.spyOn(projection, "prepareMembership").mockImplementation(async () => {
+      membershipEntered.resolve();
+      await releaseMembership.promise;
+      markerReady = true;
+    });
+    const earlierReadEntered = createDeferred();
+    const releaseEarlierRead = createDeferred();
+    const markerReadEntered = createDeferred();
+    const releaseMarkerRead = createDeferred<number>();
+    readSessionMessageCountAsyncMock.mockImplementation(async () => {
+      markerReadEntered.resolve();
+      return await releaseMarkerRead.promise;
+    });
+    readSessionMessageByIdAsyncMock.mockImplementation(async (_scope, id: string) => {
+      if (id === "earlier") {
+        earlierReadEntered.resolve();
+        await releaseEarlierRead.promise;
+      }
+      return storedMessage(id, 1);
+    });
+    const broadcastToConnIds = vi.fn();
+    const handler = createTranscriptUpdateBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
+      sessionMessageSubscribers: { get: () => new Set<string>() },
+      chatAbortControllers: new Map(),
+      getSessionRowProjection: () => projection,
+    });
+    const tasks: Promise<void>[] = [];
+    const messages = () => broadcastToConnIds.mock.calls.map((call) => call[1]?.messageId);
+    try {
+      if (hasEarlierKeyedUpdate) {
+        tasks.push(
+          handler({
+            target: { agentId: "main", sessionId: "sess-main", sessionKey: "global", storePath },
+            message: { role: "assistant", content: "earlier" },
+            messageId: "earlier",
+          }),
+        );
+        await withTestTimeout(earlierReadEntered.promise, 2_000, "Earlier read did not start");
+      }
+      tasks.push(
+        handler({
+          sessionFile: `sqlite:main:sess-main:${storePath}`,
+          ...(markerAgentId ? { agentId: markerAgentId } : {}),
+          message: { role: "assistant", content: "marker" },
+          messageId: "marker",
+          ...(keyedAfterResolution ? {} : { messageSeq: 2 }),
+        }),
+      );
+      await withTestTimeout(membershipEntered.promise, 2_000, "Marker readiness did not start");
+      if (keyedAfterResolution) {
+        releaseMembership.resolve();
+        await withTestTimeout(
+          markerReadEntered.promise,
+          2_000,
+          "Resolved marker read did not start",
+        );
+      }
+      tasks.push(
+        handler({
+          sessionKey: "agent:main:global",
+          ...(differentStore
+            ? {
+                target: {
+                  agentId: "main",
+                  sessionKey: "global",
+                  sessionId: otherEntry.sessionId,
+                  storePath: otherStorePath,
+                },
+              }
+            : {}),
+          message: { role: "assistant", content: "later" },
+          messageId: "later",
+          messageSeq: 3,
+        }),
+      );
+      const independent = handler({
+        sessionKey: "agent:main:independent",
+        message: { role: "assistant", content: "independent" },
+        messageId: "independent",
+        messageSeq: 1,
+      });
+      tasks.push(independent);
+      await withTestTimeout(independent, 2_000, "Unrelated key stalled behind marker readiness");
+      expect(messages()).toEqual(["independent"]);
+      releaseMembership.resolve();
+      await withTestTimeout(markerResolved.promise, 2_000, "Marker key did not resolve");
+      if (hasEarlierKeyedUpdate) {
+        expect(messages()).toEqual(["independent"]);
+      }
+      releaseEarlierRead.resolve();
+      releaseMarkerRead.resolve(2);
+      await Promise.all(tasks);
+      expect(messages()).toEqual([
+        "independent",
+        ...(hasEarlierKeyedUpdate ? ["earlier"] : []),
+        "marker",
+        "later",
+      ]);
+    } finally {
+      releaseMembership.resolve();
+      releaseEarlierRead.resolve();
+      releaseMarkerRead.resolve(2);
+      await Promise.allSettled(tasks);
+      projection.dispose();
+    }
   });
 
   it.each([

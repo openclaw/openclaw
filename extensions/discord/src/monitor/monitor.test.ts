@@ -1,3 +1,6 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover monitor plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";

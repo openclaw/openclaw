@@ -143,7 +143,7 @@ describe("tool display details", () => {
       resolveToolDisplay({
         name: "sessions_spawn",
         args: {
-          task: "double-message-bug-gpt",
+          taskName: "double-message-bug-gpt",
           label: 0,
           runTimeoutSeconds: 0,
         },
@@ -1061,7 +1061,7 @@ describe("coerceDisplayValue middle truncation", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "sessions_spawn",
-        args: { task: longPath },
+        args: { label: longPath },
       }),
     );
     // Should contain the start of the path
@@ -1070,17 +1070,6 @@ describe("coerceDisplayValue middle truncation", () => {
     expect(detail).toContain("important-file.txt");
     // Should contain the ellipsis for middle truncation
     expect(detail).toContain("…");
-  });
-
-  it("does not truncate short string values", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_spawn",
-        args: { task: "short-task-name" },
-      }),
-    );
-    expect(detail).toBe("short-task-name");
-    expect(detail).not.toContain("…");
   });
 
   it("redacts credential-like values in long generic string details", () => {
@@ -1094,7 +1083,7 @@ describe("coerceDisplayValue middle truncation", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "sessions_spawn",
-        args: { task: longValue },
+        args: { label: longValue },
       }),
     );
     // The ghp_ token must be redacted before truncation
@@ -1109,7 +1098,7 @@ describe("coerceDisplayValue middle truncation", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "sessions_spawn",
-        args: { task: longValue },
+        args: { label: longValue },
       }),
     );
 

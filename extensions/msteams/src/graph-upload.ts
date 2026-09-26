@@ -26,26 +26,6 @@ const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
 
-async function requestSharePoint(
-  url: string,
-  init: RequestInit,
-  params: Pick<MSTeamsSendHandoff, "assertDirectAdapterHandoff"> & { fetchFn?: typeof fetch },
-): Promise<Response> {
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
-    init,
-    fetchImpl: params.fetchFn,
-    mode: "trusted_env_proxy",
-    beforeRequest: () => assertMSTeamsSendHandoff(params),
-    // Preserve fetch's redirect limit, method/body replay, and cross-origin
-    // credential stripping while checking authority again before each hop.
-    maxRedirects: 20,
-    allowCrossOriginUnsafeRedirectReplay: true,
-    auditContext: "msteams.graph-upload",
-  });
-  return responseWithRelease(response, release);
-}
-
 export function requireMSTeamsSharePointSiteId(siteId?: string): string {
   const normalized = siteId?.trim();
   if (!normalized) {
@@ -70,10 +50,64 @@ const SHAREPOINT_REQUEST_TIMEOUT_LABEL = "MS Teams SharePoint request";
 const SHAREPOINT_UPLOAD_TIMEOUT_LABEL = "MS Teams SharePoint upload";
 const GRAPH_TOKEN_TIMEOUT_LABEL = "MS Teams Graph token acquisition";
 
-async function getGraphAccessToken(tokenProvider: MSTeamsAccessTokenProvider): Promise<string> {
-  return await withMSTeamsRequestDeadline({
-    label: GRAPH_TOKEN_TIMEOUT_LABEL,
-    work: async () => await tokenProvider.getAccessToken(GRAPH_SCOPE),
+async function requestSharePointJson<T>(
+  params: {
+    tokenProvider: MSTeamsAccessTokenProvider;
+    fetchFn?: typeof fetch;
+  } & MSTeamsSendHandoff,
+  request: {
+    url: string;
+    init?: () => Pick<RequestInit, "method" | "body"> & { headers?: Record<string, string> };
+    label: string;
+    error: string | ((response: Response) => string);
+    timeoutMs?: number;
+  },
+): Promise<T> {
+  return await withMSTeamsAbortableRequestTimeout({
+    label:
+      request.timeoutMs !== undefined
+        ? SHAREPOINT_UPLOAD_TIMEOUT_LABEL
+        : SHAREPOINT_REQUEST_TIMEOUT_LABEL,
+    timeoutMs: request.timeoutMs,
+    work: async (signal) => {
+      assertMSTeamsSendHandoff(params);
+      const token = await withMSTeamsRequestDeadline({
+        label: GRAPH_TOKEN_TIMEOUT_LABEL,
+        work: () => params.tokenProvider.getAccessToken(GRAPH_SCOPE),
+      });
+      assertMSTeamsSendHandoff(params);
+      const init = request.init?.();
+      const { response, release } = await fetchWithSsrFGuard({
+        url: request.url,
+        init: {
+          ...init,
+          headers: {
+            "User-Agent": buildUserAgent(),
+            Authorization: `Bearer ${token}`,
+            ...init?.headers,
+          },
+          signal,
+        },
+        fetchImpl: params.fetchFn,
+        mode: "trusted_env_proxy",
+        beforeRequest: () => assertMSTeamsSendHandoff(params),
+        // Preserve fetch's redirect limit, method/body replay, and cross-origin
+        // credential stripping while checking authority again before each hop.
+        maxRedirects: 20,
+        allowCrossOriginUnsafeRedirectReplay: true,
+        auditContext: "msteams.graph-upload",
+      });
+      const res = responseWithRelease(response, release);
+      if (!res.ok) {
+        throw await createMSTeamsHttpError(
+          res,
+          typeof request.error === "string" ? request.error : request.error(res),
+        );
+      }
+      return await readProviderJsonResponse<T>(res, request.label, {
+        chunkTimeoutMs: request.timeoutMs,
+      });
+    },
   });
 }
 
@@ -105,38 +139,16 @@ async function uploadToSharePoint(
   const uploadUrl = `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content?@microsoft.graph.conflictBehavior=rename`;
   const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length);
 
-  const data = await withMSTeamsAbortableRequestTimeout({
-    label: SHAREPOINT_UPLOAD_TIMEOUT_LABEL,
+  const data = await requestSharePointJson<Partial<DriveUploadResult>>(params, {
+    url: uploadUrl,
     timeoutMs,
-    work: async (signal) => {
-      assertMSTeamsSendHandoff(params);
-      const token = await getGraphAccessToken(params.tokenProvider);
-      assertMSTeamsSendHandoff(params);
-      const res = await requestSharePoint(
-        uploadUrl,
-        {
-          method: "PUT",
-          headers: {
-            "User-Agent": buildUserAgent(),
-            Authorization: `Bearer ${token}`,
-            "Content-Type": params.contentType ?? "application/octet-stream",
-          },
-          body: new Blob([bufferToBlobPart(params.buffer)]),
-          signal,
-        },
-        params,
-      );
-
-      if (!res.ok) {
-        throw await createMSTeamsHttpError(res, "SharePoint upload failed");
-      }
-
-      return await readProviderJsonResponse<{
-        id?: string;
-        webUrl?: string;
-        name?: string;
-      }>(res, "msteams.graph-upload.uploadSharePointFile", { chunkTimeoutMs: timeoutMs });
-    },
+    init: () => ({
+      method: "PUT",
+      headers: { "Content-Type": params.contentType ?? "application/octet-stream" },
+      body: new Blob([bufferToBlobPart(params.buffer)]),
+    }),
+    error: "SharePoint upload failed",
+    label: "msteams.graph-upload.uploadSharePointFile",
   });
 
   if (!data.id || !data.webUrl || !data.name) {
@@ -182,31 +194,10 @@ export async function getDriveItemProperties(
     fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
 ): Promise<DriveItemProperties> {
-  const data = await withMSTeamsAbortableRequestTimeout({
-    label: SHAREPOINT_REQUEST_TIMEOUT_LABEL,
-    work: async (signal) => {
-      assertMSTeamsSendHandoff(params);
-      const token = await getGraphAccessToken(params.tokenProvider);
-      assertMSTeamsSendHandoff(params);
-      const res = await requestSharePoint(
-        `${GRAPH_ROOT}/sites/${params.siteId}/drive/items/${params.itemId}?$select=eTag,webDavUrl,name`,
-        {
-          headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
-          signal,
-        },
-        params,
-      );
-
-      if (!res.ok) {
-        throw await createMSTeamsHttpError(res, "Get driveItem properties failed");
-      }
-
-      return await readProviderJsonResponse<{
-        eTag?: string;
-        webDavUrl?: string;
-        name?: string;
-      }>(res, "msteams.graph-upload.getDriveItemProperties");
-    },
+  const data = await requestSharePointJson<Partial<DriveItemProperties>>(params, {
+    url: `${GRAPH_ROOT}/sites/${params.siteId}/drive/items/${params.itemId}?$select=eTag,webDavUrl,name`,
+    error: "Get driveItem properties failed",
+    label: "msteams.graph-upload.getDriveItemProperties",
   });
 
   if (!data.eTag || !data.webDavUrl || !data.name) {
@@ -231,40 +222,19 @@ async function getChatMembers(
     fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
 ): Promise<ChatMember[]> {
-  return await withMSTeamsAbortableRequestTimeout({
-    label: SHAREPOINT_REQUEST_TIMEOUT_LABEL,
-    work: async (signal) => {
-      assertMSTeamsSendHandoff(params);
-      const token = await getGraphAccessToken(params.tokenProvider);
-      assertMSTeamsSendHandoff(params);
-      const res = await requestSharePoint(
-        `${GRAPH_ROOT}/chats/${params.chatId}/members`,
-        {
-          headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
-          signal,
-        },
-        params,
-      );
-
-      if (!res.ok) {
-        // Graph 403 covers permissions, licensing, and conditional access. RSC
-        // grants are not token roles, so no local signal can safely widen access.
-        const message =
-          res.status === 403
-            ? "Get chat members failed; verify Graph chat-member permissions and tenant access policies"
-            : "Get chat members failed";
-        throw await createMSTeamsHttpError(res, message);
-      }
-
-      const data = await readProviderJsonResponse<{
-        value?: Array<{ userId?: string }>;
-      }>(res, "msteams.graph-upload.getChatMembers");
-      const members = (data.value ?? [])
-        .map((member) => ({ aadObjectId: member.userId ?? "" }))
-        .filter((member) => member.aadObjectId);
-      return members;
-    },
+  const data = await requestSharePointJson<{ value?: Array<{ userId?: string }> }>(params, {
+    url: `${GRAPH_ROOT}/chats/${params.chatId}/members`,
+    // Graph 403 covers permissions, licensing, and conditional access. RSC
+    // grants are not token roles, so no local signal can safely widen access.
+    error: (res) =>
+      res.status === 403
+        ? "Get chat members failed; verify Graph chat-member permissions and tenant access policies"
+        : "Get chat members failed",
+    label: "msteams.graph-upload.getChatMembers",
   });
+  return (data.value ?? [])
+    .map((member) => ({ aadObjectId: member.userId ?? "" }))
+    .filter((member) => member.aadObjectId);
 }
 
 /**
@@ -299,35 +269,15 @@ async function createSharePointSharingLink(
     body.recipients = params.recipientObjectIds.map((id) => ({ objectId: id }));
   }
 
-  const data = await withMSTeamsAbortableRequestTimeout({
-    label: SHAREPOINT_REQUEST_TIMEOUT_LABEL,
-    work: async (signal) => {
-      assertMSTeamsSendHandoff(params);
-      const token = await getGraphAccessToken(params.tokenProvider);
-      assertMSTeamsSendHandoff(params);
-      const res = await requestSharePoint(
-        `${apiRoot}/sites/${params.siteId}/drive/items/${params.itemId}/createLink`,
-        {
-          method: "POST",
-          headers: {
-            "User-Agent": buildUserAgent(),
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(body),
-          signal,
-        },
-        params,
-      );
-
-      if (!res.ok) {
-        throw await createMSTeamsHttpError(res, "Create SharePoint sharing link failed");
-      }
-
-      return await readProviderJsonResponse<{
-        link?: { webUrl?: string };
-      }>(res, "msteams.graph-upload.createSharePointSharingLink");
-    },
+  const data = await requestSharePointJson<{ link?: { webUrl?: string } }>(params, {
+    url: `${apiRoot}/sites/${params.siteId}/drive/items/${params.itemId}/createLink`,
+    init: () => ({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    error: "Create SharePoint sharing link failed",
+    label: "msteams.graph-upload.createSharePointSharingLink",
   });
 
   if (!data.link?.webUrl) {

@@ -74,6 +74,45 @@ describe("model route intent", () => {
       }),
     ).toEqual({ runtimeId: "codex", authRequirement: "api-key", source: "inherited" });
   });
+
+  it.each([false, true].flatMap((acp) => [false, true].map((prepared) => ({ acp, prepared }))))(
+    "inherits native runtime and billing policy (ACP=$acp prepared=$prepared)",
+    ({ acp, prepared }) => {
+      const cfg: OpenClawConfig = {
+        ...config,
+        auth: {
+          profiles: {
+            "openai:native": { provider: "openai", mode: "api_key" },
+            "openai:harness": { provider: "openai", mode: "oauth" },
+          },
+        },
+        agents: {
+          defaults: { ...config.agents?.defaults, model: "openai/gpt-5.5@openai:native" },
+          entries: {
+            assistant: {
+              model: "openai/harness-model@openai:harness",
+              ...(acp ? { runtime: { type: "acp" } } : {}),
+            },
+          },
+        },
+      };
+      expect(
+        resolveModelRouteIntent({
+          config: cfg,
+          provider: "openai",
+          modelId: "gpt-5.4-mini",
+          agentId: "assistant",
+          ...(prepared
+            ? { primaryModel: { provider: "openai", model: acp ? "gpt-5.5" : "harness-model" } }
+            : {}),
+        }),
+      ).toEqual(
+        acp
+          ? { runtimeId: "codex", authRequirement: "api-key", source: "inherited" }
+          : { authRequirement: "subscription", source: "inherited" },
+      );
+    },
+  );
 });
 
 function resolveModelRuntimePolicy(

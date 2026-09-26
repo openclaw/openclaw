@@ -119,7 +119,7 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
     expect(
       resolveEmbeddedCompactionThinkingLevel({
         config: {
-          agents: { defaults: { compaction: { thinkingLevel: "ultra" } } },
+          agents: { defaults: { compaction: { thinkingLevel: "xhigh" } } },
         },
         provider: "demo",
         modelId: "demo-model",

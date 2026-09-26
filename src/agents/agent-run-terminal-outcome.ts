@@ -526,6 +526,8 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
   abortSignal?: AbortSignal;
 }): AgentRunTerminalOutcome {
   const projected = projectAgentRunAttemptTerminal(input.terminal);
+  // Yield cleanup can retain a synthetic aborted assistant after stripping its transcript entry.
+  const assistant = projected.cleanupYieldAborted ? undefined : input.assistant;
   const abortFields = resolveAgentRunAbortLifecycleFields(input.abortSignal);
   const timedOut = projected.timedOut || abortFields.stopReason === "timeout";
   const timedOutDuringPrompt =
@@ -537,7 +539,7 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
   const restartAborted = hasNestedAbortReason(projected.promptError, isAgentRunRestartAbortReason);
   const superseded = hasNestedAbortReason(projected.promptError, isAgentRunSupersededAbortReason);
   const assistantStopReason =
-    projected.promptErrorSource !== null ? undefined : input.assistant?.stopReason;
+    projected.promptErrorSource !== null ? undefined : assistant?.stopReason;
   const unattributedAttemptTimeout =
     projected.timedOut && timeoutPhase === undefined && providerStarted !== true;
   const stopReason = unattributedAttemptTimeout
@@ -557,8 +559,7 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
       : "ok";
   return buildAgentRunTerminalOutcome({
     status,
-    error:
-      projected.promptErrorSource !== null ? projected.promptError : input.assistant?.errorMessage,
+    error: projected.promptErrorSource !== null ? projected.promptError : assistant?.errorMessage,
     stopReason,
     livenessState: input.promptTimeoutOutcome?.livenessState,
     timeoutPhase,

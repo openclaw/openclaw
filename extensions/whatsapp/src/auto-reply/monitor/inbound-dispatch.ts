@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements inbound dispatch behavior.
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,
@@ -118,12 +117,6 @@ type WhatsAppReplyDeliveryVisibility = {
   messageIds?: string[];
   content?: string;
 };
-
-function whatsAppReplyDeliveryVisibility(
-  visibleReplySent: boolean,
-): WhatsAppReplyDeliveryVisibility {
-  return { visibleReplySent };
-}
 
 function createWhatsAppChannelDeliveryResult(params: {
   content: string;
@@ -331,7 +324,7 @@ function createWhatsAppMediaOnlyReplyCoalescer(params: {
           pending.payload = { ...pending.payload, mediaUrl: mediaUrls[0], mediaUrls };
         }
         if (pending.mediaUrls.size === 0) {
-          pending.resolveFinalization(whatsAppReplyDeliveryVisibility(false));
+          pending.resolveFinalization({ visibleReplySent: false });
           continue;
         }
         retained.push(pending);
@@ -631,8 +624,6 @@ export function createWhatsAppReplyPlan(params: {
     tableMode?: ReturnType<typeof resolveMarkdownTableMode>;
     onMediaAccepted?: (mediaUrl: string) => void;
   }) => Promise<WhatsAppReplyDeliveryResult>;
-  groupHistories: Map<string, GroupHistoryEntry[]>;
-  groupHistoryKey: string;
   maxMediaBytes: number;
   maxMediaTextChunkLimit?: number;
   inbound: PreparedChannelInbound;
@@ -641,7 +632,6 @@ export function createWhatsAppReplyPlan(params: {
   replyPipeline: WhatsAppDispatchPipeline;
   replyResolver: typeof getReplyFromConfig;
   route: ReturnType<typeof resolveAgentRoute>;
-  shouldClearGroupHistory: boolean;
   statusReactionController?: StatusReactionController | null;
   transport: WhatsAppInboundTransportContext;
   turnAdoptionLifecycle?: NonNullable<
@@ -684,7 +674,7 @@ export function createWhatsAppReplyPlan(params: {
   ): Promise<WhatsAppReplyDeliveryVisibility> => {
     const reply = resolveSendableOutboundReplyParts(normalizedDeliveryPayload);
     if (!reply.hasMedia && !reply.text.trim()) {
-      return whatsAppReplyDeliveryVisibility(false);
+      return { visibleReplySent: false };
     }
     let delivery: WhatsAppReplyDeliveryResult;
     try {
@@ -753,7 +743,7 @@ export function createWhatsAppReplyPlan(params: {
     onSettled: async () => {
       const flushResult = await mediaOnlyCoalescer.flushAll();
       logWhatsAppMediaOnlyFlushResult(flushResult);
-      return whatsAppReplyDeliveryVisibility(didSendReply || flushResult.delivered > 0);
+      return { visibleReplySent: didSendReply || flushResult.delivered > 0 };
     },
     onReplyStart: params.transport.sendComposing,
   };
@@ -808,7 +798,7 @@ export function createWhatsAppReplyPlan(params: {
       const normalizedDeliveryPayload = payload as DeliverableWhatsAppOutboundPayload<ReplyPayload>;
       const reply = resolveSendableOutboundReplyParts(normalizedDeliveryPayload);
       if (!reply.hasMedia && !reply.text.trim()) {
-        return whatsAppReplyDeliveryVisibility(false);
+        return { visibleReplySent: false };
       }
       if (!reply.hasMedia) {
         return await deliverNormalizedPayload(normalizedDeliveryPayload, info, {
@@ -903,19 +893,6 @@ export function createWhatsAppReplyPlan(params: {
     }): boolean => {
       const didQueueVisibleReply = hasVisibleInboundReplyDispatch(dispatchResult);
       const didDeliverVisibleReply = didSendReply || dispatchResult.observedReplyDelivery === true;
-      if (!didQueueVisibleReply && !didDeliverVisibleReply) {
-        if (statusReactionController) {
-          void finalizeWhatsAppStatusReaction({
-            controller: statusReactionController,
-            outcome: "error",
-          });
-        }
-        if (params.shouldClearGroupHistory) {
-          params.groupHistories.set(params.groupHistoryKey, []);
-        }
-        logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
-        return false;
-      }
 
       if (statusReactionController) {
         void finalizeWhatsAppStatusReaction({
@@ -926,8 +903,8 @@ export function createWhatsAppReplyPlan(params: {
               : "done",
         });
       }
-      if (params.shouldClearGroupHistory) {
-        params.groupHistories.set(params.groupHistoryKey, []);
+      if (!didQueueVisibleReply && !didDeliverVisibleReply) {
+        logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
       }
       return didDeliverVisibleReply;
     },

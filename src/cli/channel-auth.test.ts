@@ -282,6 +282,28 @@ describe("channel-auth", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
+  it("awaits account preparation for inferred local logout", async () => {
+    const account = { id: "prepared-account", enabled: true };
+    const selectedPlugin = {
+      ...plugin,
+      config: {
+        ...plugin.config,
+        resolveAccount: () => {
+          throw new Error("legacy account resolution");
+        },
+        resolveAccountAsync: async () => account,
+        isEnabled: (resolved: unknown) => resolved === account,
+      },
+    };
+    mocks.listChannelPlugins.mockReturnValue([selectedPlugin]);
+    mocks.getLoadedChannelPlugin.mockReturnValue(selectedPlugin);
+    mocks.callGateway.mockRejectedValue(new Error("gateway unreachable"));
+
+    await runChannelLogout({}, runtime);
+
+    expect(mocks.logoutAccount).toHaveBeenCalledWith(expect.objectContaining({ account }));
+  });
+
   it("keeps repeated credential-free logout free of runtime-only plugin activation writes", async () => {
     const sourceConfig: OpenClawConfig = {
       channels: { whatsapp: { enabled: false } },
@@ -931,6 +953,109 @@ describe("channel-auth", () => {
 
       expect(mocks.resolveChannelDefaultAccountId).toHaveBeenCalledTimes(1);
       expectFields(readFirstCallArg(action), { accountId: "default-account" });
+    },
+  );
+  it.each(
+    [
+      { channel: "", label: "empty" },
+      { channel: "   ", label: "whitespace" },
+      { channel: "\t\n", label: "tab/newline" },
+    ].flatMap((channelCase) => [
+      { ...channelCase, mode: "login" as const },
+      { ...channelCase, mode: "logout" as const },
+    ]),
+  )("rejects a $label --channel instead of inferring one for $mode", async ({ channel, mode }) => {
+    // Auto-enable changes make channel inference persist config, so a late guard is visible.
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: { channels: { whatsapp: {} }, plugins: { allow: ["whatsapp"] } },
+      changes: ["whatsapp"],
+    });
+    const run = mode === "login" ? runChannelLogin : runChannelLogout;
+
+    await expect(run({ channel }, runtime)).rejects.toThrow("--channel must not be blank");
+
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.applyPluginAutoEnable).not.toHaveBeenCalled();
+    expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
+    expect(mocks.normalizeChannelId).not.toHaveBeenCalled();
+    expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.listChannelPluginCatalogEntries).not.toHaveBeenCalled();
+    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(mocks.ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+    expect(mocks.resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+    expect(mocks.resolveChannelDefaultAccountId).not.toHaveBeenCalled();
+    expect(mocks.resolveAccount).not.toHaveBeenCalled();
+    expect(mocks.commitConfigWithPendingPluginInstalls).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.login).not.toHaveBeenCalled();
+    expect(mocks.logoutAccount).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["login", runChannelLogin],
+    ["logout", runChannelLogout],
+  ] as const)(
+    "preserves blank-account precedence over blank-channel for %s",
+    async (_mode, run) => {
+      await expect(run({ channel: "", account: " " }, runtime)).rejects.toThrow(
+        "--account must not be blank",
+      );
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.login).not.toHaveBeenCalled();
+      expect(mocks.logoutAccount).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["login", runChannelLogin, mocks.login],
+    ["logout", runChannelLogout, mocks.logoutAccount],
+  ] as const)(
+    "keeps trimmed aliases and explicit account/agent selection for %s",
+    async (_mode, run, action) => {
+      mocks.callGateway.mockRejectedValue(new Error("gateway unreachable"));
+
+      mocks.loadConfig.mockReturnValue({
+        channels: { whatsapp: {} },
+        agents: { list: [{ id: "sales" }] },
+      });
+
+      await run({ channel: "  wa  ", account: " work ", agent: "sales" }, runtime);
+
+      expect(mocks.normalizeChannelId).toHaveBeenCalledWith("wa");
+      expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
+      expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.anything(), "sales");
+      expect(mocks.resolveChannelDefaultAccountId).not.toHaveBeenCalled();
+      expectFields(readFirstCallArg(action), { accountId: "work" });
+    },
+  );
+
+  it.each(["zero", "multiple", "disabled"] as const)(
+    "does not log out when omitted channel has %s eligible selection",
+    async (selection) => {
+      mocks.listChannelPlugins.mockReturnValue(
+        selection === "zero"
+          ? []
+          : selection === "multiple"
+            ? [plugin, { ...plugin, id: "zalouser" }]
+            : [plugin],
+      );
+      if (selection === "multiple") {
+        mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {}, zalouser: {} } });
+      } else if (selection === "disabled") {
+        mocks.loadConfig.mockReturnValue({ channels: { whatsapp: { enabled: false } } });
+      }
+
+      await expect(runChannelLogout({}, runtime)).rejects.toThrow(
+        selection === "multiple"
+          ? "Multiple configured channels support logout"
+          : "No configured channel supports logout",
+      );
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.logoutAccount).not.toHaveBeenCalled();
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     },
   );
 });

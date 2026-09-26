@@ -7,6 +7,7 @@ import {
 import type { CronJob } from "../types.js";
 import { resolveFailureAlert } from "./failure-alerts.js";
 import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
+import { runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult, authorCronRunCompletion } from "./timer.js";
 
 function stripTestTargetPrefix(raw: string, prefixes: readonly string[]): string | undefined {
@@ -519,7 +520,7 @@ describe("cron failure alert account routing", () => {
     if (!expectAlert) {
       return;
     }
-    deferredNotifications[0]?.();
+    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         channel: "telegram",
@@ -594,7 +595,7 @@ describe("cron failure alert account routing", () => {
       if (deliveryStatus === "unknown") {
         return;
       }
-      deferredNotifications[0]?.();
+      runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
       expect(sendCronFailureAlert).toHaveBeenCalledWith(
         expect.objectContaining({
           payload: {
@@ -695,7 +696,7 @@ describe("cron failure alert account routing", () => {
       },
       { deferredNotifications },
     );
-    deferredNotifications[0]?.();
+    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
 
     expect(sendCronFailureAlert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -750,7 +751,7 @@ describe("cron failure alert account routing", () => {
 
     expect(job.state.lastFailureAlertAtMs).toBe(endedAt);
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
-    deferredNotifications[0]?.();
+    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(sendCronFailureAlert).toHaveBeenCalledWith(expect.objectContaining({ runAtMs }));
   });
 
@@ -820,7 +821,7 @@ describe("cron failure alert account routing", () => {
     );
 
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
-    deferredNotifications[0]?.();
+    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(sendCronFailureAlert).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "expectedChannel" in testCase ? testCase.expectedChannel : "telegram",

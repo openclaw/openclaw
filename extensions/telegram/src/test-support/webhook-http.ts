@@ -55,7 +55,7 @@ function createSingleSettlement<T>(params: {
   };
 }
 
-export async function fetchWithTimeout(
+async function fetchWithTimeout(
   input: string,
   init: Omit<RequestInit, "signal">,
   timeoutMs: number,

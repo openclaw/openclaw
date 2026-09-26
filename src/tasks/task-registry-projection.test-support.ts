@@ -36,6 +36,7 @@ export function createProjectionTransactionDatabase(): OpenClawStateDatabase {
     },
     walMaintenance: {
       checkpoint: unexpectedDatabaseAccess,
+      reclaimFreePages: unexpectedDatabaseAccess,
       close: unexpectedDatabaseAccess,
     },
   };

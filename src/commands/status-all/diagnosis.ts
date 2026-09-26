@@ -27,10 +27,7 @@ import {
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
-import {
-  hasMissingSkillRequirements,
-  type SkillStatusReport,
-} from "../../skills/discovery/status.js";
+import type { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { formatDeliveryQueueHealthLine } from "../health-format.js";
 import type {
   resolveStatusGatewayHealthSafe,
@@ -153,7 +150,7 @@ export async function appendStatusAllDiagnosis(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
-  skillStatus: SkillStatusReport | null;
+  skillReadiness: ReturnType<typeof buildWorkspaceSkillReadiness> | null;
   pluginCompatibility: PluginCompatibilityNotice[];
   channelsStatus: unknown;
   channelIssues: ChannelIssueLike[];
@@ -161,6 +158,7 @@ export async function appendStatusAllDiagnosis(params: {
   exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
   agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
   health: Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>> | null | undefined;
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
@@ -292,11 +290,10 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push(`  ${muted(`https: ${params.tailscaleHttpsUrl}`)}`);
   }
 
-  if (params.skillStatus) {
-    const eligible = params.skillStatus.skills.filter((s) => s.eligible).length;
-    const missing = params.skillStatus.skills.filter(hasMissingSkillRequirements).length;
+  if (params.skillReadiness) {
+    const { eligible, missing, workspaceDir } = params.skillReadiness;
     emitCheck(
-      `Skills: ${eligible} eligible · ${missing} missing · ${params.skillStatus.workspaceDir}`,
+      `Skills: ${eligible} eligible · ${missing} missing · ${workspaceDir}`,
       missing === 0 ? "ok" : "warn",
     );
   }
@@ -470,6 +467,11 @@ export async function appendStatusAllDiagnosis(params: {
   } else if (params.nodeOnlyGateway) {
     emitCheck(
       `Channel issues skipped (node-only mode; query ${params.nodeOnlyGateway.gatewayTarget})`,
+      "ok",
+    );
+  } else if (params.gatewayStartupPhase) {
+    emitCheck(
+      `Channel issues skipped (gateway still starting (phase ${params.gatewayStartupPhase}))`,
       "ok",
     );
   } else {

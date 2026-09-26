@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
@@ -13,6 +13,7 @@ import {
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createPreparedVitestCliFixture } from "./run-vitest-bounded-fixture.test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const posixDescribe = process.platform === "win32" ? describe.skip : describe;
@@ -27,6 +28,12 @@ const entrypoints = [
     (name) => ({ script: `${name}.mts`, direct: false, tool: "test" }),
   ),
 ];
+const preparedCli = createPreparedVitestCliFixture(
+  repoRoot,
+  entrypoints.map(({ script }) => script),
+);
+beforeAll(() => preparedCli.prepare());
+afterAll(() => preparedCli.cleanup());
 
 describe("Vitest CLI final outcome ownership", () => {
   it.for(
@@ -103,12 +110,12 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
         let output = "";
         let signaled = false;
         const preload = script.endsWith(".mts")
-          ? ["--import", path.join(repoRoot, "scripts/tsx.mjs")]
+          ? ["--import", path.join(preparedCli.root, "scripts/tsx.mjs")]
           : [];
         const result = await lifetime.track(
           runNodeScript(
-            [...preload, path.join(repoRoot, "scripts", script), ...args],
-            env,
+            [...preload, path.join(preparedCli.root, "scripts", script), ...args],
+            preparedCli.env(env),
             45_000,
             {
               cwd: root,
@@ -363,10 +370,10 @@ it("case ${index}", () => {
       }
       const result = spawnSync(
         testNodeExecPath,
-        [path.join(repoRoot, "scripts/run-vitest.mjs"), "run", "--config", configPath],
+        [path.join(preparedCli.root, "scripts/run-vitest.mjs"), "run", "--config", configPath],
         {
           cwd: repoRoot,
-          env: { ...env, CI: "1", NO_COLOR: "1", FORCE_COLOR: "0" },
+          env: preparedCli.env({ ...env, CI: "1", NO_COLOR: "1", FORCE_COLOR: "0" }),
           encoding: "utf8",
           timeout: 45_000,
         },

@@ -3,6 +3,8 @@
  *
  * Builds stable receipts from platform send results and nested adapter receipt data.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type {
   MessageReceipt,
@@ -16,6 +18,48 @@ type MessageReceiptInputResult = MessageReceiptSourceResult & {
 
 const normalizeIdentity = (value: string | undefined): string | undefined =>
   value?.trim() || undefined;
+
+/** Reads reported recipients, including every physical part of an aggregate receipt. */
+export function listMessageReceiptSourceTargets(value: unknown): string[] {
+  const targets = new Set<string>();
+  const seen = new Set<object>();
+  const pending = [value];
+  for (const entry of pending) {
+    if (!entry || typeof entry !== "object" || seen.has(entry)) {
+      continue;
+    }
+    seen.add(entry);
+    if (Array.isArray(entry)) {
+      pending.push(...entry);
+      continue;
+    }
+    const record = asOptionalRecord(entry);
+    if (!record || record.outcome === "not_sent") {
+      continue;
+    }
+    const target = asOptionalRecord(record.target);
+    const ids = [
+      target?.id,
+      ...(
+        [
+          "chatId",
+          "channelId",
+          "roomId",
+          "conversationId",
+          "toJid",
+        ] as const satisfies readonly (keyof MessageReceiptSourceResult)[]
+      ).map((key) => record[key]),
+    ];
+    for (const id of ids) {
+      const normalized = normalizeOptionalString(id);
+      if (normalized) {
+        targets.add(normalized);
+      }
+    }
+    pending.push(record.receipt, record.raw, record.parts);
+  }
+  return [...targets];
+}
 
 export function resolveReceiptSourceId(result: MessageReceiptInputResult): string | undefined {
   if (result.outcome === "not_sent") {

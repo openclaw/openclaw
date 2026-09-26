@@ -10,6 +10,7 @@ import type {
   PluginHookSkillChangedEvent,
 } from "../../plugins/hook-types.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
+import type { CommittedSkillChange } from "./workspace-types.js";
 
 const SKILL_FILE_CANDIDATES = ["SKILL.md", "skill.md", "skills.md", "SKILL.MD"] as const;
 const EXCLUDED_ROOT_DIRS = new Set([".clawhub", ".clawdhub", ".openclaw"]);
@@ -166,15 +167,9 @@ export async function snapshotCommittedSkillArtifactBestEffort(
   }
 }
 
-export async function dispatchCommittedSkillChangeBestEffort(params: {
-  action: PluginHookSkillChangedEvent["action"];
-  source: CommittedSkillChangeSource;
-  workspaceDir: string;
-  before?: PluginHookSkillArtifact;
-  after?: PluginHookSkillArtifact;
-  proposal?: PluginHookSkillChangedEvent["proposal"];
-  logger?: Logger;
-}): Promise<void> {
+export async function dispatchCommittedSkillChangeBestEffort(
+  params: CommittedSkillChange,
+): Promise<void> {
   const runner = getGlobalHookRunner();
   if (!runner?.hasHooks("skill_changed")) {
     return;

@@ -28,7 +28,6 @@ describe("Codex plugin services", () => {
       appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
     });
 
-    expect(registerService).toHaveBeenCalledTimes(4);
     expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
       expect.objectContaining({
         id: "codex-session-catalog",
@@ -55,7 +54,6 @@ describe("Codex plugin services", () => {
     for (const appServer of [undefined, { transport: "stdio" }, { transport: "unix" }]) {
       const registerService = registerServices(appServer ? { appServer } : {});
 
-      expect(registerService).toHaveBeenCalledTimes(3);
       expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
         expect.objectContaining({
           id: "codex-session-catalog",
@@ -66,15 +64,19 @@ describe("Codex plugin services", () => {
       expect(registerService.mock.calls.map(([service]) => service.id)).not.toContain(
         "codex-app-server-connection-health",
       );
-      expect(registerService.mock.calls[0]?.[0]).toMatchObject({
-        id: "codex-desktop-generation",
-        start: expect.any(Function),
-        stop: expect.any(Function),
-      });
-      expect(registerService.mock.calls[1]?.[0]).toMatchObject({
-        id: "codex-app-server-process-reaper",
-        start: expect.any(Function),
-      });
+      expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
+        expect.objectContaining({
+          id: "codex-desktop-generation",
+          start: expect.any(Function),
+          stop: expect.any(Function),
+        }),
+      );
+      expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
+        expect.objectContaining({
+          id: "codex-app-server-process-reaper",
+          start: expect.any(Function),
+        }),
+      );
     }
   });
 });

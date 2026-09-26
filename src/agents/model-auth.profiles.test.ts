@@ -594,6 +594,52 @@ describe("getApiKeyForModelCore", () => {
     });
   });
 
+  it("resolves ChatGPT token-sharing as renewable OAuth for public Responses", async () => {
+    await expect(
+      getApiKeyForModelCore({
+        model: {
+          id: "gpt-5.5",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+        } as Model,
+        profileId: "openai:shared",
+        lockedProfile: true,
+        store: createAuthProfileStoreFixture({
+          "openai:shared": {
+            type: "oauth",
+            provider: "openai",
+            ...oauthFixture,
+            authFlow: "chatgpt-token-sharing",
+          },
+        }),
+      }),
+    ).resolves.toMatchObject({
+      apiKey: oauthFixture.access,
+      mode: "oauth",
+      authFlow: "chatgpt-token-sharing",
+      profileId: "openai:shared",
+    });
+  });
+
+  it.each([
+    ["chatgpt-token-sharing", "openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex"],
+    ["chatgpt-token-sharing", "openai-audio-transcriptions", "https://api.openai.com/v1"],
+    ["chatgpt-token-sharing", "openai-responses", "https://proxy.example/v1"],
+    ["chatgpt-identity", "openai-responses", "https://api.openai.com/v1"],
+  ])("rejects %s for %s at %s before returning a bearer", async (authFlow, api, baseUrl) => {
+    await expect(
+      getApiKeyForModelCore({
+        model: { id: "gpt-5.5", provider: "openai", api, baseUrl } as Model,
+        profileId: "openai:shared",
+        lockedProfile: true,
+        store: createAuthProfileStoreFixture({
+          "openai:shared": { type: "oauth", provider: "openai", ...oauthFixture, authFlow },
+        }),
+      }),
+    ).rejects.toThrow(/requires (the public OpenAI Responses endpoint|token-sharing consent)/);
+  });
+
   it("rejects an explicit OpenAI OAuth profile for direct OpenAI Platform models", async () => {
     const store = {
       version: 1 as const,

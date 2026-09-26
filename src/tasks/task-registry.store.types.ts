@@ -42,6 +42,11 @@ export type TaskLiveFlowAuthority = {
 
 type TaskRegistryObserverRecord = Omit<TaskRecord, "detail">;
 
+export type TaskRegistryObservers = {
+  // Observers are incremental/best-effort only. Persistence belongs to TaskRegistryStore.
+  onEvent?: (event: TaskRegistryObserverEvent) => void;
+};
+
 export type TaskRegistryObserverEvent =
   | {
       kind: "restored";

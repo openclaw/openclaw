@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { findGitRoot, resolveGitHeadPath } from "./git-root.js";
+import { findGitRoot, readGitHead } from "./git-root.js";
 
 async function expectGitRootResolution(params: {
   label: string;
@@ -13,8 +13,13 @@ async function expectGitRootResolution(params: {
 }): Promise<void> {
   await withTestDir({ prefix: `openclaw-${params.label}-` }, async (temp) => {
     const { startPath, expectedRoot, expectedHead } = await params.setup(temp);
-    expect(findGitRoot(startPath)).toBe(expectedRoot);
-    expect(resolveGitHeadPath(startPath)).toBe(expectedHead);
+    if (expectedHead) {
+      await fs.writeFile(expectedHead, `${"a".repeat(40)}\n`);
+    }
+    // Include the fixture root, but never inspect host-owned ancestors above it.
+    const maxDepth = path.relative(temp, startPath).split(path.sep).filter(Boolean).length + 1;
+    expect(findGitRoot(startPath, { maxDepth })).toBe(expectedRoot);
+    expect(readGitHead(startPath, { maxDepth })?.headPath ?? null).toBe(expectedHead);
   });
 }
 
@@ -109,7 +114,7 @@ describe("git-root", () => {
       await fs.mkdir(nested, { recursive: true });
 
       expect(findGitRoot(nested, { maxDepth: 2 })).toBeNull();
-      expect(resolveGitHeadPath(nested, { maxDepth: 2 })).toBeNull();
+      expect(readGitHead(nested, { maxDepth: 2 })).toBeUndefined();
     });
   });
 });

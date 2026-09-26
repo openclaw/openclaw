@@ -321,6 +321,10 @@ describe("gateway presence audience", () => {
         sockets.push(unauthenticated);
         const unauthenticatedEvents = observePresence(unauthenticated);
         const readers = recipients.filter(({ canRead }) => canRead);
+        // The viewer declaration already published activity. Typing within its
+        // 30-second window updates the store without another full roster event.
+        const readNow = Date.now;
+        const activityClock = vi.spyOn(Date, "now").mockImplementation(() => readNow() + 30_000);
         const typingStartedAt = Date.now();
         const eventPromises = readers.map(({ ws }) =>
           onceMessage<{ type: string; event: string; payload: { presence: SystemPresence[] } }>(
@@ -349,7 +353,7 @@ describe("gateway presence audience", () => {
               }),
             )
             .then((response) => expect(response).toMatchObject({ ok: true })),
-        ]);
+        ]).finally(() => activityClock.mockRestore());
         const activeWatcher = listSystemPresence().find(
           (entry) => entry.instanceId === watcherInstanceId,
         )!;

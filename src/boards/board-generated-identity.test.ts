@@ -2,10 +2,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import type { BoardStore } from "./board-store.js";
 import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
@@ -32,8 +36,10 @@ function generatedIdentity(key: string, fallbackName: string) {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -200,7 +206,9 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
     )
     .run(sessionKey, "cafe-menu");
 
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 
   const reopened = new SqliteBoardStore(options);
@@ -222,7 +230,9 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
   });
   expect((await readBoardHtml(reopened, { sessionKey }, "cafe-menu"))?.html).toContain("approved");
 
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 
   const durable = new SqliteBoardStore(options);
@@ -238,6 +248,7 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
     revision: 2,
   });
   expect((await readBoardHtml(durable, { sessionKey }, "cafe-menu"))?.html).toContain("approved");
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
 
   expect(
@@ -282,6 +293,7 @@ it("does not infer generated ownership from a canonical unmarked title match", a
       "UPDATE board_widgets SET manifest = json_remove(manifest, '$.nameIdentity') WHERE session_key = ? AND name = ?",
     )
     .run(sessionKey, "widget-e3b21956");
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
 
   const reopened = new SqliteBoardStore(options);
@@ -326,6 +338,7 @@ it("preserves unmarked rows whose absent or capped titles are ambiguous", async 
       "UPDATE board_widgets SET manifest = json_remove(manifest, '$.nameIdentity') WHERE session_key = ?",
     )
     .run(sessionKey);
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
 
   const reopened = new SqliteBoardStore(options);
@@ -365,6 +378,7 @@ it("persists explicit ownership across restart", async () => {
     title: "Status",
     content: { kind: "html", html: "<p>manual</p>" },
   });
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
 
   const reopened = new SqliteBoardStore(options);

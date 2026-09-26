@@ -20,18 +20,20 @@ import { matchBrowserUrlPattern } from "../url-pattern.js";
 export function createExistingSessionDeadline(
   timeoutMs: number,
   parentSignal: AbortSignal | undefined,
-  label: string,
+  label: string | Error,
 ) {
   const controller = new AbortController();
   const signal = parentSignal
     ? AbortSignal.any([parentSignal, controller.signal])
     : controller.signal;
-  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
+  const error =
+    typeof label === "string" ? new Error(`${label} timed out after ${timeoutMs}ms`) : label;
   const deadlineAt = Date.now() + timeoutMs;
   const timer = setTimeout(() => controller.abort(error), timeoutMs);
   timer.unref?.();
   return {
     signal,
+    remainingMs: () => Math.max(0, deadlineAt - Date.now()),
     throwIfAborted: () => {
       // A busy event loop must not turn a late completion into a successful action.
       if (Date.now() >= deadlineAt && !signal.aborted) {
@@ -219,40 +221,49 @@ export async function waitForExistingSessionCondition(
     return;
   }
   const timeoutMs = Math.max(250, params.timeoutMs ?? 10_000);
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const ready = await withChromeMcpDocument(params, async (document) => {
-        const readAllowedUrl = async () => {
-          const url = await document.evaluate(`(root) => {
+  const timeoutError = new Error("Timed out waiting for condition");
+  const deadline = createExistingSessionDeadline(timeoutMs, params.signal, timeoutError);
+  const { signal } = deadline;
+  try {
+    while (deadline.remainingMs() > 0) {
+      try {
+        const ready = await withChromeMcpDocument({ ...params, signal }, async (document) => {
+          deadline.throwIfAborted();
+          const readAllowedUrl = async () => {
+            deadline.throwIfAborted();
+            const url = await document.evaluate(`(root) => {
             const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
-            return boundDocument === globalThis.document ? globalThis.location.href : null;
+            return boundDocument === document ? location.href : null;
           }`);
-          if (typeof url !== "string" || !url.trim()) {
-            return null;
+            deadline.throwIfAborted();
+            if (typeof url !== "string" || !url.trim()) {
+              return null;
+            }
+            await assertBrowserNavigationResultAllowed({
+              url,
+              signal,
+              ...withBrowserNavigationPolicy(params.ssrfPolicy, {
+                browserProxyMode: params.browserProxyMode,
+              }),
+            });
+            return url;
+          };
+          const currentUrl = await readAllowedUrl();
+          if (!currentUrl) {
+            return false;
           }
-          await assertBrowserNavigationResultAllowed({
-            url,
-            signal: params.signal,
-            ...withBrowserNavigationPolicy(params.ssrfPolicy, {
-              browserProxyMode: params.browserProxyMode,
-            }),
-          });
-          return url;
-        };
-        const currentUrl = await readAllowedUrl();
-        if (!currentUrl) {
-          return false;
-        }
-        if (params.url && !matchBrowserUrlPattern(params.url, currentUrl)) {
-          return false;
-        }
-        if (!predicate) {
-          return true;
-        }
-        const outcome = await document.evaluate(`async (root) => {
+          if (params.url && !matchBrowserUrlPattern(params.url, currentUrl)) {
+            return false;
+          }
+          if (!predicate) {
+            return true;
+          }
+          deadline.throwIfAborted();
+          const outcome = await document.evaluate(`async (root) => {
           const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
-          if (boundDocument !== globalThis.document) return { kind: "navigation" };
+          if (boundDocument !== document || location.href !== ${JSON.stringify(currentUrl)}) {
+            return { kind: "navigation" };
+          }
           try {
             return { kind: "result", ready: Boolean(await (${predicate})) };
           } catch (error) {
@@ -262,36 +273,47 @@ export async function waitForExistingSessionCondition(
             return { kind: "error", message };
           }
         }`);
-        if (!outcome || typeof outcome !== "object") {
-          throw new Error("Document-bound wait returned an invalid result");
+          deadline.throwIfAborted();
+          if (!outcome || typeof outcome !== "object") {
+            throw new Error("Document-bound wait returned an invalid result");
+          }
+          if ("kind" in outcome && outcome.kind === "error") {
+            throw new Error(
+              "message" in outcome && typeof outcome.message === "string"
+                ? outcome.message
+                : "Wait predicate failed",
+            );
+          }
+          const predicateReady =
+            "kind" in outcome &&
+            outcome.kind === "result" &&
+            "ready" in outcome &&
+            outcome.ready === true;
+          if (!predicateReady || !params.url) {
+            return predicateReady;
+          }
+          const finalUrl = await readAllowedUrl();
+          return finalUrl !== null && matchBrowserUrlPattern(params.url, finalUrl);
+        });
+        deadline.throwIfAborted();
+        if (ready) {
+          return;
         }
-        if ("kind" in outcome && outcome.kind === "error") {
-          throw new Error(
-            "message" in outcome && typeof outcome.message === "string"
-              ? outcome.message
-              : "Wait predicate failed",
-          );
+      } catch (error) {
+        deadline.throwIfAborted();
+        if (!(error instanceof ChromeMcpDocumentUnavailableError)) {
+          throw error;
         }
-        const predicateReady =
-          "kind" in outcome &&
-          outcome.kind === "result" &&
-          "ready" in outcome &&
-          outcome.ready === true;
-        if (!predicateReady || !params.url) {
-          return predicateReady;
-        }
-        const finalUrl = await readAllowedUrl();
-        return finalUrl !== null && matchBrowserUrlPattern(params.url, finalUrl);
-      });
-      if (ready) {
-        return;
       }
-    } catch (error) {
-      if (!(error instanceof ChromeMcpDocumentUnavailableError)) {
-        throw error;
-      }
+      await sleep(Math.min(250, deadline.remainingMs()), undefined, { signal }).catch(
+        (error: unknown) => {
+          deadline.throwIfAborted();
+          throw error;
+        },
+      );
     }
-    await sleep(250, undefined, { signal: params.signal });
+    throw timeoutError;
+  } finally {
+    deadline.cleanup();
   }
-  throw new Error("Timed out waiting for condition");
 }

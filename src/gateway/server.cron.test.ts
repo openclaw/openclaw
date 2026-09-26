@@ -10,6 +10,7 @@ import type WebSocket from "ws";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -174,14 +175,7 @@ async function setupCronTestRun(params: {
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
   testState.cronTriggersEnabled = params.cronTriggersEnabled;
-  if (params.jobs) {
-    await saveCronStore(testState.cronStorePath, {
-      version: 1,
-      jobs: params.jobs as never,
-    });
-  } else {
-    await saveCronStore(testState.cronStorePath, { version: 1, jobs: [] });
-  }
+  await saveCronStore(storePath, { version: 1, jobs: (params.jobs ?? []) as never });
   return { prevSkipCron, dir };
 }
 
@@ -520,6 +514,10 @@ describe("gateway server cron", () => {
       tempPrefix: "openclaw-gw-cron-agent-turn-default-",
       cronEnabled: false,
     });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:webchat:loop" },
+      { sessionId: "loop", updatedAt: 1 },
+    );
     const cronState = await createDirectCronState();
 
     try {
@@ -748,32 +746,21 @@ describe("gateway server cron", () => {
         compactListRes.payload as { jobs?: Array<Record<string, unknown>> } | null
       )?.jobs;
       expect(compactJobs).toHaveLength(1);
-      expect(compactJobs?.[0]).toMatchObject({
+      expect(compactJobs?.[0]).toStrictEqual({
         id: dailyJobId,
         effectiveAgentId: "main",
         name: "daily",
         enabled: true,
+        updatedAtMs: expect.any(Number),
         scheduleKind: "every",
-        schedule: { kind: "every", everyMs: 60_000 },
+        schedule: expect.objectContaining({ kind: "every", everyMs: 60_000 }),
+        nextRunAt: expect.any(String),
+        nextRunAtMs: expect.any(Number),
         lastRunAt: null,
+        lastRunAtMs: null,
+        lastRunError: null,
         lastRunStatus: null,
       });
-      expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
-        [
-          "effectiveAgentId",
-          "enabled",
-          "id",
-          "lastRunAtMs",
-          "lastRunAt",
-          "lastRunError",
-          "lastRunStatus",
-          "name",
-          "nextRunAtMs",
-          "nextRunAt",
-          "scheduleKind",
-          "schedule",
-        ].toSorted(),
-      );
       expect(Date.parse(String(compactJobs?.[0]?.nextRunAt))).toBe(compactJobs?.[0]?.nextRunAtMs);
       expect(
         (compactListRes.payload as { deliveryPreviews?: unknown } | null)?.deliveryPreviews,

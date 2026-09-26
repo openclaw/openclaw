@@ -42,15 +42,23 @@ function publishSessionEntry(
   }
 }
 
-async function persistSessionEntryUpdate(params: {
+async function persistSkillSnapshot(params: {
   expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  sessionId?: string;
   storePath?: string;
-  nextEntry: SessionEntry;
-  updates: Partial<SessionEntry>;
+  currentEntry: SessionEntry;
+  skillsSnapshot: SessionEntry["skillsSnapshot"];
+  isFirstTurnInSession: boolean;
 }): Promise<{ entry: SessionEntry | undefined; updated: boolean }> {
+  const updates = {
+    sessionId: params.sessionId ?? params.currentEntry.sessionId ?? crypto.randomUUID(),
+    updatedAt: Date.now(),
+    ...(params.isFirstTurnInSession ? { systemSent: true } : {}),
+    skillsSnapshot: params.skillsSnapshot,
+  };
   if (!params.sessionEntryHandle && (!params.sessionStore || !params.sessionKey)) {
     return { entry: undefined, updated: false };
   }
@@ -70,7 +78,7 @@ async function persistSessionEntryUpdate(params: {
     }
     // Preparation can yield to session management. Apply only the owned fields
     // to its current row, including field removals such as unpinning.
-    const nextEntry = current ? { ...current, ...params.updates } : params.nextEntry;
+    const nextEntry = { ...(current ?? params.currentEntry), ...updates };
     publishSessionEntry(params, nextEntry);
     return { entry: nextEntry, updated: true };
   }
@@ -84,7 +92,7 @@ async function persistSessionEntryUpdate(params: {
       updated =
         entry.sessionId === params.expectedSession?.sessionId &&
         entry.lifecycleRevision === params.expectedSession?.lifecycleRevision;
-      return updated ? params.updates : null;
+      return updated ? updates : null;
     },
   );
   publishSessionEntry(params, persistedEntry ?? undefined);
@@ -186,26 +194,16 @@ export async function ensureSkillSnapshot(params: {
       !current.skillsSnapshot || shouldRefreshSnapshot
         ? initialSnapshotState.snapshot
         : (await resolveSnapshot(current.skillsSnapshot)).snapshot;
-    nextEntry = {
-      ...current,
-      sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
-      updatedAt: Date.now(),
-      systemSent: true,
-      skillsSnapshot: skillSnapshot,
-    };
-    const { entry: persistedEntry, updated } = await persistSessionEntryUpdate({
+    const { entry: persistedEntry, updated } = await persistSkillSnapshot({
       expectedSession,
       sessionEntryHandle,
       sessionStore,
       sessionKey,
+      sessionId,
       storePath,
-      nextEntry,
-      updates: {
-        sessionId: nextEntry.sessionId,
-        updatedAt: nextEntry.updatedAt,
-        systemSent: nextEntry.systemSent,
-        skillsSnapshot: nextEntry.skillsSnapshot,
-      },
+      currentEntry: current,
+      skillsSnapshot: skillSnapshot,
+      isFirstTurnInSession,
     });
     if (!updated) {
       return {
@@ -218,15 +216,11 @@ export async function ensureSkillSnapshot(params: {
     systemSent = persistedEntry?.systemSent ?? systemSent;
   }
 
-  const hasFreshSnapshotInEntry =
-    Boolean(nextEntry?.skillsSnapshot) &&
-    (nextEntry?.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot);
   const skillsSnapshot =
-    hasFreshSnapshotInEntry && nextEntry?.skillsSnapshot
+    nextEntry?.skillsSnapshot &&
+    (nextEntry.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot)
       ? (await resolveSnapshot(nextEntry.skillsSnapshot)).snapshot
-      : shouldRefreshSnapshot || !nextEntry?.skillsSnapshot
-        ? initialSnapshotState.snapshot
-        : (await resolveSnapshot(nextEntry.skillsSnapshot)).snapshot;
+      : initialSnapshotState.snapshot;
   if (
     skillsSnapshot &&
     (sessionEntryHandle || sessionStore) &&
@@ -238,24 +232,16 @@ export async function ensureSkillSnapshot(params: {
       sessionId: sessionId ?? crypto.randomUUID(),
       updatedAt: Date.now(),
     };
-    nextEntry = {
-      ...current,
-      sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
-      updatedAt: Date.now(),
-      skillsSnapshot,
-    };
-    const { entry: persistedEntry, updated } = await persistSessionEntryUpdate({
+    const { entry: persistedEntry, updated } = await persistSkillSnapshot({
       expectedSession,
       sessionEntryHandle,
       sessionStore,
       sessionKey,
+      sessionId,
       storePath,
-      nextEntry,
-      updates: {
-        sessionId: nextEntry.sessionId,
-        updatedAt: nextEntry.updatedAt,
-        skillsSnapshot: nextEntry.skillsSnapshot,
-      },
+      currentEntry: current,
+      skillsSnapshot,
+      isFirstTurnInSession,
     });
     if (!updated) {
       return {

@@ -12,12 +12,9 @@ import type {
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
-  ensureApiKeyFromOptionEnvOrPrompt,
-  normalizeApiKeyInput,
+  captureProviderApiKey,
   normalizeOptionalSecretInput,
-  type SecretInput,
-  upsertAuthProfileWithLockOrThrow,
-  validateApiKeyInput,
+  persistProviderApiKey,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
@@ -164,39 +161,19 @@ async function runZaiApiKeyAuth(
   defaultModel: string;
   notes?: string[];
 }> {
-  let capturedSecretInput: SecretInput | undefined;
-  let capturedCredential = false;
-  let capturedMode: "plaintext" | "ref" | undefined;
-  const apiKey = await ensureApiKeyFromOptionEnvOrPrompt({
+  const { apiKey, input, mode } = await captureProviderApiKey(ctx, {
     token:
       normalizeOptionalSecretInput(ctx.opts?.zaiApiKey) ??
       normalizeOptionalSecretInput(ctx.opts?.token),
     tokenProvider: normalizeOptionalSecretInput(ctx.opts?.zaiApiKey)
       ? PROVIDER_ID
       : normalizeOptionalSecretInput(ctx.opts?.tokenProvider),
-    secretInputMode:
-      ctx.allowSecretRefPrompt === false
-        ? (ctx.secretInputMode ?? "plaintext")
-        : ctx.secretInputMode,
-    config: ctx.config,
-    workspaceDir: ctx.workspaceDir,
     expectedProviders: [PROVIDER_ID, "z-ai"],
     provider: PROVIDER_ID,
     envLabel: "ZAI_API_KEY",
     promptMessage: "Enter Z.AI API key",
-    normalize: normalizeApiKeyInput,
-    validate: validateApiKeyInput,
-    prompter: ctx.prompter,
-    setCredential: async (key, mode) => {
-      capturedSecretInput = key;
-      capturedCredential = true;
-      capturedMode = mode;
-    },
+    missingInputMessage: "Missing Z.AI API key.",
   });
-  if (!capturedCredential) {
-    throw new Error("Missing Z.AI API key.");
-  }
-  const credentialInput = capturedSecretInput ?? "";
 
   const detected = await detectZaiEndpoint({ apiKey, ...(endpoint ? { endpoint } : {}) });
   const modelIdOverride = detected?.modelId;
@@ -211,9 +188,9 @@ async function runZaiApiKeyAuth(
         profileId: PROFILE_ID,
         credential: buildApiKeyCredential(
           PROVIDER_ID,
-          credentialInput,
+          input,
           undefined,
-          capturedMode ? { secretInputMode: capturedMode } : undefined,
+          mode ? { secretInputMode: mode } : undefined,
         ),
       },
     ],
@@ -243,19 +220,13 @@ async function runZaiApiKeyAuthNonInteractive(
   const modelIdOverride = detected?.modelId;
   const nextEndpoint = detected?.endpoint ?? endpoint;
 
-  if (resolved.source !== "profile") {
-    const credential = ctx.toApiKeyCredential({
+  if (
+    !(await persistProviderApiKey(ctx, PROFILE_ID, {
       provider: PROVIDER_ID,
       resolved,
-    });
-    if (!credential) {
-      return null;
-    }
-    await upsertAuthProfileWithLockOrThrow({
-      profileId: PROFILE_ID,
-      credential,
-      agentDir: ctx.agentDir,
-    });
+    }))
+  ) {
+    return null;
   }
 
   const next = applyAuthProfileConfig(ctx.config, {

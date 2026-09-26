@@ -1,8 +1,8 @@
-// Matrix plugin module implements reaction events behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
@@ -15,7 +15,6 @@ import { extractMatrixReactionAnnotation } from "../reaction-common.js";
 import { resolveMatrixThreadRootId } from "../relations.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixInboundRoute } from "./route.js";
-import type { PluginRuntime } from "./runtime-api.js";
 import { resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 

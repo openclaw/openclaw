@@ -6,7 +6,9 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import {
   openOpenClawStateDatabase,
   closeOpenClawStateDatabaseForTest,
@@ -19,16 +21,15 @@ it("refuses state removal while a peer owns a cached database, then removes afte
   const stateDir = tempDirs.make("openclaw-cleanup-handle-exclusion-");
   const configPath = path.join(stateDir, "openclaw.json");
   fs.writeFileSync(configPath, "{}\n");
-  const moduleUrl = new URL("../state/openclaw-state-db.ts", import.meta.url).href;
+  const moduleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase);
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
+      ...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
       `
-    import { openOpenClawStateDatabase, closeOpenClawStateDatabase } from ${JSON.stringify(moduleUrl)};
+    import { openOpenClawStateDatabase, closeOpenClawStateDatabase } from ${JSON.stringify(moduleUrl.href)};
     const owner = openOpenClawStateDatabase();
     process.send({ ready: true, path: owner.path });
     process.once("message", () => {

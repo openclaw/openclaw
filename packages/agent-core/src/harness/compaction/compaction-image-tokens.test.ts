@@ -6,6 +6,10 @@ import { buildSessionContext } from "../session/session.js";
 import type { SessionTreeEntry } from "../types.js";
 import { generateBranchSummary } from "./branch-summarization.js";
 import { compact, estimateTokens, findCutPoint, prepareCompaction } from "./compaction.js";
+import {
+  createCompactionModel,
+  createMessageEntry as messageEntry,
+} from "./compaction.test-support.js";
 
 const IMAGE_PAYLOAD = "a".repeat(1_500_000);
 
@@ -53,28 +57,7 @@ function assistantText(text: string, timestamp: number): AssistantMessage {
 }
 
 function summaryModel(contextWindow = 100_000): Model {
-  return {
-    id: "summary-model",
-    name: "Summary Model",
-    api: "test-api",
-    provider: "test-provider",
-    baseUrl: "https://example.test",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens: 2048,
-  };
-}
-
-function messageEntry(message: AgentMessage, index: number): SessionTreeEntry {
-  return {
-    type: "message",
-    id: `entry-${index}`,
-    parentId: index === 0 ? null : `entry-${index - 1}`,
-    timestamp: new Date(message.timestamp).toISOString(),
-    message,
-  };
+  return createCompactionModel({ contextWindow, maxTokens: 2048 });
 }
 
 function buildTranscript(recentUserTurns: AgentMessage[]): SessionTreeEntry[] {

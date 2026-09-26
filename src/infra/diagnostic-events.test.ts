@@ -2,10 +2,7 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  hasInternalDiagnosticEventInterest,
-  hasInternalDiagnosticEventListeners,
-} from "./diagnostic-event-listener-presence.js";
+import { hasInternalDiagnosticEventListeners } from "./diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
@@ -145,42 +142,6 @@ describe("diagnostic-events", () => {
       error: "failed",
     });
     expect(seen).toEqual(["webhook.received"]);
-  });
-
-  it("applies internal listener interests before dispatch", async () => {
-    const included: string[] = [];
-    const excluded: string[] = [];
-    onInternalDiagnosticEvent((event) => included.push(event.type), {
-      include: ["message.queued"],
-    });
-    onTrustedInternalDiagnosticEvent((event) => excluded.push(event.type), {
-      exclude: ["log.record"],
-    });
-
-    emitDiagnosticEvent({ type: "message.queued", source: "plugin" });
-    emitDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored" });
-    await waitForDiagnosticEventsDrained();
-
-    expect(included).toEqual(["message.queued"]);
-    expect(excluded).toEqual(["message.queued"]);
-  });
-
-  it("tracks broad, included, and excluded event interest through unsubscribe and reset", () => {
-    const stopBroad = onInternalDiagnosticEvent(() => undefined);
-    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(true);
-    stopBroad();
-    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
-
-    const stopIncluded = onInternalDiagnosticEvent(() => undefined, {
-      include: ["message.queued", "log.record"],
-      exclude: ["log.record"],
-    });
-    expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(true);
-    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
-
-    resetDiagnosticEventsForTest();
-    expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(false);
-    stopIncluded();
   });
 
   it("carries explicit trace context without creating retained trace state", () => {

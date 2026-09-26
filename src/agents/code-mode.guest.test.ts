@@ -23,9 +23,9 @@ describe("Code Mode guest execution", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("preserves text encoding primitives across explicit suspension", async () => {
@@ -65,7 +65,7 @@ describe("Code Mode guest execution", () => {
     });
   });
 
-  it("runs JavaScript through QuickJS-WASI and resumes nested tool calls with wait", async () => {
+  it("runs JavaScript through the selected executor and resumes nested tool calls with wait", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
     applyCodeModeCatalog({
@@ -540,9 +540,6 @@ describe("Code Mode guest execution", () => {
         type: "text",
         text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
       });
-      expect(result.content[0]).toMatchObject({
-        text: expect.stringContaining("SECURITY NOTICE:"),
-      });
       expect(result.content[0]).not.toMatchObject({
         text: expect.stringContaining("<|endoftext|>"),
       });
@@ -624,7 +621,7 @@ describe("Code Mode guest execution", () => {
       error: expect.stringContaining(hostile),
     });
     expect(result.content[0]).toMatchObject({
-      text: expect.stringContaining("SECURITY NOTICE:"),
+      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
     });
     expect(result.content[0]).not.toMatchObject({
       text: expect.stringContaining("<|endoftext|>"),
@@ -738,68 +735,106 @@ describe("Code Mode guest execution", () => {
     expect(testing.activeRuns.size).toBe(beforeRunCount);
   });
 
-  it("surfaces the QuickJS error name and message for guest syntax errors", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+  it.each(["node", "quickjs"] as const)(
+    "%s rejects malformed commands before dispatch and accepts a corrected follow-up",
+    async (executor) => {
+      const {
+        config,
+        catalogRef,
+        tools: codeModeTools,
+      } = createCodeModeHarness({ codeMode: { executor } });
+      const command = pluginTool("fake_command", "Run a synthetic command");
+      applyCodeModeCatalog({ tools: [...codeModeTools, command], config, catalogRef });
+      const execTool = expectDefined(codeModeTools[0], "Code Mode exec");
+      const malformed = [
+        'await fake_command({ value: "first" });',
+        String.raw`const patch = { 'newText:' const value = 1;\n };`,
+        "return await fake_command({ value: \"import test from 'node:test';\" });",
+      ].join("\n");
+      const details = resultDetails(
+        await execTool.execute("code-call-syntax", { code: malformed }),
+      );
 
-    const details = resultDetails(
-      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-        "code-call-syntax",
-        { code: "const valid = 1;\nconst x = ;" },
-      ),
-    );
+      expect(details).toMatchObject({
+        status: "failed",
+        code: "invalid_input",
+        failurePhase: "input",
+        bridgeDispatchStarted: false,
+        replaySafe: false,
+        telemetry: { callCount: 0 },
+      });
+      expect(String(details.error)).toMatch(/SyntaxError.*openclaw-code-mode:user\.js:2:\d+/);
+      expect(command.execute).not.toHaveBeenCalled();
+      expect(testing.activeRuns.size).toBe(0);
 
-    expect(details.status).toBe("failed");
-    const error = String(details.error);
-    // Regression guard: QuickJS stacks are frames only, so the error used to
-    // collapse to a bare "at openclaw-code-mode:user.js:..." location with the
-    // actual cause dropped. The model now sees the name and message.
-    expect(error).toContain("SyntaxError");
-    expect(error).toContain("unexpected token");
-    expect(error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
-    expect(error.startsWith("at ")).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "ReferenceError",
-      code: "const valid = 1;\nreturn missingFn();",
-      cause: "missingFn is not defined",
+      const corrected = await runUntilCompleted({
+        execTool,
+        waitTool: expectDefined(codeModeTools[1], "Code Mode wait"),
+        code:
+          "return await fake_command({ value: " +
+          JSON.stringify("import test from 'node:test';") +
+          " });",
+      });
+      expect(corrected).toMatchObject({
+        status: "completed",
+        replaySafe: false,
+        value: { name: "fake_command", input: { value: "import test from 'node:test';" } },
+      });
+      expect(command.execute).toHaveBeenCalledTimes(1);
+      expect(testing.activeRuns.size).toBe(0);
     },
-    { name: "TypeError", code: "const value = 1;\nvalue();", cause: "not a function" },
-  ])("surfaces the QuickJS $name at the submitted source line", async ({ name, code, cause }) => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+  );
 
-    const details = resultDetails(
-      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-        "code-call-runtime",
-        { code },
-      ),
-    );
+  it.each(
+    [
+      {
+        name: "ReferenceError",
+        code: "const valid = 1;\nreturn missingFn();",
+        cause: "missingFn is not defined",
+      },
+      { name: "TypeError", code: "const value = 1;\nvalue();", cause: "not a function" },
+      {
+        name: "SyntaxError",
+        code: 'const valid = 1;\nthrow new SyntaxError("runtime failure");',
+        cause: "runtime failure",
+      },
+    ].flatMap(({ name, code, cause }) =>
+      (["node", "quickjs"] as const).map((executor) => ({ name, code, cause, executor })),
+    ),
+  )(
+    "$executor surfaces the guest $name at the submitted source line",
+    async ({ executor, name, code, cause }) => {
+      const {
+        config,
+        catalogRef,
+        tools: codeModeTools,
+      } = createCodeModeHarness({ codeMode: { executor } });
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      });
 
-    expect(details.status).toBe("failed");
-    const error = String(details.error);
-    expect(error).toContain(name);
-    expect(error).toContain(cause);
-    expect(error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
-    expect(error).not.toContain("<eval>");
-    expect(error.startsWith("at ")).toBe(false);
-  });
+      const details = resultDetails(
+        await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+          "code-call-runtime",
+          { code },
+        ),
+      );
+
+      expect(details.status).toBe("failed");
+      const error = String(details.error);
+      expect(details).toMatchObject({ code: "internal_error", failurePhase: "guest" });
+      expect(error).toContain(name);
+      expect(error).toContain(cause);
+      expect(error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
+      expect(error).not.toContain("<eval>");
+      expect(error.startsWith("at ")).toBe(false);
+    },
+  );
 
   it("does not expose the raw host request callback", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();

@@ -12,13 +12,12 @@ import {
 import { dirname } from "node:path";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { structuredPatch, formatPatch, FILE_HEADERS_ONLY } from "diff";
-import { Type } from "typebox";
 import { isMissingPathError } from "../../../infra/errors.js";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { textResult } from "../../tools/common.js";
+import { textResult } from "../../tools/tool-results.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
 import {
@@ -38,41 +37,8 @@ import {
 } from "./render-utils.js";
 import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { writeSchema, WriteToolOutputSchema } from "./tool-schemas.js";
 
-const writeSchema = Type.Object({
-  path: Type.String({
-    description: "File path; relative/absolute.",
-  }),
-  content: Type.String({ description: "File content." }),
-});
-
-const WriteToolOutputSchema = Type.Union([
-  Type.Object({ changed: Type.Literal(false) }, { additionalProperties: false }),
-  Type.Object(
-    {
-      changed: Type.Literal(true),
-      created: Type.Literal(true),
-      diff: Type.String(),
-      patch: Type.String(),
-      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      changed: Type.Literal(true),
-      created: Type.Literal(false),
-      diff: Type.String(),
-      patch: Type.String(),
-      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    { changed: Type.Literal(true), created: Type.Optional(Type.Boolean()) },
-    { additionalProperties: false },
-  ),
-]);
 /**
  * Pluggable operations for the write tool.
  * Override these to delegate file writing to remote systems (for example SSH).
@@ -330,7 +296,7 @@ async function readOriginalWriteState(
   if (stat.size !== Buffer.byteLength(content, "utf8")) {
     return { state: "different", beforeStat: stat };
   }
-  if (!ops.readFile || stat.size > WRITE_PRECHECK_READ_LIMIT_BYTES) {
+  if (stat.size > WRITE_PRECHECK_READ_LIMIT_BYTES) {
     return { state: "unknown", beforeStat: stat };
   }
 
@@ -393,8 +359,7 @@ async function resolveWriteDetails(params: {
     beforeText === undefined &&
     !params.precheck.readAttempted &&
     beforeStat?.type === "file" &&
-    beforeStat.size <= WRITE_PRECHECK_READ_LIMIT_BYTES &&
-    params.ops.readFile
+    beforeStat.size <= WRITE_PRECHECK_READ_LIMIT_BYTES
   ) {
     const originalContent = await params.ops.readFile(params.absolutePath).catch(() => undefined);
     const candidate = Buffer.isBuffer(originalContent)
@@ -456,7 +421,7 @@ async function didWriteMetadataChange(
   beforeStat: PersistedFileStat | null | undefined,
   ops: WriteOperations,
 ): Promise<boolean> {
-  if (!beforeStat || !ops.statFile) {
+  if (!beforeStat) {
     return false;
   }
   const afterStat = await ops.statFile(absolutePath).catch(() => null);

@@ -106,7 +106,7 @@ export type SessionActivitySummaryService = {
 
 export function createSessionActivitySummaries(deps: {
   getConfig: () => OpenClawConfig;
-  onChanged: (target: ActivitySummaryTarget) => void;
+  onChanged: (target: ActivitySummaryTarget & { storePath: string }) => void;
   prepareModel?: typeof defaultPrepareModel;
   completeModel?: typeof defaultCompleteModel;
 }): SessionActivitySummaryService {

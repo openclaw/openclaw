@@ -100,6 +100,12 @@ export async function runQaFlowSuiteStandard(
     adapterOptions: {
       ...params?.adapterOptions,
       scenarioIds: selectedScenarios.map((scenario) => scenario.id),
+      ...(selectedScenarios.some(
+        (scenario) =>
+          scenario.execution.kind === "flow" && scenario.execution.config?.agentE2e === true,
+      )
+        ? { agentE2e: true }
+        : {}),
     },
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir,
@@ -130,6 +136,7 @@ export async function runQaFlowSuiteStandard(
       `provider ready: ${sanitizeQaSuiteProgressValue(activeMock?.baseUrl ?? "live")}`,
     );
     writeQaSuiteProgress(progressEnabled, "gateway start");
+    const runtimePreloads = transport.createRuntimePreloads?.();
     const activeGateway = await gateway.start({
       repoRoot,
       command: params?.sutOpenClawCommand,
@@ -162,6 +169,7 @@ export async function runQaFlowSuiteStandard(
         transport.createRuntimeEnvPatch?.(),
         buildQaGatewayHeapCheckpointRuntimeEnvPatch(),
       ),
+      ...(runtimePreloads ? { runtimePreloads } : {}),
     });
     writeQaSuiteProgress(
       progressEnabled,
@@ -481,6 +489,7 @@ export async function runQaFlowSuiteStandard(
         activeGateway.stop({
           keepTemp,
           preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
+          beforeTempCleanup: transport.captureBeforeGatewayCleanup,
         }),
       disposeAgentHarnesses: () => disposeRegisteredAgentHarnesses(),
       stopProvider: activeMock ? () => activeMock.stop() : undefined,

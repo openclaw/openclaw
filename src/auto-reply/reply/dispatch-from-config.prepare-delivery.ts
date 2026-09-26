@@ -10,14 +10,14 @@ import {
   type ReplyPayload,
 } from "../reply-payload.js";
 import { resolveRoutedPolicyConversationType } from "./dispatch-from-config.context.js";
+import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
 import type { GatherDispatchRequestReadyState } from "./dispatch-from-config.gather.js";
 import { hasAskUserPayload } from "./dispatch-from-config.payloads.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import {
   loadReplyMediaPathsRuntime,
   loadRouteReplyRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
-import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
+import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 import {
   createReplyDeliveryContext,
   resolveReplyDeliveryAccountId,
@@ -125,15 +125,15 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     return normalizeReplyMediaPaths;
   };
   const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
-    if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
+    if (isInternalWebchatTurn || !resolveSendableOutboundReplyParts(payload).hasMedia) {
       return payload;
     }
     const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
     return await normalizeReplyMediaPayloadPaths(payload);
   };
 
-  const routeReplyToOriginating = async (
-    payload: ReplyPayload,
+  const routeReplyOperationToOriginating = async (
+    operation: ReplyDispatchOperation,
     options?: {
       abortSignal?: AbortSignal;
       mirror?: boolean;
@@ -143,6 +143,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       deliveryIntentId?: string;
     },
   ) => {
+    const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
     const durableRouteAuthorized =
       options?.deliveryIntentId !== undefined && canRouteDurableBlockReply;
     const runtime =
@@ -167,8 +168,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       (ctx.CommandSource === "native"
         ? (resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey)
         : ctx.SessionKey);
-    const result = await runtime.routeReply({
-      payload,
+    const routeParams: Omit<Parameters<typeof runtime.routeReply>[0], "payload"> = {
       channel: routeReplyChannel,
       to: routeReplyTo,
       agentId: state.sessionAgentId,
@@ -195,12 +195,21 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       runId: state.params.replyOptions?.runId,
       responsePrefixContext: options?.responsePrefixContext,
       deliveryIntentId: options?.deliveryIntentId,
-    });
+    };
+    const result =
+      operation.kind === "prepared"
+        ? await runtime.routePreparedReply({ ...routeParams, plan: operation.plan })
+        : await runtime.routeReply({ ...routeParams, payload });
     // Routed sends settle here: the transport result is the settlement. This is
     // the single routed choke point, so every routed lane feeds the turn ledger.
-    turnLedger.recordRoutedDelivery(payload, result);
+    turnLedger.recordRoutedDelivery(options?.kind ?? "final", payload, result);
     return result;
   };
+
+  const routeReplyToOriginating = (
+    payload: ReplyPayload,
+    options?: Parameters<typeof routeReplyOperationToOriginating>[1],
+  ) => routeReplyOperationToOriginating({ kind: "raw", payload }, options);
 
   const isRoutedReplyDelivered = (result: { delivered: boolean; ambiguous?: boolean }) =>
     result.delivered && result.ambiguous !== true;
@@ -211,13 +220,14 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
    * Note: Only called when shouldRouteToOriginating is true, so
    * routeReplyChannel and routeReplyTo are guaranteed to be defined.
    */
-  const sendPayloadAsync = async (
-    payload: ReplyPayload,
+  const sendReplyOperationAsync = async (
+    operation: ReplyDispatchOperation,
     abortSignal?: AbortSignal,
     mirror?: boolean,
     kind: ReplyDispatchKind = "tool",
     deliveryIntentId?: string,
   ) => {
+    const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
     // Keep the runtime guard explicit because this helper is called from nested
     // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
     if (!routeReplyRuntime && !deliveryIntentId) {
@@ -227,7 +237,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     if (effectiveAbortSignal?.aborted) {
       return null;
     }
-    const result = await routeReplyToOriginating(payload, {
+    const result = await routeReplyOperationToOriginating(operation, {
       abortSignal: effectiveAbortSignal,
       mirror,
       kind,
@@ -245,12 +255,15 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     return result;
   };
 
-  type PluginBindingTranscriptOwner = {
-    agentId: string;
-    expectedSessionId?: string;
-    sessionKey: string;
-    transcriptWriteBlocked?: true;
-  };
+  const sendPayloadAsync = (
+    payload: ReplyPayload,
+    abortSignal?: AbortSignal,
+    mirror?: boolean,
+    kind: ReplyDispatchKind = "tool",
+    deliveryIntentId?: string,
+  ) =>
+    sendReplyOperationAsync({ kind: "raw", payload }, abortSignal, mirror, kind, deliveryIntentId);
+
   const deliverBindingPayload = async (
     payload: ReplyPayload,
     mode: "additive" | "terminal",
@@ -290,7 +303,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       ? turnLedger.sendQueued("tool", bindingPayload).queued
       : turnLedger.sendQueued("final", bindingPayload).queued;
   };
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
     suppressAcpChildUserDelivery,
     normalizedCurrentSurface,
     isInternalWebchatTurn,
@@ -305,6 +318,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     routeReplyToOriginating,
     isRoutedReplyDelivered,
     sendPayloadAsync,
+    sendReplyOperationAsync,
     deliverBindingPayload,
   });
   return { status: "ready" as const, state: nextState };

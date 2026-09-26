@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler.preflight context behavior.
 import type {
   DiscordMessagePreflightContext,
   DiscordMessagePreflightParams,
@@ -6,6 +5,7 @@ import type {
 
 type SharedPreflightFields =
   | "cfg"
+  | "client"
   | "discordConfig"
   | "accountId"
   | "token"
@@ -13,6 +13,7 @@ type SharedPreflightFields =
   | "buildContext"
   | "botUserId"
   | "abortSignal"
+  | "isPolicyCurrent"
   | "guildHistories"
   | "historyLimit"
   | "mediaMaxBytes"
@@ -37,6 +38,7 @@ export function buildDiscordMessagePreflightContext({
 }: BuildDiscordMessagePreflightContextParams): DiscordMessagePreflightContext {
   return {
     cfg: preflightParams.cfg,
+    client: preflightParams.client,
     discordConfig: preflightParams.discordConfig,
     accountId: preflightParams.accountId,
     token: preflightParams.token,
@@ -44,6 +46,7 @@ export function buildDiscordMessagePreflightContext({
     buildContext: preflightParams.buildContext,
     botUserId: preflightParams.botUserId,
     abortSignal: preflightParams.abortSignal,
+    isPolicyCurrent: preflightParams.isPolicyCurrent,
     guildHistories: preflightParams.guildHistories,
     historyLimit: preflightParams.historyLimit,
     mediaMaxBytes: preflightParams.mediaMaxBytes,

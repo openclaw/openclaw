@@ -3,16 +3,21 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readUnixProcessGroupMembers, signalProcessTree } from "../process/kill-tree.js";
-import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import {
+  collectProcessAncestorPids,
+  getFileLockProcessStartTime,
+  isPidDefinitelyDead,
+  MAX_ANCESTOR_WALK_DEPTH,
+} from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { readGatewayLockProcessCmdline } from "./gateway-lock-process.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
-import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { spawnPsSync } from "./spawn-ps.js";
@@ -33,29 +38,11 @@ const INITIAL_LSOF_TIMEOUT_MS = 5000;
 const PROCESS_INSPECTION_TIMEOUT_MS = 2000;
 const STALE_SIGTERM_WAIT_MS = 600;
 const STALE_SIGKILL_WAIT_MS = 400;
-/**
- * After SIGKILL, the kernel may not release the TCP port immediately.
- * Poll until the port is confirmed free (or until the budget expires) before
- * returning control to the caller (typically `triggerOpenClawRestart` →
- * `systemctl restart`). Without this wait the new process races the dying
- * process for the port and systemd enters an EADDRINUSE restart loop.
- *
- * POLL_SPAWN_TIMEOUT_MS is intentionally much shorter than the initial scan
- * so that a single slow or hung lsof invocation does not consume the entire
- * polling budget. At 400 ms per call, up to five independent lsof attempts
- * fit within PORT_FREE_TIMEOUT_MS = 2000 ms, each with a definitive outcome.
- */
+// Allow the kernel to release the port after SIGKILL before the supervisor restarts.
+// Each probe has its own shorter bound so one slow lsof cannot consume the whole budget.
 const PORT_FREE_POLL_INTERVAL_MS = 50;
 const PORT_FREE_TIMEOUT_MS = 2000;
 const POLL_SPAWN_TIMEOUT_MS = 400;
-
-/**
- * Upper bound on the ancestor-PID walk. A real-world chain is shallow
- * (pid1 → systemd → gateway → plugin-host → sidecar ≈ 5); 32 generously covers
- * nested-supervisor setups (k8s pod → containerd-shim → runc → …) while still
- * providing a hard stop against corrupted process tables or ppid cycles.
- */
-const MAX_ANCESTOR_WALK_DEPTH = 32;
 
 const restartLog = createSubsystemLogger("restart");
 
@@ -132,13 +119,7 @@ function sleepSync(ms: number): void {
   }
 }
 
-/**
- * Read a single ancestor PID from `/proc/<pid>/status` on Linux.
- * Returns null on any failure (non-Linux platform, restricted /proc, race
- * where the target pid exited between the walk step and the read); callers
- * treat a null return as "stop walking" and proceed with the ancestor set
- * collected so far.
- */
+/** An unreadable /proc hop truncates the best-effort ancestor walk. */
 function readParentPidFromProc(pid: number): number | null {
   try {
     const status = readFileSync(`/proc/${pid}/status`, "utf8");
@@ -149,13 +130,7 @@ function readParentPidFromProc(pid: number): number | null {
     const parsed = Number.parseInt(match[1] ?? "", 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   } catch {
-    // Null truncates the walk at this hop. In hardened Linux (hidepid=2,
-    // gVisor, AppArmor-locked namespaces) /proc is unreadable beyond the
-    // caller, so the walk can stop at `process.ppid`. #68451's direct
-    // gateway→sidecar topology is covered (ppid is captured without a
-    // /proc read); 3-level chains (gateway→plugin-host→sidecar) are not
-    // — pinned by the "grandparent stays killable when /proc truncates
-    // the walk" regression test.
+    // Restricted /proc can hide transitive ancestors; process.ppid still protects the direct parent.
     return null;
   }
 }
@@ -173,37 +148,9 @@ function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null
 }
 
 /**
- * Collect the set of PIDs whose termination would cascade-kill the caller:
- * the current process, its direct parent, and — where the platform permits
- * — the full ancestor chain up to the top of the pid namespace.
- *
- * Rationale: `cleanStaleGatewayProcessesSync` already refuses to kill
- * `process.pid` (see `parsePidsFromLsofOutput`), acknowledging the invariant
- * "a cleanup step must never destroy its own caller." That invariant was
- * applied only to the caller itself, not to its ancestors — which is how
- * issue #68451 arises: a plugin sidecar calls the cleanup, `lsof` reports
- * the parent gateway listening on 18789, the parent's PID passes the
- * `pid !== process.pid` filter, it is SIGTERM'd, the sidecar is then reaped
- * by the supervisor, the supervisor restarts the gateway, which re-spawns
- * the sidecar, which runs the cleanup again — infinite restart loop.
- *
- * Completing the invariant here removes the loop at its source: killing any
- * ancestor is exactly as fatal to the caller as killing itself, so ancestors
- * must receive the same exclusion treatment. The check admits any positive
- * ancestor PID (including 1), because inside a container — a first-class
- * deployment target for this project — the gateway is frequently the
- * entrypoint and therefore runs as PID 1 of its own namespace; excluding 1
- * unconditionally would recreate the #68451 loop on every containerised
- * install where the gateway spawns a direct-child sidecar.
- *
- * The walk is best-effort. `process.ppid` is provided by Node via a direct
- * syscall and is always available; transitive ancestors are read on Linux via
- * `/proc`, on macOS via `ps`, and on Windows from one process snapshot.
- *
- * The function exposes no runtime hooks. Tests exercise the real walk by
- * stubbing `process.ppid` (and, on Linux, by mocking `node:fs` to inject
- * `/proc/<pid>/status` payloads) — there is no reachable override for
- * runtime callers to mutate.
+ * Protect the caller and its ancestors from cleanup that would cascade-kill the caller.
+ * Include PID 1 for container Gateways. process.ppid is always available; transitive
+ * ancestry is best effort through /proc, ps, or one Windows process snapshot.
  */
 export function getSelfAndAncestorPidsSync(
   spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
@@ -238,20 +185,7 @@ export function getSelfAndAncestorPidsSync(
   if (!readTransitiveParent) {
     return pids;
   }
-  // Transitive ancestor walk. Each hop's validity (positive pid, not already
-  // seen) is enforced by the per-iteration `parent` check below; the entry
-  // invariant `current > 0` is established above and preserved by `current =
-  // parent` after the same check, so no separate top-of-loop guard is needed.
-  let current = immediateParent;
-  for (let depth = 0; depth < MAX_ANCESTOR_WALK_DEPTH; depth++) {
-    const parent = readTransitiveParent(current);
-    if (parent == null || parent <= 0 || pids.has(parent)) {
-      break;
-    }
-    pids.add(parent);
-    current = parent;
-  }
-  return pids;
+  return collectProcessAncestorPids(immediateParent, readTransitiveParent);
 }
 
 function getExcludedGatewayPidsSync(spawnTimeoutMs: number, protectedPid?: number): Set<number> {
@@ -261,38 +195,6 @@ function getExcludedGatewayPidsSync(spawnTimeoutMs: number, protectedPid?: numbe
     excluded.add(protectedPid);
   }
   return excluded;
-}
-
-/**
- * Parse raw PIDs from lsof -Fpc stdout, excluding the current
- * process and its ancestors (see `getSelfAndAncestorPidsSync` for the full
- * rationale). On Linux the ancestor lookup reads up to
- * `MAX_ANCESTOR_WALK_DEPTH` entries from `/proc/<pid>/status`; each read is
- * a virtual-filesystem access (no disk I/O, no external process), wrapped
- * in try/catch and degrades silently. On macOS the lookup shells out to `ps`
- * with the process-inspection timeout.
- */
-function parseLsofEntries(stdout: string): Array<{ pid: number; cmd?: string }> {
-  const entries: Array<{ pid: number; cmd?: string }> = [];
-  let currentPid: number | undefined;
-  let currentCmd: string | undefined;
-  const flush = () => {
-    if (currentPid != null) {
-      entries.push({ pid: currentPid, ...(currentCmd ? { cmd: currentCmd } : {}) });
-    }
-  };
-  for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
-    if (line.startsWith("p")) {
-      flush();
-      const parsed = parseStrictPositiveInteger(line.slice(1));
-      currentPid = parsed ?? undefined;
-      currentCmd = undefined;
-    } else if (line.startsWith("c")) {
-      currentCmd = line.slice(1);
-    }
-  }
-  flush();
-  return entries;
 }
 
 function parsePsCommandLine(raw: string): string[] {
@@ -307,15 +209,9 @@ function parsePsCommandLine(raw: string): string[] {
 }
 
 function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] | null {
-  if (process.platform === "linux") {
-    try {
-      const args = parseProcCmdline(readFileSync(`/proc/${pid}/cmdline`, "utf8"));
-      if (args.length > 0) {
-        return args;
-      }
-    } catch {
-      // Fall back to ps below; /proc may be unavailable or restricted.
-    }
+  const args = readGatewayLockProcessCmdline(pid, process.platform, spawnTimeoutMs);
+  if (args?.length || process.platform === "darwin") {
+    return args;
   }
   const res = spawnPsSync(["-ww", "-p", String(pid), "-o", "command="], spawnTimeoutMs);
   if (res.error || res.status !== 0 || !res.stdout.trim()) {
@@ -326,7 +222,9 @@ function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] 
 
 function verifyGatewayPidByArgvSync(pid: number, spawnTimeoutMs: number): boolean {
   const args = readUnixProcessArgsSync(pid, spawnTimeoutMs);
-  return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
+  return (
+    args != null && classifyOpenClawArgv(args, { command: "gateway", pid }).kind === "openclaw"
+  );
 }
 
 function parsePidsFromLsofOutput(
@@ -340,35 +238,35 @@ function parsePidsFromLsofOutput(
   // caller via the supervisor, recreating the #68451 restart loop.
   const excluded = getExcludedGatewayPidsSync(spawnTimeoutMs, protectedPid);
   const pids: number[] = [];
-  for (const entry of parseLsofEntries(stdout)) {
-    if (excluded.has(entry.pid)) {
+  for (const line of stdout.split(/\r?\n/)) {
+    const pid = line.startsWith("p") ? parseStrictPositiveInteger(line.slice(1)) : undefined;
+    if (!pid || excluded.has(pid)) {
       continue;
     }
-    if (entry.cmd && normalizeLowercaseStringOrEmpty(entry.cmd).includes("openclaw")) {
-      pids.push(entry.pid);
-      continue;
-    }
-    if (verifyGatewayPidByArgvSync(entry.pid, spawnTimeoutMs)) {
-      pids.push(entry.pid);
+    if (verifyGatewayPidByArgvSync(pid, spawnTimeoutMs)) {
+      pids.push(pid);
     }
   }
   return uniqueValues(pids);
 }
 
-/**
- * Windows: find listening PIDs on the port, then verify each is an openclaw
- * gateway process via command-line inspection. Excludes the current process
- * and its ancestors (same invariant as the lsof path — see
- * `getSelfAndAncestorPidsSync`).
- */
+// Recorded owners are never stale targets; unverifiable argv must stay explicit.
+function verifyWindowsGatewayArgv(pid: number, args: string[] | null): boolean {
+  if (!args) {
+    return false;
+  }
+  const identity = classifyOpenClawArgv(args, { command: "gateway", pid });
+  if (identity.kind === "unclassified") {
+    restartLog.warn(`Could not classify PID ${pid}: ${identity.reason}; leaving listener running.`);
+  }
+  return identity.kind === "openclaw";
+}
+
 function filterVerifiedWindowsGatewayPids(rawPids: number[], protectedPid?: number): number[] {
   const excluded = getExcludedGatewayPidsSync(PROCESS_INSPECTION_TIMEOUT_MS, protectedPid);
   return uniqueValues(rawPids)
     .filter((pid) => Number.isFinite(pid) && pid > 0 && !excluded.has(pid))
-    .filter((pid) => {
-      const args = readWindowsProcessArgsSync(pid);
-      return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
-    });
+    .filter((pid) => verifyWindowsGatewayArgv(pid, readWindowsProcessArgsSync(pid)));
 }
 
 function filterVerifiedWindowsGatewayPidsResult(
@@ -386,7 +284,7 @@ function filterVerifiedWindowsGatewayPidsResult(
     if (!argsResult.ok) {
       return { ok: false, permanent: argsResult.permanent };
     }
-    if (argsResult.args != null && isGatewayArgv(argsResult.args, { allowGatewayBinary: true })) {
+    if (verifyWindowsGatewayArgv(pid, argsResult.args)) {
       verified.push(pid);
     }
   }
@@ -495,25 +393,7 @@ export function findGatewayPidsOnPortSync(port: number, spawnTimeoutMs?: number)
   );
 }
 
-/**
- * Attempt a single lsof poll for the given port.
- *
- * Returns a discriminated union with four possible states:
- *
- *   { free: true }                      — port confirmed free
- *   { free: false }                     — port confirmed busy
- *   { free: null; permanent: false }    — transient error, keep retrying
- *   { free: null; permanent: true }     — lsof unavailable (ENOENT / EACCES),
- *                                         no point retrying
- *
- * Separating transient from permanent errors is critical so that:
- *  1. A slow/timed-out lsof call (transient) does not abort the polling loop —
- *     the caller retries until the wall-clock budget expires.
- *  2. Non-zero lsof exits from runtime/permission failures (status > 1) are
- *     not misclassified as "port free" — they are inconclusive and retried.
- *  3. A missing lsof binary (permanent) short-circuits cleanly rather than
- *     spinning the full budget pointlessly.
- */
+// Unknown probes distinguish permanent tool failures from retryable inspection errors.
 type PollResult = { free: true } | { free: false } | { free: null; permanent: boolean };
 
 function pollPortOnce(port: number): PollResult {
@@ -555,13 +435,7 @@ function pollPortOnce(port: number): PollResult {
   }
 }
 
-/**
- * Windows-specific port poll.
- * Uses a short timeout (POLL_SPAWN_TIMEOUT_MS) so a single slow PowerShell
- * invocation cannot exceed the waitForPortFreeSync wall-clock budget.
- * Only checks whether any process is listening — no gateway verification
- * needed because we already killed the stale gateway in the prior step.
- */
+// Occupancy alone matters after cleanup; keep PowerShell within the per-probe budget.
 function pollPortOnceWindows(port: number): PollResult {
   try {
     const result = readWindowsListeningPidsResultSync(port, POLL_SPAWN_TIMEOUT_MS);
@@ -682,23 +556,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-/**
- * Poll the given port until it is confirmed free, lsof is confirmed unavailable,
- * or the wall-clock budget expires.
- *
- * Each poll invocation uses POLL_SPAWN_TIMEOUT_MS (400 ms), which is
- * significantly shorter than PORT_FREE_TIMEOUT_MS (2000 ms). This ensures
- * that a single slow or hung lsof call cannot consume the entire polling
- * budget and cause the function to exit prematurely with an inconclusive
- * result. Up to five independent lsof attempts fit within the budget.
- *
- * Exit conditions:
- *   - `pollPortOnce` returns `{ free: true }`                    → port confirmed free
- *   - `pollPortOnce` returns `{ free: null, permanent: true }`   → lsof unavailable, bail
- *   - `pollPortOnce` returns `{ free: false }`                   → port busy, sleep + retry
- *   - `pollPortOnce` returns `{ free: null, permanent: false }`  → transient error, sleep + retry
- *   - Wall-clock deadline exceeded                               → log warning, proceed anyway
- */
+/** Wait for a free port, a permanent inspection failure, or the wall-clock deadline. */
 function waitForPortFreeSync(port: number): void {
   const deadline = Date.now() + PORT_FREE_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -765,11 +623,7 @@ export function cleanStaleGatewayProcessesSync(
       options?.assertCurrent?.();
       return readGatewayOwnerLease(ownerContext) === undefined;
     });
-    // Wait for the port to be released before returning — called unconditionally
-    // even when `killed` is empty (all pids were already dead before SIGTERM).
-    // A process can exit before our signal arrives yet still leave its socket
-    // in TIME_WAIT / FIN_WAIT; polling is the only reliable way to confirm the
-    // kernel has fully released the port before systemd fires the new process.
+    // Even an already-exited PID can leave its socket bound briefly; always join port release.
     waitForPortFreeSync(port);
     return killed;
   } catch {

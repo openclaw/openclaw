@@ -1,4 +1,3 @@
-// Discord plugin module implements component custom id behavior.
 import {
   escapeCustomIdFieldValue,
   needsCustomIdFieldEscaping,

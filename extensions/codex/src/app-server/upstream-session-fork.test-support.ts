@@ -67,6 +67,7 @@ export function forkResponse(threadId = "thread-forked") {
 export function forkParams() {
   return {
     targetKey: "agent:main:dashboard:forked",
+    assertCurrent: () => {},
     source: {
       agentId: "main",
       sessionId: "session-source",

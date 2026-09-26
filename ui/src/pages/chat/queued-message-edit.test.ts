@@ -14,14 +14,9 @@ import {
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { applyChatAgentsList } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
-import {
-  admitQueuedMessageForSession,
-  removeQueuedMessageWithoutReleasing,
-  subscribeChatOutboxProjection,
-  syncVisibleChatQueueProjection,
-  updateQueuedMessage,
-} from "./chat-queue.ts";
+import { admitQueuedMessageForSession, updateQueuedMessage } from "./chat-queue.ts";
 import {
   moveQueuedChatMessage,
   retryQueuedChatMessage,
@@ -61,8 +56,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function trackOutboxProjection(host: Parameters<typeof subscribeChatOutboxProjection>[0]) {
-  const unsubscribe = subscribeChatOutboxProjection(host);
+function trackOutboxProjection(
+  host: Parameters<ReturnType<typeof chatOutboxOwner>["subscribe"]>[0],
+) {
+  const unsubscribe = chatOutboxOwner(host).subscribe(host);
   outboxSubscriptions.push(unsubscribe);
   return unsubscribe;
 }
@@ -214,16 +211,23 @@ describe("queued message edit round-trip", () => {
     expect(host.chatAttachments).toEqual([added]);
   });
 
-  it("replaces the row in the same slot when the edited message is sent", async () => {
-    const { host } = queueHost([{}, {}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-2");
-    updateQueuedMessageEdit(host as never, "message 2, corrected");
-
-    await submitQueuedEdit(host);
-
-    expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
-    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
-  });
+  it.each(["corrected prompt", "/review-this", "!echo hello"])(
+    "keeps an edited row's place and only eligible frozen context: %s",
+    async (draft) => {
+      const workContext = { page: "chat", title: "Original work" };
+      const { host } = queueHost([{}, { workContext }, {}], {
+        getWorkContext: () => ({ page: "chat", title: "Later work" }),
+      });
+      beginQueuedMessageEdit(host, "queued-2");
+      updateQueuedMessageEdit(host, draft);
+      await submitQueuedEdit(host);
+      expect(storedOrder(host)).toEqual(["message 1", draft, "message 3"]);
+      expect(host.chatQueue[1]?.workContext).toEqual(
+        draft === "corrected prompt" ? workContext : undefined,
+      );
+      expect(isQueuedMessageBeingEdited(host, "queued-2")).toBe(false);
+    },
+  );
 
   it.each(["steer", "interrupt"] as const)(
     "keeps an explicitly queued edit behind earlier messages while the composer defaults to %s",
@@ -312,7 +316,7 @@ describe("queued message edit round-trip", () => {
       }
       const stalePane = makeChatHost({ connected: false, sessionKey: SESSION_KEY });
       if (mutation === "remove") {
-        removeQueuedMessageWithoutReleasing(stalePane as never, "queued-1");
+        chatOutboxOwner(stalePane).remove(stalePane as never, "queued-1");
       } else {
         expect(
           updateQueuedMessage(stalePane as never, "queued-1", (item) => ({
@@ -628,7 +632,7 @@ describe("queued message edit round-trip", () => {
           applyChatAgentsList(host, { ...agentsList, mainKey: "current" }, host.client!);
         }
         host.sessionKey = "agent:main:current";
-        syncVisibleChatQueueProjection(host);
+        chatOutboxOwner(host).syncHost(host);
         expect(host.chatQueue).toEqual([]);
         const active = activeQueuedMessageEdit(host);
         render(
@@ -657,7 +661,7 @@ describe("queued message edit round-trip", () => {
         // Returning the real routing facts restores the original owner, not a renamed token.
         applyChatAgentsList(host, agentsList, host.client!);
         host.sessionKey = SESSION_KEY;
-        syncVisibleChatQueueProjection(host);
+        chatOutboxOwner(host).syncHost(host);
         expect(activeQueuedMessageEdit(host)?.draftText).toBe("Unsaved original correction");
         expect(cancelQueuedMessageEdit(host)).toBe(true);
         expect(listStoredChatOutboxes(host)).toEqual(originalOutboxes);

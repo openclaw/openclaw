@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime approval behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
@@ -69,21 +68,10 @@ function hasObservedApprovalOptionReaction(params: MatrixQaApprovalOptionReactio
 }
 
 function assertApprovalMetadata(params: {
-  event: { approval?: unknown; eventId: string };
+  event: Pick<MatrixQaObservedEvent, "approval" | "eventId">;
   expectedKind: ChannelApprovalKind;
 }) {
-  const approval =
-    typeof params.event.approval === "object" && params.event.approval !== null
-      ? (params.event.approval as {
-          allowedDecisions?: string[];
-          hasCommandText?: boolean;
-          id?: string;
-          kind?: string;
-          state?: string;
-          type?: string;
-          version?: number;
-        })
-      : null;
+  const approval = params.event.approval;
   if (!approval) {
     throw new Error(`approval event ${params.event.eventId} did not expose metadata`);
   }

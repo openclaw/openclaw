@@ -3,7 +3,6 @@ import type { ControlUiSessionListSnapshot } from "../../../src/plugin-sdk/contr
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
@@ -22,7 +21,7 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
   const { gateway } = createGatewayHarness(client);
   const agents = createAgentCapability(gateway);
   const sessions = createTestSessionCapability(gateway);
-  const context = { gateway, agents, sessions } as unknown as ApplicationContext<RouteId>;
+  const context = { gateway, agents, sessions } as unknown as ApplicationContext;
   const abort = new AbortController();
   const owner = { client, abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
     ControlUiPluginOwner,
@@ -376,7 +375,7 @@ describe("native UI locale subscription", () => {
       agents: { subscribe },
       agentSelection: { subscribe },
       theme: { subscribe },
-    } as unknown as ApplicationContext<RouteId>;
+    } as unknown as ApplicationContext;
     const abort = new AbortController();
     const owner = { abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
       ControlUiPluginOwner,
@@ -479,7 +478,7 @@ describe("native UI page navigation", () => {
         },
         navigate,
         replace,
-      } as unknown as ApplicationContext<RouteId>;
+      } as unknown as ApplicationContext;
       const abort = new AbortController();
       const owner = { abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
         ControlUiPluginOwner,

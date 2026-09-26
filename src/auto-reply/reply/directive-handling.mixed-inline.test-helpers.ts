@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
@@ -30,6 +31,7 @@ export async function applyMixedDirectives(params: {
   aliasIndex?: ModelAliasIndex;
   senderIsOwner?: boolean;
   gatewayClientScopes?: string[];
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   directives?: InlineDirectives;
   resolveDefaultThinkingLevel?: Parameters<
     typeof applyInlineDirectiveOverrides
@@ -61,6 +63,7 @@ export async function applyMixedDirectives(params: {
       defaultModel: params.defaultModel ?? model,
       agentId: "main",
     }),
+    operatorAuthority: params.operatorAuthority,
     allowedModelKeys: new Set(allowedModels.map((entry) => `${entry.provider}/${entry.id}`)),
     allowedModelCatalog: allowedModels,
     policyAliasIndex: aliasIndex,
@@ -68,7 +71,6 @@ export async function applyMixedDirectives(params: {
     resolveThinkingCatalog: async () => allowedModels,
     resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel ?? (async () => "off"),
     resolveDefaultReasoningLevel: async () => "off",
-    needsModelCatalog: false,
   };
   const typing = {
     onReplyStart: async () => {},

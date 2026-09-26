@@ -24,6 +24,30 @@ export type InputProvenance = {
 
 export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
 
+export const PROGRESS_CARD_REFRESH_SOURCE_TOOL = "progress_card_refresh" as const;
+
+/** The card is the only visible result of this Gateway-authored status request. */
+export function isProgressCardRefreshInputProvenance(
+  provenance: InputProvenance | undefined,
+): boolean {
+  return (
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === PROGRESS_CARD_REFRESH_SOURCE_TOOL
+  );
+}
+
+/** Shared projection policy for the refresh run, never for its active steering target. */
+export function progressCardRefreshRunProjection(provenance: InputProvenance | undefined) {
+  return isProgressCardRefreshInputProvenance(provenance)
+    ? {
+        isControlUiVisible: false,
+        projectSessionMessages: false,
+        projectSessionActive: false,
+        projectSessionLifecycle: false,
+      }
+    : undefined;
+}
+
 // Internal completion provenance is distinct from the webchat routing sentinel.
 // Reusing that sentinel here makes internal work look like browser input.
 export const INTERNAL_PROVENANCE_SOURCE_CHANNEL = "internal" as const;
@@ -149,6 +173,9 @@ const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = n
 
 export function shouldPreserveUserFacingSessionStateForInputProvenance(value: unknown): boolean {
   const provenance = normalizeInputProvenance(value);
+  if (isProgressCardRefreshInputProvenance(provenance)) {
+    return true;
+  }
   if (provenance?.kind !== "inter_session") {
     return false;
   }

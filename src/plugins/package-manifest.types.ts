@@ -43,6 +43,7 @@ export type PluginPackageChannel = {
   persistedAuthState?: {
     specifier?: string;
     exportName?: string;
+    backingStore?: "plugin-state";
   };
   doctorCapabilities?: PluginPackageChannelDoctorCapabilities;
   /** Typed, serializable setup fields available before plugin runtime load. */

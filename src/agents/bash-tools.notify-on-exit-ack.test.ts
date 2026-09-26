@@ -48,7 +48,8 @@ const contexts = () => peekSystemEventEntries(QUEUE_KEY).map((event) => event.co
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
-  vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now);
 });
 afterEach(() => {
   resetProcessRegistryForTests();

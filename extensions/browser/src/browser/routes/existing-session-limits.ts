@@ -12,6 +12,8 @@ export const EXISTING_SESSION_LIMITS = {
     clickSelector: "existing-session click does not support selector targeting yet; use ref.",
     clickButtonOrModifiers:
       "existing-session click currently supports left-click only (no button overrides/modifiers).",
+    coordinateButtonOrDelay:
+      "existing-session coordinate clicks support left-click only and no delayMs; use a managed browser profile for other buttons or click delays.",
     typeSelector: "existing-session type does not support selector targeting yet; use ref.",
     typeSlowly: "existing-session type does not support slowly=true; use fill/press instead.",
     typeTimeout: "existing-session type does not support timeoutMs overrides.",
@@ -62,70 +64,93 @@ export const EXISTING_SESSION_LIMITS = {
     "emulate is not supported for existing-session profiles; use a managed browser profile for device, media, timezone, or locale settings.",
 } as const;
 
-/** Explain unsupported action shapes before existing-session dispatch. */
-export function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string | null {
+type ExistingSessionAction = Exclude<BrowserActRequest, { kind: "batch" | "insertText" }>;
+
+type ExistingSessionActionAdmission =
+  | { ok: true; action: ExistingSessionAction }
+  | { ok: false; error: string };
+
+/** Validate existing-session support before admitting a narrowed action to dispatch. */
+export function admitExistingSessionAction(
+  action: BrowserActRequest,
+): ExistingSessionActionAdmission {
+  let error: string | undefined;
   switch (action.kind) {
     case "click":
       if (action.selector) {
-        return EXISTING_SESSION_LIMITS.act.clickSelector;
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickSelector };
       }
       if (
         (action.button && action.button !== "left") ||
         (Array.isArray(action.modifiers) && action.modifiers.length > 0)
       ) {
-        return EXISTING_SESSION_LIMITS.act.clickButtonOrModifiers;
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickButtonOrModifiers };
       }
-      return null;
+      break;
     case "clickCoords":
-      return null;
+      error =
+        (action.button && action.button !== "left") || action.delayMs
+          ? EXISTING_SESSION_LIMITS.act.coordinateButtonOrDelay
+          : undefined;
+      break;
     case "type":
       if (action.selector) {
-        return EXISTING_SESSION_LIMITS.act.typeSelector;
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.typeSelector };
       }
       if (action.slowly) {
-        return EXISTING_SESSION_LIMITS.act.typeSlowly;
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.typeSlowly };
       }
-      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.typeTimeout : null;
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.typeTimeout : undefined;
+      break;
     case "insertText":
-      return EXISTING_SESSION_LIMITS.act.insertText;
+      return { ok: false, error: EXISTING_SESSION_LIMITS.act.insertText };
     case "press":
-      return action.delayMs ? EXISTING_SESSION_LIMITS.act.pressDelay : null;
+      error = action.delayMs ? EXISTING_SESSION_LIMITS.act.pressDelay : undefined;
+      break;
     case "hover":
       if (action.selector) {
-        return EXISTING_SESSION_LIMITS.act.hoverSelector;
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.hoverSelector };
       }
-      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.hoverTimeout : null;
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.hoverTimeout : undefined;
+      break;
     case "scrollIntoView":
       if (action.selector) {
-        return EXISTING_SESSION_LIMITS.act.scrollSelector;
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.scrollSelector };
       }
-      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.scrollTimeout : null;
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.scrollTimeout : undefined;
+      break;
     case "drag":
       if (action.startSelector || action.endSelector) {
-        return EXISTING_SESSION_LIMITS.act.dragSelector;
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.dragSelector };
       }
-      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.dragTimeout : null;
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.dragTimeout : undefined;
+      break;
     case "select":
       if (action.selector) {
-        return EXISTING_SESSION_LIMITS.act.selectSelector;
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.selectSelector };
       }
       if (action.values.length !== 1) {
-        return EXISTING_SESSION_LIMITS.act.selectSingleValue;
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.selectSingleValue };
       }
-      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.selectTimeout : null;
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.selectTimeout : undefined;
+      break;
     case "fill":
-      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.fillTimeout : null;
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.fillTimeout : undefined;
+      break;
     case "wait":
-      return action.loadState === "networkidle"
-        ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
-        : null;
-    case "evaluate":
-      return null;
+      error =
+        action.loadState === "networkidle"
+          ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
+          : undefined;
+      break;
     case "batch":
-      return EXISTING_SESSION_LIMITS.act.batch;
+      return { ok: false, error: EXISTING_SESSION_LIMITS.act.batch };
+    case "evaluate":
     case "resize":
     case "close":
-      return null;
+      break;
+    default:
+      throw new Error("Unsupported browser act kind");
   }
-  throw new Error("Unsupported browser act kind");
+  return error ? { ok: false, error } : { ok: true, action };
 }

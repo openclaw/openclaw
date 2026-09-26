@@ -40,8 +40,8 @@ import {
 } from "../hooks.js";
 import type { HookAgentCompletion, HookAgentDispatchResult } from "../hooks.types.js";
 import {
+  createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
-  runWithScheduledGatewayContext,
 } from "../scheduled-run-gateway-context.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
@@ -188,10 +188,10 @@ function createSessionKeyedHookDispatchQueue() {
   };
 }
 
-function validateHookAgentDeliveryAccount(params: {
+async function validateHookAgentDeliveryAccount(params: {
   cfg: OpenClawConfig;
   value: HookAgentDispatchPayload;
-}): HookAgentDispatchPayload {
+}): Promise<HookAgentDispatchPayload> {
   // Mapped hooks can defer partial/last targets to cron and cannot select an account.
   // Bind only direct hook announces whose destination is already complete.
   if (
@@ -202,7 +202,7 @@ function validateHookAgentDeliveryAccount(params: {
     return params.value;
   }
   const accountId = params.value.delivery.accountId
-    ? validateExplicitMessageAccountSelection({
+    ? await validateExplicitMessageAccountSelection({
         cfg: params.cfg,
         channel: params.value.delivery.channel,
         accountId: params.value.delivery.accountId,
@@ -251,6 +251,7 @@ export function createGatewayHookDispatcher(params: {
   } = params;
   const scheduledGatewayContextResolver =
     fenceScheduledGatewayContextResolver(resolveGatewayContext);
+  const runScheduledHook = createScheduledGatewayRunner(scheduledGatewayContextResolver);
   const enqueueHookAgentDispatch = createSessionKeyedHookDispatchQueue();
   let isolatedAgentModulePromise:
     | Promise<typeof import("../../cron/isolated-agent.js")>
@@ -431,7 +432,7 @@ export function createGatewayHookDispatcher(params: {
     }
     let acceptedValue: HookAgentDispatchPayload;
     try {
-      acceptedValue = validateHookAgentDeliveryAccount({ cfg: dispatchCfg, value });
+      acceptedValue = await validateHookAgentDeliveryAccount({ cfg: dispatchCfg, value });
       job.delivery = acceptedValue.delivery;
     } catch (err) {
       return {
@@ -501,7 +502,7 @@ export function createGatewayHookDispatcher(params: {
           try {
             const cfg = getRuntimeConfig();
             try {
-              validateHookAgentDeliveryAccount({ cfg, value: acceptedValue });
+              await validateHookAgentDeliveryAccount({ cfg, value: acceptedValue });
             } catch (err) {
               settleAdmission({
                 ok: false,
@@ -509,6 +510,9 @@ export function createGatewayHookDispatcher(params: {
                 error: formatErrorMessage(err),
                 runId,
               });
+              return;
+            }
+            if (startupAbortController.signal.aborted) {
               return;
             }
             // The accepted agent is the stable owner. Global scope stays global;
@@ -562,12 +566,7 @@ export function createGatewayHookDispatcher(params: {
                 },
                 onExecutionStarted: settleSuccessfulAdmission,
               });
-            const result = await runWithScheduledGatewayContext({
-              ...(scheduledGatewayContextResolver
-                ? { resolveGatewayContext: scheduledGatewayContextResolver }
-                : {}),
-              run: runHookIsolatedTurn,
-            });
+            const result = await runScheduledHook(runHookIsolatedTurn);
             if (admissionTimedOut) {
               return;
             }

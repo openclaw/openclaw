@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { buildChatApiAttachments } from "./attachment-api.ts";
+import { restoreChatApiAttachments } from "./attachment-restoration.ts";
 
 it.each([
   { mediaType: "text/plain;charset=utf-8", mimeType: "text/plain", type: "file" },
@@ -52,3 +53,28 @@ it.each([
     buildChatApiAttachments([{ id: "broken", dataUrl, mimeType: "application/pdf" }]),
   ).toThrow();
 });
+
+it.each(["paste", "file", undefined] as const)(
+  "preserves %s origin through queued API recovery without changing attachment bytes",
+  (origin) => {
+    const submitted = buildChatApiAttachments([
+      {
+        id: "origin-attachment",
+        mimeType: "text/plain",
+        fileName: "pasted-text-123.txt",
+        dataUrl: "data:text/plain;base64,bm90ZXM=",
+        ...(origin ? { origin } : {}),
+      },
+    ]);
+    expect(submitted).toEqual([
+      {
+        type: "file",
+        mimeType: "text/plain",
+        fileName: "pasted-text-123.txt",
+        content: "bm90ZXM=",
+        ...(origin ? { origin } : {}),
+      },
+    ]);
+    expect(buildChatApiAttachments(restoreChatApiAttachments(submitted))).toEqual(submitted);
+  },
+);

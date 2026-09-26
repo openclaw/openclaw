@@ -5,15 +5,21 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import * as commandSpawner from "../../process/exec-spawn.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { killPidIfAlive, waitForPidFile } from "../../test-utils/process-tree.js";
-import { snapshotProvisionedFiles } from "./provisioned-files.js";
+import * as worktreeGit from "./git.js";
+import { provisionIncludedFiles, snapshotProvisionedFiles } from "./provisioned-files.js";
 import {
   getRegistryWorktree,
   getRegistryWorktreeProvisionedChunk,
+  getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
   insertRegistryWorktreeProvisionedChunk,
@@ -83,9 +89,229 @@ describe("ManagedWorktreeService provisioned state", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
+
+  it("provisions only manifest-selected ignored files beside a dependency tree under a reduced output cap", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "dependencies/\n.env.local\n");
+    await fs.writeFile(
+      path.join(repo, ".worktreeinclude"),
+      ".env.local\nvisible.local\nREADME.md\ndependencies/package/*.local\n!dependencies/package/excluded.local\n",
+    );
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "configure bounded provisioning");
+    const dependencies = path.join(repo, "dependencies", "package");
+    await fs.mkdir(dependencies, { recursive: true });
+    for (let index = 0; index < 64; index++) {
+      await fs.writeFile(
+        path.join(dependencies, "generated-dependency-file-" + index + ".txt"),
+        "",
+      );
+    }
+    await fs.writeFile(path.join(dependencies, "settings.local"), "nested provisioned\n");
+    await fs.writeFile(path.join(dependencies, "excluded.local"), "excluded\n");
+    await fs.writeFile(path.join(repo, ".env.local"), "synthetic provisioned\n", { mode: 0o640 });
+    await fs.writeFile(path.join(repo, "visible.local"), "not ignored\n");
+    const realRun = worktreeGit.runGitBuffered;
+    const capped = vi
+      .spyOn(worktreeGit, "runGitBuffered")
+      .mockImplementation(async (cwd, args, options) => {
+        if (cwd === repo && args.includes("ls-files") && args.includes("--ignored")) {
+          return await realRun(cwd, args, { ...options, maxOutputBytes: 256 });
+        }
+        return await realRun(cwd, args, options);
+      });
+    try {
+      // Exercise the typed worker used for capacity estimates, then the registered service flow.
+      const inspection = await runGitWorkerOperation({
+        type: "worktree.provisioning-inspection",
+        input: { sourceRoot: repo },
+      });
+      expect(inspection).toEqual({
+        paths: [".env.local", "dependencies/package/settings.local"],
+        estimatedBytes: 8192,
+      });
+      const created = await service.create({
+        repoRoot: repo,
+        name: "dependencies",
+        baseRef: "HEAD",
+      });
+      expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(inspection.paths);
+      expect(await fs.readFile(path.join(created.path, ".env.local"), "utf8")).toBe(
+        "synthetic provisioned\n",
+      );
+      expect((await fs.stat(path.join(created.path, ".env.local"))).mode & 0o777).toBe(
+        (await fs.stat(path.join(repo, ".env.local"))).mode & 0o777,
+      );
+      expect(
+        await fs.readFile(path.join(created.path, "dependencies/package/settings.local"), "utf8"),
+      ).toBe("nested provisioned\n");
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await fs.readdir(path.join(created.path, "dependencies/package"))).toEqual([
+        "settings.local",
+      ]);
+      await expect(fs.stat(path.join(created.path, "visible.local"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      // Only paths actually created are returned; an existing checkout file is not owned.
+      const destination = path.join(root, "destination");
+      await fs.mkdir(destination);
+      await fs.writeFile(path.join(destination, ".env.local"), "destination-owned\n");
+      expect(await provisionIncludedFiles(repo, destination)).toEqual([
+        "dependencies/package/settings.local",
+      ]);
+      expect(await fs.readFile(path.join(destination, ".env.local"), "utf8")).toBe(
+        "destination-owned\n",
+      );
+    } finally {
+      capped.mockRestore();
+    }
+  });
+
+  it.each([undefined, "", "absent.local\n", "dependencies/\n!dependencies/\n"])(
+    "does not broaden empty manifest selections (%s)",
+    async (manifest) => {
+      await fs.writeFile(path.join(repo, ".gitignore"), "dependencies/\n");
+      await fs.mkdir(path.join(repo, "dependencies"));
+      await fs.writeFile(path.join(repo, "dependencies/unrelated"), "unrelated\n");
+      if (manifest !== undefined) {
+        await fs.writeFile(path.join(repo, ".worktreeinclude"), manifest);
+      }
+      const commands = vi.spyOn(worktreeGit, "runGitBuffered");
+      try {
+        expect(
+          await runGitWorkerOperation({
+            type: "worktree.provisioning-inspection",
+            input: { sourceRoot: repo },
+          }),
+        ).toEqual({ paths: [], estimatedBytes: 0 });
+        const reads = commands.mock.calls.filter(([, args]) => args.includes("ls-files"));
+        expect(reads).toHaveLength(manifest === undefined ? 0 : 1);
+        expect(reads.some(([, args]) => args.includes("--exclude-standard"))).toBe(false);
+      } finally {
+        commands.mockRestore();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "batches supported literal UTF-8 paths without expanding wildcard or magic names",
+    async () => {
+      await fs.writeFile(path.join(repo, ".gitignore"), "*.local\n");
+      await fs.writeFile(
+        path.join(repo, ".worktreeinclude"),
+        "*.local\n!literalZ.local\n!unselected.local\n",
+      );
+      await git(repo, "add", ".gitignore", ".worktreeinclude");
+      await git(repo, "commit", "-m", "configure literal batches");
+      const names = [
+        "-leading.local",
+        ":(glob)**.local",
+        "literal*.local",
+        "white space.local",
+        "new\nline.local",
+        ...Array.from({ length: 140 }, (_, i) => "short-" + String(i).padStart(3, "0") + ".local"),
+        ...Array.from(
+          { length: 140 },
+          (_, i) => "utf8-" + String(i).padStart(3, "0") + "-" + "界".repeat(60) + ".local",
+        ),
+      ].toSorted((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+      for (const name of [...names, "literalZ.local", "unselected.local"]) {
+        await fs.writeFile(path.join(repo, name), "bytes:" + name);
+      }
+      const commands = vi.spyOn(worktreeGit, "runGitBuffered");
+      const membershipCommands = vi.spyOn(worktreeGit, "requireGitBuffer");
+      try {
+        expect(
+          await runGitWorkerOperation({
+            type: "worktree.provisioning-inspection",
+            input: { sourceRoot: repo },
+          }),
+        ).toEqual({ paths: names, estimatedBytes: names.length * 4096 });
+        const batches = commands.mock.calls
+          .filter(([, args]) => args.includes("ls-files") && args.includes("--exclude-standard"))
+          .map(([, args]) => {
+            expect(args).toContain("--literal-pathspecs");
+            expect(args).toContain("--");
+            return args.slice(args.indexOf("--") + 1);
+          });
+        expect(batches.flat()).toEqual(names);
+        expect(batches.some((batch) => batch.length === 128)).toBe(true);
+        expect(
+          batches.some(
+            (batch) =>
+              batch.length < 128 &&
+              batch.reduce((bytes, entry) => bytes + Buffer.byteLength(entry) + 1, 0) >= 16_384,
+          ),
+        ).toBe(true);
+        for (const batch of batches) {
+          expect(batch.length).toBeGreaterThan(0);
+          expect(batch.length).toBeLessThanOrEqual(128);
+          expect(
+            batch.slice(0, -1).reduce((bytes, entry) => bytes + Buffer.byteLength(entry) + 1, 0),
+          ).toBeLessThan(16_384);
+        }
+        const created = await service.create({
+          repoRoot: repo,
+          name: "literal-batches",
+          baseRef: "HEAD",
+        });
+        expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(
+          names.toSorted(),
+        );
+        await expect(fs.stat(path.join(created.path, "literalZ.local"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.stat(path.join(created.path, "unselected.local"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        membershipCommands.mockClear();
+        const guard = vi.fn();
+        const states = await snapshotProvisionedFiles(env, created.id, created.path, names, {
+          assertCurrent: guard,
+        });
+        expect(states.map((state) => state.path)).toEqual(names.toSorted());
+        expect(guard).toHaveBeenCalled();
+        const membership = membershipCommands.mock.calls.filter(([, args]) =>
+          args.includes("--literal-pathspecs"),
+        );
+        expect(membership.length).toBe(batches.length * 3);
+        for (const call of membership) {
+          const options = call[2];
+          expect(options?.killProcessTree).toBe(true);
+          expect(options?.beforeRun).toEqual(expect.any(Function));
+        }
+        for (const name of names.slice(0, 5)) {
+          expect(await fs.readFile(path.join(created.path, name), "utf8")).toBe("bytes:" + name);
+        }
+      } finally {
+        commands.mockRestore();
+        membershipCommands.mockRestore();
+      }
+    },
+  );
+
+  it.each(["directory", "directory-symlink"] as const)(
+    "propagates manifest inventory failures without provisioning unrelated files (%s)",
+    async (kind) => {
+      const manifest = path.join(repo, ".worktreeinclude");
+      if (kind === "directory") {
+        await fs.mkdir(manifest);
+      } else {
+        const target = path.join(repo, "manifest-directory");
+        await fs.mkdir(target);
+        await fs.symlink(target, manifest, "junction");
+      }
+      await expect(
+        runGitWorkerOperation({
+          type: "worktree.provisioning-inspection",
+          input: { sourceRoot: repo },
+        }),
+      ).rejects.toThrow();
+    },
+  );
 
   it("reuses snapshot inventories while round-tripping Git and provisioned contents", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\nignored/\n");
@@ -197,21 +423,21 @@ describe("ManagedWorktreeService provisioned state", () => {
             },
           }),
         ).rejects.toThrow("authority changed");
-        expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toEqual(oldBytes);
+        expect(await getRegistryWorktreeProvisionedChunk(env, oldChunk)).toEqual(oldBytes);
         expect(
           await snapshotProvisionedFiles(env, created.id, created.path, ledger, {
             assertCurrent: guard,
           }),
         ).toEqual(expected);
         expect(guard).toHaveBeenCalled();
-        expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toBeUndefined();
+        expect(await getRegistryWorktreeProvisionedChunk(env, oldChunk)).toBeUndefined();
         expect(commands.mock.calls.length).toBe(0);
       } finally {
         commands.mockRestore();
       }
       const removed = await service.remove({ id: created.id, reason: "test" });
       expect(removed.removed).toBe(true);
-      expect(getRegistryWorktreeProvisionedState(env, created.id)).toEqual(expected);
+      expect(await getRegistryWorktreeProvisionedState(env, created.id)).toEqual(expected);
       const restored = await service.restore({ id: created.id });
       expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
         "preserved edit\n",
@@ -297,7 +523,7 @@ describe("ManagedWorktreeService provisioned state", () => {
     expect(await service.removeIfLossless(created.id)).toBe(true);
     await fs.writeFile(path.join(repo, "large.local"), Buffer.from("new source"));
     const restored = await service.restore({ id: created.id });
-    expect((await fs.readFile(path.join(restored.path, "large.local"))).at(-1)).toBe(0x62);
+    expect(await fs.readFile(path.join(restored.path, "large.local"))).toEqual(copy);
   });
 
   it("keeps provisioned files protected after manifest removal or pattern changes", async () => {

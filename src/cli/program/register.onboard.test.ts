@@ -84,6 +84,27 @@ describe("registerOnboardCommand", () => {
     setupWizardCommandMock.mockResolvedValue(undefined);
   });
 
+  it.each([
+    { args: ["recommendations"], target: "onboardRecommendationsCommand" },
+    {
+      args: ["recommendations", "acknowledge"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+    },
+    { args: ["recommendations", "refresh"], target: "refreshOnboardRecommendationsCommand" },
+  ] as const)(
+    "reports asynchronous recommendation persistence failures for $target",
+    async ({ args, target }) => {
+      mocks[target].mockRejectedValueOnce(
+        new Error("synthetic recommendation persistence failure"),
+      );
+      await runCli(["onboard", ...args]);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("synthetic recommendation persistence failure"),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
   it("routes the read-only recommendations subcommand", async () => {
     await runCli(["onboard", "recommendations", "--json"]);
 

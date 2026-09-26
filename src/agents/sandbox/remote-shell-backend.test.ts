@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { hasErrnoCode } from "../../infra/errno.js";
@@ -14,6 +14,156 @@ import {
 type RemoteShellUploadParams = Parameters<RemoteShellSandboxSession["uploadDirectory"]>[0];
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function createCommandCancellationFixture() {
+  const workspaceDir = tempDirs.make("remote-shell-cancellation-");
+  const session = {
+    runCommand: vi.fn<RemoteShellSandboxSession["runCommand"]>(async () => ({
+      stdout: Buffer.from("1\n"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    })),
+    uploadDirectory: vi.fn<RemoteShellSandboxSession["uploadDirectory"]>(async () => {}),
+    prepareExec: async () => {
+      throw new Error("unexpected exec preparation");
+    },
+    dispose: vi.fn(async () => {}),
+  } satisfies RemoteShellSandboxSession;
+  const createSession = vi.fn(async () => session);
+  const backend = await createRemoteShellSandboxBackend(
+    {
+      cfg: resolveSandboxConfigForAgent({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "ssh",
+              workspaceAccess: "rw",
+              ssh: { target: "unused", workspaceRoot: path.join(workspaceDir, "remote") },
+            },
+          },
+        },
+      }),
+      scopeKey: "command-cancellation",
+      sessionKey: "test",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      skillsWorkspaceDir: workspaceDir,
+    },
+    { createSession },
+  );
+  await backend.runShellCommand({ script: "true" });
+  session.runCommand.mockClear();
+  session.uploadDirectory.mockClear();
+  session.dispose.mockClear();
+  createSession.mockClear();
+  return { backend, session, createSession };
+}
+
+describe("remote shell command cancellation", () => {
+  it.each(["clear", "upload"] as const)(
+    "cancels the skills %s and joins it and session disposal before rejecting",
+    async (phase) => {
+      const { backend, session } = await createCommandCancellationFixture();
+      const controller = new AbortController();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const disposing = createDeferred();
+      const releaseDisposal = createDeferred();
+      let cancellationObserved = false;
+      let completed = false;
+      const hold = async (signal?: AbortSignal) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            cancellationObserved = true;
+          },
+          { once: true },
+        );
+        entered.resolve();
+        await release.promise;
+        signal?.throwIfAborted();
+      };
+      if (phase === "clear") {
+        session.runCommand.mockImplementationOnce(async ({ signal }) => {
+          await hold(signal);
+          return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
+        });
+      } else {
+        session.uploadDirectory.mockImplementationOnce(({ signal }) => hold(signal));
+      }
+      session.dispose.mockImplementationOnce(async () => {
+        disposing.resolve();
+        await releaseDisposal.promise;
+      });
+      const command = backend.runShellCommand({
+        script: "touch sentinel",
+        signal: controller.signal,
+      });
+      const result = command.then(
+        () => {
+          completed = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          completed = true;
+          return error;
+        },
+      );
+      try {
+        await entered.promise;
+        controller.abort(new Error("interrupt deadline"));
+        expect(cancellationObserved).toBe(true);
+        expect(session.dispose).not.toHaveBeenCalled();
+        expect(completed).toBe(false);
+        release.resolve();
+        await disposing.promise;
+        expect(completed).toBe(false);
+        releaseDisposal.resolve();
+        expect(await result).toEqual(expect.objectContaining({ message: "interrupt deadline" }));
+        expect(session.runCommand).toHaveBeenCalledOnce();
+        expect(session.uploadDirectory).toHaveBeenCalledTimes(phase === "upload" ? 1 : 0);
+        expect(session.dispose).toHaveBeenCalledOnce();
+      } finally {
+        release.resolve();
+        releaseDisposal.resolve();
+        await result;
+      }
+    },
+  );
+
+  it("disposes a session acquired after cancellation without starting remote work", async () => {
+    const { backend, session, createSession } = await createCommandCancellationFixture();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const controller = new AbortController();
+    createSession.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return session;
+    });
+    const command = backend.runShellCommand({
+      script: "touch sentinel",
+      signal: controller.signal,
+    });
+    const result = command.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      await entered.promise;
+      controller.abort(new Error("interrupt deadline"));
+      release.resolve();
+      expect(await result).toEqual(expect.objectContaining({ message: "interrupt deadline" }));
+      expect(session.runCommand).not.toHaveBeenCalled();
+      expect(session.uploadDirectory).not.toHaveBeenCalled();
+      expect(session.dispose).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await result;
+    }
+  });
+});
 
 async function createFixture() {
   const root = await fs.realpath(tempDirs.make("remote-shell-bootstrap-"));

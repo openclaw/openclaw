@@ -6,7 +6,7 @@ import {
   parseOpenAIQuicksilverEvent,
   type OpenAIQuicksilverInboundEvent,
 } from "./realtime-quicksilver-events.js";
-import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-sideband.js";
+import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-socket.shared.js";
 import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 
 export function buildOpenAIQuicksilverAudioAppend(model: string, audio: string) {

@@ -139,15 +139,15 @@ function requireTrustedXaiOAuthEndpoint(endpoint: string, label: string): string
   return endpoint;
 }
 
-async function readResponseBody({
-  response,
-  release,
-}: Awaited<ReturnType<typeof fetchXaiOAuth>>): Promise<XaiOAuthResponseBody> {
+async function readResponseBody(
+  { response, release }: Awaited<ReturnType<typeof fetchXaiOAuth>>,
+  options: { fatalUtf8?: boolean } = {},
+): Promise<XaiOAuthResponseBody> {
   try {
     const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
       onOverflow: ({ maxBytes }) => new Error(`xAI OAuth response exceeds ${maxBytes} bytes`),
     });
-    const text = new TextDecoder().decode(buffer);
+    const text = new TextDecoder("utf-8", { fatal: options.fatalUtf8 }).decode(buffer);
     let json: unknown;
     try {
       json = JSON.parse(text);
@@ -355,7 +355,19 @@ async function exchangeXaiOAuthToken(
       throw new Error(`${params.context} failed: ${formatErrorMessage(err)}`, { cause: err });
     }
     const { response } = result;
-    const body = await readResponseBody(result);
+    // A 2xx token response becomes a stored credential, so it must decode strictly:
+    // lossy decoding repairs corrupted bytes into U+FFFD and yields tokens that
+    // parse and persist but never authenticate, and the refresh grant rotates the
+    // refresh token, so that repaired value replaces a working one. Error bodies
+    // stay lossy so a mangled Cloudflare challenge is still reported as itself.
+    let body: XaiOAuthResponseBody;
+    try {
+      body = await readResponseBody(result, { fatalUtf8: response.ok });
+    } catch (err) {
+      // Not retryable, for the same reason as the transport failure above: xAI
+      // answered the grant, so it has already consumed and rotated the token.
+      throw new Error(`${params.context} failed: ${formatErrorMessage(err)}`, { cause: err });
+    }
     if (response.ok) {
       return parseXaiOAuthTokenResponse(body.json, params.now ?? Date.now, {
         requireRefreshToken: params.requireRefreshToken,
@@ -453,7 +465,7 @@ async function pollXaiDeviceCodeToken(
     const { response } = result;
     let body: unknown;
     try {
-      body = (await readResponseBody(result)).json;
+      body = (await readResponseBody(result, { fatalUtf8: true })).json;
     } catch {
       body = null;
     }

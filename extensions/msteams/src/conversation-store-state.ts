@@ -1,4 +1,3 @@
-// Msteams plugin module implements conversation store state behavior.
 import crypto from "node:crypto";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -19,15 +18,9 @@ import {
   withMSTeamsSqliteMutationLock,
 } from "./sqlite-state.js";
 
-export type MSTeamsLegacyConversationStoreData = {
-  version: 1;
-  conversations: Record<string, StoredConversationReference>;
-};
-
-export const MSTEAMS_CONVERSATIONS_LEGACY_FILENAME = "msteams-conversations.json";
-export const MSTEAMS_CONVERSATIONS_NAMESPACE = "conversations";
+const MSTEAMS_CONVERSATIONS_NAMESPACE = "conversations";
 const MSTEAMS_MAX_CONVERSATIONS = 1000;
-export const MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS = MSTEAMS_MAX_CONVERSATIONS + 1000;
+const MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS = MSTEAMS_MAX_CONVERSATIONS + 1000;
 const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const CONVERSATION_MUTATION_KEY = "conversations";
 
@@ -47,25 +40,11 @@ function createConversationStateStore(params?: MSTeamsConversationStoreStateOpti
   });
 }
 
-export function normalizeMSTeamsLegacyConversationStore(
-  value: MSTeamsLegacyConversationStoreData,
-): MSTeamsLegacyConversationStoreData {
-  if (
-    value.version !== 1 ||
-    !value.conversations ||
-    typeof value.conversations !== "object" ||
-    Array.isArray(value.conversations)
-  ) {
-    return { version: 1, conversations: {} };
-  }
-  return value;
-}
-
-export function buildMSTeamsConversationStateKey(conversationId: string): string {
+function buildMSTeamsConversationStateKey(conversationId: string): string {
   return crypto.createHash("sha256").update(conversationId).digest("hex");
 }
 
-export function prepareMSTeamsConversationReferenceForStorage(
+function prepareMSTeamsConversationReferenceForStorage(
   conversationId: string,
   reference: StoredConversationReference,
 ): StoredConversationReference {
@@ -81,25 +60,6 @@ export function prepareMSTeamsConversationReferenceForStorage(
 function getStoredConversationId(reference: StoredConversationReference): string | null {
   const rawId = reference.conversation?.id;
   return rawId ? normalizeStoredConversationId(rawId) : null;
-}
-
-export function selectRetainedMSTeamsConversations(
-  conversations: Record<string, StoredConversationReference>,
-  ttlMs = MSTEAMS_CONVERSATION_TTL_MS,
-): Array<[string, StoredConversationReference]> {
-  const retained = Object.entries(conversations).filter(([, reference]) => {
-    const lastSeenAt = parseDateStringTimestampMs(reference.lastSeenAt);
-    return lastSeenAt == null || Date.now() - lastSeenAt <= ttlMs;
-  });
-  if (retained.length <= MSTEAMS_MAX_CONVERSATIONS) {
-    return retained;
-  }
-  retained.sort((a, b) => {
-    const aTs = parseDateStringTimestampMs(a[1].lastSeenAt) ?? 0;
-    const bTs = parseDateStringTimestampMs(b[1].lastSeenAt) ?? 0;
-    return aTs - bTs || a[0].localeCompare(b[0]);
-  });
-  return retained.slice(retained.length - MSTEAMS_MAX_CONVERSATIONS);
 }
 
 export function createMSTeamsConversationStoreState(

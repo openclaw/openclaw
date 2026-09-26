@@ -36,14 +36,6 @@ const HeartbeatResponseToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-function readRequiredBoolean(params: Record<string, unknown>, key: string): boolean {
-  const raw = readSnakeCaseParamRaw(params, key);
-  if (typeof raw !== "boolean") {
-    throw new ToolInputError(`${key} required`);
-  }
-  return raw;
-}
-
 /** Creates the one-shot heartbeat response tool for an auto-reply turn. */
 export function createHeartbeatResponseTool(): AnyAgentTool {
   let recorded = false;
@@ -61,7 +53,9 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
       if (!isRecord(args)) {
         throw new ToolInputError("Heartbeat response arguments required");
       }
-      readRequiredBoolean(args, "notify");
+      if (typeof readSnakeCaseParamRaw(args, "notify") !== "boolean") {
+        throw new ToolInputError("notify required");
+      }
       if (typeof args.scratch === "string") {
         try {
           assertCronJobScratchContent(args.scratch);

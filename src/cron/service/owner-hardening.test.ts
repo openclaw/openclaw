@@ -40,7 +40,6 @@ import type { CronServiceState } from "./state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 
 const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
-const stateDatabaseUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase);
 
 const children = new Set<ChildProcess>();
 let scriptRoot = "";
@@ -70,11 +69,14 @@ beforeEach(async () => {
     `
       import fs from "node:fs";
       import { CronService } from ${JSON.stringify(serviceUrl.href)};
-      import { openOpenClawStateDatabase } from ${JSON.stringify(stateDatabaseUrl.href)};
+      import { deserialize } from "node:v8";
+      import { MessagePort } from "node:worker_threads";
       const [storePath, jobId, mode, releasePath, outputPath] = process.argv.slice(2);
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
+      let activationClock = Date.now();
       const cron = new CronService({
+        ...(mode === "crash-activation" ? { nowMs: () => ++activationClock } : {}),
         storePath,
         cronEnabled: true,
         log: logger,
@@ -95,7 +97,6 @@ beforeEach(async () => {
           fs.appendFileSync(outputPath, job.agentId + ":" + process.pid + "\\n");
           process.stdout.write("started\\n");
           if (mode === "block" || mode === "barrier-block") await new Promise(() => {});
-          if (mode === "hold") while (!fs.existsSync(releasePath)) await sleep(10);
           await sleep(150);
           return { status: "ok", summary: "done" };
         },
@@ -107,24 +108,25 @@ beforeEach(async () => {
         await cron.run(jobId, "force");
       }
       if (mode === "crash-activation") {
-        const database = openOpenClawStateDatabase().db;
-        database.function("crash_activation", () => {
-          process.kill(process.pid, "SIGKILL");
-          return 0;
-        });
-        database.exec(\`
-          CREATE TEMP TRIGGER crash_cron_activation
-          BEFORE UPDATE OF state_json ON cron_jobs
-          WHEN json_extract(OLD.state_json, '$.runningAtMs') IS NULL
-            AND json_extract(NEW.state_json, '$.runningAtMs') IS NOT NULL
-          BEGIN
-            SELECT crash_activation();
-          END;
-        \`);
+        const originalOn = MessagePort.prototype.on;
+        MessagePort.prototype.on = function (event, listener) {
+          if (event !== "message") return originalOn.call(this, event, listener);
+          return originalOn.call(this, event, function (message) {
+            // The worker has changed both receipt and job rows, and is waiting
+            // for the real owner to admit COMMIT. Death here must roll both back.
+            if (message?.stage === "commit" && message.facts?.bytes instanceof Uint8Array) {
+              const outcome = deserialize(message.facts.bytes);
+              if (outcome?.activation?.job?.id === jobId) {
+                process.kill(process.pid, "SIGKILL");
+              }
+            }
+            return Reflect.apply(listener, this, [message]);
+          });
+        };
         await cron.run(jobId, "force");
       }
       if (mode === "manual-postcommit-crash") await cron.run(jobId, "due");
-      if (mode === "block" || mode === "hold" || mode === "hold-alive") {
+      if (mode === "block" || mode === "hold-alive") {
         await cron.run(jobId, "force");
       }
       if (mode === "hold-alive") {
@@ -160,7 +162,6 @@ function spawnRunner(params: {
   mode:
     | "barrier-block"
     | "block"
-    | "hold"
     | "hold-alive"
     | "trigger"
     | "due"
@@ -369,6 +370,12 @@ describe("cron durable run ownership", () => {
     await waitForExit(child);
     expect(child.signalCode).toBe("SIGKILL");
     expect(fs.existsSync(outputPath)).toBe(false);
+    const rolledBack = (await loadCronStore(storePath)).jobs[0];
+    expect(rolledBack?.state.queuedAtMs).toEqual(expect.any(Number));
+    expect(rolledBack?.state.runningAtMs).toBeUndefined();
+    expect(receipts(storePath, job.id)).toMatchObject([
+      { status: "running", startedAtMs: rolledBack?.state.queuedAtMs },
+    ]);
 
     const recovered = makeParentService(storePath);
     try {

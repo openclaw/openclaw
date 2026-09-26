@@ -39,29 +39,7 @@ export function buildSubagentLaunchRequest(params: {
   launchAuthorization?: SubagentLaunchAuthorization;
   swarmSchedulerGroupKey?: string;
   swarmMaxConcurrent: number;
-}): {
-  childLaunch: {
-    request: Record<string, unknown>;
-    authorization?: SubagentLaunchAuthorization;
-    timeoutMs: number;
-  };
-  queuedLaunch?: {
-    request: Record<string, unknown>;
-    authorization?: SubagentLaunchAuthorization;
-    timeoutMs: number;
-    schedulerGroupKey: string;
-    maxConcurrent: number;
-  };
-  progressOrigin: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-    channelId?: string;
-    messageId?: string | number;
-  };
-  spawnedMetadata: ReturnType<typeof normalizeSpawnedRunMetadata>;
-} {
+}) {
   const bootstrapContextMode: BootstrapContextMode | undefined = params.lightContext
     ? "lightweight"
     : undefined;

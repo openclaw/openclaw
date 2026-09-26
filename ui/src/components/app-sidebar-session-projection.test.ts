@@ -379,7 +379,7 @@ describe("SidebarSessionProjection running subtitle hold", () => {
     });
   });
 
-  it.each(["ended", "preview-hidden"] as const)(
+  it.each(["ended", "preview-hidden", "error"] as const)(
     "clears held running activity when its run is %s",
     (change) => {
       const projection = new SidebarSessionProjection();
@@ -394,7 +394,19 @@ describe("SidebarSessionProjection running subtitle hold", () => {
           },
         }),
       );
-      const changed = change === "ended" ? sessionRow(running.key) : running;
+      const changed =
+        change === "ended"
+          ? sessionRow(running.key)
+          : change === "error"
+            ? {
+                ...running,
+                attention: {
+                  kind: "error" as const,
+                  reason: "Child validation failed",
+                  childLabel: "Validation",
+                },
+              }
+            : running;
       const showPreview = change !== "preview-hidden";
 
       projection.project(

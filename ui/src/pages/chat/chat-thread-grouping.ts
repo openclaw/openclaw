@@ -1,22 +1,17 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
-import {
-  extractAssistantTextForPhase,
-  resolveAssistantMessagePhase,
-} from "../../../../src/shared/chat-message-content.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
+import { resolveAssistantReplyPhase } from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
-import {
-  isKeyedAssistantStreamFallbackMessage,
-  transcriptRunId,
-} from "./chat-thread-run-identity.ts";
+import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
   chatItemStartsUserTurn,
@@ -25,16 +20,7 @@ import {
 import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
 function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
-  if (isKeyedAssistantStreamFallbackMessage(message)) {
-    return "commentary";
-  }
-  // A response can contain both phases; any explicit answer remains visible.
-  if (extractAssistantTextForPhase(message, { phase: "final_answer" })) {
-    return "final_answer";
-  }
-  return (
-    resolveAssistantMessagePhase(message) ?? (visibleContent === "none" ? "activity" : "reply")
-  );
+  return resolveAssistantReplyPhase(message) ?? (visibleContent === "none" ? "activity" : "reply");
 }
 
 function stampReplyAttribution(
@@ -56,6 +42,10 @@ function stampReplyAttribution(
 
   let latestUserSender: MessageGroup["sender"];
   for (const item of items) {
+    if (item.kind === "stream") {
+      item.replyToSender = latestUserSender;
+      continue;
+    }
     if (item.kind !== "group") {
       continue;
     }
@@ -113,6 +103,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     const userTurnIdentity = role === "user" ? (steerTarget ?? userTurnRunId(item.message)) : null;
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
+      item.startsTurn === true ||
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
     const splitsAssistantKind =
       role === "assistant" &&
@@ -173,6 +164,7 @@ export type StreamRunRenderItem = {
   key: string;
   runId?: string;
   boundaryId?: string;
+  replyToSender?: MessageGroup["replyToSender"];
   parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" }>>;
 };
 export function coalesceStreamRuns(
@@ -188,6 +180,7 @@ export function coalesceStreamRuns(
         kind: "stream-run",
         key: `stream-run:${first.key}`,
         parts: run,
+        replyToSender: run.find((part) => part.kind === "stream")?.replyToSender,
         ...(runId ? { runId } : {}),
         ...(boundaryId ? { boundaryId } : {}),
       });
@@ -291,7 +284,12 @@ function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
  */
 export function collapseCompletedTurnWork(
   items: TurnRenderItem[],
-  opts: { sessionKey: string; runWorking: boolean; searchActive?: boolean },
+  opts: {
+    sessionKey: string;
+    runWorking: boolean;
+    searchActive?: boolean;
+    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
+  },
 ): Array<TurnRenderItem | WorkGroupRenderItem> {
   const [scope, agentId, kind, sessionId, ...extraParts] = normalizeLowercaseStringOrEmpty(
     opts.sessionKey,
@@ -423,20 +421,24 @@ export function collapseCompletedTurnWork(
       result.push(...turn);
       continue;
     }
-    const boundary = turn[0];
-    const boundaryTimestamp =
-      boundary &&
-      boundary.kind !== "stream-run" &&
-      chatItemStartsUserTurn(boundary) &&
-      "timestamp" in boundary
-        ? boundary.timestamp
+    // Message timestamps describe creation, not completion of the final model
+    // request. Only the lifecycle owner can supply elapsed time for this run.
+    // Older history without matching lifecycle facts keeps an untimed disclosure.
+    const session = opts.session;
+    const runtimeMs = session?.runtimeMs;
+    const durationMs =
+      session?.key === opts.sessionKey &&
+      terminalReply.runId !== undefined &&
+      session.lastRunId === terminalReply.runId &&
+      (session.status === "done" ||
+        session.status === "failed" ||
+        session.status === "timeout" ||
+        session.status === "killed") &&
+      typeof runtimeMs === "number" &&
+      Number.isFinite(runtimeMs) &&
+      runtimeMs >= 0
+        ? runtimeMs
         : null;
-    const startTimestamp = boundaryTimestamp == null ? firstGroup.timestamp : boundaryTimestamp;
-    const endTimestamp = groups.reduce(
-      (latest, group) => Math.max(latest, group.timestamp),
-      terminalReply.timestamp,
-    );
-    const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
     const continuationBoundary = turns[continuationTurnIndexes.get(turnIndex) ?? -1]?.[0];
     result.push(...turn.slice(0, segmentStart));
     result.push({

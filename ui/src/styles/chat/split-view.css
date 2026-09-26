@@ -603,7 +603,6 @@
   .chat-pane__actions .chat-pane__split-right,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__branches-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__nav-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__palette-open,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__participants,

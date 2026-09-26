@@ -62,6 +62,7 @@ function setNavigationContext(page: ChatPage) {
     basePath: "",
     sessions: { ...createChatPageSessions(), patch },
     chatSubmissions: createChatSubmissions(),
+    placementStartup: { get: vi.fn(() => null), subscribe: () => () => undefined },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: {
       snapshot: { hello: null },
@@ -672,6 +673,56 @@ describe("chat page retained sessions", () => {
       expect(commit).toHaveBeenCalledOnce();
     } finally {
       window.history.replaceState(null, "", originalHref);
+    }
+  });
+
+  it("retires a retained preview when newer navigation supersedes its pending route", async () => {
+    const originalHref = window.location.href;
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.set(++nextFrame, callback);
+      return nextFrame;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frame) => frames.delete(frame));
+    const { page, paneFor } = await mountRetainedPage(
+      "agent:main:a",
+      "agent:main:b",
+      "agent:main:a",
+    );
+    const paneA = expectDefined(paneFor("agent:main:a"), "selected conversation");
+    const paneB = expectDefined(paneFor("agent:main:b"), "retained conversation");
+    const returnToA = vi.fn(() => true);
+    try {
+      runSessionNavigationIntent(paneA, {
+        face: "chat",
+        sessionKey: paneB.sessionKey,
+        commit: () => {
+          // Route history advances immediately; data is still awaiting its loader.
+          history.pushState(null, "", "/chat/pending-b");
+          return true;
+        },
+      });
+      frames.get(1)?.(0);
+      frames.get(2)?.(16);
+      expect(paneB.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+      expect(page.data.sessionKey).toBe(paneA.sessionKey);
+
+      runSessionNavigationIntent(paneA, {
+        commit: returnToA,
+        face: "chat",
+        sessionKey: paneA.sessionKey,
+      });
+
+      expect(returnToA).toHaveBeenCalledOnce();
+      expect(paneA.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+      expect(paneA.hasAttribute("inert")).toBe(false);
+      expect(paneB.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
+      expect(paneB.hasAttribute("inert")).toBe(true);
+    } finally {
+      page.remove();
+      history.replaceState(null, "", originalHref);
+      vi.restoreAllMocks();
     }
   });
 

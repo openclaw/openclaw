@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import "../../../components/image-lightbox.ts";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { t } from "../../../i18n/index.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 
@@ -56,9 +56,13 @@ export function renderChatImageLightbox(
   return html`
     <openclaw-image-lightbox
       .mediaKind=${item.kind ?? "image"}
+      .gallery=${item.gallery}
+      .loadFullResolution=${item.loadFullResolution}
       src=${item.src}
       .originalSrc=${item.originalSrc ?? ""}
       .imageTitle=${item.title}
+      .imageWidth=${item.width}
+      .imageHeight=${item.height}
       @image-lightbox-close=${onClose}
     ></openclaw-image-lightbox>
   `;

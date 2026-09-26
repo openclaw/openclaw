@@ -34,6 +34,14 @@ describe("update-channels tag detection", () => {
     ["v2026.2.24-1", true],
     ["v1.0.1-1", true],
     ["v2026.2.24", true],
+    ["v2026.6.32", true],
+    ["v2026.6.32-1", true],
+    ["v2026.6.33", false],
+    ["2026.6.34", false],
+    ["v2026.6.33-1", false],
+    ["v2026.6.34+build.1", false],
+    ["v2026.6.33-beta.1", false],
+    ["v1.6.33", true],
   ])("stable classification for %s", (tag, stable) => {
     expect(isStableTag(tag)).toBe(stable);
   });
@@ -123,6 +131,20 @@ describe("resolveEffectiveUpdateChannel", () => {
       name: "treats stable git tag as stable",
       params: { installKind: "git" as const, git: { tag: "v2026.2.24" } },
       expected: { channel: "stable", source: "git-tag" },
+    },
+    {
+      name: "identifies final extended-stable git tags without enabling Git updates",
+      params: { installKind: "git" as const, git: { tag: "v2026.6.33" } },
+      expected: { channel: "extended-stable", source: "git-tag" },
+    },
+    {
+      name: "preserves explicit stable policy on an extended-stable git tag",
+      params: {
+        configChannel: "stable" as const,
+        installKind: "git" as const,
+        git: { tag: "v2026.6.33" },
+      },
+      expected: { channel: "stable", source: "config" },
     },
     {
       name: "treats non-beta prerelease git tag as dev",

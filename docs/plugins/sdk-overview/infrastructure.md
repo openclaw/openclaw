@@ -49,6 +49,17 @@ forward directory-scan errors through the same error event. Use the result in
 the watcher lifecycle owner to stop native retries and select an existing
 refresh path.
 
+### Streaming file verification
+
+`sha256File(pathOrHandle, { maxBytes, signal })` from
+`openclaw/plugin-sdk/file-access-runtime` returns `{ bytes, digest }` without
+loading the whole file into memory. It reads through EOF and rejects files
+that grow beyond the byte limit. A borrowed handle stays open at its original
+offset; the caller owns admission and close. Path inputs reject final symlinks
+and close their owned handle. Cancellation settles pending work before rejecting.
+The optional native helper hashes off the JavaScript event loop; the fallback
+uses bounded buffers. Neither route provides a snapshot of concurrent writes.
+
 ### SQLite write admission
 
 `runSqliteImmediateTransaction(db, prepare, options?)` from
@@ -78,8 +89,16 @@ the connection; transaction callbacks must remain synchronous.
 
 ### Worker task admission
 
-`WorkerTaskPool` and `serveWorkerTasks` from
-`openclaw/plugin-sdk/process-runtime` support reusable computation workers.
+`WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` supports reusable
+computation workers for bundled and separately published official plugins.
+Inside those workers, import `serveWorkerTasks` and the
+`WorkerTaskControl` type from `openclaw/plugin-sdk/worker-task-server` to avoid
+loading the host process and pool runtime. Both paths use the same task protocol.
+
+The older serving exports in `process-runtime` remain for released official
+plugins. Bundled workers use `worker-task-server`; remove the older exports only
+after supported official plugin versions have migrated to hosts with this subpath.
+
 Each pool defaults to 128 outstanding tasks and 256 MiB of reported input bytes,
 including queued, preparing, and running tasks. Set `maxPendingTasks` and
 `maxPendingBytes` when constructing a pool to choose different positive limits.
@@ -113,6 +132,13 @@ cancellation, and reports deletion failures without replacing the task outcome.
 Worker exit releases execution capacity; `close()` also waits for pending file
 cleanup. Keep persistent data and files borrowed outside the Worker out of this
 directory.
+
+When native termination fails, the pool retains that worker's input custody and
+capacity. `retryFailedRetirements()` retries only those failed retirements and
+joins native exit and pending file cleanup without interrupting healthy tasks or
+waiting for them to finish. It does not replay failed work or close the pool.
+An owner that is shutting down must stop new admissions, drain healthy tasks,
+and finish with `close()`.
 
 `serveWorkerTasks` supplies a third handler argument, `WorkerTaskControl`. Await
 `control.runNativeSection(() => nativeOperation())` around each bounded native
@@ -187,12 +213,15 @@ and joins that worker before reporting `outcome-unknown`; it does the same when
 a completed reply cannot be decoded. Failed cleanup retains its original error
 while the worker is drained.
 
-The process-wide host starts lazily and permits at most four shared workers. Bun
-uses up to 64 dedicated workers until its native SQLite close fix ships. The host
-permits 64 opening or live store clients (including clients sharing a database), 128 outstanding
-operations, and 64 MiB of queued input. Each input message is limited to 32 MiB
-and capacity exhaustion rejects with `code: "overloaded"`. Larger execute inputs
-arrive in 8 MiB chunks; the backend runs once after the complete command is
+The process-wide host starts lazily and uses two to eight shared Node workers
+based on available CPUs. Bun uses up to 64 dedicated workers until its native
+SQLite close fix ships. The host permits 64 opening or live store clients
+(including clients sharing a database), 128 outstanding operations per worker,
+and 256 MiB of queued and retained input across all workers. Count-only overflow
+waits in FIFO order on its worker for up to ten seconds; an independent worker
+keeps its own request capacity. Byte, message, and store limits refuse immediately
+with `code: "overloaded"`. Each input message is limited to 32 MiB. Larger execute
+inputs arrive in 8 MiB chunks; the backend runs once after the complete command is
 validated. Factory initialization input remains a single bounded message.
 
 Commands retaining at most 64 MiB of serialized input can queue, with their full

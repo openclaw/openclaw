@@ -27,7 +27,11 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
   // Raw edits never autosave; form edits and outstanding writes also remain
   // owned by this capability when a worker update or reconnect wants to reload.
   const stopReloadGuard = registerControlUiReloadGuard(
-    () => !state.configFormDirty && !state.configSaving && !state.configApplying,
+    () =>
+      !state.configFormDirty &&
+      !state.configSaving &&
+      !state.configApplying &&
+      !writes.hasUnacknowledgedDraftWrite(),
     () => showToast({ message: t("configView.reloadBlocked") }),
   );
   const listeners = new Set<(state: RuntimeConfigState) => void>();
@@ -96,10 +100,23 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
       state.configNeedsApply &&
       state.configSnapshot?.appliedConfigHash !== undefined,
     refresh: (isCurrent) =>
-      loadOnce("config", () => loadConfig(state, { background: true }, isCurrent)),
+      loadOnce("config", () =>
+        loadConfig(state, { background: true, draftWrites: writes }, isCurrent),
+      ),
   });
-  const refreshConnectionState = (beforeApplySnapshot?: () => void) => {
-    const config = run(() => loadConfig(state, { beforeApplySnapshot }), "config");
+  const refreshConnectionState = (
+    beforeApplySnapshot?: () => void,
+    preservePendingChanges = false,
+  ) => {
+    const config = run(
+      () =>
+        loadConfig(state, {
+          beforeApplySnapshot,
+          preservePendingChanges,
+          draftWrites: writes,
+        }),
+      "config",
+    );
     if (state.configSchemaVersion !== null && canLoadConfigSchema()) {
       void run(() => loadConfigSchema(state), "schema");
     }
@@ -128,7 +145,7 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
 
   const ensureLoaded = async () => {
     if (!state.configSnapshot) {
-      await loadOnce("config", () => loadConfig(state));
+      await loadOnce("config", () => loadConfig(state, { draftWrites: writes }));
     }
     appliedRefresh.reconcile();
   };
@@ -171,7 +188,7 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
     refresh: async (options?: { background?: boolean }) => {
       appliedRefresh.cancel();
       try {
-        await run(() => loadConfig(state, options), "config");
+        await run(() => loadConfig(state, { ...options, draftWrites: writes }), "config");
       } finally {
         appliedRefresh.reconcile();
       }

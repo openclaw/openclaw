@@ -211,7 +211,7 @@ class OnboardingFlowLogicTest {
   @Test
   fun deviceCapabilityRowDistinguishesAndroidPermissionFromCapabilityOptIn() {
     assertEqualsCases(
-      "Not allowed" to deviceCapabilityRowStatusText(capabilityEnabled = false, androidPermissionGranted = false).resolveNativeText(),
+      "Allow" to deviceCapabilityRowStatusText(capabilityEnabled = false, androidPermissionGranted = false).resolveNativeText(),
       "Off" to deviceCapabilityRowStatusText(capabilityEnabled = false, androidPermissionGranted = true).resolveNativeText(),
       "Enabled" to deviceCapabilityRowStatusText(capabilityEnabled = true, androidPermissionGranted = true).resolveNativeText(),
     )

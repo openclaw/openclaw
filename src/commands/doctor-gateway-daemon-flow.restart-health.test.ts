@@ -1,4 +1,4 @@
-// Doctor restart-health tests cover transient ECONNREFUSED after an approved gateway restart.
+// Doctor delegates post-restart diagnostics to the health command readiness owner.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExitError } from "../runtime.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
@@ -145,64 +145,15 @@ describe("maybeRepairGatewayDaemon restart health", () => {
     return runtime;
   }
 
-  it.each([500, 25_000])(
-    "waits for a Gateway that refuses connections for %i ms after restart",
-    async (readyAfterMs) => {
-      const startedAt = performance.now();
-      healthCommand.mockImplementation(async () => {
-        if (performance.now() - startedAt < readyAfterMs) {
-          throw new Error("connect ECONNREFUSED 127.0.0.1:18789");
-        }
-      });
-
-      const repair = runAutoRepair();
-      await vi.runAllTimersAsync();
-      const runtime = await repair;
-
-      expect(service.restart).toHaveBeenCalledOnce();
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(performance.now() - startedAt).toBe(readyAfterMs);
-      expect(healthCommand).toHaveBeenCalledTimes(readyAfterMs / 500 + 1);
-      if (readyAfterMs === 25_000) {
-        expect(note).toHaveBeenCalledWith(
-          expect.stringContaining("Gateway is still starting (20 s elapsed)"),
-          "Gateway",
-        );
-      }
-      expect(note.mock.calls.some(([message]) => String(message).includes("not reachable"))).toBe(
-        false,
-      );
-    },
-  );
-
-  it("reports an unreachable Gateway only after the full restart budget", async () => {
-    healthCommand.mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:18789"));
-    let completed = false;
-    const repair = runAutoRepair().then((runtime) => {
-      completed = true;
-      return runtime;
-    });
-
-    await vi.advanceTimersByTimeAsync(59_999);
-    expect(completed).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    const runtime = await repair;
-
-    expect(runtime.error).toHaveBeenCalledOnce();
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Gateway not reachable"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Doctor waited 60 s"));
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw gateway status --deep"),
-    );
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("ECONNREFUSED"));
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("returns on the first probe when the restarted Gateway is healthy", async () => {
     const startedAt = performance.now();
     const runtime = await runAutoRepair();
 
     expect(healthCommand).toHaveBeenCalledOnce();
+    expect(healthCommand).toHaveBeenCalledWith(
+      { json: false, config: { gateway: {} } },
+      expect.any(Object),
+    );
     expect(performance.now()).toBe(startedAt);
     expect(vi.getTimerCount()).toBe(0);
     expect(runtime.error).not.toHaveBeenCalled();

@@ -375,6 +375,58 @@ describe("connection live-text delivery", () => {
     expect(getBufferedAmount(peer.client.connId)).toBe(128);
   });
 
+  it("reserves a complete queued message and refreshes recipient projection when it drains", () => {
+    const peer = createPeer("projected-message");
+    const payload = {
+      sessionKey: "agent:main:stream",
+      message: { content: "A".repeat(4096) },
+    };
+    let sharingRole = "owner";
+    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+      prepareSessionEventProjection: (event, value) => {
+        if (event !== "session.message") {
+          return undefined;
+        }
+        const source = value as typeof payload;
+        return () => ({ ...source, session: { sharingRole } });
+      },
+    });
+    const stateVersion = { presence: 7 };
+    const opts = {
+      stateVersion,
+      liveText: {
+        group: new AbortController().signal,
+        coalesce: { key: "message", merge: replaceText },
+      },
+    };
+    broadcast("tick", {});
+    broadcast("session.message", payload, opts);
+    const originalBytes = getBufferedAmount(peer.client.connId)!;
+    expect(originalBytes).toBeGreaterThan(Buffer.byteLength(JSON.stringify(payload)));
+    const replacement = { ...payload, message: { content: "B".repeat(2048) } };
+    broadcast("session.message", replacement, opts);
+    expect(getBufferedAmount(peer.client.connId)).toBeLessThan(originalBytes);
+    expect(getBufferedAmount(peer.client.connId)).toBeGreaterThan(
+      Buffer.byteLength(JSON.stringify(replacement)),
+    );
+    expect(peer.frames).toHaveLength(1);
+
+    sharingRole = "viewer";
+    peer.client.preparedRecipientProfileId = "current-profile";
+    peer.complete();
+
+    expect(peer.frames.at(-1)).toEqual({
+      type: "event",
+      event: "session.message",
+      payload: { ...replacement, session: { sharingRole: "viewer" } },
+      seq: 2,
+      stateVersion,
+      recipientProfileId: "current-profile",
+    });
+    expect(getBufferedAmount(peer.client.connId)).toBe(0);
+  });
+
   it.each([0, 1])(
     "reserves complete pending frames at the byte limit (overflow=%s)",
     (overflow) => {

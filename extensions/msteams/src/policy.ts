@@ -1,4 +1,3 @@
-// Msteams plugin module implements policy behavior.
 import {
   resolveScopeToolsPolicy,
   scopeKey,

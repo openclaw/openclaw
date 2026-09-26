@@ -531,6 +531,8 @@ describe("resolveNodeProgramArguments", () => {
   });
 
   it("replaces persisted command restrictions with all commands while retaining node options", async () => {
+    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    fsMocks.stat.mockImplementation(actualFs.stat);
     const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
     process.argv = ["node", entryPath];
     fsMocks.realpath.mockResolvedValue(entryPath);

@@ -78,6 +78,7 @@ export type SessionWorkspaceHost = {
   connected: boolean;
   connectionEpoch: number;
   hello: GatewayHelloOk | null;
+  resourceBasePath?: string;
   terminalAvailable?: boolean;
   browserPanelAvailable?: boolean;
   assistantAgentId?: string | null;

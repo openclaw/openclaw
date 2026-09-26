@@ -17,7 +17,10 @@ const loadMatrixCredentialsMock = vi.hoisted(() =>
 );
 
 vi.mock("./credentials-read.js", () => ({
+  captureMatrixCredentialsEnv: (env: NodeJS.ProcessEnv) => env,
   loadMatrixCredentials: (env?: NodeJS.ProcessEnv, accountId?: string | null) =>
+    loadMatrixCredentialsMock(env, accountId),
+  loadMatrixCredentialsAsync: async (env?: NodeJS.ProcessEnv, accountId?: string | null) =>
     loadMatrixCredentialsMock(env, accountId),
   credentialsMatchConfig: () => false,
 }));
@@ -462,7 +465,7 @@ describe("resolveMatrixAccount", () => {
     expect(resolveDefaultMatrixAccountId(cfg)).toBe("default");
   });
 
-  it("collects other configured Matrix account user ids for bot detection", () => {
+  it("collects other configured Matrix account user ids for bot detection", async () => {
     const cfg: CoreConfig = {
       channels: {
         matrix: {
@@ -486,11 +489,11 @@ describe("resolveMatrixAccount", () => {
     };
 
     expect(
-      Array.from(resolveConfiguredMatrixBotUserIds({ cfg, accountId: "ops" })).toSorted(),
+      Array.from(await resolveConfiguredMatrixBotUserIds({ cfg, accountId: "ops" })).toSorted(),
     ).toEqual(["@alerts:example.org", "@main:example.org"]);
   });
 
-  it("honors injected env when detecting configured bot accounts", () => {
+  it("honors injected env when detecting configured bot accounts", async () => {
     const env = {
       MATRIX_HOMESERVER: "https://matrix.example.org",
       MATRIX_USER_ID: "@main:example.org",
@@ -507,11 +510,13 @@ describe("resolveMatrixAccount", () => {
     };
 
     expect(
-      Array.from(resolveConfiguredMatrixBotUserIds({ cfg, accountId: "ops", env })).toSorted(),
+      Array.from(
+        await resolveConfiguredMatrixBotUserIds({ cfg, accountId: "ops", env }),
+      ).toSorted(),
     ).toEqual(["@alerts:example.org", "@main:example.org"]);
   });
 
-  it("falls back to stored credentials when an access-token-only account omits userId", () => {
+  it("falls back to stored credentials when an access-token-only account omits userId", async () => {
     loadMatrixCredentialsMock.mockImplementation(
       (env?: NodeJS.ProcessEnv, accountId?: string | null) =>
         accountId === "ops"
@@ -540,9 +545,9 @@ describe("resolveMatrixAccount", () => {
       },
     };
 
-    expect(Array.from(resolveConfiguredMatrixBotUserIds({ cfg, accountId: "default" }))).toEqual([
-      "@ops:example.org",
-    ]);
+    expect(
+      Array.from(await resolveConfiguredMatrixBotUserIds({ cfg, accountId: "default" })),
+    ).toEqual(["@ops:example.org"]);
   });
 
   it("preserves shared nested dm and actions config when an account overrides one field", () => {

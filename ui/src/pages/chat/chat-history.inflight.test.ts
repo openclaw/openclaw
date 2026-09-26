@@ -159,7 +159,7 @@ describe("chat history in-flight assistant recovery", () => {
             "run-first",
           ),
         );
-        admitChatSubmission(state);
+        admitChatSubmission(state, undefined);
       }
 
       await loadChatHistory(state, { startup: method === "chat.startup" });

@@ -1,3 +1,4 @@
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import { releaseSessionDeliveryClaim } from "../../../infra/session-delivery-queue-storage.js";
@@ -233,33 +234,86 @@ export async function retrySubagentCompletionDelivery(
   if (delivery.status !== "suspended") {
     return { ok: false, reason: "completion delivery is not blocked" };
   }
-  const generation = (delivery.generation ?? 1) + 1;
-  if (generation > MAX_DELIVERY_GENERATION) {
-    return { ok: false, reason: "completion delivery redrive limit reached" };
+  const selected = {
+    runId: current.runId,
+    generation: current.generation,
+    createdAt: current.createdAt,
+    deliveryGeneration: delivery.generation,
+    queueId: delivery.queueId,
+    taskRunId: task.runId,
+    taskRuntime: task.runtime,
+    taskCreatedAt: task.createdAt,
+  };
+  const admission = captureOpenClawStateWorkerContext({
+    ...databaseOptions,
+    path: databaseOptions?.database?.path ?? databaseOptions?.path,
+  }).admission;
+  const writeOptions = { ...databaseOptions, path: admission.databasePath };
+  // An explicit retry is a fresh admitted operation, never a revival of the expired source.
+  const preparation = captureOperatorToolGatewayContinuationContext();
+  const continuation = preparation ? await preparation : undefined;
+  let transferred = false;
+  try {
+    continuation?.assertCurrent();
+    admission.assertCurrent();
+    const currentTask = getTaskById(taskId);
+    if (
+      !currentTask ||
+      currentTask.runId !== selected.taskRunId ||
+      currentTask.runtime !== selected.taskRuntime ||
+      currentTask.createdAt !== selected.taskCreatedAt ||
+      subagentRuns.get(selected.runId) !== current ||
+      findSubagentForTask(currentTask) !== current ||
+      current.runId !== selected.runId ||
+      current.generation !== selected.generation ||
+      current.createdAt !== selected.createdAt ||
+      current.delivery?.status !== "suspended" ||
+      current.delivery.generation !== selected.deliveryGeneration ||
+      current.delivery.queueId !== selected.queueId
+    ) {
+      return { ok: false, reason: "completion delivery changed during preparation" };
+    }
+    const generation = (selected.deliveryGeneration ?? 1) + 1;
+    if (generation > MAX_DELIVERY_GENERATION) {
+      return { ok: false, reason: "completion delivery redrive limit reached" };
+    }
+    const now = Date.now();
+    const redrive = structuredClone(current);
+    Object.assign(ensureDeliveryState(redrive), {
+      status: "pending" as const,
+      disposition: "retryable" as const,
+      generation,
+      queueId: undefined,
+      windowStartedAt: now,
+      deadlineAt: now + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+      suspendedAt: undefined,
+      suspendedReason: undefined,
+      attemptCount: 0,
+      lastDropReason: undefined,
+      lastError: undefined,
+      nextAttemptAt: undefined,
+    });
+    redrive.cleanupHandled = false;
+    const projectedTask = projectRedrivenTask(currentTask, redrive, "pending", now);
+    settleSubagentCompletionDelivery({
+      subagent: redrive,
+      task: projectedTask,
+      databaseOptions: writeOptions,
+    });
+    // The committed new generation owns the caller before publication can schedule delivery.
+    if (continuation?.operatorAuthority) {
+      subagentRuns.bindCompletionAuthority(current, continuation);
+      transferred = true;
+    }
+    publishCommittedRecords(redrive, projectedTask);
+    const { resumeSubagentRun } = await import("../registry/subagent-registry.js");
+    resumeSubagentRun(redrive.runId);
+    return { ok: true, task: getTaskById(taskId), duplicateRisk: true };
+  } finally {
+    if (!transferred) {
+      continuation?.release();
+    }
   }
-  const now = Date.now();
-  const redrive = structuredClone(current);
-  Object.assign(ensureDeliveryState(redrive), {
-    status: "pending" as const,
-    disposition: "retryable" as const,
-    generation,
-    queueId: undefined,
-    windowStartedAt: now,
-    deadlineAt: now + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
-    suspendedAt: undefined,
-    suspendedReason: undefined,
-    attemptCount: 0,
-    lastDropReason: undefined,
-    lastError: undefined,
-    nextAttemptAt: undefined,
-  });
-  redrive.cleanupHandled = false;
-  const projectedTask = projectRedrivenTask(task, redrive, "pending", now);
-  settleSubagentCompletionDelivery({ subagent: redrive, task: projectedTask, databaseOptions });
-  publishCommittedRecords(redrive, projectedTask);
-  const { resumeSubagentRun } = await import("../registry/subagent-registry.js");
-  resumeSubagentRun(redrive.runId);
-  return { ok: true, task: getTaskById(taskId), duplicateRisk: true };
 }
 
 export async function dismissSubagentCompletionDelivery(

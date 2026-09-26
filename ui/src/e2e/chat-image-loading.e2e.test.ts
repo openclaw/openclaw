@@ -169,7 +169,7 @@ suite.define(() => {
             const before = await frame.boundingBox();
             expect(before?.width).toBe(400);
             expect(before?.height).toBeCloseTo(400 / 1.5, 1);
-            expect(await frame.textContent()).toBe("");
+            expect((await frame.textContent())?.trim()).toBe("");
             expect(await frame.locator("svg").count()).toBe(0);
             const motion = await skeleton.evaluate((element) => {
               const style = getComputedStyle(element, "::after");

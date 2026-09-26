@@ -97,7 +97,7 @@ describe("app-tool-stream approval lifecycle", () => {
     const messages = reconciled.flatMap((item) => (item.kind === "message" ? [item.message] : []));
     const activity = messages.flatMap(readPreparedActivity);
     expect(activity).toEqual([completed]);
-    expect(summarizeToolGroup(activity)).toBe("Stop process");
+    expect(summarizeToolGroup(activity)).toBe("1 other operation");
     expect(activity[0]).not.toHaveProperty("diagnostic");
     expect(completedEvent.diagnostic).toEqual({ source: "native-tool" });
     expect(messages.flatMap(extractToolCardsCached)).toMatchObject([

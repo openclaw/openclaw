@@ -63,17 +63,16 @@ function normalizeAccountPhone(account?: string | null) {
   return trimmed ? normalizeE164(trimmed) : undefined;
 }
 
-function resolveSignalNativeMentionFacts(params: {
-  message: string;
-  mentions?: SignalMention[] | null;
-  account?: string | null;
-  accountUuid?: string | null;
-}): SignalNativeMentionFacts {
-  const validMentions = (params.mentions ?? []).filter((mention) =>
-    isValidStructuredMention(params.message, mention),
+export function resolveSignalMentionFacts(
+  identity: SignalNativeMentionIdentity,
+  message: string,
+  mentions?: SignalMention[] | null,
+): SignalNativeMentionFacts {
+  const validMentions = (mentions ?? []).filter((mention) =>
+    isValidStructuredMention(message, mention),
   );
-  const botUuid = params.accountUuid?.trim();
-  const botPhone = normalizeAccountPhone(params.account);
+  const botUuid = identity.accountUuid?.trim();
+  const botPhone = normalizeAccountPhone(identity.account);
   const canDetectBotMention = Boolean(botUuid || botPhone);
   const mentionsBot = validMentions.some((mention) => {
     const mentionUuid = mention.uuid?.trim();
@@ -89,19 +88,6 @@ function resolveSignalNativeMentionFacts(params: {
     hasAnyMention: validMentions.length > 0,
     mentionsBot,
   };
-}
-
-export function resolveSignalMentionFacts(
-  identity: SignalNativeMentionIdentity,
-  message: string,
-  mentions?: SignalMention[] | null,
-) {
-  return resolveSignalNativeMentionFacts({
-    message,
-    mentions,
-    account: identity.account,
-    accountUuid: identity.accountUuid,
-  });
 }
 
 export function renderSignalMentions(message: string, mentions?: SignalMention[] | null) {

@@ -1,22 +1,36 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
-import { formatSqliteErrorCodeSuffix } from "./sqlite-error-diagnostics.js";
+import {
+  formatSqliteErrorCodeSuffix,
+  formatSqliteReadOnlyInspectionFailure,
+  isSqliteLockError,
+} from "./sqlite-error-diagnostics.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
-import { releaseSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
+import {
+  releaseSnapshotTempDirectory,
+  retireSqliteSnapshotPayload,
+} from "./sqlite-readonly-location-cleanup.js";
 import {
   createOnlineReadOnlyBackup,
-  inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
+  SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
 import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
+  SQLITE_INSPECTION_CONTENTION_PREFIX,
+  isSqliteSnapshotStagingMode,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
-import { reclaimAbandonedSqliteSnapshots } from "./sqlite-snapshot-staging.js";
+import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
+import {
+  createSqliteSnapshotStagingTokenSync,
+  reclaimAbandonedSqliteSnapshots,
+  reconcileSqliteSnapshotRetirement,
+} from "./sqlite-snapshot-staging.js";
+import type { SqliteStagingToken } from "./sqlite-staging-token.js";
 import { assertExistingDatabaseIdentity } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 import {
@@ -24,20 +38,20 @@ import {
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "./state-database-coordinator.js";
 
-// The sync strategy raw-copies without attaching SQLite to the source, so sync
-// callers stay byte-neutral on the live family; the async strategy holds a read
-// transaction on the source and may update its WAL index.
+const stagingTokens = new Map<string, SqliteStagingToken>();
+
+// Artifact-preserving sync requests must not open SQLite on the source. Live
+// async backups pin committed pages with a read transaction and may update SHM.
 async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   const mode = args[0];
   const pathname = args[1];
   const stagingRoot = args[2];
-  const agentSchemaVersionForOwnership = args[3] === undefined ? undefined : Number(args[3]);
   if (
     (mode !== "sync" &&
       mode !== "async" &&
       mode !== "consolidated" &&
-      mode !== "schema-header" &&
-      mode !== "reclaim") ||
+      mode !== "reclaim" &&
+      !isSqliteSnapshotStagingMode(mode)) ||
     !pathname
   ) {
     return {
@@ -46,6 +60,32 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     };
   }
   try {
+    if (mode === "staging-reconcile") {
+      reconcileSqliteSnapshotRetirement(pathname);
+      return { ok: true, location: pathname };
+    }
+    if (mode === "staging-create" || mode === "staging-create-legacy") {
+      const owned = createSqliteSnapshotStagingTokenSync(
+        pathname,
+        mode === "staging-create-legacy",
+      );
+      stagingTokens.set(owned.directory, owned.release);
+      return { ok: true, location: owned.directory };
+    }
+    if (mode === "staging-retire") {
+      const token = stagingTokens.get(pathname);
+      if (!token) {
+        throw new Error("SQLite snapshot token is not owned by this worker");
+      }
+      const retirement = beginSqliteSnapshotRetirement(pathname, { token });
+      try {
+        retireSqliteSnapshotPayload(retirement);
+        stagingTokens.delete(pathname);
+      } finally {
+        retirement.release();
+      }
+      return { ok: true, location: pathname };
+    }
     if (mode === "reclaim") {
       const warnings: string[] = [];
       const directories = reclaimAbandonedSqliteSnapshots(pathname, (message, error) => {
@@ -78,21 +118,6 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       }
       return { ok: true, warnings };
     }
-    if (mode === "schema-header") {
-      if (
-        agentSchemaVersionForOwnership !== undefined &&
-        (!Number.isSafeInteger(agentSchemaVersionForOwnership) ||
-          agentSchemaVersionForOwnership < 0)
-      ) {
-        throw new Error("SQLite schema header requires a valid supported agent schema version");
-      }
-      const header = await inspectSqliteSchemaHeaderInProcess(
-        pathname,
-        stagingRoot,
-        agentSchemaVersionForOwnership,
-      );
-      return { ok: true, header };
-    }
     if (mode === "consolidated") {
       if (!stagingRoot || path.dirname(path.resolve(pathname)) !== path.resolve(stagingRoot)) {
         throw new Error(
@@ -112,13 +137,17 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
     return { ok: true, location: prepared.location };
   } catch (error) {
-    const message = `${coerceErrorMessage(error)}${formatSqliteErrorCodeSuffix(error)}`;
-    return { ok: false, message };
+    const contention = error instanceof SqliteSourceChangedError || isSqliteLockError(error);
+    return {
+      ok: false,
+      message: `${contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : ""}${formatSqliteReadOnlyInspectionFailure(error)}`,
+    };
   }
 }
 
 function runSession(): void {
   let busy = false;
+  let closeRequested = false;
   const transfers = createSqliteWorkerTransferOwner();
   const sourceLeases = new Set<ReturnType<typeof acquireStateDatabaseHandleLease>>();
   let activeTransfer: { requestId: number; transferId: number } | undefined;
@@ -132,11 +161,7 @@ function runSession(): void {
   };
   const fail = (id: number, error: unknown) => {
     transfers.close();
-    send(
-      id,
-      { ok: false, message: `${coerceErrorMessage(error)}${formatSqliteErrorCodeSuffix(error)}` },
-      true,
-    );
+    send(id, { ok: false, message: formatSqliteReadOnlyInspectionFailure(error) }, true);
   };
   process.once("disconnect", () => {
     if (busy) {
@@ -145,9 +170,13 @@ function runSession(): void {
     }
   });
   process.on("message", (message: unknown) => {
-    if (message === "close" && !busy) {
-      transfers.close();
-      process.disconnect?.();
+    if (message === "close") {
+      if (busy) {
+        closeRequested = true;
+      } else {
+        transfers.close();
+        process.disconnect?.();
+      }
       return;
     }
     if (
@@ -235,7 +264,7 @@ function runSession(): void {
           { kinds: ["store", "state"] },
         );
         activeTransfer = { requestId: id, transferId: handle.id };
-        send(id, { type: "start", handle });
+        send(id, { type: "start", handle: { ...handle, cacheable: rows.cacheable } });
       })().catch((error: unknown) => fail(id, error));
       return;
     }
@@ -249,25 +278,28 @@ function runSession(): void {
       !Number.isSafeInteger(message.id) ||
       !("args" in message) ||
       !Array.isArray(message.args) ||
-      message.args[0] !== "sync" ||
+      (message.args[0] !== "sync" && !isSqliteSnapshotStagingMode(message.args[0])) ||
       !message.args.every((arg): arg is string => typeof arg === "string")
     ) {
       process.exit(1);
     }
     busy = true;
     const id = message.id;
+    const staging = isSqliteSnapshotStagingMode(message.args[0]);
     void inspect(message.args).then((inspected) => {
       const result: SqliteReadOnlyWorkerResult =
         Buffer.byteLength(JSON.stringify(inspected)) > SQLITE_READONLY_WORKER_MAX_BUFFER
           ? { ok: false, message: "exceeded its output buffer" }
           : inspected;
-      if (result.ok) {
-        busy = false;
-      }
       process.send?.({ id, result }, (error) => {
-        if (error || !result.ok) {
-          // A failed inspection may still own a native handle and admission.
+        if (error || (!result.ok && !staging)) {
+          // Failed private recovery can retain a native handle until process exit.
           process.exit(1);
+          return;
+        }
+        busy = false;
+        if (closeRequested) {
+          process.disconnect?.();
         }
       });
     });

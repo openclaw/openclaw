@@ -5,6 +5,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 
@@ -226,8 +227,8 @@ describe("chat pane read markers", () => {
     const sessionsState = (presented: boolean) => {
       pane.presented = presented;
       pane.applySessionsState({
-        result: {
-          sessions: [
+        result: sessionsResult(
+          [
             {
               key: "agent:main:current",
               kind: "direct",
@@ -236,12 +237,17 @@ describe("chat pane read markers", () => {
               unread: true,
             },
           ],
-        },
+          20,
+        ),
         agentId: "main",
         loading: false,
         error: null,
         deletedSessions: [],
-      } as unknown as Parameters<typeof pane.applySessionsState>[0]);
+        modelOverrides: {},
+        groups: [],
+        groupSettings: [],
+        sectionOrder: [],
+      });
     };
 
     // Hidden retained panes keep the subscription alive but must not mark
@@ -301,12 +307,16 @@ describe("chat pane read markers", () => {
 
     pane.presented = false;
     pane.applySessionsState({
-      result: { sessions: [row] },
+      result: sessionsResult([row], 20),
       agentId: "main",
       loading: false,
       error: null,
       deletedSessions: [],
-    } as unknown as Parameters<typeof pane.applySessionsState>[0]);
+      modelOverrides: {},
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
+    });
     pane.presented = true;
 
     expect(patch).toHaveBeenCalledWith(

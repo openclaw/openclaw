@@ -5,7 +5,10 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeUniqueTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import {
   readConnectPairingRequiredMessage,
   type ConnectPairingRequiredDetails,
@@ -159,12 +162,10 @@ function findQueryPendingNodeApprovalNotices(
   paired: PairedDevice[] | undefined,
   query: string,
 ): PendingNodeApprovalNotice[] {
-  return (paired ?? [])
-    .filter((device) => pairedDeviceMatchesNodeApprovalQuery(device, query))
-    .flatMap((device) => {
-      const notice = buildPendingNodeApprovalNotice(device, opts);
-      return notice ? [notice] : [];
-    });
+  return findPairedDevicePendingNodeApprovalNotices(
+    opts,
+    paired?.filter((device) => pairedDeviceMatchesNodeApprovalQuery(device, query)),
+  );
 }
 
 function isDevicePairingApprovalDenied(error: unknown): boolean {
@@ -329,6 +330,7 @@ async function approvePairingWithFallback(
       throw error;
     }
     const gatewayRequestId = normalizeOptionalString(fallback.details.requestId);
+    let replacement: PendingDevice | null = null;
     if (gatewayRequestId && gatewayRequestId !== requestId) {
       const local = await listDevicePairing();
       const localList = {
@@ -336,59 +338,34 @@ async function approvePairingWithFallback(
         paired: local.paired.map((device) => redactLocalPairedDevice(device)),
       };
       context.pairingList = localList;
-      const replacement = findSameDeviceReplacementRequest({
+      replacement = findSameDeviceReplacementRequest({
         originalRequest,
         originalRequestId: requestId,
         gatewayRequestId,
         pending: localList.pending,
         paired: localList.paired,
       });
-      if (replacement) {
-        const approved = await approveDevicePairing(replacement.requestId, {
-          callerScopes: ["operator.admin"],
-        });
-        if (!approved) {
+      if (!replacement) {
+        const hasOriginalPending = Boolean(findPendingRequestById(localList.pending, requestId));
+        const hasGatewayPending = Boolean(
+          findPendingRequestById(localList.pending, gatewayRequestId),
+        );
+        if (!hasOriginalPending && !hasGatewayPending) {
           return null;
         }
-        if (approved.status === "forbidden") {
-          throw new Error(formatDevicePairingForbiddenMessage(approved), { cause: error });
-        }
-        if (opts.json !== true) {
-          defaultRuntime.log(
-            theme.warn(
-              `Pending request ${sanitizeForLog(requestId)} was replaced by same-device repair ${sanitizeForLog(replacement.requestId)}; approving latest compatible request.`,
-            ),
-          );
-          defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
-        }
-        return {
-          requestId: replacement.requestId,
-          resolved: {
-            kind: "same-device-replacement",
-            requestedRequestId: requestId,
-            approvedRequestId: replacement.requestId,
-          },
-          device: redactLocalPairedDevice(approved.device),
-        };
+        // Fail-closed replacement validation refused to substitute; do not point
+        // at the incompatible pending id as a recovery step.
+        throw buildFallbackStateMismatchError(fallback.details, []);
       }
-      const hasOriginalPending = Boolean(findPendingRequestById(localList.pending, requestId));
-      const hasGatewayPending = Boolean(
-        findPendingRequestById(localList.pending, gatewayRequestId),
-      );
-      if (!hasOriginalPending && !hasGatewayPending) {
-        return null;
-      }
-      // Fail-closed replacement validation refused to substitute; do not point
-      // at the incompatible pending id as a recovery step.
-      throw buildFallbackStateMismatchError(fallback.details, []);
     }
-    const approved = await approveDevicePairing(requestId, {
+    const approvedRequestId = replacement?.requestId ?? requestId;
+    const approved = await approveDevicePairing(approvedRequestId, {
       // Local CLI fallback already assumes direct machine access; treat it as an
       // explicit admin approval path instead of relying on missing caller scopes.
       callerScopes: ["operator.admin"],
     });
     if (!approved) {
-      if (gatewayRequestId && gatewayRequestId === requestId) {
+      if (!replacement && gatewayRequestId && gatewayRequestId === requestId) {
         throw buildFallbackStateMismatchError(fallback.details, []);
       }
       return null;
@@ -397,10 +374,26 @@ async function approvePairingWithFallback(
       throw new Error(formatDevicePairingForbiddenMessage(approved), { cause: error });
     }
     if (opts.json !== true) {
+      if (replacement) {
+        defaultRuntime.log(
+          theme.warn(
+            `Pending request ${sanitizeForLog(requestId)} was replaced by same-device repair ${sanitizeForLog(replacement.requestId)}; approving latest compatible request.`,
+          ),
+        );
+      }
       defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
     }
     return {
-      requestId,
+      requestId: approvedRequestId,
+      ...(replacement
+        ? {
+            resolved: {
+              kind: "same-device-replacement",
+              requestedRequestId: requestId,
+              approvedRequestId,
+            },
+          }
+        : {}),
       device: redactLocalPairedDevice(approved.device),
     };
   }
@@ -415,18 +408,7 @@ function parseDevicePairingList(value: unknown): DevicePairingList {
 }
 
 function normalizeDeviceRoles(request: PendingDevice): string[] {
-  const roles = new Set<string>();
-  for (const role of request.roles ?? []) {
-    const normalized = normalizeOptionalString(role);
-    if (normalized) {
-      roles.add(normalized);
-    }
-  }
-  const role = normalizeOptionalString(request.role);
-  if (role) {
-    roles.add(role);
-  }
-  return [...roles];
+  return normalizeUniqueTrimmedStringList([...(request.roles ?? []), request.role]);
 }
 
 function normalizeOperatorScopes(scopes: string[] | undefined): string[] {

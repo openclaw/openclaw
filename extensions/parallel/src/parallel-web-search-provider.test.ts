@@ -107,6 +107,48 @@ beforeEach(() => {
   endpointMockState.responses = [];
 });
 describe.each(["paid", "free"] as const)("Parallel %s cache policy", (transport) => {
+  it("caps returned and cached results when Parallel exceeds the requested count", async () => {
+    const enqueue = transport === "paid" ? enqueueJson : pushMcpHandshake;
+    enqueue({
+      search_id: "parallel-result-cap",
+      session_id: "parallel-cap-session",
+      results: [
+        { url: "https://example.com/first", title: "First", excerpts: ["first"] },
+        { url: "https://example.com/second", title: "Second", excerpts: ["second"] },
+        { url: "https://example.com/third", title: "Third", excerpts: ["third"] },
+      ],
+      warnings: ["provider warning"],
+      usage: [{ count: 1 }],
+    });
+    const tool = transport === "paid" ? paidTool() : freeTool();
+    const args = {
+      search_queries: [`parallel ${transport} result count owner`],
+      session_id: "parallel-cap-session",
+      count: 1,
+    };
+
+    const first = await tool.execute(args);
+    const cached = await tool.execute(args);
+
+    expect(endpointMockState.calls).toHaveLength(transport === "paid" ? 1 : 3);
+    if (transport === "paid") {
+      expect(readBody()).toMatchObject({ advanced_settings: { max_results: 1 } });
+    } else {
+      expect(callArguments()).toMatchObject({ session_id: args.session_id });
+    }
+    expect(first).toMatchObject({
+      provider: transport === "paid" ? "parallel" : "parallel-free",
+      count: 1,
+      searchId: "parallel-result-cap",
+      sessionId: "parallel-cap-session",
+      warnings: ["provider warning"],
+      usage: [{ count: 1 }],
+      results: [{ url: "https://example.com/first" }],
+    });
+    expect(first.results).toHaveLength(1);
+    expect(cached).toEqual({ ...first, cached: true });
+  });
+
   it.each([0, 1])(
     "honors the current %i-minute TTL after populating at 15 minutes",
     async (ttl) => {
@@ -425,6 +467,7 @@ describe("parallel web search provider", () => {
       })
       .catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ status: 503, statusCode: 503 });
     expect((error as Error).message).toMatch(
       /Parallel API error \(503\): parallel upstream unavailable/,
     );
@@ -675,10 +718,14 @@ describe("runParallelMcpSearch", () => {
     expect(response.session_id).toBe(callerSessionId);
   });
   it("throws when initialize fails", async () => {
-    endpointMockState.responses.push(new Response("nope", { status: 500 }));
-    await expect(runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 })).rejects.toThrow(
-      /initialize failed \(500\)/,
-    );
+    endpointMockState.responses.push(new Response("nope", { status: 429 }));
+    await expect(
+      runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 }),
+    ).rejects.toMatchObject({
+      status: 429,
+      statusCode: 429,
+      message: expect.stringMatching(/initialize failed \(429\)/),
+    });
   });
   it("throws when the initialized acknowledgement fails", async () => {
     endpointMockState.responses.push(
@@ -686,17 +733,35 @@ describe("runParallelMcpSearch", () => {
         { jsonrpc: "2.0", id: "i", result: { protocolVersion: "2025-06-18" } },
         { "mcp-session-id": "server-session-1" },
       ),
-      new Response("ack nope", { status: 500 }),
+      new Response("ack nope", { status: 403 }),
     );
-    await expect(runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 })).rejects.toThrow(
-      /notifications\/initialized failed \(500\): ack nope/,
-    );
+    await expect(
+      runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 }),
+    ).rejects.toMatchObject({
+      status: 403,
+      statusCode: 403,
+      message: expect.stringMatching(/notifications\/initialized failed \(403\): ack nope/),
+    });
     expect(endpointMockState.calls.map((call) => readBody(call).method)).toEqual([
       "initialize",
       "notifications/initialized",
     ]);
     expect(headerOf(endpointCall(1), "Mcp-Session-Id")).toBe("server-session-1");
     expect(headerOf(endpointCall(1), "MCP-Protocol-Version")).toBe("2025-06-18");
+  });
+  it("preserves HTTP status when tools/call fails", async () => {
+    endpointMockState.responses.push(
+      jsonResponse({ jsonrpc: "2.0", id: "i", result: { protocolVersion: "2025-06-18" } }),
+      new Response(null, { status: 202 }),
+      new Response("call rejected", { status: 401 }),
+    );
+    await expect(
+      runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 }),
+    ).rejects.toMatchObject({
+      status: 401,
+      statusCode: 401,
+      message: expect.stringContaining("tools/call failed (401): call rejected"),
+    });
   });
   it("bounds initialize error bodies without using response.text()", async () => {
     const tracked = cancelTrackedTextResponse(`${"parallel mcp unavailable ".repeat(1024)}tail`, {

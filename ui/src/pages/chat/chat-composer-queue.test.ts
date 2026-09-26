@@ -559,6 +559,7 @@ describe("chat composer queue reordering", () => {
   it.each([
     { sendState: "failed" as const, label: t("common.failed") },
     { sendState: "unconfirmed" as const, label: t("chat.queue.states.needsReview") },
+    { sendState: "held" as const, label: t("chat.queue.states.needsReview") },
   ])("keeps an offline $sendState row terminal with its diagnostic", ({ sendState, label }) => {
     const container = renderQueue({
       offline: true,
@@ -589,6 +590,7 @@ describe("chat composer queue reordering", () => {
   it.each([
     { sendState: "failed" as const, label: t("common.failed") },
     { sendState: "unconfirmed" as const, label: t("chat.queue.states.needsReview") },
+    { sendState: "held" as const, label: t("chat.queue.states.needsReview") },
   ])("keeps a $sendState row labeled without a diagnostic", ({ sendState, label }) => {
     const container = renderQueue({
       queue: [{ id: sendState, text: sendState, createdAt: 1, sendState }],

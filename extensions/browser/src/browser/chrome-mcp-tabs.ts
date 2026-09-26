@@ -351,5 +351,3 @@ export async function openChromeMcpTab(
     },
   );
 }
-
-/** Bring a Chrome MCP page to the foreground. */

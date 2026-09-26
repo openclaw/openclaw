@@ -121,6 +121,8 @@ describe("Codex app-server terminal settlement", () => {
         });
         expect(settled).not.toHaveBeenCalled();
         expect(onAttemptTimeout).not.toHaveBeenCalled();
+        // Storage released after the deadline simulation must keep its native coordinator timers.
+        vi.useRealTimers();
         held.resolve();
         await writer;
         const result = await run;
@@ -477,6 +479,8 @@ describe("Codex app-server terminal settlement", () => {
         __openclaw: undefined,
       });
       params.timeoutMs = 60 * 60_000;
+      const promptPersisted = createDeferred<void>();
+      params.onUserMessagePersisted = () => promptPersisted.resolve();
       vi.useFakeTimers();
       const settled = vi.fn();
       const run = runCodexAppServerAttempt(params);
@@ -485,6 +489,7 @@ describe("Codex app-server terminal settlement", () => {
       try {
         await harness.waitForMethod("turn/start");
         if (boundary === "checkpoint") {
+          await promptPersisted.promise;
           await holdWriter();
         }
         await harness.notify({
@@ -567,8 +572,12 @@ describe("Codex app-server terminal settlement", () => {
           checkpoint.resolve();
           await Promise.allSettled(checkpointWrites);
         }
-        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+        if (release !== "during grace") {
+          await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+        }
+        // Keep the grace clock fixed while accepted transcript work and cleanup settle.
         const result = await run;
+        expect(settled).toHaveBeenCalledOnce();
         expect(readAttemptTerminal(result)).toMatchObject({
           aborted: termination === "abort",
           timedOut: false,

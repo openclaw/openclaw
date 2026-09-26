@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import { writeSessionPlacementRecovery } from "../lib/sessions/session-placement-recovery.ts";
+import { chatStartupStatusLabel } from "../pages/chat/chat-run-startup.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import createRuntime from "./session-placement-startup.runtime.ts";
 import {
@@ -48,7 +49,17 @@ describe("initial turn ownership through disconnect", () => {
       await vi.waitFor(() => expect(startup.get(input.recovery.sessionKey)?.phase).toBe("failed"));
       client.recoveryScopeReady = false;
       transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
-      expect(startup.get(input.recovery.sessionKey)).toBeNull();
+      const reconnecting = startup.get(input.recovery.sessionKey);
+      expect(reconnecting).toMatchObject({
+        phase: "reconnecting",
+        retryable: false,
+        initialTurn: {
+          text: input.recovery.message,
+          sendRunId: input.recovery.messageId,
+          sendState: "waiting-reconnect",
+        },
+      });
+      expect(chatStartupStatusLabel(null, reconnecting)).toBe("Reconnecting…");
       expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
       startup.retry(input.recovery.sessionKey);
       const replacement = replacementClient ? { ...client, recoveryScopeReady: true } : client;
@@ -89,10 +100,16 @@ describe("initial turn ownership through disconnect", () => {
     startup.start({ ...input, persistRecovery: false });
     client.recoveryScopeReady = false;
     transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
+    expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+      phase: "reconnecting",
+      retryable: false,
+      initialTurn: { text: input.recovery.message, sendState: "waiting-reconnect" },
+    });
     moduleLoad.resolve({ default: createRuntime });
     await flushStartupMicrotasks();
     expect(request).not.toHaveBeenCalled();
     expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+    expect(startup.get(input.recovery.sessionKey)?.initialTurn?.text).toBe(input.recovery.message);
     const replacement = { ...client, recoveryScopeReady: true };
     transition(gateway, { ...gateway.snapshot, client: replacement as never, phase: "connected" });
     await vi.waitFor(() =>
@@ -105,7 +122,7 @@ describe("initial turn ownership through disconnect", () => {
     expect(sessionStorage.length).toBe(0);
     startup.dispose();
   });
-  it.each(["credentials", "hello", "gateway", "message"])(
+  it.each(["credentials", "hello", "hello-before-recovery", "principal", "gateway", "message"])(
     "fences a replaced %s owner while retaining its original storage",
     async (change) => {
       const request = vi
@@ -114,6 +131,7 @@ describe("initial turn ownership through disconnect", () => {
           new GatewayRequestError({ code: "INVALID_REQUEST", message: "target unavailable" }),
         );
       const { startup, input, client, gateway } = createPlacementStartupHarness(request);
+      Object.assign(gateway.snapshot, { selfUser: { id: "user-a" } });
       startup.start(input);
       await vi.waitFor(() => expect(startup.get(input.recovery.sessionKey)?.phase).toBe("failed"));
       if (change === "credentials") {
@@ -121,6 +139,14 @@ describe("initial turn ownership through disconnect", () => {
       }
       if (change === "hello") {
         client.recoveryScope = "principal-b";
+      }
+      if (change === "hello-before-recovery") {
+        client.recoveryScopeReady = false;
+        Object.assign(gateway.snapshot.hello!, { auth: { recoveryScope: "principal-b" } });
+      }
+      if (change === "principal") {
+        client.recoveryScopeReady = false;
+        Object.assign(gateway.snapshot, { selfUser: { id: "user-b" } });
       }
       if (change === "gateway") {
         Object.assign(gateway.connection, { gatewayUrl: "ws://other.example" });
@@ -228,7 +254,10 @@ describe("initial turn ownership through disconnect", () => {
     dispatch.resolve({ placement: createStartupPlacement("active", 2) });
     await flushStartupMicrotasks();
     expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
+    expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+      phase: "reconnecting",
+      initialTurn: { text: input.recovery.message, sendState: "waiting-reconnect" },
+    });
     expect(request).toHaveBeenCalledTimes(1);
     client.recoveryScopeReady = true;
     transition(gateway, { ...gateway.snapshot, phase: "connected" });
@@ -242,42 +271,146 @@ describe("initial turn ownership through disconnect", () => {
     expect(sessionStorage.length).toBe(0);
     startup.dispose();
   });
-  it("retains an incognito cleanup failure that settles after same-credential reconnect", async () => {
-    const dispatch = createDeferred<unknown>();
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.dispatch") {
-        return dispatch.promise;
+  it.each([false, true])(
+    "keeps accepted display when reconnect follows recovery retirement (replacement client: %s)",
+    async (replaceClient) => {
+      const send = createDeferred<unknown>();
+      const request = vi.fn((method: string) => {
+        if (method === "sessions.dispatch") {
+          return Promise.resolve({ placement: createStartupPlacement("active", 2) });
+        }
+        if (method === "sessions.send") {
+          return send.promise;
+        }
+        if (method === "chat.history") {
+          return Promise.resolve({
+            messages: [
+              {
+                role: "user",
+                content: "fix the cloud task",
+                __openclaw: { id: "accepted-user", idempotencyKey: "message-stable:user" },
+              },
+            ],
+          });
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+      const { startup, input, client, gateway, chatSubmissions } =
+        createPlacementStartupHarness(request);
+      startup.start(input);
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("sessions.send", expect.anything()),
+      );
+      const storage = sessionStorage;
+      const remove = storage.removeItem.bind(storage);
+      const recoveryKey = sessionPlacementRecoveryExactStorageKey(
+        input.recovery.gatewayUrl,
+        input.recovery.recoveryScope,
+        input.recovery.sessionKey,
+      );
+      vi.spyOn(Storage.prototype, "removeItem").mockImplementation((key) => {
+        remove(key);
+        if (key === recoveryKey) {
+          queueMicrotask(() => {
+            client.recoveryScopeReady = false;
+            transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
+            const replacement = replaceClient ? { ...client } : client;
+            replacement.recoveryScopeReady = true;
+            transition(gateway, {
+              ...gateway.snapshot,
+              phase: "connected",
+              client: replacement as never,
+            });
+          });
+        }
+      });
+      const visible: boolean[] = [];
+      const stop = startup.subscribe(() =>
+        visible.push(
+          Boolean(
+            startup.get(input.recovery.sessionKey)?.initialTurn ||
+            chatSubmissions.readInitial(input.recovery.sessionKey, gateway.snapshot.client),
+          ),
+        ),
+      );
+      try {
+        send.resolve({ status: "started" });
+        await vi.waitFor(() =>
+          expect(
+            chatSubmissions.readInitial(input.recovery.sessionKey, gateway.snapshot.client)
+              ?.pendingRunId,
+          ).toBe(input.recovery.messageId),
+        );
+        expect(visible).not.toContain(false);
+        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
+        expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+      } finally {
+        stop();
+        startup.dispose();
       }
-      if (method === "sessions.reclaim") {
-        return Promise.reject(new Error("cleanup unavailable"));
-      }
-      throw new Error(`unexpected ${method}`);
-    });
-    const { startup, input, client, gateway } = createPlacementStartupHarness(request);
-    sessionStorage.clear();
-    startup.start({ ...input, persistRecovery: false });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-    client.recoveryScopeReady = false;
-    transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
-    transition(gateway, {
-      ...gateway.snapshot,
-      client: { ...client, recoveryScopeReady: true } as never,
-      phase: "connected",
-    });
-    dispatch.resolve({ placement: createStartupPlacement("active", 2) });
-    await vi.waitFor(() =>
-      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-        phase: "failed",
-        error: "cleanup unavailable",
-        initialTurn: { text: input.recovery.message },
-      }),
-    );
-    expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "sessions.dispatch",
-      "sessions.reclaim",
-    ]);
-    expect(sessionStorage.length).toBe(0);
-    startup.dispose();
-  });
+    },
+  );
+
+  it.each(["reclaim", "archive", "delete"])(
+    "retains an incognito %s failure that settles after same-credential reconnect",
+    async (failure) => {
+      const dispatch = createDeferred<unknown>();
+      const request = vi.fn((method: string, params?: { archived?: boolean }) => {
+        if (method === "sessions.dispatch") {
+          return dispatch.promise;
+        }
+        if (method === "sessions.reclaim") {
+          return failure === "reclaim"
+            ? Promise.reject(new Error("cleanup unavailable"))
+            : Promise.resolve({ ok: true });
+        }
+        if (method === "sessions.describe") {
+          return Promise.resolve({ session: { sessionId: "temporary-session" } });
+        }
+        if (method === "sessions.patch") {
+          return failure === "archive" && params?.archived
+            ? Promise.reject(new Error("cleanup unavailable"))
+            : Promise.resolve({ ok: true });
+        }
+        if (method === "sessions.delete") {
+          return Promise.reject(new Error("cleanup unavailable"));
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+      const { startup, input, client, gateway } = createPlacementStartupHarness(request);
+      sessionStorage.clear();
+      startup.start({ ...input, persistRecovery: false });
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      client.recoveryScopeReady = false;
+      transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
+      transition(gateway, {
+        ...gateway.snapshot,
+        client: { ...client, recoveryScopeReady: true } as never,
+        phase: "connected",
+      });
+      dispatch.resolve({ placement: createStartupPlacement("active", 2) });
+      await vi.waitFor(() =>
+        expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+          phase: "failed",
+          error: "cleanup unavailable",
+          retryable: true,
+          initialTurn: { text: input.recovery.message },
+        }),
+      );
+      expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+      expect(request.mock.calls.map(([method]) => method)).toEqual(
+        failure === "reclaim"
+          ? ["sessions.dispatch", "sessions.reclaim"]
+          : [
+              "sessions.dispatch",
+              "sessions.reclaim",
+              "sessions.describe",
+              "sessions.patch",
+              ...(failure === "delete" ? ["sessions.delete", "sessions.patch"] : []),
+            ],
+      );
+      expect(sessionStorage.length).toBe(0);
+      startup.dispose();
+    },
+  );
 });

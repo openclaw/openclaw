@@ -125,25 +125,18 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
   renderedMatch: RouteMatch<TRouteId, TModule, TData> | undefined,
   options: RouterOutletOptions<TLoadContext> = {},
 ): unknown {
-  if (renderedMatch?.status === "notFound") {
-    return nothing;
-  }
-  if (renderedMatch?.status === "redirected") {
-    return nothing;
-  }
-  if (!renderedMatch) {
+  if (
+    !renderedMatch ||
+    renderedMatch.status === "notFound" ||
+    renderedMatch.status === "redirected"
+  ) {
     return nothing;
   }
 
   const routeId = renderedMatch.routeId;
-  if (!renderedMatch?.module) {
+  if (!renderedMatch.module) {
     return renderedMatch.error
-      ? renderError<TRouteId, TLoadContext, TModule, TData>(
-          router,
-          options.retryContext,
-          renderedMatch.error,
-          routeId,
-        )
+      ? renderError(router, options.retryContext, renderedMatch.error, routeId)
       : selection.showPending
         ? renderLoadingState()
         : nothing;
@@ -151,12 +144,7 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
   const routeModule = renderedMatch.module;
   if (!isRenderableModule<TData>(routeModule)) {
     return renderedMatch.error
-      ? renderError<TRouteId, TLoadContext, TModule, TData>(
-          router,
-          options.retryContext,
-          renderedMatch.error,
-          routeId,
-        )
+      ? renderError(router, options.retryContext, renderedMatch.error, routeId)
       : null;
   }
   const renderedPage = () =>
@@ -166,7 +154,7 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
         : routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader"),
     );
   return renderedMatch.error
-    ? renderError<TRouteId, TLoadContext, TModule, TData>(
+    ? renderError(
         router,
         options.retryContext,
         renderedMatch.error,
@@ -368,6 +356,13 @@ class OpenClawRouterOutlet<
       // Returning from another page must not revive the previously selected
       // session while the requested destination is still unresolved.
       if (module?.retainOnNavigate && waiting) {
+        // Chat's module can arrive before its submitted-prompt preview loader.
+        // Keep the launcher visible until that first Chat presentation is ready.
+        if (renderedMatch?.routeId === "chat" && snapshot.settled?.routeId === "new-session") {
+          return renderRouterOutlet(router, snapshot, snapshot.settled, {
+            retryContext: this.retryContext,
+          });
+        }
         return renderLoadingState();
       }
       return renderRouterOutlet(router, snapshot, renderedMatch, {

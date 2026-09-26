@@ -1,6 +1,6 @@
 // Startup policy helpers for config guards, plugin loading, banners, and CLI path checks.
 import { isTruthyEnvValue } from "../infra/env.js";
-import type { CliCommandPluginLoadPolicy } from "./command-catalog.js";
+import type { CliCommandPluginLoadPolicy } from "./command-catalog-types.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 
 function shouldLoadPlugins(params: {
@@ -27,9 +27,13 @@ export function resolveCliStartupPolicy(params: {
   jsonOutputMode: boolean;
   machineOutputMode?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** Set only by the parsed, registered native capability action. */
+  nativeUpdateExecutorCheck?: boolean;
 }) {
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
-  const machineOutputMode = params.jsonOutputMode || params.machineOutputMode === true;
+  const nativeCheck = params.nativeUpdateExecutorCheck === true;
+  const machineOutputMode =
+    nativeCheck || params.jsonOutputMode || params.machineOutputMode === true;
   // Protocol commands own stdout from process startup, before their action installs later routing.
   const suppressDoctorStdout = machineOutputMode || commandPolicy.ownsProtocolStdout;
   const configGuard =
@@ -42,14 +46,20 @@ export function resolveCliStartupPolicy(params: {
     suppressDoctorStdout,
     hideBanner: hideBanner || isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER),
     skipConfigGuard:
-      configGuard === "skip" || (configGuard === "when-suppressed" && suppressDoctorStdout),
-    ...(configGuard === "validate" ? { validateConfigOnly: true } : {}),
-    loadPlugins: shouldLoadPlugins({
-      argv: params.argv,
-      commandPath: params.commandPath,
-      jsonOutputMode: params.jsonOutputMode,
-      loadPlugins: commandPolicy.loadPlugins,
-    }),
+      nativeCheck ||
+      configGuard === "skip" ||
+      configGuard === "defer" ||
+      (configGuard === "when-suppressed" && suppressDoctorStdout),
+    // Deferred actions own full preparation; early routing/proxy reads need only core config.
+    ...(configGuard === "validate" || configGuard === "defer" ? { validateConfigOnly: true } : {}),
+    loadPlugins:
+      !nativeCheck &&
+      shouldLoadPlugins({
+        argv: params.argv,
+        commandPath: params.commandPath,
+        jsonOutputMode: params.jsonOutputMode,
+        loadPlugins: commandPolicy.loadPlugins,
+      }),
     pluginRegistry: commandPolicy.pluginRegistry,
   };
 }

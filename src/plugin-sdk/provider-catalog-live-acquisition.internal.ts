@@ -364,7 +364,7 @@ export async function fetchLiveProviderModelRows(
 ): Promise<readonly unknown[]> {
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const timeoutMs = params.timeoutMs ?? 5_000;
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const rows: unknown[] = [];
   const seenPageUrls = new Set<string>();
   let pageUrl: string | undefined = params.endpoint;
@@ -373,7 +373,7 @@ export async function fetchLiveProviderModelRows(
     if (seenPageUrls.has(pageUrl)) {
       break;
     }
-    const remainingTimeoutMs = timeoutMs - (Date.now() - startedAt);
+    const remainingTimeoutMs = Math.floor(timeoutMs - (performance.now() - startedAt));
     if (remainingTimeoutMs <= 0) {
       throw new Error(
         `${params.providerId} model discovery exceeded ${timeoutMs}ms before the catalog completed`,

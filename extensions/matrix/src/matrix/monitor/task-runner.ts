@@ -1,4 +1,3 @@
-// Matrix plugin module implements task runner behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 

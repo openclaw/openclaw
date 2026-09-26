@@ -9,6 +9,13 @@ import {
 } from "./assistant-error-format.js";
 
 describe("formatProviderRefusalText", () => {
+  it("directs a misalignment stop to review instead of another ordinary retry", () => {
+    expect(
+      formatProviderRefusalText({
+        diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }],
+      }),
+    ).toBe("Chat stopped as a precaution. Review the findings in chat before continuing.");
+  });
   it.each(["bio", "cyber"])("formats a sanitized %s refusal", (category) => {
     expect(
       formatProviderRefusalText({

@@ -32,7 +32,7 @@ describe("worker live Gateway chat projection", () => {
   });
 
   async function liveProjection() {
-    const current = harness.createClients();
+    const current = await harness.createClients();
     clients.push(current);
     await current.connection.start();
     const runtime = createWorkerLiveRuntime({

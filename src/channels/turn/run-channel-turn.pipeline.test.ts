@@ -28,6 +28,7 @@ import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import type { RecordInboundSession } from "../session.types.js";
 import { runPreparedChannelTurn } from "./execution.js";
 import { dispatchAssembledChannelTurn } from "./lifecycle.js";
+import { createReplyDispatchReceipt } from "./run-channel-turn.delivery.test-helpers.js";
 import type { ChannelTurnResult, PreparedChannelTurn } from "./types.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
@@ -119,32 +120,7 @@ vi.mock("../../config/sessions/transcript.js", () => ({
 const cfg = {} as OpenClawConfig;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let storePath: string;
-const visibleFinalReceipt = {
-  counts: {
-    tool: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    block: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    final: {
-      delivered: 1,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-  },
-  anyVisibleDelivered: true,
-} as const;
+const visibleFinalReceipt = createReplyDispatchReceipt({ final: { delivered: 1 } });
 
 function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {

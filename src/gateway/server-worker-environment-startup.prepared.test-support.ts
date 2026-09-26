@@ -24,7 +24,6 @@ import { NodeWorkerPreparedWorkspaceStore } from "../node-host/node-worker-prepa
 import { NodeWorkerWorkspaceRuntime } from "../node-host/node-worker-workspace.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { parseNodeWorkerPreparedWorkspaceResult } from "../worker/node-workspace-prepared-protocol.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
@@ -34,6 +33,7 @@ import {
   createGatewayWorkerEnvironmentRuntime,
   loadGatewayWorkerEnvironmentStartupState,
 } from "./server-worker-environment-startup.js";
+import { withGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.state.test-support.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
 import { createProjectSetupScript } from "./worker-environments/project-setup-script.js";
 import * as serviceModule from "./worker-environments/service.js";
@@ -75,7 +75,7 @@ async function createPreparedNodeAcknowledgement(root: string) {
           });
           expect(drained).toMatchObject({ code: 0, termination: "exit", stdout: "drained\n" });
         }
-        startup.store.transition({
+        await startup.store.transition({
           environmentId: record.environmentId,
           from: "attached",
           to: "idle",
@@ -288,7 +288,7 @@ async function createPreparedNodeAcknowledgement(root: string) {
       });
     });
     runtime.bindDeviceNodeControl?.(nodeWorkerSupervisorTransport);
-    startup.store.createIntent({
+    await startup.store.createIntent({
       environmentId,
       providerId: "fake",
       profileId: "prepared",
@@ -316,8 +316,8 @@ async function createPreparedNodeAcknowledgement(root: string) {
       },
       provisionOperationId: "prepared-wire",
     });
-    startup.store.ensureNodeEnrollment(environmentId);
-    const record = startup.store.transition({
+    await startup.store.ensureNodeEnrollment(environmentId);
+    const record = await startup.store.transition({
       environmentId,
       from: "requested",
       to: "provisioning",
@@ -339,8 +339,8 @@ async function createPreparedNodeAcknowledgement(root: string) {
         assertCurrent: () => {},
         signal,
       });
-    const attach = () => {
-      startup.store.transition({
+    const attach = async () => {
+      await startup.store.transition({
         environmentId,
         from: "provisioning",
         to: "ready",
@@ -362,7 +362,7 @@ async function createPreparedNodeAcknowledgement(root: string) {
           },
         },
       });
-      const attached = startup.store.transition({
+      const attached = await startup.store.transition({
         environmentId,
         from: "ready",
         to: "attached",
@@ -442,7 +442,7 @@ export async function withPreparedNodeAcknowledgement(
   root: string,
   run: (fixture: Awaited<ReturnType<typeof createPreparedNodeAcknowledgement>>) => Promise<void>,
 ) {
-  await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "gateway-state") }, async () => {
+  await withGatewayWorkerEnvironmentStartupState(path.join(root, "gateway-state"), async () => {
     const fixture = await createPreparedNodeAcknowledgement(root);
     try {
       await run(fixture);

@@ -734,7 +734,7 @@ describe("abandoned update runs", () => {
       const run = adoptUpdateRun(created.runId, options);
       const progress = createUpdateRunProgress({ runId: run.runId, env: options.env }, {});
       const command = createDeferredCore<Awaited<ReturnType<CommandRunner>>>();
-      const timersBefore = vi.getTimerCount();
+      const heartbeat = vi.spyOn(progress, "onHeartbeat");
       const pending = runStep({
         runCommand: () => command.promise,
         name: "build",
@@ -763,9 +763,11 @@ describe("abandoned update runs", () => {
         command.resolve({ stdout: "", stderr: "", code: 0 });
       }
       await settled;
-      expect(vi.getTimerCount()).toBe(timersBefore);
+      expect(heartbeat).toHaveBeenCalled();
+      heartbeat.mockClear();
       const finished = getUpdateRun(run.runId, options);
       await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+      expect(heartbeat).not.toHaveBeenCalled();
       expect(getUpdateRun(run.runId, options)).toEqual(finished);
     },
   );

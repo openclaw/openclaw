@@ -161,26 +161,19 @@ function pushTextMessages(
   if (!text) {
     return;
   }
-  if (opts.chunkText) {
-    for (const chunk of getMSTeamsRuntime().channel.text.chunkMarkdownTextWithMode(
-      text,
-      opts.chunkLimit,
-      opts.chunkMode,
-    )) {
-      const trimmed = chunk.trim();
-      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
-        continue;
-      }
+  const chunks = opts.chunkText
+    ? getMSTeamsRuntime().channel.text.chunkMarkdownTextWithMode(
+        text,
+        opts.chunkLimit,
+        opts.chunkMode,
+      )
+    : [text];
+  for (const chunk of chunks) {
+    const trimmed = chunk.trim();
+    if (trimmed && !isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
       out.push({ text: trimmed });
     }
-    return;
   }
-
-  const trimmed = text.trim();
-  if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
-    return;
-  }
-  out.push({ text: trimmed });
 }
 
 function clampMs(value: number, maxMs: number): number {

@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
-  buildLatestSubagentRunReadIndexFromRuns,
-  buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
   countPendingDescendantRunsFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
@@ -121,6 +119,69 @@ describe("subagent registry scoped reads", () => {
     expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledOnce();
     expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      storePath: undefined,
+      ids: ["a", "b", "unknown"],
+      active: 3,
+      excluded: "grandchild",
+      waiting: true,
+    },
+    { storePath: null, ids: ["unknown"], active: 1, excluded: "unknown", waiting: false },
+    { storePath: "store-a", ids: ["a"], active: 1, excluded: "grandchild", waiting: false },
+    { storePath: "store-b", ids: ["b"], active: 1, excluded: "b", waiting: false },
+  ])(
+    "scopes requester root edges to $storePath while retaining child-agent descendants",
+    ({ storePath, ids, active, excluded, waiting }) => {
+      const root = "agent:main:root";
+      const parent = createRun({
+        runId: "a",
+        childSessionKey: "agent:research:subagent:a",
+        requesterSessionKey: root,
+        requesterAgentId: "main",
+        requesterStorePath: "store-a",
+        execution: { status: "terminal", endedAt: 100 },
+        cleanupCompletedAt: 200,
+      });
+      const runs = [
+        parent,
+        createRun({
+          runId: "b",
+          requesterSessionKey: root,
+          requesterAgentId: "main",
+          requesterStorePath: "store-b",
+        }),
+        createRun({ runId: "unknown", requesterSessionKey: root, requesterAgentId: "main" }),
+        createRun({
+          runId: "grandchild",
+          requesterSessionKey: parent.childSessionKey,
+          requesterAgentId: "research",
+          requesterStorePath: "research-store",
+        }),
+        createRun({
+          runId: "other-agent",
+          requesterSessionKey: root,
+          requesterAgentId: "other",
+          requesterStorePath: "store-a",
+        }),
+      ];
+      for (const run of runs) {
+        mocks.liveRuns.set(run.runId, run);
+      }
+      mocks.getSubagentRunsSnapshotForSessions.mockReturnValue(new Map(mocks.liveRuns));
+      expect(
+        mod
+          .listSubagentRunsForRequester(root, {
+            requesterAgentId: "main",
+            requesterStorePath: storePath,
+          })
+          .map((run) => run.runId),
+      ).toEqual(ids);
+      expect(mod.countActiveDescendantRuns(root, "main", storePath)).toBe(active);
+      expect(mod.hasDescendantRunAwaitingSettle(root, excluded, "main", storePath)).toBe(waiting);
+    },
+  );
 
   it("keeps the latest raw live generation authoritative in compact display", () => {
     const childSessionKey = "agent:main:subagent:child";
@@ -321,18 +382,6 @@ describe("subagent registry scoped reads", () => {
 
     const requester = resolveRequesterForChildSessionFromRuns(childSnapshot, reusedChild);
     const cases = [
-      {
-        name: "full snapshot index",
-        actual: mod.buildSubagentRunReadIndex(now).latestRunsByChildSessionKey,
-        expected: buildSubagentRunReadIndexFromRuns({ runs: snapshot, now })
-          .latestRunsByChildSessionKey,
-      },
-      {
-        name: "latest full snapshot index",
-        actual: mod.buildLatestSubagentRunReadIndex().getLatestSubagentRun(reusedChild),
-        expected:
-          buildLatestSubagentRunReadIndexFromRuns(snapshot).getLatestSubagentRun(reusedChild),
-      },
       {
         name: "controller snapshot",
         actual: mod.listSubagentRunsForController(controller),

@@ -1,5 +1,5 @@
 // Daemon lifecycle core tests cover service lifecycle transitions and platform adapters.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -53,8 +53,10 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 vi.mock("../../infra/restart-intent.js", () => ({
+  prepareGatewayRestartIntentLegacyProcess: async () => undefined,
   clearGatewayRestartIntentSync: () => clearGatewayRestartIntentSync(),
   writeGatewayRestartIntentSync: (opts: unknown) => writeGatewayRestartIntentSync(opts),
+  writeGatewayServiceRestartIntentSync: (opts: unknown) => writeGatewayRestartIntentSync(opts),
 }));
 
 vi.mock("./lifecycle-audit.js", () => ({
@@ -79,10 +81,8 @@ vi.mock("./lifecycle-audit.js", () => ({
   },
 }));
 
-let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
-let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
-let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
-let runServiceUninstall: typeof import("./lifecycle-core.js").runServiceUninstall;
+const { runServiceRestart, runServiceStart, runServiceStop, runServiceUninstall } =
+  await import("./lifecycle-core.js");
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe logged JSON shape.
 function readJsonLog<T extends object>() {
@@ -141,11 +141,6 @@ function expectUnsupportedServiceCheckFailure() {
 }
 
 describe("runServiceRestart token drift", () => {
-  beforeAll(async () => {
-    ({ runServiceRestart, runServiceStart, runServiceStop, runServiceUninstall } =
-      await import("./lifecycle-core.js"));
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -479,11 +474,13 @@ describe("runServiceRestart token drift", () => {
       }),
     );
     expect(service.restart).not.toHaveBeenCalled();
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
-      targetPid: 1234,
-      reason: "gateway.restart",
-      intent: { waitMs: 2_500 },
-    });
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.any(Object),
+        reason: "gateway.restart",
+        intent: { waitMs: 2_500 },
+      }),
+    );
     expect(readJsonLog<{ result?: string; message?: string }>()).toMatchObject({
       result: "restarted",
       message: "Gateway service definition repaired and restarted.",
@@ -729,12 +726,15 @@ describe("runServiceRestart token drift", () => {
 
     await runServiceRestart(createServiceRunArgs());
 
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
-      targetPid: 1234,
-      reason: "gateway.restart",
-    });
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.any(Object),
+        reason: "gateway.restart",
+      }),
+    );
     expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
     expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledBefore(service.restart);
   });
 
   it("captures service restart warnings in json restart output", async () => {
@@ -769,13 +769,15 @@ describe("runServiceRestart token drift", () => {
       },
     });
 
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
-      targetPid: 1234,
-      reason: "gateway.restart",
-      intent: {
-        waitMs: 2_500,
-      },
-    });
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.any(Object),
+        reason: "gateway.restart",
+        intent: {
+          waitMs: 2_500,
+        },
+      }),
+    );
   });
 
   it("clears restart intent when service-manager restart fails before signaling", async () => {
@@ -785,10 +787,12 @@ describe("runServiceRestart token drift", () => {
 
     await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
-      targetPid: 1234,
-      reason: "gateway.restart",
-    });
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.any(Object),
+        reason: "gateway.restart",
+      }),
+    );
     expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
   });
 

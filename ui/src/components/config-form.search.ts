@@ -1,3 +1,4 @@
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ConfigUiHints } from "../api/types.ts";
 import {
@@ -156,20 +157,15 @@ export function matchesNodeSearch(params: {
   const type = schemaType(schema);
   if (type === "object") {
     const fallback = value ?? schema.default;
-    const obj =
-      fallback && typeof fallback === "object" && !Array.isArray(fallback)
-        ? (fallback as Record<string, unknown>)
-        : {};
+    const obj = asNonArrayRecord(fallback);
     const properties = schema.properties ?? {};
     for (const [propertyKey, node] of Object.entries(properties)) {
       if (
         matchesNodeSearch({
+          ...params,
           schema: node,
           value: obj[propertyKey],
           path: [...path, propertyKey],
-          hints,
-          criteria,
-          textMatcher,
         })
       ) {
         return true;
@@ -181,23 +177,19 @@ export function matchesNodeSearch(params: {
       const dynamicEntries = Object.entries(obj).filter(([entryKey]) => !reserved.has(entryKey));
       if (dynamicEntries.length === 0) {
         return matchesNodeSearch({
+          ...params,
           schema: additional,
           value: undefined,
           path: [...path, "*"],
-          hints,
-          criteria,
-          textMatcher,
         });
       }
       for (const [entryKey, entryValue] of dynamicEntries) {
         if (
           matchesNodeSearch({
+            ...params,
             schema: additional,
             value: entryValue,
             path: [...path, entryKey],
-            hints,
-            criteria,
-            textMatcher,
           })
         ) {
           return true;
@@ -217,12 +209,10 @@ export function matchesNodeSearch(params: {
     if (
       itemSchema &&
       matchesNodeSearch({
+        ...params,
         schema: itemSchema,
         value: values[index],
         path: [...path, index],
-        hints,
-        criteria,
-        textMatcher,
       })
     ) {
       return true;

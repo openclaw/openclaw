@@ -783,28 +783,41 @@ for (const winner of ["bunx", "npx"]) {
   });
 }
 
-test("exhausts available launchers before asking for authentication and redacts their output", async (context) => {
-  const denied =
-    "console.error('Not authenticated: synthetic-private-token'); process.exitCode = 1;";
-  const fixture = await launcherFixture(context, { convex: denied, bunx: denied, npx: denied });
-  await assert.rejects(
-    acquireQaLease({
-      kind: "telegram-test-userbot",
-      ...fixture,
-      fetchImpl: async () => assert.fail("unauthenticated discovery cannot acquire a lease"),
-    }),
-    (error) => {
-      assert.match(error.message, /No existing launcher can authenticate/);
-      assert.doesNotMatch(String(error.stack), /synthetic-private-token/);
-      assert.equal(error.cause, undefined);
-      return true;
-    },
-  );
-  assert.deepEqual(
-    fixture.calls().map(({ name }) => name),
-    ["convex", "bunx", "npx"],
-  );
-});
+for (const [bunxCode, bunxDiagnostic] of [
+  ["AUTH_REQUIRED", "Not authenticated"],
+  [
+    "UNAVAILABLE",
+    "error: Could not find an existing 'convex' binary to run. Stopping because --no-install was passed.",
+  ],
+]) {
+  test(`exhausts launchers with bunx ${bunxCode} and redacts their output`, async (context) => {
+    const denied =
+      "console.error('Not authenticated: synthetic-private-token'); process.exitCode = 1;";
+    const fixture = await launcherFixture(context, {
+      convex: denied,
+      bunx: `console.error(${JSON.stringify(`${bunxDiagnostic}: synthetic-private-token`)}); process.exitCode = 1;`,
+      npx: denied,
+    });
+    await assert.rejects(
+      acquireQaLease({
+        kind: "telegram-test-userbot",
+        ...fixture,
+        fetchImpl: async () => assert.fail("unauthenticated discovery cannot acquire a lease"),
+      }),
+      (error) => {
+        assert.match(error.message, new RegExp(`bunx convex: ${bunxCode}`));
+        assert.match(error.message, /No existing launcher can authenticate/);
+        assert.doesNotMatch(String(error.stack), /synthetic-private-token/);
+        assert.equal(error.cause, undefined);
+        return true;
+      },
+    );
+    assert.deepEqual(
+      fixture.calls().map(({ name }) => name),
+      ["convex", "bunx", "npx"],
+    );
+  });
+}
 
 test("an authenticated CLI's empty env output requests broker configuration, not another login", async (context) => {
   const fixture = await launcherFixture(context, {

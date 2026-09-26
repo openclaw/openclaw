@@ -51,12 +51,12 @@ const LineCommonConfigSchemaBase = z.object({
   threadBindings: ThreadBindingsSchema.optional(),
 });
 
-const LineGroupConfigSchema = buildGroupEntrySchema().omit({
+export const LineGroupConfigSchema = buildGroupEntrySchema().omit({
   tools: true,
   toolsBySender: true,
 });
 
-const LineAccountConfigSchema = LineCommonConfigSchemaBase.extend({
+export const LineAccountConfigSchema = LineCommonConfigSchemaBase.extend({
   groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
 }).strict();
 

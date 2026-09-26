@@ -141,7 +141,7 @@ describe("Gateway node worker bundle installer", () => {
     );
     const input = invoke.mock.calls[0]?.[0].params as { archive: { token: string } };
     expect(
-      transfer.authorize({ token: input.archive.token, bundleHash: artifact.bundleHash }),
+      transfer.authorize({ token: input.archive.token, artifactKey: artifact.bundleHash }),
     ).toBeUndefined();
   });
 

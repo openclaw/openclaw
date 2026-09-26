@@ -52,7 +52,7 @@ const TlonAccountSchema = z.object({
   ...tlonCommonConfigFields,
 });
 
-const TlonConfigSchema = z.object({
+export const TlonConfigSchema = z.object({
   ...tlonCommonConfigFields,
   historyLimit: z.number().int().min(0).optional(),
   authorization: TlonAuthorizationSchema.optional(),

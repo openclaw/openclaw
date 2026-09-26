@@ -104,7 +104,6 @@ export class ModelSetupIconLoader {
     return new Set(
       [
         ...result.candidates,
-        ...(result.unavailableCandidates ?? []),
         ...result.manualProviders,
         ...(result.authOptions ?? []),
         ...(result.prepareOptions ?? []),

@@ -18,7 +18,10 @@ packages:
     path: ../swabble
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
-    exactVersion: 152.0.0
+    exactVersion: 153.0.0
+  Sodium:
+    url: https://github.com/jedisct1/swift-sodium.git
+    revision: cfd195c76882aa9b997560ca7cb95d72fbf5db00
 
 schemes:
   OpenClaw:
@@ -87,6 +90,7 @@ targets:
       - package: Swabble
         product: SwabbleKit
       - package: WebRTC
+      - package: Sodium
       - sdk: AppIntents.framework
       - sdk: HealthKit.framework
     preBuildScripts:
@@ -109,7 +113,7 @@ targets:
           set -euo pipefail
           export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
           "$SRCROOT/../../scripts/check-swift-tools.sh" swiftlint
-          swiftlint lint --strict --config "$SRCROOT/.swiftlint.yml" --use-script-input-file-lists
+          node "$SRCROOT/../../scripts/run-swiftlint.mts" --strict --config "$SRCROOT/.swiftlint.yml" --use-script-input-file-lists
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

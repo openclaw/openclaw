@@ -1,9 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
+import { hasCanonicalSessionValidationProjection } from "./session-canonical-key.js";
 import {
   getSessionMaintenanceActivityAt,
   shouldPreserveMaintenanceEntry,
@@ -11,24 +11,29 @@ import {
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
-type AgeFact = {
+export type SessionEntryMaintenanceAgeFact = {
   maintenance: ResolvedSessionMaintenanceConfig;
   next: { at: number };
   recheckAt: number;
 };
+export type SessionEntryMaintenanceAgeCapture = { fact?: SessionEntryMaintenanceAgeFact };
+
 type Activity = Parameters<typeof getSessionMaintenanceActivityAt>[0];
 
 export const SESSION_ENTRY_MAINTENANCE_INTERVAL_MS = 30 * 60 * 1_000;
 
-// Ordinary writes only make entries younger or remove them, so this lower bound
-// survives entry-cache revision churn. Every maintenance caller enforces the
-// recheck deadline, including callers that do not register a maintenance kick.
-const ageFacts = new WeakMap<DatabaseSync, AgeFact>();
+// Ordinary updates retain this age lower bound across entry-cache revision churn.
+// New active entries rotate the capture so in-flight count decisions observe them.
+// Maintenance readers enforce the recheck deadline, including paths without a kick.
+const ageFacts = new WeakMap<DatabaseSync, SessionEntryMaintenanceAgeCapture>();
 
-function stageAgeFact(db: DatabaseSync, fact: AgeFact): void {
+export function stageSessionEntryMaintenanceAgeFact(
+  db: DatabaseSync,
+  fact: SessionEntryMaintenanceAgeFact | undefined,
+): void {
   if (
     stageSqliteTransactionState(db, {
-      stage: () => ageFacts.set(db, fact),
+      stage: () => ageFacts.set(db, { fact }),
       rollback: () => ageFacts.delete(db),
       commit: () => {},
     })
@@ -36,7 +41,7 @@ function stageAgeFact(db: DatabaseSync, fact: AgeFact): void {
     return;
   }
   if (!db.isTransaction) {
-    ageFacts.set(db, fact);
+    ageFacts.set(db, { fact });
   }
 }
 
@@ -47,8 +52,8 @@ export function invalidateSessionEntryMaintenanceAgeFact(db: DatabaseSync): void
 export function readSessionEntryMaintenanceAgeFact(
   db: DatabaseSync,
   maintenance: ResolvedSessionMaintenanceConfig,
-): AgeFact | undefined {
-  const fact = ageFacts.get(db);
+): SessionEntryMaintenanceAgeFact | undefined {
+  const fact = ageFacts.get(db)?.fact;
   if (!fact) {
     return undefined;
   }
@@ -64,6 +69,39 @@ export function readSessionEntryMaintenanceAgeFact(
   return fact;
 }
 
+/** Capture identity stays local; only its scalar fact crosses the Worker boundary. */
+export function captureSessionEntryMaintenanceAgeFact(
+  db: DatabaseSync,
+  maintenance: ResolvedSessionMaintenanceConfig,
+): SessionEntryMaintenanceAgeCapture {
+  readSessionEntryMaintenanceAgeFact(db, maintenance);
+  let capture = ageFacts.get(db);
+  if (!capture) {
+    capture = {};
+    ageFacts.set(db, capture);
+  }
+  return capture;
+}
+
+export function isSessionEntryMaintenanceAgeCaptureCurrent(
+  db: DatabaseSync,
+  capture: SessionEntryMaintenanceAgeCapture,
+): boolean {
+  return ageFacts.get(db) === capture;
+}
+
+export function adoptSessionEntryMaintenanceAgeFact(
+  db: DatabaseSync,
+  capture: SessionEntryMaintenanceAgeCapture,
+  fact: SessionEntryMaintenanceAgeFact | undefined,
+): void {
+  // A synchronous writer can run after native commit but before parent settlement.
+  // Keep its newer state without turning an already committed result into failure.
+  if (isSessionEntryMaintenanceAgeCaptureCurrent(db, capture)) {
+    capture.fact = fact;
+  }
+}
+
 function isDashboardKey(key: string): boolean {
   return parseAgentSessionKey(key)?.rest.startsWith("dashboard:") === true;
 }
@@ -73,8 +111,13 @@ export function advanceSessionEntryMaintenanceAgeFact(
   db: DatabaseSync,
   update: { sessionKey: string; entry: SessionEntry; previousEntry?: SessionEntry },
 ): void {
-  const fact = ageFacts.get(db);
-  if (!fact || update.entry.archivedAt !== undefined) {
+  const fact = ageFacts.get(db)?.fact;
+  if (!fact) {
+    // An empty capture must also observe writes while Worker results are in flight.
+    invalidateSessionEntryMaintenanceAgeFact(db);
+    return;
+  }
+  if (update.entry.archivedAt !== undefined) {
     return;
   }
   const { entry, previousEntry } = update;
@@ -95,8 +138,8 @@ export function advanceSessionEntryMaintenanceAgeFact(
     fact.maintenance,
     previousEntry ? Date.now() : -Infinity,
   );
-  if (at < fact.next.at) {
-    stageAgeFact(db, { ...fact, next: { at } });
+  if (!previousEntry || at < fact.next.at) {
+    stageSessionEntryMaintenanceAgeFact(db, { ...fact, next: { at: Math.min(at, fact.next.at) } });
   }
 }
 
@@ -134,48 +177,78 @@ function nextEntryAgeAt(
   return next;
 }
 
-/** Plan facts use one timestamp projection; prompt payloads never enter JavaScript. */
+function nextAgeAt(timestamp: number, age: number | null | undefined, plannedAt: number): number {
+  const at = age != null && age > 0 ? timestamp + age + 1 : Infinity;
+  return at > plannedAt ? at : Infinity;
+}
+
+function readActivityAt(row: {
+  updated_at: number;
+  last_activity_at: number | null;
+  last_interaction_at: number | null;
+  session_started_at: number | null;
+}): number {
+  return getSessionMaintenanceActivityAt({
+    updatedAt: row.updated_at,
+    lastActivityAt: row.last_activity_at ?? undefined,
+    lastInteractionAt: row.last_interaction_at ?? undefined,
+    sessionStartedAt: row.session_started_at ?? undefined,
+  });
+}
+
+/** The caller's transaction keeps these indexed probes in one snapshot. */
 export function recordSessionEntryMaintenanceAgeFact(
   database: OpenClawAgentDatabase,
   maintenance: ResolvedSessionMaintenanceConfig,
   plannedAt: number,
 ): void {
   const next = { at: Infinity };
-  const fact: AgeFact = {
+  const fact: SessionEntryMaintenanceAgeFact = {
     maintenance,
     next,
     recheckAt: plannedAt + SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
   };
-  const query = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "session_nodes">>(database.db)
-    .selectFrom("session_nodes")
-    .select(["session_key", "updated_at", "last_activity_at", "last_interaction_at"])
-    .select((eb) =>
-      eb
-        .case()
-        .when(eb.fn<number>("json_valid", ["entry_json"]), "=", 1)
-        .then(
-          eb.cast<number>(
-            eb.fn("json_extract", [eb.ref("entry_json"), eb.val("$.sessionStartedAt")]),
-            "integer",
-          ),
-        )
-        .else(null)
-        .end()
-        .as("session_started_at"),
-    )
-    .where("archived_at", "is", null);
-  for (const row of iterateSqliteQuerySync(database.db, query)) {
-    const activity = {
-      updatedAt: row.updated_at,
-      lastActivityAt: row.last_activity_at ?? undefined,
-      lastInteractionAt: row.last_interaction_at ?? undefined,
-      sessionStartedAt: row.session_started_at ?? undefined,
-    };
-    // Keep only transitions after plan start, including ones crossed while planning.
-    // Already-aged protected entries wait for the periodic recheck.
-    next.at = Math.min(next.at, nextEntryAgeAt(row.session_key, activity, maintenance, plannedAt));
+  const queries = readSessionMaintenanceAgeQueries(database.db);
+  if (maintenance.pruneAfterMs > 0) {
+    for (const row of queries.after(plannedAt - maintenance.pruneAfterMs - 1)) {
+      if (!shouldPreserveMaintenanceEntry({ key: row.session_key, entry: undefined })) {
+        next.at = row.updated_at + maintenance.pruneAfterMs + 1;
+        break;
+      }
+    }
   }
-  stageAgeFact(database.db, fact);
+  // Certified keys support indexed namespaces; pending aliases retain the canonical decoder.
+  // Older maintenance readers have no pending projection and keep their full row path.
+  const dashboardRows = hasCanonicalSessionValidationProjection(database)
+    ? [queries.dashboards(undefined), queries.uncertified(undefined)]
+    : [queries.activity(undefined)];
+  for (const rows of dashboardRows) {
+    for (const row of rows) {
+      if (
+        !isDashboardKey(row.session_key) ||
+        shouldPreserveMaintenanceEntry({ key: row.session_key, entry: undefined })
+      ) {
+        continue;
+      }
+      next.at = Math.min(
+        next.at,
+        nextAgeAt(readActivityAt(row), maintenance.archiveDashboardAfterMs, plannedAt),
+      );
+    }
+  }
+  const recentAge = maintenance.preserveRecentMs;
+  if (recentAge != null && recentAge > 0) {
+    for (const row of queries.activity(undefined)) {
+      // Activity includes updatedAt, so later indexed rows cannot improve this finite bound.
+      if (row.updated_at + recentAge + 1 >= next.at) {
+        break;
+      }
+      if (!shouldPreserveMaintenanceEntry({ key: row.session_key, entry: undefined })) {
+        next.at = Math.min(next.at, nextAgeAt(readActivityAt(row), recentAge, plannedAt));
+      }
+    }
+  }
+  stageSessionEntryMaintenanceAgeFact(database.db, fact);
 }
 
 /** The kick uses the same periodic deadline as inline maintenance callers. */

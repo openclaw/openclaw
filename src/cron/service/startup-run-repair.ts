@@ -3,10 +3,11 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { resolveCronCompletionStatus } from "../completion-status.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
+import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import { finalizeCronFailureNotifications, resolveFailureAlert } from "./failure-alerts.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
 import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 import {
   applyJobResult,
@@ -16,14 +17,6 @@ import {
 import { applyTriggerRunResult } from "./timer-trigger.js";
 
 export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
-
-export type InterruptedStartupRun = {
-  jobId: string;
-  taskRunId?: string;
-  runAtMs: number;
-  durationMs: number;
-  replacementAtMs?: number;
-};
 
 function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): number | undefined {
   if (job.schedule.kind !== "at" || !job.enabled) {
@@ -39,13 +32,13 @@ function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): numbe
 }
 
 export function markInterruptedStartupRun(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   taskRunId?: string;
   runningAtMs: number;
   nowMs: number;
   recoverInterruptedOneShot?: boolean;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
   const replacementAtMs = resolveOneShotReplacementAtMs(job, runningAtMs);
@@ -84,7 +77,6 @@ export function markInterruptedStartupRun(params: {
 
   const alertConfig = resolveFailureAlert(params.state, job);
   const autoDisableNotificationOwnsFailure = maybeAutoDisableCronJobAfterRunFailure({
-    state: params.state,
     job,
     atMs: nowMs,
     deferredNotifications: params.deferredNotifications,
@@ -128,14 +120,14 @@ export function markInterruptedStartupRun(params: {
 }
 
 export function restoreFinalizedStartupRun(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   runningAtMs: number;
   entry: CronRunLogEntry & { status: CronRunStatus };
   scriptResult?: { scriptStateChanged: true; scriptState?: unknown };
   triggerEval?: CronTriggerEvalOutcome;
   triggerStateRetired?: boolean;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
 }): { shouldDelete: boolean; replacementAtMs?: number } | undefined {
   const { state, job, runningAtMs, entry } = params;
   const triggerOwnership = params.triggerStateRetired ? "stale" : "current";

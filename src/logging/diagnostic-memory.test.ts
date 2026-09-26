@@ -1,4 +1,5 @@
 // Diagnostic memory tests cover pressure events and diagnostic log output.
+import { channel } from "node:diagnostics_channel";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -6,6 +7,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import * as workerMemory from "../infra/worker-cpu.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
@@ -34,6 +36,12 @@ function memoryUsage(overrides: Partial<NodeJS.MemoryUsage>): NodeJS.MemoryUsage
   };
 }
 
+const workerLifecycle: ReturnType<
+  typeof workerMemory.sampleTrackedWorkerMemory
+>["workerLifecycle"] = [
+  { script: "sqlite-store.worker.js", started: 3, retired: [{ reason: "closed", count: 3 }] },
+];
+
 describe("diagnostic memory", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -43,9 +51,19 @@ describe("diagnostic memory", () => {
     uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     resetLogger();
+    // Cumulative Worker history survives earlier test files even when no Worker remains alive.
+    vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
+      workerCount: 0,
+      workerHeapSampledCount: 0,
+      workerHeapTotalBytes: 0,
+      workerHeapUsedBytes: 0,
+      workerHeaps: [],
+      workerLifecycle: structuredClone(workerLifecycle),
+    });
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     stopDiagnosticStabilityRecorder();
     vi.useRealTimers();
     resetDiagnosticEventsForTest();
@@ -76,6 +94,12 @@ describe("diagnostic memory", () => {
         uptimeMs: 123,
         memory: {
           arrayBuffersBytes: 5,
+          workerCount: 0,
+          workerHeapSampledCount: 0,
+          workerHeapTotalBytes: 0,
+          workerHeapUsedBytes: 0,
+          workerHeaps: [],
+          workerLifecycle,
           externalBytes: 10,
           heapTotalBytes: 80,
           rssBytes: 4096,
@@ -113,6 +137,12 @@ describe("diagnostic memory", () => {
         uptimeMs: 0,
         memory: {
           arrayBuffersBytes: 5,
+          workerCount: 0,
+          workerHeapSampledCount: 0,
+          workerHeapTotalBytes: 0,
+          workerHeapUsedBytes: 0,
+          workerHeaps: [],
+          workerLifecycle,
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -129,6 +159,12 @@ describe("diagnostic memory", () => {
         thresholdBytes: 1000,
         memory: {
           arrayBuffersBytes: 5,
+          workerCount: 0,
+          workerHeapSampledCount: 0,
+          workerHeapTotalBytes: 0,
+          workerHeapUsedBytes: 0,
+          workerHeaps: [],
+          workerLifecycle,
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -136,6 +172,65 @@ describe("diagnostic memory", () => {
         },
       },
     ]);
+  });
+
+  it.each([
+    {
+      name: "RSS critical before heap critical",
+      rss: 3000,
+      heapUsed: 2000,
+      expected: { level: "critical", reason: "rss_threshold", thresholdBytes: 3000 },
+    },
+    {
+      name: "heap critical before RSS warning",
+      rss: 1000,
+      heapUsed: 2000,
+      expected: { level: "critical", reason: "heap_threshold", thresholdBytes: 2000 },
+    },
+    {
+      name: "RSS warning before heap warning",
+      rss: 1000,
+      heapUsed: 500,
+      expected: { level: "warning", reason: "rss_threshold", thresholdBytes: 1000 },
+    },
+    {
+      name: "heap warning after RSS stays below its threshold",
+      rss: 999,
+      heapUsed: 500,
+      expected: { level: "warning", reason: "heap_threshold", thresholdBytes: 500 },
+    },
+    { name: "no pressure below all thresholds", rss: 999, heapUsed: 499, expected: null },
+  ])("selects $name at inclusive boundaries", ({ rss, heapUsed, expected }) => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+
+    const memory = emitDiagnosticMemorySample({
+      now: 1000,
+      emitSample: false,
+      memoryUsage: memoryUsage({ rss, heapUsed }),
+      thresholds: {
+        rssCriticalBytes: 3000,
+        heapUsedCriticalBytes: 2000,
+        rssWarningBytes: 1000,
+        heapUsedWarningBytes: 500,
+      },
+    });
+    stop();
+
+    expect(events).toEqual(
+      expected
+        ? [
+            {
+              seq: 1,
+              ts: 1_776_859_200_000,
+              trace: undefined,
+              type: "diagnostic.memory.pressure",
+              ...expected,
+              memory,
+            },
+          ]
+        : [],
+    );
   });
 
   it("can check pressure without recording an idle memory sample", () => {
@@ -155,6 +250,25 @@ describe("diagnostic memory", () => {
     stop();
 
     expect(events.map((event) => event.type)).toEqual(["diagnostic.memory.pressure"]);
+  });
+
+  it("requests idle retirement on every critical sample despite log suppression", () => {
+    const pressure = channel("openclaw.memory.critical");
+    const retireIdle = vi.fn();
+    pressure.subscribe(retireIdle);
+    try {
+      for (const now of [1_000, 2_000]) {
+        emitDiagnosticMemorySample({
+          now,
+          emitSample: false,
+          memoryUsage: memoryUsage({ rss: 4_000 }),
+          thresholds: { rssCriticalBytes: 3_000, pressureRepeatMs: 60_000 },
+        });
+      }
+      expect(retireIdle).toHaveBeenCalledTimes(2);
+    } finally {
+      pressure.unsubscribe(retireIdle);
+    }
   });
 
   it.each([1, 8, 16, 32])(
@@ -471,6 +585,12 @@ describe("diagnostic memory", () => {
       windowMs: 10_000,
       memory: {
         arrayBuffersBytes: 5,
+        workerCount: 0,
+        workerHeapSampledCount: 0,
+        workerHeapTotalBytes: 0,
+        workerHeapUsedBytes: 0,
+        workerHeaps: [],
+        workerLifecycle,
         externalBytes: 10,
         heapTotalBytes: 80,
         heapUsedBytes: 40,
@@ -526,6 +646,18 @@ describe("diagnostic memory", () => {
   });
 
   it("logs memory pressure events through the gateway subsystem", async () => {
+    vi.mocked(workerMemory.sampleTrackedWorkerMemory).mockReturnValue({
+      workerCount: 7,
+      workerHeapSampledCount: 7,
+      workerHeapTotalBytes: 5600,
+      workerHeapUsedBytes: 2800,
+      workerLifecycle: [],
+      workerHeaps: [200, 700, 400, 100, 600, 300, 500].map((heapUsed) => ({
+        script: "sqlite-store.worker.js",
+        heapUsed,
+        heapTotal: heapUsed * 2,
+      })),
+    });
     setLoggerOverride({ level: "info", consoleLevel: "silent" });
     const records: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
     const stop = onInternalDiagnosticEvent((event) => {
@@ -558,7 +690,18 @@ describe("diagnostic memory", () => {
       }),
     ]);
     expect(records[0]?.message).not.toMatch(/snapshot/i);
-    expect(records[0]?.message).toContain("rssBytes=4000 heapUsedBytes=3000 thresholdBytes=3000");
+    expect(records[0]?.message).toContain(
+      "rssBytes=4000 heapUsedBytes=3000 externalBytes=10 arrayBuffersBytes=5 workerHeapTotalBytes=5600 workerHeapUsedBytes=2800 workerCount=7 workerHeapSampledCount=7",
+    );
+    expect(records[0]?.message).toContain(
+      `workerHeaps=${JSON.stringify([
+        { script: "sqlite-store.worker.js", heapUsed: 700, heapTotal: 1400 },
+        { script: "sqlite-store.worker.js", heapUsed: 600, heapTotal: 1200 },
+        { script: "sqlite-store.worker.js", heapUsed: 500, heapTotal: 1000 },
+        { script: "sqlite-store.worker.js", heapUsed: 400, heapTotal: 800 },
+        { script: "sqlite-store.worker.js", heapUsed: 300, heapTotal: 600 },
+      ])} thresholdBytes=3000`,
+    );
     expect(records[0]?.message).toContain(
       "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or on Node sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000.",
     );

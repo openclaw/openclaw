@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type {
   SessionCapability,
@@ -31,7 +31,7 @@ import {
 } from "./app-sidebar-child-session-data.ts";
 
 type LineageOwner = {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   readonly isSessionDataHostConnected: boolean;
   sessionsResult: SessionsListResult | null;
   activeSessionLineageRoot: GatewaySessionRow | null;
@@ -43,7 +43,7 @@ type LineageOwner = {
 type LineageScope = {
   key: string;
   selectedAgentId: string | null;
-  gateway: ApplicationContext<RouteId>["gateway"];
+  gateway: ApplicationContext["gateway"];
   client: GatewayBrowserClient;
   sessions: SessionCapability;
   connectionRevision: number;
@@ -67,7 +67,7 @@ type LineageNavigation = Pick<LineageScope, "key" | "selectedAgentId" | "gateway
 };
 
 export function sessionLineageIdentityHost(
-  context: ApplicationContext<RouteId> | undefined,
+  context: ApplicationContext | undefined,
 ): UiSessionDefaultsHost {
   return {
     assistantAgentId:

@@ -1,12 +1,11 @@
 /** Tests plugin module loader cache keys and lifecycle reset behavior. */
 import fs from "node:fs";
-import Module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import {
   createPluginCache,
@@ -101,9 +100,7 @@ function expectJitiOptions(
 function expectNativeOptions(mock: unknown, target: string) {
   expect(callArg(mock, 0, 0, "native target")).toBe(target);
   const options = requireRecord(callArg(mock, 0, 1, "native options"), "native options");
-  expect(options.allowWindows).toBe(true);
   expect(options.fallbackOnMissingDependency).toBe(true);
-  expect(options.fallbackOnNativeError).toBeUndefined();
 }
 
 function expectStats(value: unknown, fields: Record<string, unknown>) {
@@ -115,7 +112,7 @@ function expectStats(value: unknown, fields: Record<string, unknown>) {
 }
 
 describe("getCachedPluginModuleLoader", () => {
-  it("loads source SDK syntax without replaying terminal native failures", async () => {
+  it("keeps source SDK evaluation native and preserves terminal failures", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-graph-"));
     try {
       const ownerPath = path.join(root, "loader.mjs");
@@ -146,17 +143,19 @@ describe("getCachedPluginModuleLoader", () => {
           import { pathToFileURL } from "node:url";
           import { getCachedPluginModuleLoader } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
           const root = ${JSON.stringify(root)};
-          const loadSdkFixture = (name, source) => {
+          const loadSdkFixture = (name, source, extension = "ts") => {
             const sdk = path.join(root, name + ".mts");
-            const modulePath = path.join(root, name + "-entry.ts");
+            const modulePath = path.join(root, name + "-entry." + extension);
             fs.mkdirSync(path.dirname(sdk), { recursive: true });
             fs.writeFileSync(sdk, source);
-            fs.writeFileSync(modulePath, 'export * from "openclaw/plugin-sdk/fixture";\\n');
+            fs.writeFileSync(modulePath, extension === "cjs"
+              ? 'module.exports = require("openclaw/plugin-sdk/fixture");'
+              : 'export * from "openclaw/plugin-sdk/fixture";\\n');
             const loader = getCachedPluginModuleLoader({
-              modulePath, importerUrl: import.meta.url, tryNative: false,
+              modulePath, importerUrl: import.meta.url, tryNative: extension === "cjs",
               aliasMap: { "openclaw/plugin-sdk/fixture": sdk },
             });
-            return () => loader(modulePath);
+            return () => loader(extension === "cjs" ? pathToFileURL(modulePath).href : modulePath);
           };
           assert.equal(loadSdkFixture("enum", "enum State { Ready }\\nexport const ready = State.Ready;")().ready, 0);
           assert.equal(loadSdkFixture("source-host/node_modules/sdk/index", "export const ready: number = 1;")().ready, 1);
@@ -170,7 +169,8 @@ describe("getCachedPluginModuleLoader", () => {
             modulePath: path.join(peerRoot, "entry.ts"), importerUrl: import.meta.url, tryNative: false,
             aliasMap: { "openclaw/plugin-sdk/fixture": path.join(peerRoot, "sdk.mts") },
           });
-          assert.equal(peerLoader(path.join(peerRoot, "entry.ts")).value, "javascript");
+          const hostPeer = await import(pathToFileURL(path.join(peerRoot, "sdk.mts")).href);
+          assert.equal(peerLoader(path.join(peerRoot, "entry.ts")).value, hostPeer.value);
           const sourcePeerRoot = path.join(root, "source-peers");
           fs.mkdirSync(sourcePeerRoot);
           fs.writeFileSync(path.join(sourcePeerRoot, "sdk.mts"), 'export { value } from "./peer.mjs";');
@@ -181,15 +181,18 @@ describe("getCachedPluginModuleLoader", () => {
             aliasMap: { "openclaw/plugin-sdk/fixture": path.join(sourcePeerRoot, "sdk.mts") },
           });
           assert.equal(sourcePeerLoader(path.join(sourcePeerRoot, "entry.ts")).value, "typescript");
+          fs.writeFileSync(path.join(root, "url-peer.mts"), 'enum State { Ready } export const ready = State.Ready;');
+          assert.equal(loadSdkFixture("url-sdk", 'export { ready } from "./url-peer.mjs";', "cjs")().ready, 0);
           const unrelated = path.join(root, "unrelated.ts");
           fs.writeFileSync(unrelated, 'export { value } from "./unrelated-peer.mjs";');
           fs.writeFileSync(path.join(root, "unrelated-peer.mts"), 'export const value = "unrelated";');
-          await assert.rejects(import(pathToFileURL(unrelated).href), /ERR_MODULE_NOT_FOUND|Cannot find module/);
+          assert.equal((await import(pathToFileURL(unrelated).href)).value, "unrelated");
           const broken = loadSdkFixture("broken", 'globalThis.sdkEvaluations = (globalThis.sdkEvaluations ?? 0) + 1; throw new Error("SDK evaluation failed");');
           assert.throws(broken, /SDK evaluation failed/);
           assert.equal(globalThis.sdkEvaluations, 1, "terminal native failures must not evaluate SDK source twice");
         `,
         {
+          imports: [pathToFileURL(path.resolve("scripts/tsx.mjs")).href],
           timeout: 30_000,
           env: {
             PATH: process.env.PATH,
@@ -212,7 +215,7 @@ describe("getCachedPluginModuleLoader", () => {
             modulePath, importerUrl: import.meta.url, tryNative: false,
             aliasMap: { "openclaw/plugin-sdk/fixture": root + "/enum.mts" },
           });
-          assert.equal(load(modulePath).ready, 0);
+          assert.throws(() => load(modulePath), /Unable to load host Plugin SDK natively/);
         `,
         {
           timeout: 30_000,
@@ -266,57 +269,6 @@ describe("getCachedPluginModuleLoader", () => {
 
     expect(loaded).toEqual({ marker: "retained-generation" });
     expect(observedOwner).toEqual([true, true]);
-  });
-
-  let filenameScopeCase: {
-    cacheSize: number;
-    firstAliasType: string;
-    firstFilename: unknown;
-    firstOptions: Record<string, unknown>;
-    sameLoader: boolean;
-    secondAliasType: string;
-    secondFilename: unknown;
-    secondOptions: Record<string, unknown>;
-  };
-
-  beforeAll(async () => {
-    const { createJiti, getCachedPluginModuleLoader } = await loadCachedPluginModuleLoader(
-      "filename-scope-precompute",
-    );
-
-    const cache = new Map();
-    const first = getCachedPluginModuleLoader({
-      cache,
-      modulePath: "/repo/dist/extensions/demo/api.ts",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      argvEntry: "/repo/openclaw.mjs",
-      preferBuiltDist: true,
-      loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
-    });
-    const second = getCachedPluginModuleLoader({
-      cache,
-      modulePath: "/repo/dist/extensions/demo/api.ts",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      argvEntry: "/repo/openclaw.mjs",
-      preferBuiltDist: true,
-      loaderFilename: "file:///repo/src/plugins/bundled-channel-config-metadata.ts",
-    });
-
-    first("/repo/dist/extensions/demo/api.ts");
-    second("/repo/dist/extensions/demo/api.ts");
-    const calls = createJiti.mock.calls;
-    const firstOptions = requireRecord(calls[0]?.[1], "first jiti options");
-    const secondOptions = requireRecord(calls[1]?.[1], "second jiti options");
-    filenameScopeCase = {
-      cacheSize: cache.size,
-      firstAliasType: typeof firstOptions.alias,
-      firstFilename: calls[0]?.[0],
-      firstOptions,
-      sameLoader: second === first,
-      secondAliasType: typeof secondOptions.alias,
-      secondFilename: calls[1]?.[0],
-      secondOptions,
-    };
   });
 
   it("reuses cached loaders for the same module config and filename", async () => {
@@ -408,20 +360,45 @@ describe("getCachedPluginModuleLoader", () => {
   });
 
   it("keeps loader caches scoped by loader filename and dist preference", async () => {
-    expect(filenameScopeCase.sameLoader).toBe(false);
-    expect(filenameScopeCase.firstFilename).toBe(
+    const { createJiti, getCachedPluginModuleLoader } =
+      await loadCachedPluginModuleLoader("filename-scope");
+
+    const cache = new Map();
+    const first = getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/demo/api.ts",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      argvEntry: "/repo/openclaw.mjs",
+      preferBuiltDist: true,
+      loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+    });
+    const second = getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/demo/api.ts",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      argvEntry: "/repo/openclaw.mjs",
+      preferBuiltDist: true,
+      loaderFilename: "file:///repo/src/plugins/bundled-channel-config-metadata.ts",
+    });
+
+    expect(second).not.toBe(first);
+    first("/repo/dist/extensions/demo/api.ts");
+    second("/repo/dist/extensions/demo/api.ts");
+    const firstOptions = expectJitiOptions(
+      createJiti,
+      0,
       "file:///repo/src/plugins/public-surface-loader.ts",
+      { tryNative: false, interopDefault: true },
     );
-    expect(filenameScopeCase.firstOptions.tryNative).toBe(false);
-    expect(filenameScopeCase.firstOptions.interopDefault).toBe(true);
-    expect(filenameScopeCase.firstAliasType).toBe("object");
-    expect(filenameScopeCase.secondFilename).toBe(
+    expect(firstOptions.alias).toBeTypeOf("object");
+    const secondOptions = expectJitiOptions(
+      createJiti,
+      1,
       "file:///repo/src/plugins/bundled-channel-config-metadata.ts",
+      { tryNative: false, interopDefault: true },
     );
-    expect(filenameScopeCase.secondOptions.tryNative).toBe(false);
-    expect(filenameScopeCase.secondOptions.interopDefault).toBe(true);
-    expect(filenameScopeCase.secondAliasType).toBe("object");
-    expect(filenameScopeCase.cacheSize).toBe(2);
+    expect(secondOptions.alias).toBeTypeOf("object");
+    expect(cache.size).toBe(2);
   });
 
   it("lets callers override alias maps and tryNative while keeping cache keys stable", async () => {
@@ -602,7 +579,6 @@ describe("getCachedPluginModuleLoader", () => {
     // `tryNativeRequireJavaScriptModule` resolves.
     expect(createJiti).not.toHaveBeenCalled();
     expect(fromSourceTransformer).not.toHaveBeenCalled();
-    // allowWindows must be passed so the native fast path works on Windows too.
     expectNativeOptions(nativeStub, "/repo/dist/extensions/demo/api.js");
     expectStats(getPluginModuleLoaderStats(), {
       calls: 1,
@@ -814,9 +790,7 @@ describe("getCachedPluginModuleLoader", () => {
         tryNative: false,
       },
     );
-    expect(options.nativeModules).toEqual(
-      typeof Module.registerHooks === "function" ? [] : ["openclaw"],
-    );
+    expect(options.nativeModules).toEqual(["openclaw"]);
     expect(fromSourceTransformer).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js");
     const stats = expectStats(getPluginModuleLoaderStats(), {
       calls: 1,
@@ -828,37 +802,6 @@ describe("getCachedPluginModuleLoader", () => {
     expect(stats.topSourceTransformTargets).toEqual([
       { target: "/repo/dist/extensions/demo/api.js", count: 1 },
     ]);
-  });
-
-  it("can transform OpenClaw dependencies on a forced source fallback", async () => {
-    const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
-    const createJiti = vi.fn(() => fromSourceTransformer);
-    const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
-    vi.doMock("./native-module-require.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./native-module-require.js")>()),
-      tryNativeRequireJavaScriptModule: nativeStub,
-    }));
-    const { getCachedPluginModuleLoader } = await importPluginModuleLoader(
-      "./plugin-module-loader-cache.js?scope=forced-source-native-fallback",
-    );
-
-    const loader = getCachedPluginModuleLoader({
-      cache: new Map(),
-      modulePath: "/repo/dist/extensions/demo/api.js",
-      importerUrl: "file:///repo/src/plugin-sdk/channel-entry-contract.ts",
-      loaderFilename: "file:///repo/src/plugin-sdk/channel-entry-contract.ts",
-      transformOpenClawDependencies: true,
-      createLoader: asPluginModuleLoaderFactory(createJiti),
-      tryNative: false,
-    });
-
-    expect(loader("/repo/dist/extensions/demo/api.js")).toEqual({
-      fromSourceTransform: true,
-    });
-    const options = requireRecord(callArg(createJiti, 0, 1, "jiti options"), "jiti options");
-    expect(options.tryNative).toBe(false);
-    expect(options.nativeModules).toEqual([]);
-    expect(nativeStub).not.toHaveBeenCalled();
   });
 
   it("normalizes Windows absolute paths before creating and calling the source transformer", async () => {
@@ -891,9 +834,7 @@ describe("getCachedPluginModuleLoader", () => {
       "file:///C:/Users/alice/openclaw/dist/extensions/feishu/api.js",
       { tryNative: false },
     );
-    expect(options.nativeModules).toEqual(
-      typeof Module.registerHooks === "function" ? [] : ["openclaw"],
-    );
+    expect(options.nativeModules).toEqual(["openclaw"]);
     expect(fromSourceTransformer).toHaveBeenCalledWith(
       "file:///C:/Users/alice/openclaw/dist/extensions/feishu/api.js",
     );

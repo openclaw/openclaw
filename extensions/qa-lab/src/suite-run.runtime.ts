@@ -35,16 +35,16 @@ import {
 export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
-  const catalog = readQaBootstrapScenarioCatalog();
+  const scenarios = params?.scenarioDefinitions ?? readQaBootstrapScenarioCatalog().scenarios;
   const requestedModels = resolveRequestedQaSuiteModels({
     ...params,
-    scenarios: catalog.scenarios,
+    scenarios,
   });
   const transportId = normalizeQaTransportId(params?.transportId);
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
   const channelDriver = params?.channelDriver;
   const selectedScenarios = selectQaFlowSuiteScenarios({
-    scenarios: catalog.scenarios,
+    scenarios,
     scenarioIds: params?.scenarioIds,
     providerMode: requestedModels.providerMode,
     primaryModel: requestedModels.primaryModel,

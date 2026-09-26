@@ -5,13 +5,56 @@ import type {
   SessionAcpMeta,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../../state/openclaw-state-db-readonly.js";
 import {
   type AcpSessionEntryBinding,
   type AcpSessionRow,
+  buildAcpDatabaseSessionKey,
+  legacyAcpDatabaseSessionKeys,
+  resolveLegacyFreeAcpSessionKey,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
+
+/** Each result stays bound to the entry lifecycle captured by the row reader. */
+export async function readAcpSessionMetaForEntries(params: {
+  entries: readonly { sessionKey: string; agentId: string; entry: AcpSessionEntryBinding }[];
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+}): Promise<Array<SessionAcpMeta | null>> {
+  if (params.entries.length === 0) {
+    return [];
+  }
+  const result = await executeExistingOpenClawStateRead(
+    { env: params.env, path: params.databasePath },
+    {
+      type: "acpSessions.metadata",
+      entries: params.entries.map(({ sessionKey, agentId, entry }) => ({
+        keys: [
+          buildAcpDatabaseSessionKey(sessionKey, agentId),
+          ...legacyAcpDatabaseSessionKeys(sessionKey, agentId, params.cfg),
+        ],
+        legacyKey: resolveLegacyFreeAcpSessionKey(sessionKey),
+        entry: {
+          lifecycleRevision: entry.lifecycleRevision,
+          sessionId: entry.sessionId,
+          sessionStartedAt: entry.sessionStartedAt,
+        },
+      })),
+    },
+  );
+  if (result === undefined) {
+    return params.entries.map(() => null);
+  }
+  if (result.ok && result.type === "acpSessions.metadata") {
+    return result.rows.map((row) => (row ? rowToAcpSessionMeta(row) : null));
+  }
+  throw new Error("Unexpected ACP session metadata read result");
+}
 
 export function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
   // SAFETY: These JSON columns are written from the typed ACP metadata by its storage owner.

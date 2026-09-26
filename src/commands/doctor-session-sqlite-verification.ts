@@ -2,29 +2,25 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
-import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
-import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db.js";
+import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import {
   readMigrationArtifactIdentity,
   type MigrationArtifact,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   canonicalMigrationFilePath,
   uniqueRestoreMoves,
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
-import {
-  createTranscriptEventReader,
-  readTranscriptFingerprint,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { verifyTranscriptEvents } from "../infra/session-sqlite-transcript-verification.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
 /** Keep one owner proof per database; fence in-place writes and sidecar changes after awaits. */
@@ -160,36 +156,10 @@ export function verifyHistoricalMigrationArtifact(params: {
           }
           continue;
         }
-        const complete = withSqliteSessionImportStage((stage) => {
-          let seq = 0;
-          const validate = createTranscriptEventReader(
-            move.archivePath,
-            sessionId,
-            false,
-            readTranscriptFingerprint(move.archivePath),
-            move.sourcePath,
-          )((event) => stage.append(0, seq++, JSON.stringify(event)));
-          const repair = stage.repairLegacyTranscript(0);
-          // Old metadata cannot prove that a now-discarded branch was deliberately retired then.
-          if (repair.repaired || !repair.recognized) {
-            return false;
-          }
-          for (const event of iterateSqliteQuerySync(
-            database.db,
-            db
-              .selectFrom("transcript_events")
-              .select("event_json")
-              .where("session_id", "=", sessionId),
-          )) {
-            stage.addSeen(event.event_json);
-          }
-          for (const event of stage.rows(0)) {
-            if (!stage.contains(event.eventJson)) {
-              return false;
-            }
-          }
-          validate();
-          return true;
+        const complete = verifyTranscriptEvents(database.db, {
+          path: move.archivePath,
+          originalPath: move.sourcePath,
+          sessionId,
         });
         if (!complete) {
           return false;

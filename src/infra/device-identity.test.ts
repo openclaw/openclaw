@@ -22,6 +22,8 @@ import {
   verifyDeviceSignature,
   type DeviceIdentity,
 } from "./device-identity.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
 const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
 const SWIFT_RAW_PUBLIC_KEY = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
@@ -78,7 +80,7 @@ function waitForChild(child: ChildProcess): Promise<DeviceIdentity> {
 
 async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdentity[]> {
   const startPath = path.join(rootDir, "identity-start");
-  const moduleUrl = new URL("./device-identity.ts", import.meta.url).href;
+  const moduleUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.deviceIdentity);
   const workerSource = `
     import fs from "node:fs";
     const { loadOrCreateDeviceIdentity } = await import(process.env.OPENCLAW_IDENTITY_MODULE);
@@ -102,12 +104,17 @@ async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdenti
     const readyPath = path.join(rootDir, `identity-ready-${index}`);
     const child = spawn(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", workerSource],
+      [
+        ...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1),
+        "--input-type=module",
+        "-e",
+        workerSource,
+      ],
       {
         env: {
           ...process.env,
           OPENCLAW_IDENTITY_DATABASE_PATH: path.join(rootDir, "state", "openclaw.sqlite"),
-          OPENCLAW_IDENTITY_MODULE: moduleUrl,
+          OPENCLAW_IDENTITY_MODULE: moduleUrl.href,
           OPENCLAW_IDENTITY_READY_PATH: readyPath,
           OPENCLAW_IDENTITY_START_PATH: startPath,
           OPENCLAW_IDENTITY_STATE_DIR: rootDir,
@@ -153,8 +160,10 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
   const readyPath = path.join(rootDir, "bootstrap-ready");
   const committedPath = path.join(rootDir, "bootstrap-committed");
   const continuePath = path.join(rootDir, "bootstrap-continue");
-  const coordinatorModuleUrl = new URL("./device-identity-coordinator.ts", import.meta.url).href;
-  const storeModuleUrl = new URL("./device-identity-store.ts", import.meta.url).href;
+  const coordinatorModuleUrl = resolveRuntimeWorkerUrl(
+    storageProcessTestEntrypoints.deviceIdentityCoordinator,
+  );
+  const storeModuleUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.deviceIdentityStore);
   const workerSource = `
     import fs from "node:fs";
     import path from "node:path";
@@ -192,17 +201,22 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
   `;
   const child = spawn(
     process.execPath,
-    ["--import", "tsx", "--input-type=module", "-e", workerSource],
+    [
+      ...resolveRuntimeWorkerArgv(coordinatorModuleUrl).slice(0, -1),
+      "--input-type=module",
+      "-e",
+      workerSource,
+    ],
     {
       env: {
         ...process.env,
         OPENCLAW_IDENTITY_COMMITTED_PATH: committedPath,
-        OPENCLAW_COORDINATOR_MODULE: coordinatorModuleUrl,
+        OPENCLAW_COORDINATOR_MODULE: coordinatorModuleUrl.href,
         OPENCLAW_IDENTITY_CONTINUE_PATH: continuePath,
         OPENCLAW_IDENTITY_DATABASE_PATH: databasePath,
         OPENCLAW_IDENTITY_READY_PATH: readyPath,
         OPENCLAW_IDENTITY_STATE_DIR: rootDir,
-        OPENCLAW_IDENTITY_STORE_MODULE: storeModuleUrl,
+        OPENCLAW_IDENTITY_STORE_MODULE: storeModuleUrl.href,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -325,20 +339,21 @@ describe("device identity SQLite store", () => {
         // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted database receiver.
         const prepare = sqlite.DatabaseSync.prototype.prepare;
         let committedDuringRead = false;
-        vi.spyOn(sqlite.DatabaseSync.prototype, "prepare").mockImplementation(
-          function (this: InstanceType<typeof sqlite.DatabaseSync>, sql) {
-            try {
-              return prepare.call(this, sql);
-            } catch (error) {
-              if (!committedDuringRead && /device_identities/iu.test(sql)) {
-                committedDuringRead = true;
-                fs.writeFileSync(creator.continuePath, "continue");
-                waitForFileSync(creator.committedPath);
-              }
-              throw error;
+        vi.spyOn(sqlite.DatabaseSync.prototype, "prepare").mockImplementation(function (
+          this: InstanceType<typeof sqlite.DatabaseSync>,
+          sql,
+        ) {
+          try {
+            return prepare.call(this, sql);
+          } catch (error) {
+            if (!committedDuringRead && /device_identities/iu.test(sql)) {
+              committedDuringRead = true;
+              fs.writeFileSync(creator.continuePath, "continue");
+              waitForFileSync(creator.committedPath);
             }
-          },
-        );
+            throw error;
+          }
+        });
 
         expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toBeNull();
         expect(committedDuringRead).toBe(true);

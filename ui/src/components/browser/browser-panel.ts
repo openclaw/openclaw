@@ -30,7 +30,7 @@ import {
   BrowserPanelController,
   type BrowserPanelControllerHost,
 } from "./browser-panel-controller.ts";
-import { renderBrowserPanelChrome, type BrowserPanelDock } from "./browser-panel-render.ts";
+import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import { browserPanelStyles } from "./browser-panel.styles.ts";
 import {
@@ -168,7 +168,7 @@ class OpenClawBrowserPanel
     }
     this.browserPanelController.native.presentation.update();
     this.dockLayout.syncReservation();
-    this.browserPanelController.paintOverlay();
+    this.browserPanelController.input.paintOverlay();
     const viewportElement = this.renderRoot.querySelector(".bp-viewport");
     if (viewportElement !== this.observedViewportElement) {
       // The viewport is transient while the dock opens, closes, or becomes unavailable.
@@ -297,69 +297,50 @@ class OpenClawBrowserPanel
     if (detail?.browserTab !== undefined && !browserTab) {
       return;
     }
+    const normalizedRequestedUrl =
+      typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
+    let shouldRefresh = true;
     if (this.embedded) {
       if (!this.browserPanelIsOpen() || detail?.open === false || !this.available) {
         return;
       }
-      const normalizedRequestedUrl =
-        typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
-      if (normalizedRequestedUrl) {
-        void this.browserPanelController.openUrl(normalizedRequestedUrl, {
-          newTab: true,
-          native: detail?.native,
-        });
-      } else if (browserTab) {
-        // Consume the current result so it cannot replace this explicit card choice.
-        this.consumedPreferredRevision = this.preferredRevision();
-        void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
-      } else if (detail?.newTab === true) {
-        this.browserPanelController.beginNewTab();
-      } else if (!this.followPreferredTab()) {
-        void this.browserPanelController.refreshAll();
+    } else {
+      if (detail?.dock === "right" || detail?.dock === "bottom") {
+        this.dockLayout.setDock(detail.dock, false);
       }
-      return;
-    }
-    if (detail?.dock === "right" || detail?.dock === "bottom") {
-      this.dockLayout.setDock(detail.dock, false);
-    }
-    if (detail?.open === false) {
-      this.closePanel();
-      return;
-    }
-    const normalizedRequestedUrl =
-      typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
-    if (normalizedRequestedUrl || detail?.open === true) {
+      if (detail?.open === false) {
+        this.closePanel();
+        return;
+      }
+      if (!normalizedRequestedUrl && detail?.open !== true) {
+        this.toggle();
+        return;
+      }
       if (!this.available) {
         return;
       }
-      const wasOpen = this.dockLayout.open;
+      shouldRefresh = !this.dockLayout.open;
       this.dockLayout.setOpen(true);
-      if (normalizedRequestedUrl) {
-        void this.browserPanelController.openUrl(normalizedRequestedUrl, {
-          newTab: true,
-          native: detail?.native,
-        });
-      } else if (browserTab) {
-        // Consume the current result so it cannot replace this explicit card choice.
-        this.consumedPreferredRevision = this.preferredRevision();
-        void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
-      } else if (detail?.newTab === true) {
-        this.browserPanelController.beginNewTab();
-      } else if (!wasOpen && !this.followPreferredTab()) {
-        void this.browserPanelController.refreshAll();
-      }
-      return;
     }
-    this.toggle();
+    if (normalizedRequestedUrl) {
+      void this.browserPanelController.openUrl(normalizedRequestedUrl, {
+        newTab: true,
+        native: detail?.native,
+      });
+    } else if (browserTab) {
+      // Consume the current result so it cannot replace this explicit card choice.
+      this.consumedPreferredRevision = this.preferredRevision();
+      void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
+    } else if (detail?.newTab === true) {
+      this.browserPanelController.beginNewTab();
+    } else if (shouldRefresh && !this.followPreferredTab()) {
+      void this.browserPanelController.refreshAll();
+    }
   }
 
   private closePanel(): void {
     this.browserPanelController.suspendView();
     this.dockLayout.setOpen(false);
-  }
-
-  private setDock(dock: BrowserPanelDock): void {
-    this.dockLayout.setDock(dock);
   }
 
   override render() {
@@ -371,7 +352,7 @@ class OpenClawBrowserPanel
       this.dockLayout.dock,
       this.dockLayout.height,
       this.dockLayout.width,
-      (dock) => this.setDock(dock),
+      (dock) => this.dockLayout.setDock(dock),
       () => this.closePanel(),
       this.dockLayout.renderResizer("bp", t("browser.resize")),
       this.embedded,

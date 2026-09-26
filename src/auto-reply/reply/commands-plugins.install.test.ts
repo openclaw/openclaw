@@ -825,7 +825,7 @@ describe("handleCommands /plugins install", () => {
     });
     persistPluginInstallMock.mockImplementation(
       async (params: { persistenceLogger?: { warn?: (message: string) => void } }) => {
-        params.persistenceLogger?.warn?.(setupWarning);
+        params.persistenceLogger?.warn?.(`\u001b[33m${setupWarning}\u001b[39m`);
         return { plugins: { entries: { "clawhub-demo": { enabled: false } } } };
       },
     );
@@ -841,8 +841,8 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "clawhub-demo"');
-      expect(result.reply?.text).toContain(warning);
-      expect(result.reply?.text).toContain(setupWarning);
+      const warningLines = result.reply?.text?.split("\n").filter((line) => line.startsWith("⚠️ "));
+      expect(warningLines).toEqual([`⚠️ ${warning}`, `⚠️ ${setupWarning}`]);
       expect(result.reply?.text).not.toContain("\u001b");
       expect(mockFirstObjectArg(installPluginFromClawHubMock).logger).toEqual(
         expect.objectContaining({ terminalLinks: false }),

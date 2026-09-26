@@ -217,7 +217,7 @@ describe("resolveGatewayClientBootstrap interactive auth policy", () => {
         gatewayUrl: "wss://override.example/rpc/?ignored=1",
         env: {},
         authPolicy: "interactive",
-        allowStoredOriginAuth: (scope) => {
+        allowStoredOriginAuth: async (scope) => {
           seenScopes.push(scope);
           return scope === "wss://override.example/rpc";
         },
@@ -235,7 +235,7 @@ describe("resolveGatewayClientBootstrap interactive auth policy", () => {
         gatewayUrl: "wss://other.example/rpc",
         env: {},
         authPolicy: "interactive",
-        allowStoredOriginAuth: (scope) => scope === "wss://override.example/rpc",
+        allowStoredOriginAuth: async (scope) => scope === "wss://override.example/rpc",
         overrideAuthErrorHint: "Fix: pair this origin.",
       }),
     ).rejects.toThrow("gateway url override requires explicit credentials");

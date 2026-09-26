@@ -163,6 +163,7 @@ export async function runCronIsolatedAgentTurn(
                 enabled: isDiagnosticsEnabled(params.cfg),
                 sessionId: prepared.context.runSessionId,
                 sessionKey: prepared.context.runSessionKey,
+                agentId: prepared.context.agentId,
                 channel: "cron",
                 source: "cron-isolated",
                 startedAtMs: turnStartedAtMs,
@@ -225,39 +226,12 @@ export async function runCronIsolatedAgentTurn(
             );
             const { executeCronRun } = await cronExecutorRuntimeLoader.load();
             const executionParams: Parameters<typeof executeCronRun>[0] = {
+              ...prepared.context,
               runId,
               cfg: params.cfg,
-              cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,
               job: params.job,
-              agentId: prepared.context.agentId,
-              agentDir: prepared.context.agentDir,
-              agentSessionKey: prepared.context.agentSessionKey,
-              runSessionKey: prepared.context.runSessionKey,
-              usesDetachedRunSession: prepared.context.usesDetachedRunSession,
-              workspaceDir: prepared.context.workspaceDir,
-              executionRoot: prepared.context.executionRoot,
               lane: params.lane,
-              resolvedDelivery: {
-                channel: prepared.context.resolvedDelivery.channel,
-                to: prepared.context.resolvedDelivery.to,
-                accountId: prepared.context.resolvedDelivery.accountId,
-                threadId: prepared.context.resolvedDelivery.threadId,
-              },
-              resolvedDeliveryOk: prepared.context.resolvedDelivery.ok,
-              deliveryRequested: prepared.context.deliveryRequested,
-              sourceDelivery: prepared.context.sourceDelivery,
-              skillsSnapshot: prepared.context.skillsSnapshot,
-              agentPayload: prepared.context.agentPayload,
-              useSubagentFallbacks: prepared.context.useSubagentFallbacks,
-              inheritDefaultFallbacksForAgentStringModel:
-                prepared.context.inheritDefaultFallbacksForAgentStringModel,
-              modelFallbacksOverride: prepared.context.modelFallbacksOverride,
               agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
-              liveSelection: prepared.context.liveSelection,
-              cronSession: prepared.context.cronSession,
-              commandBody: prepared.context.commandBody,
-              inputProvenance: prepared.context.inputProvenance,
-              persistSessionEntry: prepared.context.persistSessionEntry,
               persistRunContinuationSession: prepared.context.runContinuationSession?.sync,
               setRunContinuationCliExecutionProvider:
                 prepared.context.runContinuationSession?.setCliExecutionProvider,
@@ -274,10 +248,8 @@ export async function runCronIsolatedAgentTurn(
               immutableThinkLevel: prepared.context.thinkingSelection.immutableThinkLevel,
               thinkingCatalog: prepared.context.thinkingSelection.catalog,
               loadThinkingCatalog: prepared.context.thinkingSelection.loadThinkingCatalog,
-              timeoutMs: prepared.context.timeoutMs,
-              runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
-              suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
               executionIdentity: params.executionIdentity,
+              admissionSource: params.admissionSource,
             };
             const execution = await prepared.context.sessionWorkAdmission.run(() =>
               withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>

@@ -6,11 +6,20 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
+import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { formatSkillsCompactForPrompt } from "../../skills/loading/skill-contract.js";
-import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
+import {
+  loadWorkspaceSkills,
+  readWorkspaceSkillSources,
+} from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
+import { resolveWorkspaceSkillSourcePlan } from "../../skills/loading/workspace-skill-sources.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
+import {
+  readSkillResourceFiles,
+  resolveExplicitSkillResource,
+} from "../../skills/runtime/resources.js";
 import { transferSkillResources } from "./skill-resource-transfer.js";
 import {
   createNodeCarrier,
@@ -119,6 +128,71 @@ async function expectRejectedResourceRequest(
 }
 
 describe("remote-exec skill resources", () => {
+  it.each(["ssh", "node"])(
+    "transfers host bytes rather than stale Gateway bytes over %s",
+    async (kind) => {
+      const source = await createSource(16);
+      const hostRoot = temps.make("skill-resource-host-");
+      await fs.cp(source.workspace, hostRoot, { recursive: true });
+      const script = "#!/bin/sh\nprintf host-script\n";
+      await fs.writeFile(path.join(hostRoot, "skills/source/scripts/check.sh"), script);
+      const release = registerAgentWorkspaceAccess(source.workspace, {
+        bridge: {
+          readFile: async () => {
+            throw new Error("Document bridge must not read skill resources");
+          },
+          writeFile: async () => {
+            throw new Error("Unexpected write");
+          },
+          stat: async () => {
+            throw new Error("Unexpected stat");
+          },
+        },
+        loadSkills: async (request) =>
+          readWorkspaceSkillSources({
+            ...request,
+            sourcePlan: resolveWorkspaceSkillSourcePlan(hostRoot, { workspaceOnly: true }),
+          }),
+        skillResources: {
+          readInstructions: (filePath, options) =>
+            fs.readFile(path.join(hostRoot, path.relative(source.workspace, filePath)), {
+              ...options,
+              encoding: "utf8",
+            }),
+          resolveExplicitSkill: resolveExplicitSkillResource,
+          readSkillFiles: (skill, options) =>
+            readSkillResourceFiles(
+              {
+                ...skill,
+                baseDir: path.join(hostRoot, path.relative(source.workspace, skill.baseDir)),
+              },
+              options,
+            ),
+        },
+      });
+      const carrier = await createCarrier(kind);
+      let resources: Awaited<ReturnType<typeof transferSkillResources>>;
+      try {
+        resources = await transferSkillResources({
+          snapshot: source.snapshot,
+          workspaceDir: source.workspace,
+          remoteWorkspaceDir: carrier.workspace,
+          assertCurrent: () => {},
+          tunnel: carrier,
+        });
+        expect(
+          await fs.readFile(
+            path.join(resources!.mounts[0]!.containerPath, "scripts/check.sh"),
+            "utf8",
+          ),
+        ).toBe(script);
+      } finally {
+        await resources?.cleanup();
+        release();
+      }
+    },
+  );
+
   it.each(["ssh", "node"])(
     "batches small resources within the input budget over %s",
     async (kind) => {
@@ -263,10 +337,13 @@ describe("remote-exec skill resources", () => {
           sequence: 1,
           retain: [{ ...carrier.binding, manifestRefs: null }],
         };
-        await restarted.applyRetainSnapshot(retention, () => []);
+        await restarted.applyRetainSnapshot(retention, async () => []);
         expect((await fs.stat(allocated!)).isDirectory()).toBe(true);
         if (failure === "retired") {
-          await restarted.applyRetainSnapshot({ ...retention, sequence: 2, retain: [] }, () => []);
+          await restarted.applyRetainSnapshot(
+            { ...retention, sequence: 2, retain: [] },
+            async () => [],
+          );
           await expect(fs.stat(allocated!)).rejects.toMatchObject({ code: "ENOENT" });
         } else {
           const next = await transferSkillResources({

@@ -250,8 +250,8 @@ try {
           await writeFile(preloadPath, CLOCK_SHIFT_PRELOAD, "utf8");
           instance = await createOpenClawTestInstance({
             name: "node-invoke-clock",
+            gatewayCommandPrefix: [process.execPath, "--import", pathToFileURL(preloadPath).href],
             env: {
-              NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
               NODE_INVOKE_CLOCK_SHIFT_PATH: shiftPath,
               NODE_INVOKE_CLOCK_SHIFT_READY_PATH: shiftReadyPath,
               NODE_INVOKE_CLOCK_SHIFT_MS: "1000",

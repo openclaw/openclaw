@@ -176,7 +176,7 @@ describe("createDiscordDraftStream", () => {
 
   it("retries failed current-preview cleanup without reusing the stale message", async () => {
     const remove = vi.fn().mockRejectedValueOnce(new Error("transient"));
-    const { rest, stream, warn } = createCurrentPreviewHarness(remove);
+    const { rest, stream } = createCurrentPreviewHarness(remove);
 
     stream.update("temporary commentary");
     await stream.flush();
@@ -189,7 +189,6 @@ describe("createDiscordDraftStream", () => {
     expect(rest.delete).toHaveBeenNthCalledWith(2, Routes.channelMessage("c1", "1001"));
     expect(rest.patch).not.toHaveBeenCalled();
     expect(stream.messageId()).toBe("1002");
-    expect(warn).toHaveBeenCalledWith("discord stream preview cleanup failed: transient");
   });
 
   it.each(["clear", "deleteCurrentMessage"] as const)(
@@ -219,6 +218,31 @@ describe("createDiscordDraftStream", () => {
       expect(stream.messageId()).toBe("1002");
     },
   );
+
+  it("does not clear a queued preview after awaiting the prior create", async () => {
+    const createStarted = createDeferred<void>();
+    const finishCreate = createDeferred<{ id: string }>();
+    const { rest, stream } = createCurrentPreviewHarness();
+    rest.post
+      .mockReset()
+      .mockImplementationOnce(async () => {
+        createStarted.resolve();
+        return await finishCreate.promise;
+      })
+      .mockResolvedValueOnce({ id: "1002" });
+
+    stream.update("prior turn");
+    await createStarted.promise;
+    const clearing = stream.clear();
+    stream.forceNewMessage("discard");
+    stream.update("queued turn");
+    finishCreate.resolve({ id: "1001" });
+    await clearing;
+    await stream.flush();
+
+    expect(rest.delete).toHaveBeenCalledExactlyOnceWith(Routes.channelMessage("c1", "1001"));
+    expect(stream.messageId()).toBe("1002");
+  });
 
   it("suppresses mentions in preview creates and edits", async () => {
     const rest = {

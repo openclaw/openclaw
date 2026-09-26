@@ -2,6 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 type TableListRow = {
@@ -60,10 +61,6 @@ export type SqliteStrictMigrationResult = {
 const DEFAULT_STRICT_MIGRATION_BUSY_TIMEOUT_MS = 5_000;
 const STRICT_MIGRATION_TABLE_PREFIX = "__openclaw_strict_migration_";
 const SQLITE_ROWID_ALIASES = ["_rowid_", "rowid", "oid"] as const;
-
-function quoteSqliteIdentifier(identifier: string): string {
-  return `"${identifier.replaceAll('"', '""')}"`;
-}
 
 function readMainTableList(db: DatabaseSync): TableListRow[] {
   return (db.prepare("PRAGMA table_list").all() as TableListRow[]).filter(

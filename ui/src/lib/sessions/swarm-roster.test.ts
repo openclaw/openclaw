@@ -222,7 +222,7 @@ describe("SwarmRosterHydrator", () => {
 
       children = [{ ...row(1), label: "New child", status: "done" }];
       sessions.invalidateParent();
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(list).toHaveBeenCalledTimes(2);
       expect(readParent).toHaveBeenCalledTimes(2);
       expect(hydrator.rows).toEqual([
@@ -379,7 +379,7 @@ describe("SwarmRosterHydrator", () => {
       expect(readParent).toHaveBeenCalledTimes(2);
       children = [row(1)];
       sessions.publishRow(children[0]!);
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       stale.resolve(initial);
       await vi.advanceTimersByTimeAsync(0);
       expect(readParent).toHaveBeenCalledTimes(3);

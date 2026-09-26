@@ -151,17 +151,11 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     });
 
     const offer = await this.awaitSetupStep(peer, peer.createOffer());
-    if (offer === cancelledSetup) {
-      return this.cancelledStart();
-    }
-    if (!this.isCurrentPeer(peer)) {
+    if (offer === cancelledSetup || !this.isCurrentPeer(peer)) {
       return this.cancelledStart();
     }
     const localDescriptionResult = await this.awaitSetupStep(peer, peer.setLocalDescription(offer));
-    if (localDescriptionResult === cancelledSetup) {
-      return this.cancelledStart();
-    }
-    if (!this.isCurrentPeer(peer)) {
+    if (localDescriptionResult === cancelledSetup || !this.isCurrentPeer(peer)) {
       return this.cancelledStart();
     }
     const answerSdp = await this.offerExchange.readAnswer({
@@ -170,10 +164,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       gatewayUrl: this.ctx.client.gatewayUrl,
       isCurrent: () => this.isCurrentPeer(peer),
     });
-    if (answerSdp === undefined) {
-      return this.cancelledStart();
-    }
-    if (!this.isCurrentPeer(peer)) {
+    if (answerSdp === undefined || !this.isCurrentPeer(peer)) {
       return this.cancelledStart();
     }
     const remoteDescriptionResult = await this.awaitSetupStep(
@@ -203,15 +194,10 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private cancelledStart(): RealtimeTalkTransportStartResult {
-    const startupError = this.currentStartupError();
-    if (startupError) {
-      throw startupError;
+    if (this.startupError) {
+      throw this.startupError;
     }
     return "cancelled";
-  }
-
-  private currentStartupError(): Error | null {
-    return this.startupError;
   }
 
   private async awaitSetupStep<T>(

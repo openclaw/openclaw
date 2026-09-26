@@ -3,11 +3,7 @@ import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
-import {
-  createGatewayKernel,
-  gatewayKernelLogs,
-  resetPreparedModelCatalogForTestCore,
-} from "./server-kernel.js";
+import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { rethrowGatewayStartupError, runGatewayCloseSteps } from "./server-shutdown.js";
@@ -21,8 +17,6 @@ const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
 const { log, logTailscale, logChannels, logHealth, logCron, logReload, logHooks, logWsControl } =
   gatewayKernelLogs;
 const POST_READY_WORK_START_DELAY_MS = 500;
-
-export { resetPreparedModelCatalogForTestCore };
 
 export async function startGatewayServerCore(
   port = 18789,

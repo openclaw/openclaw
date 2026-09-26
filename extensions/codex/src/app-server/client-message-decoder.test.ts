@@ -30,12 +30,129 @@ describe("CodexAppServerClient message decoding", () => {
         finished(harness.process.stdout, { cleanup: true }),
         finished(harness.process.stderr, { cleanup: true }),
       ]);
-      harness.emitExit();
+      for (const output of [harness.process.stdout, harness.process.stderr]) {
+        output.end();
+        output.resume();
+      }
       await drained;
+      harness.emitExit();
       await expect(harness.client.closeAndWait()).resolves.toMatchObject({ exited: true });
     }
     harnesses.length = 0;
     vi.restoreAllMocks();
+  });
+
+  it("dispatches interleaved responses, notifications, and server requests in stdout order", async () => {
+    const harness = createHarness();
+    const observed: string[] = [];
+    harness.client.addNotificationHandler((message) => {
+      observed.push(message.method);
+    });
+    harness.client.addRequestHandler((request) => {
+      observed.push(request.method);
+      return { decision: "decline" };
+    });
+    const first = harness.client.request(
+      "thread/list",
+      {},
+      {
+        attemptWaiterFinished: () => observed.push("first response"),
+      },
+    );
+    const second = harness.client.request(
+      "thread/list",
+      {},
+      {
+        attemptWaiterFinished: () => observed.push("second response"),
+      },
+    );
+    const firstId = JSON.parse(await harness.waitForWrite(0)).id;
+    const secondId = JSON.parse(await harness.waitForWrite(1)).id;
+    const frames = [
+      { method: "turn/started", params: { threadId: "thread-1" } },
+      { id: secondId, result: { data: [{ id: "second" }] } },
+      {
+        id: "approval-1",
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-1" },
+      },
+      { method: "item/agentMessage/delta", params: { delta: "hello" } },
+      { id: firstId, result: { data: [{ id: "first" }] } },
+      { method: "turn/completed", params: { threadId: "thread-1" } },
+    ];
+
+    harness.process.stdout.write(`${frames.map((frame) => JSON.stringify(frame)).join("\n")}\n`);
+
+    expect(observed).toEqual([
+      "turn/started",
+      "second response",
+      "item/commandExecution/requestApproval",
+      "item/agentMessage/delta",
+      "first response",
+      "turn/completed",
+    ]);
+    await expect(first).resolves.toEqual({ data: [{ id: "first" }] });
+    await expect(second).resolves.toEqual({ data: [{ id: "second" }] });
+    expect(JSON.parse(await harness.waitForWrite(2))).toEqual({
+      id: "approval-1",
+      result: { decision: "decline" },
+    });
+    expect(harness.warn).not.toHaveBeenCalled();
+  });
+
+  it.each(["\n", "\r\n"])(
+    "preserves split UTF-8 and raw-newline recovery with %j framing",
+    (separator) => {
+      const harness = createHarness();
+      const bytes = Buffer.from(
+        `${prefix}猫${separator}😀"}}${separator}${JSON.stringify(following)}${separator}`,
+      );
+      for (let offset = 0; offset < bytes.length; offset++) {
+        harness.process.stdout.write(bytes.subarray(offset, offset + 1));
+      }
+
+      expect(harness.notifications).toEqual([notification("猫\n😀"), following]);
+      expect(harness.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delivers the final stdout frame at EOF without a trailing newline", async () => {
+    const harness = createHarness();
+    harness.process.stdout.end(JSON.stringify(following));
+    await finished(harness.process.stdout, { cleanup: true });
+
+    expect(harness.notifications).toEqual([following]);
+    expect(harness.warn).not.toHaveBeenCalled();
+  });
+
+  it("drops later frames in the same chunk when a notification handler closes the client", async () => {
+    const harness = createHarness();
+    const pending = harness.client.request("model/list", {});
+    harness.client.addNotificationHandler(() => harness.client.close());
+
+    harness.process.stdout.write(
+      `${JSON.stringify(notification("close"))}\n${JSON.stringify(following)}\n${prefix}partial`,
+    );
+
+    await expect(pending).rejects.toThrow("codex app-server client is closed");
+    expect(harness.notifications).toEqual([notification("close")]);
+    expect(harness.warn).not.toHaveBeenCalled();
+  });
+
+  it("preserves child errors while discarding an incomplete stdout frame", async () => {
+    const harness = createHarness();
+    const pending = harness.client.request("model/list", {});
+    harness.process.stdout.write(`${prefix}partial`);
+
+    harness.process.emit("error", new Error("synthetic child transport failure"));
+    harness.process.stdout.write(`"}}\n${JSON.stringify(following)}\n`);
+
+    await expect(pending).rejects.toThrow("synthetic child transport failure");
+    await expect(harness.client.request("model/list", {})).rejects.toThrow(
+      "synthetic child transport failure",
+    );
+    expect(harness.notifications).toEqual([]);
+    expect(harness.warn).not.toHaveBeenCalled();
   });
 
   it.each([

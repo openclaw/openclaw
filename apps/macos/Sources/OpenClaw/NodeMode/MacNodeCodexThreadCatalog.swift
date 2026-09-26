@@ -1,4 +1,6 @@
 import CoreFoundation
+import CryptoKit
+import Darwin
 import Foundation
 
 enum MacNodeCodexThreadCatalogContract {
@@ -60,6 +62,7 @@ enum MacNodeCodexThreadCatalog {
     }
 
     private struct ListParams {
+        var sourceHomeId: String?
         var cursor: String?
         var limit = 50
         var searchTerm: String?
@@ -67,6 +70,7 @@ enum MacNodeCodexThreadCatalog {
     }
 
     private struct TurnParams {
+        var sourceHomeId: String?
         var threadId: String
         var cursor: String?
         var limit = 20
@@ -151,6 +155,8 @@ enum MacNodeCodexThreadCatalog {
     private static let maxSearchPageCalls = 4
 
     private struct WireResponse: Encodable {
+        let canContinueCodex = true
+        let sourceHomeId: String
         var sessions: [WireSession]
         var nextCursor: String?
         var backwardsCursor: String?
@@ -223,8 +229,9 @@ enum MacNodeCodexThreadCatalog {
         maxLineBytes: Int = 20 * 1024 * 1024) async throws -> String
     {
         let deadline = Date().addingTimeInterval(max(0.01, timeoutSeconds))
-        try await self.requireCatalogThread(
+        let sourceHomeId = try await self.requireCatalogThread(
             params.threadId,
+            sourceHomeId: params.sourceHomeId,
             invocation: invocation,
             client: client,
             deadline: deadline)
@@ -237,13 +244,14 @@ enum MacNodeCodexThreadCatalog {
         if let cursor = params.cursor {
             requestParams["cursor"] = cursor
         }
-        let resultData = try await client.request(
+        let response = try await client.request(
             invocation: invocation,
             method: "thread/turns/list",
             requestParams: requestParams,
+            sourceHomeId: sourceHomeId,
             timeoutSeconds: max(0.01, deadline.timeIntervalSinceNow),
             maxLineBytes: maxLineBytes)
-        guard let payload = String(data: resultData, encoding: .utf8) else {
+        guard let payload = String(data: response.data, encoding: .utf8) else {
             throw CatalogError.appServerUnavailable
         }
         return payload
@@ -251,27 +259,31 @@ enum MacNodeCodexThreadCatalog {
 
     private static func requireCatalogThread(
         _ threadId: String,
+        sourceHomeId: String?,
         invocation: ResolvedInvocation,
         client: CodexAppServerThreadClient,
-        deadline: Date) async throws
+        deadline: Date) async throws -> String
     {
+        var sourceHomeId = sourceHomeId
         var cursor: String?
         var seenCursors = Set<String>()
         for _ in 0..<100 {
             let remainingTimeout = deadline.timeIntervalSinceNow
             guard remainingTimeout > 0 else { throw CatalogError.timedOut }
             let payload = try await list(
-                params: ListParams(cursor: cursor, limit: 100),
+                params: ListParams(sourceHomeId: sourceHomeId, cursor: cursor, limit: 100),
                 invocation: invocation,
                 client: client,
                 timeoutSeconds: remainingTimeout)
             guard let response = try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-                  let sessions = response["sessions"] as? [[String: Any]]
+                  let sessions = response["sessions"] as? [[String: Any]],
+                  let pageSourceHomeId = response["sourceHomeId"] as? String
             else {
                 throw CatalogError.appServerUnavailable
             }
+            sourceHomeId = pageSourceHomeId
             if sessions.contains(where: { $0["threadId"] as? String == threadId }) {
-                return
+                return pageSourceHomeId
             }
             guard let nextCursor = response["nextCursor"] as? String,
                   !nextCursor.isEmpty,
@@ -334,19 +346,23 @@ enum MacNodeCodexThreadCatalog {
         maxLineBytes: Int = 5 * 1024 * 1024) async throws -> String
     {
         guard params.searchTerm != nil else {
-            let resultData = try await client.request(
+            let response = try await client.request(
                 invocation: invocation,
                 method: "thread/list",
                 requestParams: self.appServerParams(params),
+                sourceHomeId: params.sourceHomeId,
                 timeoutSeconds: timeoutSeconds,
                 maxLineBytes: maxLineBytes)
-            return try self.normalize(listResultData: resultData)
+            return try self.normalize(
+                listResultData: response.data,
+                sourceHomeId: response.sourceHomeId)
         }
 
         // Native search also inspects transcript-derived previews. Scan a bounded
         // number of unsearched pages and filter normalized titles locally instead.
         let deadline = Date().addingTimeInterval(max(0.01, timeoutSeconds))
         var sessions: [WireSession] = []
+        var sourceHomeId = params.sourceHomeId
         var cursor = params.cursor
         var seenCursors = Set(cursor.map { [$0] } ?? [])
         var backwardsCursor: String?
@@ -361,14 +377,17 @@ enum MacNodeCodexThreadCatalog {
             var pageParams = params
             pageParams.cursor = cursor
             pageParams.limit = remainingLimit
-            let resultData = try await client.request(
+            let response = try await client.request(
                 invocation: invocation,
                 method: "thread/list",
                 requestParams: self.appServerParams(pageParams),
+                sourceHomeId: sourceHomeId,
                 timeoutSeconds: remainingTimeout,
                 maxLineBytes: maxLineBytes)
+            sourceHomeId = response.sourceHomeId
             let page = try self.normalizedResponse(
-                listResultData: resultData,
+                listResultData: response.data,
+                sourceHomeId: response.sourceHomeId,
                 searchTerm: params.searchTerm)
             if pageIndex == 0 {
                 backwardsCursor = page.backwardsCursor
@@ -393,7 +412,9 @@ enum MacNodeCodexThreadCatalog {
             cursor = candidateCursor
         }
 
+        guard let sourceHomeId else { throw CatalogError.appServerUnavailable }
         return try self.encodeResponse(WireResponse(
+            sourceHomeId: sourceHomeId,
             sessions: sessions,
             nextCursor: nextCursor,
             backwardsCursor: backwardsCursor))
@@ -971,12 +992,13 @@ extension MacNodeCodexThreadCatalog {
 
     private static func decodeParams(_ paramsJSON: String?) throws -> ListParams {
         let raw = try self.decodeRequestObject(paramsJSON)
-        let allowed = Set(["agentId", "cursor", "limit", "searchTerm", "cwd"])
+        let allowed = Set(["agentId", "sourceHomeId", "cursor", "limit", "searchTerm", "cwd"])
         if let unknown = raw.keys.first(where: { !allowed.contains($0) }) {
             throw CatalogError.invalidParams("unknown Codex session catalog parameter: \(unknown)")
         }
 
         var params = ListParams()
+        params.sourceHomeId = try self.optionalString(raw, key: "sourceHomeId", maxLength: 64)
         params.cursor = try self.optionalString(raw, key: "cursor", maxLength: self.maxCursorLength)
         params.searchTerm = try self.optionalString(
             raw,
@@ -998,7 +1020,7 @@ extension MacNodeCodexThreadCatalog {
 
     private static func decodeTurnParams(_ paramsJSON: String?) throws -> TurnParams {
         let raw = try self.decodeRequestObject(paramsJSON)
-        let allowed = Set(["agentId", "threadId", "cursor", "limit"])
+        let allowed = Set(["agentId", "sourceHomeId", "threadId", "cursor", "limit"])
         if let unknown = raw.keys.first(where: { !allowed.contains($0) }) {
             throw CatalogError.invalidParams("unknown Codex transcript parameter: \(unknown)")
         }
@@ -1010,6 +1032,7 @@ extension MacNodeCodexThreadCatalog {
             throw CatalogError.invalidParams("threadId is required")
         }
         var params = TurnParams(threadId: threadId)
+        params.sourceHomeId = try self.optionalString(raw, key: "sourceHomeId", maxLength: 64)
         params.cursor = try self.optionalString(raw, key: "cursor", maxLength: self.maxCursorLength)
         if let value = raw["limit"] {
             guard let number = value as? NSNumber,
@@ -1063,17 +1086,46 @@ extension MacNodeCodexThreadCatalog {
         return result
     }
 
+    static func sourceHomeId(codexHome: String) throws -> String {
+        guard codexHome.hasPrefix("/"), !codexHome.utf8.contains(0) else {
+            throw CatalogError.appServerUnavailable
+        }
+        var components: [Substring] = []
+        for component in codexHome.split(separator: "/") {
+            switch component {
+            case ".": continue
+            case "..":
+                if !components.isEmpty { components.removeLast() }
+            default: components.append(component)
+            }
+        }
+        let absolute = "/" + components.joined(separator: "/")
+        let canonical: String
+        if let resolved = realpath(absolute, nil) {
+            defer { free(resolved) }
+            canonical = String(cString: resolved)
+        } else {
+            canonical = absolute
+        }
+        // Match the Node catalog identity without exposing the native home path.
+        return SHA256.hash(data: Data(("openclaw:codex-session-catalog-home:v1\u{0}" + canonical).utf8))
+            .map { String(format: "%02x", $0) }.joined()
+    }
+
     static func normalize(
         listResultData: Data,
+        sourceHomeId: String,
         searchTerm: String? = nil) throws -> String
     {
         try self.encodeResponse(self.normalizedResponse(
             listResultData: listResultData,
+            sourceHomeId: sourceHomeId,
             searchTerm: searchTerm))
     }
 
     private static func normalizedResponse(
         listResultData: Data,
+        sourceHomeId: String,
         searchTerm: String? = nil) throws -> WireResponse
     {
         guard let result = try JSONSerialization.jsonObject(with: listResultData) as? [String: Any],
@@ -1137,6 +1189,7 @@ extension MacNodeCodexThreadCatalog {
         }
 
         return WireResponse(
+            sourceHomeId: sourceHomeId,
             sessions: sessions,
             nextCursor: self.boundedCursor(result["nextCursor"]),
             backwardsCursor: self.boundedCursor(result["backwardsCursor"]))

@@ -15,7 +15,6 @@ import {
 
 type TaskLedgerStatus = TaskSummary["status"];
 
-const TASK_PROMPT_MAX_CHARS = 4_000;
 const TASK_RESULT_MAX_CHARS = 4_000;
 
 const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
@@ -60,9 +59,7 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
     truncateTaskStatusText(terminalResult, TASK_STATUS_DETAIL_MAX_CHARS) || undefined;
   const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
   const lastToolName = sanitizeOptionalTaskText(task.lastToolName);
-  const prompt = opts?.includePrompt
-    ? sanitizeTaskPromptText(task.task, TASK_PROMPT_MAX_CHARS) || undefined
-    : undefined;
+  const prompt = opts?.includePrompt ? sanitizeTaskPromptText(task.task) || undefined : undefined;
   const result = opts?.includePrompt
     ? (task.runtime === "subagent" || task.runtime === "acp"
         ? progressResult
@@ -90,7 +87,7 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
     ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
     ...(task.sourceId ? { sourceId: task.sourceId } : {}),
     createdAt: task.createdAt,
-    updatedAt: Math.max(taskUpdatedAt(task), activity?.lastActivityAt ?? 0),
+    updatedAt: taskUpdatedAt(task),
     ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
     ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
     ...(toolUseCount !== undefined ? { toolUseCount } : {}),

@@ -10,6 +10,7 @@ import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice as applyProviderAuthChoice } from "./auth-choice.apply.js";
+import { withLoopbackTestServer } from "./loopback-server.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   promptAuthChoiceGrouped: vi.fn(),
@@ -904,59 +905,54 @@ describe("promptAuthConfig", () => {
     async ({ explicit, defaultModel, agentModel, expectedModel }) => {
       vi.clearAllMocks();
       mocks.promptAuthChoiceGrouped.mockResolvedValue("custom-api-key");
-      await using server = createServer((_req, res) => {
+      const server = createServer((_req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
         res.end("{}");
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Expected a TCP listener");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-      const prompter: WizardPrompter = {
-        intro: vi.fn(),
-        outro: vi.fn(),
-        note: vi.fn(),
-        select: vi.fn().mockResolvedValueOnce("plaintext").mockResolvedValueOnce("openai"),
-        multiselect: vi.fn(),
-        text: vi
-          .fn()
-          .mockResolvedValueOnce(baseUrl)
-          .mockResolvedValueOnce("")
-          .mockResolvedValueOnce("llama3")
-          .mockResolvedValueOnce("custom")
-          .mockResolvedValueOnce("Custom"),
-        confirm: vi.fn().mockResolvedValue(false),
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      };
+      await withLoopbackTestServer(server, async (port) => {
+        const baseUrl = `http://127.0.0.1:${port}/v1`;
+        const prompter: WizardPrompter = {
+          intro: vi.fn(),
+          outro: vi.fn(),
+          note: vi.fn(),
+          select: vi.fn().mockResolvedValueOnce("plaintext").mockResolvedValueOnce("openai"),
+          multiselect: vi.fn(),
+          text: vi
+            .fn()
+            .mockResolvedValueOnce(baseUrl)
+            .mockResolvedValueOnce("")
+            .mockResolvedValueOnce("llama3")
+            .mockResolvedValueOnce("custom")
+            .mockResolvedValueOnce("Custom"),
+          confirm: vi.fn().mockResolvedValue(false),
+          progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+        };
 
-      const config: OpenClawConfig = {
-        agents: {
-          ...(explicit ? { ownership: "explicit" } : {}),
-          defaults: { systemAgent: { agentId: "ops" }, model: defaultModel },
-          entries: { OPS: { model: agentModel } },
-        },
-      };
-      const result = await promptAuthConfig(config, makeRuntime(), prompter, {
-        agentId: "ops",
-        agentDir: "/tmp/ops-agent",
-        workspaceDir: "/tmp/ops-workspace",
-      });
+        const config: OpenClawConfig = {
+          agents: {
+            ...(explicit ? { ownership: "explicit" } : {}),
+            defaults: { systemAgent: { agentId: "ops" }, model: defaultModel },
+            entries: { OPS: { model: agentModel } },
+          },
+        };
+        const result = await promptAuthConfig(config, makeRuntime(), prompter, {
+          agentId: "ops",
+          agentDir: "/tmp/ops-agent",
+          workspaceDir: "/tmp/ops-workspace",
+        });
 
-      const modelOwner = explicit ? result.agents?.entries?.OPS : result.agents?.defaults;
-      expect(modelOwner?.model).toEqual(expectedModel);
-      expect(modelOwner?.models?.["custom/llama3"]).toEqual({ alias: "Custom" });
-      if (explicit) {
-        expect(result.agents?.defaults?.model).toEqual(defaultModel);
-        expect(result.agents?.defaults?.models).toBeUndefined();
-      }
-      expect(result.models?.providers?.custom).toMatchObject({
-        baseUrl,
-        api: "openai-completions",
-        models: [{ id: "llama3" }],
+        const modelOwner = explicit ? result.agents?.entries?.OPS : result.agents?.defaults;
+        expect(modelOwner?.model).toEqual(expectedModel);
+        expect(modelOwner?.models?.["custom/llama3"]).toEqual({ alias: "Custom" });
+        if (explicit) {
+          expect(result.agents?.defaults?.model).toEqual(defaultModel);
+          expect(result.agents?.defaults?.models).toBeUndefined();
+        }
+        expect(result.models?.providers?.custom).toMatchObject({
+          baseUrl,
+          api: "openai-completions",
+          models: [{ id: "llama3" }],
+        });
       });
     },
   );

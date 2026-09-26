@@ -23,7 +23,7 @@ import {
 import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
@@ -32,6 +32,7 @@ import {
   type SystemAgentPluginMetadataTestSnapshot,
 } from "../../system-agent/system-agent.test-helpers.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { installTestApprovalClock } from "../exec-approval-manager.test-support.js";
 import { getOperatorApprovalDetailed } from "../operator-approval-store.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
@@ -72,7 +73,7 @@ describe("Full Access delegated chat", () => {
   afterEach(async () => {
     for (const { manager, databasePath } of approvalManagers.splice(0)) {
       await manager.drain();
-      closeOpenClawStateDatabaseByPath(databasePath);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
     }
     vi.restoreAllMocks();
     vi.resetAllMocks();
@@ -279,7 +280,7 @@ describe("Full Access delegated chat", () => {
     });
     try {
       await requested.promise;
-      const original = expectDefined(manager.listPendingRecords()[0], "original approval");
+      const original = expectDefined((await manager.listPendingRecords())[0], "original approval");
       const correctionRequested = createDeferred();
       broadcast.mockImplementation((event) => {
         if (event === "openclaw.approval.requested") {
@@ -287,10 +288,10 @@ describe("Full Access delegated chat", () => {
         }
       });
       expect(runConfigSet).not.toHaveBeenCalled();
-      expect(manager.resolve(original.id, "allow-once", "operator")).toBe(true);
+      expect(await manager.resolve(original.id, "allow-once", "operator")).toBe(true);
       if (outcome === "closed-before") {
         await pending;
-        expect(manager.listPendingRecords()).toEqual([]);
+        expect(await manager.listPendingRecords()).toEqual([]);
         expect(engine.getPendingOperatorProposal()).toBeNull();
         expect(runConfigSet).toHaveBeenCalledOnce();
         expect(
@@ -304,7 +305,10 @@ describe("Full Access delegated chat", () => {
           pending.then(() => "completed"),
         ]),
       ).toBe("requested");
-      const correction = expectDefined(manager.listPendingRecords()[0], "corrective approval");
+      const correction = expectDefined(
+        (await manager.listPendingRecords())[0],
+        "corrective approval",
+      );
       expect(
         broadcast.mock.calls.filter(([event]) => event === "openclaw.approval.requested"),
       ).toHaveLength(2);
@@ -313,25 +317,25 @@ describe("Full Access delegated chat", () => {
       await runSystemAgentGatewayTask(async () => undefined);
       expect(settled).toBe(false);
       expect(runConfigSet).toHaveBeenCalledOnce();
-      expect(manager.resolve(original.id, "allow-once", "stale-operator")).toBe(false);
+      expect(await manager.resolve(original.id, "allow-once", "stale-operator")).toBe(false);
       if (outcome === "closed-after" || outcome === "tool-cancelled" || outcome === "denied") {
         if (outcome === "closed-after") {
           releaseAgentRunDelegatedAuthority(authority);
-          manager.forceDenyIfRuntimeAuthorityClosed(correction.id);
+          await manager.forceDenyIfRuntimeAuthorityClosed(correction.id);
         } else if (outcome === "tool-cancelled") {
           controller.abort();
         } else {
-          expect(manager.resolve(correction.id, "deny", "operator")).toBe(true);
+          expect(await manager.resolve(correction.id, "deny", "operator")).toBe(true);
         }
         expect((await pending).payload).toMatchObject({
           reply: expect.stringContaining(outcome === "denied" ? "Denied" : "cancelled"),
         });
         expect(runConfigSet).toHaveBeenCalledOnce();
         expect(engine.getPendingOperatorProposal()).toBeNull();
-        expect(manager.listPendingRecords()).toEqual([]);
+        expect(await manager.listPendingRecords()).toEqual([]);
         return;
       }
-      expect(manager.resolve(correction.id, "allow-once", "operator")).toBe(true);
+      expect(await manager.resolve(correction.id, "allow-once", "operator")).toBe(true);
       const result = await pending;
       expect(result.payload).toMatchObject({
         reply: expect.stringContaining("gateway.port: Invalid input"),
@@ -353,8 +357,8 @@ describe("Full Access delegated chat", () => {
       });
       expect(engine.getPendingOperatorProposal()).toBeNull();
     } finally {
-      for (const record of manager.listPendingRecords()) {
-        manager.resolve(record.id, "deny", "cleanup");
+      for (const record of await manager.listPendingRecords()) {
+        await manager.resolve(record.id, "deny", "cleanup");
       }
       await pending;
     }
@@ -386,7 +390,7 @@ describe("Full Access delegated chat", () => {
           }),
       );
       expect(runConfigSet).toHaveBeenCalledTimes(2);
-      expect(manager.listPendingRecords()).toEqual([]);
+      expect(await manager.listPendingRecords()).toEqual([]);
       expect(engine.getPendingOperatorProposal()).toBeNull();
       expect(reply.payload).toMatchObject({
         reply: expect.stringContaining(
@@ -424,6 +428,7 @@ describe("Full Access delegated chat", () => {
       const observation = new AsyncWorkScope();
       if (outcome === "expired") {
         vi.useFakeTimers();
+        installTestApprovalClock();
       }
       const applyStarted = createDeferred();
       const releaseApply = createDeferred();
@@ -464,7 +469,7 @@ describe("Full Access delegated chat", () => {
       });
       try {
         await requested.promise;
-        const record = expectDefined(manager.listPendingRecords()[0], "pending approval");
+        const record = expectDefined((await manager.listPendingRecords())[0], "pending approval");
         await runSystemAgentGatewayTask(async () => undefined);
         expect.soft(settled).toBe(false);
         expect(runConfigSet).not.toHaveBeenCalled();
@@ -474,7 +479,7 @@ describe("Full Access delegated chat", () => {
           await rejected;
           await observation.drain();
           expect(
-            getOperatorApprovalDetailed({
+            await getOperatorApprovalDetailed({
               id: record.id,
               databaseOptions: { path: approvalDatabasePath },
             }),
@@ -494,13 +499,13 @@ describe("Full Access delegated chat", () => {
               }),
           );
           await runSystemAgentGatewayTask(async () => undefined);
-          expect(manager.listPendingRecords()).toHaveLength(1);
+          expect(await manager.listPendingRecords()).toHaveLength(1);
         }
         if (outcome === "expired") {
           await vi.advanceTimersByTimeAsync(SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
         } else if (outcome === "run-cancelled") {
           releaseAgentRunDelegatedAuthority(authority);
-          manager.forceDenyIfRuntimeAuthorityClosed(record.id);
+          await manager.forceDenyIfRuntimeAuthorityClosed(record.id);
         } else if (outcome === "tool-cancelled") {
           controller.abort();
         } else {
@@ -515,7 +520,11 @@ describe("Full Access delegated chat", () => {
             await applyStarted.promise;
           }
           expect(
-            manager.resolve(record.id, outcome === "deny" ? "deny" : "allow-once", "operator-ui"),
+            await manager.resolve(
+              record.id,
+              outcome === "deny" ? "deny" : "allow-once",
+              "operator-ui",
+            ),
           ).toBe(true);
           if (queued || outcome === "precommit-cancelled" || outcome === "afterDecision-failed") {
             await applyStarted.promise;
@@ -532,7 +541,7 @@ describe("Full Access delegated chat", () => {
         }
         if (outcome === "queued-cancelled" || outcome === "precommit-cancelled") {
           expect(
-            getOperatorApprovalDetailed({
+            await getOperatorApprovalDetailed({
               id: record.id,
               databaseOptions: { path: approvalDatabasePath },
             }),
@@ -540,7 +549,7 @@ describe("Full Access delegated chat", () => {
             outcome: "found",
             record: { decision: "allow-once", status: "allowed" },
           });
-          expect(manager.resolve(record.id, "allow-once", "late-operator")).toBe(false);
+          expect(await manager.resolve(record.id, "allow-once", "late-operator")).toBe(false);
         }
         const expected =
           outcome === "allow"
@@ -571,8 +580,8 @@ describe("Full Access delegated chat", () => {
       } finally {
         releaseApply.resolve();
         controller.abort();
-        for (const record of manager.listPendingRecords()) {
-          manager.expire(record.id);
+        for (const record of await manager.listPendingRecords()) {
+          await manager.expire(record.id);
         }
         await Promise.allSettled([pending]);
         await sameOwner;
@@ -633,7 +642,7 @@ describe("Full Access delegated chat", () => {
       expect(runConfigSet).toHaveBeenCalledOnce();
       expect(call.payload).not.toHaveProperty("needsApproval");
       expect(call.payload).not.toHaveProperty("proposalId");
-      expect(manager.listPendingRecords()).toEqual([]);
+      expect(await manager.listPendingRecords()).toEqual([]);
       expect(broadcast).not.toHaveBeenCalled();
       expect(engine.getPendingOperatorProposal()).toBeNull();
       expect(readLastSystemAgentAuditEntry()).toMatchObject({
@@ -679,22 +688,22 @@ describe("Full Access delegated chat", () => {
         await expect(proposalCall).rejects.toThrow(
           previousRun === "unregistered-closed"
             ? "system-agent approval authority is no longer active"
-            : /EISDIR|directory|open database/u,
+            : "SQLite worker database path must identify a regular file",
         );
         expect.soft(delegatedSession.pendingApproval).toBeUndefined();
-        expect(manager.listPendingRecords()).toEqual([]);
+        expect(await manager.listPendingRecords()).toEqual([]);
         expect.soft(engine.getPendingOperatorProposal()).toBeNull();
       } else {
         await requested.promise;
-        expect(manager.listPendingRecords()).toHaveLength(1);
+        expect(await manager.listPendingRecords()).toHaveLength(1);
       }
       expect(runConfigSet).toHaveBeenCalledOnce();
-      const pending = manager.listPendingRecords()[0];
+      const pending = (await manager.listPendingRecords())[0];
       if (previousRun === "closed") {
         releaseAgentRunDelegatedAuthority(authority);
         const pendingId = expectDefined(pending, "restricted proposal").id;
-        manager.forceDenyIfRuntimeAuthorityClosed(pendingId);
-        expect(manager.getSnapshot(pendingId)?.status).toBe("cancelled");
+        await manager.forceDenyIfRuntimeAuthorityClosed(pendingId);
+        expect((await manager.getSnapshot(pendingId))?.status).toBe("cancelled");
       }
 
       const replacementRun = createOperationalRunInstanceRef("delegated-replacement-run");
@@ -722,9 +731,9 @@ describe("Full Access delegated chat", () => {
         const forceDeny = manager.forceDenyIfRuntimeAuthorityClosed.bind(manager);
         const storageFailure = vi
           .spyOn(manager, "forceDenyIfRuntimeAuthorityClosed")
-          .mockImplementation((id) => {
+          .mockImplementation(async (id) => {
             if (!delegatedSession.pendingApproval) {
-              manager.forceDenyDetailed(id, "storage-corrupt", { kind: "system", id: null });
+              await manager.forceDenyDetailed(id, "storage-corrupt", { kind: "system", id: null });
               throw new Error("approval storage unavailable");
             }
             return forceDeny(id);
@@ -740,9 +749,9 @@ describe("Full Access delegated chat", () => {
         reply: expect.stringContaining("logging.level: not set"),
       });
       expect(engine.getPendingOperatorProposal()).toBeNull();
-      expect(manager.listPendingRecords()).toEqual([]);
+      expect(await manager.listPendingRecords()).toEqual([]);
       if (pending) {
-        expect(manager.resolve(pending.id, "allow-once", "late-operator")).toBe(false);
+        expect(await manager.resolve(pending.id, "allow-once", "late-operator")).toBe(false);
         expect((await proposalCall).payload).toMatchObject({
           reply: expect.stringContaining("cancelled"),
         });

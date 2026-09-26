@@ -195,6 +195,8 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       outfile: bundlePath,
       platform: "node",
       target: "node22",
+      // The plugin package tsconfig targets built SDK declarations; this fixture runs from source.
+      tsconfig: fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)),
     });
     const moduleUrl = pathToFileURL(bundlePath).href;
     let descendantPid: number | undefined;

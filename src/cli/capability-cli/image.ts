@@ -2,46 +2,21 @@ import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { runWithImageModelFallback } from "../../agents/model-fallback-image.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
-import {
-  generateImage,
-  listRuntimeImageGenerationProviders,
-} from "../../image-generation/runtime.js";
 import type {
   ImageGenerationBackground,
   ImageGenerationOpenAIModeration,
   ImageGenerationOutputFormat,
   ImageGenerationQuality,
 } from "../../image-generation/types.js";
-import {
-  describeImageFile,
-  describePreparedImageWithModel,
-  prepareImageDescriptionInput,
-} from "../../media-understanding/runtime.js";
-import { getImageMetadata } from "../../media/media-services.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
-import { readInputFiles, writeOutputAsset } from "../media-output.js";
 import { collectOption } from "../program/helpers.js";
-import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
-import {
-  parseOptionalPositiveInteger,
-  parseOptionalTimeoutMs,
-  providerHasGenericConfig,
-  registerLocalProvidersCommand,
-  requireProviderModelOverride,
-  resolveCapabilityAgentOption,
-  resolveCapabilityProviderAgentId,
-  resolveLocalCapabilityRuntimeConfig,
-  resolveSelectedProviderFromModelRef,
-} from "./shared.js";
+import { registerLocalProvidersCommand } from "./providers-command.js";
 
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
@@ -67,12 +42,23 @@ async function runImageGenerate(params: {
   timeoutMs?: number;
   agent?: string;
 }) {
+  const {
+    requireProviderModelOverride,
+    resolveCapabilityProviderAgentId,
+    resolveLocalCapabilityRuntimeConfig,
+  } = await import("./shared.js");
+  const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
+  const { generateImage } = await import("../../image-generation/runtime.js");
+  const { getImageMetadata } = await import("../../media/media-services.js");
+  const { readInputFiles, writeOutputAsset } = await import("../media-output.js");
   requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: `infer ${params.capability}`,
     targetIds: getModelsCommandSecretTargetIds(),
   });
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, `infer ${params.capability}`);
+  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
   await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const agentDir = resolveAgentDir(cfg, agentId);
   const inputImages =
@@ -150,11 +136,22 @@ async function runImageDescribe(params: {
   timeoutMs?: number;
   agent?: string;
 }) {
+  const {
+    requireProviderModelOverride,
+    resolveCapabilityProviderAgentId,
+    resolveLocalCapabilityRuntimeConfig,
+  } = await import("./shared.js");
+  const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
+  const { runWithImageModelFallback } = await import("../../agents/model-fallback-image.js");
+  const { describeImageFile, describePreparedImageWithModel, prepareImageDescriptionInput } =
+    await import("../../media-understanding/runtime.js");
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: `infer ${params.capability}`,
     targetIds: getModelsCommandSecretTargetIds(),
   });
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, `infer ${params.capability}`);
+  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
   await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
@@ -262,7 +259,9 @@ function addImageGenerationOptions(command: Command): Command {
     .option("--json", "Output JSON", false);
 }
 
-function resolveImageGenerationOptions(opts: Record<string, unknown>, command: Command) {
+async function resolveImageGenerationOptions(opts: Record<string, unknown>, command: Command) {
+  const { resolveCapabilityAgentOption, parseOptionalPositiveInteger, parseOptionalTimeoutMs } =
+    await import("./shared.js");
   return {
     agent: resolveCapabilityAgentOption(command, opts.agent),
     model: opts.model as string | undefined,
@@ -294,40 +293,30 @@ export function registerImageCapabilityCommands(capability: Command): void {
     .description("Image generation and description")
     .option("--agent <id>", "Agent whose model and auth state should be used");
 
-  addImageGenerationOptions(
-    image
-      .command("generate")
-      .description("Generate images")
-      .requiredOption("--prompt <text>", "Prompt text"),
-  ).action(async (opts, command) => {
-    await runCommandWithRuntime(defaultRuntime, async () => {
-      const result = await runImageGenerate({
-        capability: "image.generate",
-        prompt: String(opts.prompt),
-        ...resolveImageGenerationOptions(opts, command),
-      });
-      emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-    });
-  });
-
-  addImageGenerationOptions(
-    image
-      .command("edit")
-      .description("Edit images with one or more input files")
-      .requiredOption("--file <path>", "Input file", collectOption)
-      .requiredOption("--prompt <text>", "Prompt text"),
-  ).action(async (opts, command) => {
-    await runCommandWithRuntime(defaultRuntime, async () => {
-      const files = Array.isArray(opts.file) ? (opts.file as string[]) : [String(opts.file)];
-      const result = await runImageGenerate({
-        capability: "image.edit",
-        prompt: String(opts.prompt),
-        file: files,
-        ...resolveImageGenerationOptions(opts, command),
-      });
-      emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-    });
-  });
+  for (const [commandName, description] of [
+    ["generate", "Generate images"],
+    ["edit", "Edit images with one or more input files"],
+  ] as const) {
+    const generate = image.command(commandName).description(description);
+    if (commandName === "edit") {
+      generate.requiredOption("--file <path>", "Input file", collectOption);
+    }
+    addImageGenerationOptions(generate.requiredOption("--prompt <text>", "Prompt text")).action(
+      async (opts, command) => {
+        await runCommandWithRuntime(defaultRuntime, async () => {
+          const result = await runImageGenerate({
+            capability: `image.${commandName}`,
+            prompt: String(opts.prompt),
+            ...(commandName === "edit"
+              ? { file: Array.isArray(opts.file) ? (opts.file as string[]) : [String(opts.file)] }
+              : {}),
+            ...(await resolveImageGenerationOptions(opts, command)),
+          });
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
+        });
+      },
+    );
+  }
 
   for (const [commandName, description] of [
     ["describe", "Describe one image file"],
@@ -351,6 +340,8 @@ export function registerImageCapabilityCommands(capability: Command): void {
       .option("--json", "Output JSON", false)
       .action(async (opts, command) => {
         await runCommandWithRuntime(defaultRuntime, async () => {
+          const { parseOptionalTimeoutMs, resolveCapabilityAgentOption } =
+            await import("./shared.js");
           const result = await runImageDescribe({
             capability: `image.${commandName}`,
             files: multiple ? (opts.file as string[]) : [String(opts.file)],
@@ -367,7 +358,11 @@ export function registerImageCapabilityCommands(capability: Command): void {
   registerLocalProvidersCommand(
     image,
     "List image generation providers",
-    (cfg, agentId) => {
+    async (cfg, agentId) => {
+      const { providerHasGenericConfig, resolveSelectedProviderFromModelRef } =
+        await import("./shared.js");
+      const { listRuntimeImageGenerationProviders } =
+        await import("../../image-generation/runtime.js");
       const selectedProvider = resolveSelectedProviderFromModelRef(
         resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
       );

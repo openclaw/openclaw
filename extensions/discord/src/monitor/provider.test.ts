@@ -189,13 +189,13 @@ describe("monitorDiscordProvider", () => {
   const getConstructedClientOptions = (): {
     clientId?: string;
     eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-    requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
+    requestOptions?: { timeout?: number; maxQueueSize?: number };
   } => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     return firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
       clientId?: string;
       eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-      requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
+      requestOptions?: { timeout?: number; maxQueueSize?: number };
     };
   };
 
@@ -1159,7 +1159,6 @@ describe("monitorDiscordProvider", () => {
     expect(clientDeployCommandsMock).toHaveBeenCalledWith({ mode: "reconcile" });
     const requestOptions = getConstructedClientOptions().requestOptions;
     expect(requestOptions?.timeout).toBe(15_000);
-    expect(requestOptions?.runtimeProfile).toBe("persistent");
     expect(requestOptions?.maxQueueSize).toBe(1000);
     expect(getConstructedClientOptions().eventQueue?.listenerTimeout).toBe(120_000);
   });

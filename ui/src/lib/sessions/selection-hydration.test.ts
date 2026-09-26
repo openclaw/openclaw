@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   createAgentSelectionCapability,
@@ -115,7 +115,7 @@ describe("session selection hydration", () => {
           event: "sessions.changed",
           payload: { agentId: "writer", reason: "create" },
         });
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         if (recover) {
           subscription.resolve({ subscribed: false });
           await vi.advanceTimersByTimeAsync(1_000);

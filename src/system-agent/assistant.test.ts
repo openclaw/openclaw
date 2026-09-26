@@ -60,6 +60,13 @@ describe("OpenClaw assistant", () => {
     expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).not.toMatch(/\bask for secrets?\b/iu);
   });
 
+  it.each([
+    ["fallback planner", SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT],
+    ["primary agent loop", buildSystemAgentSystemPrompt()],
+  ])("keeps normal-agent slash commands out of %s", (_name, prompt) => {
+    expect(prompt).toContain("cannot run normal-agent slash commands such as `/codex`");
+    expect(prompt).toContain("never that the task, conversation, or work has already transferred");
+  });
   it("keeps remote Gateway mode outside both hosted chat planners", () => {
     for (const prompt of [SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT, buildSystemAgentSystemPrompt()]) {
       expect(prompt).toContain("running the Gateway on another machine");

@@ -16,7 +16,7 @@ import { onTimer } from "../service/timer-scheduler.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { readCronTaskRunHistoryPage } from "../task-run-history.js";
-import type { CronJob } from "../types.js";
+import type { CronStoredJob } from "../types.js";
 import {
   getChannelPluginMock,
   loadRunCronIsolatedAgentTurn,
@@ -48,20 +48,64 @@ afterEach(() => {
 });
 
 describe("scheduled account policy outcomes", () => {
-  it.each([
+  it.each<{
+    name: string;
+    accountId?: string;
+    toolsAllow?: string[];
+    fails: boolean;
+    ownerSessionKey?: string;
+    callerOrigin?: NonNullable<CronStoredJob["toolsAllowProvenance"]>["callerOrigin"];
+  }>([
     { name: "removed named account", accountId: "removed", toolsAllow: ["read"], fails: true },
     { name: "configured named account", accountId: "work", toolsAllow: ["read"], fails: false },
     { name: "default account", accountId: "default", toolsAllow: ["read"], fails: false },
     { name: "legacy accountless cap", accountId: undefined, toolsAllow: ["read"], fails: false },
     { name: "legacy capless job", accountId: undefined, toolsAllow: undefined, fails: false },
     { name: "intentional no-tool job", accountId: "work", toolsAllow: [], fails: false },
+    {
+      name: "configured DM account without delivery",
+      accountId: "work",
+      toolsAllow: ["read"],
+      fails: false,
+      ownerSessionKey: "agent:main:whatsapp:direct:sender",
+      callerOrigin: { kind: "external", channel: "whatsapp" },
+    },
+    {
+      name: "removed DM account without delivery",
+      accountId: "removed",
+      toolsAllow: ["read"],
+      fails: true,
+      ownerSessionKey: "agent:main:whatsapp:direct:sender",
+      callerOrigin: { kind: "external", channel: "whatsapp" },
+    },
+    {
+      name: "DM account without creator origin",
+      accountId: "work",
+      toolsAllow: ["read"],
+      fails: true,
+      ownerSessionKey: "agent:main:whatsapp:direct:sender",
+    },
+    {
+      name: "DM account with malformed creator origin",
+      accountId: "work",
+      toolsAllow: ["read"],
+      fails: true,
+      ownerSessionKey: "agent:main:whatsapp:direct:sender",
+      callerOrigin: { kind: "external", channel: "" },
+    },
   ])(
     "records $name through scheduler and history",
-    async ({ name, accountId, toolsAllow, fails }) => {
+    async ({
+      name,
+      accountId,
+      toolsAllow,
+      fails,
+      ownerSessionKey = "agent:main:whatsapp:group:team",
+      callerOrigin,
+    }) => {
       const { storePath } = fixtures.makeStorePath();
       const cfg: OpenClawConfig = { channels: { whatsapp: { accounts: { work: {} } } } };
-      const ownerSessionKey = "agent:main:whatsapp:group:team";
-      const job: CronJob = {
+      const job: CronStoredJob = {
         ...createDueIsolatedJob({
           id: name.replaceAll(" ", "-"),
           nowMs: Date.now(),
@@ -80,6 +124,15 @@ describe("scheduled account policy outcomes", () => {
           ownerSessionKey,
           ownerAccountId: accountId ?? "removed",
         },
+        ...(callerOrigin
+          ? {
+              toolsAllowProvenance: {
+                version: 1,
+                source: "final-executable-surface",
+                callerOrigin,
+              },
+            }
+          : {}),
       };
       await saveCronStore(storePath, { version: 1, jobs: [job] });
       const events: CronEvent[] = [];
@@ -123,8 +176,7 @@ describe("scheduled account policy outcomes", () => {
         ]);
         if (fails) {
           const reason = persisted?.state.lastError;
-          expect(reason).toContain('Scheduled account "removed" is unavailable');
-          expect(reason).toContain("Re-add");
+          expect(reason).toContain(`Scheduled account "${accountId}" is unavailable`);
           expect(history.entries[0]?.error).toBe(reason);
           expect(history.entries[0]?.diagnostics?.summary).toContain(reason);
           expect(persisted?.state.lastDiagnosticSummary).toContain(reason);

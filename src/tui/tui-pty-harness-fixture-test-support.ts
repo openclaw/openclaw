@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { transform } from "esbuild";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { TUI_PTY_FALLBACK_FIXTURE } from "./tui-fallback-fixture-test-support.js";
 import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
@@ -11,11 +12,17 @@ import {
   waitForFixtureLogEntry,
   type FixtureLogEntry,
 } from "./tui-pty-harness-assertion-test-support.js";
-import { TUI_PTY_RECONNECT_FIXTURE } from "./tui-pty-reconnect-fixture-test-support.js";
+import {
+  createTuiReconnectRelease,
+  TUI_PTY_RECONNECT_FIXTURE,
+} from "./tui-pty-reconnect-fixture-test-support.js";
 import { TUI_PTY_RENDERING_FIXTURE_SCRIPT } from "./tui-pty-rendering-test-support.js";
 import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
 import { tuiPtyRuntimeEntrypoints } from "./tui-pty-runtime-test-support.js";
-import { TUI_PTY_STARTUP_SESSION_FIXTURE } from "./tui-pty-startup-session-fixture-test-support.js";
+import {
+  createTuiStartupRelease,
+  TUI_PTY_STARTUP_SESSION_FIXTURE,
+} from "./tui-pty-startup-session-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
 import { TUI_PTY_TASK_FIXTURE } from "./tui-pty-task-fixture-test-support.js";
 import { startRuntimePty, type PtyRun } from "./tui-pty-test-support.js";
@@ -33,16 +40,21 @@ export async function disposeActiveTuiFixtures(): Promise<void> {
 }
 
 export async function startTuiFixture(
-  opts: { env?: NodeJS.ProcessEnv; execPath?: string; holdStartupHistory?: boolean } = {},
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    execPath?: string;
+    holdStartupHistory?: boolean;
+    holdSessionDescription?: boolean;
+    holdReconnect?: boolean;
+  } = {},
 ) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
   const configPath = path.join(tempDir, "openclaw.json");
   await writeFile(configPath, "{}\n");
   const scriptPath = await writeTuiPtyFixtureScript(tempDir);
   const logPath = path.join(tempDir, "fixture-log.jsonl");
-  const startupHistoryReleasePath = opts.holdStartupHistory
-    ? path.join(tempDir, "startup-history.release")
-    : undefined;
+  const startupRelease = createTuiStartupRelease(tempDir, opts);
+  const reconnectRelease = createTuiReconnectRelease(tempDir, opts.holdReconnect);
   const execPath = opts.execPath ?? process.execPath;
   const run = await startRuntimePty(
     execPath,
@@ -56,36 +68,22 @@ export async function startTuiFixture(
         OPENCLAW_TUI_PTY_LOG_PATH: logPath,
         NO_COLOR: undefined,
         ...opts.env,
-        OPENCLAW_TUI_PTY_STARTUP_RELEASE_PATH: startupHistoryReleasePath,
+        ...startupRelease.env,
+        ...reconnectRelease.env,
       },
       exitTimeoutMs: EXIT_TIMEOUT_MS,
       outputTimeoutMs: OUTPUT_TIMEOUT_MS,
     },
   );
 
-  let releaseStartupHistoryPromise: Promise<void> | undefined;
-  const releaseStartupHistory = () => {
-    releaseStartupHistoryPromise ??= startupHistoryReleasePath
-      ? writeFile(startupHistoryReleasePath, "")
-      : Promise.resolve();
-    return releaseStartupHistoryPromise;
-  };
-  if (startupHistoryReleasePath) {
-    const dispose = run.dispose;
-    // Suite cleanup must release held initialization even when its test never runs.
-    run.dispose = async () => {
-      try {
-        await releaseStartupHistory();
-      } finally {
-        await dispose();
-      }
-    };
-  }
+  startupRelease.wrapDispose(run);
+  reconnectRelease.wrapDispose(run);
 
   return {
     run,
     logPath,
-    releaseStartupHistory,
+    releaseStartup: startupRelease.releaseStartup,
+    releaseReconnect: reconnectRelease.releaseReconnect,
     waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
       await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
     cleanup: async () => {
@@ -96,19 +94,20 @@ export async function startTuiFixture(
 }
 
 export async function writeTuiPtyFixtureScript(dir: string) {
-  // Temp files sit outside the repo package scope; .mts preserves the ESM contract under tsx.
-  const scriptPath = path.join(dir, "run-tui-pty-fixture.mts");
-  const tuiModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.tui).href;
+  const tuiUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.tui);
+  const prepared = tuiUrl.pathname.endsWith(".js");
+  // Direct source runs retain TSX; prepared runs compile this final generated fixture before launch.
+  const scriptPath = path.join(dir, `run-tui-pty-fixture.${prepared ? "mjs" : "mts"}`);
+  const tuiModuleUrl = tuiUrl.href;
   const payloadsModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.embeddedPayloads).href;
   const replyPayloadModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.replyPayload).href;
   const outboundPayloadsModuleUrl = resolveRuntimeWorkerUrl(
     tuiPtyRuntimeEntrypoints.outboundPayloads,
   ).href;
   const tuiBackendTypeUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui-backend.ts")).href;
-  await writeFile(
-    scriptPath,
-    `
-      import { appendFileSync, existsSync, watchFile, unwatchFile } from "node:fs";
+  const source = `
+      import { appendFileSync, existsSync, watch, watchFile, unwatchFile } from "node:fs";
+      import { dirname } from "node:path";
       import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
       import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
       import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
@@ -202,6 +201,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           thinkingLevels,
         };
       }
+
+      ${TUI_PTY_STARTUP_SESSION_FIXTURE.sessionInventory}
 
       ${TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT}
       ${TUI_PTY_ASSISTANT_FIXTURE_SCRIPT}
@@ -522,37 +523,31 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           };
         }
 
+        async describeSession(opts: Parameters<TuiBackend["describeSession"]>[0]) {
+          record("describeSession", opts);
+          ${TUI_PTY_STARTUP_SESSION_FIXTURE.describeSessionDelay}
+          const session = fixtureSessions().find(({ key }) =>
+            key === opts.sessionKey || ("agent:main:" + key) === opts.sessionKey,
+          );
+          return { session: session ?? null, defaults: sessionDefaults() };
+        }
+
         async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]) {
-          ${TUI_PTY_STARTUP_SESSION_FIXTURE.listSessionsSetup}
           record("listSessions", {
             ...opts,
             purpose: opts?.includeDerivedTitles ? "picker" : "refresh",
           });
-          ${TUI_PTY_STARTUP_SESSION_FIXTURE.listSessionsDelay}
-          const sessions = enablePickerFixture
-            ? [
-                sessionEntry("main"),
-                {
-                  ...sessionEntry(pickerSessionKey),
-                  derivedTitle: pickerSessionTitle,
-                  lastMessagePreview: pickerSessionPreview,
-                },
-              ]
-            : [];
-          const visibleSessions = sessions.filter(
-            (session) => session.key !== "global" || opts?.includeGlobal === true,
-          );
+          const sessions = fixtureSessions().filter((session) =>
+            (session.key !== "global" || opts?.includeGlobal === true) &&
+            (session.key !== "unknown" || opts?.includeUnknown === true) &&
+            (!opts?.search || session.key.includes(opts.search) || session.label?.includes(opts.search)),
+          ).slice(0, opts?.limit);
           return {
             ts: Date.now(),
             path: "",
-            count: visibleSessions.length,
-            sessions: visibleSessions,
-            defaults: {
-              model: currentModel,
-              modelProvider: "fixture-provider",
-              contextTokens: 128,
-              thinkingLevels,
-            },
+            count: sessions.length,
+            sessions,
+            defaults: sessionDefaults(),
           };
         }
 
@@ -693,7 +688,10 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         console.error(error);
         process.exitCode = 1;
       });
-    `,
+    `;
+  await writeFile(
+    scriptPath,
+    prepared ? (await transform(source, { loader: "ts", format: "esm" })).code : source,
     "utf8",
   );
   return scriptPath;

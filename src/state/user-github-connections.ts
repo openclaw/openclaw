@@ -26,7 +26,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
-import type { UserProfilesDatabase } from "./user-profiles-schema.js";
+import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 const tokenPair = z.strictObject({
   accessToken: secret,

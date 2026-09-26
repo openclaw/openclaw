@@ -33,6 +33,7 @@ export function createStateDatabaseRetainer(
     capture(pathname: string): { assertCurrent(): void };
     retire(database: OpenClawStateDatabase, retireAdmission: boolean): void;
     retainFailed(database: OpenClawStateDatabase): void;
+    touch(database: OpenClawStateDatabase): void;
   },
 ) {
   const retain = (database: OpenClawStateDatabase, readOnly = false) => {
@@ -98,7 +99,10 @@ export function createStateDatabaseRetainer(
         // Failed schema admission must not transfer a maintenance-owned handle.
         observeOpenClawDatabaseMaintenanceResource(database.db);
       },
-      release: () => reference.release(),
+      release() {
+        reference.release();
+        operations.touch(database);
+      },
     };
   };
   return {

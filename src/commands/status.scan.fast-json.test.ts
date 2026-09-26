@@ -1,6 +1,7 @@
 // Status scan fast-json tests cover scan defaults, memory config, and JSON-safe status payloads.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import {
   applyStatusScanDefaults,
   createStatusMemorySearchConfig,
@@ -71,12 +72,14 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(performance, "now").mockReturnValue(0);
   configureFastJsonStatus();
   originalForceStderr = loggingStateRef.forceConsoleToStderr;
   loggingStateRef.forceConsoleToStderr = false;
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   loggingStateRef.forceConsoleToStderr = originalForceStderr;
 });
 
@@ -84,7 +87,7 @@ describe("scanStatusJsonFast", () => {
   it("does not preload configured channel plugins for the lean JSON path", async () => {
     mocks.hasConfiguredChannels.mockReturnValue(true);
 
-    await scanStatusJsonFast({}, {} as never);
+    await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
 
     expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(
       createStatusMemorySearchConfig(),
@@ -112,7 +115,7 @@ describe("scanStatusJsonFast", () => {
       configDiagnostics,
     });
 
-    const result = await scanStatusJsonFast({}, {} as never);
+    const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
 
     expect(result.configDiagnostics).toEqual(configDiagnostics);
   });
@@ -142,19 +145,22 @@ describe("scanStatusJsonFast", () => {
       } as never,
     });
 
-    await scanStatusJsonFast({}, {} as never);
+    await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
 
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalled();
   });
 
   it.each([
-    { opts: {}, expected: 1000 },
+    { opts: {}, expected: 60_000 },
     { opts: { timeoutMs: 1500 }, expected: 1500 },
-    { opts: { all: true }, expected: 5000 },
+    { opts: { all: true }, expected: 60_000 },
     { opts: { all: true, timeoutMs: 700 }, expected: 700 },
   ])("bounds gateway secret resolution to $expected ms for $opts", async ({ opts, expected }) => {
-    await scanStatusJsonFast(opts, {} as never);
+    await scanStatusJsonFast(
+      { ...opts, ...createStatusGatewayProbeBudget(opts.timeoutMs) },
+      {} as never,
+    );
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
       expect.objectContaining({ gatewaySecretResolveTimeoutMs: expected }),
     );
@@ -163,7 +169,7 @@ describe("scanStatusJsonFast", () => {
   it("skips plugin compatibility loading even when configured channels are present", async () => {
     mocks.hasConfiguredChannels.mockReturnValue(true);
 
-    await scanStatusJsonFast({}, {} as never);
+    await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
 
     expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
   });
@@ -177,7 +183,10 @@ describe("scanStatusJsonFast", () => {
     };
     mocks.buildPluginCompatibilityNotices.mockReturnValue([notice]);
 
-    const result = await scanStatusJsonFast({ all: true }, {} as never);
+    const result = await scanStatusJsonFast(
+      { ...createStatusGatewayProbeBudget(), all: true },
+      {} as never,
+    );
 
     expect(mocks.buildPluginCompatibilityNotices).toHaveBeenCalledWith({
       config: createStatusMemorySearchConfig(),
@@ -188,7 +197,7 @@ describe("scanStatusJsonFast", () => {
   it("keeps default fast JSON update scans local-only", async () => {
     mocks.hasConfiguredChannels.mockReturnValue(true);
 
-    await scanStatusJsonFast({ timeoutMs: 1234 }, {} as never);
+    await scanStatusJsonFast(createStatusGatewayProbeBudget(1234), {} as never);
 
     expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -202,7 +211,7 @@ describe("scanStatusJsonFast", () => {
   it("restores registry-backed update checks and remote git fetches when --all is requested", async () => {
     mocks.hasConfiguredChannels.mockReturnValue(true);
 
-    await scanStatusJsonFast({ all: true }, {} as never);
+    await scanStatusJsonFast({ ...createStatusGatewayProbeBudget(), all: true }, {} as never);
 
     expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -217,16 +226,16 @@ describe("scanStatusJsonFast", () => {
     mocks.hasConfiguredChannels.mockReturnValue(true);
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
-    await scanStatusJsonFast({}, {} as never);
+    await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
 
-    expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+    expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("honors explicit gateway probe timeouts on the lean JSON path", async () => {
     mocks.hasConfiguredChannels.mockReturnValue(true);
 
-    await scanStatusJsonFast({ timeoutMs: 5000 }, {} as never);
+    await scanStatusJsonFast(createStatusGatewayProbeBudget(5000), {} as never);
 
     expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 5000 }));
   });
@@ -235,7 +244,7 @@ describe("scanStatusJsonFast", () => {
     mocks.hasConfiguredChannels.mockReturnValue(true);
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
-    await scanStatusJsonFast({ all: true }, {} as never);
+    await scanStatusJsonFast({ ...createStatusGatewayProbeBudget(), all: true }, {} as never);
 
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -248,7 +257,7 @@ describe("scanStatusJsonFast", () => {
   it("keeps the fast JSON summary off the channel plugin summary path", async () => {
     mocks.hasConfiguredChannels.mockReturnValue(true);
 
-    await scanStatusJsonFast({}, {} as never);
+    await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
 
     expect(mocks.getStatusSummary).toHaveBeenCalledOnce();
     const summaryOptions = firstCallArg(mocks.getStatusSummary, "status summary options") as {
@@ -258,7 +267,7 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("skips memory inspection for the lean status --json fast path", async () => {
-    const result = await scanStatusJsonFast({}, {} as never);
+    const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
 
     expect(result.memory).toBeNull();
     expect(mocks.hasConfiguredChannels).not.toHaveBeenCalled();
@@ -267,7 +276,10 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("restores memory inspection when --all is requested", async () => {
-    const result = await scanStatusJsonFast({ all: true }, {} as never);
+    const result = await scanStatusJsonFast(
+      { ...createStatusGatewayProbeBudget(), all: true },
+      {} as never,
+    );
 
     expect(result.memory).toStrictEqual({
       agentId: "main",
@@ -298,7 +310,7 @@ describe("scanStatusJsonFast", () => {
         NODE_ENV: undefined,
       },
       async () => {
-        await scanStatusJsonFast({}, {} as never);
+        await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
       },
     );
 
@@ -323,7 +335,7 @@ describe("scanStatusJsonFast", () => {
       summary: createStatusSummary({ linkChannel: { linked: false } }),
     });
 
-    await scanStatusJsonFast({}, {} as never);
+    await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
 
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
@@ -335,7 +347,7 @@ describe("scanStatusJsonFast", () => {
       url: "ws://127.0.0.1:18789",
       config: resolvedConfig,
       auth: {},
-      timeoutMs: 1000,
+      timeoutMs: 60_000,
       detailLevel: "presence",
     });
     expect(probeArgs.env).toBe(process.env);
@@ -356,7 +368,7 @@ describe("scanStatusJsonFast", () => {
         NODE_ENV: undefined,
       },
       async () => {
-        await scanStatusJsonFast({}, {} as never);
+        await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
       },
     );
 

@@ -18,6 +18,50 @@ afterAll(() => {
 });
 
 describe("applyPluginAutoEnable providers", () => {
+  it.each([
+    { label: "default", agents: { defaults: { decisionModel: "judge/fast" } } },
+    { label: "agent override", agents: { entries: { worker: { decisionModel: "judge/fast" } } } },
+  ])("activates a decision contract owner selected by $label", ({ agents }) => {
+    const result = applyPluginAutoEnable({
+      config: { agents, plugins: { allow: ["telegram"] } },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "decision-plugin",
+          channels: [],
+          origin: "bundled",
+          contracts: { decisionProviders: ["judge"] },
+        },
+      ]),
+    });
+    expect(result.config.plugins?.entries?.["decision-plugin"]?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "decision-plugin"]);
+    expect(result.autoEnabledReasons).toEqual({
+      "decision-plugin": ["judge decision provider selected"],
+    });
+  });
+
+  it.each([
+    { plugins: { enabled: false } },
+    { plugins: { entries: { "decision-plugin": { enabled: false } } } },
+    { plugins: { deny: ["decision-plugin"] } },
+  ])("keeps a selected decision provider disabled by explicit plugin policy: %j", ({ plugins }) => {
+    const result = applyPluginAutoEnable({
+      config: { agents: { defaults: { decisionModel: "judge/fast" } }, plugins },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "decision-plugin",
+          channels: [],
+          origin: "bundled",
+          contracts: { decisionProviders: ["judge"] },
+        },
+      ]),
+    });
+    expect(result.config.plugins?.entries?.["decision-plugin"]?.enabled).not.toBe(true);
+    expect(result.changes).toEqual([]);
+  });
+
   it("auto-enables provider auth plugins when profiles exist", () => {
     const result = applyPluginAutoEnable({
       config: {

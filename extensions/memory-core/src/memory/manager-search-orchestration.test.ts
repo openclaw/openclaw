@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
@@ -320,15 +321,14 @@ describe("memory index", () => {
     const manager = await getPersistentManager(
       createCfg({
         minScore: 0,
+        vectorEnabled: false,
       }),
     );
     await manager.sync({ reason: "test" });
 
     const fields = manager as unknown as {
       db: DatabaseSync;
-      ensureVectorReady: (dimensions?: number) => Promise<boolean>;
     };
-    fields.ensureVectorReady = async () => false;
     const insertChunk = fields.db.prepare(
       "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
@@ -342,7 +342,7 @@ describe("memory index", () => {
         `cancel-scan-hash-${index}`,
         "mock-embed",
         `fallback scan row ${index}`,
-        JSON.stringify([0, 1, 0, 0]),
+        encodeMemoryEmbedding([0, 1, 0, 0]),
         index,
       );
     }
@@ -367,11 +367,15 @@ describe("memory index", () => {
     const healthyResults = await manager.search("alpha");
     expect(healthyResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
 
-    fields.ensureVectorReady = async () => {
-      throw new Error("vector store unavailable");
-    };
-    const degradedResults = await manager.search("alpha");
-    expect(degradedResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+    const unavailable = vi
+      .spyOn(memoryCpuWorkerRuntime, "runMemoryVectorFallback")
+      .mockRejectedValueOnce(new Error("vector store unavailable"));
+    try {
+      const degradedResults = await manager.search("alpha");
+      expect(degradedResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+    } finally {
+      unavailable.mockRestore();
+    }
   });
 
   it("supplements thin strict FTS results for conversational queries", async () => {
@@ -661,10 +665,10 @@ describe("memory index", () => {
     const servingFields = manager as unknown as {
       dirty: boolean;
       memoryFullRetryDirty: boolean;
-      closeNativeMemoryWatchPairs: () => void;
+      fileWatcher: { closeNativeMemoryWatchPairs: () => void };
       awaitManagerIdle: () => Promise<void>;
     };
-    servingFields.closeNativeMemoryWatchPairs();
+    servingFields.fileWatcher.closeNativeMemoryWatchPairs();
 
     const sessionId = "automatic-maintenance-purge";
     const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");

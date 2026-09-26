@@ -1,6 +1,6 @@
 // Registry refresh helper shared by plugin config mutations that need post-write discovery repair.
 import { createConfigIO } from "../config/io.factory.js";
-import { createManagedRuntimeEnvBase } from "../config/io.read-helpers.js";
+import { createManagedRuntimeEnvBase } from "../config/io.runtime-env.js";
 import { formatConfigIssueSummary } from "../config/issue-format.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isGatewayPluginMetadataSnapshotActive } from "./current-plugin-metadata-state.js";

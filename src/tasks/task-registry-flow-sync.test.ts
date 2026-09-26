@@ -20,8 +20,9 @@ import {
 import {
   createInMemoryTaskRegistryStore,
   createInMemoryTaskFlowRegistryStore,
+  reconcileTaskFlowRestoreForTests,
 } from "../test-utils/task-registry-store.js";
-import { ensureTaskFlowRegistryReadyAsync } from "./task-flow-registry.js";
+import { ensureTaskFlowRegistryReadyAsync, readResidentTaskFlow } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { markTaskTerminalById } from "./task-registry-record-api.js";
 import type { TaskRegistryRestoreResult } from "./task-registry-restore.worker.js";
@@ -255,10 +256,12 @@ describe("restored task flow synchronization", () => {
             retried.resolve({ context, error: failure });
           }
         },
-        async withSnapshotAsync(_context, consume) {
+        async withSnapshotAsync(context, consume) {
           started.resolve();
           await release.promise;
-          return consume(first.result);
+          return consume(first.result, () =>
+            reconcileTaskFlowRestoreForTests(context, [flow.flowId]),
+          );
         },
       },
     });
@@ -269,7 +272,8 @@ describe("restored task flow synchronization", () => {
       configureTaskRegistryRuntime({
         store: {
           ...second.store,
-          withSnapshotAsync: async (_context, consume) => consume(second.result),
+          withSnapshotAsync: async (context, consume) =>
+            consume(second.result, () => reconcileTaskFlowRestoreForTests(context, [flow.flowId])),
         },
       });
     }
@@ -344,31 +348,24 @@ it.each(["live", "restored"] as const)(
       flows,
     );
     if (kind === "restored") {
-      vi.spyOn(store, "withSnapshotAsync").mockImplementation(async (_context, consume) =>
-        consume({
-          ...taskRestoreResult(store.loadSnapshot()),
-          flowSyncs: [
-            {
-              taskId: task.taskId,
-              flowId: flow.flowId,
-              kind: "result",
-              result: { ok: false, reason: "persist_failed", current },
-            },
-          ],
-        }),
+      vi.spyOn(store, "withSnapshotAsync").mockImplementation(async (context, consume) =>
+        consume(
+          {
+            ...taskRestoreResult(store.loadSnapshot()),
+            flowSyncs: [
+              {
+                taskId: task.taskId,
+                flowId: flow.flowId,
+                kind: "result",
+                result: { ok: false, reason: "persist_failed", current },
+              },
+            ],
+          },
+          () => reconcileTaskFlowRestoreForTests(context, [flow.flowId]),
+        ),
       );
     }
-    let published: TaskFlowRecord | undefined;
-    configureTaskFlowRegistryRuntime({
-      store: flows,
-      observers: {
-        onEvent(event) {
-          if (event.kind === "upserted" && event.flow.flowId === flow.flowId) {
-            published = event.flow;
-          }
-        },
-      },
-    });
+    configureTaskFlowRegistryRuntime({ store: flows });
     configureTaskRegistryRuntime({ store });
     const context = captureOpenClawStateWorkerContext();
     await ensureTaskFlowRegistryReadyAsync(context);
@@ -441,7 +438,7 @@ it.each(["live", "restored"] as const)(
       suspension?.release();
       await setImmediate();
       expect(enter).toHaveBeenCalledOnce();
-      expect(published).toMatchObject({ revision: 1, status: "succeeded" });
+      expect(readResidentTaskFlow(flow.flowId)).toMatchObject({ revision: 1, status: "succeeded" });
       expect.soft(retrySignal).toBeDefined();
       expect.soft(retrySignal).not.toBe(foreground.signal);
       expect.soft(retrySignal?.aborted).toBe(false);

@@ -112,9 +112,9 @@ function firstWsCallbacks(): { onError?: (err: Error) => void } {
   return callbacks as { onError?: (err: Error) => void };
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
-  cleanupFeishuMonitorStateForTests();
+  await cleanupFeishuMonitorStateForTests();
   vi.clearAllMocks();
 });
 

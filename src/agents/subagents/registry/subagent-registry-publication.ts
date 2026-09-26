@@ -15,7 +15,7 @@ export function publishSubagentRunChanges(keys?: readonly (string | undefined)[]
   }
   for (const sessionKey of new Set(keys)) {
     if (sessionKey) {
-      sessionChanges.emit({ sessionKey });
+      sessionChanges.emit({ sessionKey, scope: "runtime" });
     }
   }
 }

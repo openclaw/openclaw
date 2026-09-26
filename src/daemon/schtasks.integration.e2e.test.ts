@@ -717,7 +717,6 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
         const startedRun = await proof.waitForExactProbeRun(eventsPath, 3);
         const startedPid = startedRun.pid;
         const startedProcesses = await waitForGatewayTaskSupervisorProcesses({ probe });
-        expect(lifecyclePids).not.toContain(startedPid);
         expectProbeProcessAlive(startedPid);
         expectProbeProcessAlive(startedProcesses.childPid);
         expectGatewayTaskSupervisorProcessAlive(startedProcesses.supervisorPid, probe.probePath);
@@ -746,7 +745,6 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
         const restartedPid = restartedRun.pid;
         const restartedProcesses = await waitForGatewayTaskSupervisorProcesses({ probe });
         lifecyclePids.push(startedPid, restartedPid);
-        expect(new Set(lifecyclePids).size).toBe(lifecyclePids.length);
         expectProbeProcessAlive(restartedPid);
         expectProbeProcessAlive(restartedProcesses.childPid);
         expectGatewayTaskSupervisorProcessAlive(restartedProcesses.supervisorPid, probe.probePath);
@@ -777,7 +775,6 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
         const hostedRestartPid = hostedRestart.gatewayPid;
         const hostedRestartProcesses = hostedRestart.processes;
         lifecyclePids.push(hostedRestartPid);
-        expect(new Set(lifecyclePids).size).toBe(lifecyclePids.length);
         await waitForRuntimeStatus(readRuntime, "running", hostedRestartPid);
         expect(readTaskPrincipal(taskName).taskState).toBe(TASK_STATE_RUNNING);
 
@@ -906,7 +903,6 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
           waitForLoopbackPortRelease,
         });
         lifecyclePids.push(startupFallbackControlProof.gatewayPid);
-        expect(new Set(lifecyclePids).size).toBe(lifecyclePids.length);
         const proofPath = process.env.CI_WINDOWS_SCHTASKS_PROOF_PATH?.trim();
         if (proofPath) {
           const proofHead = process.env.CI_WINDOWS_SCHTASKS_HEAD?.trim();

@@ -2,6 +2,8 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import {
+  SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_CHARS,
+  SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_ITEMS,
   SYSTEM_AGENT_PLUGIN_ID_MAX_CHARS,
   SYSTEM_AGENT_PLUGIN_NAME_MAX_CHARS,
   SYSTEM_AGENT_SETTING_PATH_MAX_SEGMENTS,
@@ -19,6 +21,12 @@ export const SystemAgentWizardCancelSchema = closedObject({
   /** The visible step this action belongs to; stale controls must not affect a newer step. */
   stepId: NonEmptyString,
 });
+
+const PluginCapabilityNamesSchema = Type.Optional(
+  Type.Array(Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_CHARS }), {
+    maxItems: SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_ITEMS,
+  }),
+);
 
 /**
  * OpenClaw chat lets clients (macOS app onboarding, future UIs) hold the
@@ -57,6 +65,17 @@ export const SystemAgentChatParamsSchema = closedObject({
           }),
           name: Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_PLUGIN_NAME_MAX_CHARS }),
           installed: Type.Optional(Type.Boolean()),
+          declared: Type.Optional(
+            closedObject({
+              tools: PluginCapabilityNamesSchema,
+              providers: PluginCapabilityNamesSchema,
+              channels: PluginCapabilityNamesSchema,
+              contracts: PluginCapabilityNamesSchema,
+              skills: PluginCapabilityNamesSchema,
+              mcpServers: PluginCapabilityNamesSchema,
+              incomplete: Type.Optional(Type.Boolean()),
+            }),
+          ),
           setting: Type.Optional(
             closedObject({
               path: Type.Array(
@@ -112,6 +131,8 @@ export const SystemAgentChatQuestionSchema = closedObject({
 export const SystemAgentChatResultSchema = closedObject({
   sessionId: NonEmptyString,
   reply: NonEmptyString,
+  /** Passive caretaker welcome that a purpose-specific view may replace. Notices stay visible. */
+  optionalWelcome: Type.Optional(Type.Boolean()),
   /** The next reply is a hosted-wizard secret and clients must mask its input/echo. */
   sensitive: Type.Optional(Type.Boolean()),
   /** The hosted wizard will consume the next message as its current step answer. */

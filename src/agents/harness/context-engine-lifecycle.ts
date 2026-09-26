@@ -20,12 +20,13 @@ import { runWithPreparedMemoryPromptSection } from "../../plugins/memory-state.j
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
-import {
-  buildAfterTurnRuntimeContext,
-  buildAfterTurnRuntimeContextFromUsage,
-} from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
+
+export {
+  buildAfterTurnRuntimeContext as buildHarnessContextEngineRuntimeContext,
+  buildAfterTurnRuntimeContextFromUsage as buildHarnessContextEngineRuntimeContextFromUsage,
+} from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 
 function preparePreTurnRuntimeContext(
   runtimeContext: ContextEngineRuntimeContext | undefined,
@@ -366,24 +367,6 @@ function buildContextEngineConversationSnapshot(params: {
     messages: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
   };
-}
-
-/**
- * Build runtime context passed into harness context-engine hooks.
- */
-export function buildHarnessContextEngineRuntimeContext(
-  params: Parameters<typeof buildAfterTurnRuntimeContext>[0],
-): ContextEngineRuntimeContext {
-  return buildAfterTurnRuntimeContext(params);
-}
-
-/**
- * Build runtime context passed into harness context-engine hooks from usage data.
- */
-export function buildHarnessContextEngineRuntimeContextFromUsage(
-  params: Parameters<typeof buildAfterTurnRuntimeContextFromUsage>[0],
-): ContextEngineRuntimeContext {
-  return buildAfterTurnRuntimeContextFromUsage(params);
 }
 
 /**

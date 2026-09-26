@@ -2,6 +2,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
@@ -156,6 +157,45 @@ describe("getReplyFromConfig configOverride", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("rejects forged operator authority at the public SDK reply entry", async () => {
+    const assertCurrent = vi.fn();
+    const plain = { profileId: "guest", scopes: ["operator.admin"], assertCurrent };
+    const issued = createAdmittedRunOperatorAuthority(plain);
+    for (const operatorAuthority of [plain, { ...issued }]) {
+      const options = { runId: "forged-operator", operatorAuthority };
+      await expect(getReplyFromConfig(buildGetReplyCtx(), options, {})).rejects.toThrow(
+        "operator run authority must be issued by the host",
+      );
+    }
+    expect(assertCurrent).not.toHaveBeenCalled();
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(runPreparedReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("pins the issued operator source once through public reply option copies", async () => {
+    const issued = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+    });
+    let reads = 0;
+    const options = {
+      runId: "issued-operator",
+      get operatorAuthority() {
+        reads += 1;
+        return reads === 1 ? issued : { ...issued, scopes: ["operator.admin"] };
+      },
+    };
+    await expect(getReplyFromConfig(buildGetReplyCtx(), options, {})).resolves.toEqual({
+      text: "ok",
+    });
+    expect(reads).toBe(1);
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+      expect.objectContaining({ opts: expect.objectContaining({ operatorAuthority: issued }) }),
+    );
   });
 
   it("merges configOverride over fresh getRuntimeConfig()", async () => {

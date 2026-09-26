@@ -3,13 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
+import type {
+  PreparedEnvironmentSelection,
+  WorkerEnvironmentIntentInput,
+} from "./environment-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import type { PreparedEnvironmentSelection, WorkerEnvironmentIntentInput } from "./store.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
 const PROJECT_KEY = "a".repeat(64);
@@ -22,21 +26,22 @@ const assertCurrent = () => undefined;
 describe("prepared environment ownership", () => {
   let root: string;
   let database: OpenClawStateDatabase;
-  let environments: ReturnType<typeof createWorkerEnvironmentStore>;
+  let environments: Awaited<ReturnType<typeof createWorkerEnvironmentStore>>;
   let placements: ReturnType<typeof createWorkerSessionPlacementStore>;
   let nowMs: number;
 
-  const openStores = () => {
+  const openStores = async () => {
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    environments = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    environments = await createWorkerEnvironmentStore({ database, now: () => nowMs });
     placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   };
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-prepared-"));
     nowMs = 1_000;
-    openStores();
+    await openStores();
   });
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -69,9 +74,13 @@ describe("prepared environment ownership", () => {
       assertCurrent,
     });
   }
-  function ready() {
-    reserve();
-    environments.transition({ environmentId: "prepared-1", from: "requested", to: "provisioning" });
+  async function ready() {
+    await reserve();
+    await environments.transition({
+      environmentId: "prepared-1",
+      from: "requested",
+      to: "provisioning",
+    });
     return environments.transition({
       environmentId: "prepared-1",
       from: "provisioning",
@@ -137,8 +146,8 @@ describe("prepared environment ownership", () => {
     });
   }
 
-  it("admits a build at zero ready target and preserves its purpose on reopen", () => {
-    expect(build()?.preparation?.purpose).toBe("build");
+  it("admits a build at zero ready target and preserves its purpose on reopen", async () => {
+    expect((await build())?.preparation?.purpose).toBe("build");
     expect(
       environments.isPreparedIntentWithinCapacity({
         environmentId: "build-1",
@@ -146,16 +155,17 @@ describe("prepared environment ownership", () => {
         maxTotal: 1,
       }),
     ).toBe(true);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    openStores();
+    await openStores();
     expect(environments.get("build-1")?.preparation?.purpose).toBe("build");
-    expect(build("build-2")).toEqual(environments.get("build-1"));
+    expect(await build("build-2")).toEqual(environments.get("build-1"));
     expect(environments.list()).toHaveLength(1);
   });
 
-  it("reuses an existing reserve for a build before checking full capacity", () => {
-    const original = reserve()!;
-    expect(build()).toEqual({
+  it("reuses an existing reserve for a build before checking full capacity", async () => {
+    const original = (await reserve())!;
+    expect(await build()).toEqual({
       ...original,
       preparation: { ...original.preparation, purpose: "build" },
     });
@@ -169,37 +179,42 @@ describe("prepared environment ownership", () => {
     expect(environments.list()).toHaveLength(1);
   });
 
-  it("counts unfinished builds and unresolved teardown against global capacity", () => {
-    const original = build()!;
-    expect(build("disabled", PREPARATION_KEY, 0)).toBeUndefined();
-    expect(build("other-key", "e".repeat(64))).toBeUndefined();
-    environments.requestDestroy({ environmentId: original.environmentId, state: original.state });
-    expect(build("retry")).toBeUndefined();
-    environments.transition({
+  it("counts unfinished builds and unresolved teardown against global capacity", async () => {
+    const original = (await build())!;
+    expect(await build("disabled", PREPARATION_KEY, 0)).toBeUndefined();
+    expect(await build("other-key", "e".repeat(64))).toBeUndefined();
+    await environments.requestDestroy({
+      environmentId: original.environmentId,
+      state: original.state,
+    });
+    expect(await build("retry")).toBeUndefined();
+    await environments.transition({
       environmentId: original.environmentId,
       from: "requested",
       to: "failed",
     });
-    expect(build("retry")?.environmentId).toBe("retry");
+    expect((await build("retry"))?.environmentId).toBe("retry");
   });
 
-  it("adds the purpose column to legacy rows without changing their reserve lifecycle", () => {
-    const original = reserve()!;
+  it("adds the purpose column to legacy rows without changing their reserve lifecycle", async () => {
+    const original = (await reserve())!;
     database.db.exec("ALTER TABLE worker_environments DROP COLUMN preparation_purpose");
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    openStores();
+    await openStores();
     expect(environments.get(original.environmentId)).toEqual(original);
     expect(
       database.db.prepare("SELECT preparation_purpose FROM worker_environments").get(),
     ).toEqual({ preparation_purpose: null });
     expect(database.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    openStores();
+    await openStores();
     expect(environments.get(original.environmentId)?.preparation?.purpose).toBe("reserve");
   });
 
-  it("assigns once across store instances and retains consumption after placement deletion and reopen", () => {
-    ready();
+  it("assigns once across store instances and retains consumption after placement deletion and reopen", async () => {
+    await ready();
     const first = selection();
     const second = selection("session-2");
     const assigned = placements.bindPreparedEnvironment(first)!;
@@ -216,8 +231,9 @@ describe("prepared environment ownership", () => {
       expectedState: "failed",
       expectedGeneration: failed.generation,
     });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    openStores();
+    await openStores();
     expect(environments.get("prepared-1")?.preparation?.consumedAtMs).toBe(1_000);
     expect(placements.bindPreparedEnvironment(second)).toBeUndefined();
     expect(placements.get(second.sessionId)?.state).toBe("requested");
@@ -225,17 +241,17 @@ describe("prepared environment ownership", () => {
 
   it.each(["claim-first", "expire-first"] as const)(
     "excludes claim and expiry in %s order",
-    (order) => {
-      ready();
+    async (order) => {
+      await ready();
       const request = selection();
       if (order === "claim-first") {
         expect(placements.bindPreparedEnvironment(request)?.state).toBe("provisioning");
         nowMs = 2_000;
-        expect(expiry()).toBeUndefined();
+        expect(await expiry()).toBeUndefined();
         expect(environments.get("prepared-1")?.destroyRequestedAtMs).toBeNull();
       } else {
         nowMs = 2_000;
-        expect(expiry()?.destroyRequestedAtMs).toBe(2_000);
+        expect((await expiry())?.destroyRequestedAtMs).toBe(2_000);
         expect(placements.bindPreparedEnvironment(request)).toBeUndefined();
         expect(environments.get("prepared-1")?.preparation?.consumedAtMs).toBeNull();
       }
@@ -244,41 +260,47 @@ describe("prepared environment ownership", () => {
 
   it.each(["test-provider", "replacement-provider"])(
     "keeps an old generation and uncertain cleanup inside project capacity for %s",
-    (providerId) => {
-      reserve();
-      expect(reserve("prepared-2", "e".repeat(64), 4, providerId)).toBeUndefined();
+    async (providerId) => {
+      await reserve();
+      expect(await reserve("prepared-2", "e".repeat(64), 4, providerId)).toBeUndefined();
       expect(
-        environments.requestPreparedDestroy({
-          environmentId: "prepared-1",
-          ownerEpoch: 0,
-          preparationKey: PREPARATION_KEY,
-          reason: "invalidated",
-          assertCurrent,
-        })?.destroyRequestedAtMs,
+        (
+          await environments.requestPreparedDestroy({
+            environmentId: "prepared-1",
+            ownerEpoch: 0,
+            preparationKey: PREPARATION_KEY,
+            reason: "invalidated",
+            assertCurrent,
+          })
+        )?.destroyRequestedAtMs,
       ).toBe(1_000);
-      expect(reserve("prepared-2", "e".repeat(64), 4, providerId)).toBeUndefined();
-      environments.transition({ environmentId: "prepared-1", from: "requested", to: "failed" });
-      expect(reserve("prepared-2", "e".repeat(64), 4, providerId)?.state).toBe("requested");
+      expect(await reserve("prepared-2", "e".repeat(64), 4, providerId)).toBeUndefined();
+      await environments.transition({
+        environmentId: "prepared-1",
+        from: "requested",
+        to: "failed",
+      });
+      expect((await reserve("prepared-2", "e".repeat(64), 4, providerId))?.state).toBe("requested");
     },
   );
 
   it.each(["test-provider", "replacement-provider"])(
     "counts consumed workers awaiting cleanup against the reserve cap for %s",
-    (providerId) => {
-      ready();
+    async (providerId) => {
+      await ready();
       placements.bindPreparedEnvironment(selection());
-      environments.requestDestroy({ environmentId: "prepared-1", state: "ready" });
-      expect(reserve("prepared-2", PREPARATION_KEY, 4, providerId)).toBeUndefined();
+      await environments.requestDestroy({ environmentId: "prepared-1", state: "ready" });
+      expect(await reserve("prepared-2", PREPARATION_KEY, 4, providerId)).toBeUndefined();
     },
   );
 
-  it("enforces the global cap, zero capacity, expiry and immutable intent replay", () => {
-    expect(reserve("disabled", PREPARATION_KEY, 0)).toBeUndefined();
-    const original = reserve();
-    expect(reserve()).toEqual(original);
-    expect(() => reserve("prepared-1", "e".repeat(64))).toThrow("identity changed");
+  it("enforces the global cap, zero capacity, expiry and immutable intent replay", async () => {
+    expect(await reserve("disabled", PREPARATION_KEY, 0)).toBeUndefined();
+    const original = await reserve();
+    expect(await reserve()).toEqual(original);
+    await expect(reserve("prepared-1", "e".repeat(64))).rejects.toThrow("identity changed");
     expect(
-      environments.ensurePreparedIntent({
+      await environments.ensurePreparedIntent({
         intent: { ...intent("other"), profileId: "other-profile" },
         projectKey: PROJECT_KEY,
         target: 1,
@@ -287,7 +309,7 @@ describe("prepared environment ownership", () => {
       }),
     ).toBeUndefined();
     nowMs = 2_000;
-    expect(reserve("expired", PREPARATION_KEY, 4)).toBeUndefined();
+    expect(await reserve("expired", PREPARATION_KEY, 4)).toBeUndefined();
   });
 
   it.each([
@@ -299,16 +321,16 @@ describe("prepared environment ownership", () => {
     { profileId: "other" },
     { sessionKey: "agent:main:other" },
     { expectedGeneration: 999 },
-  ])("rejects stale selection without consuming capacity: %j", (changed) => {
-    ready();
+  ])("rejects stale selection without consuming capacity: %j", async (changed) => {
+    await ready();
     const request = selection();
     expect(placements.bindPreparedEnvironment({ ...request, ...changed })).toBeUndefined();
     expect(environments.get("prepared-1")?.preparation?.consumedAtMs).toBeNull();
     expect(placements.get(request.sessionId)?.state).toBe("requested");
   });
 
-  it("rechecks live authority before consuming and atomically rolls back a rejected assignment", () => {
-    ready();
+  it("rechecks live authority before consuming and atomically rolls back a rejected assignment", async () => {
+    await ready();
     const request = selection();
     let assertions = 0;
     expect(() =>
@@ -327,14 +349,15 @@ describe("prepared environment ownership", () => {
 
   it.each(["immediate", "after reserve expiry"] as const)(
     "requires the exact reservation for %s attachment and cannot recycle its rollback",
-    (timing) => {
-      ready();
+    async (timing) => {
+      await ready();
       const request = selection();
       const assigned = placements.bindPreparedEnvironment(request)!;
       if (timing === "after reserve expiry") {
         nowMs = 2_001;
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
-        openStores();
+        await openStores();
       }
       const syncing = placements.transition({
         sessionId: request.sessionId,
@@ -358,27 +381,27 @@ describe("prepared environment ownership", () => {
           },
         },
       };
-      expect(() => environments.transition(attach)).toThrow("exact placement reservation");
+      await expect(environments.transition(attach)).rejects.toThrow("exact placement reservation");
       const binding = { ...request, generation: syncing.generation };
-      expect(() =>
+      await expect(
         environments.transition({ ...attach, placementBinding: { ...binding, generation: 0 } }),
-      ).toThrow("exact placement reservation");
-      const attached = environments.transition({ ...attach, placementBinding: binding });
+      ).rejects.toThrow("exact placement reservation");
+      const attached = await environments.transition({ ...attach, placementBinding: binding });
       expect(attached.state).toBe("attached");
-      const idle = environments.transition({
+      const idle = await environments.transition({
         environmentId: "prepared-1",
         from: "attached",
         to: "idle",
       });
       expect(idle.preparation?.consumedAtMs).toBe(1_000);
-      expect(() =>
+      await expect(
         environments.transition({
           ...attach,
           from: "idle",
           expectedOwnerEpoch: idle.ownerEpoch,
           placementBinding: binding,
         }),
-      ).toThrow("exact placement reservation");
+      ).rejects.toThrow("exact placement reservation");
     },
   );
 });

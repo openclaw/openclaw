@@ -279,7 +279,7 @@ describe("worker launch capabilities", () => {
           : primary === "overload"
             ? ({ reason: "overloaded", status: 503 } as const)
             : primary === "http-507"
-              ? ({ reason: "timeout", status: 507 } as const)
+              ? ({ reason: "server_error", status: 507 } as const)
               : undefined;
       const primaryError = providerFailure
         ? primary === "http-507"

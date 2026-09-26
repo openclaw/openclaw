@@ -118,7 +118,10 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     });
   });
 
-  it("holds chunk-split tagged reasoning until its close tag is complete", () => {
+  it.each([
+    { name: "tag name", chunks: ["<thi", "nking>Private "] },
+    { name: "quoted attribute", chunks: ['<thinking note="', "x>y", '">Private '] },
+  ])("holds reasoning with a split $name until its close tag is complete", ({ chunks }) => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
     const pushText = (text: string) =>
       parser.push(
@@ -131,10 +134,11 @@ describe("createCliJsonlStreamingParser reasoning", () => {
         })}\n`,
       );
 
-    pushText("<thi");
-    pushText("nking>Private ");
-    expect(assistant).toEqual([]);
-    expect(thinking).toEqual([]);
+    for (const chunk of chunks) {
+      pushText(chunk);
+      expect(assistant).toEqual([]);
+      expect(thinking).toEqual([]);
+    }
     pushText("analysis.</think");
     expect(assistant).toEqual([]);
     expect(thinking).toEqual([]);
@@ -148,6 +152,7 @@ describe("createCliJsonlStreamingParser reasoning", () => {
 
   it("streams rejected angle prefixes while valid split reasoning stays buffered", () => {
     const visible = createClaudeTaggedReasoningHarness();
+    const split = createClaudeTaggedReasoningHarness();
     const mixed = createClaudeTaggedReasoningHarness();
     const tagged = createClaudeTaggedReasoningHarness();
     const pushText = (parser: ReturnType<typeof createCliJsonlStreamingParser>, text: string) =>
@@ -164,6 +169,13 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     pushText(visible.parser, "<div>Visible prefix <thi");
     expect(visible.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
     expect(visible.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
+
+    pushText(split.parser, "<thi");
+    expect(split.assistant).toEqual([]);
+    pushText(split.parser, "s");
+    expect(split.assistant.at(-1)?.text).toBe("<this");
+    pushText(split.parser, ">Visible");
+    expect(split.assistant.at(-1)?.text).toBe("<this>Visible");
 
     pushText(mixed.parser, "<div>Visible prefix ");
     pushText(mixed.parser, "<thi");

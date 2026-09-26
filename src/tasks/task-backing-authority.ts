@@ -1,14 +1,22 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import {
   createAcpTaskBackingDetail,
   createManagedTaskBackingDetail,
   readManagedTaskBacking,
   readTaskBackingInstance,
-  sameTaskBackingInstance,
+  hasAuthoritativeTaskBackingFromRecords,
   selectCurrentCanonicalTaskBacking,
   type TaskBackingInstance,
 } from "./task-backing-records.js";
-import { getTaskFlowById, getTaskMirroredFlowIds } from "./task-flow-runtime-internal.js";
+import {
+  getTaskFlowById,
+  getTaskMirroredFlowIds,
+  prepareTaskFlowRegistryRead,
+  readResidentTaskFlow,
+  type TaskFlowRegistryRead,
+} from "./task-flow-runtime-internal.js";
+import { prepareTaskRegistryRead, type TaskRegistryRead } from "./task-registry-read.js";
 import {
   ensureTaskRegistryReady,
   taskIdsByRelatedSessionKey,
@@ -21,6 +29,97 @@ export {
   createSubagentTaskBackingDetail,
   type TaskBackingInstance,
 } from "./task-backing-records.js";
+
+export type TaskBackingRead = Pick<
+  TaskRegistryRead,
+  "assertCurrent" | "getTaskById" | "getTasksByRunId"
+> & {
+  getTaskFlowById: TaskFlowRegistryRead["getTaskFlowById"];
+  hasAuthoritativeTaskBacking(task: TaskRecord): boolean;
+};
+
+/** Side effects use both admitted projections; their synchronous guards never reopen storage. */
+export async function prepareTaskBackingRead(): Promise<TaskBackingRead | undefined> {
+  const [taskRead, flowRead] = await Promise.allSettled([
+    prepareTaskRegistryRead(),
+    prepareTaskFlowRegistryRead(),
+  ]);
+  const errors = [taskRead, flowRead].flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw createSqliteLifecycleAggregateError(
+      errors,
+      "Task backing read preparation failed",
+      errors[0],
+    );
+  }
+  if (
+    taskRead.status !== "fulfilled" ||
+    flowRead.status !== "fulfilled" ||
+    !taskRead.value ||
+    !flowRead.value
+  ) {
+    return undefined;
+  }
+  const task = taskRead.value;
+  const flow = flowRead.value;
+  const assertCurrent = () => {
+    task.assertCurrent();
+    flow.assertCurrent();
+  };
+  assertCurrent();
+  return {
+    assertCurrent,
+    getTasksByRunId: task.getTasksByRunId,
+    getTaskById(taskId) {
+      assertCurrent();
+      if (!task.isTaskCurrent(taskId)) {
+        return undefined;
+      }
+      const record = task.getTaskById(taskId);
+      return record?.parentFlowId && !flow.isTaskFlowCurrent(record.parentFlowId)
+        ? undefined
+        : record;
+    },
+    getTaskFlowById: flow.getTaskFlowById,
+    hasAuthoritativeTaskBacking(record) {
+      assertCurrent();
+      if (
+        !task.isTaskCurrent(record.taskId) ||
+        (record.parentFlowId && !flow.isTaskFlowCurrent(record.parentFlowId))
+      ) {
+        return false;
+      }
+      return hasAuthoritativeTaskBackingFromRecords(record, {
+        isManagedFlow: (flowId) => flow.getTaskFlowById(flowId)?.syncMode === "managed",
+        resolveCurrentCanonicalBacking: (scope) => {
+          if (!task.isChildSessionCurrent(scope.childSessionKey)) {
+            return undefined;
+          }
+          const candidates = task.listTaskRecordsForChildSessionKey(scope.childSessionKey);
+          if (
+            candidates.some(
+              (candidate) =>
+                candidate.parentFlowId && !flow.isTaskFlowCurrent(candidate.parentFlowId),
+            )
+          ) {
+            return undefined;
+          }
+          return selectCurrentCanonicalTaskBacking({
+            ...scope,
+            candidates,
+            isTaskMirroredFlow: (flowId) =>
+              flow.getTaskFlowById(flowId)?.syncMode === "task_mirrored",
+          });
+        },
+      });
+    },
+  };
+}
 
 function resolveCurrentCanonicalBacking(
   params: Omit<
@@ -118,32 +217,26 @@ export function getManagedTaskBackingInstance(task: TaskRecord): TaskBackingInst
 
 /** A managed projection may control a child only while its exact canonical instance is current. */
 export function hasAuthoritativeTaskBacking(task: TaskRecord): boolean {
-  if (task.runtime !== "acp" && task.runtime !== "subagent") {
-    return true;
-  }
-  const flowId = task.parentFlowId?.trim();
-  if (!flowId || getTaskFlowById(flowId)?.syncMode !== "managed") {
-    return true;
-  }
-  const childSessionKey = task.childSessionKey?.trim();
-  if (!childSessionKey) {
-    return true;
-  }
-  const runId = task.runId?.trim();
-  const managed = readManagedTaskBacking(task.detail);
-  if (!runId || !managed) {
-    return false;
-  }
-  const current = resolveCurrentCanonicalBacking({
-    runtime: task.runtime,
-    scopeKind: task.scopeKind,
-    ownerKey: task.ownerKey,
-    childSessionKey,
-    runId,
+  return hasAuthoritativeTaskBackingFromRecords(task, {
+    isManagedFlow: (flowId) => getTaskFlowById(flowId)?.syncMode === "managed",
+    resolveCurrentCanonicalBacking,
   });
-  return Boolean(
-    current &&
-    current.task.taskId === managed.taskId &&
-    sameTaskBackingInstance(current.instance, managed.instance),
-  );
+}
+
+/** Presentation ingestion consumes recorded facts; durable mutations recheck the canonical rows. */
+export function hasResidentTaskBacking(task: TaskRecord): boolean {
+  return hasAuthoritativeTaskBackingFromRecords(task, {
+    isManagedFlow: (flowId) => readResidentTaskFlow(flowId)?.syncMode === "managed",
+    resolveCurrentCanonicalBacking: (scope) =>
+      selectCurrentCanonicalTaskBacking({
+        ...scope,
+        candidates: [...(taskIdsByRelatedSessionKey.get(scope.childSessionKey) ?? [])].flatMap(
+          (taskId) => {
+            const candidate = tasks.get(taskId);
+            return candidate ? [candidate] : [];
+          },
+        ),
+        isTaskMirroredFlow: (flowId) => readResidentTaskFlow(flowId)?.syncMode === "task_mirrored",
+      }),
+  });
 }

@@ -9,7 +9,7 @@ import {
   projectCodexCatalogPage,
 } from "./session-catalog-projection.js";
 
-beforeEach(() => vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] }));
+beforeEach(() => vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] }));
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -67,15 +67,16 @@ it.each([
       await index.initialize();
       expect((await index.list({})).sessions[0]?.fallbackName).toBe(before || undefined);
       thread.preview = after;
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
       await vi.waitFor(async () => {
         expect((await index.list({})).sessions[0]?.fallbackName).toBe(after || undefined);
       });
       expect(index.get(thread.id)?.preview).toBe(after);
       expect(requests).toHaveLength(2);
       expect(requests[1]).toMatchObject({ useStateDbOnly: true });
+      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
       await vi.waitFor(() => expect(requests).toHaveLength(3));
       expect((await index.list({})).sessions[0]?.fallbackName).toBe(after || undefined);
       expect(sanitize).not.toHaveBeenCalled();

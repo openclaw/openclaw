@@ -8,8 +8,9 @@ import {
 } from "../../chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
-import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
+import type { InFlightRunSnapshot } from "../chat-abort.js";
 import {
   extractChatHistoryBlockText,
   extractChatToolResultCanvasPreview,
@@ -81,6 +82,27 @@ export function chatHistoryActivityBytes(activity: readonly AgentHistoryActivity
   return activity.length > 0 ? jsonUtf8Bytes({ activity }) - 1 : 0;
 }
 
+/** Delta envelopes share one prepared plain-data snapshot throughout their synchronous projection. */
+export function createChatHistoryDeltaByteCounter(sessionSnapshot: Record<string, unknown>) {
+  let snapshot: { bytes: number; keys: Set<string> } | undefined;
+  return (envelope: Record<string, unknown>): number => {
+    snapshot ??= {
+      bytes: jsonUtf8BytesOrInfinity(sessionSnapshot),
+      keys: new Set(Object.keys(sessionSnapshot)),
+    };
+    const fields: Record<string, unknown> = {};
+    for (const key in envelope) {
+      // The snapshot is the final writer, including keys whose undefined value omits a field.
+      if (!snapshot.keys.has(key) && Object.hasOwn(envelope, key)) {
+        fields[key] = envelope[key];
+      }
+    }
+    const fieldsBytes = jsonUtf8BytesOrInfinity(fields);
+    // Merge the object bodies with one brace pair and, when both have fields, one comma.
+    return snapshot.bytes + fieldsBytes - 2 + (snapshot.bytes > 2 && fieldsBytes > 2 ? 1 : 0);
+  };
+}
+
 function hasHistoryToolPresentation(
   message: Record<string, unknown>,
   inheritedError?: boolean,
@@ -133,7 +155,7 @@ function isChatHistoryActivity(message: unknown): boolean {
     return false;
   }
   const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role === "toolresult" || role === "tool_result" || role === "tool" || role === "function") {
+  if (isToolResultContentType(role) || role === "tool" || role === "function") {
     return isPlainHistoryToolResult(entry);
   }
   if (
@@ -180,7 +202,7 @@ export function trimChatHistoryActivity(params: {
   });
 }
 
-function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
+export function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   return {
     role: "assistant",
     timestamp: Date.now(),
@@ -189,26 +211,18 @@ function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
 }
 
 function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
-  const role =
-    message &&
-    typeof message === "object" &&
-    typeof (message as { role?: unknown }).role === "string"
-      ? (message as { role: string }).role
-      : "assistant";
-  const timestamp =
-    message &&
-    typeof message === "object" &&
-    typeof (message as { timestamp?: unknown }).timestamp === "number"
-      ? (message as { timestamp: number }).timestamp
-      : Date.now();
-  const rawMetadata =
-    message && typeof message === "object"
-      ? (message as Record<string, unknown>)["__openclaw"]
-      : undefined;
-  const metadata =
-    rawMetadata && typeof rawMetadata === "object" && !Array.isArray(rawMetadata)
-      ? (rawMetadata as Record<string, unknown>)
-      : {};
+  const entry = asOptionalRecord(message) ?? {};
+  const role = typeof entry.role === "string" ? entry.role : "assistant";
+  const timestamp = typeof entry.timestamp === "number" ? entry.timestamp : Date.now();
+  const metadata = asOptionalRecord(entry["__openclaw"]) ?? {};
+  // A bounded placeholder still identifies the tool so callers can reopen its
+  // durable row. The caller checks this envelope against the byte cap as well.
+  const toolIdentity = Object.fromEntries(
+    ["toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "toolName", "tool_name", "name"]
+      .filter((key) => typeof entry[key] === "string")
+      .map((key) => [key, entry[key]]),
+  );
+  const isError = readToolErrorFlag(entry);
   const metadataId = typeof metadata.id === "string" ? metadata.id : undefined;
   const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
   const metadataIdempotencyKey =
@@ -219,7 +233,10 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
     role,
     timestamp,
     content: [{ type: "text", text: CHAT_HISTORY_OVERSIZED_PLACEHOLDER }],
+    ...toolIdentity,
+    ...(isError !== undefined ? { isError } : {}),
     __openclaw: {
+      ...(metadata.toolOutput ? { toolOutput: metadata.toolOutput } : {}),
       ...(metadataId ? { id: metadataId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
@@ -286,4 +303,66 @@ export function reportOmittedChatHistory(params: {
     `chat.history omitted oversized payloads count=${omittedCount} total=${chatHistoryOmittedEmitCount}`,
   );
   return omittedCount;
+}
+
+export function boundInFlightRunSnapshotForChatHistory(params: {
+  snapshot: InFlightRunSnapshot | undefined;
+  messages: unknown[];
+  getMessagesBytes?: () => number;
+  maxBytes: number;
+}): InFlightRunSnapshot | undefined {
+  if (!params.snapshot) {
+    return undefined;
+  }
+  const messagesBytes = params.getMessagesBytes?.() ?? jsonUtf8Bytes(params.messages);
+  const snapshotBytes = jsonUtf8Bytes(params.snapshot);
+  if (messagesBytes + snapshotBytes <= params.maxBytes) {
+    return params.snapshot;
+  }
+  // Recovery priority is run adoption, authoritative timing, active progress,
+  // plan replay, and opportunistic text. Explicit empty projections
+  // authoritatively clear stale client state when a richer snapshot cannot fit.
+  let bounded: InFlightRunSnapshot = {
+    runId: params.snapshot.runId,
+    text: "",
+    ...(params.snapshot.sessionAbortable ? { sessionAbortable: true } : {}),
+    ...(params.snapshot.events ? { events: [] } : {}),
+    ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
+  };
+  const retainIfWithinBudget = (candidate: InFlightRunSnapshot): boolean => {
+    if (!(messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes)) {
+      return false;
+    }
+    bounded = candidate;
+    return true;
+  };
+
+  if (params.snapshot.startedAt !== undefined) {
+    retainIfWithinBudget({ ...bounded, startedAt: params.snapshot.startedAt });
+  }
+
+  if (params.snapshot.events) {
+    const events = params.snapshot.events;
+    let start = 0;
+    let end = events.length;
+    // Try all progress first, then search suffixes instead of serializing each eviction.
+    let middle = 0;
+    while (start < end) {
+      if (retainIfWithinBudget({ ...bounded, events: events.slice(middle) })) {
+        end = middle;
+      } else {
+        start = middle + 1;
+      }
+      middle = Math.floor((start + end) / 2);
+    }
+  }
+
+  if (params.snapshot.plan) {
+    retainIfWithinBudget({ ...bounded, plan: params.snapshot.plan });
+  }
+
+  if (params.snapshot.text) {
+    retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
+  }
+  return bounded;
 }

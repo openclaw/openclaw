@@ -849,8 +849,9 @@ suite.define(() => {
             emptyDividerBox!.y + emptyDividerBox!.height / 2,
           );
           await page.mouse.down();
+          // Shrink here: the wider Browser default can leave this saved column near its maximum.
           await page.mouse.move(
-            emptyDividerBox!.x - 70,
+            emptyDividerBox!.x + 70,
             emptyDividerBox!.y + emptyDividerBox!.height / 2,
           );
           await page.mouse.up();
@@ -858,7 +859,7 @@ suite.define(() => {
             .poll(() =>
               sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
             )
-            .toBeGreaterThan(resizedWidth + 50);
+            .toBeLessThan(resizedWidth - 50);
           const emptyResizedWidth = await sidePanelBody(page).evaluate(
             (element) => element.getBoundingClientRect().width,
           );

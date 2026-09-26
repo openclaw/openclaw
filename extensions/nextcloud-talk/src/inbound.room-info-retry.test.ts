@@ -4,6 +4,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RuntimeEnv } from "../runtime-api.js";
@@ -79,6 +80,7 @@ function installRuntime(dispatches: { count: number }): void {
   setNextcloudTalkRuntime({
     channel: {
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: (payload: unknown) => payload,
         dispatch: async () => {
           dispatches.count += 1;

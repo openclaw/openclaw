@@ -10,6 +10,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { currentConversationBindingRow as serializeCurrentConversationBindingRow } from "./outbound/current-conversation-binding-row.js";
 import { normalizeConversationRef } from "./outbound/session-binding-normalization.js";
 import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
 import { migrationFileExists } from "./state-migrations.fs.js";
@@ -588,8 +589,6 @@ export function migrateLegacyPluginBindingApprovals(params: {
   });
 }
 
-const CURRENT_BINDING_CONVERSATION_KIND = "current";
-
 type LegacyCurrentConversationBindingsFile = {
   version?: unknown;
   bindings?: unknown;
@@ -663,41 +662,15 @@ function normalizeLegacyCurrentConversationBindingFile(input: unknown): SessionB
   return [...records.values()].toSorted((a, b) => a.bindingId.localeCompare(b.bindingId));
 }
 
-function currentConversationBindingRow(record: SessionBindingRecord): {
-  binding_key: string;
-  binding_id: string;
-  target_session_key: string;
-  channel: string;
-  account_id: string;
-  conversation_kind: string;
-  parent_conversation_id: string | null;
-  conversation_id: string;
-  target_kind: string;
-  status: string;
-  bound_at: number;
-  expires_at: number | null;
-  metadata_json: string | null;
-  record_json: string;
-  updated_at: number;
-} {
+function currentConversationBindingRow(
+  record: SessionBindingRecord,
+): ReturnType<typeof serializeCurrentConversationBindingRow> {
   const conversation = normalizeConversationRef(record.conversation);
-  return {
-    binding_key: currentConversationBindingKey(conversation),
-    binding_id: record.bindingId,
-    target_session_key: record.targetSessionKey,
-    channel: conversation.channel,
-    account_id: conversation.accountId,
-    conversation_kind: CURRENT_BINDING_CONVERSATION_KIND,
-    parent_conversation_id: conversation.parentConversationId ?? null,
-    conversation_id: conversation.conversationId,
-    target_kind: record.targetKind,
-    status: record.status,
-    bound_at: record.boundAt,
-    expires_at: record.expiresAt ?? null,
-    metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
-    record_json: JSON.stringify(record),
-    updated_at: Date.now(),
-  };
+  return serializeCurrentConversationBindingRow(
+    record,
+    conversation,
+    currentConversationBindingKey(conversation),
+  );
 }
 
 export function migrateLegacyCurrentConversationBindings(params: {
@@ -756,4 +729,3 @@ export function migrateLegacyCurrentConversationBindings(params: {
     },
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

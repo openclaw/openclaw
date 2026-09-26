@@ -187,16 +187,6 @@ export class GoogleLiveToolOwner {
             ctx.callbacks.onStatus?.(status, detail);
           }
         },
-        onTranscript: (entry) => {
-          if (!this.options.isClosed()) {
-            ctx.callbacks.onTranscript?.(entry);
-          }
-        },
-        onTalkEvent: (event) => {
-          if (!this.options.isClosed()) {
-            ctx.callbacks.onTalkEvent?.(event);
-          }
-        },
       },
     };
   }

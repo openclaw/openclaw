@@ -24,43 +24,45 @@ describe("renderChannelWizard", () => {
     { sensitive: false, expectedType: "text" },
     { sensitive: true, expectedType: "password" },
   ])(
-    "labels a $expectedType input with the visible text-step message",
+    "labels a $expectedType input and associates validation errors until recovery",
     ({ sensitive, expectedType }) => {
       const container = document.createElement("div");
       document.body.append(container);
-      render(
-        renderChannelWizard({
-          wizard: {
-            phase: "step",
-            channel: "matrix",
-            step: {
-              id: "account-id",
-              type: "text",
-              message: "New Matrix account id",
-              sensitive,
+      const renderStep = (validationError: string | null) =>
+        render(
+          renderChannelWizard({
+            wizard: {
+              phase: "step",
+              channel: "matrix",
+              step: {
+                id: "account-id",
+                type: "text",
+                message: "New Matrix account id",
+                sensitive,
+              },
+              stepIndex: 1,
+              busy: false,
+              validationError,
             },
-            stepIndex: 1,
-            busy: false,
-            validationError: null,
-          },
-          channelLabel: (channelId) => channelId,
-          multiselectValues: [],
-          onToggleMultiselect: vi.fn(),
-          textValue: "",
-          secretVisible: false,
-          onTextInput: vi.fn(),
-          onToggleSecretVisibility: vi.fn(),
-          onAnswer: vi.fn(),
-          onClose: vi.fn(),
-          whatsappQrDataUrl: null,
-          whatsappMessage: null,
-          whatsappConnected: null,
-          whatsappBusy: false,
-          onWhatsAppStart: vi.fn(),
-          onWhatsAppWait: vi.fn(),
-        }),
-        container,
-      );
+            channelLabel: (channelId) => channelId,
+            multiselectValues: [],
+            onToggleMultiselect: vi.fn(),
+            textValue: "",
+            secretVisible: false,
+            onTextInput: vi.fn(),
+            onToggleSecretVisibility: vi.fn(),
+            onAnswer: vi.fn(),
+            onClose: vi.fn(),
+            whatsappQrDataUrl: null,
+            whatsappMessage: null,
+            whatsappConnected: null,
+            whatsappBusy: false,
+            onWhatsAppStart: vi.fn(),
+            onWhatsAppWait: vi.fn(),
+          }),
+          container,
+        );
+      renderStep(null);
 
       const input = container.querySelector<HTMLInputElement>("#channel-wizard-text-input");
       const label = container.querySelector<HTMLLabelElement>(
@@ -74,6 +76,15 @@ describe("renderChannelWizard", () => {
       } else {
         expect(container.querySelector(".oc-sensitive-toggle")).toBeNull();
       }
+      renderStep("That account id is not valid.");
+      const errorId = input?.getAttribute("aria-describedby");
+      expect(input?.getAttribute("aria-invalid")).toBe("true");
+      expect(document.getElementById(errorId ?? "")?.textContent).toContain(
+        "That account id is not valid.",
+      );
+      renderStep(null);
+      expect(input?.hasAttribute("aria-invalid")).toBe(false);
+      expect(input?.hasAttribute("aria-describedby")).toBe(false);
     },
   );
 

@@ -1,3 +1,6 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover dm command auth plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {

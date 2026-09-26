@@ -62,6 +62,7 @@ it.each(["main", "work"])(
       dedupe: new Map(),
       deps: {},
       getRuntimeConfig: () => cfg,
+      trackExecution: async (work) => await work(),
       getSessionEventSubscriberConnIds: () => new Set(),
       loadGatewayModelCatalog: vi.fn(async () => []),
       loadGatewayModelCatalogSnapshot,

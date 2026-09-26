@@ -15,6 +15,7 @@ import {
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
 
 type AgentWaitResult = {
   status?: "error" | "ok" | "pending" | "timeout";
@@ -38,6 +39,7 @@ async function notifyWhenBackgroundSessionEnds(params: {
   context: ApplicationContext;
   key: string;
   runId: string;
+  isCurrentOwner: () => boolean;
 }): Promise<void> {
   let result: AgentWaitResult | undefined;
   while (!result) {
@@ -83,6 +85,9 @@ async function notifyWhenBackgroundSessionEnds(params: {
     }
   }
 
+  if (!params.isCurrentOwner()) {
+    return;
+  }
   const gateway = params.context.gateway.snapshot;
   if (
     uiSessionEventMatches(
@@ -120,6 +125,9 @@ async function notifyWhenBackgroundSessionEnds(params: {
     message: `${resolveSessionDisplayName(params.key, row)}: ${status}`,
     actionLabel: t("sessionsView.openSession"),
     onAction: () => {
+      if (!params.isCurrentOwner()) {
+        return;
+      }
       selectApplicationSession({
         selection: params.context.agentSelection,
         gateway: params.context.gateway,
@@ -145,10 +153,15 @@ export function prepareBackgroundSessionCompletion(params: {
   client: GatewayBrowserClient;
   context: ApplicationContext;
 }): (key: string, runId?: string) => boolean {
+  const isCurrentOwner = captureSessionNoticeOwner(params.context);
   return (key, runId) => {
     const normalizedRunId = runId?.trim();
-    if (!params.enabled || !normalizedRunId) {
+    if (!params.enabled) {
       return false;
+    }
+    // Creation disposition is independent of whether the Gateway returned a watchable run.
+    if (!normalizedRunId) {
+      return true;
     }
     void notifyWhenBackgroundSessionEnds({
       agentId: params.agentId,
@@ -156,6 +169,7 @@ export function prepareBackgroundSessionCompletion(params: {
       context: params.context,
       key,
       runId: normalizedRunId,
+      isCurrentOwner,
     });
     return true;
   };

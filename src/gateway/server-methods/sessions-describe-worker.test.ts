@@ -32,6 +32,7 @@ import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
+import { reportPlacementTransition } from "../worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import {
   identifiedClient,
@@ -295,11 +296,14 @@ it("projects current target, lineage, children and placement after committed cha
           target: { canonicalKey: removedKey, storeKeys: [removedKey] },
           archiveTranscript: false,
         });
-        placements.startDispatch({
-          sessionId: "replacement",
-          agentId: "main",
-          sessionKey: targetKey,
-        });
+        reportPlacementTransition(
+          undefined,
+          placements.startDispatch({
+            sessionId: "replacement",
+            agentId: "main",
+            sessionKey: targetKey,
+          }),
+        );
       },
     );
     expect(response).toMatchObject({

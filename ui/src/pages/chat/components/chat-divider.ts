@@ -73,14 +73,7 @@ function renderSystemLine(params: {
   `;
 }
 
-export function renderChatDivider(
-  item: Extract<ChatItem, { kind: "divider" }>,
-  onOpenSessionCheckpoints?: () => void | Promise<void>,
-) {
-  const action =
-    item.action?.kind === "session-checkpoints" && onOpenSessionCheckpoints
-      ? item.action
-      : undefined;
+export function renderChatDivider(item: Extract<ChatItem, { kind: "divider" }>) {
   return html`
     <div
       class="chat-divider ${
@@ -91,34 +84,10 @@ export function renderChatDivider(
     >
       ${renderSystemLine(item)}
       ${
-        item.description || action
+        item.description
           ? html`
               <div class="chat-divider__details">
-                ${
-                  item.description
-                    ? html`<span class="chat-divider__description">${item.description}</span>`
-                    : nothing
-                }
-                ${
-                  item.description && action
-                    ? html`<span class="chat-divider__details-separator" aria-hidden="true"
-                        >·</span
-                      >`
-                    : nothing
-                }
-                ${
-                  action
-                    ? html`
-                        <button
-                          type="button"
-                          class="chat-divider__action"
-                          @click=${() => onOpenSessionCheckpoints?.()}
-                        >
-                          ${action.label}
-                        </button>
-                      `
-                    : nothing
-                }
+                <span class="chat-divider__description">${item.description}</span>
               </div>
             `
           : nothing

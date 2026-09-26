@@ -1,5 +1,5 @@
-import * as terminalText from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CodexAppServerMessageDecoder } from "./client-message-decoder.js";
 import { createClientHarness } from "./test-support.js";
 
 const harnesses: Array<ReturnType<typeof createClientHarness>> = [];
@@ -10,10 +10,12 @@ function createHarness() {
   return harness;
 }
 
-function requestId(harness: ReturnType<typeof createClientHarness>, index = 0): number {
-  const request = JSON.parse(harness.writes[index] ?? "{}") as { id: number; method: string };
+function requestId(harness: ReturnType<typeof createClientHarness>, index = 0): number | string {
+  const request = JSON.parse(harness.writes[index] ?? "{}") as {
+    id: number | string;
+    method: string;
+  };
   expect(request.method).toBe("thread/list");
-  expect(request.id).toBeTypeOf("number");
   return request.id;
 }
 
@@ -21,10 +23,11 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const harness of harnesses.splice(0)) {
     harness.client.close();
     harness.emitExit();
+    await harness.client.closeAndWait();
   }
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -35,7 +38,6 @@ describe("Codex catalog preview decoding", () => {
     "projects only the remaining %i catalog rows without shrinking the native page",
     async (catalogRows) => {
       const harness = createHarness();
-      const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
       const selectedPreview = "\u001b[32mKept first user request\u001b[0m";
       const cache = vi.fn((thread: { id: string }) => {
         if (catalogRows === 0 || thread.id !== "selected") {
@@ -93,17 +95,12 @@ describe("Codex catalog preview decoding", () => {
       expect(cache.mock.calls.map(([thread]) => thread.id)).toEqual(
         catalogRows ? ["selected"] : [],
       );
-      if (catalogRows === 0) {
-        expect(sanitize).not.toHaveBeenCalled();
-      } else {
-        expect(sanitize.mock.calls.every(([input]) => input === selectedPreview)).toBe(true);
-      }
       expect(harness.writes).toHaveLength(1);
     },
   );
 
   it("bounds catalog previews before delivery while preserving ordinary thread/list results", async () => {
-    const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
+    const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
     const harness = createHarness();
     const preview = "x".repeat(1024 * 1024);
     type PreviewPage = { data: Array<{ id: string; preview: string }> };
@@ -115,9 +112,7 @@ describe("Codex catalog preview decoding", () => {
     const first = JSON.parse(harness.writes[0]!);
     harness.send({ id: first.id, result: { data: [{ id: "large-preview", preview }] } });
     expect((await catalog).data[0]?.preview).toBe("x".repeat(500));
-    expect(Math.max(0, ...sanitize.mock.calls.map(([text]) => text.length))).toBeLessThanOrEqual(
-      2_048,
-    );
+    expect(parse).not.toHaveBeenCalled();
 
     const ordinary = harness.client.request<PreviewPage>(
       "thread/list",
@@ -127,11 +122,11 @@ describe("Codex catalog preview decoding", () => {
     const second = JSON.parse(harness.writes[1]!);
     harness.send({ id: second.id, result: { data: [{ id: "large-preview", preview }] } });
     expect((await ordinary).data[0]?.preview).toBe(preview);
+    expect(parse).toHaveBeenCalledOnce();
   });
 
-  it("reuses unchanged resident previews before sanitizing native responses", async () => {
+  it("reuses unchanged resident previews after worker projection", async () => {
     const harness = createHarness();
-    const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
     const catalogPreviewCache = (thread: { updatedAt?: number | null }) =>
       thread.updatedAt === 100 ? "Retained first user request" : undefined;
     for (const updatedAt of [100, 101]) {
@@ -155,10 +150,8 @@ describe("Codex catalog preview decoding", () => {
       const page = await request;
       if (updatedAt === 100) {
         expect(page.data[0]?.preview).toBe("Retained first user request");
-        expect(sanitize).not.toHaveBeenCalled();
       } else {
         expect(page.data[0]?.preview).toBe("new ".repeat(125));
-        expect(sanitize).toHaveBeenCalled();
       }
     }
   });
@@ -194,6 +187,41 @@ describe("Codex catalog preview decoding", () => {
     harness.send({ id: requestId(harness, 1), result: { data: [thread] } });
     await expect(ordinary).resolves.toEqual({ data: [thread] });
   });
+
+  it.each([0, 64 * 1024])(
+    "preserves native preview cache states with %i bytes of padding",
+    async (padding) => {
+      const harness = createHarness();
+      const cases = [
+        { id: "cleared", preview: "", cached: "retained", expected: "" },
+        { id: "whitespace", preview: " \n\t ", cached: "retained", expected: "retained" },
+        { id: "controls", preview: "\u001b[0m", cached: "retained", expected: "retained" },
+        { id: "newly-visible", preview: "visible", cached: "", expected: "visible" },
+        { id: "missing", cached: "retained", expected: "retained" },
+        { id: "missing-empty", cached: "", expected: "" },
+        { id: "empty", preview: "", cached: "", expected: "" },
+        { id: "cache-miss", preview: "uncached", cached: undefined, expected: "uncached" },
+      ];
+      const previews = new Map(cases.map(({ id, cached }) => [id, cached]));
+      const cache = vi.fn(({ id }: { id: string }) => previews.get(id));
+      const request = harness.client.request(
+        "thread/list",
+        { limit: 64 },
+        { catalogPreview: true, catalogPreviewCache: cache },
+      );
+      harness.send({
+        id: requestId(harness),
+        result: {
+          data: cases.map(({ id, preview }) => ({ id, preview })),
+          unused: "x".repeat(padding),
+        },
+      });
+      await expect(request).resolves.toEqual({
+        data: cases.map(({ id, expected }) => ({ id, projectId: null, preview: expected })),
+      });
+      expect(cache.mock.calls.map(([thread]) => thread.id)).toEqual(cases.map(({ id }) => id));
+    },
+  );
 
   it.each([
     {

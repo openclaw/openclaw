@@ -42,7 +42,7 @@ describe("doctor --fix with a validation-blocked candidate", () => {
         expect(noteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
 
         // The write must refuse gracefully — no throw, no change panel, no file write.
-        await expect(runWriteConfigHealth(ctx)).resolves.toBeUndefined();
+        await expect(runWriteConfigHealth(ctx)).resolves.toBe(false);
 
         expect(ctx.configWriteRefusal).toBe("validation");
         expect(ctx.configResultWriteCommitted).not.toBe(true);

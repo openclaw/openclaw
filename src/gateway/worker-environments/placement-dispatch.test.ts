@@ -5,10 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { resolveWorkerPlacementDestination } from "./placement-destination.js";
 import {
   type DispatchStage,
@@ -37,7 +37,7 @@ describe("worker placement dispatch", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -102,18 +102,17 @@ describe("worker placement dispatch", () => {
         os: "os-a",
       });
 
-      expect(harness.environments.create).not.toHaveBeenCalled();
-      expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
-        { profileId: REQUEST.profileId, ...inheritedProfile },
-        expect.stringMatching(/^session-dispatch:/u),
-        "beast",
-        REQUEST.executionMode,
-        path.join(root, "workspace"),
-        undefined,
-        "os-a",
+      expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
+        profileId: REQUEST.profileId,
+        idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
+        machineClass: "beast",
+        executionMode: REQUEST.executionMode,
+        projectPath: path.join(root, "workspace"),
+        os: "os-a",
         runSetupScript,
         inheritedProfile,
-      );
+        admittedIntent: inheritedProfile,
+      });
     },
   );
 
@@ -170,7 +169,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "completed-turn-claim",
       runId: "completed-turn-run",
@@ -232,7 +231,7 @@ describe("worker placement dispatch", () => {
       expectedGeneration: otherPlacement.generation,
       patch: { activeOwnerEpoch: active.activeOwnerEpoch },
     });
-    const otherClaim = placementStore.claimTurn({
+    const otherClaim = await placementStore.claimTurn({
       ...otherRequest,
       claimId: "other-session-claim",
       runId: "other-session-run",
@@ -271,7 +270,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "shared-worker-claim",
       runId: "shared-worker-run",
@@ -303,7 +302,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "draining-result-claim",
       runId: "draining-result-run",
@@ -344,7 +343,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "resume-failure-claim",
       runId: "resume-failure-run",
@@ -373,7 +372,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "lost-result-claim",
       runId: "lost-result-run",
@@ -405,7 +404,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "accepted-lost-result-claim",
       runId: "accepted-lost-result-run",
@@ -562,7 +561,7 @@ describe("worker placement dispatch", () => {
 
     expect(rejectedHarness.placements.current()).toBeUndefined();
     expect(rejectedHarness.log).toEqual(["barrier", "preflight"]);
-    expect(rejectedHarness.environments.create).not.toHaveBeenCalled();
+    expect(rejectedHarness.environments.createWithRequest).not.toHaveBeenCalled();
 
     const correctedHarness = createTestHarness();
     const active = await correctedHarness.service.dispatch(REQUEST);
@@ -707,7 +706,7 @@ describe("worker placement dispatch", () => {
       "tunnel:attached",
       "placement:adopted",
     ]);
-    expect(harness.environments.create).not.toHaveBeenCalled();
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
@@ -898,7 +897,7 @@ describe("worker placement dispatch", () => {
     });
     harness.placements.seedActive(harness.attached.ownerEpoch);
     harness.markEnvironmentNodeDeviceId("live-worker-node");
-    placementStore.claimTurn({
+    await placementStore.claimTurn({
       ...REQUEST,
       claimId: "claim-1",
       runId: "run-1",
@@ -933,7 +932,7 @@ describe("worker placement dispatch", () => {
       sessionId: REQUEST.sessionId,
     });
     harness.placements.seedActive(harness.attached.ownerEpoch);
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "claim-1",
       runId: "run-1",

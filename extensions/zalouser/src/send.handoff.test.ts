@@ -14,9 +14,8 @@ vi.mock("./session-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-state.js")>()),
   clearStoredZaloCredentials: vi.fn(),
   loadStoredZaloCredentials: vi.fn(),
-  loadStoredZaloCredentialsAsync: vi.fn(),
   refreshStoredZaloCredentials: vi.fn(),
-  saveStoredZaloCredentials: vi.fn(),
+  saveStoredZaloCredentials: vi.fn(async () => {}),
 }));
 
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({

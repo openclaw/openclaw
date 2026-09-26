@@ -17,8 +17,11 @@ vi.mock("../../agents/workspace-templates.js", () => ({
   resolveWorkspaceTemplateSearchDirs: async () => [],
 }));
 
-vi.mock("../../agents/workspace.js", () => ({
+vi.mock("../../agents/workspace-bootstrap-publish.js", () => ({
   publishBootstrapFile: async () => true,
+}));
+
+vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: () => mocks.workspace,
 }));
 

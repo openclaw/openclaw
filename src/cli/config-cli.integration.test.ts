@@ -70,7 +70,7 @@ describe("config cli integration", () => {
                 code: 1,
               });
               expect(registeredRuntimeErrors.at(-1)).toContain(
-                'Plugin "sample" state migration is pending',
+                'Plugin "sample" data/settings upgrade is unfinished',
               );
               expect(registeredRuntimeErrors.at(-1)).toContain(
                 "openclaw plugins install @example/sample",
@@ -488,6 +488,10 @@ describe("config cli integration", () => {
             code: 1,
           });
           const diagnostic = registeredRuntimeErrors.join("\n");
+          if (args[1] === "validate") {
+            expect(diagnostic).toContain("Config needs correction:");
+            expect(diagnostic).toContain("openclaw config schema");
+          }
           expect(diagnostic).toContain(`openclaw.json:9 — ${displayPath}:`);
           expect(diagnostic).toContain("expected string");
           expect(diagnostic).not.toContain(`${issuePath}:`);

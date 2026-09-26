@@ -5,7 +5,7 @@
  * host, and node browser integrations that need HTTP access to browser control.
  */
 import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { isIPv6, type AddressInfo } from "node:net";
 import express from "express";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -158,7 +158,7 @@ export async function startBrowserBridgeServer(params: {
 
   setBridgeAuthForPort(resolvedPort, { token: authToken, password: authPassword });
 
-  const baseUrl = `http://${host}:${resolvedPort}`;
+  const baseUrl = `http://${isIPv6(host) ? `[${host}]` : host}:${resolvedPort}`;
   return { server, port: resolvedPort, baseUrl, state };
 }
 

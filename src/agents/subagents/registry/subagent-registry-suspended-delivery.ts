@@ -10,13 +10,12 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT = 25;
-export const SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP = 50;
 
 export function isSuspendedPendingFinalDelivery(entry: SubagentRunRecord): boolean {
   return typeof entry.execution.endedAt === "number" && isDeliverySuspended(entry);
 }
 
-/** Report retained pressure changes without repeating an unchanged backlog every sweep. */
+/** Report delivery backlog changes independently of admission for new work. */
 export function warnSuspendedDeliveryPressure(
   entries: Iterable<SubagentRunRecord>,
   previousCount: number | undefined,
@@ -32,11 +31,9 @@ export function warnSuspendedDeliveryPressure(
     return undefined;
   }
   if (suspendedCount !== previousCount) {
-    warn("subagent suspended delivery backlog exceeded pressure cap", {
+    warn("subagent suspended delivery backlog reached warning threshold", {
       suspendedCount,
-      softCap: SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT,
-      hardCap: SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
-      admissionBlocked: suspendedCount >= SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
+      warningThreshold: SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT,
     });
   }
   return suspendedCount;

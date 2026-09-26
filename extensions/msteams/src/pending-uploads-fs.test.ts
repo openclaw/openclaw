@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
@@ -130,7 +130,7 @@ describe("msteams pending uploads (fs-backed)", () => {
         ...msteamsRuntimeStub,
         state: {
           ...msteamsRuntimeStub.state,
-          openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
             const { lookupMany: _lookupMany, ...store } = createPluginStateKeyedStoreForTests<T>(
               "msteams",
               options,

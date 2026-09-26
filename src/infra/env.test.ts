@@ -4,6 +4,7 @@ import { withEnv } from "../test-utils/env.js";
 import {
   isFastTestRuntimeEnv,
   isTruthyEnvValue,
+  isVitestRuntimeEnv,
   logAcceptedEnvOption,
   normalizeEnv,
   normalizeZaiEnv,
@@ -75,6 +76,31 @@ describe("isTruthyEnvValue", () => {
   });
 });
 
+describe("isVitestRuntimeEnv", () => {
+  it.each([
+    { VITEST: "true" },
+    { VITEST: "1" },
+    { VITEST_POOL_ID: "" },
+    { VITEST_WORKER_ID: "0" },
+    { NODE_ENV: "test" },
+  ])("detects %j and observes subsequent env changes", (marker) => {
+    withEnv(
+      {
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        VITEST_WORKER_ID: undefined,
+        NODE_ENV: "production",
+      },
+      () => {
+        expect(isVitestRuntimeEnv()).toBe(false);
+        expect(isVitestRuntimeEnv(marker)).toBe(true);
+        withEnv(marker, () => expect(isVitestRuntimeEnv()).toBe(true));
+        expect(isVitestRuntimeEnv()).toBe(false);
+      },
+    );
+  });
+});
+
 describe("isFastTestRuntimeEnv", () => {
   it("ignores OPENCLAW_TEST_FAST outside a test runtime", () => {
     withEnv(
@@ -94,6 +120,15 @@ describe("isFastTestRuntimeEnv", () => {
   it("honors OPENCLAW_TEST_FAST inside a detected test runtime", () => {
     expect(isFastTestRuntimeEnv({ VITEST: "1", OPENCLAW_TEST_FAST: "1" })).toBe(true);
   });
+
+  it.each([undefined, "0", "true", "1"])(
+    "uses the caller's fast flag (%j) when the process supplies the test marker",
+    (fastFlag) => {
+      withEnv({ VITEST: "true", OPENCLAW_TEST_FAST: "1" }, () => {
+        expect(isFastTestRuntimeEnv({ OPENCLAW_TEST_FAST: fastFlag })).toBe(fastFlag === "1");
+      });
+    },
+  );
 });
 
 describe("logAcceptedEnvOption", () => {

@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import {
   buildCaptionedFinalTextFallback,
@@ -33,7 +34,6 @@ import {
   requiresDurableToolResultDelivery,
 } from "./dispatch-from-config.payloads.js";
 import { suppressPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import { runReplyDispatchTakeover } from "./dispatch-from-config.reply-dispatch-hook.js";
 import {
@@ -57,6 +57,7 @@ import {
   prepareReplyPayloadForDispatcher,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatcher.js";
+import type { ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 import { isDispatchFinalReplySessionWriterAuthorized } from "./session-writer-delivery-authority.js";
 
 export async function chooseDispatchRoute(state: PrepareDispatchOperationReadyState) {
@@ -100,7 +101,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const shouldSuppressDefaultToolProgressMessages = () =>
     params.replyOptions?.suppressToolProgressMessages === true || !shouldEmitVerboseProgress();
   const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
-  const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
+  const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
   const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
     params.onSessionMetadataChanges,
   );
@@ -208,8 +209,12 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     outcomes.push(outcome);
     blockDeliveryOutcomes.set(key, outcomes);
   };
-  const sendTrackedBlockReply = (payload: ReplyPayload) => {
-    const delivery = turnLedger.sendQueued("block", payload);
+  const sendTrackedBlockReply = (operation: ReplyDispatchOperation) => {
+    const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
+    const delivery =
+      operation.kind === "prepared"
+        ? turnLedger.sendPreparedQueued("block", operation.plan)
+        : turnLedger.sendQueued("block", payload);
     if (delivery.queued) {
       recordBlockOutcome(
         payload,
@@ -574,28 +579,27 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       },
     });
     const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
-      runWithDispatchLifecycleAdmission(
-        async () =>
-          await runWithDispatchAbortSignal(
-            getPreDispatchAbortSignal(),
-            () =>
-              hookRunner.runBeforeDispatch(
-                {
-                  messageId: state.hookState.hookContext.messageId,
-                  content: state.hookState.hookContext.content,
-                  body:
-                    state.hookState.hookContext.bodyForAgent ?? state.hookState.hookContext.body,
-                  channel: state.hookState.hookContext.channelId,
-                  sessionKey: beforeDispatchSessionKey,
-                  senderId: state.hookState.hookContext.senderId,
-                  replyToId: state.hookState.hookContext.replyToId,
-                  replyToIdFull: state.hookState.hookContext.replyToIdFull,
-                  replyToBody: state.hookState.hookContext.replyToBody,
-                  replyToSender: state.hookState.hookContext.replyToSender,
-                  replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
-                  isGroup: state.hookState.hookContext.isGroup,
-                  timestamp: state.hookState.hookContext.timestamp,
-                },
+      runWithDispatchLifecycleAdmission(async () => {
+        return await runWithDispatchAbortSignal(
+          getPreDispatchAbortSignal(),
+          () =>
+            hookRunner.runBeforeDispatch(
+              {
+                messageId: state.hookState.hookContext.messageId,
+                content: state.hookState.hookContext.content,
+                body: state.hookState.hookContext.bodyForAgent ?? state.hookState.hookContext.body,
+                channel: state.hookState.hookContext.channelId,
+                sessionKey: beforeDispatchSessionKey,
+                senderId: state.hookState.hookContext.senderId,
+                replyToId: state.hookState.hookContext.replyToId,
+                replyToIdFull: state.hookState.hookContext.replyToIdFull,
+                replyToBody: state.hookState.hookContext.replyToBody,
+                replyToSender: state.hookState.hookContext.replyToSender,
+                replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
+                isGroup: state.hookState.hookContext.isGroup,
+                timestamp: state.hookState.hookContext.timestamp,
+              },
+              withClaimingHookAdmission(
                 {
                   messageId: state.hookState.hookContext.messageId,
                   channelId: state.hookState.hookContext.channelId,
@@ -609,11 +613,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   replyToSender: state.hookState.hookContext.replyToSender,
                   replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
                 },
-                pluginSubagentRequester,
+                state.assertCurrentBindingRoute,
               ),
-            trackDispatchLifecycleWork,
-          ),
-      ),
+              pluginSubagentRequester,
+            ),
+          trackDispatchLifecycleWork,
+        );
+      }),
     );
     if (beforeDispatchResult?.handled) {
       const text = beforeDispatchResult.text;
@@ -671,7 +677,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       result: state.finishReplyOperationBusyDispatch({ dedupeDisposition: "release" }),
     };
   }
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
+    shouldSuppressProgressDelivery,
     shouldSuppressDefaultToolProgressMessages,
     shouldSendVerboseProgressMessages,
     shouldSendToolSummaries,

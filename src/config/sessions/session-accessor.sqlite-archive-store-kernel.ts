@@ -1,15 +1,23 @@
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
+import {
+  ensureSessionTranscriptArchiveSchema,
+  SESSION_TRANSCRIPT_ARCHIVES_TABLE,
+} from "../../state/openclaw-agent-session-transcript-archive-schema.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { resolveRegisteredSqliteTranscriptArchiveName } from "./session-accessor.sqlite-archive-artifact.js";
 import type {
+  MaterializedSessionStateDeletePlan,
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
 } from "./session-accessor.sqlite-archive-types.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+
+type TranscriptArchiveDatabase = Pick<OpenClawAgentKyselyDatabase, "session_transcript_archives">;
 
 const PENDING_ARCHIVE_PUBLISH_BATCH_SIZE = 4;
 
@@ -32,6 +40,23 @@ export function uniqueTranscriptArchives<T extends { generation: string; session
   ];
 }
 
+/** The archive table is optional until the first committed archive. */
+export function hasPendingSessionTranscriptArchives(
+  database: Pick<OpenClawAgentDatabase, "db">,
+): boolean {
+  return (
+    tableExists(database.db, SESSION_TRANSCRIPT_ARCHIVES_TABLE) &&
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db)
+        .selectFrom("session_transcript_archives")
+        .select("session_id")
+        .where("published_at", "is", null)
+        .limit(1),
+    ) !== undefined
+  );
+}
+
 export function prepareSessionTranscriptArchivePublishPlans(
   database: OpenClawAgentDatabase,
   params: {
@@ -39,21 +64,11 @@ export function prepareSessionTranscriptArchivePublishPlans(
     requested: readonly Pick<TranscriptArchivePublishPlan, "sessionId" | "generation">[];
   },
 ): TranscriptArchivePublishPlan[] {
-  const db = getSessionKysely(database.db);
+  const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
   if (params.requested.length > 0) {
     ensureSessionTranscriptArchiveSchema(database.db);
-  } else {
-    const exists = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("sqlite_schema")
-        .select("name")
-        .where("type", "=", "table")
-        .where("name", "=", "session_transcript_archives"),
-    );
-    if (!exists) {
-      return [];
-    }
+  } else if (!tableExists(database.db, SESSION_TRANSCRIPT_ARCHIVES_TABLE)) {
+    return [];
   }
   const pendingArchives = executeSqliteQuerySync(
     database.db,
@@ -118,7 +133,7 @@ export function recordSessionTranscriptArchivePublishResults(
   nowMs: number,
 ): void {
   ensureSessionTranscriptArchiveSchema(database.db);
-  const db = getSessionKysely(database.db);
+  const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
   for (const result of results) {
     executeSqliteQuerySync(
       database.db,
@@ -133,5 +148,73 @@ export function recordSessionTranscriptArchivePublishResults(
         .where("session_id", "=", result.sessionId)
         .where("generation", "=", result.generation),
     );
+  }
+}
+
+/** Inserts the canonical archive row inside the lifecycle deletion transaction. */
+export function persistSessionTranscriptArchive(
+  database: OpenClawAgentDatabase,
+  plan: MaterializedSessionStateDeletePlan,
+): void {
+  const archive = plan.archive;
+  const generation = plan.snapshot.generation;
+  const sessionKey = plan.snapshot.sessionKey;
+  if (!archive || !generation || !sessionKey) {
+    throw new Error(
+      `Cannot persist SQLite transcript archive without an owner generation for ${plan.sessionId}`,
+    );
+  }
+  ensureSessionTranscriptArchiveSchema(database.db);
+  const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
+  const inserted = executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("session_transcript_archives")
+      .values({
+        archive_blob: archive.bytes,
+        archive_name: archive.archiveName,
+        archive_sha256: archive.sha256,
+        created_at: archive.createdAt,
+        encoding: archive.encoding,
+        generation,
+        last_publish_attempt_at: null,
+        last_publish_error: null,
+        published_at: null,
+        reason: plan.reason,
+        session_id: plan.sessionId,
+        session_key: sessionKey,
+      })
+      .onConflict((conflict) => conflict.columns(["session_id", "generation"]).doNothing()),
+  );
+  if (inserted.numAffectedRows === 1n) {
+    return;
+  }
+  const persisted = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_transcript_archives")
+      .select([
+        "archive_blob",
+        "archive_name",
+        "archive_sha256",
+        "created_at",
+        "encoding",
+        "reason",
+        "session_key",
+      ])
+      .where("session_id", "=", plan.sessionId)
+      .where("generation", "=", generation),
+  );
+  if (
+    !persisted ||
+    persisted.archive_name !== archive.archiveName ||
+    persisted.archive_sha256 !== archive.sha256 ||
+    persisted.created_at !== archive.createdAt ||
+    persisted.encoding !== archive.encoding ||
+    persisted.reason !== plan.reason ||
+    persisted.session_key !== sessionKey ||
+    !Buffer.from(persisted.archive_blob).equals(Buffer.from(archive.bytes))
+  ) {
+    throw new Error(`Conflicting SQLite transcript archive for ${plan.sessionId}`);
   }
 }

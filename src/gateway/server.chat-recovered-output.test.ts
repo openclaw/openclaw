@@ -153,7 +153,7 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        defaults: { workspace: home.workspaceDir, skipBootstrap: true },
+        defaults: { workspace: home.workspaceDir, skipBootstrap: true, utilityModel: "" },
         entries,
       },
       plugins: {
@@ -239,7 +239,9 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
       );
       if (failed) {
         expect(completed.status).toBe("error");
-        expect(messageText(history.messages.at(-1))).toBe(prefix);
+        expect(messageText(history.messages.at(-1))).toBe(
+          `⚠️ LLM request failed (provider internal error). This is usually temporary — try again shortly.\n\n${prefix}`,
+        );
         expect(terminal.some((event) => event.state === "error")).toBe(true);
         const deltas = events.filter(
           (event): event is Extract<ChatEvent, { state: "delta" }> =>

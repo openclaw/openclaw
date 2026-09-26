@@ -157,6 +157,7 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
+            "anthropic/claude-opus-5-5": {},
             "anthropic/claude-opus-5": {},
             "anthropic/claude-sonnet-5": {},
             "openai/gpt-5.4": {},
@@ -166,7 +167,8 @@ describe("applyModelDefaults", () => {
     } satisfies OpenClawConfig;
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5-5"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBeUndefined();
     expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("sonnet");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
   });
@@ -192,8 +194,8 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-8": { alias: "Opus" },
-            "anthropic/claude-opus-5": {},
+            "anthropic/claude-opus-5": { alias: "Opus" },
+            "anthropic/claude-opus-5-5": {},
           },
         },
       },
@@ -201,8 +203,8 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]?.alias).toBe("Opus");
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBeUndefined();
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBe("Opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5-5"]?.alias).toBeUndefined();
   });
 
   it("preserves an authored Sonnet alias when the new default target is also present", () => {

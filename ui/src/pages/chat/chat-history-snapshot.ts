@@ -1,4 +1,5 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
@@ -12,7 +13,9 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
+import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
 export type ChatHistoryResult = {
   activity?: ChatHistoryActivity[];
@@ -36,15 +39,7 @@ export type ChatHistoryResult = {
     text?: string;
     startedAt?: number;
     sessionAbortable?: boolean;
-    events?: Array<{
-      runId: string;
-      seq: number;
-      stream: string;
-      ts: number;
-      sessionKey?: string;
-      agentId?: string;
-      data: Record<string, unknown>;
-    }>;
+    events?: AgentEventPayload[];
     plan?: { steps: Array<{ step: string; status: string }>; explanation?: string };
   };
 };
@@ -71,6 +66,7 @@ export type ChatHistoryResponse =
 export type ChatHistoryObservation = {
   owner: ChatHistorySessions;
   reconcile: ReturnType<ChatHistorySessions["captureReconcile"]>;
+  run?: ChatHistoryRunObservation;
 };
 
 export type ObservedChatHistoryResult = ChatHistoryResult & {
@@ -116,12 +112,10 @@ export function resolveChatHistoryPagination(
 }
 
 export function historySessionId(result: ChatHistoryResult): string | null {
-  if (typeof result.sessionInfo?.sessionId === "string" && result.sessionInfo.sessionId.trim()) {
-    return result.sessionInfo.sessionId.trim();
-  }
-  return typeof result.sessionId === "string" && result.sessionId.trim()
-    ? result.sessionId.trim()
-    : null;
+  return (
+    normalizeNullableString(result.sessionInfo?.sessionId) ??
+    normalizeNullableString(result.sessionId)
+  );
 }
 
 function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {

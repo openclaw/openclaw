@@ -45,16 +45,19 @@ export function prepareCodexCatalogQuery(
     ) {
       return undefined;
     }
-    const candidates = ordered.filter((row) => {
-      const session = row.page.sessions[0];
-      return (
-        !row.archived &&
-        session &&
-        (complete || !frontier || compareCodexCatalogRows(row, frontier) <= 0) &&
-        (!cwd || (liveSettings.get(row.threadId)?.cwd ?? session.cwd) === cwd) &&
-        (!search || (session.name ?? session.fallbackName)?.toLocaleLowerCase().includes(search))
-      );
-    });
+    const candidates =
+      complete && !cwd && !search
+        ? ordered
+        : ordered.filter((row) => {
+            const session = row.page.sessions[0];
+            return (
+              session &&
+              (complete || !frontier || compareCodexCatalogRows(row, frontier) <= 0) &&
+              (!cwd || (liveSettings.get(row.threadId)?.cwd ?? session.cwd) === cwd) &&
+              (!search ||
+                (session.name ?? session.fallbackName)?.toLocaleLowerCase().includes(search))
+            );
+          });
     const selected = anchor?.backwards
       ? candidates.filter((row) => row.threadId !== anchor.threadId)
       : candidates;

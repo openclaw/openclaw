@@ -252,6 +252,7 @@ describe("happy path prompt snapshots", () => {
     const contextTexts: string[] = [];
     // Canonical ASCII keys in Codex's BTreeMap order, independent of the renderer's sorter.
     const keyOrder = [
+      "openclaw_active_computer",
       "openclaw_current_sender",
       "openclaw_source_delivery",
       "openclaw_temporal_context",

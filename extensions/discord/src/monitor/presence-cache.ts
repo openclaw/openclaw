@@ -1,4 +1,3 @@
-// Discord plugin module implements presence cache behavior.
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 
 /**

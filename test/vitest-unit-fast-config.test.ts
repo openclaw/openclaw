@@ -490,7 +490,9 @@ describe("unit-fast vitest lane", () => {
     for (const file of [
       "src/agents/agent-command.compaction-rotation.test.ts",
       "src/agents/agent-command.embedded-maintenance.test.ts",
+      "src/agents/code-mode-quickjs.integration.test.ts",
       "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
+      "src/agents/provider-transport-fetch.headers.test.ts",
     ]) {
       expect(isUnitFastTestFile(file), file).toBe(false);
       expect(resolveUnitFastTestIncludePattern(file), file).toBeNull();

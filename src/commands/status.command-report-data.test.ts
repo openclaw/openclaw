@@ -76,6 +76,26 @@ describe("buildStatusCommandReportData", () => {
     );
   });
 
+  it("keeps pending startup guidance distinct from reachability failure", async () => {
+    const params = createStatusCommandReportDataParams();
+    const report = await buildStatusCommandReportData({
+      ...params,
+      surface: {
+        ...params.surface,
+        gatewayReachable: false,
+        gatewayProbe: { startupPhase: "plugins", error: null },
+      },
+      health: undefined,
+      lastHeartbeat: null,
+    });
+
+    expect(
+      stripAnsi(report.overviewRows.find(({ Item }) => Item === "Last heartbeat")?.Value ?? ""),
+    ).toBe("not checked (gateway still starting; phase plugins)");
+    expect(report.footerLines.at(-1)).toBe("  Retry after startup: openclaw status --deep");
+    expect(report.footerLines.join("\n")).not.toContain("Fix reachability first");
+  });
+
   it("builds report inputs from shared status surfaces", async () => {
     const baseParams = createStatusCommandReportDataParams();
     const result = await buildStatusCommandReportData(

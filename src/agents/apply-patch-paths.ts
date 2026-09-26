@@ -1,5 +1,5 @@
 /**
- * Path extraction for the apply_patch envelope grammar.
+ * Input resolution, path extraction, and display for the apply_patch envelope grammar.
  * Used by pre-execution policy hooks that only need destination paths, not the
  * full strict patch parser.
  */
@@ -8,6 +8,26 @@ import { extractApplyPatchTargets } from "./apply-patch-targets.js";
 import { preserveAtPrefixedRelativePath, resolvePathFromInput } from "./path-policy.js";
 import { normalizeFileReferencePrefix, resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+
+function relativePathEscapesRoot(relativePath: string): boolean {
+  return (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.startsWith("..\\") ||
+    path.isAbsolute(relativePath)
+  );
+}
+
+export function toDisplayPath(resolved: string, cwd: string): string {
+  const relative = path.relative(cwd, resolved);
+  if (!relative || relative === "") {
+    return path.basename(resolved);
+  }
+  if (relativePathEscapesRoot(relative)) {
+    return resolved;
+  }
+  return relative;
+}
 
 /**
  * Lightweight path extractor for the `apply_patch` envelope grammar.

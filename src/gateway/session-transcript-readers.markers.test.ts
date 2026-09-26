@@ -32,6 +32,7 @@ function compaction(id: string, firstKeptEntryId: string) {
     summary: `${id} summary`,
     firstKeptEntryId,
     tokensBefore: 100,
+    tokensAfter: 25,
   };
 }
 
@@ -108,6 +109,31 @@ describe("session transcript reader marker projection", () => {
     ]);
     return scope;
   }
+
+  test("pages pre-compaction history and token savings from the transcript without checkpoints", async () => {
+    const scope = await writeTranscript("metrics", [
+      message("before", "Original conversation"),
+      compaction("summary", "before"),
+      message("after", "Continued conversation", "assistant"),
+    ]);
+    const messages = await readSessionMessagesAsync(scope, {
+      mode: "full",
+      reason: "Compaction metrics and retained history regression",
+    });
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ __openclaw: expect.objectContaining({ id: "before" }) }),
+        expect.objectContaining({
+          __openclaw: expect.objectContaining({
+            id: "summary",
+            tokensBefore: 100,
+            tokensAfter: 25,
+          }),
+        }),
+        expect.objectContaining({ __openclaw: expect.objectContaining({ id: "after" }) }),
+      ]),
+    );
+  });
 
   test.each([
     {

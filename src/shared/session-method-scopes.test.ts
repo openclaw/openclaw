@@ -120,6 +120,8 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   it.each([
     { contextWindow: "extended" },
     { toolOverrides: {} },
+    { sandboxMode: "off" },
+    { sandboxMode: null },
     { verboseLevel: "full" },
     { reasoningLevel: "high" },
     { thinkingLevel: "high", verboseLevel: "full" },
@@ -135,6 +137,14 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   });
 
   it("scopes sessions.patchMany from the shared patch only", () => {
+    for (const sandboxMode of ["off", null]) {
+      expect(
+        resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
+          targets: [{ key: "agent:main:thread", expectedSandboxMode: null }],
+          patch: { sandboxMode },
+        }),
+      ).toBe("operator.admin");
+    }
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
         targets: [

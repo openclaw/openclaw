@@ -7,6 +7,7 @@ import { waitForPidFile } from "../../../../test/helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { killPidIfAlive } from "../../../test-utils/process-tree.js";
+import * as relayIntegration from "../../spawn-broker/relay-integration.js";
 import { createProcessSupervisor } from "../supervisor.js";
 import { createChildAdapter } from "./child.js";
 import {
@@ -301,7 +302,7 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       stdinMode: "pipe-closed",
     });
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
+      adapter.onExit!(() => resolve());
     });
 
     let stdout = "";
@@ -664,11 +665,25 @@ describeSpawnTransports("service-managed child lifecycle", () => {
         });
       });
     `;
-      const adapter = await startChildAdapter({
-        ownProcessTree: true,
-        argv: [process.execPath, "-e", rootScript],
-        stdinMode: "pipe-closed",
-      });
+      const relayExited = createDeferred();
+      const spawnRelay = relayIntegration.spawnServiceChildRelay;
+      const observeRelay = vi
+        .spyOn(relayIntegration, "spawnServiceChildRelay")
+        .mockImplementation((params) => {
+          const relay = spawnRelay(params);
+          relay.child.once("exit", () => relayExited.resolve());
+          return relay;
+        });
+      let adapter: Awaited<ReturnType<typeof startChildAdapter>>;
+      try {
+        adapter = await startChildAdapter({
+          ownProcessTree: true,
+          argv: [process.execPath, "-e", rootScript],
+          stdinMode: "pipe-closed",
+        });
+      } finally {
+        observeRelay.mockRestore();
+      }
       let output = "";
       adapter.onStdout((chunk) => {
         output += chunk;
@@ -677,14 +692,33 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       const [rootPid, descendantPid] = parsePidPair(output);
       activePids.add(rootPid);
       activePids.add(descendantPid);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
+        const extinction = adapter.waitForExtinction!();
+        let settled = false;
+        void extinction.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          },
+        );
         adapter.kill(signal);
-        await expect(adapter.waitForExtinction!()).rejects.toThrow(
+        // Real relay exit follows the closing acknowledgement; its host deadline is now armed.
+        await relayExited.promise;
+        expect(isAlive(descendantPid)).toBe(true);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(extinction).rejects.toThrow(
           "service child cleanup did not complete before its hard deadline",
         );
         await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
         expect(isAlive(descendantPid)).toBe(true);
       } finally {
+        vi.useRealTimers();
         killPidIfAlive(descendantPid);
         try {
           await waitFor(() => !isAlive(descendantPid));
@@ -864,10 +898,12 @@ describeSpawnTransports("service-managed child lifecycle", () => {
         ${serviceChildHostTransportPrelude()}
         const { createChildAdapter } = await import(${JSON.stringify(childModuleUrl)});
         const { adapter, ready } = await withTransport(() => createChildAdapter({
-          argv: ["/bin/sh", "-c", "sleep 0.05; kill -KILL $PPID; sleep 0.05"],
-          stdinMode: "pipe-closed",
+          argv: ["/bin/sh", "-c", "read gate; kill -KILL $PPID; sleep 0.05"],
+          stdinMode: "pipe-open",
         }));
         await ready;
+        adapter.stdin.write("kill\\n");
+        adapter.stdin.end();
         await new Promise((resolve) => setTimeout(resolve, 200));
         try {
           await adapter.wait();

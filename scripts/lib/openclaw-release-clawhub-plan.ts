@@ -34,6 +34,7 @@ type OpenClawReleaseClawHubPlanArgs = {
   releasePublishRunId: string;
   pluginPublishScope: PluginReleaseSelectionMode;
   plugins: string[];
+  skipClawHub?: boolean;
   preparedArtifact?: string;
 };
 
@@ -266,6 +267,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
   let pluginPublishScope: PluginReleaseSelectionMode | undefined;
   let plugins: string[] = [];
   let pluginsFlagProvided = false;
+  let skipClawHub = false;
   let preparedArtifact: string | undefined;
 
   for (let index = 0; index < values.length; index += 1) {
@@ -314,6 +316,9 @@ export function parseOpenClawReleaseClawHubPlanArgs(
         plugins = parsePluginReleaseSelection(next());
         pluginsFlagProvided = true;
         break;
+      case "--skip-clawhub":
+        skipClawHub = true;
+        break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
@@ -344,6 +349,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     releasePublishRunId: requireArg(releasePublishRunId, "--release-publish-run-id"),
     pluginPublishScope: resolvedPluginPublishScope,
     plugins,
+    skipClawHub,
     ...(preparedArtifact ? { preparedArtifact } : {}),
   };
 }
@@ -367,34 +373,37 @@ export async function buildOpenClawReleaseClawHubPlan(
     "releasePublishRunAttempt",
   );
   const releasePublishRunId = requireArg(args.releasePublishRunId, "releasePublishRunId");
-  const prepared = args.preparedArtifact
-    ? await resolvePreparedClawHubMatrix({
-        descriptor: JSON.parse(args.preparedArtifact),
-        candidateSha: releaseSha,
-        toolingSha: bootstrapWorkflowSha,
-        selectionMode: args.pluginPublishScope,
-        plugins: args.plugins,
-        sourceRoot: options.rootDir ?? resolve("."),
-        token: process.env.GH_TOKEN,
-        fetchImpl: options.fetchImpl,
-      })
-    : undefined;
-  const plan = prepared
-    ? {
-        // Prepared publication requires established normal trusted publishers;
-        // the resolver rejects bootstrap/repair needs before this routing.
-        candidates: prepared,
-        bootstrapCandidates: [],
-        missingTrustedPublisher: [],
-        warnings: [],
-      }
-    : await collectPluginClawHubReleasePlan({
-        rootDir: options.rootDir ?? resolve("."),
-        selection: args.plugins,
-        selectionMode: args.pluginPublishScope,
-        fetchImpl: options.fetchImpl,
-        registryBaseUrl: options.registryBaseUrl,
-      });
+  const prepared =
+    !args.skipClawHub && args.preparedArtifact
+      ? await resolvePreparedClawHubMatrix({
+          descriptor: JSON.parse(args.preparedArtifact),
+          candidateSha: releaseSha,
+          toolingSha: bootstrapWorkflowSha,
+          selectionMode: args.pluginPublishScope,
+          plugins: args.plugins,
+          sourceRoot: options.rootDir ?? resolve("."),
+          token: process.env.GH_TOKEN,
+          fetchImpl: options.fetchImpl,
+        })
+      : undefined;
+  const plan = args.skipClawHub
+    ? { candidates: [], bootstrapCandidates: [], missingTrustedPublisher: [], warnings: [] }
+    : prepared
+      ? {
+          // Prepared publication requires established normal trusted publishers;
+          // the resolver rejects bootstrap/repair needs before this routing.
+          candidates: prepared,
+          bootstrapCandidates: [],
+          missingTrustedPublisher: [],
+          warnings: [],
+        }
+      : await collectPluginClawHubReleasePlan({
+          rootDir: options.rootDir ?? resolve("."),
+          selection: args.plugins,
+          selectionMode: args.pluginPublishScope,
+          fetchImpl: options.fetchImpl,
+          registryBaseUrl: options.registryBaseUrl,
+        });
 
   const normalPackages = packageNames(plan.candidates);
   const bootstrapPackages = [

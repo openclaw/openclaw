@@ -28,6 +28,7 @@ export type BrowserDashboardTarget = {
   agentId?: string;
   name: string;
   instanceId: string;
+  sessionScoped?: boolean;
 };
 
 export type BrowserDashboard = {
@@ -48,15 +49,24 @@ export async function requestBrowserDashboard(
 ): Promise<BrowserDashboard> {
   const result = asRecord(
     await client.request(
-      "browser.request",
+      params.sessionScoped ? "browser.dashboard.request" : "browser.request",
       {
-        target: "host",
+        ...(params.sessionScoped
+          ? {
+              sessionKey: params.sessionKey,
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+              dashboard: { name: params.name, instanceId: params.instanceId },
+            }
+          : { target: "host" }),
         method: action === "stop" ? "DELETE" : action === "inspect" ? "GET" : "POST",
         path: "/dashboard",
         ...(action === "inspect"
-          ? { query: params }
+          ? { query: params.sessionScoped ? {} : params }
           : {
-              body: { ...params, ...(action === "resume" ? { resume: true } : {}) },
+              body: {
+                ...(params.sessionScoped ? {} : params),
+                ...(action === "resume" ? { resume: true } : {}),
+              },
             }),
         timeoutMs: 120_000,
       },
@@ -149,6 +159,14 @@ type BrowserRequestEnvelope = {
   timeoutMs?: number;
 };
 
+function withoutBrowserTarget(value: unknown): Record<string, unknown> {
+  const result = { ...asRecord(value) };
+  for (const key of ["target", "targetId", "node", "profile"]) {
+    delete result[key];
+  }
+  return result;
+}
+
 /** Bind every browser operation to one route and one live panel scope. */
 export function bindBrowserRequestClient(
   client: BrowserRequestClient,
@@ -166,6 +184,23 @@ export function bindBrowserRequestClient(
         throw new DOMException("Browser request scope ended", "AbortError");
       }
       const envelope = asRecord(params);
+      if (dashboard?.sessionScoped) {
+        // Scoped routes bind their browser target on the server. Never forward a
+        // panel's cached profile or tab selection into that authority boundary.
+        const scopedParams = {
+          method: envelope?.method,
+          path: envelope?.path,
+          ...(envelope?.timeoutMs !== undefined ? { timeoutMs: envelope.timeoutMs } : {}),
+          ...(envelope?.query ? { query: withoutBrowserTarget(envelope.query) } : {}),
+          ...(envelope?.body ? { body: withoutBrowserTarget(envelope.body) } : {}),
+          sessionKey: dashboard.sessionKey,
+          ...(dashboard.agentId ? { agentId: dashboard.agentId } : {}),
+          dashboard: { name: dashboard.name, instanceId: dashboard.instanceId },
+        };
+        return options
+          ? await client.request<T>("browser.dashboard.request", scopedParams, options)
+          : await client.request<T>("browser.dashboard.request", scopedParams);
+      }
       const routedParams =
         route || dashboard
           ? {
@@ -187,8 +222,14 @@ export function bindBrowserRequestClient(
   };
 }
 
-function browserRequest<T>(client: BrowserRequestClient, envelope: BrowserRequestEnvelope) {
-  return client.request<T>(BROWSER_REQUEST_METHOD, envelope);
+function browserRequest<T>(
+  client: BrowserRequestClient,
+  envelope: BrowserRequestEnvelope,
+  options?: GatewayClientRequestOptions,
+) {
+  return options
+    ? client.request<T>(BROWSER_REQUEST_METHOD, envelope, options)
+    : client.request<T>(BROWSER_REQUEST_METHOD, envelope);
 }
 
 function stringOrEmpty(value: unknown): string {
@@ -291,9 +332,10 @@ export async function navigateBrowser(
 export async function requestBrowserScreencast(
   client: BrowserRequestClient,
   params: { targetId: string; maxWidth: number; maxHeight: number },
+  options?: GatewayClientRequestOptions,
 ): Promise<{ token: string; wsPath: string; targetId: string; url: string }> {
   const result = asRecord(
-    await browserRequest(client, { method: "POST", path: "/screencast", body: params }),
+    await browserRequest(client, { method: "POST", path: "/screencast", body: params }, options),
   );
   const token = stringOrEmpty(result?.token);
   const wsPath = stringOrEmpty(result?.wsPath);

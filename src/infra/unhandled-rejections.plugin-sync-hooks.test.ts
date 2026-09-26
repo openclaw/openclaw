@@ -1,8 +1,15 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
-import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { nativeBoundaryTestEntrypoints } from "./native-boundary-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+
+const rejectionUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.unhandledRejections);
+const hooksUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.pluginHooks);
+const registryUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.emptyPluginRegistry);
 
 const syncHookNames = ["tool_result_persist", "before_message_write"] as const;
 type SyncHookName = (typeof syncHookNames)[number];
@@ -48,10 +55,16 @@ describe("sync-only plugin hooks", () => {
     (hookName) => {
       const method =
         hookName === "tool_result_persist" ? "runToolResultPersist" : "runBeforeMessageWrite";
-      const result = spawnNodeEvalSync(
-        `import { installUnhandledRejectionHandler } from "./src/infra/unhandled-rejections.ts";
-       import { createHookRunner } from "./src/plugins/hooks.ts";
-       import { createEmptyPluginRegistry } from "./src/plugins/registry-empty.ts";
+      const nodeExecutable = resolveTestNodeExecPath();
+      const result = spawnSync(
+        nodeExecutable,
+        [
+          ...resolveRuntimeWorkerArgv(rejectionUrl, nodeExecutable).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          `import { installUnhandledRejectionHandler } from ${JSON.stringify(rejectionUrl.href)};
+       import { createHookRunner } from ${JSON.stringify(hooksUrl.href)};
+       import { createEmptyPluginRegistry } from ${JSON.stringify(registryUrl.href)};
        installUnhandledRejectionHandler();
        const registry = createEmptyPluginRegistry();
        registry.typedHooks.push({
@@ -74,7 +87,8 @@ describe("sync-only plugin hooks", () => {
          process.exit(2);
        }
        console.log("sync hook rejection contained");`,
-        { imports: ["tsx"], timeout: 20_000 },
+        ],
+        { cwd: process.cwd(), encoding: "utf8", timeout: 20_000 },
       );
 
       expect(result.status).toBe(0);

@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
 import {
   collectChannelDoctorCompatibilityMutations,
-  collectChannelDoctorEmptyAllowlistExtraWarnings,
   collectChannelDoctorMutableAllowlistWarnings,
   collectChannelDoctorPreviewWarnings,
   collectChannelDoctorStaleConfigMutations,
@@ -391,10 +390,10 @@ describe("channel doctor compatibility mutations", () => {
       ],
     });
 
-    const result = collectChannelDoctorEmptyAllowlistExtraWarnings({
+    const hooks = createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: cfg as never });
+    const result = hooks.extraWarningsForAccount({
       account: {},
       channelName: "matrix",
-      cfg: cfg as never,
       prefix: "channels.matrix",
     });
 

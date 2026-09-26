@@ -378,6 +378,8 @@ describe("command-startup-policy", () => {
   it("reserves stdout for the browser native-host protocol", () => {
     const policy = resolvePolicy({ commandPath: ["browser", "extension", "native-host"] });
 
+    expect(policy.skipConfigGuard).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
     expect(policy.hideBanner).toBe(true);
     expect(policy.suppressDoctorStdout).toBe(true);
   });
@@ -391,6 +393,13 @@ describe("command-startup-policy", () => {
     expect(policy.validateConfigOnly).toBe(true);
     expect(policy.skipConfigGuard).toBe(false);
     expect(resolvePolicy({ commandPath: ["node", "run"] }).validateConfigOnly).toBeUndefined();
+  });
+
+  it("keeps managed worktree commands out of shared-state migration preflight", () => {
+    const policy = resolvePolicy({ commandPath: ["worktrees", "gc"] });
+
+    expect(policy.validateConfigOnly).toBe(true);
+    expect(policy.skipConfigGuard).toBe(false);
   });
 
   it("isolates cloud worker startup", () => {

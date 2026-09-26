@@ -6,7 +6,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredContextTokenLimits } from "./context-resolution.js";
-import { resolveProviderEndpoint } from "./provider-attribution.js";
+import { isLocalProviderEndpoint } from "./provider-attribution.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000;
 const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 8_000;
@@ -69,17 +69,14 @@ type ContextWindowGuardThresholds = {
 };
 
 type ContextWindowGuardHint = {
-  endpointClass: ReturnType<typeof resolveProviderEndpoint>["endpointClass"];
   likelySelfHosted: boolean;
 };
 
 function resolveContextWindowGuardHint(params: {
   runtimeBaseUrl?: string | null;
 }): ContextWindowGuardHint {
-  const endpoint = resolveProviderEndpoint(params.runtimeBaseUrl ?? undefined);
   return {
-    endpointClass: endpoint.endpointClass,
-    likelySelfHosted: endpoint.endpointClass === "local",
+    likelySelfHosted: isLocalProviderEndpoint(params.runtimeBaseUrl),
   };
 }
 

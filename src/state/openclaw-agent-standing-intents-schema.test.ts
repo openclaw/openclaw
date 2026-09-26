@@ -251,7 +251,7 @@ describe("additive memory agent schemas", () => {
           id, path, source, start_line, end_line, hash, model, text, embedding,
           updated_at, importance, triggers, project_key
         ) VALUES (
-          'sentinel', 'MEMORY.md', 'memory', 1, 1, 'hash', 'model', 'body', '[]',
+          'sentinel', 'MEMORY.md', 'memory', 1, 1, 'hash', 'model', 'body', X'',
           42, 9, 'when testing rollback', 'project/key'
         );
       `);
@@ -271,6 +271,7 @@ describe("additive memory agent schemas", () => {
           .all()
           .map((row) => (row as { name: string }).name),
       ).toEqual([
+        "chunk_rowid",
         "id",
         "path",
         "source",

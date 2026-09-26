@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRoleSnapshotFromAiSnapshot,
-  buildRoleSnapshotFromAriaSnapshot,
   finalizeRoleSnapshot,
   getRoleSnapshotIdentityKeys,
   parseRoleRef,
@@ -21,12 +20,7 @@ describe("pw-role-snapshot", () => {
       ["button /", "/"],
       ["button /x [ref=e99]/", "/x [ref=e99]/"],
       [String.raw`button "Control\u0001button"`, "Control\u0001button"],
-    ])("preserves %s through actionable refs", (key, name) => {
-      const built = buildRoleSnapshotFromAriaSnapshot(`- ${key}`, { interactive });
-      const result = finalizeRoleSnapshot(built);
-      expect(result.refs).toEqual({ e1: { role: "button", name } });
-      expect(result.stats.refs).toBe(1);
-      expect(result.snapshot).toContain(JSON.stringify(name));
+    ])("preserves %s through native AI refs", (key, name) => {
       const aiKey = key.endsWith("'") ? `${key.slice(0, -1)} [ref=f2e7]'` : `${key} [ref=f2e7]`;
       const ai = finalizeRoleSnapshot({
         ...buildRoleSnapshotFromAiSnapshot(`- ${aiKey}`, { interactive }),
@@ -34,6 +28,7 @@ describe("pw-role-snapshot", () => {
       });
       expect(ai.refs).toEqual({ f2e7: { role: "button", name } });
       expect(ai.newElements).toBe(1);
+      expect(ai.stats.refs).toBe(1);
     });
 
     it("preserves native frame refs without reading refs inside names or values", () => {
@@ -104,61 +99,33 @@ describe("pw-role-snapshot", () => {
     expect(result.refs).toEqual({ f1e1: { role: "button", name: "Real" } });
   });
 
-  it.each([
-    ["role", buildRoleSnapshotFromAriaSnapshot],
-    ["AI", buildRoleSnapshotFromAiSnapshot],
-  ] as const)("keeps an explicit empty result for compact %s snapshots", (_mode, build) => {
-    const result = build("", { compact: true });
+  it("keeps an explicit empty result for compact AI snapshots", () => {
+    const result = buildRoleSnapshotFromAiSnapshot("", { compact: true });
     expect(result.snapshot).toBe("(empty)");
     expect(result.refs).toEqual({});
   });
 
-  it("adds refs for interactive elements", () => {
-    const aria = [
-      '- heading "Example" [level=1]',
-      "- paragraph: hello",
-      '- button "Submit"',
-      "  - generic",
-      '- link "Learn more"',
-    ].join("\n");
-
-    const res = buildRoleSnapshotFromAriaSnapshot(aria, { interactive: true });
-    expect(res.snapshot).toContain("[ref=e1]");
-    expect(res.snapshot).toContain("[ref=e2]");
-    expect(res.snapshot).toContain('- button "Submit" [ref=e1]');
-    expect(res.snapshot).toContain('- link "Learn more" [ref=e2]');
-    expect(Object.keys(res.refs)).toEqual(["e1", "e2"]);
-    expect(res.refs.e1?.role).toBe("button");
-    expect(res.refs.e1?.name).toBe("Submit");
-    expect(res.refs.e2?.role).toBe("link");
-    expect(res.refs.e2?.name).toBe("Learn more");
-  });
-
-  it("uses nth only when duplicates exist", () => {
-    const aria = ['- button "OK"', '- button "OK"', '- button "Cancel"'].join("\n");
-    const res = buildRoleSnapshotFromAriaSnapshot(aria);
-    expect(res.snapshot).toContain("[ref=e1]");
-    expect(res.snapshot).toContain("[ref=e2] [nth=1]");
-    expect(res.refs.e1?.nth).toBe(0);
-    expect(res.refs.e2?.nth).toBe(1);
-    expect(res.refs.e3?.nth).toBeUndefined();
-  });
   it("respects maxDepth", () => {
-    const aria = ['- region "Main"', "  - group", '    - button "Deep"'].join("\n");
-    const res = buildRoleSnapshotFromAriaSnapshot(aria, { maxDepth: 1 });
+    const ai = ['- region "Main" [ref=f1e1]', "  - group", '    - button "Deep" [ref=f1e2]'].join(
+      "\n",
+    );
+    const res = buildRoleSnapshotFromAiSnapshot(ai, { maxDepth: 1 });
     expect(res.snapshot).toContain('- region "Main"');
     expect(res.snapshot).toContain("  - group");
     expect(res.snapshot).not.toContain("button");
   });
 
   it("keeps named branches with refs and drops empty branches when compact", () => {
-    const aria = ['- list "Menu":', '  - button "Save"', '- list "Empty":', "  - generic"].join(
-      "\n",
-    );
+    const ai = [
+      '- list "Menu":',
+      '  - button "Save" [ref=f1e7]',
+      '- list "Empty":',
+      "  - generic",
+    ].join("\n");
 
-    const res = buildRoleSnapshotFromAriaSnapshot(aria, { compact: true });
+    const res = buildRoleSnapshotFromAiSnapshot(ai, { compact: true });
 
-    expect(res.snapshot).toBe('- list "Menu":\n  - button "Save" [ref=e1]');
+    expect(res.snapshot).toBe('- list "Menu":\n  - button "Save" [ref=f1e7]');
   });
 
   it("caps complete lines and derives refs and stats from the returned snapshot", () => {
@@ -340,7 +307,7 @@ describe("pw-role-snapshot", () => {
 
   it("returns a helpful message when no interactive elements exist", () => {
     const aria = ['- heading "Hello"', "- paragraph: world"].join("\n");
-    const res = buildRoleSnapshotFromAriaSnapshot(aria, { interactive: true });
+    const res = buildRoleSnapshotFromAiSnapshot(aria, { interactive: true });
     expect(res.snapshot).toBe("(no interactive elements)");
     expect(Object.keys(res.refs)).toStrictEqual([]);
   });
@@ -389,5 +356,20 @@ describe("pw-role-snapshot", () => {
     expect(res.refs["5"]?.name).toBe("Home");
     expect(res.refs["7"]?.role).toBe("button");
     expect(res.refs["7"]?.name).toBe("Save");
+  });
+
+  it.each([
+    {
+      options: {},
+      expected: '\n    - button "Deep" [ref=f1e1]\nraw\r\n- button "Save" [ref=f1e2]\n\n',
+    },
+    { options: { maxDepth: 0 }, expected: '\nraw\r\n- button "Save" [ref=f1e2]\n\n' },
+  ])("preserves raw line boundaries with options $options", ({ options, expected }) => {
+    const result = buildRoleSnapshotFromAiSnapshot(
+      '\n    - button "Deep" [ref=f1e1]\nraw\r\n- button "Save" [ref=f1e2]\n\n',
+      options,
+    );
+    expect(result.snapshot).toBe(expected);
+    expect(Object.keys(result.refs)).toEqual(options.maxDepth === 0 ? ["f1e2"] : ["f1e1", "f1e2"]);
   });
 });

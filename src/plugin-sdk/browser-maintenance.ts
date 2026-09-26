@@ -6,6 +6,8 @@ export { movePathToTrash, type MovePathToTrashOptions } from "./browser-trash.js
 
 type CloseTrackedBrowserTabsParams = {
   sessionKeys: Array<string | undefined>;
+  /** Gates new cleanup claims; already claimed tabs retain their cleanup owner. */
+  isCurrent?: () => boolean;
   closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
   onWarn?: (message: string) => void;
 };
@@ -22,7 +24,7 @@ function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolea
 export async function closeTrackedBrowserTabsForSessions(
   params: CloseTrackedBrowserTabsParams,
 ): Promise<number> {
-  if (!hasRequestedSessionKeys(params.sessionKeys)) {
+  if (params.isCurrent?.() === false || !hasRequestedSessionKeys(params.sessionKeys)) {
     return 0;
   }
 
@@ -37,7 +39,7 @@ export async function closeTrackedBrowserTabsForSessions(
     params.onWarn?.(`browser cleanup unavailable: ${String(error)}`);
     return 0;
   }
-  if (!surface) {
+  if (!surface || params.isCurrent?.() === false) {
     return 0;
   }
   return await surface.closeTrackedBrowserTabsForSessions(params);

@@ -11,6 +11,8 @@ import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { Context } from "../../llm/types.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { mintSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
 import {
@@ -327,6 +329,20 @@ describe("google prompt cache", () => {
       expireTime,
     });
     const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+    const providerMetadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "google",
+          providers: ["google"],
+          providerEndpoints: [
+            {
+              endpointClass: "google-generative-ai",
+              hosts: ["generativelanguage.googleapis.com"],
+            },
+          ],
+        },
+      ],
+    });
 
     const wrapped = await preparePromptCacheStream({
       fetchMock,
@@ -337,7 +353,7 @@ describe("google prompt cache", () => {
 
     expect(wrapped).toBeTypeOf("function");
     expect(fetchMock).not.toHaveBeenCalled();
-    await Promise.resolve(
+    await withPluginMetadataSnapshotScope(providerMetadata, () =>
       wrapped?.(
         makeGoogleModel(),
         {

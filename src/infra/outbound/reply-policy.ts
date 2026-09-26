@@ -1,3 +1,4 @@
+import { isReplyPayloadTargetSuppressed } from "../../auto-reply/reply-payload.js";
 // Reply policy coordinates explicit and implicit reply-to ids across chunked or
 // multi-payload outbound delivery.
 import { isSingleUseReplyToMode } from "../../auto-reply/reply/reply-reference.js";
@@ -75,6 +76,9 @@ export function createReplyToDeliveryPolicy(params: {
   let replyToConsumed = false;
 
   const resolveCurrentReplyTo = (payload: ReplyPayload): ReplyToResolution => {
+    if (isReplyPayloadTargetSuppressed(payload)) {
+      return {};
+    }
     if (payload.replyToId != null) {
       return payload.replyToId ? { replyToId: payload.replyToId, source: "explicit" } : {};
     }

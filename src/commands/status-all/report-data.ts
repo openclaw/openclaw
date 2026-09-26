@@ -13,7 +13,7 @@ import {
   buildPluginCompatibilityNotices,
   withPluginDiagnosticsReport,
 } from "../../plugins/status.js";
-import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
 import {
@@ -59,6 +59,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
   gatewayCallOverrides: StatusScanOverviewResult["gatewaySnapshot"]["gatewayCallOverrides"];
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
   timeoutMs?: number;
+  gatewayProbeDeadlineMs: number;
 }): Promise<{
   configPath: string;
   health: StatusGatewayHealthSafe | undefined;
@@ -73,12 +74,13 @@ async function resolveStatusAllLocalDiagnosis(params: {
     tailscaleMode: string;
     tailscaleDns: string | null;
     tailscaleHttpsUrl: string | null;
-    skillStatus: ReturnType<typeof buildWorkspaceSkillStatus> | null;
+    skillReadiness: ReturnType<typeof buildWorkspaceSkillReadiness> | null;
     pluginCompatibility: ReturnType<typeof buildPluginCompatibilityNotices>;
     channelsStatus: StatusScanOverviewResult["channelsStatus"];
     channelIssues: StatusScanOverviewResult["channelIssues"];
     agentStatus: StatusScanOverviewResult["agentStatus"];
     gatewayReachable: boolean;
+    gatewayStartupPhase?: string;
     health: StatusGatewayHealthSafe | undefined;
     deliveryDiagnostics: StatusGatewayDiagnosticsResult | null;
     exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
@@ -90,27 +92,30 @@ async function resolveStatusAllLocalDiagnosis(params: {
   const configPath = resolveStatusAllConfigPath(snap?.path);
   const diagnosticsParams = {
     config: overview.cfg,
+    gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
     timeoutMs: Math.min(5000, params.timeoutMs ?? 10_000),
     gatewayReachable: params.gatewayReachable,
     ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
   };
 
-  const [health, deliveryDiagnostics, exporterDiagnostics] = params.nodeOnlyGateway
-    ? [undefined, null, null]
-    : await Promise.all([
-        resolveStatusGatewayHealthSafe({
-          config: overview.cfg,
-          timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
-          gatewayReachable: params.gatewayReachable,
-          gatewayProbeError: params.gatewayProbe?.error ?? null,
-          ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
-        }),
-        resolveStatusGatewayDiagnosticsSafe(diagnosticsParams),
-        resolveStatusGatewayDiagnosticsSafe({
-          ...diagnosticsParams,
-          type: "telemetry.exporter",
-        }),
-      ]);
+  const [health, deliveryDiagnostics, exporterDiagnostics] =
+    params.nodeOnlyGateway || params.gatewayProbe?.startupPhase
+      ? [undefined, null, null]
+      : await Promise.all([
+          resolveStatusGatewayHealthSafe({
+            config: overview.cfg,
+            gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+            timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
+            gatewayReachable: params.gatewayReachable,
+            gatewayProbeError: params.gatewayProbe?.error ?? null,
+            ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
+          }),
+          resolveStatusGatewayDiagnosticsSafe(diagnosticsParams),
+          resolveStatusGatewayDiagnosticsSafe({
+            ...diagnosticsParams,
+            type: "telemetry.exporter",
+          }),
+        ]);
 
   params.progress.setLabel("Checking local state…");
   // These probes are intentionally best-effort so status-all can still print a partial report.
@@ -131,7 +136,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
     env: process.env,
   });
   const defaultWorkspace = controlPlaneWorkspace.workspaceDir ?? null;
-  const skillStatus =
+  const skillReadiness =
     defaultWorkspace != null
       ? (() => {
           try {
@@ -141,7 +146,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
               execApprovals: loadExecApprovalsReadOnly(),
               agentId: controlPlaneWorkspace.agentId,
             });
-            return buildWorkspaceSkillStatus(defaultWorkspace, {
+            return buildWorkspaceSkillReadiness(defaultWorkspace, {
               config: overview.cfg,
               agentId: controlPlaneWorkspace.agentId,
               eligibility: {
@@ -175,12 +180,13 @@ async function resolveStatusAllLocalDiagnosis(params: {
       tailscaleMode: overview.tailscaleMode,
       tailscaleDns: overview.tailscaleDns,
       tailscaleHttpsUrl: overview.tailscaleHttpsUrl,
-      skillStatus,
+      skillReadiness,
       pluginCompatibility,
       channelsStatus: overview.channelsStatus,
       channelIssues: overview.channelIssues,
       agentStatus: overview.agentStatus,
       gatewayReachable: params.gatewayReachable,
+      gatewayStartupPhase: params.gatewayProbe?.startupPhase,
       health,
       deliveryDiagnostics,
       exporterDiagnostics,
@@ -197,6 +203,7 @@ export async function buildStatusAllReportData(params: {
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
   progress: StatusAllProgress;
   timeoutMs?: number;
+  gatewayProbeDeadlineMs: number;
 }) {
   const gatewaySnapshot = params.overview.gatewaySnapshot;
   const [{ configPath, health, diagnosis }, summary] = await Promise.all([
@@ -208,6 +215,7 @@ export async function buildStatusAllReportData(params: {
       gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
       nodeOnlyGateway: params.nodeOnlyGateway,
       timeoutMs: params.timeoutMs,
+      gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
     }),
     params.overview.runtimeDegradation ??
       resolveStatusSummaryFromOverview({ overview: params.overview }),

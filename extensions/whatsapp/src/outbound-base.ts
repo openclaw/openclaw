@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements outbound base behavior.
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -6,7 +5,6 @@ import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 import {
@@ -28,16 +26,7 @@ type CreateWhatsAppOutboundBaseParams = {
   shouldLogVerbose: () => boolean;
   resolveTarget: ChannelOutboundAdapter["resolveTarget"];
   normalizeText?: (text: string | undefined) => string;
-  skipEmptyText?: boolean;
 };
-
-function resolveQuoteLookupAccountId(cfg?: OpenClawConfig, accountId?: string | null): string {
-  const explicitAccountId = normalizeOptionalAccountId(accountId);
-  if (explicitAccountId) {
-    return explicitAccountId;
-  }
-  return resolveDefaultWhatsAppAccountId(cfg ?? {});
-}
 
 type WhatsAppOutboundBaseCore = Pick<
   ChannelOutboundAdapter,
@@ -58,7 +47,6 @@ export function createWhatsAppOutboundBase({
   shouldLogVerbose,
   resolveTarget,
   normalizeText = normalizeWhatsAppPayloadText,
-  skipEmptyText = true,
 }: CreateWhatsAppOutboundBaseParams): WhatsAppOutboundBaseCore &
   Pick<ChannelOutboundAdapter, "sendPayload"> {
   const resolveQuotedMessageKey = (params: {
@@ -88,11 +76,16 @@ export function createWhatsAppOutboundBase({
     text: string | undefined,
     mediaOptions?: Pick<
       WhatsAppSendOptions,
-      "mediaUrl" | "mediaAccess" | "mediaLocalRoots" | "mediaReadFile" | "audioAsVoice"
+      | "mediaUrl"
+      | "mediaAccess"
+      | "mediaLocalRoots"
+      | "mediaReadFile"
+      | "audioAsVoice"
+      | "forceDocument"
     >,
-    mediaDeliveryOptions?: Pick<WhatsAppSendOptions, "forceDocument">,
   ) => {
-    const lookupAccountId = resolveQuoteLookupAccountId(params.cfg, params.accountId);
+    const lookupAccountId =
+      normalizeOptionalAccountId(params.accountId) ?? resolveDefaultWhatsAppAccountId(params.cfg);
     const quotedMessageKey = resolveQuotedMessageKey({
       accountId: lookupAccountId,
       to: params.to,
@@ -110,7 +103,6 @@ export function createWhatsAppOutboundBase({
       ...mediaOptions,
       accountId: params.accountId ?? undefined,
       gifPlayback: params.gifPlayback,
-      ...mediaDeliveryOptions,
       replyToIdSource: params.replyToIdSource,
       replyToMode: params.replyToMode,
       formatting: params.formatting,
@@ -143,24 +135,20 @@ export function createWhatsAppOutboundBase({
       channel: "whatsapp",
       sendText: async (params) => {
         const normalizedText = normalizeText(params.text);
-        if (skipEmptyText && !normalizedText) {
+        if (!normalizedText) {
           return { messageId: "" };
         }
         return await dispatchMessage(params, normalizedText);
       },
       sendMedia: async (params) =>
-        await dispatchMessage(
-          params,
-          undefined,
-          {
-            mediaUrl: params.mediaUrl,
-            mediaAccess: params.mediaAccess,
-            mediaLocalRoots: params.mediaLocalRoots,
-            mediaReadFile: params.mediaReadFile,
-            ...(params.audioAsVoice === undefined ? {} : { audioAsVoice: params.audioAsVoice }),
-          },
-          { forceDocument: params.forceDocument },
-        ),
+        await dispatchMessage(params, undefined, {
+          mediaUrl: params.mediaUrl,
+          mediaAccess: params.mediaAccess,
+          mediaLocalRoots: params.mediaLocalRoots,
+          mediaReadFile: params.mediaReadFile,
+          ...(params.audioAsVoice === undefined ? {} : { audioAsVoice: params.audioAsVoice }),
+          forceDocument: params.forceDocument,
+        }),
       sendPoll: async ({ cfg, to, poll, accountId }) =>
         await sendPollWhatsApp(to, poll, {
           verbose: shouldLogVerbose(),

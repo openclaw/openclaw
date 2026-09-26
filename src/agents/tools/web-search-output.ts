@@ -7,7 +7,10 @@
  * re-wrapped here unconditionally, so no provider-controlled metadata can
  * spoof the trust marker and transport-specific extras never reach the model.
  */
-import { asFiniteNumber as readFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber as readFiniteNumber,
+  parseDateStringTimestampMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
@@ -116,7 +119,7 @@ const WEB_SEARCH_CITATION_MAX_SCAN = 1_000;
 
 type WebSearchOutputBudget = { remaining: number; truncated: boolean };
 
-function unwrapEnvelopes(value: string): string {
+export function unwrapWebSearchOutputText(value: string): string {
   return value.replace(ENVELOPE_OPEN_RE, "").replace(ENVELOPE_END_RE, "").trim();
 }
 
@@ -140,7 +143,7 @@ function toHttpUrl(value: string): string | undefined {
 const PUBLISHED_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
 function wrapProse(value: string, budget?: WebSearchOutputBudget): string {
-  let inner = unwrapEnvelopes(value);
+  let inner = unwrapWebSearchOutputText(value);
   if (budget) {
     const bounded = truncateSanitizedExternalContent(inner, budget.remaining);
     budget.truncated ||= bounded.truncated;
@@ -302,10 +305,14 @@ export function normalizeWebSearchOutput(params: {
             : Array.isArray(row.snippets)
               ? row.snippets.find((value): value is string => typeof value === "string")
               : undefined;
-      const published =
-        typeof row.published === "string" && PUBLISHED_RE.test(row.published)
-          ? row.published
-          : undefined;
+      let published: string | undefined;
+      if (typeof row.published === "string" && PUBLISHED_RE.test(row.published)) {
+        const calendarDate = row.published.slice(0, 10);
+        const timestamp = parseDateStringTimestampMs(calendarDate);
+        if (timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate)) {
+          published = row.published;
+        }
+      }
       const normalizedRow: Static<typeof WebSearchResultSchema> = {
         title: wrapProse(row.title as string, budget),
         url,

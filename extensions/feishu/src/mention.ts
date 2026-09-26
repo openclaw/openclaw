@@ -1,4 +1,3 @@
-// Feishu plugin module implements mention behavior.
 import type { FeishuMessageEvent } from "./event-types.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { isFeishuGroupChatType } from "./types.js";
@@ -33,17 +32,9 @@ export function extractMentionTargets(
   const mentions = event.message.mentions ?? [];
 
   return mentions
-    .filter((m) => {
-      if (isFeishuBroadcastMention(m)) {
-        return false;
-      }
-      // Exclude the bot itself
-      if (m.id.open_id === botOpenId) {
-        return false;
-      }
-      // Must have open_id
-      return Boolean(m.id.open_id);
-    })
+    .filter(
+      (m) => !isFeishuBroadcastMention(m) && m.id.open_id !== botOpenId && Boolean(m.id.open_id),
+    )
     .map((m) => ({
       openId: m.id.open_id!,
       name: m.name,
@@ -80,21 +71,11 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
   return hasBotMention && hasOtherMention;
 }
 
-/**
- * Format @mention for card message (lark_md)
- */
-function formatMentionForCard(target: MentionTarget): string {
-  return `<at id=${target.openId}></at>`;
-}
-
-/**
- * Build card content with @mentions (Markdown format)
- */
 export function buildMentionedCardContent(targets: MentionTarget[], message: string): string {
   if (targets.length === 0) {
     return message;
   }
 
-  const mentionParts = targets.map((t) => formatMentionForCard(t));
+  const mentionParts = targets.map((target) => `<at id=${target.openId}></at>`);
   return `${mentionParts.join(" ")} ${message}`;
 }

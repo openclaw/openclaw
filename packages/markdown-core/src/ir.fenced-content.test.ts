@@ -3,6 +3,14 @@ import { countMarkdownFencedCodeChars } from "./ir.js";
 
 describe("fenced code content length", () => {
   it.each([
+    {
+      name: "ordinary inline code and strikethrough",
+      text: "Use `one` and ``two`` ticks with ~~old~~ prose.",
+      count: 0,
+    },
+    { name: "entity-encoded markers", text: "&#96;&#96;&#96;\ncode\n&#96;&#96;&#96;", count: 0 },
+    { name: "escaped opener", text: "\\```\nordinary prose", count: 0 },
+    { name: "control-separated markers", text: "`\0``\r~\0~~", count: 0 },
     { name: "below half", text: "```\n1234567\n```", count: 7 },
     { name: "exactly half", text: "```\n12345678\n```", count: 8 },
     { name: "above half", text: "```\n123456789\n```", count: 9 },

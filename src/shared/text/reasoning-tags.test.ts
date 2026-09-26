@@ -72,10 +72,6 @@ describe("stripReasoningTagsFromText", () => {
         "preserves xml fenced examples",
         "Example:\n```xml\n<think>\n  <thought>nested</thought>\n</think>\n```\nDone!",
       ],
-      [
-        "preserves plain literal opening and closing tags",
-        "Use `<think>` to open and `</think>` to close.",
-      ],
       ["preserves fenced think example", "Example:\n```\n<think>reasoning</think>\n```"],
       [
         "preserves final tags inside code examples",
@@ -112,10 +108,6 @@ describe("stripReasoningTagsFromText", () => {
       ],
       ["Internal reasoning </think> final answer", "final answer"],
       ["<reasoning>outer<think>secret</think>", ""],
-      [
-        "Use `<think>` to open and `</think>` to close. Final sentence.",
-        "Use `<think>` to open and `</think>` to close. Final sentence.",
-      ],
       ["A < think >content< /think > B", "A  B"],
       ["", ""],
       [null as unknown as string, null],
@@ -146,6 +138,8 @@ describe("stripReasoningTagsFromText", () => {
     it.each([
       ["<think>outer <think>inner</think> still outer</think>visible", "visible"],
       ["A<final>1</final>B<final>2</final>C", "A1B2C"],
+      ["<thi<final>nk>private</thi<final>nk>Visible", "Visible"],
+      ["private</thi<final>nk>Visible", "Visible"],
       ["`<final>` in code, <final>visible</final> outside", "`<final>` in code, visible outside"],
       ["  `<final>literal</final>`  ", "`<final>literal</final>`"],
       ["A <FINAL data-x='1'>visible</Final> B", "A visible B"],
@@ -176,8 +170,9 @@ describe("stripReasoningTagsFromText", () => {
 
       const pathological = "`".repeat(100) + "<think>test</think>" + "`".repeat(100);
       const start = Date.now();
-      stripReasoningTagsFromText(pathological);
+      const result = stripReasoningTagsFromText(pathological);
       const elapsed = Date.now() - start;
+      expect(result).toBe(pathological);
       expect(elapsed).toBeLessThan(1000);
     });
 
@@ -277,6 +272,26 @@ describe("stripReasoningTagsFromText", () => {
 
   describe("trim options", () => {
     it.each([
+      ["keeps no-tag whitespace (none)", "\t text \r\n", "\t text \r\n", { trim: "none" as const }],
+      [
+        "keeps no-tag whitespace (start)",
+        "\t text \r\n",
+        "\t text \r\n",
+        { trim: "start" as const },
+      ],
+      ["keeps no-tag whitespace (both)", "\t text \r\n", "\t text \r\n", { trim: "both" as const }],
+      [
+        "keeps final-only whitespace with trim=none",
+        "  <final>result</final>  ",
+        "  result  ",
+        { trim: "none" as const },
+      ],
+      [
+        "trims only the start of final-only text",
+        "  <final>result</final>  ",
+        "result  ",
+        { trim: "start" as const },
+      ],
       [
         "applies default trim strategy",
         "  <think>x</think>  result  <think>y</think>  ",

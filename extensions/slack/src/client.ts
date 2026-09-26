@@ -1,4 +1,3 @@
-// Slack plugin module implements client behavior.
 import { hash } from "node:crypto";
 import { type WebClientOptions, WebClient } from "@slack/web-api";
 import type { SlackLookupClientOptions, SlackProxyDispatcher } from "./client-options.js";

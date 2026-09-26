@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
@@ -366,6 +367,38 @@ describe("codex web search provider", () => {
       expect.objectContaining({ model: "available-default-wire" }),
     );
     expect(requests[2]?.params).not.toHaveProperty("model");
+  });
+
+  it("does not send app-server requests after authority ends during client preparation", async () => {
+    const { client, requests } = createFakeClient();
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const denial = new Error("search caller no longer authorized");
+    let current = true;
+    const provider = createCodexWebSearchProvider({
+      clientFactory: async () => {
+        entered.resolve();
+        await release.promise;
+        return client;
+      },
+    });
+    const config = createConfig();
+    const tool = provider.createTool({ config, searchConfig: config.tools?.web?.search });
+    const pending = tool!.execute(
+      { query: "synthetic authority probe" },
+      {
+        assertCurrent: () => {
+          if (!current) {
+            throw denial;
+          }
+        },
+      },
+    );
+    await entered.promise;
+    current = false;
+    release.resolve();
+    await expect(pending).rejects.toBe(denial);
+    expect(requests).toEqual([]);
   });
 
   it("fails closed when the live catalog has no text-capable model", async () => {

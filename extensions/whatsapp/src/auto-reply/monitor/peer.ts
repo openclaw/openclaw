@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements peer behavior.
 import { getSenderIdentity } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";

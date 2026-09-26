@@ -31,8 +31,11 @@ describe("Browser CLI import boundary", () => {
     const browser = program.command("browser");
     registerBrowserExtensionCommands(browser, () => ({}));
     expect(browser.commands[0]?.commands.map((command) => command.name())).toEqual([
+      "native-host",
+      "setup",
       "path",
       "install",
+      "repair",
       "status",
       "uninstall-store",
       "uninstall-host",

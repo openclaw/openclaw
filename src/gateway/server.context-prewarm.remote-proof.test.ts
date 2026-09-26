@@ -12,12 +12,9 @@ import { resetContextWindowCacheForTest } from "../agents/context-runtime-state.
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { initializeManagedWorktreeTestRepository } from "../agents/worktrees/service.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
-import {
-  getGatewayTestPort,
-  installGatewayTestHooks,
-  startTestGatewayServer,
-} from "./test-helpers.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 
 installGatewayTestHooks();
 const repositories = createTempDirTracker();
@@ -41,9 +38,10 @@ describe("Gateway context cache remote proof", () => {
         contextWindow: baseWindow + (index % 17),
         maxTokens: 8_192,
       }));
-    const port = await getGatewayTestPort();
     const token = "context-prewarm-proof-token";
-    const server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const { port } = portClaim;
+    const server = await startTestGatewayServer(portClaim, {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,

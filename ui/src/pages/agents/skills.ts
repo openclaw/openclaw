@@ -5,7 +5,7 @@ import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-ca
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 
-type AgentSkillsState = {
+export type AgentSkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   requestGeneration: number;

@@ -9,8 +9,15 @@ import {
   loadSessionEntryReadOnly as loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   runWithDeferredSessionSuspension,
   suspendSession,
@@ -101,10 +108,17 @@ async function joinSuspensionWrites() {
 
 afterEach(async () => {
   await joinSuspensionWrites();
+  // Worker lease release still needs the fixture's shared-state database.
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  expect(
+    hasOpenClawAgentDatabaseAsyncResources(),
+    "fixture workers must settle before root deletion",
+  ).toBe(false);
   tempRoots.cleanup();
 });
 

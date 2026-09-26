@@ -423,11 +423,8 @@ function buildSlackRenderOptions({ enclosingStyle, mentions }: SlackMarkdownOpti
   };
 }
 
-export function normalizeSlackOutboundText(
-  markdown: string,
-  options: SlackMarkdownOptions = {},
-): string {
-  const ir = makeSlackEmphasisStylesSafe(
+function prepareSlackMarkdownIR(markdown: string, options: SlackMarkdownOptions): MarkdownIR {
+  return makeSlackEmphasisStylesSafe(
     markdownToIR(markdown ?? "", {
       assistantTranscriptRoleHeaders: true,
       linkify: false,
@@ -437,6 +434,13 @@ export function normalizeSlackOutboundText(
       tableMode: options.tableMode,
     }),
   );
+}
+
+export function normalizeSlackOutboundText(
+  markdown: string,
+  options: SlackMarkdownOptions = {},
+): string {
+  const ir = prepareSlackMarkdownIR(markdown, options);
   return protectSlackAssistantTranscriptRoleHeaders(
     renderMarkdownWithMarkers(ir, buildSlackRenderOptions(options), SLACK_FORMAT_PROFILE),
   );
@@ -522,16 +526,7 @@ export function markdownToSlackMrkdwnChunks(
   limit: number,
   options: SlackMarkdownOptions = {},
 ): string[] {
-  const ir = makeSlackEmphasisStylesSafe(
-    markdownToIR(markdown ?? "", {
-      assistantTranscriptRoleHeaders: true,
-      linkify: false,
-      autolink: false,
-      headingStyle: "rich",
-      blockquotePrefix: "> ",
-      tableMode: options.tableMode,
-    }),
-  );
+  const ir = prepareSlackMarkdownIR(markdown, options);
   const renderOptions = buildSlackRenderOptions();
   const normalizedLimit =
     limit === Number.POSITIVE_INFINITY ? limit : resolveIntegerOption(limit, 1, { min: 1 });

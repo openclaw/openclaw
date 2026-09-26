@@ -23,14 +23,18 @@ const TELEGRAM_QA_DEFAULT_READY_TIMEOUT_MS = 45_000;
 export function buildTelegramQaConfig(
   baseCfg: OpenClawConfig,
   params: {
-    apiRoot: string;
+    apiRoot?: string;
     directMessageOnly?: boolean;
+    enableDirectMessages?: boolean;
+    additionalTesterUserIds?: string[];
+    forumGroupId?: string;
     groupId: string;
     sutAccountId: string;
     sutToken: string;
     testerUserId: string;
   },
 ): OpenClawConfig {
+  const testerUserIds = [params.testerUserId, ...(params.additionalTesterUserIds ?? [])];
   return {
     ...baseCfg,
     agents: {
@@ -71,19 +75,25 @@ export function buildTelegramQaConfig(
           [params.sutAccountId]: {
             enabled: true,
             botToken: params.sutToken,
-            apiRoot: params.apiRoot,
-            ...(params.directMessageOnly
-              ? { dmPolicy: "allowlist", allowFrom: [params.testerUserId] }
+            ...(params.apiRoot ? { apiRoot: params.apiRoot } : {}),
+            ...(params.directMessageOnly || params.enableDirectMessages
+              ? { dmPolicy: "allowlist", allowFrom: testerUserIds }
               : { dmPolicy: "disabled" }),
-            groups: {
-              [params.groupId]: {
-                groupPolicy: "allowlist",
-                allowFrom: [params.testerUserId],
-                // Concurrent leases share this group and QA sender. Only this
-                // bot's mentions or reply chain may trigger an agent turn.
-                requireMention: true,
-              },
-            },
+            groups: Object.fromEntries(
+              uniqueStrings([
+                params.groupId,
+                ...(params.forumGroupId ? [params.forumGroupId] : []),
+              ]).map((groupId) => [
+                groupId,
+                {
+                  groupPolicy: "allowlist",
+                  allowFrom: testerUserIds,
+                  // Concurrent leases share this group and QA sender. Only this
+                  // bot's mentions or reply chain may trigger an agent turn.
+                  requireMention: true,
+                },
+              ]),
+            ),
           },
         },
       },

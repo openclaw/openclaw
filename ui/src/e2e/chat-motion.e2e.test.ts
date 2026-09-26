@@ -24,7 +24,7 @@ suite.define(() => {
     { name: "mobile", width: 390, height: 844, reducedMotion: "no-preference" as const },
     { name: "reduced-motion", width: 1280, height: 900, reducedMotion: "reduce" as const },
   ])(
-    "shows one CSS arrival per send and reply on $name",
+    "animates new prompts without hiding streamed replies on $name",
     async ({ name, width, height, reducedMotion }) => {
       const viewport = { width, height };
       const dir = createControlUiE2eArtifactDir(`chat-motion-${name}`, artifactDir);
@@ -115,7 +115,7 @@ suite.define(() => {
         if (dir) {
           await page.screenshot({ path: path.join(dir, "03-reply.png") });
         }
-        expect(await page.evaluate(() => window.openclawMotionArrivals)).toHaveLength(expected * 2);
+        expect(await page.evaluate(() => window.openclawMotionArrivals)).toHaveLength(expected);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
           true,
         );

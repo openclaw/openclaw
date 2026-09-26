@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 
-type SlackSend = typeof import("./send.runtime.js").sendMessageSlack;
+type SlackSend = typeof import("./send.js").sendMessageSlack;
 
 const sendMethods = [
   { kind: "text", send: slackPlugin.outbound!.sendText! },

@@ -9,16 +9,23 @@ import type {
 } from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
+import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
+
+type PersonalModelSelectionScope = "operator.read" | "operator.write" | typeof SESSION_READ_SCOPE;
 
 /** Capture human authority once; every later privileged use rechecks this exact connection. */
 export function prepareUserModelAccountAction(
   options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">,
   profileId?: string,
-  requiredScope: "operator.read" | "operator.write" | "operator.admin" = "operator.write",
+  requiredScope:
+    | PersonalModelSelectionScope
+    | "operator.admin"
+    | typeof SESSION_WRITE_SCOPE = WRITE_SCOPE,
 ): ModelAccountConnectAction {
   const { client, context } = options;
   const actor = resolveAuthenticatedProfileId(client);
@@ -60,7 +67,7 @@ export function prepareUserModelAccountAction(
 export function preparePersonalModelAccountSelection(
   options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">,
   authProfileId: string,
-  requiredScope: "operator.read" | "operator.write" = "operator.write",
+  requiredScope: PersonalModelSelectionScope = "operator.write",
 ): UserModelAccountSelection {
   const action = prepareUserModelAccountAction(options, undefined, requiredScope);
   const assertCurrent = () => {
@@ -86,9 +93,9 @@ export function preparePersonalModelSelection(
   return preparePersonalModelAccountSelection(options, authProfileId);
 }
 
-/** Capture either an explicit personal selection or the human's creation-time default authority. */
+/** Default use follows this creation's admitted scope; explicit account selection stays write-scoped. */
 export function prepareSessionModelAccountAccess(
-  options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">,
+  options: GatewayRequestHandlerOptions,
   model: string | undefined,
 ): {
   personalModelSelection?: UserModelAccountSelection;
@@ -101,7 +108,13 @@ export function prepareSessionModelAccountAccess(
     client?.connId &&
     client.authenticatedUserProfile &&
     !isIneligiblePersonalGatewayCaller(client)
-      ? prepareUserModelAccountAction(options)
+      ? prepareUserModelAccountAction(
+          options,
+          undefined,
+          readGatewayRequestMutationAuthority(options).sessionScope === SESSION_WRITE_SCOPE
+            ? SESSION_WRITE_SCOPE
+            : WRITE_SCOPE,
+        )
       : undefined;
   return { personalModelSelection, personalAccountDefaults };
 }

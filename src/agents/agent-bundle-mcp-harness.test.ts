@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeMcpAppOperation } from "../gateway/mcp-app-operations.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 
@@ -89,7 +90,7 @@ vi.mock("./mcp-oauth.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./mcp-oauth.js")>();
   return {
     ...actual,
-    readMcpOAuthCredentialsStatus: readCredentialsStatus,
+    readMcpOAuthCredentialsStatuses: readCredentialsStatus,
     startMcpOAuthAuthorization: startAuthorization,
   };
 });
@@ -106,7 +107,11 @@ beforeEach(() => {
   mocks.acquireSessionMcpRuntime.mockReset();
   mocks.rememberAdvertisedScopedMcpCatalog.mockClear();
   mocks.getAdvertisedScopedMcpCatalog.mockClear();
-  readCredentialsStatus.mockReset().mockResolvedValue({ state: "unauthenticated" });
+  readCredentialsStatus
+    .mockReset()
+    .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
+      identities.map(() => ({ state: "unauthenticated" })),
+    );
   startAuthorization.mockReset();
 });
 

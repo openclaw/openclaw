@@ -1,4 +1,5 @@
 import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import type { SkillsState } from "../../lib/skills/index.ts";
 import type { SkillsProps } from "./view-types.ts";
 
 export function normalizeText(node: Element | DocumentFragment): string {
@@ -46,41 +47,55 @@ export function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillSta
   };
 }
 
-export function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
+type SkillsTestOverrides = Partial<Omit<SkillsProps, "state">> & Record<string, unknown>;
+
+export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
   const report: SkillStatusReport = {
     workspaceDir: "/tmp/workspace",
     managedSkillsDir: "/tmp/skills",
     skills: [createSkill()],
   };
+  const value = <T>(key: string, fallback: T): T =>
+    key in overrides ? (overrides[key] as T) : fallback;
+  const state: SkillsState = {
+    client: null,
+    connected: value("connected", true),
+    runtimeConfig: {} as SkillsState["runtimeConfig"],
+    skillsAgentId: null,
+    skillsAgentRevision: 0,
+    skillsLoading: value("loading", false),
+    skillsReport: value("report", report),
+    skillsError: value("error", null),
+    skillsFilter: value("filter", ""),
+    skillsStatusFilter: value("statusFilter", "all"),
+    skillsDetailKey: value("detailKey", null),
+    skillsDetailTab: value("detailTab", "overview"),
+    skillOperation: value("operation", null),
+    skillEdits: value("edits", {}),
+    skillMessages: value("messages", {}),
+    clawhubSearchQuery: value("clawhubQuery", ""),
+    clawhubSearchResults: value("clawhubResults", null),
+    clawhubSearchLoading: value("clawhubSearchLoading", false),
+    clawhubSearchError: value("clawhubSearchError", null),
+    clawhubIconUrls: value("clawhubIconUrls", {}),
+    clawhubDetail: value("clawhubDetail", null),
+    clawhubDetailRef: value("clawhubDetailRef", null),
+    clawhubDetailLoading: value("clawhubDetailLoading", false),
+    clawhubDetailError: value("clawhubDetailError", null),
+    clawhubInstallMessage: value("clawhubInstallMessage", null),
+    clawhubVerdicts: value("clawhubVerdicts", {}),
+    clawhubVerdictsLoading: value("clawhubVerdictsLoading", false),
+    clawhubVerdictsError: value("clawhubVerdictsError", null),
+    skillCardContents: value("skillCardContents", {}),
+    skillCardContentKeys: {},
+    skillCardLoadingKey: value("skillCardLoadingKey", null),
+    skillCardErrors: value("skillCardErrors", {}),
+  };
   return {
     canUpdate: true,
     canInstall: true,
-    connected: true,
-    loading: false,
-    report,
-    error: null,
-    filter: "",
-    statusFilter: "all",
-    edits: {},
-    operation: null,
-    messages: {},
-    detailKey: null,
-    detailTab: "overview",
-    clawhubVerdicts: {},
-    clawhubVerdictsLoading: false,
-    clawhubVerdictsError: null,
-    skillCardContents: {},
-    skillCardLoadingKey: null,
-    skillCardErrors: {},
-    clawhubQuery: "",
-    clawhubResults: null,
-    clawhubSearchLoading: false,
-    clawhubSearchError: null,
-    clawhubDetail: null,
-    clawhubDetailRef: null,
-    clawhubDetailLoading: false,
-    clawhubDetailError: null,
-    clawhubInstallMessage: null,
+    loading: state.skillsLoading,
+    error: state.skillsError,
     onFilterChange: () => undefined,
     onStatusFilterChange: () => undefined,
     onRefresh: () => undefined,
@@ -96,7 +111,8 @@ export function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     onClawHubDetailClose: () => undefined,
     onClawHubInstall: () => undefined,
     ...overrides,
-  };
+    state,
+  } as SkillsProps;
 }
 
 /**

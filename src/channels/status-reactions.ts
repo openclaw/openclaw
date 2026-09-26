@@ -299,9 +299,7 @@ export function createStatusReactionController(params: {
       try {
         await adapter.removeReaction(emoji);
       } catch (err) {
-        if (onError) {
-          onError(err);
-        }
+        onError?.(err);
       } finally {
         activeEmojis.delete(emoji);
       }
@@ -321,9 +319,7 @@ export function createStatusReactionController(params: {
       activeEmojis.add(newEmoji);
       currentEmoji = newEmoji;
     } catch (err) {
-      if (onError) {
-        onError(err);
-      }
+      onError?.(err);
     }
   }
 
@@ -367,28 +363,6 @@ export function createStatusReactionController(params: {
     }
   }
 
-  function setQueued(): void {
-    scheduleEmoji(emojis.queued, { immediate: true });
-  }
-
-  function setThinking(): void {
-    scheduleEmoji(emojis.thinking);
-  }
-
-  function setTool(toolName?: string): void {
-    const emoji = resolveToolEmoji(toolName, emojis, params.emojis);
-    scheduleEmoji(emoji);
-  }
-
-  function setCompacting(): void {
-    scheduleEmoji(emojis.compacting);
-  }
-
-  function cancelPending(): void {
-    clearDebounceTimer();
-    pendingEmoji = "";
-  }
-
   function finishWithEmoji(emoji: string, holdMs: number): Promise<void> {
     if (!enabled) {
       return Promise.resolve();
@@ -407,16 +381,6 @@ export function createStatusReactionController(params: {
     });
   }
 
-  function setDone(): Promise<void> {
-    return showActivity
-      ? finishWithEmoji(emojis.done, timing.doneHoldMs)
-      : finishWithEmoji(initialEmoji, 0);
-  }
-
-  function setError(): Promise<void> {
-    return finishWithEmoji(emojis.error, timing.errorHoldMs);
-  }
-
   async function clear(): Promise<void> {
     if (!enabled) {
       return;
@@ -431,9 +395,7 @@ export function createStatusReactionController(params: {
         try {
           await adapter.clearReaction();
         } catch (err) {
-          if (onError) {
-            onError(err);
-          }
+          onError?.(err);
         } finally {
           activeEmojis.clear();
         }
@@ -479,13 +441,19 @@ export function createStatusReactionController(params: {
   }
 
   return {
-    setQueued,
-    setThinking,
-    setTool,
-    setCompacting,
-    cancelPending,
-    setDone,
-    setError,
+    setQueued: () => scheduleEmoji(emojis.queued, { immediate: true }),
+    setThinking: () => scheduleEmoji(emojis.thinking),
+    setTool: (toolName) => scheduleEmoji(resolveToolEmoji(toolName, emojis, params.emojis)),
+    setCompacting: () => scheduleEmoji(emojis.compacting),
+    cancelPending() {
+      clearDebounceTimer();
+      pendingEmoji = "";
+    },
+    setDone: () =>
+      showActivity
+        ? finishWithEmoji(emojis.done, timing.doneHoldMs)
+        : finishWithEmoji(initialEmoji, 0),
+    setError: () => finishWithEmoji(emojis.error, timing.errorHoldMs),
     clear,
     restoreInitial,
   };

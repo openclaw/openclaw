@@ -250,11 +250,11 @@ struct TerminalHubScreenTests {
             url: controlURL,
             tls: nil)
 
-        #expect(coordinator.allowsNavigation(to: sameOriginURL, isMainFrame: true))
-        #expect(!coordinator.allowsNavigation(to: alternateHostURL, isMainFrame: true))
-        #expect(!coordinator.allowsNavigation(to: alternatePortURL, isMainFrame: true))
-        #expect(coordinator.allowsNavigation(to: embeddedURL, isMainFrame: false))
-        #expect(!coordinator.allowsNavigation(to: unknownFrameURL, isMainFrame: nil))
+        #expect(coordinator.navigationDecision(to: sameOriginURL, isMainFrame: true) == .allow)
+        #expect(coordinator.navigationDecision(to: alternateHostURL, isMainFrame: true) == .cancel)
+        #expect(coordinator.navigationDecision(to: alternatePortURL, isMainFrame: true) == .cancel)
+        #expect(coordinator.navigationDecision(to: embeddedURL, isMainFrame: false) == .allow)
+        #expect(coordinator.navigationDecision(to: unknownFrameURL, isMainFrame: nil) == .cancel)
     }
 
     @Test func `authenticated dashboard navigation cannot leave its document scope`() throws {

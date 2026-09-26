@@ -232,124 +232,78 @@ it.each(["converging", "exhausted"] as const)(
   },
 );
 
-it.each(["success", "failure"] as const)(
-  "keeps live retry admitted until a sibling projection read settles with %s",
-  async (siblingOutcome) => {
-    const unrelated: TaskRecord = { ...task, taskId: "live-unrelated" };
-    delete unrelated.parentFlowId;
-    const records = [task, unrelated];
-    const { store, flows, context } = await fixture(records);
-    vi.spyOn(flows, "upsertFlow").mockImplementationOnce(() => {
-      throw new Error("Controlled initial flow refusal");
-    });
-    expect(replay()?.status).toBe("succeeded");
-    const publishedTasks = [...tasks.values()];
-    const firstError = new Error("first scoped projection read failed");
-    const siblingError = new Error("sibling scoped projection read failed");
-    const reads = records.map(({ taskId }) => ({ taskId, release: createDeferred() }));
-    const readSnapshot = store.loadMutationSnapshotAsync.bind(store);
-    const settledReads: string[] = [];
-    const pendingReads: Promise<unknown>[] = [];
-    const asyncRead = vi
-      .spyOn(store, "loadMutationSnapshotAsync")
-      .mockImplementation((current, scope) => {
-        const read = reads.find(({ taskId }) => taskId === scope?.taskId);
-        if (!read) {
-          throw new Error("Expected a registered task mutation scope");
-        }
-        const pending = (async () => {
-          try {
-            await read.release.promise;
-            if (read.taskId === task.taskId) {
-              throw firstError;
-            }
-            if (siblingOutcome === "failure") {
-              throw siblingError;
-            }
-            return await readSnapshot(current, scope);
-          } finally {
-            settledReads.push(read.taskId);
-          }
-        })();
-        pendingReads.push(pending);
-        return pending;
-      });
-    const releaseMutations = createDeferred();
-    const mutations = records.map((record) => {
-      const committed = new Map<string, TaskRecord>();
-      return runTaskRegistryWorkerMutation(
-        {
-          scope: { taskId: record.taskId, flowId: flow.flowId },
-          admission: context.admission,
-          publicationRecords: () => committed,
-        },
-        async () => {
-          const next = { ...record, task: `Stored ${record.taskId}` };
-          store.upsertTaskWithDeliveryState({ task: next });
-          committed.set(next.taskId, next);
-          await releaseMutations.promise;
-        },
-        () => readSnapshot(context, { taskId: record.taskId, flowId: flow.flowId }),
-      );
-    });
-    const revision = readTaskRegistryRevision();
-    const live = vi.spyOn(store, "syncLiveTaskFlowAsync");
-    const admission = vi.spyOn(gatewayWorkAdmission, "runWithGatewayDetachedWorkContinuation");
-    try {
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(admission).toHaveBeenCalledOnce();
-      expect(asyncRead).toHaveBeenCalledTimes(2);
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-      const admitted = admission.mock.results[0];
-      if (admitted?.type !== "return") {
-        throw new Error("Expected the live retry's actual root-work promise");
-      }
-      const observed = admitted.value.then(
-        () => ({ error: undefined, settledReads: [...settledReads] }),
-        (error: unknown) => ({ error, settledReads: [...settledReads] }),
-      );
-      reads[0]!.release.resolve();
-      await setImmediate();
-      expect(settledReads).toEqual([task.taskId]);
-      expect.soft(getActiveGatewayRootWorkCount()).toBe(1);
-      expect([...tasks.values()]).toEqual(publishedTasks);
-      expect(readTaskRegistryRevision()).toBe(revision);
-      expect(live).not.toHaveBeenCalled();
-
-      reads[1]!.release.resolve();
-      const result = await observed;
-      expect.soft(result.settledReads).toEqual(records.map((record) => record.taskId));
-      if (siblingOutcome === "success") {
-        expect(result.error).toBe(firstError);
-      } else {
-        expect(result.error).toBeInstanceOf(AggregateError);
-        expect(result.error).toMatchObject({
-          errors: [firstError, siblingError],
-          cause: firstError,
-        });
-      }
-      await drainRetry();
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect([...tasks.values()]).toEqual(publishedTasks);
-      expect(readTaskRegistryRevision()).toBe(revision);
-      expect(live).not.toHaveBeenCalled();
-      expect(flows.loadSnapshot().flows.get(flow.flowId)?.revision).toBe(4);
-    } finally {
-      for (const read of reads) {
-        read.release.resolve();
-      }
-      await Promise.allSettled(pendingReads);
-      await Promise.allSettled(
-        admission.mock.results.flatMap((result) =>
-          result.type === "return" ? [result.value] : [],
-        ),
-      );
-      releaseMutations.resolve();
-      await Promise.allSettled(mutations);
-      await drainRetry();
+it("keeps live retry admitted until its union projection read rejects", async () => {
+  const unrelated: TaskRecord = { ...task, taskId: "live-unrelated" };
+  delete unrelated.parentFlowId;
+  const records = [task, unrelated];
+  const { store, flows, context } = await fixture(records);
+  vi.spyOn(flows, "upsertFlow").mockImplementationOnce(() => {
+    throw new Error("Controlled initial flow refusal");
+  });
+  expect(replay()?.status).toBe("succeeded");
+  const publishedTasks = [...tasks.values()];
+  const failure = new Error("Union projection read failed");
+  const releaseRead = createDeferred();
+  const readSnapshot = store.loadMutationSnapshotAsync.bind(store);
+  const asyncRead = vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async () => {
+    await releaseRead.promise;
+    throw failure;
+  });
+  const releaseMutations = createDeferred();
+  const mutations = records.map((record) => {
+    const committed = new Map<string, TaskRecord>();
+    return runTaskRegistryWorkerMutation(
+      {
+        scope: { taskId: record.taskId, flowId: flow.flowId },
+        admission: context.admission,
+        publicationRecords: () => committed,
+      },
+      async () => {
+        const next = { ...record, task: `Stored ${record.taskId}` };
+        store.upsertTaskWithDeliveryState({ task: next });
+        committed.set(next.taskId, next);
+        await releaseMutations.promise;
+      },
+      () => readSnapshot(context, { taskId: record.taskId, flowId: flow.flowId }),
+    );
+  });
+  const revision = readTaskRegistryRevision();
+  const live = vi.spyOn(store, "syncLiveTaskFlowAsync");
+  const admission = vi.spyOn(gatewayWorkAdmission, "runWithGatewayDetachedWorkContinuation");
+  try {
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(admission).toHaveBeenCalledOnce();
+    expect(asyncRead).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    const admitted = admission.mock.results[0];
+    if (admitted?.type !== "return") {
+      throw new Error("Expected the live retry's actual root-work promise");
     }
-  },
-);
+    const observed = admitted.value.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect([...tasks.values()]).toEqual(publishedTasks);
+    expect(readTaskRegistryRevision()).toBe(revision);
+    expect(live).not.toHaveBeenCalled();
+    releaseRead.resolve();
+    expect(await observed).toBe(failure);
+    await drainRetry();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect([...tasks.values()]).toEqual(publishedTasks);
+    expect(readTaskRegistryRevision()).toBe(revision);
+    expect(live).not.toHaveBeenCalled();
+    expect(flows.loadSnapshot().flows.get(flow.flowId)?.revision).toBe(4);
+  } finally {
+    releaseRead.resolve();
+    await Promise.allSettled(
+      admission.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
+    );
+    releaseMutations.resolve();
+    await Promise.allSettled(mutations);
+    await drainRetry();
+  }
+});
 
 it.each(["missing", "new row", "managed", "mirrored"] as const)(
   "synchronizes a dirty target against its canonical %s row",

@@ -2,7 +2,6 @@ import { resolveChannelInboundRouteEnvelope } from "openclaw/plugin-sdk/channel-
 // Nextcloud Talk plugin module implements inbound behavior.
 import {
   channelIngressRoutes,
-  resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
@@ -206,7 +205,7 @@ export async function handleNextcloudTalkInbound(params: {
     wasMentioned?: boolean,
     contextBinding?: ChannelIngressContextBinding,
   ) =>
-    await resolveStableChannelMessageIngress({
+    await core.channel.inbound.ingress.resolveStable({
       channelId: CHANNEL_ID,
       accountId: account.accountId,
       identity: {

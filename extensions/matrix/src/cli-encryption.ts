@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import * as cli from "./cli-shared.js";
-import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
+import { resolveMatrixAccountAsync, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import * as verificationActions from "./matrix/actions/verification.js";
 import { resolveMatrixRoomKeyBackupIssue } from "./matrix/backup-health.js";
 import { resolveMatrixConfigPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
@@ -58,7 +58,7 @@ async function setupMatrixEncryption(params: {
 }): Promise<MatrixCliEncryptionSetupResult> {
   const { accountId, cfg } = cli.resolveMatrixCliAccountContext(params.account);
   const publishConfig = cli.createMatrixCliAccountConfigPublisher({ accountId, previousCfg: cfg });
-  const account = resolveMatrixAccount({ cfg, accountId });
+  const account = await resolveMatrixAccountAsync({ cfg, accountId });
   if (!account.configured) {
     throw new Error(
       `Matrix account "${accountId}" is not configured; run ${cli.formatMatrixCliCommand(

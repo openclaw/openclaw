@@ -313,7 +313,7 @@ describe("cron outcome receipt finalization", () => {
     });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TEMP TRIGGER reject_post_finalization_maintenance
+      CREATE TRIGGER reject_post_finalization_maintenance
       BEFORE UPDATE ON cron_jobs
       WHEN NEW.job_id = '${sibling.id}'
       BEGIN

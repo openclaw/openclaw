@@ -148,6 +148,8 @@ describe("SessionManager branch replacement", () => {
     });
 
     const sessionManager = SessionManager.open(scope, dir);
+    const sourceTarget = sessionManager.getSessionTarget();
+    expect(sourceTarget).toMatchObject(scope);
     const observedBranches: unknown[] = [];
     const stop = onSessionIdentityMutation((mutation) => {
       if (mutation.kind !== "replace" || !mutation.current.sessionKeys.includes(sessionKey)) {
@@ -175,7 +177,7 @@ describe("SessionManager branch replacement", () => {
     expect(observedBranches).toEqual([
       {
         sessionId: branchedSessionId,
-        target: { ...scope, sessionId: branchedSessionId },
+        target: { ...sourceTarget, sessionId: branchedSessionId },
         durableEntries: sessionManager.getEntries(),
       },
     ]);
@@ -219,6 +221,8 @@ describe("SessionManager branch replacement", () => {
     const beforeEntry = loadSessionEntry(scope);
     const beforeEvents = await loadTranscriptEvents(scope);
     const beforeEntries = manager.getEntries();
+    const beforeTarget = manager.getSessionTarget();
+    expect(beforeTarget).toMatchObject(scope);
     const database = openOpenClawAgentDatabase({
       agentId: scope.agentId,
       path: resolveSessionTranscriptDatabasePath(scope),
@@ -244,7 +248,7 @@ describe("SessionManager branch replacement", () => {
     expect(loadSessionEntry(scope)).toEqual(beforeEntry);
     expect(await loadTranscriptEvents(scope)).toEqual(beforeEvents);
     expect(manager.getSessionId()).toBe(scope.sessionId);
-    expect(manager.getSessionTarget()).toEqual(scope);
+    expect(manager.getSessionTarget()).toEqual(beforeTarget);
     expect(manager.getEntries()).toEqual(beforeEntries);
     expect(manager.getLeafId()).toBe(leafId);
     expect(replacements).toEqual([]);

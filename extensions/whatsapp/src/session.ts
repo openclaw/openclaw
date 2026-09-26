@@ -1,5 +1,3 @@
-// Whatsapp plugin module implements session behavior.
-import { randomUUID } from "node:crypto";
 import type { Agent } from "node:https";
 import type {
   GroupMetadata,
@@ -45,6 +43,7 @@ import {
   type WhatsAppSocketTimingOptions,
 } from "./socket-timing.js";
 export { formatError, getStatusCode } from "./session-errors.js";
+export { newConnectionId } from "./reconnect.js";
 
 export {
   getWebAuthAgeMs,
@@ -218,16 +217,7 @@ export async function createWaSocket(
 async function createWaSocketInternal(
   printQr: boolean,
   verbose: boolean,
-  opts: {
-    authDir?: string;
-    onQr?: (qr: string) => void;
-    beforeCredentialPersistence?: () => Promise<void>;
-    onCredentialPersistenceError?: (error: unknown) => void;
-    onCredentialPersistenceTask?: (task: Promise<unknown>) => void;
-    getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
-    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
-    waWebSocketUrl?: string | URL;
-  } & WhatsAppSocketTimingOptions,
+  opts: NonNullable<Parameters<typeof createWaSocket>[2]>,
   receiveMode: "normal" | "directory",
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
@@ -384,35 +374,33 @@ async function createWaSocketInternal(
     }),
   );
   sock.ev.on("connection.update", (update: Partial<import("baileys").ConnectionState>) => {
-    void (async () => {
-      try {
-        const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-          opts.onQr?.(qr);
-          if (printQr) {
-            console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
-            void printTerminalQr(qr).catch((err: unknown) => {
-              sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
-            });
-          }
+    try {
+      const { connection, lastDisconnect, qr } = update;
+      if (qr) {
+        opts.onQr?.(qr);
+        if (printQr) {
+          console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
+          void printTerminalQr(qr).catch((err: unknown) => {
+            sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
+          });
         }
-        if (connection === "close") {
-          const status = getStatusCode(lastDisconnect?.error);
-          if (status === LOGGED_OUT_STATUS) {
-            console.error(
-              danger(
-                `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
-              ),
-            );
-          }
-        }
-        if (connection === "open" && verbose) {
-          console.log(success("WhatsApp Web connected."));
-        }
-      } catch (err) {
-        sessionLogger.error({ error: String(err) }, "connection.update handler error");
       }
-    })();
+      if (connection === "close") {
+        const status = getStatusCode(lastDisconnect?.error);
+        if (status === LOGGED_OUT_STATUS) {
+          console.error(
+            danger(
+              `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
+            ),
+          );
+        }
+      }
+      if (connection === "open" && verbose) {
+        console.log(success("WhatsApp Web connected."));
+      }
+    } catch (err) {
+      sessionLogger.error({ error: String(err) }, "connection.update handler error");
+    }
   });
 
   // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process
@@ -525,22 +513,17 @@ export async function waitForWaConnection(
   options: WhatsAppConnectionWaitOptions = { timeout: "none" },
 ) {
   return new Promise<void>((resolve, reject) => {
-    type OffCapable = {
-      off?: (event: string, listener: (...args: unknown[]) => void) => void;
-    };
-    const evWithOff = sock.ev as unknown as OffCapable;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = () => {
-      evWithOff.off?.("connection.update", handler);
+      sock.ev.off?.("connection.update", handler);
       if (timer) {
         clearTimeout(timer);
         timer = undefined;
       }
     };
 
-    const handler = (...args: unknown[]) => {
-      const update = (args[0] ?? {}) as Partial<import("baileys").ConnectionState>;
+    const handler = (update: Partial<import("baileys").ConnectionState> = {}) => {
       if (update.connection === "open") {
         cleanup();
         resolve();
@@ -565,10 +548,6 @@ export async function waitForWaConnection(
       timer.unref?.();
     }
   });
-}
-
-export function newConnectionId() {
-  return randomUUID();
 }
 
 function createConnectionTimeoutError(timeoutMs: number): Error {

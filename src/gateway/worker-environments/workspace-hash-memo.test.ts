@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tsImport } from "tsx/esm/api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   createWorkspaceReconcileMetrics,
   MAX_WORKSPACE_HASH_MEMO_BYTES,
+  MAX_WORKSPACE_HASH_MEMO_ENTRIES,
   pruneWorkspaceHashMemo,
   recordRemoteWorkspaceHashMetrics,
   serializeRemoteWorkspaceHashMemo,
@@ -14,9 +16,13 @@ import {
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "./workspace-hash-memo.js";
-import { MAX_RECONCILIATION_ENTRIES, type WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { preflightWorkspaceApply, readActualWorkspaceManifest } from "./workspace-reconcile.js";
-import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
+
+// Generate the wire script through the source runtime loader, which preserves
+// function names. Vitest's own transform does not exercise that closure boundary.
+const { REMOTE_WORKSPACE_MANIFEST_JS }: typeof import("./workspace-sync-scripts.js") =
+  await tsImport("./workspace-sync-scripts.ts", import.meta.url);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -163,7 +169,7 @@ describe("workspace hash memo", () => {
 
     const uint64 = "18446744073709551615";
     const memo = new Map<string, string>();
-    for (let index = 0; index < MAX_RECONCILIATION_ENTRIES; index += 1) {
+    for (let index = 0; index < MAX_WORKSPACE_HASH_MEMO_ENTRIES; index += 1) {
       const inode = String(index).padStart(20, "0");
       memo.set(
         `worker:${uint64}:${inode}:${uint64}:${uint64}:${uint64}`,
@@ -177,10 +183,10 @@ describe("workspace hash memo", () => {
         manifestRef: `sha256:${"f".repeat(64)}`,
         memo: JSON.parse(serializedMemo),
         metrics: {
-          contentHashCount: MAX_RECONCILIATION_ENTRIES,
+          contentHashCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
           contentHashDurationMs: Number.MAX_SAFE_INTEGER,
-          memoHitCount: MAX_RECONCILIATION_ENTRIES,
-          memoTruncatedCount: MAX_RECONCILIATION_ENTRIES,
+          memoHitCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
+          memoTruncatedCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
           totalDurationMs: Number.MAX_SAFE_INTEGER,
         },
       })}\n`,
@@ -190,7 +196,7 @@ describe("workspace hash memo", () => {
     const smallFile = "worker:0:0:1:0:0";
     memo.set(smallFile, "c".repeat(64));
     const bounded = JSON.parse(serializeRemoteWorkspaceHashMemo(memo)) as [string, string][];
-    expect(bounded).toHaveLength(MAX_RECONCILIATION_ENTRIES);
+    expect(bounded).toHaveLength(MAX_WORKSPACE_HASH_MEMO_ENTRIES);
     expect(bounded.some(([identity]) => identity === smallFile)).toBe(false);
   });
 
@@ -269,10 +275,10 @@ describe("workspace hash memo", () => {
       fs.writeFile(path.join(workspace, "medium.txt"), "22"),
       fs.writeFile(path.join(workspace, "large.txt"), "333"),
     ]);
-    const limitDeclaration = `const MAX_RECONCILIATION_ENTRIES = ${MAX_RECONCILIATION_ENTRIES};`;
+    const limitDeclaration = `const MAX_WORKSPACE_HASH_MEMO_ENTRIES = ${MAX_WORKSPACE_HASH_MEMO_ENTRIES};`;
     const limitedScript = REMOTE_WORKSPACE_MANIFEST_JS.replace(
       limitDeclaration,
-      "const MAX_RECONCILIATION_ENTRIES = 2;",
+      "const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 2;",
     );
     expect(limitedScript).not.toBe(REMOTE_WORKSPACE_MANIFEST_JS);
     const env = { ...process.env, HOME: home };

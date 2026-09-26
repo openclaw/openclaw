@@ -3,6 +3,7 @@ import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { WorktreeAllocationGuard } from "./allocation.js";
+import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import type { updateRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService, WorktreeSnapshotError } from "./service.js";
 import type {
@@ -101,6 +102,28 @@ vi.mock("./allocation.js", () => ({
     }
   },
 }));
+// This synthetic fixture tests trusted restore/rollback custody. Actual source-only
+// policy and process execution are covered by service.source-only-filters.test.ts.
+vi.mock("../../gateway/worker-environments/local-workspace-store.js", () => ({
+  localWorkspaceStore: () => ({ get: () => undefined }),
+}));
+vi.mock("./checkout-policy.js", async () => {
+  const git = await import("./git.js");
+  return {
+    usesSourceOnlyWorktreeGit: async () => false,
+    withManagedWorktreeGit: async <T>(
+      _params: unknown,
+      run: (policy: WorktreeGitPolicy) => Promise<T>,
+    ) =>
+      run({
+        sourceOnly: false,
+        run: git.runGit,
+        require: git.requireGit,
+        worker: { text: fixture.forbidden, buffered: fixture.forbidden },
+        withContentEnvironment: fixture.forbidden,
+      }),
+  };
+});
 vi.mock("./base-ref.js", () => ({ resolveWorktreeBase: fixture.forbidden }));
 vi.mock("./capacity.js", () => ({
   directorySizeBytes: fixture.forbidden,
@@ -121,6 +144,11 @@ vi.mock("./checkout.js", () => ({
     fixture.events.push("checkout-restored");
     return { code: 0, stdout: "", stderr: "", templateCloned: false };
   },
+  materializeManagedWorktree: async (_params: unknown, options: GitOptions) => {
+    options.signal?.throwIfAborted();
+    options.beforeRun?.();
+    return { code: 0, stdout: "", stderr: "" };
+  },
   collectWorktreeTemplates: fixture.forbidden,
   WORKTREE_TEMPLATE_DIRECTORY: "templates",
 }));
@@ -135,6 +163,8 @@ vi.mock("./git-lock.js", () => ({
   unlockWorktree: fixture.forbidden,
 }));
 vi.mock("./git.js", () => ({
+  runGitBytes: fixture.forbidden,
+  runGitBuffered: fixture.forbidden,
   resolveGitRepositoryPaths: async () => ({ canonicalRoot: repoRoot, commonDir }),
   worktreePathExists: async (target: string) =>
     target === repoRoot || (target === checkoutPath && fixture.checkoutPresent),
@@ -200,9 +230,9 @@ vi.mock("./registry.js", () => ({
   listRegistryWorktrees: () => Array.from(fixture.records.values(), (record) => ({ ...record })),
   findLiveRegistryWorktreeByOwner: () => undefined,
   findLiveRegistryWorktreeByPath: fixture.forbidden,
-  getRegistryWorktreeProvisionedPaths: (_env: unknown, id: string) =>
+  getRegistryWorktreeProvisionedPaths: async (_env: unknown, id: string) =>
     fixture.ledger.get(id)?.map((entry) => (typeof entry === "string" ? entry : entry.path)),
-  getRegistryWorktreeProvisionedState: (_env: unknown, id: string) => {
+  getRegistryWorktreeProvisionedState: async (_env: unknown, id: string) => {
     const data = fixture.ledger.get(id);
     return data?.every((entry) => typeof entry !== "string") ? data : undefined;
   },
@@ -224,7 +254,8 @@ vi.mock("./registry.js", () => ({
   insertRegistryWorktree: fixture.forbidden,
   WorktreeRemovalContentionError: class extends Error {},
 }));
-vi.mock("./removal-git.js", () => ({
+vi.mock("./removal-git.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./removal-git.js")>()),
   requireManagedWorktreeHead: async () => "branch-head",
   prepareSnapshotBranchDeletion: async () => ({}),
 }));

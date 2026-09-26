@@ -367,6 +367,15 @@ export function resolveSessionStorePathCore(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
+  return resolveSessionStorePathWithContext(store, opts, { cwd: process.cwd() });
+}
+
+/** Internal async readers capture their relative-path base before yielding. */
+export function resolveSessionStorePathWithContext(
+  store: string | undefined,
+  opts: { agentId?: string; env?: NodeJS.ProcessEnv } | undefined,
+  context: { cwd: string },
+) {
   const env = opts?.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   if (!store) {
@@ -376,33 +385,25 @@ export function resolveSessionStorePathCore(
     const agentId = normalizeAgentId(opts.agentId);
     return path.join(resolveAgentSessionsDir(agentId, env, homedir), "sessions.json");
   }
-  if (store.includes("{agentId}")) {
+  let expandedStore = store;
+  if (expandedStore.includes("{agentId}")) {
     if (!opts?.agentId?.trim()) {
       throw new SessionStoreAgentIdRequiredError();
     }
     const agentId = normalizeAgentId(opts.agentId);
-    const expanded = store.replaceAll("{agentId}", agentId);
-    if (expanded.startsWith("~")) {
-      return path.resolve(
-        expandHomePrefix(expanded, {
-          home: resolveRequiredHomeDir(env, homedir),
-          env,
-          homedir,
-        }),
-      );
-    }
-    return path.resolve(expanded);
+    expandedStore = expandedStore.replaceAll("{agentId}", agentId);
   }
-  if (store.startsWith("~")) {
+  if (expandedStore.startsWith("~")) {
     return path.resolve(
-      expandHomePrefix(store, {
+      context.cwd,
+      expandHomePrefix(expandedStore, {
         home: resolveRequiredHomeDir(env, homedir),
         env,
         homedir,
       }),
     );
   }
-  return path.resolve(store);
+  return path.resolve(context.cwd, expandedStore);
 }
 
 export function resolveAgentsDirFromSessionStorePath(storePath: string): string | undefined {

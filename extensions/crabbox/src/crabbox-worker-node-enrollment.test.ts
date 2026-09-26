@@ -92,7 +92,7 @@ if (args[0] === "--version") {
 function testHome() {
   const home = fs.realpathSync(tempDirs.make("crabbox-bootstrap-home-"));
   const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
-  const stop = () => {
+  const stop = async () => {
     const pidFile = path.join(stateDir, "node.pid");
     if (fs.existsSync(pidFile)) {
       const pid = Number(fs.readFileSync(pidFile, "utf8"));
@@ -103,7 +103,9 @@ function testHome() {
           throw error;
         }
       }
-      fs.rmSync(pidFile);
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow("ESRCH"), {
+        timeout: 5_000,
+      });
     }
   };
   cleanups.push(stop);
@@ -701,7 +703,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     );
     expect(fs.readdirSync(stateDir).some((name) => name.startsWith("node-bootstrap-"))).toBe(false);
     expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
-    stop();
+    await stop();
     fs.rmSync(path.join(stateDir, "launch.json"));
     await expectSetupPhases(enroll(home, nodeBootstrap));
     expect((await readLaunch(stateDir)).cli).toBe(launch.cli);
@@ -805,7 +807,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     expect(
       JSON.parse(fs.readFileSync(path.join(path.dirname(oldLaunch.cli), "installed.json"), "utf8")),
     ).toEqual({ scriptsRan: true });
-    stop();
+    await stop();
     fs.rmSync(path.join(stateDir, "launch.json"));
     const second = await serveArtifact(await packageFixture("second"));
     await expectSetupPhases(enroll(home, second.nodeBootstrap));

@@ -23,7 +23,10 @@ import * as commandExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import * as worktreeRunLease from "./run-lease.js";
@@ -135,6 +138,7 @@ describe("ManagedWorktreeService failure diagnostics", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -168,7 +172,7 @@ describe("ManagedWorktreeService failure diagnostics", () => {
     await expect(fs.stat(allocated)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("actual-failed-setup");
     expect(await git(repo, "branch", "--list", "openclaw/actual-failed-setup")).toBe("");
-    expect(service.listRegistryRecords()).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
     expect(message).toContain("worktree setup failed (exit code 23)");
     expect(message).toContain("create local-fixture-input.txt and retry");
     expect(message).toContain("optional fixture hint is unset");
@@ -190,7 +194,7 @@ describe("ManagedWorktreeService failure diagnostics", () => {
 
     expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("terminated-setup");
     expect(await git(repo, "branch", "--list", "openclaw/terminated-setup")).toBe("");
-    expect(service.listRegistryRecords()).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
     expect(message).toContain("worktree setup failed");
     for (const pattern of entry.expected) {
       expect.soft(message).toMatch(pattern);
@@ -219,7 +223,7 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       } else {
         await writeFailingSetup();
       }
-      const registryBefore = service.listRegistryRecords();
+      const registryBefore = await service.listRegistryRecords();
       const fatal = "fatal: branch deletion denied";
       let cleanupPath: string | undefined;
       let restoreFailed = false;
@@ -261,7 +265,7 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       expect(branchDeletionFailed).toBe(branchFails);
       expect(cleanupPath).toBeDefined();
       await expect(fs.stat(cleanupPath!)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(service.listRegistryRecords()).toEqual(registryBefore);
+      expect(await service.listRegistryRecords()).toEqual(registryBefore);
       expect(await git(repo, "branch", "--list", branch)).toBe(branchFails ? branch : "");
       if (record) {
         expect(await git(repo, "show-ref", "--verify", registryBefore[0]!.snapshotRef!)).not.toBe(
@@ -345,9 +349,9 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       await expect(fs.stat(path.join(created.path, "README.md"))).rejects.toMatchObject({
         code: "ENOENT",
       });
-      const snapshotRef = service
-        .listRegistryRecords()
-        .find((record) => record.id === created.id)?.snapshotRef;
+      const snapshotRef = (await service.listRegistryRecords()).find(
+        (record) => record.id === created.id,
+      )?.snapshotRef;
       expect(snapshotRef).toBeDefined();
       const snapshot = await git(repo, "rev-parse", snapshotRef!);
       abort.abort(new Error("fixture cancellation during deletion"));
@@ -398,11 +402,11 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       expect(checkoutFailed).toBe(true);
       expect(created.baseRef).toBe("HEAD");
       expect(await git(created.path, "branch", "--show-current")).toBe(branch);
-      expect(service.listRegistryRecords()).toEqual([created]);
+      expect(await service.listRegistryRecords()).toEqual([created]);
     } else {
       await expect(service.create({ repoRoot: repo, name })).rejects.toThrow("checkout failed");
       expect(checkoutFailed).toBe(true);
-      expect(service.listRegistryRecords()).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([]);
     }
     expect(allocatedPath).toBeDefined();
     expect(await git(repo, "worktree", "list", "--porcelain")).toContain(allocatedPath);
@@ -467,6 +471,7 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
     unsubscribe();
     await flushLogger();
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
     setLoggerOverride(null);

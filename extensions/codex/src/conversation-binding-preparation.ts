@@ -371,7 +371,10 @@ async function writeThreadBindingFromResponse(
       const { assertCurrent } = requestOptions();
       // Keep the old identity visible until its sole native subscription is
       // released; a concurrent owner must not adopt it between clear and cleanup.
-      await releaseCodexAppServerBindingSubscription(current, { assertCurrent });
+      await releaseCodexAppServerBindingSubscription(current, {
+        assertCurrent,
+        retainedClientId: client.getInstanceId(),
+      });
     }
     requestOptions();
     const committed = await params.bindingStore.mutate(
@@ -646,7 +649,7 @@ async function projectConversationSourceHistory(
   if (history.length === 0) {
     return;
   }
-  const clientLease = retainSharedCodexAppServerClientByInstanceId(target.clientId);
+  const clientLease = await retainSharedCodexAppServerClientByInstanceId(target.clientId);
   if (!clientLease) {
     throw new Error("Codex conversation source history lost its bound client owner.");
   }
@@ -656,7 +659,7 @@ async function projectConversationSourceHistory(
       items: history,
     });
   } finally {
-    clientLease.release();
+    await clientLease.release();
   }
 }
 

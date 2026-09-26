@@ -50,13 +50,14 @@ function createDefaultReplyPayload(overrides = {}) {
   });
 }
 
-function createReferencedMessagePayload(content: string) {
+function createReferencedMessagePayload(content: string, bot = false) {
   return createMessagePayload({
     id: "1000",
     content,
     author: {
       id: "u2",
       username: "bob",
+      bot,
       discriminator: "0",
       avatar: null,
     },
@@ -94,13 +95,14 @@ describe("hydrateDiscordMessageIfNeeded", () => {
         }),
       }),
     ]);
-    const message = new Message<true>(client, {
+    const message = new Message(client, {
       id: "1001",
       channelId: "c1",
-    }) as unknown as Message;
+    });
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -127,8 +129,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       }),
     );
 
+    client.rest = rest;
     const outcome = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -160,8 +163,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       }),
     );
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -170,55 +174,72 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     expect(hydrated.referencedMessage?.content).toBe("the replied-to message");
   });
 
-  it.each([undefined, "u2"])("fetches missing reply context (botUserId=%s)", async (botUserId) => {
-    const client = createInternalTestClient();
-    const rest = createFakeRestClient([
-      createReferencedMessagePayload("the directly fetched message"),
-    ]);
-    const message = new Message(
-      client,
-      createDefaultReplyPayload({
-        content: "<@bot> ok do it",
-        mentions: [
-          {
-            id: "bot",
-            username: "openclaw",
-            global_name: null,
-            discriminator: "0",
-            avatar: null,
-          },
-        ],
-      }),
-    );
+  it.each([
+    { botUserId: undefined, referenced: undefined },
+    { botUserId: "u2", referenced: undefined },
+    { botUserId: "bot", referenced: createReferencedMessagePayload("", true) },
+  ])(
+    "fetches missing or empty reply context (botUserId=$botUserId)",
+    async ({ botUserId, referenced }) => {
+      const client = createInternalTestClient();
+      const rest = createFakeRestClient([
+        createReferencedMessagePayload(
+          "Release repair: https://github.com/example/project/pull/42",
+          true,
+        ),
+      ]);
+      const message = new Message(
+        client,
+        createDefaultReplyPayload({
+          ...(referenced ? { referenced_message: referenced } : {}),
+          content: "<@bot> ok do it",
+          mentions: [
+            {
+              id: "bot",
+              username: "openclaw",
+              global_name: null,
+              discriminator: "0",
+              avatar: null,
+            },
+          ],
+        }),
+      );
 
-    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message,
-      messageChannelId: "c1",
-    });
+      client.rest = rest;
+      const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
+        client,
+        message,
+        messageChannelId: "c1",
+      });
 
-    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/1000"]);
-    expect(hydrated.referencedMessage?.content).toBe("the directly fetched message");
+      expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/1000"]);
+      expect(hydrated.referencedMessage?.content).toBe(
+        "Release repair: https://github.com/example/project/pull/42",
+      );
 
-    const ctx = await createBaseDiscordMessageContext({
-      botUserId,
-      message: hydrated,
-      author: hydrated.author,
-      baseText: hydrated.content,
-      messageText: hydrated.content,
-    });
-    const result = await buildDiscordMessageProcessContext({
-      ctx,
-      text: hydrated.content,
-      mediaList: [],
-    });
-    if (!result) {
-      throw new Error("expected a built Discord message context");
-    }
+      const ctx = await createBaseDiscordMessageContext({
+        discordConfig: { allowBots: false },
+        botUserId,
+        message: hydrated,
+        author: hydrated.author,
+        baseText: hydrated.content,
+        messageText: hydrated.content,
+      });
+      const result = await buildDiscordMessageProcessContext({
+        ctx,
+        text: hydrated.content,
+        mediaList: [],
+      });
+      if (!result) {
+        throw new Error("expected a built Discord message context");
+      }
 
-    expect(result.ctxPayload.ReplyToId).toBe("1000");
-    expect(result.ctxPayload.ReplyToBody).toBe("the directly fetched message");
-  });
+      expect(result.ctxPayload.ReplyToId).toBe("1000");
+      expect(result.ctxPayload.ReplyToBody).toBe(
+        "Release repair: https://github.com/example/project/pull/42",
+      );
+    },
+  );
 
   it("replaces a mismatched nested reply with the canonical referenced message", async () => {
     const client = createInternalTestClient();
@@ -235,8 +256,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       }),
     );
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -281,8 +303,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       }),
     );
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -304,7 +327,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       throw new Error("expected a built Discord message context");
     }
 
-    expect(result.ctxPayload.ReplyToId).toBeUndefined();
+    expect(result.ctxPayload.ReplyToId).toBe("1000");
     expect(result.ctxPayload.ReplyToBody).toBeUndefined();
   });
 
@@ -322,8 +345,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     ]);
     const message = new Message(client, reply);
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -341,8 +365,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     rest.get = get;
     const message = new Message(client, createDefaultReplyPayload());
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -372,13 +397,14 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       }),
     );
 
+    client.rest = rest;
     await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message: deletedReply,
       messageChannelId: "c1",
     });
     await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message: forwardedMessage,
       messageChannelId: "c1",
     });

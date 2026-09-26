@@ -115,6 +115,16 @@ async function fixture(sameSecond = false, overflow = false, evicted = false) {
     });
   const a = create();
   const b = create();
+  cleanups.push(async () => {
+    await Promise.all([a.client.closeAndWait(), b.client.closeAndWait()]);
+  });
+  // Worker startup is fixture setup, outside the live-settings request deadline.
+  await (overflow ? b.client : a.client).request(
+    "thread/list",
+    { limit: 1 },
+    { catalogPreview: true },
+  );
+  methods.length = 0;
   await observeCodexCatalogClient(a.client, { startOptions: options });
   await observeCodexCatalogClient(b.client, { startOptions: options });
   const homeId = await codexCatalogResidentHomeKey({ startOptions: options });
@@ -124,18 +134,13 @@ async function fixture(sameSecond = false, overflow = false, evicted = false) {
       projectCodexCatalogPage(
         // Overflow queries still have a native reader after the live settings source closes.
         await (overflow ? b.client : a.client).request("thread/list", params, {
-          timeoutMs: 1_000,
           catalogPreview: true,
         }),
         { sanitize: sanitizeTerminalText },
       ),
     assertCurrent: () => {},
   });
-  cleanups.push(async () => {
-    a.client.close();
-    b.client.close();
-    await index.close();
-  });
+  cleanups.push(() => index.close());
   await index.initialize();
   return { a, b, index, inventory, methods, homeId };
 }

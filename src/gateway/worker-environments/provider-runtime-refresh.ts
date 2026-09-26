@@ -1,5 +1,5 @@
 import type { WorkerProvider } from "../../plugins/types.js";
-import { verifyWorkerAdmissionHandshake } from "./admission.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -52,8 +52,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
   ) => {
     if (
       !installation ||
-      (record.bootstrapReceipt &&
-        verifyWorkerAdmissionHandshake(record.bootstrapReceipt, installation))
+      (record.bootstrapReceipt && sameWorkerBuild(record.bootstrapReceipt, installation))
     ) {
       return;
     }
@@ -121,10 +120,10 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
       });
     });
     assertCurrent();
-    if (!verifyWorkerAdmissionHandshake(receipt, installation)) {
+    if (!sameWorkerBuild(receipt, installation)) {
       throw new Error("Worker runtime refresh returned a mismatched build receipt");
     }
-    const refreshed = store.refreshBootstrapReceipt({
+    const refreshed = await store.refreshBootstrapReceipt({
       environmentId: record.environmentId,
       ...(record.state === "attached"
         ? { expectedState: record.state, expectedPlacementGeneration: expectedPlacementGeneration! }
@@ -135,7 +134,8 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
       bootstrapReceipt: { ...receipt, installKind: "bundle" },
       assertCurrent,
     });
-    ensurePendingCredential(refreshed, sessionId ?? null);
+    assertCurrent();
+    await ensurePendingCredential(refreshed, sessionId ?? null);
   };
 
   return refreshRuntime;

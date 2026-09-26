@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
     wallClockMs: params.wallClockMs,
     bootStateLines: [],
   })),
+  createRuntimePreloads: vi.fn(() => ["file:///qa-transport-preload.mjs"]),
   startQaGatewayChild: vi.fn(async (_params: unknown) => ({
     baseUrl: "http://127.0.0.1:18789",
     token: "qa-test-token",
@@ -92,7 +93,11 @@ vi.mock("./suite.js", async (importOriginal) => ({
   buildQaSuiteRuntimeMetrics: vi.fn(() => ({ wallMs: 1 })),
   captureGatewayHeapSnapshotCheckpoint: vi.fn(async () => undefined),
   createQaSuiteTransportAdapter: vi.fn(async () => ({
-    adapter: { id: "qa-channel", captureArtifacts: mocks.captureTransportArtifacts },
+    adapter: {
+      id: "qa-channel",
+      captureArtifacts: mocks.captureTransportArtifacts,
+      createRuntimePreloads: mocks.createRuntimePreloads,
+    },
     cleanupBeforeGatewayStop: vi.fn(async () => {}),
     cleanupAfterGatewayStop: vi.fn(async () => {}),
   })),
@@ -234,8 +239,12 @@ describe("QA suite Control UI ownership", () => {
     );
 
     expect(mocks.startQaGatewayChild).toHaveBeenCalledWith(
-      expect.objectContaining({ controlUiEnabled: testCase.enabled }),
+      expect.objectContaining({
+        controlUiEnabled: testCase.enabled,
+        runtimePreloads: ["file:///qa-transport-preload.mjs"],
+      }),
     );
+    expect(mocks.createRuntimePreloads).toHaveBeenCalledOnce();
     if (testCase.enabled) {
       expect(lab.setControlUi).toHaveBeenCalledWith({
         controlUiProxyTarget: "http://127.0.0.1:18789",

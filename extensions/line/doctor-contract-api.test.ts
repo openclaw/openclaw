@@ -13,6 +13,7 @@ import type {
   PluginDoctorChannelIngressQueueAccess,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 
@@ -74,6 +75,7 @@ async function withStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T>
   try {
     return await fn(stateDir);
   } finally {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   }

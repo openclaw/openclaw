@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
  */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -42,12 +43,6 @@ vi.mock("../../agents/subagents/registry/subagent-registry-runtime.js", () => ({
 
 vi.mock("../../agents/subagents/spawn/subagent-spawn-cleanup.js", () => ({
   terminateAcceptedCollectorRun: (...args: unknown[]) => terminateAcceptedCollectorRunMock(...args),
-}));
-
-vi.mock("./chat.js", () => ({
-  chatHandlers: {
-    "chat.send": (...args: unknown[]) => chatSendMock(...args),
-  },
 }));
 
 vi.mock("./chat-send-external-entry.js", () => ({
@@ -125,6 +120,12 @@ describe("sessions.send completed subagent follow-up status", () => {
   }
 
   it("reactivates completed subagent sessions before broadcasting sessions.changed", async () => {
+    const state = await createOpenClawTestState({
+      label: "session-send-followup",
+      applyEnv: false,
+    });
+    onTestFinished(() => state.cleanup());
+    const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
     const childSessionKey = "agent:main:subagent:followup";
     const completedRun = {
       runId: "run-old",
@@ -146,7 +147,7 @@ describe("sessions.send completed subagent follow-up status", () => {
     loadSessionEntryMock.mockReturnValue({
       cfg: {},
       canonicalKey: childSessionKey,
-      storePath: "/tmp/sessions.json",
+      storePath,
       entry: { sessionId: "sess-followup" },
     });
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(completedRun);
@@ -161,7 +162,7 @@ describe("sessions.send completed subagent follow-up status", () => {
     const projection = createSessionRowProjectionFixture({
       cfg: {},
       agentId: "main",
-      storePath: "/tmp/sessions.json",
+      storePath,
       store: {
         [childSessionKey]: {
           sessionId: "sess-followup",
@@ -306,9 +307,7 @@ describe("sessions.send completed subagent follow-up status", () => {
         });
         expect(respond).toHaveBeenCalledWith(true, payload, undefined, undefined);
       }
-      expect(chatSendWithAdmissionOwnedMock).toHaveBeenCalledTimes(
-        method === "sessions.steer" ? 2 : 0,
-      );
+      expect(chatSendWithAdmissionOwnedMock).toHaveBeenCalledTimes(2);
     },
   );
 

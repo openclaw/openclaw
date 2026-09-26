@@ -6,7 +6,7 @@ import type {
   PlacementStandingGrantMintSpec,
   PlacementStandingGrantRuntime,
 } from "./operator-approval-placement-grants.js";
-import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.js";
+import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.types.js";
 import type {
   ForceDenyOperatorApprovalResult,
   OperatorApprovalKind,
@@ -16,6 +16,19 @@ import type {
   OperatorApprovalTerminalReason,
   ResolveOperatorApprovalResult,
 } from "./operator-approval-store.js";
+import type { OperatorApprovalStoreGuard } from "./operator-approval-store.types.js";
+
+export type ExecApprovalReadAuthority = {
+  assertCurrent: () => void;
+  guard: OperatorApprovalStoreGuard;
+};
+
+export type ExecApprovalResolveOptions = {
+  /** Explicit grant expiry override; undefined defers to the configured default. */
+  grantExpiresAtMs?: number | null;
+  assertCurrent?: () => void;
+  guard?: OperatorApprovalStoreGuard;
+};
 
 // Node replay distinguishes a trusted auto-review verdict from an operator decision.
 export type ExecApprovalResolutionSource = "operator" | "auto-review";
@@ -70,11 +83,11 @@ export type ExecApprovalManagerOptions<TPayload> = {
     databaseOptions?: OpenClawStateDatabaseOptions;
   };
   resolveAllowedDecisions?: (request: TPayload) => readonly ExecApprovalDecision[];
-  /** Gateway owns lineage lookup; absence seeds only the requesting session. */
+  /** Gateway may await lineage preparation; absence seeds only the requesting session. */
   resolveAudienceSessionKeys?: (
     sourceSessionKey: string,
     sourceAgentId?: string | null,
-  ) => string[];
+  ) => string[] | Promise<string[]>;
   onError?: (
     error: Error,
     context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },

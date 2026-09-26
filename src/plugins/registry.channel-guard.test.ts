@@ -27,6 +27,34 @@ function createChannelPlugin(id: string, label: string): ChannelPlugin {
 }
 
 describe("plugin registry channel guard", () => {
+  it("rejects conflicted tool registration before reading declarations", () => {
+    const builder = createTestRegistry();
+    const owner = createPluginRecord({ id: "channel-owner" });
+    let declarationReads = 0;
+    const conflicting = createPluginRecord({
+      id: "conflicting-owner",
+      contracts: {
+        get tools(): string[] {
+          declarationReads += 1;
+          throw new Error("conflicted declarations must not be read");
+        },
+      },
+    });
+    builder.registry.plugins.push(owner, conflicting);
+    builder.createApi(owner, { config: {}, registrationMode: "full" }).registerChannel({
+      plugin: createChannelPlugin("shared-channel", "Owner"),
+    });
+    const api = builder.createApi(conflicting, { config: {}, registrationMode: "full" });
+    api.registerChannel({ plugin: createChannelPlugin("shared-channel", "Conflict") });
+    expect(() => api.registerTool(() => null, { name: "probe" })).not.toThrow();
+    expect(builder.registry.channels.map((entry) => entry.pluginId)).toEqual(["channel-owner"]);
+    expect(builder.registry.tools).toEqual([]);
+    expect(builder.registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+      "channel already registered: shared-channel (channel-owner)",
+    ]);
+    expect(declarationReads).toBe(0);
+  });
+
   it.each([undefined, { chatTypes: [] }, { chatTypes: ["forum"] }, { chatTypes: [1] }])(
     "rejects incomplete or invalid channel plugins at the registrar boundary",
     (capabilities) => {

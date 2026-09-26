@@ -287,6 +287,38 @@ describe("basic browser routes", () => {
     expect(ensureTabAvailable).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ["chromium", "browser", "rendered"],
+    ["lightpanda", "connection", "none"],
+  ] as const)(
+    "discovers registered engines and reports the selected %s contract",
+    async (engine, sessionScope, screenshotFidelity) => {
+      const response = await callBasicRouteWithState({
+        state: createManagedProfileState({ engine, attachOnly: true }),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(responseBodyRecord(response)).toMatchObject({
+        engine,
+        sessionScope,
+        screenshotFidelity,
+        availableEngines: [
+          {
+            id: "chromium",
+            launchMode: "managed-or-attach",
+            sessionScope: "browser",
+            screenshotFidelity: "rendered",
+          },
+          {
+            id: "lightpanda",
+            launchMode: "attach-only",
+            sessionScope: "connection",
+            screenshotFidelity: "none",
+          },
+        ],
+      });
+    },
+  );
+
   it.each(["/", "/doctor"] as const)(
     "detects the local managed profile executable for %s",
     async (route) => {

@@ -3,14 +3,76 @@ import fs from "node:fs";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
-import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
+import {
+  isBlockedShellWrapperCommand,
+  isShellWrapperInvocation,
+} from "../infra/exec-wrapper-resolution.js";
+import {
+  inspectHostExecEnvOverrides,
+  sanitizeHostExecEnv,
+  sanitizeSystemRunEnvOverrides,
+} from "../infra/host-env-security.js";
 import { resolveMutableFileOperandSnapshotSync } from "../infra/system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import {
   type ApprovedCwdSnapshot,
   captureApprovedCwdSnapshotSync,
 } from "../infra/system-run-cwd-binding.js";
+import type { SystemRunBindingFailure } from "../infra/system-run-mutable-file-operand.js";
 
+type SystemRunPrepareEnv =
+  | {
+      ok: true;
+      env: Record<string, string>;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+export function buildEnvOverrideRejectionMessage(params: {
+  rejectedOverrideBlockedKeys: string[];
+  rejectedOverrideInvalidKeys: string[];
+}): string {
+  const details: string[] = [];
+  if (params.rejectedOverrideBlockedKeys.length > 0) {
+    details.push(`blocked override keys: ${params.rejectedOverrideBlockedKeys.join(", ")}`);
+  }
+  if (params.rejectedOverrideInvalidKeys.length > 0) {
+    details.push(
+      `invalid non-portable override keys: ${params.rejectedOverrideInvalidKeys.join(", ")}`,
+    );
+  }
+  return `SYSTEM_RUN_DENIED: environment override rejected (${details.join("; ")})`;
+}
+
+export function buildSystemRunPrepareCoverageEnv(params: {
+  argv: string[];
+  env?: Record<string, string> | null;
+}): SystemRunPrepareEnv {
+  const diagnostics = inspectHostExecEnvOverrides({
+    overrides: params.env ?? undefined,
+    blockPathOverrides: true,
+  });
+  if (
+    diagnostics.rejectedOverrideBlockedKeys.length > 0 ||
+    diagnostics.rejectedOverrideInvalidKeys.length > 0
+  ) {
+    return {
+      ok: false,
+      message: buildEnvOverrideRejectionMessage(diagnostics),
+    };
+  }
+  const envOverrides = sanitizeSystemRunEnvOverrides({
+    overrides: params.env ?? undefined,
+    shellWrapper: isShellWrapperInvocation(params.argv),
+  });
+  return {
+    ok: true,
+    // Prepared coverage is durable approval evidence, so keep this in parity
+    // with the env passed to `system.run` policy and execution.
+    env: sanitizeHostExecEnv({ overrides: envOverrides, blockPathOverrides: true }),
+  };
+}
 function shouldPinExecutableForApproval(params: {
   shellCommand: string | null;
   wrapperChain: string[] | undefined;
@@ -102,7 +164,7 @@ export function buildSystemRunApprovalPlan(
     sessionKey?: unknown;
   },
   bindApproval = true,
-): { ok: true; plan: SystemRunApprovalPlan } | { ok: false; message: string } {
+): { ok: true; plan: SystemRunApprovalPlan } | SystemRunBindingFailure {
   const command = resolveSystemRunCommandRequest({
     command: params.command,
     rawCommand: params.rawCommand,
@@ -116,6 +178,7 @@ export function buildSystemRunApprovalPlan(
   if (bindApproval && command.shellPayload === null && isBlockedShellWrapperCommand(command.argv)) {
     return {
       ok: false,
+      reason: "unsupported-command-shape",
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
     };
   }

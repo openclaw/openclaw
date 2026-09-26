@@ -710,38 +710,6 @@ describe("session transcript runtime SDK", () => {
     expect(fs.existsSync(scope.sessionFile)).toBe(false);
   });
 
-  it("appends messages by the same explicit scoped transcript target", async () => {
-    const scope = {
-      agentId: "main",
-      sessionFile: path.join(tempDir, "mirror-target.jsonl"),
-      sessionId: "mirror-session",
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-    const message = {
-      role: "assistant",
-      content: [{ type: "text", text: "hello" }],
-      timestamp: 1,
-    };
-
-    const appended = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message,
-    });
-
-    expect(appended).toBeDefined();
-    expect(appended?.message).toMatchObject(message);
-    await expect(readLatestAssistantTextByIdentity(scope)).resolves.toMatchObject({
-      id: appended?.messageId,
-      text: "hello",
-      timestamp: 1,
-    });
-    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ type: "session" }),
-      expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
-    ]);
-  });
-
   it("publishes internal updates for SQLite transcript identity", async () => {
     const scope = {
       agentId: "main",

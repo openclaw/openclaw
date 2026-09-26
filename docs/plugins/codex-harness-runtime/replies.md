@@ -23,6 +23,16 @@ or notify. Heartbeat turns use the same Codex Default collaboration mode as
 ordinary chat turns. The heartbeat monitor's cron scratch is appended to the
 scheduled heartbeat user message when present.
 
+## Attachments in a remote workspace
+
+With `appServer.remoteWorkspaceRoot`, final and asynchronous replies can use
+`MEDIA:./report.pdf` or an absolute path inside the remote workspace. Before
+releasing the app-server connection, the Codex plugin reads the attachment with
+bounded `command/exec` requests. The host's
+[reply-media capability](/plugins/sdk-agent-harness/attempt-runtime#reply-attachments-from-a-remote-workspace)
+applies read policy and stages the bytes for delivery. The original reply remains
+in the transcript; Gateway workspace copies are not used as a fallback.
+
 ## Final answers after settled tool work
 
 For ordinary host-authenticated Codex turns that finish tool work without a
@@ -33,6 +43,13 @@ request metadata. The existing environment, dynamic-tool, MCP, and native-hook
 restrictions remain. Completed actions are transcript evidence, not instructions
 to replay. Preserving a native model does not, by itself, disable host-authenticated
 finalization.
+
+Hidden background-task completion messages remain eligible for this recovery
+when they are part of the model's context. The host records their native turn
+identity on the admitted prompt while keeping them hidden in chat. Native
+transcript mirroring reuses that prompt as evidence; it cannot recreate an
+admitted prompt that disappeared. Messages explicitly excluded from model
+context remain outside native prompt annotation.
 
 Recovery reserves its existing limits for the complete current turn, then keeps
 the nearest whole earlier exchanges that fit. Older exchanges can be omitted,

@@ -16,7 +16,7 @@ import { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js"
 import { probeIMessage } from "./probe.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { sendMessageIMessage } from "./send.js";
-import { imessageSetupWizard } from "./setup-surface.js";
+export { imessageSetupWizard } from "./setup-surface.js";
 
 type IMessageSendFn = typeof sendMessageIMessage;
 
@@ -140,5 +140,3 @@ export async function startIMessageGatewayAccount(
     statusSink,
   });
 }
-
-export { imessageSetupWizard };

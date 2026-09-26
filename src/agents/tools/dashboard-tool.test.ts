@@ -236,7 +236,11 @@ describe("dashboard tool", () => {
       }),
       expect.objectContaining({
         method: "sessions.patch",
-        params: { key: "agent:main:main", boardPresentation: "expanded" },
+        params: {
+          key: "agent:main:main",
+          boardFace: "dashboard",
+          boardPresentation: "expanded",
+        },
       }),
     ]);
     expect(replacement.requests).toEqual([]);
@@ -414,7 +418,12 @@ describe("dashboard tool", () => {
       expect(harness.calls).toEqual([
         [
           "sessions.patch",
-          { key: "agent:main:main", agentId: "main", boardPresentation: presentation },
+          {
+            key: "agent:main:main",
+            agentId: "main",
+            boardFace: "dashboard",
+            boardPresentation: presentation,
+          },
         ],
       ]);
       expect(result.details).toEqual({

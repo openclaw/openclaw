@@ -9,11 +9,13 @@ import {
   extractEmbeddedAssistantText,
   extractAssistantThinking,
   extractAssistantVisibleText,
+  prepareAssistantVisibleText,
   createThinkingTagStreamState,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  sanitizeAssistantVisibleStreamText,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
@@ -639,6 +641,21 @@ describe("extractAssistantThinking", () => {
 });
 
 describe("stripDowngradedToolCallText", () => {
+  it.each([
+    { input: "Hello [Historical context: example]  \n", expected: "Hello   \n" },
+    {
+      input: "Use `[Historical context: example]`  \n",
+      expected: "Use `[Historical context: example]`  \n",
+    },
+  ])("preserves requested stream boundaries around $input", ({ input, expected }) => {
+    expect(
+      sanitizeAssistantVisibleStreamText(input, "final_answer", {
+        preserveTrailingWhitespace: true,
+      }),
+    ).toBe(expected);
+    expect(sanitizeAssistantVisibleStreamText(input, "final_answer")).toBe(expected.trimEnd());
+  });
+
   it("strips downgraded marker blocks while preserving surrounding user-facing text", () => {
     const cases = [
       {
@@ -680,7 +697,22 @@ describe("stripDowngradedToolCallText", () => {
 });
 
 describe("extractAssistantVisibleText", () => {
-  it("prefers non-empty final_answer text over commentary", () => {
+  it.each(["Visible prefix <think>private reasoning tail", ""])(
+    "captures legacy string content before it changes: %j",
+    (content) => {
+      const message = makeAssistantMessage({ role: "assistant", content, timestamp: 0 });
+      const render = prepareAssistantVisibleText(message);
+      message.content = [{ type: "text", text: "Replacement" }];
+
+      expect(render()).toBe(content ? "Visible prefix" : "");
+      expect(render()).toBe(content ? "Visible prefix" : "");
+    },
+  );
+
+  it.each([
+    { name: "plain text", text: "Done." },
+    { name: "indented code", text: "    const value = 1;\n    use(value);" },
+  ])("prefers non-empty final_answer $name over commentary", ({ text }) => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [
@@ -691,14 +723,14 @@ describe("extractAssistantVisibleText", () => {
         },
         {
           type: "text",
-          text: "Done.",
+          text,
           textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
         },
       ],
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantVisibleText(msg)).toBe("Done.");
+    expect(extractAssistantVisibleText(msg)).toBe(text);
   });
 
   it("does not fall back to commentary when final_answer is empty", () => {

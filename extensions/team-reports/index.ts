@@ -6,6 +6,7 @@ import { registerTeamReportsGatewayMethods } from "./src/gateway-methods.js";
 import { createTeamReportsHttpHandler } from "./src/http.js";
 import { TeamReportsScheduler } from "./src/scheduler.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./src/store.js";
+import { listWorkSessions } from "./src/work-sessions.js";
 
 export default definePluginEntry({
   id: "team-reports",
@@ -137,6 +138,14 @@ export default definePluginEntry({
       handler: createTeamReportsHttpHandler({
         basePath: initial.basePath,
         displayTimezone: initial.displayTimezone,
+        sessionRouting: () => {
+          const config = api.runtime.config.current();
+          return {
+            controlUiBasePath: config.gateway?.controlUi?.basePath,
+            mainKey: config.session?.mainKey,
+          };
+        },
+        workSessions: listWorkSessions,
         // Source checkouts, the flattened dist bundle, and installed packages all keep assets/ at the plugin root.
         assetsDir: path.join(api.rootDir ?? path.dirname(fileURLToPath(import.meta.url)), "assets"),
         getStore: () => store,

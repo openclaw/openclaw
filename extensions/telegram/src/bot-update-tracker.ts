@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot update tracker behavior.
 import {
   createMessageReceiveContext,
   type MessageAckPolicy,

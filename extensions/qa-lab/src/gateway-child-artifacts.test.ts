@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import {
   openOpenClawAgentDatabase,
   openOpenClawStateDatabase,
@@ -28,6 +30,38 @@ afterEach(async () => {
 });
 
 describe("cleanupQaGatewayTempRoots", () => {
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "does not inspect child-private state before startup or boundary cleanup",
+    async () => {
+      const tempRoot = await dirs.makeTempDir("qa-cleanup-private-state-");
+      const stateDir = path.join(tempRoot, "state");
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      await fs.writeFile(databasePath, "child-owned state");
+      // Reproduce the runner's filesystem boundary without privileged chown:
+      // no parent handles exist, and traversal is denied after SUT auth staging.
+      await fs.chmod(stateDir, 0);
+      const cleanupTempRoot = vi.fn(async () => {
+        await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "EACCES" });
+        await fs.chmod(stateDir, 0o700);
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      });
+      try {
+        await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "EACCES" });
+        // prepareAttempt invokes this after the packaged auth subprocess exits.
+        await closeQaRuntimeStores(tempRoot);
+        await cleanupQaGatewayTempRoots({ tempRoot, cleanupTempRoot });
+        expect(cleanupTempRoot).toHaveBeenCalledOnce();
+        await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await fs.chmod(stateDir, 0o700).catch((error: unknown) => {
+          if (extractErrorCode(error) !== "ENOENT") {
+            throw error;
+          }
+        });
+      }
+    },
+  );
   it("does not recreate disposed state at natural parent exit or close sibling stores", async () => {
     const root = await fs.realpath(await dirs.makeTempDir("qa-cleanup-parent-stores-"));
     const tempRoot = path.join(root, "runtime");

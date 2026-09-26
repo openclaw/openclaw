@@ -32,6 +32,10 @@ describe("resolveCronSession provider-owned daily reset", () => {
       nowMs: NOW_MS,
       forceNew: false,
       store: { [sessionKey]: entry },
+      lifecycleTimestamps: {
+        sessionStartedAt: entry.sessionStartedAt,
+        lastInteractionAt: entry.lastInteractionAt,
+      },
     });
 
     expect(result.isNewSession).toBe(false);
@@ -58,6 +62,10 @@ describe("resolveCronSession provider-owned daily reset", () => {
       nowMs: NOW_MS,
       forceNew: false,
       store: { [sessionKey]: entry },
+      lifecycleTimestamps: {
+        sessionStartedAt: entry.sessionStartedAt,
+        lastInteractionAt: entry.lastInteractionAt,
+      },
     });
 
     expect(result.isNewSession).toBe(true);
@@ -75,6 +83,10 @@ describe("resolveCronSession provider-owned daily reset", () => {
       nowMs: NOW_MS,
       forceNew: false,
       store: { [sessionKey]: entry },
+      lifecycleTimestamps: {
+        sessionStartedAt: entry.sessionStartedAt,
+        lastInteractionAt: entry.lastInteractionAt,
+      },
     });
 
     expect(result.isNewSession).toBe(true);

@@ -8,11 +8,14 @@ import {
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
+import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import * as sessionGroupCatalog from "./session-group-catalog.js";
 import { talkModeHandlers } from "./talk/handlers/mode.js";
 
 function createPendingProfileClient() {
@@ -65,6 +68,108 @@ async function dispatchPendingProfileMethod(params: {
 }
 
 describe("Gateway pending-profile authorization", () => {
+  it.each([
+    ["agents.list", SESSION_READ_SCOPE, SESSION_READ_SCOPE],
+    ["models.list", SESSION_READ_SCOPE, SESSION_READ_SCOPE],
+    ["sessions.list", SESSION_READ_SCOPE, SESSION_READ_SCOPE],
+    ["models.list", READ_SCOPE, READ_SCOPE],
+    ["models.list", READ_SCOPE, SESSION_READ_SCOPE],
+    ["models.list", SESSION_READ_SCOPE, READ_SCOPE],
+    ["sessions.groups.list", SESSION_READ_SCOPE, SESSION_READ_SCOPE],
+    ["sessions.groups.list", READ_SCOPE, READ_SCOPE],
+    ["sessions.groups.list", READ_SCOPE, SESSION_READ_SCOPE],
+    ["sessions.groups.list", SESSION_READ_SCOPE, READ_SCOPE],
+  ])(
+    "retains %s admission through awaited preparation (%s -> %s)",
+    async (method, initial, current) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = ensureProfileForEmail("catalog-reader@example.test");
+        const client = createPendingProfileClient();
+        client.connect.scopes = [initial];
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const admittedScopes: Array<string | undefined> = [];
+        const handler = vi.fn<GatewayRequestHandler>((options) => {
+          admittedScopes.push(readGatewayRequestMutationAuthority(options).sessionScope);
+          options.respond(true, { ok: true });
+        });
+        const identity = {
+          profileId: profile.id,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        };
+        const groupRead = method === "sessions.groups.list";
+        const ensureCatalog = sessionGroupCatalog.ensureSessionGroupCatalog;
+        using catalogPreparation = groupRead
+          ? vi
+              .spyOn(sessionGroupCatalog, "ensureSessionGroupCatalog")
+              .mockImplementation(async (env) => {
+                await ensureCatalog(env);
+                entered.resolve();
+                await release.promise;
+              })
+          : undefined;
+        if (groupRead) {
+          client.authenticatedUserProfile = identity;
+        }
+        client.authenticatedGitHubIdentitySync = vi.fn(async () => {
+          entered.resolve();
+          await release.promise;
+          client.authenticatedUserProfile = identity;
+          return { profileId: profile.id, updatedAt: profile.updatedAt };
+        });
+        const pending = dispatchPendingProfileMethod({ client, method, handler });
+        try {
+          await Promise.race([entered.promise, pending]);
+          expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(groupRead ? 0 : 1);
+          if (groupRead) {
+            expect(catalogPreparation).toHaveBeenCalledOnce();
+          }
+          expect(handler).not.toHaveBeenCalled();
+          client.connect.scopes = [current];
+        } finally {
+          release.resolve();
+        }
+        const response = await pending;
+        if (initial === current) {
+          expect(response).toHaveBeenCalledExactlyOnceWith(true, { ok: true });
+          expect(admittedScopes).toEqual([
+            initial === SESSION_READ_SCOPE ? SESSION_READ_SCOPE : undefined,
+          ]);
+        } else {
+          expect(handler).not.toHaveBeenCalled();
+          expect(response).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "FORBIDDEN",
+              message: "Gateway requester authority changed",
+            }),
+          );
+        }
+      });
+    },
+  );
+
+  it("requires a verified person only when the request uses narrow session admission", async () => {
+    const client = createPendingProfileClient();
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sessions: [] }));
+    client.connect.scopes = ["operator.sessions.read"];
+    const denied = await dispatchPendingProfileMethod({ client, method: "sessions.list", handler });
+    expect(denied).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN" }),
+    );
+    expect(handler).not.toHaveBeenCalled();
+
+    client.connect.scopes = ["operator.read"];
+    const broad = await dispatchPendingProfileMethod({ client, method: "sessions.list", handler });
+    expect(broad).toHaveBeenCalledWith(true, { sessions: [] });
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])(
     "rechecks bound webchat talk.mode after node discovery (profile merged: %s)",
     async (merge) => {

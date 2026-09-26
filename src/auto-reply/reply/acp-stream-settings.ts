@@ -54,14 +54,6 @@ function resolveAcpDeliveryMode(value: unknown): AcpDeliveryMode {
   return DEFAULT_ACP_DELIVERY_MODE;
 }
 
-function resolveAcpStreamCoalesceIdleMs(): number {
-  return DEFAULT_ACP_STREAM_COALESCE_IDLE_MS;
-}
-
-function resolveAcpStreamMaxChunkChars(): number {
-  return DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS;
-}
-
 /** Resolves ACP projection settings with bounded defaults. */
 export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjectionSettings {
   const stream = cfg.acp?.stream;
@@ -91,8 +83,8 @@ export function resolveAcpStreamingConfig(params: {
     cfg: params.cfg,
     provider: params.provider,
     accountId: params.accountId,
-    maxChunkChars: resolveAcpStreamMaxChunkChars(),
-    coalesceIdleMs: resolveAcpStreamCoalesceIdleMs(),
+    maxChunkChars: DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS,
+    coalesceIdleMs: DEFAULT_ACP_STREAM_COALESCE_IDLE_MS,
   });
 
   // In live mode, ACP text deltas should flush promptly and never be held

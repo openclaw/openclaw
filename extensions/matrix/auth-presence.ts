@@ -1,4 +1,3 @@
-// Matrix plugin module implements auth presence behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import {

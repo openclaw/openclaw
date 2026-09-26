@@ -1,5 +1,6 @@
 /** Built-in blocking user-question tool and its active-session answer bridge. */
 import { createHash } from "node:crypto";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   QuestionAnswers,
   QuestionRequestQuestion,
@@ -7,6 +8,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   resolveAgentQuestionGatewayCall,
   type AgentHarnessQuestionGatewayCall,
@@ -50,24 +52,15 @@ type AskUserQuestionState = {
   questions: QuestionRequestQuestion[];
   expiresAtMs: number;
   phase: AskUserQuestionPhase;
-  answer?: Promise<QuestionWaitAnswerResult>;
   claim?: ReturnType<typeof registerPendingAgentQuestion>;
   waiters: Set<() => void>;
 };
 
-const ASK_USER_QUESTIONS_KEY = Symbol.for("openclaw.askUserQuestions");
-const askUserGlobal = globalThis as Record<PropertyKey, unknown>;
 // Tool execution and subscriber delivery can live in separate production bundles.
 // Keep one process registry or prompt readiness never reaches the delivery waiter.
-const askUserQuestions = (() => {
-  const existing = askUserGlobal[ASK_USER_QUESTIONS_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, AskUserQuestionState>;
-  }
-  const questions = new Map<string, AskUserQuestionState>();
-  askUserGlobal[ASK_USER_QUESTIONS_KEY] = questions;
-  return questions;
-})();
+const askUserQuestions = resolveGlobalMap<string, AskUserQuestionState>(
+  Symbol.for("openclaw.askUserQuestions"),
+);
 
 export { normalizeAskUserParams } from "./ask-user-tool-normalization.js";
 
@@ -217,23 +210,11 @@ async function readAskUserQuestionStatus(
   gatewayCall: GatewayQuestionCall,
 ): Promise<string | undefined> {
   const result = await gatewayCall("question.list", { timeoutMs: QUESTION_RPC_GRACE_MS }, {});
-  const questions =
-    result && typeof result === "object" && !Array.isArray(result)
-      ? (result as { questions?: unknown }).questions
-      : undefined;
+  const questions = asNullableRecord(result)?.questions;
   const question = Array.isArray(questions)
-    ? questions.find(
-        (candidate) =>
-          candidate &&
-          typeof candidate === "object" &&
-          !Array.isArray(candidate) &&
-          (candidate as { id?: unknown }).id === questionId,
-      )
+    ? questions.find((candidate) => asNullableRecord(candidate)?.id === questionId)
     : undefined;
-  const status =
-    question && typeof question === "object" && !Array.isArray(question)
-      ? (question as { status?: unknown }).status
-      : undefined;
+  const status = asNullableRecord(question)?.status;
   return typeof status === "string" ? status : undefined;
 }
 
@@ -341,10 +322,8 @@ export async function isAskUserPromptPending(
     if (read.kind === "status" && typeof read.status === "string") {
       return false;
     }
-    if (read.kind === "error") {
-      // Keep the prompt private until Gateway state is authoritative again.
-      // Failing open here can expose a stale question after remote terminalization.
-    }
+    // Keep the prompt private until Gateway state is authoritative again;
+    // failing open could expose a stale question after remote terminalization.
     const remainingMs = state.expiresAtMs - Date.now();
     if (remainingMs <= 0) {
       return false;
@@ -400,6 +379,28 @@ async function waitForPromptDelivery(
   return { error: new Error("ask_user prompt is no longer active") };
 }
 
+function registerAskUserQuestionState(
+  questionId: string,
+  sessionKey: string,
+  questions: QuestionRequestQuestion[],
+  timeoutSeconds: number,
+  reserved: AskUserQuestionState | undefined,
+): AskUserQuestionState {
+  const state: AskUserQuestionState = reserved ?? {
+    questionId,
+    sessionKey,
+    questions,
+    expiresAtMs: 0,
+    phase: { kind: "registering" },
+    waiters: new Set(),
+  };
+  Object.assign(state, { sessionKey, questions });
+  state.expiresAtMs = Date.now() + timeoutSeconds * 1_000;
+  transitionAskUserQuestion(state, { kind: "registering" });
+  askUserQuestions.set(questionId, state);
+  return state;
+}
+
 /** Shares question ownership and prompt delivery without installing a plaintext answer claim. */
 export function beginAskUserPromptDelivery(params: {
   toolCallId: string;
@@ -425,18 +426,13 @@ export function beginAskUserPromptDelivery(params: {
       "a question is already pending for this session; wait for it to resolve before requesting another",
     );
   }
-  const state: AskUserQuestionState = reserved ?? {
+  const state = registerAskUserQuestionState(
     questionId,
     sessionKey,
-    questions: params.questions,
-    expiresAtMs: 0,
-    phase: { kind: "registering" },
-    waiters: new Set(),
-  };
-  Object.assign(state, { sessionKey, questions: params.questions });
-  state.expiresAtMs = Date.now() + params.timeoutSeconds * 1_000;
-  transitionAskUserQuestion(state, { kind: "registering" });
-  askUserQuestions.set(questionId, state);
+    params.questions,
+    params.timeoutSeconds,
+    reserved,
+  );
   return {
     questionId,
     hasSubscriber: reserved !== undefined || params.deliverPrompt !== undefined,
@@ -525,20 +521,13 @@ export function createAskUserTool(params: {
       const publishOwnPrompt = reserved ? undefined : params.questionPrompt?.send;
       using prompt = createQuestionPromptLifetime(signal);
       const deliverPrompt = reserved?.phase.kind === "reserved" || publishOwnPrompt !== undefined;
-      const state: AskUserQuestionState =
-        reserved ??
-        ({
-          questionId,
-          sessionKey,
-          questions: normalized.questions,
-          expiresAtMs: Date.now() + timeoutMs,
-          phase: { kind: "registering" },
-          waiters: new Set(),
-        } satisfies AskUserQuestionState);
-      Object.assign(state, { sessionKey, questions: normalized.questions });
-      state.expiresAtMs = Date.now() + timeoutMs;
-      transitionAskUserQuestion(state, { kind: "registering" });
-      askUserQuestions.set(questionId, state);
+      const state = registerAskUserQuestionState(
+        questionId,
+        sessionKey,
+        normalized.questions,
+        normalized.timeoutSeconds,
+        reserved,
+      );
       let registered = false;
       const cancelPendingQuestion = createGatewayQuestionCanceller({
         gatewayCall,
@@ -633,7 +622,6 @@ export function createAskUserTool(params: {
           { id: questionId, timeoutMs, includeResolutionId: true },
           signal ? { signal } : undefined,
         ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
-        state.answer = answerPromise;
         state.claim.setAnswer(answerPromise);
         // A refused registration-time claim releases prompt delivery, not the question.
         let consumed: boolean;
@@ -696,7 +684,7 @@ export function createAskUserTool(params: {
         } else if (!consumed) {
           transitionAskUserQuestion(state, { kind: "answerable" });
         }
-        const result = await state.answer;
+        const result = await answerPromise;
         signal?.throwIfAborted();
         return await finishWait(result);
       } catch (error) {

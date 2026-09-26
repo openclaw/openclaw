@@ -1,13 +1,24 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isPathInside } from "../infra/path-guards.js";
+import { hasErrnoCode } from "../infra/errno.js";
+import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
+import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
 
 function canonicalSource(rootDir: string, sourceRoot: string, source: string): string {
   const lexical = path.resolve(source);
-  return isPathInside(path.resolve(rootDir), lexical)
-    ? path.join(sourceRoot, path.relative(path.resolve(rootDir), lexical))
-    : lexical;
+  const relative = relativePluginPathInsideRootSync(rootDir, lexical);
+  return relative === undefined ? lexical : path.join(sourceRoot, relative);
+}
+
+function getCapturedSource(
+  sources: ReadonlyMap<string, string>,
+  rootDir: string,
+  sourceRoot: string,
+  source: string,
+): string | undefined {
+  const lexical = path.resolve(source);
+  return sources.get(lexical) ?? sources.get(canonicalSource(rootDir, sourceRoot, lexical));
 }
 
 // A recovery resolver outlives its producer. Its closure contains copied path
@@ -18,7 +29,7 @@ function createRecoverySourceResolver(
   sources: ReadonlyMap<string, string>,
 ) {
   return (source: string) => {
-    const captured = sources.get(canonicalSource(rootDir, sourceRoot, source));
+    const captured = getCapturedSource(sources, rootDir, sourceRoot, source);
     if (!captured) {
       throw new Error("Plugin recovery entry is outside its captured source package");
     }
@@ -55,6 +66,10 @@ function captureRecoverySource({
     });
     const relocate = (filename: string) =>
       path.join(recovery.directory, path.relative(boundaryRoot, filename));
+    // A partial capture can copy successfully while losing an already-loaded companion.
+    for (const captured of new Set(capturedPaths.values())) {
+      fs.lstatSync(relocate(captured));
+    }
     const sources = new Map(
       Array.from(capturedPaths, ([source, captured]) => [source, relocate(captured)]),
     );
@@ -65,6 +80,9 @@ function captureRecoverySource({
     };
   } catch (error) {
     recovery.dispose();
+    if (hasErrnoCode(error, "ENOENT")) {
+      throw new PluginSourceRecoveryUnavailableError(error);
+    }
     throw error;
   }
 }
@@ -88,7 +106,7 @@ export function createPluginGenerationSourceLookup({
   assertModuleAvailable: (filename: string) => void;
 }) {
   const resolveCaptured = (source: string) => {
-    const captured = capturedPaths.get(canonicalSource(rootDir, sourceRoot, source));
+    const captured = getCapturedSource(capturedPaths, rootDir, sourceRoot, source);
     return captured && isPathInside(capturedRoot, captured) ? captured : undefined;
   };
   return {

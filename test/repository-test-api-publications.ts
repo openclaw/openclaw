@@ -47,18 +47,12 @@ const publications: Record<string, string | symbol> = {
   "src/agents/subagents/registry/subagent-registry.ts": Symbol.for(
     "openclaw.subagentRegistryTestApi",
   ),
-  "src/agents/subagents/spawn/subagent-spawn.ts": Symbol.for("openclaw.subagentSpawnTestApi"),
   "src/agents/subagents/swarm/swarm-scheduler.ts": Symbol.for("openclaw.swarmSchedulerTestApi"),
   "src/agents/tool-search.ts": Symbol.for("openclaw.toolSearchTestApi"),
-  "src/agents/tools/agent-step.ts": Symbol.for("openclaw.agentStepTestApi"),
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
   "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
-  "src/agents/utils/tools-manager.ts": Symbol.for("openclaw.toolsManagerTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),
-  "src/auto-reply/reply/agent-runner-session-reset.ts": Symbol.for(
-    "openclaw.agentRunnerSessionResetTestApi",
-  ),
   "src/auto-reply/reply/commands-login.ts": Symbol.for("openclaw.commandsLoginTestApi"),
   "src/auto-reply/reply/queue/enqueue.ts": Symbol.for("openclaw.queueEnqueueTestApi"),
   "src/auto-reply/reply/reply-run-registry.registry.ts": Symbol.for(
@@ -93,8 +87,6 @@ const publications: Record<string, string | symbol> = {
   "src/media/playback-transcode.ts": Symbol.for("openclaw.playbackTranscodeTestApi"),
   "src/model-catalog/remote-overlay.ts": Symbol.for("openclaw.remoteModelCatalogOverlayTestApi"),
   "src/node-host/plugin-node-host.ts": Symbol.for("openclaw.nodeHostPluginTestApi"),
-  "src/plugin-state/plugin-state-store.sqlite.ts": Symbol.for("openclaw.pluginStateSqliteTestApi"),
-  "src/plugin-state/plugin-state-store.ts": Symbol.for("openclaw.pluginStateStoreTestApi"),
   "src/plugins/memory-runtime.ts": Symbol.for("openclaw.memoryRuntimeTestApi"),
   "src/sessions/session-lifecycle-admission.ts": Symbol.for(
     "openclaw.sessionLifecycleAdmissionTestApi",
@@ -104,7 +96,6 @@ const publications: Record<string, string | symbol> = {
   "src/skills/lifecycle/upload-store.ts": Symbol.for("openclaw.skillUploadStoreTestApi"),
   "src/skills/runtime/remote-skills.ts": Symbol.for("openclaw.remoteNodeSkillsTestApi"),
   "src/system-agent/agent-turn.ts": Symbol.for("openclaw.systemAgentTurnTestApi"),
-  "src/system-agent/assistant-timeout.ts": Symbol.for("openclaw.systemAgentTimeoutTestApi"),
   "src/talk/client-voice-confirmation.ts": Symbol.for("openclaw.clientVoiceConfirmationTestApi"),
   "src/talk/client-voice-session.ts": Symbol.for("openclaw.clientVoiceSessionTestApi"),
   "src/tasks/generated-media-task-activity.ts": Symbol.for(

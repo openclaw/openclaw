@@ -12,6 +12,7 @@ import {
   registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { retainOpenClawStateDatabaseForIdle } from "../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -190,6 +191,7 @@ function runSharedDebugProxyCaptureWrite<T>(owner: object, operation: () => T): 
 
 class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
   private readonly pathBased?: PathBasedDebugProxyCaptureStore;
+  private readonly releaseIdleReference?: () => void;
   private closed: boolean;
   private closing: boolean;
 
@@ -224,6 +226,7 @@ class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
     });
     this.closed = false;
     this.closing = false;
+    this.releaseIdleReference = retainOpenClawStateDatabaseForIdle(database);
     sharedDebugProxyCaptureStates.set(this, { database, env: optionsOrDbPath.env });
   }
 
@@ -235,6 +238,7 @@ class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
     const errors: unknown[] = [];
     for (const close of [
       () => finalizeCaptureStore(this),
+      () => this.releaseIdleReference?.(),
       () => this.pathBased?.walMaintenance.close(),
       () => {
         if (this.pathBased && this.db.isOpen) {

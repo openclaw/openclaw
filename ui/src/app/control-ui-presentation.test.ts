@@ -32,6 +32,12 @@ describe("Control UI accent presentation", () => {
     expect(style.getPropertyValue("--accent-foreground")).toBe("#000000");
     expect(style.getPropertyValue("--primary-foreground")).toBe("#000000");
 
+    applyControlUiAccent("theme");
+    expect(style.getPropertyValue("--accent")).toBe("");
+    expect(style.getPropertyValue("--primary-hover")).toBe("");
+    applyControlUiPresentation({ environment: null, seamColor: "#abcdef" });
+    expect(style.getPropertyValue("--accent")).toBe("");
+    applyControlUiPresentation({ environment: null, seamColor: "#123456" });
     applyControlUiAccent();
     expect(style.getPropertyValue("--accent")).toBe("#123456");
     expect(style.getPropertyValue("--primary-foreground")).toBe("#ffffff");

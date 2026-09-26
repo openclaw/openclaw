@@ -10,7 +10,7 @@ const CONTROL_PLANE_BUCKET_MAX_STALE_MS = 5 * 60_000;
 /** Hard cap to prevent memory DoS from rapid unique-key injection (CWE-400). */
 const CONTROL_PLANE_BUCKET_MAX_ENTRIES = 10_000;
 
-/** Sliding-window counter keyed by method and device/IP identity for write-side control RPCs. */
+/** Fixed-window counter keyed by method and device/IP identity for write-side control RPCs. */
 type Bucket = {
   count: number;
   windowStartMs: number;

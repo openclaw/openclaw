@@ -22,6 +22,7 @@ import { buildTestCtx } from "./test-ctx.js";
 
 const notice =
   "My session in this room ended during restart recovery. Use /reset or /new to start a replacement session.";
+const databaseIdentity = Symbol("restart-tombstone-database");
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -82,6 +83,7 @@ describe("restart tombstone channel feedback", () => {
     emitSessionIdentityMutation({
       kind: "delete",
       agentId: "main",
+      databaseIdentity,
       previous: { sessionId: "failed-session", sessionKeys: [sessionKey] },
     });
     loggingState.rawConsole = null;
@@ -163,8 +165,8 @@ describe("restart tombstone channel feedback", () => {
     const previous = { sessionId: "failed-session", sessionKeys: [sessionKey] };
     emitSessionIdentityMutation(
       kind === "delete"
-        ? { kind, agentId: "main", previous }
-        : { kind, agentId: "main", previous, current: previous },
+        ? { kind, agentId: "main", databaseIdentity, previous }
+        : { kind, agentId: "main", databaseIdentity, previous, current: previous },
     );
     await rejectInbound();
     expect(deliver).toHaveBeenCalledTimes(2);

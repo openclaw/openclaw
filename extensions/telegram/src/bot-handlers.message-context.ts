@@ -2,7 +2,7 @@ import type { Message } from "grammy/types";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import {
   getSessionEntry,
   readAmbientTranscriptWatermark,
@@ -36,6 +36,13 @@ import {
   isTelegramHistoryEntryAfterAmbientWatermark,
   isTelegramSelfSenderName,
 } from "./group-history-window.js";
+import { isTelegramHistoryNodeAllowed, readTelegramHistoryWindow } from "./history-policy.js";
+import {
+  isTelegramMessageFromCurrentBot,
+  resolveProviderObservedTelegramThreadSpec,
+  type TelegramCachedMessageNode,
+  type TelegramReplyChainEntry,
+} from "./message-cache-codec.js";
 import {
   resolveTelegramMessageCacheScope,
   type TelegramResolvedMedia,
@@ -44,10 +51,6 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
-  isTelegramMessageFromCurrentBot,
-  resolveProviderObservedTelegramThreadSpec,
-  type TelegramCachedMessageNode,
-  type TelegramReplyChainEntry,
 } from "./message-cache.js";
 import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
 
@@ -94,9 +97,6 @@ export type ResolvePromptContextAmbientWatermarkParams = {
   storePath: string;
 };
 
-export const normalizePromptContextMinTimestampMs = (timestampMs?: number) =>
-  asFiniteNumber(timestampMs);
-
 export function promptContextBoundaryOptions(
   timestampMs?: number,
   ambientWatermark?: TelegramAmbientTranscriptWatermark,
@@ -104,7 +104,7 @@ export function promptContextBoundaryOptions(
   TelegramMessageContextOptions,
   "promptContextMinTimestampMs" | "promptContextAmbientWatermark"
 > {
-  const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(timestampMs);
+  const promptContextMinTimestampMs = asFiniteNumber(timestampMs);
   return {
     ...(promptContextMinTimestampMs === undefined ? {} : { promptContextMinTimestampMs }),
     ...(ambientWatermark === undefined ? {} : { promptContextAmbientWatermark: ambientWatermark }),
@@ -116,7 +116,7 @@ export function latestPromptContextMinTimestampMs(
 ): number | undefined {
   let latest: number | undefined;
   for (const timestampMs of timestamps) {
-    const normalized = normalizePromptContextMinTimestampMs(timestampMs);
+    const normalized = asFiniteNumber(timestampMs);
     if (normalized !== undefined) {
       latest = latest === undefined ? normalized : Math.max(latest, normalized);
     }
@@ -136,15 +136,20 @@ export function buildSyntheticTextMessage(params: {
   date?: number;
   from?: Message["from"];
 }): Message {
-  return {
+  const message: Message = {
     ...params.base,
     ...(params.from ? { from: params.from } : {}),
     text: params.text,
-    caption: undefined,
-    caption_entities: undefined,
-    entities: params.entities?.length ? params.entities : undefined,
     ...(params.date != null ? { date: params.date } : {}),
   };
+  delete message.caption;
+  delete message.caption_entities;
+  if (params.entities?.length) {
+    message.entities = params.entities;
+  } else {
+    delete message.entities;
+  }
+  return message;
 }
 
 export const buildSyntheticContext = (
@@ -181,9 +186,9 @@ export function createTelegramMessageSessionRuntime({
   "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
 >) {
   const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
-  const resolveTelegramSessionState = (
+  const resolveTelegramSessionState = async (
     params: ResolveTelegramSessionStateParams,
-  ): TelegramSessionState => {
+  ): Promise<TelegramSessionState> => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
     const topicThreadId = params.threadSpec.id;
     const { topicConfig } = resolveTelegramGroupConfig(
@@ -191,7 +196,7 @@ export function createTelegramMessageSessionRuntime({
       topicThreadId,
       params.runtimeCfg,
     );
-    const { route } = resolveTelegramConversationRoute({
+    const { route } = await resolveTelegramConversationRoute({
       cfg: params.runtimeCfg,
       accountId,
       chatId: params.chatId,
@@ -223,35 +228,23 @@ export function createTelegramMessageSessionRuntime({
         agentId: route.agentId,
       }).provider,
     });
-    if (storedOverride) {
-      return {
-        agentId: route.agentId,
-        sessionEntry: entry,
-        sessionKey,
-        storePath,
-        model: storedOverride.provider
-          ? `${storedOverride.provider}/${storedOverride.model}`
-          : storedOverride.model,
-      };
-    }
     const provider = entry?.modelProvider?.trim();
     const model = entry?.model?.trim();
-    if (provider && model) {
-      return {
-        agentId: route.agentId,
-        sessionEntry: entry,
-        sessionKey,
-        storePath,
-        model: `${provider}/${model}`,
-      };
-    }
     const modelCfg = params.runtimeCfg.agents?.defaults?.model;
     return {
       agentId: route.agentId,
       sessionEntry: entry,
       sessionKey,
       storePath,
-      model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
+      model: storedOverride
+        ? storedOverride.provider
+          ? `${storedOverride.provider}/${storedOverride.model}`
+          : storedOverride.model
+        : provider && model
+          ? `${provider}/${model}`
+          : typeof modelCfg === "string"
+            ? modelCfg
+            : modelCfg?.primary,
     };
   };
 
@@ -286,10 +279,10 @@ export function createTelegramMessageContextRuntime({
   opts,
   telegramCfg,
   telegramDeps,
-}: Pick<
-  RegisterTelegramHandlerParams,
-  "cfg" | "accountId" | "ownerAgentId" | "opts" | "telegramCfg" | "telegramDeps"
->) {
+}: Pick<RegisterTelegramHandlerParams, "cfg" | "accountId" | "ownerAgentId" | "telegramCfg"> & {
+  opts: Pick<RegisterTelegramHandlerParams["opts"], "botInfo">;
+  telegramDeps: Pick<RegisterTelegramHandlerParams["telegramDeps"], "resolveStorePath">;
+}) {
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(
       telegramDeps.resolveStorePath(cfg.session?.store, {
@@ -325,6 +318,7 @@ export function createTelegramMessageContextRuntime({
       accountId,
       chatId: msg.chat.id,
       msg,
+      historyEligible: true,
       ...(botUserId !== undefined ? { botUserId } : {}),
       ...(providerObservedThread ? { providerObservedThread } : {}),
       ...(providerObservedThread?.id != null ? { threadId: providerObservedThread.id } : {}),
@@ -440,54 +434,78 @@ export function createTelegramMessageContextRuntime({
     mediaByMessageId?: ReadonlyMap<string, TelegramMediaRef>,
     selectedMessageIds?: TelegramPromptContextMessageSelection,
   ): Promise<TelegramPromptContextEntry[]> => {
+    const body = getTelegramTextParts(msg).text.trim();
+    if (
+      /^\/(?:new|reset)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i.test(body) &&
+      !/^\/reset(?:@[A-Za-z0-9_]+)?\s+soft(?:\s|$)/i.test(body)
+    ) {
+      return [];
+    }
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-    const groupHistoryLimit = Math.max(
-      0,
-      runtimeTelegramCfg.historyLimit ??
-        runtimeCfg.messages?.groupChat?.historyLimit ??
-        DEFAULT_GROUP_HISTORY_LIMIT,
+    const groupHistoryLimit = resolvePromptHistoryLimit(
+      runtimeTelegramCfg.historyLimit ?? runtimeCfg.messages?.groupChat?.historyLimit,
     );
     const dmHistoryLimit = resolveTelegramDmHistoryLimit({
       config: runtimeTelegramCfg,
       senderId: msg.from?.id,
     });
+    if (
+      (isGroup ? groupHistoryLimit : dmHistoryLimit) === 0 &&
+      replyChainNodes.length === 0 &&
+      !selectedMessageIds?.size
+    ) {
+      return [];
+    }
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
     const currentNode = await messageCache.get({ accountId, chatId: msg.chat.id, messageId });
-    const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
-    const conversationContext =
-      isGroup && groupHistoryLimit <= 0
-        ? []
-        : await buildTelegramConversationContext({
-            cache: messageCache,
-            messageId,
-            accountId,
-            chatId: msg.chat.id,
-            ...(Number.isFinite(threadId) ? { threadId } : {}),
-            replyChainNodes,
-            recentLimit: isGroup ? groupHistoryLimit : dmHistoryLimit,
-            replyTargetWindowSize: isGroup || dmHistoryLimit > 0 ? 2 : 0,
-            ...(options?.promptContextMinTimestampMs !== undefined
-              ? { minTimestampMs: options.promptContextMinTimestampMs }
-              : {}),
-            ...(isGroup && options?.promptContextAmbientWatermark !== undefined
-              ? {
-                  includeNode: (
-                    node: TelegramCachedMessageNode,
-                    flags?: { replyTarget?: boolean },
-                  ) =>
-                    flags?.replyTarget === true ||
-                    isTelegramHistoryEntryAfterAmbientWatermark(
-                      node,
-                      options.promptContextAmbientWatermark,
-                    ),
-                }
-              : {}),
-          });
+    const threadId =
+      options?.threadSpec?.id ?? (currentNode?.threadId ? Number(currentNode.threadId) : undefined);
+    const historyScope = {
+      cache: messageCache,
+      cfg: runtimeCfg,
+      accountId,
+      chatId: msg.chat.id,
+      ...(Number.isFinite(threadId) ? { threadId } : {}),
+      botUserId: ctx.me?.id ?? opts.botInfo?.id,
+    };
+    const conversationContext = await buildTelegramConversationContext({
+      cache: messageCache,
+      messageId,
+      accountId,
+      chatId: msg.chat.id,
+      ...(Number.isFinite(threadId) ? { threadId } : {}),
+      replyChainNodes,
+      recentLimit: isGroup ? 0 : dmHistoryLimit,
+      replyTargetWindowSize: isGroup ? 0 : dmHistoryLimit > 0 ? 2 : 0,
+      ...(options?.promptContextMinTimestampMs !== undefined
+        ? { minTimestampMs: options.promptContextMinTimestampMs }
+        : {}),
+    });
     const conversationContextById = new Map(
       conversationContext.flatMap((entry) =>
         entry.node.messageId ? [[entry.node.messageId, entry] as const] : [],
       ),
     );
+    if (isGroup && groupHistoryLimit > 0) {
+      const history = await readTelegramHistoryWindow({
+        ...historyScope,
+        before: messageId,
+        limit: groupHistoryLimit,
+      });
+      for (const node of history) {
+        if (
+          (options?.promptContextMinTimestampMs !== undefined &&
+            node.timestamp !== undefined &&
+            node.timestamp < options.promptContextMinTimestampMs) ||
+          !isTelegramHistoryEntryAfterAmbientWatermark(node, options?.promptContextAmbientWatermark)
+        ) {
+          continue;
+        }
+        if (node.messageId && !conversationContextById.has(node.messageId)) {
+          conversationContextById.set(node.messageId, { node });
+        }
+      }
+    }
     for (const [selectedMessageId, selection] of selectedMessageIds ?? []) {
       if (selection === "exclude") {
         conversationContextById.delete(selectedMessageId);
@@ -501,19 +519,24 @@ export function createTelegramMessageContextRuntime({
         chatId: msg.chat.id,
         messageId: selectedMessageId,
       });
-      if (node?.messageId) {
+      if (
+        node?.messageId &&
+        (!isGroup || (await isTelegramHistoryNodeAllowed({ ...historyScope, node })))
+      ) {
         conversationContextById.set(node.messageId, { node });
       }
     }
-    const cacheEntries = Array.from(conversationContextById.values()).map((entry) => ({
-      node: entry.node,
-      message: toPromptContextMessage(
-        entry.node,
-        ctx,
-        { replyTarget: entry.isReplyTarget },
-        entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
-      ),
-    }));
+    const cacheEntries = Array.from(conversationContextById.values())
+      .toSorted((left, right) => Number(left.node.messageId) - Number(right.node.messageId))
+      .map((entry) => ({
+        node: entry.node,
+        message: toPromptContextMessage(
+          entry.node,
+          ctx,
+          { replyTarget: entry.isReplyTarget },
+          entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
+        ),
+      }));
     const completeProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
       cacheEntries.map((entry) => entry.node.promptContextProjectionMarker),
     );

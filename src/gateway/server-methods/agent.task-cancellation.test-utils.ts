@@ -202,6 +202,7 @@ export function registerAgentTaskCancellationTests() {
             await accepted;
           }
         },
+        { selectedTask: task },
       );
     });
   });

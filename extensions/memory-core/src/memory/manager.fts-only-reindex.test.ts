@@ -388,6 +388,7 @@ describe("memory manager FTS-only reindex", () => {
       });
       expect(memoryManager.status()).toMatchObject({
         provider: "none",
+        model: undefined,
         vector: { semanticAvailable: false },
         custom: { indexIdentity: { status: "valid" }, searchMode: "fts-only" },
       });

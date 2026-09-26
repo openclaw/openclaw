@@ -8,7 +8,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
-  resolveAgentExplicitModelPrimary,
+  resolveAgentNativeModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
@@ -293,7 +293,7 @@ export async function modelsStatusCommand(
   const agentId = explicitAgentId ? workspaceAgentId : undefined;
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
-  const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
+  const agentModelPrimary = agentId ? resolveAgentNativeModelPrimary(cfg, agentId) : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
     : undefined;
@@ -1297,100 +1297,78 @@ export async function modelsStatusCommand(
       const rich = isRich(opts);
       type ModelConfigSource = "agent" | "defaults";
       const label = (value: string) => colorize(rich, theme.accent, value.padEnd(14));
-      const labelWithSource = (value: string, source?: ModelConfigSource) =>
-        label(source ? `${value} (${source})` : value);
+      const logField = (
+        name: string,
+        value: string,
+        style: (value: string) => string,
+        source?: ModelConfigSource,
+      ) =>
+        runtime.log(
+          `${label(source ? `${name} (${source})` : name)}${colorize(rich, theme.muted, ":")} ${colorize(rich, style, value)}`,
+        );
       const displayDefault =
         rawModel && rawModel !== resolvedLabel
           ? `${resolvedLabel} (from ${rawModel})`
           : resolvedLabel;
 
-      runtime.log(
-        `${label("Config")}${colorize(rich, theme.muted, ":")} ${colorize(rich, theme.info, shortenHomePath(configPath))}`,
+      logField("Config", shortenHomePath(configPath), theme.info);
+      logField("Agent dir", shortenHomePath(agentDir), theme.info);
+      logField(
+        "Default",
+        displayDefault,
+        theme.success,
+        agentId ? (agentModelPrimary ? "agent" : "defaults") : undefined,
       );
-      runtime.log(
-        `${label("Agent dir")}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          theme.info,
-          shortenHomePath(agentDir),
-        )}`,
+      logField(
+        `Fallbacks (${fallbacks.length})`,
+        fallbacks.length ? fallbacks.join(", ") : "-",
+        fallbacks.length ? theme.warn : theme.muted,
+        agentId ? (agentFallbacksOverride !== undefined ? "agent" : "defaults") : undefined,
       );
-      runtime.log(
-        `${labelWithSource("Default", agentId ? (agentModelPrimary ? "agent" : "defaults") : undefined)}${colorize(
-          rich,
-          theme.muted,
-          ":",
-        )} ${colorize(rich, theme.success, displayDefault)}`,
-      );
-      runtime.log(
-        `${labelWithSource(
-          `Fallbacks (${fallbacks.length || 0})`,
-          agentId ? (agentFallbacksOverride !== undefined ? "agent" : "defaults") : undefined,
-        )}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          fallbacks.length ? theme.warn : theme.muted,
-          fallbacks.length ? fallbacks.join(", ") : "-",
-        )}`,
-      );
-      runtime.log(
-        `${label("Utility model")}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          utilityModelDisplayRef ? theme.success : theme.muted,
-          utilityModelDisplayRef
-            ? `${utilityModelDisplayRef}${utilityModelSource === "provider-default" ? " (provider default)" : ""}`
-            : utilityModelSource === "disabled"
-              ? "off"
-              : "-",
-        )}`,
-      );
-      runtime.log(
-        `${labelWithSource("Image model", agentId ? "defaults" : undefined)}${colorize(
-          rich,
-          theme.muted,
-          ":",
-        )} ${colorize(rich, imageModel ? theme.accentBright : theme.muted, imageModel || "-")}`,
-      );
-      runtime.log(
-        `${labelWithSource(
-          `Image fallbacks (${imageFallbacks.length || 0})`,
-          agentId ? "defaults" : undefined,
-        )}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          imageFallbacks.length ? theme.accentBright : theme.muted,
-          imageFallbacks.length ? imageFallbacks.join(", ") : "-",
-        )}`,
-      );
-      runtime.log(
-        `${label(`Aliases (${Object.keys(aliases).length || 0})`)}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          Object.keys(aliases).length ? theme.accent : theme.muted,
-          Object.keys(aliases).length
-            ? Object.entries(aliases)
-                .map(([alias, target]) =>
-                  rich
-                    ? `${theme.accentDim(alias)} ${theme.muted("->")} ${theme.info(target)}`
-                    : `${alias} -> ${target}`,
-                )
-                .join(", ")
+      logField(
+        "Utility model",
+        utilityModelDisplayRef
+          ? `${utilityModelDisplayRef}${utilityModelSource === "provider-default" ? " (provider default)" : ""}`
+          : utilityModelSource === "disabled"
+            ? "off"
             : "-",
-        )}`,
+        utilityModelDisplayRef ? theme.success : theme.muted,
       );
-      runtime.log(
-        `${label(`Allowed models (${allowed.length || 0})`)}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          allowed.length ? theme.info : theme.muted,
-          allowed.length ? allowed.join(", ") : "all",
-        )}`,
+      logField(
+        "Image model",
+        imageModel || "-",
+        imageModel ? theme.accentBright : theme.muted,
+        agentId ? "defaults" : undefined,
+      );
+      logField(
+        `Image fallbacks (${imageFallbacks.length})`,
+        imageFallbacks.length ? imageFallbacks.join(", ") : "-",
+        imageFallbacks.length ? theme.accentBright : theme.muted,
+        agentId ? "defaults" : undefined,
+      );
+      const aliasEntries = Object.entries(aliases);
+      logField(
+        `Aliases (${aliasEntries.length})`,
+        aliasEntries.length
+          ? aliasEntries
+              .map(([alias, target]) =>
+                rich
+                  ? `${theme.accentDim(alias)} ${theme.muted("->")} ${theme.info(target)}`
+                  : `${alias} -> ${target}`,
+              )
+              .join(", ")
+          : "-",
+        aliasEntries.length ? theme.accent : theme.muted,
+      );
+      logField(
+        `Allowed models (${allowed.length})`,
+        allowed.length ? allowed.join(", ") : "all",
+        allowed.length ? theme.info : theme.muted,
       );
 
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Auth overview"));
-      runtime.log(
-        `${label("Auth store")}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          theme.info,
-          shortenHomePath(resolveAuthStorePathForDisplay(agentDir)),
-        )}`,
-      );
+      logField("Auth store", shortenHomePath(resolveAuthStorePathForDisplay(agentDir)), theme.info);
       runtime.log(
         `${label("Shell env")}${colorize(rich, theme.muted, ":")} ${colorize(
           rich,
@@ -1398,16 +1376,10 @@ export async function modelsStatusCommand(
           shellFallbackEnabled ? "on" : "off",
         )}${applied.length ? colorize(rich, theme.muted, ` (applied: ${applied.join(", ")})`) : ""}`,
       );
-      runtime.log(
-        `${label(`Providers w/ OAuth/tokens (${providersWithOauth.length || 0})`)}${colorize(
-          rich,
-          theme.muted,
-          ":",
-        )} ${colorize(
-          rich,
-          providersWithOauth.length ? theme.info : theme.muted,
-          providersWithOauth.length ? providersWithOauth.join(", ") : "-",
-        )}`,
+      logField(
+        `Providers w/ OAuth/tokens (${providersWithOauth.length})`,
+        providersWithOauth.length ? providersWithOauth.join(", ") : "-",
+        providersWithOauth.length ? theme.info : theme.muted,
       );
 
       const formatKey = (key: string) => colorize(rich, theme.warn, key);
@@ -1434,29 +1406,19 @@ export async function modelsStatusCommand(
             bits.push(colorize(rich, theme.info, entry.profiles.labels.join(", ")));
           }
         }
-        if (entry.env) {
-          bits.push(
-            formatKeyValue(
-              "env",
-              `${entry.env.value}${separator}${formatKeyValue("source", entry.env.source)}`,
-            ),
-          );
-        }
-        if (entry.modelsJson) {
-          bits.push(
-            formatKeyValue(
-              "models.json",
-              `${entry.modelsJson.value}${separator}${formatKeyValue("source", entry.modelsJson.source)}`,
-            ),
-          );
-        }
-        if (entry.syntheticAuth) {
-          bits.push(
-            formatKeyValue(
-              "synthetic",
-              `${entry.syntheticAuth.value}${separator}${formatKeyValue("source", entry.syntheticAuth.source)}`,
-            ),
-          );
+        for (const [key, auth] of [
+          ["env", entry.env],
+          ["models.json", entry.modelsJson],
+          ["synthetic", entry.syntheticAuth],
+        ] as const) {
+          if (auth) {
+            bits.push(
+              formatKeyValue(
+                key,
+                `${auth.value}${separator}${formatKeyValue("source", auth.source)}`,
+              ),
+            );
+          }
         }
         runtime.log(`- ${theme.heading(entry.provider)} ${bits.join(separator)}`);
       }

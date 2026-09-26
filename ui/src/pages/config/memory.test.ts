@@ -109,7 +109,7 @@ describe("renderMemory", () => {
   it("reports whether the engine came from config or from the slot default", () => {
     const auto = renderInto(createProps());
     expect(auto.textContent).toContain("falls back to its default owner");
-    expect(auto.textContent).toContain("Using default: OpenClaw Memory");
+    expect(auto.textContent).not.toContain("Using default:");
 
     const pinned = renderInto(
       createProps({ engineSelection: { kind: "pinned", engineId: "memory-core" } }),

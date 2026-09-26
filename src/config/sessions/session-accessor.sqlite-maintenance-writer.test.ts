@@ -3,11 +3,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -23,7 +25,9 @@ import {
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
-import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintenance.js";
+import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import * as maintenance from "./session-accessor.sqlite-maintenance.js";
+import * as reclamationCommit from "./session-accessor.sqlite-reclamation-commit.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -90,7 +94,7 @@ it("avoids inventory projection for sequential writes with no retention candidat
       });
       const plan = runOpenClawAgentWriteTransaction(
         (owner) =>
-          applySessionEntryMaintenance(owner, {
+          maintenance.applySessionEntryMaintenance(owner, {
             activeSessionKey: target.sessionKey,
             archiveDirectory: path.join(path.dirname(database.path), "archives"),
             maintenanceConfig: resolveMaintenanceConfigFromInput(),
@@ -138,7 +142,7 @@ it.each([false, true])(
         run: async () => {
           const plan = runOpenClawAgentWriteTransaction(
             (owner) =>
-              applySessionEntryMaintenance(owner, {
+              maintenance.applySessionEntryMaintenance(owner, {
                 activeSessionKey: key(3),
                 archiveDirectory: path.join(path.dirname(database.path), "archives"),
                 maintenanceConfig: {
@@ -180,7 +184,7 @@ it.each(["session-key", "session-id"] as const)(
     const maintain = (forceMaintenance = false) =>
       runOpenClawAgentWriteTransaction(
         (owner) =>
-          applySessionEntryMaintenance(owner, {
+          maintenance.applySessionEntryMaintenance(owner, {
             forceMaintenance,
             archiveDirectory: path.join(path.dirname(database.path), "archives"),
             maintenanceConfig: resolveMaintenanceConfigFromInput(),
@@ -317,10 +321,34 @@ it("releases the store writer before maintenance archive sizing completes", asyn
   expect(writerCompletedBeforeMaterialization).toBe(true);
 });
 
-it("does not hold channel recording behind automatic session maintenance", async () => {
+it("does not hold channel recording behind automatic session maintenance", async ({ signal }) => {
   const tempDir = tempDirs.make("openclaw-session-maintenance-ingress-");
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   const staleSessionKey = "agent:main:subagent:maintenance-ingress-stale";
+  const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
+  const finalized = createDeferredCore();
+  void finalized.promise.catch(() => {});
+  const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
+  vi.spyOn(
+    maintenance,
+    "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
+  ).mockImplementation(async (...args) => {
+    const includesLaterEntry = args[1].some((plan) =>
+      plan.entryRemovals.some(({ sessionKey }) => sessionKey === laterStaleSessionKey),
+    );
+    try {
+      const result = await finalize(...args);
+      if (includesLaterEntry) {
+        finalized.resolve();
+      }
+      return result;
+    } catch (error) {
+      if (includesLaterEntry) {
+        finalized.reject(error);
+      }
+      throw error;
+    }
+  });
   replaceSessionEntrySync(
     { sessionKey: staleSessionKey, storePath },
     { sessionId: "maintenance-ingress-stale", updatedAt: 1 },
@@ -364,7 +392,6 @@ it("does not hold channel recording behind automatic session maintenance", async
     entryWrite.then(() => "entry-write" as const),
     materializationStarted.then(() => "maintenance" as const),
   ]);
-  const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
   if (firstCompleted === "entry-write") {
     await materializationStarted;
     replaceSessionEntrySync(
@@ -397,12 +424,10 @@ it("does not hold channel recording behind automatic session maintenance", async
   await entryWrite;
 
   expect(firstCompleted).toBe("entry-write");
-  await vi.waitFor(() => {
-    expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
-    if (firstCompleted === "entry-write") {
-      expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
-    }
-  });
+  // Join the second cleanup before inspecting its writes; worker startup can exceed polling deadlines.
+  await racePromiseWithAbortSignal(finalized.promise, signal);
+  expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
+  expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
 });
 
 it.each([
@@ -481,4 +506,77 @@ it("does not refresh planner statistics after one routine session deletion", asy
       .get("idx_agent_session_nodes_updated_at"),
   ).toEqual({ stat: expect.stringMatching(/^66\b/u) });
   expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
+});
+
+it("rolls back planner statistics when maintenance ownership is revoked before commit", async () => {
+  const { database } = createPlannerStore(66);
+  const scope = { agentId: "main", path: database.path };
+  runOpenClawAgentWriteTransaction((current) => {
+    for (let index = 1; index < 66; index += 1) {
+      deleteSessionEntryRows(current, `agent:main:planner-${index}`, { deleteOwnedWindows: true });
+    }
+  }, scope);
+  expect(database.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()).toEqual({
+    count: 1,
+  });
+  const readStatistics = () =>
+    database.db
+      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+      .get("idx_agent_session_nodes_updated_at");
+  let current = true;
+  let reachedCommit = false;
+  const authorize = reclamationCommit.withSqliteReclamationAuthorization;
+  const authorization = vi
+    .spyOn(reclamationCommit, "withSqliteReclamationAuthorization")
+    .mockImplementation((buffer, owner, assertCurrent, run) =>
+      authorize(buffer, owner, assertCurrent, (commit) =>
+        run(() => {
+          reachedCommit = true;
+          current = false;
+          return commit();
+        }),
+      ),
+    );
+
+  await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, {
+    isCurrent: () => current,
+  });
+  expect(reachedCommit).toBe(true);
+  expect(readStatistics()).toEqual({ stat: expect.stringMatching(/^66\b/u) });
+  authorization.mockRestore();
+  current = true;
+  await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, {
+    isCurrent: () => current,
+  });
+  expect(readStatistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
+  expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
+});
+
+it("refreshes the retained parent query planner after worker analysis", async () => {
+  const { database } = createPlannerStore(1);
+  database.db.exec(`
+    CREATE TABLE maintenance_planner_probe (a INTEGER, b INTEGER, payload TEXT);
+    CREATE INDEX maintenance_probe_a ON maintenance_planner_probe(a);
+    CREATE INDEX maintenance_probe_b ON maintenance_planner_probe(b);
+    WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000)
+    INSERT INTO maintenance_planner_probe
+      SELECT CASE WHEN i<=9900 THEN 1 ELSE i-9899 END,
+        CASE WHEN i<=9900 THEN i+1 ELSE 1 END, 'synthetic' FROM n;
+    PRAGMA analysis_limit=0;
+    ANALYZE main;
+  `);
+  const plan = () =>
+    database.db
+      .prepare("EXPLAIN QUERY PLAN SELECT payload FROM maintenance_planner_probe WHERE a=1 AND b=1")
+      .all()
+      .map((row) => row.detail);
+  expect(plan()).toEqual([expect.stringContaining("maintenance_probe_b")]);
+  database.db.exec("DELETE FROM maintenance_planner_probe WHERE a=1");
+
+  await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(
+    { agentId: "main", path: database.path },
+    9900,
+  );
+
+  expect(plan()).toEqual([expect.stringContaining("maintenance_probe_a")]);
 });

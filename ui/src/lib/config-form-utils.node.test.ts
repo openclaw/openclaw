@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import {
-  cloneConfigObject,
   hintForPath,
   localizedHintForPath,
   removePathValue,
@@ -128,9 +127,9 @@ describe("form-utils preserves numeric types", () => {
     expect(cost.input).toBe(0.5);
   });
 
-  it("cloneConfigObject + setPathValue preserves unrelated numeric fields", () => {
+  it("setPathValue preserves unrelated numeric fields", () => {
     const form = makeConfigWithProvider();
-    const cloned = cloneConfigObject(form);
+    const cloned = structuredClone(form);
     setPathValue(cloned, ["gateway", "auth", "token"], "new-token");
     const first = getFirstXaiModel(cloned);
 
@@ -176,7 +175,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
         },
       },
     };
-    const originalForm = cloneConfigObject(form);
+    const originalForm = structuredClone(form);
 
     expect(
       sanitizeRedactedFormForSubmit(form, originalForm, {
@@ -215,7 +214,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
       },
       ui: { theme: "dark" },
     };
-    const originalForm = cloneConfigObject(form);
+    const originalForm = structuredClone(form);
 
     expect(sanitizeRedactedFormForSubmit(form, originalForm, { ui: { theme: "dark" } })).toEqual({
       ui: { theme: "dark" },
@@ -230,7 +229,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
         },
       },
     };
-    const originalForm = cloneConfigObject(form);
+    const originalForm = structuredClone(form);
 
     expect(
       sanitizeRedactedFormForSubmit(form, originalForm, {
@@ -247,7 +246,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
         },
       },
     };
-    const originalForm = cloneConfigObject(form);
+    const originalForm = structuredClone(form);
 
     expect(sanitizeRedactedFormForSubmit(form, originalForm, null)).toEqual(form);
   });

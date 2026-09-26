@@ -4,6 +4,12 @@ import type { CoreConfig } from "../types.js";
 import { withAuthorizedMatrixReadTarget } from "./read-policy.js";
 import type { MatrixClient } from "./sdk.js";
 
+vi.mock("openclaw/plugin-sdk/plugin-state-store-runtime", () => ({
+  createPluginStateSyncKeyedStore: () => {
+    throw new Error("read policy must not read credential storage");
+  },
+}));
+
 function createClient(
   members: string[],
   directFlag: boolean | null = null,

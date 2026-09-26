@@ -339,6 +339,18 @@ describe("local model lean tool filtering", () => {
     ).toThrow(/belongs to "gemma"/);
   });
 
+  it.each([undefined, {}])("keeps local search limits with config %j", (config) => {
+    expect(
+      resolveAgentToolSearchRuntimeConfig({ config, model: { toolSearchMode: "tools" } })?.tools
+        ?.toolSearch,
+    ).toEqual({
+      enabled: true,
+      mode: "tools",
+      searchDefaultLimit: 5,
+      maxSearchLimit: 10,
+    });
+  });
+
   it("defaults lean runs to structured Tool Search controls", () => {
     const cfg: OpenClawConfig = {
       agents: {

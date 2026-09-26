@@ -15,6 +15,7 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { captureCliProcessTree } from "./cli-process-tree.test-support.js";
 
 const OUTPUT_TAIL_CHARS = 8_000;
 const DIAGNOSTIC_GRACE_MS = 200;
@@ -222,7 +223,7 @@ export async function runCliProcessChild(params: {
                 "--require",
                 diagnosticPreload,
                 "--report-on-signal",
-                "--report-signal=SIGUSR2",
+                "--report-signal=SIGQUIT",
                 `--report-directory=${reportDir}`,
                 "--report-filename=diagnostic.json",
                 "--report-exclude-env",
@@ -318,6 +319,7 @@ export async function runCliProcessChild(params: {
         // The deadline is final: even an exit during diagnostic grace remains a failure.
         timedOut = true;
         const reason = `CLI process did not exit before the ${timeoutMs}ms deadlock guard (exitCode=${child.exitCode} signalCode=${child.signalCode})`;
+        const processTree = captureCliProcessTree(child.pid);
         let diagnosticRequest = "unavailable: preload not ready or runtime unsupported";
         const finish = (
           report = "Node diagnostic report unavailable: signal was not requested.",
@@ -325,34 +327,38 @@ export async function runCliProcessChild(params: {
           const diagnosticDump = stderr.match(
             /\[cli-process-diagnostics\] (\{"pid":[^\n]*\})\n/u,
           )?.[1];
-          reject(
-            new Error(
-              formatCliProcessFailure({
-                reason: `${reason}\nChild diagnostics: ${diagnosticRequest}; ${diagnosticDump ? "received" : "no response"}. SIGKILL cleanup attempted.\n--- Node diagnostic report ---\n${report}\n--- child diagnostics ---\n${diagnosticDump ?? "No child dump received before cleanup."}`,
-                stderr: withoutDiagnosticReadiness(stderr),
-                stdout,
-              }),
+          void processTree.then((tree) =>
+            reject(
+              new Error(
+                formatCliProcessFailure({
+                  reason: `${reason}\nChild diagnostics: ${diagnosticRequest}; ${diagnosticDump ? "received" : "no response"}. SIGKILL cleanup attempted.\n--- process tree at deadline ---\n${tree}\n--- Node diagnostic report ---\n${report}\n--- child diagnostics ---\n${diagnosticDump ?? "No child dump received before cleanup."}`,
+                  stderr: withoutDiagnosticReadiness(stderr),
+                  stdout,
+                }),
+              ),
             ),
           );
         };
-        // An unhandled SIGUSR2 would terminate Node before we could inspect it.
-        if (reportDir && stderr.includes(`[cli-process-diagnostics] ready pid=${child.pid}\n`)) {
-          diagnosticRequest = "SIGUSR2 was not delivered";
-          try {
-            if (child.kill("SIGUSR2")) {
-              diagnosticRequest = `SIGUSR2 requested; report grace<=${REPORT_GRACE_MS}ms`;
-              // Preserve the child's JS diagnostic and trailing pipe output grace.
-              void collectNodeDiagnosticReport(
-                path.join(reportDir, "diagnostic.json"),
-                DIAGNOSTIC_GRACE_MS,
-              ).then(finish);
-              return;
+        void processTree.then(() => {
+          // An unhandled SIGQUIT would terminate Node before we could inspect it.
+          if (reportDir && stderr.includes(`[cli-process-diagnostics] ready pid=${child.pid}\n`)) {
+            diagnosticRequest = "SIGQUIT was not delivered";
+            try {
+              if (child.kill("SIGQUIT")) {
+                diagnosticRequest = `SIGQUIT requested; report grace<=${REPORT_GRACE_MS}ms`;
+                // Preserve the child's JS diagnostic and trailing pipe output grace.
+                void collectNodeDiagnosticReport(
+                  path.join(reportDir, "diagnostic.json"),
+                  DIAGNOSTIC_GRACE_MS,
+                ).then(finish);
+                return;
+              }
+            } catch (error) {
+              diagnosticRequest = `request failed: ${String(error)}`;
             }
-          } catch (error) {
-            diagnosticRequest = `request failed: ${String(error)}`;
           }
-        }
-        finish();
+          finish();
+        });
       }, timeoutMs);
       guard.unref();
     },

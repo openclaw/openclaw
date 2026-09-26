@@ -25,8 +25,11 @@ export function buildCodexMigrationProvider(
   return {
     id: "codex",
     label: "Codex",
-    description:
-      "Import Codex memory and skills while keeping Codex native plugins and hooks explicit.",
+    description: [
+      "Import consolidated memories, selected Codex and personal AgentSkills, and selected eligible openai-curated plugins.",
+      "Auth credentials require separate consent. Sessions and chat history are not imported.",
+      "Codex config and hooks are saved for manual review, not activated. Source files are not moved or deleted.",
+    ].join(" "),
     supportedItemKinds: ["memory", "auth"],
     async detect(ctx) {
       const { discoverCodexSource, hasCodexSource } = await import("./source.js");

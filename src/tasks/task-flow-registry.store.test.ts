@@ -344,19 +344,25 @@ describe("task-flow-registry store runtime", () => {
       expect(
         tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
       ).toBe(false);
-      expect(bindTaskFlowExecution({ admitted, flowId: managedTerminal.flowId })).toBe("missing");
-      expect(bindTaskFlowExecution({ admitted, flowId: mirroredTerminal.flowId })).toBe("missing");
-      expect(bindTaskFlowExecution({ admitted, flowId: managedCancelling.flowId })).toBe("missing");
+      expect(await bindTaskFlowExecution({ admitted, flowId: managedTerminal.flowId })).toBe(
+        "missing",
+      );
+      expect(await bindTaskFlowExecution({ admitted, flowId: mirroredTerminal.flowId })).toBe(
+        "missing",
+      );
+      expect(await bindTaskFlowExecution({ admitted, flowId: managedCancelling.flowId })).toBe(
+        "missing",
+      );
       expect(
         tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
       ).toBe(false);
-      expect(bindTaskFlowExecution({ admitted, flowId: managed.flowId })).toBe("bound");
-      expect(bindTaskFlowExecution({ admitted, flowId: mirrored.flowId })).toBe("bound");
+      expect(await bindTaskFlowExecution({ admitted, flowId: managed.flowId })).toBe("bound");
+      expect(await bindTaskFlowExecution({ admitted, flowId: mirrored.flowId })).toBe("bound");
 
       upsertTaskFlowRegistryRecordToSqlite({ ...managed, status: "succeeded", endedAt: 210 });
       upsertTaskFlowRegistryRecordToSqlite({ ...mirrored, status: "blocked", endedAt: 211 });
-      expect(bindTaskFlowExecution({ admitted, flowId: managed.flowId })).toBe("missing");
-      expect(bindTaskFlowExecution({ admitted, flowId: mirrored.flowId })).toBe("missing");
+      expect(await bindTaskFlowExecution({ admitted, flowId: managed.flowId })).toBe("missing");
+      expect(await bindTaskFlowExecution({ admitted, flowId: mirrored.flowId })).toBe("missing");
       expect(
         openOpenClawStateDatabase()
           .db.prepare(

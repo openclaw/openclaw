@@ -1,4 +1,3 @@
-// Msteams plugin module implements http error behavior.
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 
 export async function createMSTeamsHttpError(

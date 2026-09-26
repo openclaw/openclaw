@@ -195,7 +195,9 @@ describe("resident Codex catalog", () => {
   });
 
   it("reconciles a new rollout with only bounded reads of that file", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     const root = path.join(tempDirs.make("openclaw-resident-currency-"), "sessions");
     const existing = idleThread({ id: "existing", source: "cli", originator: "codex_cli_rs" });
     existing.path = await writeCatalogRollout(root, existing);
@@ -210,7 +212,12 @@ describe("resident Codex catalog", () => {
     });
     try {
       await index.initialize();
+      await vi.advanceTimersByTimeAsync(0);
       await index.reconcile();
+      const stat = vi.spyOn(fs, "lstat");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(stat).not.toHaveBeenCalled();
+      expect(readNative).toHaveBeenCalledOnce();
       const added = await writeCatalogRollout(
         root,
         idleThread({ id: "new-thread", preview: "A new native request" }),
@@ -227,7 +234,7 @@ describe("resident Codex catalog", () => {
         return handle;
       });
       const readFile = vi.spyOn(fs, "readFile");
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
       await index.reconcile();
       await vi.waitFor(async () => {
         expect((await index.list({})).sessions).toEqual(
@@ -254,6 +261,9 @@ describe("resident Codex catalog", () => {
   });
 
   it("does not reread unchanged incomplete rollouts during currency scans", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     const root = path.join(tempDirs.make("openclaw-resident-incomplete-"), "sessions");
     const file = await writeCatalogRollout(root, idleThread({ id: "partial" }));
     await fs.writeFile(file, '{"type":"session_meta","payload":');
@@ -265,6 +275,7 @@ describe("resident Codex catalog", () => {
     });
     try {
       await index.initialize();
+      await vi.advanceTimersByTimeAsync(0);
       await index.reconcile();
       const open = vi.spyOn(fs, "open");
       await index.reconcile();
@@ -276,6 +287,57 @@ describe("resident Codex catalog", () => {
       await index.reconcile();
       expect(open.mock.calls.map(([opened]) => opened)).toEqual([file]);
       expect((await index.list({})).sessions[0]?.fallbackName).toBe("Completed native request");
+    } finally {
+      await index.close();
+    }
+  });
+
+  it("keeps file scans on their own safety cadence through native outages and recovery", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const root = path.join(tempDirs.make("openclaw-catalog-outage-"), "sessions");
+    const existing = idleThread({ id: "existing", source: "cli" });
+    existing.path = await writeCatalogRollout(root, existing);
+    const page = await projectCodexCatalogPage(
+      { data: [existing] },
+      { sanitize: sanitizeTerminalText },
+    );
+    const readNative = vi.fn(async () => page);
+    const index = new CodexCatalogIndex({
+      homeId: "file-scan-outage",
+      localSessionsRoot: root,
+      readNative,
+      assertCurrent: () => {},
+    });
+    try {
+      await index.initialize();
+      await vi.advanceTimersByTimeAsync(0);
+      await index.reconcile();
+      readNative.mockRejectedValueOnce(new Error("native unavailable"));
+      readNative.mockRejectedValueOnce(new Error("native retry unavailable"));
+      const stat = vi.spyOn(fs, "lstat");
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      expect(stat).toHaveBeenCalled();
+      expect(readNative).toHaveBeenCalledTimes(2);
+      stat.mockClear();
+      await index.upsertThread(existing);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      expect(readNative).toHaveBeenCalledTimes(3);
+      expect(stat).not.toHaveBeenCalled();
+      await index.upsertThread(existing);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      expect(readNative).toHaveBeenCalledTimes(4);
+      expect(stat).not.toHaveBeenCalled();
+
+      await writeCatalogRollout(root, idleThread({ id: "external", preview: "External request" }));
+      await vi.advanceTimersByTimeAsync(14 * 60_000);
+      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      expect(stat).toHaveBeenCalled();
+      expect(index.get("external")?.preview).toBe("External request");
     } finally {
       await index.close();
     }

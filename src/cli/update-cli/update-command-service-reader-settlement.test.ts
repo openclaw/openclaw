@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { GatewayServiceLayoutSummary } from "../../daemon/service-layout.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceState,
@@ -24,28 +25,24 @@ import {
 const boundary = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
   read: vi.fn<typeof readGatewayServiceState>(),
-  layout: vi.fn<() => Promise<GatewayServiceLayoutSummary>>(),
 }));
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
   resolveGatewayService: boundary.service,
   readGatewayServiceState: boundary.read,
 }));
-vi.mock("../../daemon/service-layout.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/service-layout.js")>()),
-  summarizeGatewayServiceLayout: boundary.layout,
-}));
 
 const root = "/synthetic/install";
 const command: GatewayServiceCommandConfig = {
   programArguments: ["/synthetic/node", `${root}/dist/index.js`, "gateway"],
 };
-function state(owned: boolean): GatewayServiceState {
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+function state(owned: boolean, serviceCommand = command): GatewayServiceState {
   return {
     installed: true,
     running: owned,
     env: {},
-    command,
+    command: serviceCommand,
     loadState: owned ? { status: "loaded" } : { status: "unknown", detail: "manager unavailable" },
     runtime: owned
       ? { status: "running", systemd: { managerUid: 2001 } }
@@ -138,6 +135,17 @@ it.each(["inspection", "fallback"] as const)(
 );
 
 it("returns the verified command and ownership verdict only after confirmed cleanup", async () => {
+  const installRoot = await fs.realpath(dirs.make("service-reader-owned-package-"));
+  const entrypoint = path.join(installRoot, "dist", "index.js");
+  await fs.mkdir(path.dirname(entrypoint));
+  await fs.writeFile(
+    path.join(installRoot, "package.json"),
+    JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
+  );
+  await fs.writeFile(entrypoint, "// isolated ownership fixture\n");
+  const ownedCommand: GatewayServiceCommandConfig = {
+    programArguments: [process.execPath, entrypoint, "gateway"],
+  };
   const cleanup = createDeferredCore<"forced">();
   const joining = createDeferredCore();
   boundary.read.mockImplementation(async () => {
@@ -145,15 +153,8 @@ it("returns the verified command and ownership verdict only after confirmed clea
     resolveCommandProcessSignal()?.addEventListener("abort", () => joining.resolve(), {
       once: true,
     });
-    return state(true);
+    return state(true, ownedCommand);
   });
-  boundary.layout.mockResolvedValue({
-    execStart: command.programArguments.join(" "),
-    entrypoint: `${root}/dist/index.js`,
-    packageRoot: root,
-    packageRootReal: root,
-  });
-  vi.spyOn(fs, "realpath").mockResolvedValue(root);
   let selected = false;
   const work = readManagedGatewayServiceForUpdate({}).then((result) => {
     selected = true;
@@ -172,7 +173,11 @@ it("returns the verified command and ownership verdict only after confirmed clea
     await work;
   }
   const result = await work;
-  expect(result?.command).toBe(command);
-  expect(result?.verdict).toMatchObject({ kind: "owned", root, refreshDefinition: true });
+  expect(result?.command).toBe(ownedCommand);
+  expect(result?.verdict).toMatchObject({
+    kind: "owned",
+    root: installRoot,
+    refreshDefinition: true,
+  });
   expect(service.isLoaded).not.toHaveBeenCalled();
 });

@@ -120,10 +120,16 @@ Changes delegated by a regular agent, including requests from messaging channels
 follow the requesting run's effective [session permission policy](/gateway/permission-modes).
 Full Access applies the exact proposed operation automatically, including when
 Full Access comes from the configured default rather than an explicit session
-mode. Restricted runs still require approval in the OpenClaw operator UI. Replying
-"yes" in the delegated chat cannot authorize a change. When approval is required,
-run `openclaw dashboard` on the Gateway host to review it, or run the change
-directly with `openclaw setup` there. Independent filesystem and sandbox boundaries,
+mode. Restricted runs from messaging channels ask for approval in the chat that
+made the request: channels with native approval cards show **Allow once** and
+**Deny** buttons, and other messaging chats receive the change summary with a
+`/approve <id> allow-once|deny` reply. Webchat and terminal runs decide in the
+Control UI or the OpenClaw apps, which can also decide any chat's approval.
+Replying "yes" in the delegated chat cannot authorize a change; the button or
+`/approve` command does.
+Channels with their own approver settings decide who may approve; elsewhere only
+a current owner (`commands.ownerAllowFrom`) can approve an OpenClaw change.
+Independent filesystem and sandbox boundaries,
 tool policy, and the operation restrictions below still apply. The host also checks
 that the requesting run and verified inference route remain valid. Interactive
 setup and agent handoffs still require a direct operator session; delegated chat

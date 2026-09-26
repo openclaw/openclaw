@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,8 +19,13 @@ import {
   loadSessionStoreEntry,
   resolveSessionStorePathCore,
 } from "./dispatch-from-config.runtime.js";
+import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { isSlackDirectRoutedThreadTurn } from "./routed-delivery-thread.js";
+import {
+  assertPreparedConversationBindingRoute,
+  readPreparedConversationBindingRouteCurrent,
+} from "./session-conversation-binding.js";
 import { canReplaceRestartTombstoneFromParent } from "./session-parent-fork-prepare.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
 
@@ -95,26 +101,35 @@ export function resolveSessionStoreLookup(
   }
 }
 
-export function resolveBoundAcpDispatchSessionKey(params: {
+export async function resolveBoundAcpDispatchSessionKey(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
-}): string | undefined {
-  const bindingContext = resolveConversationBindingContextFromMessage({
-    cfg: params.cfg,
-    ctx: params.ctx,
-  });
+}): Promise<string | undefined> {
+  if (resolveCommandTurnTargetSessionKey(params.ctx)) {
+    return undefined;
+  }
+  const preparedRoute = readConversationBindingRouteFacts(params.ctx);
+  const bindingContext =
+    preparedRoute?.conversation ??
+    resolveConversationBindingContextFromMessage({
+      cfg: params.cfg,
+      ctx: params.ctx,
+    });
   if (!bindingContext) {
     return undefined;
   }
 
-  const binding = getSessionBindingService().resolveByConversation({
-    channel: bindingContext.channel,
-    accountId: bindingContext.accountId,
-    conversationId: bindingContext.conversationId,
-    ...(bindingContext.parentConversationId
-      ? { parentConversationId: bindingContext.parentConversationId }
-      : {}),
-  });
+  const binding = preparedRoute
+    ? await readPreparedConversationBindingRouteCurrent(params.ctx)
+    : await getSessionBindingService().resolveByConversationAsync({
+        channel: bindingContext.channel,
+        accountId: bindingContext.accountId,
+        conversationId: bindingContext.conversationId,
+        ...(bindingContext.parentConversationId
+          ? { parentConversationId: bindingContext.parentConversationId }
+          : {}),
+      });
+  assertPreparedConversationBindingRoute(params.ctx, binding);
   const targetSessionKey = normalizeOptionalString(binding?.targetSessionKey);
   if (!binding || !targetSessionKey || !isAcpSessionKey(targetSessionKey)) {
     return undefined;
@@ -122,8 +137,35 @@ export function resolveBoundAcpDispatchSessionKey(params: {
   if (isPluginOwnedSessionBindingRecord(binding)) {
     return undefined;
   }
-  getSessionBindingService().touch(binding.bindingId, undefined, binding.conversation);
-  return targetSessionKey;
+  const { bindingId, boundAt, targetSessionKey: boundTargetSessionKey, targetKind } = binding;
+  const scope = { ...binding.conversation };
+  await getSessionBindingService().touchAsync(bindingId, undefined, scope);
+  const currentBinding = preparedRoute
+    ? await readPreparedConversationBindingRouteCurrent(params.ctx)
+    : await getSessionBindingService().resolveByConversationAsync(bindingContext);
+  assertPreparedConversationBindingRoute(params.ctx, currentBinding);
+  if (
+    currentBinding &&
+    (currentBinding.bindingId !== bindingId ||
+      currentBinding.boundAt !== boundAt ||
+      currentBinding.targetSessionKey !== boundTargetSessionKey ||
+      currentBinding.targetKind !== targetKind ||
+      currentBinding.conversation.channel !== scope.channel ||
+      currentBinding.conversation.accountId !== scope.accountId)
+  ) {
+    throw new DispatchSessionRefreshRequiredError(
+      new Error("conversation binding changed while recording activity"),
+    );
+  }
+  const currentTargetSessionKey = normalizeOptionalString(currentBinding?.targetSessionKey);
+  return currentBinding &&
+    currentTargetSessionKey &&
+    isAcpSessionKey(currentTargetSessionKey) &&
+    !isPluginOwnedSessionBindingRecord(currentBinding)
+    ? preparedRoute
+      ? normalizeOptionalString(params.ctx.SessionKey)
+      : currentTargetSessionKey
+    : undefined;
 }
 
 export function resolveDispatchResetAdmission(params: {

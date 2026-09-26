@@ -9,13 +9,15 @@ import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import {
-  deliveryContextFromChannelRoute,
   deliveryContextFromSession,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../../utils/delivery-context.read.js";
+import {
+  deliveryContextFromChannelRoute,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryState,
-  sessionDeliveryOrigin,
-  sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
@@ -121,42 +123,19 @@ export function deriveSessionOrigin(
   const accountId = normalizeOptionalString(ctx.AccountId);
   const threadId = ctx.MessageThreadId ?? undefined;
 
-  const origin: SessionOrigin = {};
-  if (label) {
-    origin.label = label;
-  }
-  if (provider) {
-    origin.provider = provider;
-  }
-  if (surface) {
-    origin.surface = surface;
-  }
-  if (chatType) {
-    origin.chatType = chatType;
-  }
-  if (from) {
-    origin.from = from;
-  }
-  if (to) {
-    origin.to = to;
-  }
-  if (nativeChannelId) {
-    origin.nativeChannelId = nativeChannelId;
-  }
-  if (nativeDirectUserId) {
-    origin.nativeDirectUserId = nativeDirectUserId;
-  }
-  if (avatar) {
-    origin.avatar = avatar;
-  }
-  if (accountId) {
-    origin.accountId = accountId;
-  }
-  if (threadId != null && threadId !== "") {
-    origin.threadId = threadId;
-  }
-
-  return Object.keys(origin).length > 0 ? origin : undefined;
+  return mergeSessionOrigin(undefined, {
+    label,
+    provider,
+    surface,
+    chatType,
+    from,
+    to,
+    nativeChannelId,
+    nativeDirectUserId,
+    avatar,
+    accountId,
+    threadId,
+  });
 }
 
 function deriveGroupSessionPatch(params: {

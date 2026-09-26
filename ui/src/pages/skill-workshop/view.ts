@@ -113,7 +113,13 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
       .label=${`${t("skillWorkshop.revision.title", { verb })}: ${proposal.slug}`}
       .description=${t("skillWorkshop.revision.description")}
       style="--openclaw-modal-width: 560px"
-      @modal-cancel=${cancelDisabled ? undefined : props.onRevisionCancel}
+      @modal-cancel=${(event: Event) => {
+        if (cancelDisabled) {
+          event.preventDefault();
+          return;
+        }
+        props.onRevisionCancel();
+      }}
     >
       <section class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}">
         <div class="sw-revision-dialog__head">
@@ -135,17 +141,21 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
             </button>
           </openclaw-tooltip>
         </div>
-        <p class="sw-revision-dialog__copy">${t("skillWorkshop.revision.description")}</p>
+        <p id="sw-revision-description" class="sw-revision-dialog__copy">
+          ${t("skillWorkshop.revision.description")}
+        </p>
         <textarea
           class="sw-revision-dialog__input"
           autofocus
+          aria-label=${t("skillWorkshop.revision.title", { verb })}
+          aria-describedby="sw-revision-description"
           placeholder=${t("skillWorkshop.revision.placeholder")}
           .value=${props.revisionDraft}
           ?disabled=${
             !props.access.canRevise || Boolean(props.actionBusy) || props.revisionRecoveryActive
           }
           @input=${(event: Event) =>
-            props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value ?? "")}
+            props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value)}
         ></textarea>
         ${
           busy
@@ -238,8 +248,12 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
   const editedAt =
     proposal.updatedAt && proposal.updatedAt > proposal.createdAt ? proposal.updatedAt : null;
   const createdLabel = editedAt
-    ? t("skillWorkshop.detail.edited", { time: formatRelative(editedAt) })
-    : t("skillWorkshop.detail.created", { time: formatRelative(proposal.createdAt) });
+    ? t("skillWorkshop.detail.edited", {
+        time: formatRelativeTimestamp(editedAt, { dateFallback: true }),
+      })
+    : t("skillWorkshop.detail.created", {
+        time: formatRelativeTimestamp(proposal.createdAt, { dateFallback: true }),
+      });
   const detailLoading = props.inspectingKey === proposal.key && !proposal.bodyLoaded;
   const firstSupportFile = proposal.supportFiles[0];
   return html`
@@ -290,7 +304,7 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
                   ${t("skillWorkshop.detail.draftMissing")}
                 </p>`
               : detailLoading
-                ? html`<p class="sw-muted">${t("skillWorkshop.detail.loading")}</p>`
+                ? html`<p class="sw-muted" role="status">${t("skillWorkshop.detail.loading")}</p>`
                 : renderSkillDocument(proposal.body)
           }
         </div>
@@ -426,8 +440,4 @@ function queueEmptyText(props: SkillWorkshopProps): string {
     return t("skillWorkshop.queue.noMatch");
   }
   return t("skillWorkshop.queue.noSuggestions");
-}
-
-function formatRelative(ms: number): string {
-  return formatRelativeTimestamp(ms, { dateFallback: true });
 }

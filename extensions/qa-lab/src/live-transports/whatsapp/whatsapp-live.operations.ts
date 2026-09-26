@@ -6,7 +6,6 @@ export {
   restartWhatsAppQaDriverSession,
   waitForDistinctWhatsAppSutMessages,
   waitForNoWhatsAppReply,
-  waitForWhatsAppScenarioSutMessage,
 } from "./whatsapp-live.driver.js";
 export {
   callWhatsAppGatewayMessageAction,

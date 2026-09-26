@@ -8,6 +8,7 @@ import {
 } from "@openclaw/model-catalog-core";
 import {
   LITELLM_PRICING_URL,
+  MODELS_DEV_CATALOG_URL,
   OPENROUTER_MODELS_URL,
 } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -51,7 +52,6 @@ function requestUrl(input: string | URL | Request): string {
 }
 
 type ModelsDevFixtureModel = { id: string } & Record<string, unknown>;
-const MODELS_DEV_CATALOG_URL = "https://models.opencode.ai/api.json";
 
 function modelsDevModel(
   id: string,
@@ -97,7 +97,9 @@ function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider: stri
       checked_at: bundle.generatedAt,
     }),
   });
+  // These bundles are v1 output; clients read v1 only from a configured mirror.
   const config: OpenClawConfig = {
+    models: { catalogRefresh: { url: "https://catalog.openclaw.ai/models/v1/catalog.json" } },
     plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
   };
   return { config, agentDir, provider };
@@ -230,6 +232,9 @@ describe("publish model catalog", () => {
           })),
         });
       }
+      if (url === MODELS_DEV_CATALOG_URL) {
+        return Response.json({});
+      }
       expect(url).toBe(LITELLM_PRICING_URL);
       return Response.json({
         absent: {
@@ -246,7 +251,7 @@ describe("publish model catalog", () => {
       cacheRead: 0.2,
       cacheWrite: 0,
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
     for (const id of ["qualified", "absent"]) {
       const model = bundle.providers.deepinfra?.models.find((row) => row.id === id);
       expect(model).toMatchObject({ name: `Fixture ${id}`, contextWindow: 123456 });
@@ -576,7 +581,7 @@ describe("publish model catalog", () => {
     expect(serializeModelCatalogBundle(bundle)).toBe(previous);
   });
 
-  it.each(["fetch failure", "malformed feed", "missing mapped provider"])(
+  it.each(["fetch failure", "malformed feed"])(
     "rejects models.dev %s before changing the bundle",
     async (scenario) => {
       const manifests = [
@@ -616,6 +621,54 @@ describe("publish model catalog", () => {
       expect(serializeModelCatalogBundle(bundle)).toBe(previous);
     },
   );
+
+  it("publishes a provider unhydrated when its models.dev source disappears", async () => {
+    const manifests = [
+      {
+        pluginId: "fixture",
+        manifestPath: "fixture.json",
+        manifest: {
+          providers: ["anthropic", "openai"],
+          modelCatalog: {
+            modelsDev: { anthropic: "anthropic", openai: "renamed-upstream" },
+            providers: {
+              anthropic: fixtureProvider("claude", 100),
+              openai: fixtureProvider("gpt", 100),
+            },
+          },
+        },
+      },
+    ];
+    const bundle = await assembleModelCatalogBundle({
+      manifests,
+      generatedAt: Date.now(),
+      sourceCommit: "fixture-sha",
+    });
+    const openaiBefore = JSON.stringify(bundle.providers.openai);
+    const warnings: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((value) => {
+      warnings.push(String(value));
+      return true;
+    });
+    const result = await hydrateModelCatalogFromModelsDev({
+      bundle,
+      manifests,
+      fetchImpl: async () =>
+        Response.json({
+          anthropic: {
+            id: "anthropic",
+            models: { "hydrated-claude": modelsDevModel("hydrated-claude") },
+          },
+        }),
+    }).finally(() => stderr.mockRestore());
+    expect(result.anthropic).toEqual({ added: 1, filled: 0, skipped: 0 });
+    expect(result.openai).toBeUndefined();
+    expect(JSON.stringify(bundle.providers.openai)).toBe(openaiBefore);
+    expect(bundle.providers.anthropic?.models.map((model) => model.id)).toContain(
+      "hydrated-claude",
+    );
+    expect(warnings.join("")).toContain("renamed-upstream");
+  });
 
   it.each(["absent", "unowned", "without provider catalog"])(
     "does not fetch models.dev with source declaration: %s",
@@ -747,6 +800,9 @@ describe("publish model catalog", () => {
           ],
         });
       }
+      if (url === MODELS_DEV_CATALOG_URL) {
+        return Response.json({});
+      }
       expect(url).toBe(LITELLM_PRICING_URL);
       return Response.json({
         "gpt-special": {
@@ -787,25 +843,26 @@ describe("publish model catalog", () => {
     };
 
     await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).resolves.toEqual({
-      modelsEnriched: 2,
-      pricingEntries: 11,
+      modelsEnriched: 1,
+      pricingEntries: 10,
     });
-    expect(bundle.providers.anthropic?.models[0]?.cost).toMatchObject({ input: 1, output: 2 });
+    // OpenRouter's feed is OpenRouter's billing: its `anthropic/…` row never prices Anthropic.
+    expect(bundle.providers.anthropic?.models[0]?.cost).toBeUndefined();
     const tieredPricing = [
       { input: 3, output: 4, cacheRead: 0.5, cacheWrite: 2.5, range: [0, 1001] },
       { input: 7, output: 4, cacheRead: 0.5, cacheWrite: 2.5, range: [1001] },
     ];
+    // OpenAI's own row takes OpenAI's listed rate from LiteLLM, not OpenRouter's schedule.
     expect(bundle.providers.openai?.models[0]?.cost).toEqual({
       input: 3,
       output: 4,
-      cacheRead: 0.5,
-      cacheWrite: 2.5,
-      tieredPricing,
+      cacheRead: 0,
+      cacheWrite: 0,
+      tieredPricing: [{ input: 5, output: 6, cacheRead: 0, cacheWrite: 0, range: [1000] }],
     });
     expect(bundle.providers.openai?.models[1]?.cost).toEqual({ input: 5, output: 6 });
     expect(bundle.providers.openai?.models[2]?.cost).toBeUndefined();
     expect(bundle.pricing).toEqual({
-      "anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
       "custom/external-model": { input: 7, output: 8 },
       "custom/secondary-wins": { input: 11, output: 12 },
       "external-model": { input: 7, output: 8 },
@@ -823,14 +880,15 @@ describe("publish model catalog", () => {
       "secondary-wins": { input: 11, output: 12 },
       "unknown/new-model": { input: 1_000_000, output: 1_000_000 },
     });
+    expect(bundle.pricing).not.toHaveProperty("anthropic/claude-3.5-sonnet");
     expect(bundle.pricing).not.toHaveProperty("openrouter/forbidden-model");
     expect(bundle.pricing).not.toHaveProperty("mapped/wrong-source");
     expect(bundle.pricing).not.toHaveProperty("gpt-special");
     expect(bundle.pricing).not.toHaveProperty("openai/gpt-special");
     expect(summarizeModelCatalogBundle(bundle)).toMatchObject({
       models: 200,
-      costModels: 3,
-      pricingEntries: 11,
+      costModels: 2,
+      pricingEntries: 10,
     });
     expect(Object.hasOwn(bundle.providers, "unknown")).toBe(false);
   });
@@ -913,7 +971,8 @@ describe("publish model catalog", () => {
         },
       });
       const published = bundle.providers.openai!.models[0]!.cost;
-      if (tierSource === "flat") {
+      // OpenRouter's schedule is OpenRouter's billing and never replaces OpenAI's own row.
+      if (tierSource !== "liteLLM") {
         expect(published).toEqual(declared);
       } else {
         expect(published).toMatchObject({ input: 2, output: 3 });
@@ -1048,6 +1107,9 @@ describe("publish model catalog", () => {
           return Response.json({
             data: [{ id: `${provider}/priced-fixture`, pricing: { prompt: "1", completion: "1" } }],
           });
+        }
+        if (request === MODELS_DEV_CATALOG_URL) {
+          return Response.json({});
         }
         expect(request).toBe(LITELLM_PRICING_URL);
         return Response.json({});
@@ -1220,7 +1282,10 @@ describe("publish model catalog", () => {
         if (request === OPENROUTER_MODELS_URL) {
           return Response.json({ data: [] });
         }
-        if (request === LITELLM_PRICING_URL) {
+        if (
+          request === LITELLM_PRICING_URL ||
+          (request === MODELS_DEV_CATALOG_URL && url !== MODELS_DEV_CATALOG_URL)
+        ) {
           return Response.json({});
         }
         expect(request).toBe(url);
@@ -1273,12 +1338,16 @@ describe("publish model catalog", () => {
           generatedAt: Date.now(),
           sourceCommit: "fixture",
         });
-        const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-          expect(requestUrl(input)).not.toBe(url);
-          return Response.json({ data: [] });
-        });
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ data: [] }));
         await enrichModelCatalogPricing({ bundle, manifests, fetchImpl });
-        expect(fetchImpl).toHaveBeenCalledTimes(2);
+        const urls = fetchImpl.mock.calls.map(([input]) => requestUrl(input));
+        // OpenCode's native feed shares models.dev's URL, which the default source reads once.
+        expect(urls.filter((fetched) => fetched === url)).toHaveLength(
+          url === MODELS_DEV_CATALOG_URL ? 1 : 0,
+        );
+        expect(urls.toSorted()).toEqual(
+          [LITELLM_PRICING_URL, MODELS_DEV_CATALOG_URL, OPENROUTER_MODELS_URL].toSorted(),
+        );
       },
     );
   });

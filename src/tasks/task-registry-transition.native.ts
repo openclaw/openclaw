@@ -11,26 +11,36 @@ import {
 } from "./task-registry-delivery.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
 import { publishTaskRecordUpdate } from "./task-registry-mutation.js";
-import { captureTaskPersistenceReceipt, cloneTaskRecord } from "./task-registry-records.js";
+import {
+  captureTaskPersistenceReceipt,
+  cloneTaskRecord,
+  matchesTaskPersistenceReceipt,
+} from "./task-registry-records.js";
 import {
   ensureTaskRegistryReady,
   getTasksByRunScope,
   tasks,
   withTaskRegistryMutation,
 } from "./task-registry-state.js";
-import {
-  runTaskRecordTransitionOperation,
-  type TaskRunTransition,
-} from "./task-registry-transition.operation.js";
+import { runTaskRecordTransitionOperation } from "./task-registry-transition.operation.js";
 import { tryPersistTaskUpsert } from "./task-registry.store.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import type {
+  TaskPersistenceReceipt,
+  TaskRecord,
+  TaskRunTransition,
+} from "./task-registry.types.js";
 
 /** Legacy adapters retain insertion-order selection and per-row commit/publication. */
-export function transitionTaskRecordsByRunNative(transition: TaskRunTransition): TaskRecord[] {
+export function transitionTaskRecordsByRunNative(
+  transition: TaskRunTransition,
+  ownership?: { expectedTask: TaskPersistenceReceipt; assertCurrent: () => void },
+): TaskRecord[] {
   return withTaskRegistryMutation(
     () => {
       ensureTaskRegistryReady();
-      const matches = getTasksByRunScope(transition.params);
+      const matches = getTasksByRunScope(transition.params).filter(
+        (task) => !ownership || matchesTaskPersistenceReceipt(task, ownership.expectedTask),
+      );
       const taskId = transition.kind === "state" ? transition.params.taskId : undefined;
       const selectedTask =
         taskId !== undefined ? matches.find((task) => task.taskId === taskId.trim()) : undefined;
@@ -44,8 +54,15 @@ export function transitionTaskRecordsByRunNative(transition: TaskRunTransition):
       const updated: TaskRecord[] = [];
       for (const selected of selections) {
         const result = runTaskRecordTransitionOperation(
-          { ...transition, taskId: selected.taskId, now: Date.now(), selection: selected },
           {
+            ...transition,
+            taskId: selected.taskId,
+            now: Date.now(),
+            selection: selected,
+            expectedTask: ownership?.expectedTask,
+          },
+          {
+            assertCurrent: ownership?.assertCurrent,
             readCurrent: () => {
               const beforeRestore = tasks.get(selected.taskId);
               if (beforeRestore) {
@@ -78,7 +95,7 @@ export function transitionTaskRecordsByRunNative(transition: TaskRunTransition):
             onCommitted(receipt) {
               publishTaskRecordUpdate(receipt.previous, receipt.task, receipt.persisted);
               if (receipt.deliver) {
-                void maybeDeliverTaskStateChangeUpdate(receipt.task.taskId, receipt.nextEvent);
+                void maybeDeliverTaskStateChangeUpdate(receipt.task, receipt.nextEvent);
                 void maybeDeliverTaskTerminalUpdate(receipt.task.taskId);
               }
             },

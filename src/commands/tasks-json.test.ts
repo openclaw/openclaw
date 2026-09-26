@@ -13,7 +13,6 @@ import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import type {
@@ -61,13 +60,11 @@ async function withTaskJsonStateDir(run: () => Promise<void>): Promise<void> {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-json-command-" },
     async () => {
-      resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       try {
         await run();
       } finally {
-        resetTaskRegistryDeliveryRuntimeForTests();
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
       }
@@ -82,7 +79,6 @@ describe("tasks JSON commands", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
   });
@@ -123,6 +119,47 @@ describe("tasks JSON commands", () => {
         runtime: "subagent",
         status: null,
         tasks: [],
+      });
+    });
+  });
+
+  it("preserves full records and newest-insertion ties after filtering", async () => {
+    await withTaskJsonStateDir(async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(1_800_000_000_000);
+      const first = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "filtered-first",
+        status: "running",
+        task: "First selected task",
+        detail: { nested: { values: ["line\nvalue", "\u0000", "🦞"], complete: true } },
+      });
+      createTaskRecord({
+        runtime: "cron",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "filtered-out",
+        status: "queued",
+        task: "Unselected task between tied records",
+      });
+      const last = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "filtered-last",
+        status: "running",
+        task: "Last selected task",
+        detail: { nested: { values: [0, false, null], complete: true } },
+      });
+      const runtime = createTestRuntime();
+      await tasksListJsonCommand({ json: true, runtime: "cli", status: "running" }, runtime);
+      expect(readJsonLog(runtime)).toStrictEqual({
+        count: 2,
+        runtime: "cli",
+        status: "running",
+        tasks: [jsonRoundTrip(last), jsonRoundTrip(first)],
       });
     });
   });

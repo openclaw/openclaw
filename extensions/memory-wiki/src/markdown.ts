@@ -216,44 +216,34 @@ export function normalizeSourceIds(value: unknown): string[] {
   return normalizeSingleOrTrimmedStringList(value);
 }
 
+function normalizeOptionalStringFields<K extends string>(
+  record: Record<string, unknown>,
+  keys: readonly K[],
+): Partial<Record<K, string>> {
+  const fields: Partial<Record<K, string>> = {};
+  for (const key of keys) {
+    const value = normalizeOptionalString(record[key]);
+    if (value) {
+      fields[key] = value;
+    }
+  }
+  return fields;
+}
+
 function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
   const record = asNullableRecord(value);
   if (!record) {
     return null;
   }
-  const kind = normalizeOptionalString(record.kind);
-  const sourceId = normalizeOptionalString(record.sourceId);
-  const evidencePath = normalizeOptionalString(record.path);
-  const lines = normalizeOptionalString(record.lines);
-  const note = normalizeOptionalString(record.note);
-  const updatedAt = normalizeOptionalString(record.updatedAt);
-  const privacyTier = normalizeOptionalString(record.privacyTier);
   const weight = asFiniteNumber(record.weight);
   const confidence = asFiniteNumber(record.confidence);
-  if (
-    !kind &&
-    !sourceId &&
-    !evidencePath &&
-    !lines &&
-    !note &&
-    weight === undefined &&
-    confidence === undefined &&
-    !privacyTier &&
-    !updatedAt
-  ) {
-    return null;
-  }
-  return {
-    ...(kind ? { kind } : {}),
-    ...(sourceId ? { sourceId } : {}),
-    ...(evidencePath ? { path: evidencePath } : {}),
-    ...(lines ? { lines } : {}),
+  const evidence: WikiClaimEvidence = {
+    ...normalizeOptionalStringFields(record, ["kind", "sourceId", "path", "lines"]),
     ...(weight !== undefined ? { weight } : {}),
     ...(confidence !== undefined ? { confidence } : {}),
-    ...(privacyTier ? { privacyTier } : {}),
-    ...(note ? { note } : {}),
-    ...(updatedAt ? { updatedAt } : {}),
+    ...normalizeOptionalStringFields(record, ["privacyTier", "note", "updatedAt"]),
   };
+  return Object.keys(evidence).length > 0 ? evidence : null;
 }
 
 export function normalizeWikiClaims(value: unknown): WikiClaim[] {
@@ -343,32 +333,15 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
     const weight = asFiniteNumber(record.weight);
     const confidence = asFiniteNumber(record.confidence);
     const relationship: WikiRelationship = {
-      ...(normalizeOptionalString(record.targetId)
-        ? { targetId: normalizeOptionalString(record.targetId) }
-        : {}),
-      ...(normalizeOptionalString(record.targetPath)
-        ? { targetPath: normalizeOptionalString(record.targetPath) }
-        : {}),
-      ...(normalizeOptionalString(record.targetTitle)
-        ? { targetTitle: normalizeOptionalString(record.targetTitle) }
-        : {}),
-      ...(normalizeOptionalString(record.kind)
-        ? { kind: normalizeOptionalString(record.kind) }
-        : {}),
+      ...normalizeOptionalStringFields(record, ["targetId", "targetPath", "targetTitle", "kind"]),
       ...(weight !== undefined ? { weight } : {}),
       ...(confidence !== undefined ? { confidence } : {}),
-      ...(normalizeOptionalString(record.evidenceKind)
-        ? { evidenceKind: normalizeOptionalString(record.evidenceKind) }
-        : {}),
-      ...(normalizeOptionalString(record.privacyTier)
-        ? { privacyTier: normalizeOptionalString(record.privacyTier) }
-        : {}),
-      ...(normalizeOptionalString(record.note)
-        ? { note: normalizeOptionalString(record.note) }
-        : {}),
-      ...(normalizeOptionalString(record.updatedAt)
-        ? { updatedAt: normalizeOptionalString(record.updatedAt) }
-        : {}),
+      ...normalizeOptionalStringFields(record, [
+        "evidenceKind",
+        "privacyTier",
+        "note",
+        "updatedAt",
+      ]),
     };
     const hasAnyValue = Object.keys(relationship).length > 0;
     return hasAnyValue ? [relationship] : [];
@@ -479,52 +452,39 @@ export function preserveHumanNotesBlock(rendered: string, existing: string): str
   );
 }
 
-function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
-  const lines = normalizeMarkdownLines(markdown);
-  const normalized = lines.join("\n");
-  if (
-    hasGeneratedWrapperLines(lines, [
-      /^# Memory Bridge(?:\s*\(|:)/u,
-      /^## Bridge Source\s*$/u,
-      /^## Content\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "bridge";
-  }
-  if (
-    hasGeneratedWrapperLines(lines, [
-      /^# Unsafe Local Import:/u,
-      /^## Unsafe Local Source\s*$/u,
-      /^## Content\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "unsafe-local";
-  }
-  if (
-    hasGeneratedWrapperLines(lines, [
-      /^#\s+\S/u,
-      /^## Source\s*$/u,
-      /^- Type: `local-file`\s*$/u,
-      /^## Content\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "local-file";
-  }
-  if (
-    hasGeneratedWrapperLines(lines, [
+const GENERATED_SOURCE_WRAPPERS: ReadonlyArray<{
+  kind: GeneratedSourceBody;
+  patterns: RegExp[];
+}> = [
+  {
+    kind: "bridge",
+    patterns: [/^# Memory Bridge(?:\s*\(|:)/u, /^## Bridge Source\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "unsafe-local",
+    patterns: [/^# Unsafe Local Import:/u, /^## Unsafe Local Source\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "local-file",
+    patterns: [/^#\s+\S/u, /^## Source\s*$/u, /^- Type: `local-file`\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "chatgpt-export",
+    patterns: [
       /^# ChatGPT Export:/u,
       /^## Source\s*$/u,
       /^- Conversation id: `[^`]+`\s*$/u,
       /^## Active Branch Transcript\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "chatgpt-export";
-  }
-  return undefined;
+    ],
+  },
+];
+
+function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
+  const lines = normalizeMarkdownLines(markdown);
+  return hasHumanNotesBlock(lines.join("\n"))
+    ? GENERATED_SOURCE_WRAPPERS.find(({ patterns }) => hasGeneratedWrapperLines(lines, patterns))
+        ?.kind
+    : undefined;
 }
 
 function detectUnmanagedRawSourceBody(markdown: string): boolean {
@@ -599,6 +559,8 @@ export function scanWikiPageSummary(params: {
   absolutePath: string;
   relativePath: string;
   raw: string;
+  /** Query readers do not need the compiler/lint link graph. */
+  includeLinks?: boolean;
 }): WikiPageSummaryScanResult {
   const kind = inferWikiPageKind(params.relativePath);
   if (!kind) {
@@ -647,7 +609,10 @@ export function scanWikiPageSummary(params: {
       canonicalId: normalizeOptionalString(parsed.frontmatter.canonicalId),
       aliases: normalizeSingleOrTrimmedStringList(parsed.frontmatter.aliases),
       sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
-      linkTargets: extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
+      linkTargets:
+        params.includeLinks === false
+          ? []
+          : extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
       claims: normalizeWikiClaims(parsed.frontmatter.claims),
       contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
       questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),

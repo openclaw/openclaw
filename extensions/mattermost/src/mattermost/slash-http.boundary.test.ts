@@ -1,6 +1,7 @@
 // Mattermost tests prove slash admission through the production route and handler over real HTTP sockets.
 import { createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, type Socket } from "node:net";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setMattermostRuntime } from "../runtime.js";
@@ -30,7 +31,7 @@ function createRuntime(dispatch: ReturnType<typeof vi.fn>) {
       commands: {
         shouldHandleTextCommands: () => true,
       },
-      inbound: { dispatch },
+      inbound: { dispatch, ingress: createPluginRuntimeMock().channel.inbound.ingress },
       pairing: {
         readAllowFromStore: async () => [],
         upsertPairingRequest: async () => ({ code: "unused" }),

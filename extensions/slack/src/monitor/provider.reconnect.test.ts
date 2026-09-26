@@ -1,5 +1,6 @@
 // Slack tests cover provider.reconnect plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatSlackError } from "../errors.js";
 import {
   gracefulStopSlackApp,
   publishSlackBlockedStatus,
@@ -9,7 +10,6 @@ import {
 } from "./provider-support.js";
 import {
   formatSlackSocketModeSharedConnectionWarning,
-  formatUnknownError,
   registerSlackSocketModeConnectionDiagnostics,
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
@@ -144,16 +144,16 @@ describe("slack socket reconnect helpers", () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
 
-    expect(formatUnknownError(undefined)).toBe("no error detail");
-    expect(formatUnknownError(null)).toBe("no error detail");
-    expect(formatUnknownError("")).toBe("no error detail");
-    expect(formatUnknownError(new Error(""))).toBe("Error");
-    expect(formatUnknownError(circular)).toBe('{"self":"[Circular]"}');
+    expect(formatSlackError(undefined)).toBe("no error detail");
+    expect(formatSlackError(null)).toBe("no error detail");
+    expect(formatSlackError("")).toBe("no error detail");
+    expect(formatSlackError(new Error(""))).toBe("Error");
+    expect(formatSlackError(circular)).toBe('{"self":"[Circular]"}');
   });
 
   it("formats structured Slack socket errors", () => {
     expect(
-      formatUnknownError({
+      formatSlackError({
         code: "slack_webapi_platform_error",
         data: {
           error: "missing_scope",

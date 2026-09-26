@@ -1,12 +1,12 @@
 // @vitest-environment node
 // Control UI tests cover cron behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   validateCronAddParams,
   validateCronUpdateParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { CronJob, CronJobsListResult, CronRunsResult } from "../../api/types.ts";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
 import {

@@ -182,7 +182,7 @@ describe("web auto-reply media delivery", () => {
   }
 
   it("sends common in-limit image formats without re-encoding", async () => {
-    const jpeg = await fs.readFile("docs/assets/showcase/roof-camera-sky.jpg");
+    const jpeg = await fs.readFile("test/fixtures/media/roof-camera-sky.jpg");
     const webp = await fs.readFile("extensions/whatsapp/src/__fixtures__/large-noisy.webp");
     const formats = [
       {

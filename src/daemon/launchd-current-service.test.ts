@@ -1,6 +1,9 @@
 // Launchd current service tests cover resolving active macOS service labels.
-import { describe, expect, it } from "vitest";
-import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isCurrentProcessInsideLaunchdService,
+  isCurrentProcessLaunchdServiceLabel,
+} from "./launchd-current-service.js";
 
 describe("isCurrentProcessLaunchdServiceLabel", () => {
   it("matches launchd-provided service labels", () => {
@@ -39,4 +42,53 @@ describe("isCurrentProcessLaunchdServiceLabel", () => {
       }),
     ).toBe(false);
   });
+});
+
+const probe = vi.hoisted(() => vi.fn());
+const ancestors = vi.hoisted(() => vi.fn<() => Set<number>>());
+vi.mock("../infra/restart-stale-pids.js", () => ({ getSelfAndAncestorPidsSync: ancestors }));
+vi.mock("./launchd-runtime.js", () => ({
+  probeLaunchAgentState: probe,
+  resolveLaunchAgentGuiDomain: () => "gui/501",
+}));
+
+describe("launchd membership with unavailable process evidence", () => {
+  beforeEach(() => {
+    probe.mockReset();
+    ancestors.mockReset();
+  });
+  it.each([
+    { pids: [900, 901], inside: true },
+    { pids: [900, 901, 1], inside: false },
+    { pids: [900, 901, 4242], inside: true },
+  ])("keeps partial ancestry conservative: $pids", async ({ pids, inside }) => {
+    probe.mockResolvedValue({ state: "running", runtime: { pid: 4242 } });
+    ancestors.mockReturnValue(new Set(pids));
+    expect(
+      await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway", {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+      }),
+    ).toBe(inside);
+  });
+  it.each([{ state: "unknown" }, { state: "running", runtime: {} }])(
+    "preserves managed-wrapper protection when launchd reports %j",
+    async (result) => {
+      probe.mockResolvedValue(result);
+      expect(
+        await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway", {
+          XPC_SERVICE_NAME: "0",
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        }),
+      ).toBe(true);
+      expect(
+        await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway", {
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        }),
+      ).toBe(false);
+    },
+  );
 });

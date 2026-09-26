@@ -1,504 +1,148 @@
-import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import * as agentEvents from "../../../infra/agent-events.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
-import { INTERNAL_PROVENANCE_SOURCE_CHANNEL } from "../../../sessions/input-provenance.js";
+import { listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
 import {
-  beginSessionWorkAdmission,
-  cancelSessionWorkAdmissionHandoff,
-} from "../../../sessions/session-lifecycle-admission.js";
-import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { isSessionWorkAdmissionActive } from "../../../sessions/session-lifecycle-admission.js";
 import {
-  formatSubagentRecoveryWedgedReason,
-  isSubagentRecoveryWedgedEntry,
-} from "./subagent-recovery-state.js";
-import { reconcileAcceptedRecovery } from "./subagent-registry-restart-recovery-accepted.js";
-import {
-  assertRestartRecoverySnapshotCurrent,
-  buildRestartRecoveryIdempotencyKey,
-  buildRestartRecoveryResumeMessage,
   getRestartRecoveryReplayError,
-  isRetiredSubagentExecution,
   isRestartRecoveryLifecycleCurrent,
   ownsSubagentSessionExecution,
 } from "./subagent-registry-restart-recovery-helpers.js";
-import { readSubagentRecoveryTranscriptMessage } from "./subagent-registry-restart-recovery-message.js";
-import {
-  confirmAcceptedRecoveryResumption,
-  loadSubagentRecoverySession,
-} from "./subagent-registry-restart-recovery-session.js";
+import { loadSubagentRecoverySession } from "./subagent-registry-restart-recovery-session.js";
 import type {
   RestartRecoveryParams,
   RestartRecoveryResult,
 } from "./subagent-registry-restart-recovery-types.js";
-import type { SubagentRestartRecoveryReceipt } from "./subagent-registry.types.js";
+import { resolveCompletionFromSessionEntry } from "./subagent-session-reconciliation.js";
 
-const MAX_RECOVERY_ATTEMPTS = 2;
-const RECOVERY_ATTEMPT_WINDOW_MS = 2 * 60_000;
-const MAX_INTERRUPTION_AGE_MS = 2 * 60 * 60_000;
-const TERMINAL_RESUMPTION_NOTICE_RETRY_WINDOW_MS = 2 * 60_000;
 export type { RestartRecoveryParams, RestartRecoveryResult };
 
 export async function recoverInterruptedSubagentRow(
   params: RestartRecoveryParams,
 ): Promise<RestartRecoveryResult> {
-  const recoveryLifecycleGeneration = agentEvents.getAgentEventLifecycleGeneration();
-  const isRecoveryAttemptLifecycleCurrent = () =>
-    agentEvents.isAgentEventLifecycleGenerationCurrent(recoveryLifecycleGeneration);
-  const childSessionKey = params.entry.childSessionKey.trim();
-  if (!childSessionKey) {
+  const { entry, runId } = params;
+  const childSessionKey = entry.childSessionKey.trim();
+  const lifecycleGeneration = agentEvents.getAgentEventLifecycleGeneration();
+  const isGatewayCurrent = () =>
+    agentEvents.isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+    params.isGatewayCurrent?.() !== false;
+  const isCurrent = () => isGatewayCurrent() && params.isCurrent(runId, entry);
+  if (
+    !childSessionKey ||
+    !isCurrent() ||
+    entry.pauseReason === "sessions_yield" ||
+    entry.suppressAnnounceReason === "steer-restart" ||
+    entry.killIntent ||
+    entry.killReconciliation ||
+    entry.execution.status === "queued"
+  ) {
     return { status: "ignored" };
   }
-  const retiredLifecycle = (details: { endedAt?: number } = {}): RestartRecoveryResult => ({
-    status: "terminal",
-    error: "retired Gateway lifecycle",
-    suppressSessionEffects: true,
-    ...details,
-  });
-  const warnRecovery = (message: string, details?: Record<string, unknown>) =>
-    params.warn(message, { runId: params.runId, childSessionKey, ...details });
-  const pendingNotice = params.entry.resumptionNotice;
-  if (pendingNotice) {
-    const isNoticeOwnerCurrent = () =>
-      isRecoveryAttemptLifecycleCurrent() &&
-      params.isCurrent(params.runId, params.entry) &&
-      params.entry.resumptionNotice === pendingNotice;
-    const confirmed = await confirmAcceptedRecoveryResumption({
-      childSessionKey,
-      gatewayRuntime: params.gatewayRuntime,
-      idempotencyKey: pendingNotice.idempotencyKey,
-      isOwnerCurrent: isNoticeOwnerCurrent,
-      owner: params.entry,
-      warn: params.warn,
-    });
-    if (!isNoticeOwnerCurrent()) {
-      return { status: "handled" };
-    }
-    const endedAt = params.entry.execution.endedAt;
-    const terminalNoticeExpired =
-      typeof endedAt === "number" &&
-      params.now - endedAt >= TERMINAL_RESUMPTION_NOTICE_RETRY_WINDOW_MS;
-    if (confirmed || terminalNoticeExpired) {
-      if (!confirmed) {
-        warnRecovery("subagent restart recovery exhausted its resumption notice window");
-      }
-      try {
-        if (
-          !params.clearPendingNotice({
-            runId: params.runId,
-            expected: params.entry,
-            idempotencyKey: pendingNotice.idempotencyKey,
-          })
-        ) {
-          return { status: "deferred" };
+  const terminalError = getRestartRecoveryReplayError(entry);
+  const replayTerminal = terminalError !== undefined;
+  if (!replayTerminal && typeof entry.execution.endedAt === "number") {
+    return { status: "ignored" };
+  }
+  try {
+    const session = await loadSubagentRecoverySession({ entry, isOwnerCurrent: isCurrent }).catch(
+      (error: unknown) => {
+        if (!replayTerminal) {
+          throw error;
         }
-      } catch (error) {
-        warnRecovery("subagent restart recovery could not clear its resumption notice debt", {
+        params.warn("could not verify child session effects for saved terminal result", {
+          runId,
+          childSessionKey,
           error,
         });
-        return { status: "deferred" };
-      }
-      if (typeof endedAt === "number") {
-        return params.resumeAcceptedRecovery({ runId: params.runId, expected: params.entry })
-          ? { status: "accepted" }
-          : { status: "deferred" };
-      }
-    } else if (!isRetiredSubagentExecution(params.entry)) {
-      return { status: "deferred" };
-    }
-    if (!isRetiredSubagentExecution(params.entry)) {
-      return { status: "handled" };
-    }
-  }
-  const initialRecoveryReceipt = params.entry.execution.restartRecovery;
-  const legacyRestartTimeout =
-    params.entry.execution.outcome?.status === "timeout" &&
-    typeof params.entry.execution.endedAt === "number";
-  const acceptedRecoveryCurrent =
-    initialRecoveryReceipt?.phase === "accepted" && params.isCurrent(params.runId, params.entry);
-  const isRecoverySourceCurrent = () =>
-    isRecoveryAttemptLifecycleCurrent() &&
-    params.isCurrent(params.runId, params.entry) &&
-    params.entry.pauseReason !== "sessions_yield" &&
-    params.entry.suppressAnnounceReason !== "steer-restart" &&
-    params.entry.killReconciliation === undefined &&
-    params.entry.killIntent === undefined &&
-    typeof params.entry.execution.endedAt !== "number";
-  if (initialRecoveryReceipt && !isRestartRecoveryLifecycleCurrent(initialRecoveryReceipt)) {
-    return retiredLifecycle({ endedAt: params.entry.execution.endedAt });
-  }
-  if (!acceptedRecoveryCurrent) {
-    const terminalError = getRestartRecoveryReplayError(params.entry);
-    if (terminalError) {
-      return { status: "terminal", error: terminalError, endedAt: params.entry.execution.endedAt };
-    }
-  }
-  if (!acceptedRecoveryCurrent && !legacyRestartTimeout && !isRecoverySourceCurrent()) {
-    return { status: "ignored" };
-  }
-
-  try {
-    const session = await loadSubagentRecoverySession({
-      entry: params.entry,
-      isOwnerCurrent: isRecoverySourceCurrent,
-    });
-    if (!session) {
-      return { status: "deferred" };
-    }
-    const { agentId, storePath, sessionEntry } = session;
-    const sessionLifecycleRunId = sessionEntry?.lifecycleRunId;
-    const recovery = sessionEntry?.subagentRecovery;
-    const attempts =
-      typeof recovery?.lastAttemptAt === "number" &&
-      Number.isFinite(recovery.lastAttemptAt) &&
-      params.now - recovery.lastAttemptAt <= RECOVERY_ATTEMPT_WINDOW_MS &&
-      typeof recovery.automaticAttempts === "number" &&
-      Number.isFinite(recovery.automaticAttempts) &&
-      recovery.automaticAttempts > 0
-        ? Math.floor(recovery.automaticAttempts)
-        : 0;
-    const reconcileAccepted = (receipt: SubagentRestartRecoveryReceipt, now: number) =>
-      reconcileAcceptedRecovery({
-        ...params,
-        agentId,
-        attempts,
-        childSessionKey,
-        currentSessionId: sessionEntry?.sessionId,
-        currentSessionLifecycleRevision: sessionEntry?.lifecycleRevision,
-        currentSessionLifecycleRunId: sessionLifecycleRunId,
-        now,
-        receipt,
-        storePath,
-      });
-    const currentRecoveryReceipt = params.entry.execution.restartRecovery;
-    const abandonedError =
-      "subagent restart recovery was abandoned after an ambiguous Gateway restart; " +
-      "automatic replay was suppressed to avoid duplicate side effects";
-    if (currentRecoveryReceipt && !isRestartRecoveryLifecycleCurrent(currentRecoveryReceipt)) {
-      return retiredLifecycle({ endedAt: params.entry.execution.endedAt });
-    }
-    if (currentRecoveryReceipt?.phase === "accepted") {
-      return await reconcileAccepted(currentRecoveryReceipt, params.now);
-    }
-    if (currentRecoveryReceipt?.phase === "abandoned") {
-      return { status: "terminal", error: abandonedError };
-    }
-    if (
-      currentRecoveryReceipt?.phase === "attempted" ||
-      currentRecoveryReceipt?.phase === "consumed"
-    ) {
-      if (
-        !params.abandonLaunch({
-          runId: params.runId,
-          expected: params.entry,
-          sessionMarker: currentRecoveryReceipt.sessionMarker,
-          idempotencyKey: currentRecoveryReceipt.idempotencyKey,
-        })
-      ) {
-        return {
-          status: "retry",
-          error: "ambiguous subagent restart recovery could not persist its terminal fence",
-        };
-      }
-      return { status: "terminal", error: abandonedError };
-    }
-    if (!sessionEntry?.abortedLastRun) {
-      return { status: "ignored" };
-    }
-    if (sessionEntry.lifecycleRunId && !ownsSubagentSessionExecution(params.entry, sessionEntry)) {
-      return {
-        status: "terminal",
-        error: "subagent restart recovery no longer owns its visible execution",
-        suppressSessionEffects: true,
-      };
-    }
-    const marker = `${sessionEntry.sessionId ?? ""}:${sessionEntry.updatedAt ?? ""}`;
-    if (typeof params.entry.execution.endedAt === "number" && !legacyRestartTimeout) {
-      return { status: "ignored" };
-    }
-    if (legacyRestartTimeout) {
-      const interruptedAt = params.entry.execution.endedAt;
-      params.entry.execution = {
-        ...params.entry.execution,
-        status: "interrupted",
-        interruptedAt,
-        interruptionReason: "gateway-restart",
-        endedAt: undefined,
-        outcome: undefined,
-      };
-      params.entry.endedReason = undefined;
-      params.entry.terminalOwner = undefined;
-    }
-    // The abort marker records the interruption, not the age of useful work.
-    // A long-running child must survive a brief planned Gateway update.
-    const interruptedForMs =
-      params.now - (params.entry.execution.interruptedAt ?? sessionEntry.updatedAt);
-    if (interruptedForMs > MAX_INTERRUPTION_AGE_MS) {
-      return {
-        status: "terminal",
-        error: `stale aborted subagent run not resumed (${Math.round(interruptedForMs / 1_000)}s interrupted, exceeds stale-run window)`,
-      };
-    }
-
-    const alreadyWedged = isSubagentRecoveryWedgedEntry(sessionEntry);
-    const blockedReason = alreadyWedged
-      ? formatSubagentRecoveryWedgedReason(sessionEntry)
-      : attempts >= MAX_RECOVERY_ATTEMPTS
-        ? `subagent orphan recovery blocked after ${attempts} rapid accepted resume attempts; ` +
-          `run "openclaw tasks maintenance --apply" or "openclaw doctor --fix" to reconcile it`
-        : undefined;
-    if (blockedReason) {
-      if (!alreadyWedged) {
-        try {
-          await patchSessionEntryCore(
-            { storePath, sessionKey: childSessionKey },
-            (current) => {
-              current.abortedLastRun = false;
-              current.subagentRecovery = {
-                ...current.subagentRecovery,
-                automaticAttempts: Math.max(
-                  current.subagentRecovery?.automaticAttempts ?? 0,
-                  MAX_RECOVERY_ATTEMPTS,
-                ),
-                lastAttemptAt: current.subagentRecovery?.lastAttemptAt ?? params.now,
-                lastRunId: params.runId,
-                wedgedAt: params.now,
-                wedgedReason: blockedReason,
-              };
-              current.updatedAt = params.now;
-              return current;
-            },
-            {
-              assertCommitAllowed: () => {
-                if (!isRecoverySourceCurrent() || !isRecoveryAttemptLifecycleCurrent()) {
-                  throw new Error("subagent recovery lifecycle retired before wedge commit");
-                }
-              },
-              replaceEntry: true,
-              skipMaintenance: true,
-            },
-          );
-        } catch (error) {
-          if (!isRecoveryAttemptLifecycleCurrent()) {
-            return retiredLifecycle();
-          }
-          warnRecovery("failed to persist wedged subagent recovery marker", { error });
-        }
-      }
-      warnRecovery("subagent restart recovery is blocked", { reason: blockedReason });
-      return { status: "handled" };
-    }
-    if (!params.gatewayRuntime) {
-      return { status: "deferred" };
-    }
-
-    const previousTranscript = params.entry.execution.transcriptTarget;
-    const transcriptSource = {
-      agentId: previousTranscript?.agentId ?? agentId,
-      sessionId: previousTranscript?.sessionId ?? sessionEntry.sessionId,
-      sessionKey: previousTranscript?.sessionKey ?? childSessionKey,
-      storePath: previousTranscript?.storePath ?? storePath,
-    };
-    const messages = await readSessionMessagesAsync(transcriptSource, {
-      mode: "recent",
-      maxMessages: 200,
-      maxBytes: 1024 * 1024,
-    });
-    if (!isRecoverySourceCurrent()) {
-      return { status: "handled" };
-    }
-    const recoveryMessages = messages.flatMap((message) => {
-      const projected = readSubagentRecoveryTranscriptMessage(message);
-      return projected ? [projected] : [];
-    });
-    const lastHumanMessage = recoveryMessages
-      .toReversed()
-      .find((message) => message.role === "user")?.text;
-    const configChanged = recoveryMessages.some(
-      (message) =>
-        message.role === "assistant" &&
-        /openclaw\.json|openclaw gateway restart|config\.patch/i.test(message.text ?? ""),
+        return null;
+      },
     );
-    const sessionId = sessionEntry.sessionId;
-    const updatedAt = sessionEntry.updatedAt;
-    if (!sessionId || typeof updatedAt !== "number") {
-      return {
-        status: "retry",
-        error: "subagent restart recovery session snapshot is incomplete",
-      };
+    if ((!session && !replayTerminal) || !isCurrent()) {
+      return { status: "deferred" };
     }
-    const assertSnapshotCurrent = () => {
-      if (
-        !isRecoverySourceCurrent() ||
-        params.entry.execution.transcriptTarget !== previousTranscript
-      ) {
-        throw new Error("subagent restart recovery source changed before dispatch");
+    const sessionEntry = session?.sessionEntry;
+    const sessionId = sessionEntry?.sessionId;
+    const lifecycleRevision = sessionEntry?.lifecycleRevision;
+    const lifecycleRunId = sessionEntry?.lifecycleRunId;
+    const target = { sessionKey: childSessionKey, sessionId };
+    const isChildSessionEffectsCurrent = () => {
+      if (!session || !isGatewayCurrent()) {
+        return false;
       }
-      assertRestartRecoverySnapshotCurrent({
-        childSessionKey,
-        isOwnerCurrent: isRecoverySourceCurrent,
-        sessionId,
-        sessionLifecycleRevision: sessionEntry.lifecycleRevision,
-        sessionLifecycleRunId,
-        storePath,
-        updatedAt,
-      });
-    };
-    const admission = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [childSessionKey, sessionId],
-      assertAllowed: assertSnapshotCurrent,
-      revalidateAllowed: assertSnapshotCurrent,
-    });
-    const handoffId = admission.createHandoff();
-    let idempotencyKey = "";
-    const launchIdentity = (key = idempotencyKey) => ({
-      runId: params.runId,
-      expected: params.entry,
-      sessionMarker: marker,
-      idempotencyKey: key,
-    });
-    let dispatched: { runId: string; status: unknown } | undefined;
-    let dispatchFailure: { error: unknown } | undefined;
-    let earlyResult: RestartRecoveryResult | undefined;
-    let attemptedGeneration: string | undefined;
-    try {
-      idempotencyKey =
-        params.reserveLaunch({
-          ...launchIdentity(buildRestartRecoveryIdempotencyKey(params.runId, marker)),
-          sessionId,
-          sessionLifecycleRevision: sessionEntry.lifecycleRevision,
-          sessionLifecycleRunId,
-        }) ?? "";
-      if (!idempotencyKey) {
-        earlyResult = { status: "handled" };
-      } else {
-        if (previousTranscript) {
-          await admission.run(() =>
-            prepareInternalSessionEffectsSession({
-              agentId,
-              runId: idempotencyKey,
-              source: transcriptSource,
-              storePath,
-              requireSource: true,
-              commitGuard: assertSnapshotCurrent,
-            }),
-          );
-          assertSnapshotCurrent();
-        }
-        const attempted = params.markLaunchAttempted({
-          ...launchIdentity(),
-          lifecycleGeneration: recoveryLifecycleGeneration,
+      try {
+        const current = loadSessionEntry({
+          storePath: session.storePath,
+          sessionKey: childSessionKey,
+          clone: false,
         });
-        if (!attempted || attempted.phase === "accepted") {
-          earlyResult = { status: "handled" };
-        } else {
-          attemptedGeneration = attempted.lifecycleGeneration;
-          dispatched = await admission.run(() =>
-            params.gatewayRuntime!.dispatchAgent<{ runId: string; status: unknown }>({
-              message:
-                buildRestartRecoveryResumeMessage(
-                  params.entry.task,
-                  lastHumanMessage ?? undefined,
-                ) +
-                (configChanged
-                  ? "\n\n[config changes from your previous run were already applied — do not re-modify openclaw.json or restart the gateway]"
-                  : ""),
-              sessionKey: childSessionKey,
-              expectedExistingSessionId: sessionId,
-              internalRuntimeHandoffId: handoffId,
-              idempotencyKey,
-              deliver: false,
-              lane: "subagent",
-              timeout: params.entry.runTimeoutSeconds ?? 0,
-              ...(params.entry.collect
-                ? { swarmCollector: true, swarmOutputSchema: params.entry.outputSchema }
-                : {}),
-              inputProvenance: {
-                kind: "inter_session",
-                sourceSessionKey: params.entry.requesterSessionKey,
-                sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
-                sourceTool: "subagent_interrupted_resume",
-              },
-              sessionEffects: "internal",
-              suppressPromptPersistence: true,
-            }),
-          );
-        }
+        return (
+          current?.sessionId === sessionId &&
+          current?.lifecycleRevision === lifecycleRevision &&
+          current?.lifecycleRunId === lifecycleRunId &&
+          (!replayTerminal ||
+            (current !== undefined && ownsSubagentSessionExecution(entry, current))) &&
+          listAgentRunsForSession(target).length === 0 &&
+          !isSessionWorkAdmissionActive(session.storePath, [childSessionKey, sessionId])
+        );
+      } catch {
+        return false;
       }
-    } catch (error) {
-      dispatchFailure = { error };
-    }
-    const handoffCanceled = cancelSessionWorkAdmissionHandoff(handoffId);
-    const attemptedLifecycleRetired =
-      attemptedGeneration !== undefined &&
-      !agentEvents.isAgentEventLifecycleGenerationCurrent(attemptedGeneration);
-    if (attemptedGeneration) {
-      if (handoffCanceled) {
-        if (!params.resetLaunchAttempt(launchIdentity())) {
-          throw new Error("failed to reset unconsumed subagent restart recovery attempt");
-        }
-      } else {
-        try {
-          const consumed = params.markLaunchConsumed(launchIdentity());
-          if (!consumed || consumed.phase === "reserved" || consumed.phase === "attempted") {
-            throw new Error("failed to persist consumed subagent restart recovery attempt");
-          }
-        } catch (error) {
-          if (!dispatched) {
-            throw error;
-          }
-          warnRecovery(
-            "subagent restart recovery could not persist its intermediate consumed receipt",
-            { error },
-          );
-        }
-      }
-    }
-    if (attemptedLifecycleRetired) {
-      return handoffCanceled ? { status: "handled" } : retiredLifecycle();
-    }
-    if (earlyResult) {
-      return earlyResult;
-    }
-    if (dispatchFailure) {
-      throw dispatchFailure.error;
-    }
-    if (handoffCanceled) {
-      return {
-        status: "retry",
-        error: "Gateway did not consume the subagent restart recovery admission",
-      };
-    }
-    if (!dispatched) {
-      throw new Error("subagent restart recovery dispatch completed without a response");
+    };
+    if (!replayTerminal && !isChildSessionEffectsCurrent()) {
+      return { status: "handled" };
     }
     if (
-      dispatched.runId !== idempotencyKey ||
-      (dispatched.status !== "accepted" && dispatched.status !== "in_flight")
+      !replayTerminal &&
+      sessionEntry?.lifecycleRunId &&
+      ownsSubagentSessionExecution(entry, sessionEntry) &&
+      resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
+        notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
+      })
     ) {
-      if (!params.abandonLaunch(launchIdentity())) {
-        return {
-          status: "retry",
-          error: "rejected subagent restart recovery could not persist its terminal fence",
-        };
-      }
-      return {
-        status: "terminal",
-        error:
-          "Gateway did not accept the subagent restart recovery run; " +
-          "automatic replay was suppressed to avoid duplicate side effects",
-      };
+      return { status: "ignored" };
     }
-    const restartRecovery = params.markLaunchAccepted(launchIdentity());
-    if (!restartRecovery || restartRecovery.phase !== "accepted") {
-      return {
-        status: "retry",
-        error: "accepted subagent restart recovery could not persist its acceptance receipt",
-      };
+    const receipt = entry.execution.restartRecovery;
+    if (
+      !replayTerminal &&
+      !receipt &&
+      sessionEntry?.abortedLastRun !== true &&
+      entry.execution.status !== "interrupted"
+    ) {
+      return { status: "ignored" };
     }
-    return await reconcileAccepted(restartRecovery, Date.now());
+    // Old launch receipts are evidence of uncertain effects, never permission
+    // to replay a child. The requester decides whether to continue its history.
+    const suppressSessionEffects =
+      (receipt !== undefined && !isRestartRecoveryLifecycleCurrent(receipt)) ||
+      (sessionEntry?.lifecycleRunId !== undefined &&
+        !ownsSubagentSessionExecution(entry, sessionEntry));
+    const resolveGatewayContext = params.gatewayRuntime
+      ? getGatewayContextResolver(params.gatewayRuntime)
+      : undefined;
+    if (resolveGatewayContext) {
+      bindGatewayContextResolver(entry, resolveGatewayContext);
+    }
+    return {
+      status: "terminal",
+      isRecoveryCurrent: () => isCurrent() && (replayTerminal || isChildSessionEffectsCurrent()),
+      isChildSessionEffectsCurrent,
+      error:
+        terminalError ??
+        "Subagent execution was interrupted by a Gateway restart. " +
+          "Inspect retained session history and uncertain tool outcomes, then continue the child " +
+          "with a follow-up or assign replacement work.",
+      endedAt: replayTerminal ? entry.execution.endedAt : undefined,
+      suppressSessionEffects: suppressSessionEffects || undefined,
+    };
   } catch (error) {
-    return { status: "retry", error: formatErrorMessage(error) };
+    params.warn("failed to reconcile interrupted subagent execution", {
+      runId,
+      childSessionKey,
+      error,
+    });
+    return { status: "deferred" };
   }
 }

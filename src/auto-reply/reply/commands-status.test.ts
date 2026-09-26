@@ -31,6 +31,7 @@ import {
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
+import { buildKiraStatusReply, buildStatusReplyForTest } from "./commands-status.test-support.js";
 import {
   baseCommandTestConfig,
   buildCommandTestParams,
@@ -145,40 +146,6 @@ function createStatusDisplayParams(
     isGroup: false,
     defaultGroupActivation: () => "mention",
   } satisfies Partial<StatusTextParams>;
-}
-
-async function buildStatusReplyForTest(params: {
-  sessionKey?: string;
-  agentId?: string;
-  cfg?: OpenClawConfig;
-  verbose?: boolean;
-}) {
-  const cfg = params.cfg ?? baseCfg;
-  const commandParams = buildCommandTestParams("/status", cfg);
-  const sessionKey = params.sessionKey ?? commandParams.sessionKey;
-  return await buildStatusReply({
-    cfg,
-    agentId: params.agentId,
-    command: commandParams.command,
-    sessionEntry: commandParams.sessionEntry,
-    sessionKey,
-    parentSessionKey: sessionKey,
-    sessionScope: commandParams.sessionScope,
-    storePath: commandParams.storePath,
-    provider: "anthropic",
-    model: "claude-opus-4-6",
-    contextTokens: 0,
-    resolvedThinkLevel: commandParams.resolvedThinkLevel,
-    resolvedFastMode: false,
-    resolvedVerboseLevel: params.verbose ? "on" : commandParams.resolvedVerboseLevel,
-    resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
-    resolvedElevatedLevel: commandParams.resolvedElevatedLevel,
-    resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
-    isGroup: commandParams.isGroup,
-    defaultGroupActivation: commandParams.defaultGroupActivation,
-    modelAuthOverride: "api-key",
-    activeModelAuthOverride: "api-key",
-  });
 }
 
 function registerStatusCodexHarness(): void {
@@ -2238,8 +2205,8 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("think max");
-    expect(normalized).not.toContain("think ultra");
+    expect(normalized).toContain("think ultra");
+    expect(normalized).not.toContain("think max");
   });
 
   it("clamps off to the active provider's always-thinking level", async () => {
@@ -2336,38 +2303,12 @@ describe("buildStatusReply error handling", () => {
     vi.restoreAllMocks();
   });
 
-  async function runStatusReply() {
-    const commandParams = buildCommandTestParams("/status", baseCfg);
-    return await buildStatusReply({
-      cfg: baseCfg,
-      command: commandParams.command,
-      sessionEntry: commandParams.sessionEntry,
-      sessionKey: commandParams.sessionKey,
-      parentSessionKey: commandParams.sessionKey,
-      sessionScope: commandParams.sessionScope,
-      storePath: commandParams.storePath,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      contextTokens: 0,
-      resolvedThinkLevel: commandParams.resolvedThinkLevel,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: commandParams.resolvedVerboseLevel,
-      resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
-      resolvedElevatedLevel: commandParams.resolvedElevatedLevel,
-      resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
-      isGroup: commandParams.isGroup,
-      defaultGroupActivation: commandParams.defaultGroupActivation,
-      modelAuthOverride: "api-key",
-      activeModelAuthOverride: "api-key",
-    });
-  }
-
   it("delivers a fixed generic reply and logs details when status rendering throws", async () => {
     const logError = vi.spyOn(logger, "logError").mockImplementation(() => {});
     vi.spyOn(statusText, "buildStatusReplyParts").mockRejectedValue(
       new Error("Unexpected rendering error"),
     );
-    const reply = await runStatusReply();
+    const reply = await buildStatusReplyForTest({});
 
     // Exact object equality also pins that no stale presentation or internal
     // error text reaches the channel; diagnostics belong to the log sink only.
@@ -2385,7 +2326,7 @@ describe("buildStatusReply error handling", () => {
       text: "plain status",
       presentation,
     });
-    const reply = await runStatusReply();
+    const reply = await buildStatusReplyForTest({});
 
     expect(reply).toMatchObject({
       text: "plain status",
@@ -2417,25 +2358,6 @@ describe("buildStatusReply error handling", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
-async function buildKiraStatusReply(cfg: OpenClawConfig) {
-  return await buildStatusReply({
-    cfg,
-    command: {
-      isAuthorizedSender: true,
-      channel: "whatsapp",
-    } as never,
-    sessionKey: "agent:kira:main",
-    provider: "openai",
-    model: "gpt-5.4",
-    contextTokens: 0,
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    isGroup: false,
-    defaultGroupActivation: () => "mention",
-  });
-}
 
 describe("buildStatusReply", () => {
   beforeAll(async () => {

@@ -66,6 +66,7 @@ export function* sortAndLimitByWork<T extends object>(
 ): SynchronousWork<T[]> {
   if (limit !== undefined && limit <= TOP_N_LIMIT) {
     const selected: T[] = [];
+    let preferFirst = false;
     let index = 0;
     while (index < entries.length) {
       const entry = entries[index++]!;
@@ -73,13 +74,17 @@ export function* sortAndLimitByWork<T extends object>(
         yield;
       }
       const first = selected[0];
-      const beforeFirst = first && compare(entry, first) < 0;
+      const beforeFirst: boolean | undefined =
+        preferFirst && first ? compare(entry, first) < 0 : undefined;
       const worst = selected[limit - 1];
       if (!beforeFirst && worst && compare(entry, worst) >= 0) {
+        preferFirst = false;
         continue;
       }
+      // Follow ascending/descending runs without comparing both endpoints for every row.
+      preferFirst = beforeFirst ?? Boolean(first && compare(entry, first) < 0);
       let insertAt = 0;
-      if (!beforeFirst) {
+      if (!preferFirst) {
         let low = 1;
         let high = selected.length;
         // Insert after equal entries to preserve the input order for ties.

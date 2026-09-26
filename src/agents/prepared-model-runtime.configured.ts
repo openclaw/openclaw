@@ -48,22 +48,32 @@ import type {
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 import { resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
 
-/** Collects defaults, global refs, and only the selected agent's overrides. */
+/** Collects scoped config refs and optional exact selections for a read-only request. */
 export function collectPreparedModelRuntimeConfiguredRefs(
   config: OpenClawConfig,
   agentId: string | undefined,
+  runtimePluginSelections: PreparedModelRuntimeInput["runtimePluginSelections"] = [],
 ): ConfiguredModelRef[] {
-  if (!agentId) {
-    return collectConfiguredModelRefs(config);
+  const entry = agentId ? resolveAgentEntry(config, agentId) : undefined;
+  const refs = collectConfiguredModelRefs(
+    agentId
+      ? {
+          ...config,
+          agents: {
+            ...(config.agents?.defaults ? { defaults: config.agents.defaults } : {}),
+            list: entry ? [entry] : [],
+          },
+        }
+      : config,
+  );
+  for (const [index, selection] of runtimePluginSelections.entries()) {
+    refs.push({
+      path: `runtimePluginSelections.${index}`,
+      value: `${selection.provider}/${selection.modelId}`,
+      kind: "literal",
+    });
   }
-  const entry = resolveAgentEntry(config, agentId);
-  return collectConfiguredModelRefs({
-    ...config,
-    agents: {
-      ...(config.agents?.defaults ? { defaults: config.agents.defaults } : {}),
-      list: entry ? [entry] : [],
-    },
-  });
+  return refs;
 }
 
 export function collectPreparedModelRuntimeProviderIds(
@@ -302,20 +312,26 @@ export function listConfiguredOwnerInputs(
   config: OpenClawConfig,
   defaultWorkspaceDir?: string,
   allowGatewaySubagentBinding?: boolean,
+  preservedWorkspaceByAgentDir?: ReadonlyMap<string, ReadonlyMap<string, string>>,
 ): PreparedModelRuntimeInput[] {
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
   return listAgentIds(config)
     .filter((agentId) => !readAgentDatabaseAdmissionRefusal(agentId))
     .map((agentId) => {
-      const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
+      const agentDir = resolveAgentDir(config, agentId);
+      const launchWorkspaceDir =
+        preservedWorkspaceByAgentDir?.get(agentId)?.get(agentDir) ??
+        (agentId === compatibilityAgentId ? defaultWorkspaceDir : undefined);
+      const preserveWorkspaceDirOnRefresh =
+        launchWorkspaceDir && !resolveAgentEntry(config, agentId)?.workspace?.trim();
       const input: PreparedModelRuntimeInput = {
         agentId,
-        agentDir: resolveAgentDir(config, agentId),
+        agentDir,
         config,
         inheritedAuthDir,
         workspaceDir: preserveWorkspaceDirOnRefresh
-          ? defaultWorkspaceDir
+          ? launchWorkspaceDir
           : resolveAgentWorkspaceDir(config, agentId),
         runtimePluginSelections: resolveConfiguredRuntimePluginSelections(config, agentId),
       };

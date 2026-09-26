@@ -60,12 +60,14 @@ export function migrateSessionTranscriptGenerations(
   if (previousVersion >= 13) {
     return;
   }
-  db.prepare(
+  const insert = db.prepare(
     `INSERT OR IGNORE INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
      SELECT session_id, lower(hex(randomblob(16))), ?
      FROM transcript_events
      GROUP BY session_id`,
-  ).run(Date.now());
+  );
+  insert.setReadBigInts(true);
+  insert.run(Date.now());
 }
 
 export function migrateSessionTranscriptActiveProjection(
@@ -297,6 +299,15 @@ export function backfillSessionConversations(db: DatabaseSync): void {
   const updatePrimary = db.prepare(
     "UPDATE sessions SET primary_conversation_id = ? WHERE session_id = ?",
   );
+  for (const statement of [
+    upsertConversation,
+    deleteMatchingRelated,
+    demotePrimary,
+    linkConversation,
+    updatePrimary,
+  ]) {
+    statement.setReadBigInts(true);
+  }
   for (const row of rows) {
     const sessionId = normalizeOptionalString(row.session_id);
     const entry = parseConversationEntry(row.entry_json);
@@ -451,6 +462,8 @@ export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
     "SELECT current_session_id, entry_json, session_key, updated_at FROM session_nodes WHERE entry_valid = 0 ORDER BY session_key LIMIT 256",
   );
   const update = db.prepare("UPDATE session_nodes SET entry_valid = ? WHERE session_key = ?");
+  // run() also returns the connection's last insert rowid, including after rollback.
+  update.setReadBigInts(true);
   while (true) {
     // Exhaust the bounded SELECT before updating its source table; SQLite does not define
     // stepping a cursor while the same connection mutates rows visible to that cursor.
@@ -487,6 +500,7 @@ export function migrateSessionEntryStatusProjection(
     session_key?: unknown;
   }>;
   const update = db.prepare("UPDATE session_entries SET status = ? WHERE session_key = ?");
+  update.setReadBigInts(true);
   for (const row of rows) {
     if (typeof row.session_key === "string") {
       update.run(readStatus(row.entry_json), row.session_key);
@@ -501,6 +515,7 @@ export function migrateSessionCreatorNamespaces(db: DatabaseSync, previousVersio
   const update = db.prepare(
     "UPDATE session_nodes SET entry_json = ?, created_actor_type = ?, created_actor_id = ? WHERE session_key = ?",
   );
+  update.setReadBigInts(true);
   const rows = db.prepare(`SELECT session_key, entry_json FROM session_nodes
     WHERE json_valid(entry_json) AND (json_extract(entry_json, '$.createdActor.type') = 'human'
       OR (json_type(entry_json, '$.createdActor') IS NULL AND json_type(entry_json, '$.createdBy') = 'object'))`);

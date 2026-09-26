@@ -1,9 +1,7 @@
-// Discord plugin module implements message media behavior.
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import {
   formatMediaPlaceholderText,
   type ChannelInboundMediaInput,
-  type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { getFileExtension, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
 import { saveRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
@@ -55,16 +53,22 @@ type DiscordMediaResolveOptions = {
   abortSignal?: AbortSignal;
 };
 
-type DiscordMediaOperation = {
+type DiscordMediaOperation = DiscordMediaResolveOptions & {
   endpointRuntime: DiscordEndpointRuntime | null;
-  abortSignal?: AbortSignal;
+  maxBytes: number;
+  out: DiscordMediaInfo[];
 };
 
-function createDiscordMediaOperation(abortSignal?: AbortSignal): DiscordMediaOperation {
-  const endpointRuntime = getDiscordEndpointRuntime() ?? null;
+function createDiscordMediaOperation(
+  maxBytes: number,
+  options?: DiscordMediaResolveOptions,
+): DiscordMediaOperation {
   return {
-    endpointRuntime,
-    abortSignal,
+    ...options,
+    ssrfPolicy: resolveDiscordCdnPolicy(options?.ssrfPolicy),
+    endpointRuntime: getDiscordEndpointRuntime() ?? null,
+    maxBytes,
+    out: [],
   };
 }
 
@@ -78,8 +82,12 @@ function isDiscordAudioAttachmentFileName(fileName?: string | null): boolean {
   return Boolean(ext && AUDIO_ATTACHMENT_EXTENSIONS.has(ext));
 }
 
-function hasDiscordVoiceAttachmentFields(attachment: APIAttachment): boolean {
-  return typeof attachment.duration_secs === "number" || typeof attachment.waveform === "string";
+function isDiscordVoiceWaveform(attachment: APIAttachment): boolean {
+  return typeof attachment.waveform === "string";
+}
+
+function isDiscordVoiceDurationOnly(attachment: APIAttachment): boolean {
+  return typeof attachment.duration_secs === "number" && !isDiscordVoiceWaveform(attachment);
 }
 
 const NON_DEFINITIVE_MEDIA_TYPES = new Set([
@@ -116,11 +124,20 @@ function resolveDiscordMediaClassification(params: {
     fetchedContentType: params.fetchedContentType,
   });
   const mime = normalizeMimeType(contentType);
+  // Discord now sends duration_secs on ordinary video/image attachments, so a
+  // bare duration is no longer a voice-note signal. A waveform remains the
+  // definitive native voice-note marker and keeps overriding a conflicting
+  // MIME; a duration-only hint only implies audio when the type is not a
+  // definitive visual one.
+  const definitiveVisual =
+    mime?.startsWith("video/") === true || mime?.startsWith("image/") === true;
   const audioKind =
     mime?.startsWith("audio/") ||
-    hasDiscordVoiceAttachmentFields(params.attachment) ||
-    (isDiscordAudioAttachmentFileName(params.attachment.filename ?? params.attachment.url) &&
-      !isDefinitiveMediaType(contentType))
+    isDiscordVoiceWaveform(params.attachment) ||
+    (!definitiveVisual &&
+      (isDiscordVoiceDurationOnly(params.attachment) ||
+        (isDiscordAudioAttachmentFileName(params.attachment.filename ?? params.attachment.url) &&
+          !isDefinitiveMediaType(contentType))))
       ? "audio"
       : undefined;
   const kind =
@@ -142,37 +159,34 @@ function resolveDiscordMediaClassification(params: {
   };
 }
 
+async function resolveMessageMedia(
+  message: Message,
+  operation: DiscordMediaOperation,
+  errorPrefix: string,
+): Promise<DiscordMediaInfo[]> {
+  await appendResolvedMediaFromAttachments({
+    ...operation,
+    attachments: message.attachments ?? [],
+    errorPrefix: `${errorPrefix} attachment`,
+  });
+  await appendResolvedMediaFromStickers({
+    ...operation,
+    stickers: resolveDiscordMessageStickers(message),
+    errorPrefix: `${errorPrefix} sticker`,
+  });
+  return operation.out;
+}
+
 export async function resolveMediaList(
   message: Message,
   maxBytes: number,
   options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
-  const out: DiscordMediaInfo[] = [];
-  const resolvedSsrFPolicy = resolveDiscordCdnPolicy(options?.ssrfPolicy);
-  const operation = createDiscordMediaOperation(options?.abortSignal);
-  await appendResolvedMediaFromAttachments({
-    attachments: message.attachments ?? [],
-    maxBytes,
-    out,
-    errorPrefix: "discord: failed to download attachment",
-    fetchImpl: options?.fetchImpl,
-    ssrfPolicy: resolvedSsrFPolicy,
-    readIdleTimeoutMs: options?.readIdleTimeoutMs,
-    totalTimeoutMs: options?.totalTimeoutMs,
-    ...operation,
-  });
-  await appendResolvedMediaFromStickers({
-    stickers: resolveDiscordMessageStickers(message),
-    maxBytes,
-    out,
-    errorPrefix: "discord: failed to download sticker",
-    fetchImpl: options?.fetchImpl,
-    ssrfPolicy: resolvedSsrFPolicy,
-    readIdleTimeoutMs: options?.readIdleTimeoutMs,
-    totalTimeoutMs: options?.totalTimeoutMs,
-    ...operation,
-  });
-  return out;
+  return resolveMessageMedia(
+    message,
+    createDiscordMediaOperation(maxBytes, options),
+    "discord: failed to download",
+  );
 }
 
 export async function resolveForwardedMediaList(
@@ -181,63 +195,26 @@ export async function resolveForwardedMediaList(
   options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
   const snapshots = resolveDiscordMessageSnapshots(message);
-  const out: DiscordMediaInfo[] = [];
-  const resolvedSsrFPolicy = resolveDiscordCdnPolicy(options?.ssrfPolicy);
-  const operation = createDiscordMediaOperation(options?.abortSignal);
+  const operation = createDiscordMediaOperation(maxBytes, options);
   if (snapshots.length > 0) {
     for (const snapshot of snapshots) {
       await appendResolvedMediaFromAttachments({
-        attachments: snapshot.message?.attachments,
-        maxBytes,
-        out,
-        errorPrefix: "discord: failed to download forwarded attachment",
-        fetchImpl: options?.fetchImpl,
-        ssrfPolicy: resolvedSsrFPolicy,
-        readIdleTimeoutMs: options?.readIdleTimeoutMs,
-        totalTimeoutMs: options?.totalTimeoutMs,
         ...operation,
+        attachments: snapshot.message?.attachments,
+        errorPrefix: "discord: failed to download forwarded attachment",
       });
       await appendResolvedMediaFromStickers({
-        stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
-        maxBytes,
-        out,
-        errorPrefix: "discord: failed to download forwarded sticker",
-        fetchImpl: options?.fetchImpl,
-        ssrfPolicy: resolvedSsrFPolicy,
-        readIdleTimeoutMs: options?.readIdleTimeoutMs,
-        totalTimeoutMs: options?.totalTimeoutMs,
         ...operation,
+        stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
+        errorPrefix: "discord: failed to download forwarded sticker",
       });
     }
-    return out;
+    return operation.out;
   }
   const referencedForward = resolveDiscordReferencedForwardMessage(message);
-  if (!referencedForward) {
-    return out;
-  }
-  await appendResolvedMediaFromAttachments({
-    attachments: referencedForward.attachments,
-    maxBytes,
-    out,
-    errorPrefix: "discord: failed to download forwarded attachment",
-    fetchImpl: options?.fetchImpl,
-    ssrfPolicy: resolvedSsrFPolicy,
-    readIdleTimeoutMs: options?.readIdleTimeoutMs,
-    totalTimeoutMs: options?.totalTimeoutMs,
-    ...operation,
-  });
-  await appendResolvedMediaFromStickers({
-    stickers: resolveDiscordMessageStickers(referencedForward),
-    maxBytes,
-    out,
-    errorPrefix: "discord: failed to download forwarded sticker",
-    fetchImpl: options?.fetchImpl,
-    ssrfPolicy: resolvedSsrFPolicy,
-    readIdleTimeoutMs: options?.readIdleTimeoutMs,
-    totalTimeoutMs: options?.totalTimeoutMs,
-    ...operation,
-  });
-  return out;
+  return referencedForward
+    ? resolveMessageMedia(referencedForward, operation, "discord: failed to download forwarded")
+    : operation.out;
 }
 
 export async function resolveReferencedReplyMediaList(
@@ -246,35 +223,13 @@ export async function resolveReferencedReplyMediaList(
   options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
   const referencedReply = resolveDiscordReferencedReplyMessage(message);
-  const out: DiscordMediaInfo[] = [];
-  if (!referencedReply) {
-    return out;
-  }
-  const resolvedSsrFPolicy = resolveDiscordCdnPolicy(options?.ssrfPolicy);
-  const operation = createDiscordMediaOperation(options?.abortSignal);
-  await appendResolvedMediaFromAttachments({
-    attachments: referencedReply.attachments,
-    maxBytes,
-    out,
-    errorPrefix: "discord: failed to download referenced reply attachment",
-    fetchImpl: options?.fetchImpl,
-    ssrfPolicy: resolvedSsrFPolicy,
-    readIdleTimeoutMs: options?.readIdleTimeoutMs,
-    totalTimeoutMs: options?.totalTimeoutMs,
-    ...operation,
-  });
-  await appendResolvedMediaFromStickers({
-    stickers: resolveDiscordMessageStickers(referencedReply),
-    maxBytes,
-    out,
-    errorPrefix: "discord: failed to download referenced reply sticker",
-    fetchImpl: options?.fetchImpl,
-    ssrfPolicy: resolvedSsrFPolicy,
-    readIdleTimeoutMs: options?.readIdleTimeoutMs,
-    totalTimeoutMs: options?.totalTimeoutMs,
-    ...operation,
-  });
-  return out;
+  return referencedReply
+    ? resolveMessageMedia(
+        referencedReply,
+        createDiscordMediaOperation(maxBytes, options),
+        "discord: failed to download referenced reply",
+      )
+    : [];
 }
 
 async function fetchDiscordMedia(params: {
@@ -337,18 +292,12 @@ async function fetchDiscordMedia(params: {
   }
 }
 
-async function appendResolvedMediaFromAttachments(params: {
-  attachments?: APIAttachment[] | null;
-  maxBytes: number;
-  out: DiscordMediaInfo[];
-  errorPrefix: string;
-  fetchImpl?: FetchLike;
-  ssrfPolicy?: SsrFPolicy;
-  readIdleTimeoutMs?: number;
-  totalTimeoutMs?: number;
-  abortSignal?: AbortSignal;
-  endpointRuntime: DiscordEndpointRuntime | null;
-}) {
+async function appendResolvedMediaFromAttachments(
+  params: DiscordMediaOperation & {
+    attachments?: APIAttachment[] | null;
+    errorPrefix: string;
+  },
+) {
   const attachments = params.attachments;
   if (!attachments || attachments.length === 0) {
     return;
@@ -453,18 +402,12 @@ function inferStickerContentType(sticker: APIStickerItem): string | undefined {
   }
 }
 
-async function appendResolvedMediaFromStickers(params: {
-  stickers?: APIStickerItem[] | null;
-  maxBytes: number;
-  out: DiscordMediaInfo[];
-  errorPrefix: string;
-  fetchImpl?: FetchLike;
-  ssrfPolicy?: SsrFPolicy;
-  readIdleTimeoutMs?: number;
-  totalTimeoutMs?: number;
-  abortSignal?: AbortSignal;
-  endpointRuntime: DiscordEndpointRuntime | null;
-}) {
+async function appendResolvedMediaFromStickers(
+  params: DiscordMediaOperation & {
+    stickers?: APIStickerItem[] | null;
+    errorPrefix: string;
+  },
+) {
   const stickers = params.stickers;
   if (!stickers || stickers.length === 0) {
     return;
@@ -527,23 +470,15 @@ function isImageAttachment(attachment: APIAttachment): boolean {
   return /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/.test(name);
 }
 
-function resolveDiscordTextMediaFacts(params: {
-  attachments?: APIAttachment[];
-  stickers?: APIStickerItem[];
-}): MediaPlaceholderTextFact[] {
-  return [
-    ...(params.attachments ?? []).map((attachment) => {
-      const classification = resolveDiscordMediaClassification({ attachment });
-      return classification;
-    }),
-    ...(params.stickers ?? []).map(() => ({ kind: "sticker" as const })),
-  ];
-}
-
 /** Renders native Discord media only for transcript surfaces that cannot carry facts. */
 export function formatDiscordMediaText(params: {
   attachments?: APIAttachment[];
   stickers?: APIStickerItem[];
 }): string {
-  return formatMediaPlaceholderText(resolveDiscordTextMediaFacts(params));
+  return formatMediaPlaceholderText([
+    ...(params.attachments ?? []).map((attachment) =>
+      resolveDiscordMediaClassification({ attachment }),
+    ),
+    ...(params.stickers ?? []).map(() => ({ kind: "sticker" as const })),
+  ]);
 }

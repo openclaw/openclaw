@@ -1,6 +1,5 @@
-// Control UI chat domain owns pure slash command rules.
-
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+// Control UI chat domain owns pure slash command rules.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
@@ -16,6 +15,9 @@ import {
 } from "../../../../src/auto-reply/reply/directive-handling.parse.js";
 import type { IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
+
+registerCommandPaletteEnglish();
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -184,14 +186,17 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
 
 const COMMAND_DESCRIPTION_KEYS: Partial<Record<string, string>> = {
   steer: "chat.commands.steerDescription",
+  "export-session": "chat.commands.exportDescription",
 };
 
 const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
   steer: "Inject a message into the active run",
+  "export-session": "Download this conversation as Markdown",
 };
 
 const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
   steer: "<message>",
+  "export-session": undefined,
 };
 
 function normalizeUiKey(command: CommandLike): string {
@@ -203,10 +208,6 @@ function getSlashAliases(command: CommandLike): string[] {
     .map((alias) => alias.trim())
     .filter(Boolean)
     .map((alias) => (alias.startsWith("/") ? alias.slice(1) : alias));
-}
-
-function getPrimarySlashName(command: CommandLike): string | null {
-  return command.name.trim() || null;
 }
 
 function formatArgs(command: CommandLike): string | undefined {
@@ -254,10 +255,6 @@ function mapCategory(command: CommandLike): SlashCommandCategory {
   }
 }
 
-function mapIcon(command: CommandLike): IconName | undefined {
-  return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
-}
-
 function mapTier(command: CommandLike): SlashCommandTier {
   const raw = command.tier;
   if (raw === "essential" || raw === "standard" || raw === "power") {
@@ -270,7 +267,7 @@ function toSlashCommand(
   command: CommandLike,
   source: "local" | "remote" = "local",
 ): SlashCommandDef | null {
-  const name = getPrimarySlashName(command);
+  const name = command.name.trim();
   if (!name) {
     return null;
   }
@@ -283,8 +280,10 @@ function toSlashCommand(
     ...(COMMAND_DESCRIPTION_KEYS[command.key]
       ? { descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key] }
       : {}),
-    args: COMMAND_ARGS_OVERRIDES[command.key] ?? formatArgs(command),
-    icon: mapIcon(command),
+    args: Object.hasOwn(COMMAND_ARGS_OVERRIDES, command.key)
+      ? COMMAND_ARGS_OVERRIDES[command.key]
+      : formatArgs(command),
+    icon: COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal",
     category: mapCategory(command),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
     modelIndependent: command.modelIndependent,
@@ -312,18 +311,6 @@ function normalizeSlashIdentifier(raw: string): string | null {
 function clampText(value: unknown, maxLength: number): string {
   const text = typeof value === "string" ? value : "";
   return text.length > maxLength ? truncateUtf16Safe(text, maxLength) : text;
-}
-
-function getEntryArgs(
-  entry: CommandEntry | Record<string, unknown>,
-): Array<Record<string, unknown>> {
-  const rawArgs = "args" in entry ? entry.args : undefined;
-  if (!Array.isArray(rawArgs)) {
-    return [];
-  }
-  return rawArgs
-    .map((arg) => asRecord(arg))
-    .filter((arg): arg is Record<string, unknown> => arg !== null);
 }
 
 function getArgChoices(arg: Record<string, unknown>): LocalArgChoice[] {
@@ -381,7 +368,7 @@ function normalizeClientPresentation(
   return { when: "no-arguments", action: { kind: "device-pairing" } };
 }
 
-function buildLocalSlashCommands(): SlashCommandDef[] {
+export function buildFallbackSlashCommands(): SlashCommandDef[] {
   const builtins = buildBuiltinChatCommands()
     .map((command) => ({
       key: command.key,
@@ -403,7 +390,7 @@ function buildLocalSlashCommands(): SlashCommandDef[] {
   return [...builtins, ...UI_ONLY_COMMANDS];
 }
 
-function buildReservedLocalSlashNames(localCommands = buildLocalSlashCommands()): Set<string> {
+function buildReservedLocalSlashNames(localCommands = buildFallbackSlashCommands()): Set<string> {
   const reserved = new Set<string>();
   for (const command of localCommands) {
     reserved.add(normalizeLowercaseStringOrEmpty(command.name));
@@ -432,7 +419,9 @@ function normalizeCommandEntry(
   if (!primaryName || reservedLocalNames.has(primaryName)) {
     return null;
   }
-  const args = getEntryArgs(entry)
+  const args = (Array.isArray(entry.args) ? entry.args : [])
+    .map((arg) => asRecord(arg))
+    .filter((arg) => arg !== null)
     .slice(0, MAX_REMOTE_ARGS)
     .map((arg) => ({
       name: clampText(arg.name, MAX_REMOTE_ARG_NAME_LENGTH),
@@ -474,7 +463,7 @@ export function replaceSlashCommands(next: SlashCommandDef[]) {
 }
 
 export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {
-  const local = buildLocalSlashCommands();
+  const local = buildFallbackSlashCommands();
   const reservedLocalNames = buildReservedLocalSlashNames(local);
   const mapped = entries
     .slice(0, MAX_REMOTE_COMMANDS)
@@ -503,10 +492,6 @@ export function getRemoteCommandEntries(
   return commands
     .map((entry) => asRecord(entry))
     .filter((entry): entry is CommandEntry => entry !== null);
-}
-
-export function buildFallbackSlashCommands(): SlashCommandDef[] {
-  return buildLocalSlashCommands();
 }
 
 export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();
@@ -573,25 +558,13 @@ export function getSlashCommandCompletions(
     commands = commands.filter((cmd) => (cmd.tier ?? "standard") !== "power");
   }
 
-  return commands.toSorted((a, b) => {
-    if (lower) {
-      const relevance = getSlashCommandRelevance(a, lower) - getSlashCommandRelevance(b, lower);
-      if (relevance !== 0) {
-        return relevance;
-      }
-    }
-    const aTier = TIER_ORDER[a.tier ?? "standard"] ?? 1;
-    const bTier = TIER_ORDER[b.tier ?? "standard"] ?? 1;
-    if (aTier !== bTier) {
-      return aTier - bTier;
-    }
-    const ai = CATEGORY_ORDER.indexOf(a.category ?? "session");
-    const bi = CATEGORY_ORDER.indexOf(b.category ?? "session");
-    if (ai !== bi) {
-      return ai - bi;
-    }
-    return 0;
-  });
+  return commands.toSorted(
+    (a, b) =>
+      (lower ? getSlashCommandRelevance(a, lower) - getSlashCommandRelevance(b, lower) : 0) ||
+      (TIER_ORDER[a.tier ?? "standard"] ?? 1) - (TIER_ORDER[b.tier ?? "standard"] ?? 1) ||
+      CATEGORY_ORDER.indexOf(a.category ?? "session") -
+        CATEGORY_ORDER.indexOf(b.category ?? "session"),
+  );
 }
 
 export type InlineSlashCompletion = {
@@ -624,9 +597,6 @@ export function findInlineSlashCompletion(
     end += 1;
   }
   const query = match[1] ?? "";
-  if (!/^[^\s/:]*$/u.test(query)) {
-    return null;
-  }
   return {
     query,
     start,

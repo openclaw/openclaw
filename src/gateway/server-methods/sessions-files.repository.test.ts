@@ -12,6 +12,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
   parseNodeWorkerWorkspaceExecInput,
@@ -731,10 +732,17 @@ it("keeps a timed-out remote save owned until its physical write drains before S
   const writing = createDeferredCore();
   const releaseWrite = createDeferredCore();
   const draining = createDeferredCore();
-  mocks.beforeWrite.mockImplementationOnce(async () => {
-    writing.resolve();
-    await releaseWrite.promise;
+  const target = fs.realpathSync(path.join(workspace, "changed.txt"));
+  const realRename = fs.promises.rename.bind(fs.promises);
+  const renameSpy = vi.spyOn(fs.promises, "rename").mockImplementation(async (...args) => {
+    if (args[1] === target) {
+      // Hold publication after its final authorization check has dispatched it.
+      writing.resolve();
+      await releaseWrite.promise;
+    }
+    return await realRename(...args);
   });
+  onTestFinished(() => renameSpy.mockRestore());
   const record = {
     ...environment(),
     environmentId: identity.environmentId,
@@ -749,7 +757,9 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     const input = parseNodeWorkerWorkspaceExecInput(JSON.stringify(request.params));
     if (input.argv[0] === WORKSPACE_INSPECTION_COMMAND) {
       const cancelled = new AbortController();
-      physicalWrite = runtime.exec(input, cancelled.signal);
+      physicalWrite = withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
+        runtime.exec(input, cancelled.signal),
+      );
       void physicalWrite.catch(() => undefined);
       await writing.promise;
       // The real transport sends cancellation and returns before the node write joins.

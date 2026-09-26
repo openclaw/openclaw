@@ -6,6 +6,7 @@ import {
   type GatewayActiveWorkInspectors,
 } from "./gateway-active-work.js";
 import type { TrackedDevUpdateTarget } from "./update-dev-target.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 
 const CAMPAIGN_FORCE_DELAY_MS = 15 * 60_000;
 const CAMPAIGN_COUNTDOWN_MS = 60_000;
@@ -51,6 +52,7 @@ export class UpdateCampaignController {
   private target: UpdateCampaignTarget | undefined;
   private announcement: UpdateCampaignAnnouncement | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private runId: string | undefined;
   private held = false;
 
   getState(): UpdateCampaignState | undefined {
@@ -98,11 +100,35 @@ export class UpdateCampaignController {
     const hadCampaign = this.campaign !== undefined;
     this.cancelTimer();
     this.campaign = undefined;
+    this.runId = undefined;
     this.target = undefined;
     this.announcement = undefined;
     this.held = false;
     if (hadCampaign) {
       onChange?.(undefined);
+    }
+  }
+
+  getRunId(): string | undefined {
+    return this.runId;
+  }
+
+  bindRun(campaignId: string, runId: string): void {
+    if (this.campaign?.state === "applying" && this.campaign.id === campaignId) {
+      this.runId = runId;
+    }
+  }
+
+  reconcileRun(run: UpdateRunRecord | undefined): void {
+    // A managed handoff may finish without restarting this process. Only its
+    // durable terminal result can release the originating applying campaign.
+    if (
+      this.campaign?.state === "applying" &&
+      run?.origin?.campaignId === this.campaign.id &&
+      run.status !== "running" &&
+      run.phase === "finished"
+    ) {
+      this.clear();
     }
   }
 

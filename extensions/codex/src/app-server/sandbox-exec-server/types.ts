@@ -4,8 +4,9 @@
  */
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import type { CodexNativeProcessClient } from "../native-process-authority.js";
 import type { JsonObject, JsonValue } from "../protocol.js";
-import type { SandboxChildOwner } from "./sandbox-child.js";
+import type { SandboxChild, SandboxChildOwner } from "./sandbox-child.js";
 
 /** Minimal JSON-RPC request shape accepted by the sandbox exec-server. */
 export type JsonRpcRequest = {
@@ -84,7 +85,7 @@ export type ManagedProcess = {
   tty: boolean;
   pipeStdin: boolean;
   terminationRequested: boolean;
-  child: SandboxChildOwner | null;
+  child: SandboxChild | null;
   startPromise?: Promise<void>;
   evictionTimer?: ReturnType<typeof setTimeout>;
   waiters: Array<() => void>;
@@ -110,6 +111,7 @@ type OpenClawExecServerLease = {
 
 /** Locally interpreted exec-server protocol backed by an OpenClaw sandbox. */
 export type OpenClawExecServer = OpenClawExecServerLease & {
+  processAuthorities?: Map<string, CodexNativeProcessClient>;
   backend: NonNullable<SandboxContext["backend"]>;
   fsBridge: NonNullable<SandboxContext["fsBridge"]>;
   readonly networkIsolated: boolean;

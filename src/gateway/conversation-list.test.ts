@@ -10,7 +10,10 @@ describe("runGatewayConversationList", () => {
         id: "reef",
         config: {
           listAccountIds: () => ["personal", "finance"],
-          resolveAccount: () => ({ enabled: true, configured: true }),
+          resolveAccount: () => {
+            throw new Error("operational directory discovery must prepare its account");
+          },
+          resolveAccountAsync: async () => ({ enabled: true, configured: true }),
           isEnabled: () => true,
           isConfigured: () => true,
         },

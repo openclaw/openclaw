@@ -4,7 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
@@ -55,7 +55,7 @@ function installStateRuntime({
   setVoiceCallStateRuntime({
     state: {
       ...state,
-      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+      openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
         const backingStore = state.openKeyedStore<T>(options);
         const store = beforeOperation
           ? {
@@ -212,7 +212,7 @@ describe("voice-call call record store", () => {
       setVoiceCallStateRuntime({
         state: {
           ...state,
-          openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
             const store = state.openKeyedStore<T>(options);
             if (options.namespace !== CALL_RECORD_EVENT_CHUNKS_NAMESPACE) {
               return store;

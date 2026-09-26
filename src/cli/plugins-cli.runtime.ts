@@ -18,6 +18,7 @@ import { resolvePluginInstallSources } from "../plugins/install-channel-specs.js
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
@@ -29,22 +30,11 @@ import type {
   PluginMarketplaceRefreshOptions,
   PluginRegistryOptions,
 } from "./plugins-cli.js";
+import type { RunPluginInstallCommandParams } from "./plugins-install-preflight.js";
 
-type PluginInstallActionOptions = {
-  acceptCapabilities?: boolean;
-  dangerouslyForceUnsafeInstall?: boolean;
-  force?: boolean;
-  link?: boolean;
-  pin?: boolean;
-  marketplace?: string;
-};
+type PluginInstallActionOptions = RunPluginInstallCommandParams["opts"];
 
-function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
-  let promise: Promise<T> | undefined;
-  return () => (promise ??= load());
-}
-
-const loadPluginsStatus = createModuleLoader(() => import("../plugins/status.js"));
+const loadPluginsStatus = createLazyRuntimeModule(() => import("../plugins/status.js"));
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
@@ -61,7 +51,7 @@ function reportMissingPlugin(id: string) {
 
 function isConfigSelectedShadowDiagnostic(entry: { level?: string; message?: string }): boolean {
   return (
-    entry.level === "warn" &&
+    (entry.level === "info" || entry.level === "warn") &&
     typeof entry.message === "string" &&
     entry.message.includes("duplicate plugin id resolved by explicit config-selected plugin")
   );
@@ -251,37 +241,6 @@ async function runPluginPolicyCommand(
       return defaultRuntime.exit(1);
     }
   });
-}
-
-export async function runPluginsReloadCommand(
-  ids: string[],
-  opts: { json?: boolean; acceptCapabilities?: boolean } = {},
-): Promise<void> {
-  const pluginIds = [...new Set(ids)];
-  const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
-  const gateway = await resolvePluginLifecycleGateway();
-  if (!gateway) {
-    throw new Error("The Gateway is not running. Start it before reloading a plugin.");
-  }
-  const consent = resolvePluginCapabilityConsentCliOptions({
-    ...opts,
-    action: "reload",
-    allowPrompt: !opts.json,
-  });
-  const result = await gateway<{ runtime: { generation: number }; warnings?: string[] }>(
-    "plugins.reload",
-    { plugins: pluginIds.map((pluginId) => ({ pluginId })) },
-    consent.onCapabilityConsent,
-  );
-  if (opts.json) {
-    return defaultRuntime.writeJson(result);
-  }
-  for (const warning of result.warnings ?? []) {
-    defaultRuntime.log(theme.warn(warning));
-  }
-  defaultRuntime.log(
-    `Reloaded ${pluginIds.length === 1 ? "plugin" : "plugins"} ${pluginIds.map((id) => `"${id}"`).join(", ")} (generation ${result.runtime.generation}).`,
-  );
 }
 
 export async function runPluginsInstallAction(
@@ -714,6 +673,7 @@ function buildMarketplaceRefreshPayload(
       typeof import("../plugins/official-external-plugin-catalog.js").loadConfiguredHostedOfficialExternalPluginCatalogEntries
     >
   >,
+  feedUrl?: string,
 ): MarketplaceRefreshPayload {
   const payload: MarketplaceRefreshPayload = {
     source: result.source,
@@ -743,6 +703,13 @@ function buildMarketplaceRefreshPayload(
   if (result.source === "bundled-fallback") {
     payload.error = result.error;
   }
+  const rawMetadataUrl = payload.metadata?.url;
+  if (payload.metadata) {
+    payload.metadata = { ...payload.metadata, url: redactMarketplaceFeedUrl(payload.metadata.url) };
+  }
+  if (payload.error) {
+    payload.error = redactMarketplaceOutputText(payload.error, [feedUrl, rawMetadataUrl]);
+  }
   return payload;
 }
 
@@ -771,23 +738,6 @@ function redactMarketplaceOutputText(
     redacted = redacted.replaceAll(rawUrl, () => redactMarketplaceFeedUrl(rawUrl));
   }
   return redacted;
-}
-
-function sanitizeMarketplaceRefreshPayload(
-  payload: MarketplaceRefreshPayload,
-  params?: { feedUrl?: string },
-): MarketplaceRefreshPayload {
-  const rawMetadataUrl = payload.metadata?.url;
-  const sanitized: MarketplaceRefreshPayload = {
-    ...payload,
-    ...(payload.metadata
-      ? { metadata: { ...payload.metadata, url: redactMarketplaceFeedUrl(payload.metadata.url) } }
-      : {}),
-  };
-  if (payload.error) {
-    sanitized.error = redactMarketplaceOutputText(payload.error, [params?.feedUrl, rawMetadataUrl]);
-  }
-  return sanitized;
 }
 
 function formatMarketplaceEntryInstall(entry: MarketplaceEntryPayload): string | undefined {
@@ -889,9 +839,7 @@ export async function runPluginMarketplaceEntriesCommand(
     ...(opts.feedUrl ? { feedUrl: opts.feedUrl } : {}),
     ...(opts.offline ? { offline: true } : {}),
   });
-  const summary = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
-    feedUrl: opts.feedUrl,
-  });
+  const summary = buildMarketplaceRefreshPayload(result, opts.feedUrl);
   const entries: MarketplaceEntryPayload[] = result.entries.map((entry) => {
     const id = catalog.resolveOfficialExternalPluginId(entry);
     const install = catalog.resolveOfficialExternalPluginInstall(entry) ?? undefined;
@@ -978,9 +926,7 @@ export async function runPluginMarketplaceRefreshCommand(
       runtimeNotice = "Marketplace catalog saved for the next Gateway start.";
     }
   }
-  const payload = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
-    feedUrl: opts.feedUrl,
-  });
+  const payload = buildMarketplaceRefreshPayload(result, opts.feedUrl);
 
   const failedPinnedRefresh = shouldFailPinnedMarketplaceRefresh({
     expectedSha256,

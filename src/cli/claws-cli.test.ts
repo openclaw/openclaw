@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { persistClawInstallRecord } from "../claws/provenance.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import * as cliTestHelpers from "./claws-cli.test-helpers.js";
 
@@ -174,7 +175,11 @@ describe("claws cli", () => {
         }),
       },
       path: "state.sqlite",
-      walMaintenance: { checkpoint: () => false, close: mocks.closeReadOnlyDatabase },
+      walMaintenance: {
+        checkpoint: () => false,
+        close: mocks.closeReadOnlyDatabase,
+        reclaimFreePages: createSqliteWalReclamationResult,
+      },
     });
     mocks.applyClawAddPlan.mockReset();
     mocks.applyClawAddPlan.mockImplementation(async (plan) => ({

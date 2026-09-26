@@ -11,6 +11,119 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus runtime metrics", () => {
+  it("exports isolate and native memory plus bounded successful spawn counts", () => {
+    const metrics = createMetricsHarness();
+    try {
+      metrics.record(
+        {
+          ...baseEvent(),
+          type: "diagnostic.memory.sample",
+          memory: {
+            rssBytes: 1000,
+            heapTotalBytes: 500,
+            heapUsedBytes: 300,
+            externalBytes: 200,
+            arrayBuffersBytes: 100,
+            workerHeapTotalBytes: 400,
+            workerHeapUsedBytes: 250,
+            workerCount: 3,
+            workerHeapSampledCount: 2,
+            workerLifecycle: [
+              {
+                script: "sqlite-store.worker.js",
+                started: 5,
+                retired: [{ reason: "idle_timeout", count: 2 }],
+              },
+            ],
+            workerHeaps: [
+              { script: "sqlite-store.worker.js", heapUsed: 100, heapTotal: 200 },
+              { script: "sqlite-store.worker.js", heapUsed: 150, heapTotal: 200 },
+            ],
+          },
+        },
+        trusted,
+      );
+      for (const count of [2, 3]) {
+        metrics.record(
+          {
+            ...baseEvent(),
+            type: "diagnostic.child_process.spawn",
+            family: "node",
+            count,
+            intervalMs: 60_000,
+          },
+          trusted,
+        );
+      }
+      const rendered = metrics.render();
+      for (const [kind, value] of Object.entries({
+        rss: 1000,
+        heap_total: 500,
+        heap_used: 300,
+        external: 200,
+        array_buffers: 100,
+        worker_heap_total: 400,
+        worker_heap_used: 250,
+      })) {
+        expect(rendered).toContain(`openclaw_memory_bytes{kind="${kind}"} ${value}\n`);
+      }
+      expect(rendered).toContain("openclaw_worker_count 3\n");
+      expect(rendered).toContain("openclaw_worker_heap_sampled_count 2\n");
+      expect(rendered).toContain(
+        'openclaw_worker_heap_used_bytes{script="sqlite-store.worker.js"} 250\n',
+      );
+      expect(rendered).toContain('openclaw_child_process_spawn_total{family="node"} 5\n');
+      expect(rendered).toContain(
+        'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_worker_retired_total{reason="idle_timeout",script="sqlite-store.worker.js"} 2\n',
+      );
+      const retiredSample = {
+        ...baseEvent(),
+        type: "diagnostic.memory.sample" as const,
+        memory: {
+          rssBytes: 1000,
+          heapTotalBytes: 500,
+          heapUsedBytes: 300,
+          externalBytes: 200,
+          arrayBuffersBytes: 100,
+          workerHeaps: [{ script: "other", heapUsed: 50, heapTotal: 100 }],
+          workerLifecycle: [
+            {
+              script: "sqlite-store.worker.js",
+              started: 5,
+              retired: [{ reason: "idle_timeout", count: 2 }],
+            },
+          ],
+        },
+      };
+      metrics.record(retiredSample, untrusted);
+      expect(metrics.render()).toBe(rendered);
+      metrics.record(retiredSample, trusted);
+      expect(metrics.render()).not.toContain(
+        'openclaw_worker_heap_used_bytes{script="sqlite-store',
+      );
+      expect(metrics.render()).toContain('openclaw_worker_heap_used_bytes{script="other"} 50\n');
+      expect(metrics.render()).toContain(
+        'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
+      );
+      expect(metrics.render()).toContain(
+        'openclaw_worker_retired_total{reason="idle_timeout",script="sqlite-store.worker.js"} 2\n',
+      );
+      metrics.record(
+        { ...retiredSample, memory: { ...retiredSample.memory, workerHeaps: [] } },
+        trusted,
+      );
+      expect(metrics.render()).not.toContain("openclaw_worker_heap_used_bytes");
+      expect(metrics.render()).toContain(
+        'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
+      );
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it.each([false, true])(
     "caps series growth while retaining admitted event-loop windows (preseed=%s)",
     (preseed) => {

@@ -4,12 +4,13 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import type { SnapshotResult } from "../browser/client.js";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
-import * as cliCoreApiModule from "./core-api.js";
 
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -66,11 +67,13 @@ function installInspectSpies() {
     vi
       .spyOn(browserCliSharedModule, "callBrowserRequest")
       .mockImplementation(sharedMocks.callBrowserRequest),
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockImplementation(configMocks.getRuntimeConfig),
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log),
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(runtime.writeJson),
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(runtime.error),
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit),
+    vi
+      .spyOn(runtimeConfigSnapshot, "getRuntimeConfig")
+      .mockImplementation(configMocks.getRuntimeConfig),
+    vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log),
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson),
+    vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error),
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit),
   ];
 }
 

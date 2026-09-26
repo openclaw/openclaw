@@ -10,6 +10,31 @@ import { installTitleTooltips } from "./tooltip-title.ts";
 afterEach(() => document.body.replaceChildren());
 
 describe("renderModelPicker", () => {
+  it("shows a late selected model first without dropping the rest of a large catalog", async () => {
+    const container = document.createElement("div");
+    render(
+      renderModelPicker({
+        label: "Model",
+        value: "fixture/model-299",
+        options: Array.from({ length: 300 }, (_, index) => ({
+          value: `fixture/model-${String(index).padStart(3, "0")}`,
+          label: `Model ${index}`,
+          provider: "fixture",
+        })),
+        onChange: vi.fn(),
+      }),
+      container,
+    );
+    await updatePickers(container);
+    const rows = Array.from(container.querySelectorAll('[role="option"][data-value]'));
+    expect(rows).toHaveLength(300);
+    expect(rows.slice(0, 3).map((row) => row.getAttribute("data-value"))).toEqual([
+      "fixture/model-299",
+      "fixture/model-000",
+      "fixture/model-001",
+    ]);
+  });
+
   it("renders provider details and caller sentinels while preserving an unknown current model", async () => {
     const container = document.createElement("div");
     render(

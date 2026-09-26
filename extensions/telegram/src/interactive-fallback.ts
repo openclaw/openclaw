@@ -1,4 +1,3 @@
-// Telegram plugin module implements interactive fallback behavior.
 import {
   adaptMessagePresentationForChannel,
   legacyInteractiveReplyToPresentation,
@@ -12,13 +11,16 @@ import {
   type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
+  copyReplyPayloadMetadata,
   resolveAskUserQuestionOptionIndices,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import {
+  appendTelegramDroppedControlFallback,
   buildTelegramPresentationButtons,
   resolveTelegramInlineButtons,
   type TelegramButtonBuildOptions,
+  type TelegramDroppedControl,
 } from "./button-types.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 
@@ -124,6 +126,27 @@ function renderTelegramRichFallbackText(presentation: MessagePresentation): stri
   return parts.join("\n\n");
 }
 
+const telegramDroppedControlFallbacks = new WeakMap<object, string>();
+export function markTelegramDroppedControlFallback(
+  payload: ReplyPayload,
+  textBefore: string,
+  textAfter: string,
+): ReplyPayload {
+  if (textBefore !== textAfter) {
+    telegramDroppedControlFallbacks.set(payload, textAfter.slice(textBefore.length));
+  }
+  return payload;
+}
+export function copyTelegramDroppedControlFallback<T extends ReplyPayload | undefined>(
+  source: ReplyPayload,
+  payload: T,
+): T {
+  const fallback = telegramDroppedControlFallbacks.get(source);
+  if (payload && fallback) {
+    telegramDroppedControlFallbacks.set(payload, fallback);
+  }
+  return payload;
+}
 function canEncodeTelegramPresentationControl(
   block: MessagePresentationInteractiveBlock,
   options?: TelegramButtonBuildOptions,
@@ -142,11 +165,7 @@ function partitionTelegramPresentationBlocks(params: {
   const fallbackBlocks: MessagePresentation["blocks"] = [];
   const nativeControlBlocks: MessagePresentationInteractiveBlock[] = [];
   for (const block of params.presentation.blocks) {
-    if (!isMessagePresentationInteractiveBlock(block)) {
-      fallbackBlocks.push(block);
-      continue;
-    }
-    if (!params.presentationControlsSelected) {
+    if (!params.presentationControlsSelected || !isMessagePresentationInteractiveBlock(block)) {
       fallbackBlocks.push(block);
       continue;
     }
@@ -212,7 +231,7 @@ export function canonicalizeTelegramPresentationPayload(
       return payload;
     }
     // Native-only controls need the same visible message anchor as portable controls.
-    return { ...payload, text: TELEGRAM_CONTROL_ONLY_FALLBACK };
+    return copyReplyPayloadMetadata(payload, { ...payload, text: TELEGRAM_CONTROL_ONLY_FALLBACK });
   }
   const richTables = options?.richTables === true;
   const presentation = adaptMessagePresentationForChannel({
@@ -293,7 +312,7 @@ export function canonicalizeTelegramPresentationPayload(
       },
     };
   }
-  return canonical;
+  return copyReplyPayloadMetadata(payload, canonical);
 }
 
 export function resolveTelegramInteractiveTextFallback(params: {
@@ -328,4 +347,55 @@ export function resolveTelegramInteractiveTextFallback(params: {
   }
   const fallback = renderMessagePresentationFallbackText({ presentation: interactivePresentation });
   return fallback.trim() ? fallback : text;
+}
+export function resolveFinalTelegramPresentationText(params: {
+  payload: ReplyPayload;
+  text: string;
+  richMessages: boolean;
+  allowWebAppButtons?: boolean;
+}): string | undefined {
+  // Rich rendering is opt-in. Preserve the authored plain fallback when the
+  // account cannot encode native presentation blocks.
+  if (!params.richMessages) {
+    return undefined;
+  }
+  const presentation = normalizeMessagePresentation(params.payload.presentation);
+  if (!presentation) {
+    return undefined;
+  }
+  const droppedControls: TelegramDroppedControl[] = [];
+  const buttonOptions: TelegramButtonBuildOptions = {
+    allowWebAppButtons: params.allowWebAppButtons === true,
+    questionOptionIndices: resolveAskUserQuestionOptionIndices(params.payload),
+  };
+  // SAFETY: untyped channelData buttons are only forwarded for resolver precedence; this path never reads their entries.
+  const telegramData = params.payload.channelData?.telegram as
+    | { buttons?: Parameters<typeof resolveTelegramInlineButtons>[0]["buttons"] }
+    | undefined;
+  resolveTelegramInlineButtons(
+    {
+      buttons: telegramData?.buttons,
+      interactive: normalizeLegacyInteractiveReply(params.payload.interactive),
+    },
+    { ...buttonOptions, onDroppedControl: (control) => droppedControls.push(control) },
+  );
+  const suffix = telegramDroppedControlFallbacks.get(params.payload);
+  const canonicalText =
+    suffix && params.text.endsWith(suffix) ? params.text.slice(0, -suffix.length) : params.text;
+  const canonicalInputText =
+    suffix && params.payload.presentationTextMode !== "fallback"
+      ? appendTelegramDroppedControlFallback(canonicalText, droppedControls)
+      : canonicalText;
+  const rendered = canonicalizeTelegramPresentationPayload(
+    { ...params.payload, text: canonicalInputText },
+    { richTables: true, allowWebAppButtons: params.allowWebAppButtons },
+  ).text?.trimEnd();
+  if (!rendered) {
+    return undefined;
+  }
+  const finalText =
+    params.payload.presentationTextMode === "fallback"
+      ? appendTelegramDroppedControlFallback(rendered, droppedControls)
+      : rendered;
+  return finalText !== params.text.trimEnd() ? finalText : undefined;
 }

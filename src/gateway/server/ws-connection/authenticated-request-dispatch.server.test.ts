@@ -18,10 +18,10 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
+import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
 import type { AgentRuntimeIdentity } from "../../agent-runtime-identity-token.js";
 import {
   connectOk,
-  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   startTestGatewayServer,
@@ -539,8 +539,8 @@ describe("authenticated WebSocket request trace dispatch", () => {
     setTestPluginRegistry(registry);
 
     const token = "gateway-request-trace-test-token";
-    const port = await getGatewayTestPort();
-    const server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const server = await startTestGatewayServer(portClaim, {
       auth: { mode: "token", token },
       bind: "loopback",
       controlUiEnabled: false,
@@ -548,7 +548,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
     let ws: WebSocket | undefined;
     try {
       ws = await openAuthenticatedTraceSocket({
-        port,
+        port: portClaim.port,
         token,
         connectTraceparent: TRACEPARENTS.first,
       });
@@ -626,8 +626,8 @@ describe("authenticated WebSocket request trace dispatch", () => {
     setTestPluginRegistry(registry);
 
     const token = "gateway-response-serialization-test-token";
-    const port = await getGatewayTestPort();
-    const server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const server = await startTestGatewayServer(portClaim, {
       auth: { mode: "token", token },
       bind: "loopback",
       controlUiEnabled: false,
@@ -635,7 +635,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
     let ws: WebSocket | undefined;
     try {
       ws = await openAuthenticatedTraceSocket({
-        port,
+        port: portClaim.port,
         token,
         connectTraceparent: TRACEPARENTS.first,
       });
@@ -678,7 +678,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
 
       ws.terminate();
       ws = await openAuthenticatedTraceSocket({
-        port,
+        port: portClaim.port,
         token,
         connectTraceparent: TRACEPARENTS.second,
       });

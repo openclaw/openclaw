@@ -371,6 +371,7 @@ describe("CronService declarative jobs", () => {
       store: {},
       skillLibrarySelections: job.skillLibrarySelections,
       forceNew: true,
+      lifecycleTimestamps: {},
     });
     expect(first.sessionEntry.skillLibrarySelections).toEqual(selections);
     const restarted = resolveCronSession({
@@ -381,6 +382,7 @@ describe("CronService declarative jobs", () => {
       store: { "agent:ops:cron:test": first.sessionEntry },
       skillLibrarySelections: [],
       forceNew: true,
+      lifecycleTimestamps: {},
     });
     expect(restarted.sessionEntry.skillLibrarySelections).toEqual(selections);
   });

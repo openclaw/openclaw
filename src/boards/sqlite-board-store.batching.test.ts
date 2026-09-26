@@ -2,15 +2,21 @@ import { afterEach, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createTestBoardStore, readBoardHtml } from "./board-store.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -75,7 +81,7 @@ it("rolls back late board writes and preserves surviving widget documents", asyn
       changes.push({ change, inTransaction: database.db.isTransaction });
     }),
   );
-  database.db.exec(`CREATE TEMP TRIGGER reject_late_tab_write BEFORE UPDATE ON board_tabs
+  database.db.exec(`CREATE TRIGGER reject_late_tab_write BEFORE UPDATE ON board_tabs
       WHEN NEW.tab_id = 'tab-129' BEGIN SELECT RAISE(ABORT, 'late tab write'); END;`);
   await expect(
     store.applyOps({ sessionKey }, [
@@ -93,7 +99,7 @@ it("rolls back late board writes and preserves surviving widget documents", asyn
 
   const removedNames = widgetNames.slice(0, -1);
   const removeOps = removedNames.map((name) => ({ kind: "widget_remove" as const, name }));
-  database.db.exec(`CREATE TEMP TRIGGER reject_late_widget_delete BEFORE DELETE ON board_widgets
+  database.db.exec(`CREATE TRIGGER reject_late_widget_delete BEFORE DELETE ON board_widgets
       WHEN OLD.name = 'tab-46' BEGIN SELECT RAISE(ABORT, 'late widget delete'); END;`);
   await expect(store.applyOps({ sessionKey }, removeOps)).rejects.toThrow("late widget delete");
   expect(changes).toEqual([]);

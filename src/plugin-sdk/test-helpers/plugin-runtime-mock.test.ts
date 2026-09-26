@@ -58,6 +58,7 @@ describe("createPluginRuntimeMock", () => {
       }),
     });
 
+    expect(debouncer.shouldBuffer("message")).toBe(false);
     expect(debouncer.cancelKey("key")).toBe(false);
     expect(vi.isMockFunction(debouncer.cancelKey)).toBe(true);
   });

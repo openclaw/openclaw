@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { routeIdFromPath } from "../../app-routes.ts";
-import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
@@ -10,7 +9,7 @@ import { isDefaultChatLanding, startModelSetupFirstRunRedirectAfterLocation } fr
 const defaultLanding = { pathname: "/chat/main", search: "", hash: "" };
 
 async function startRedirect(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   currentLocation = defaultLanding,
   onInitialDecision?: () => void,
 ): Promise<() => void> {
@@ -68,7 +67,7 @@ function createConnectedContext(
       state: { selectedId: options.selectedId === undefined ? "main" : options.selectedId },
     },
     replace,
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
   return { context, replace, request };
 }
 
@@ -169,7 +168,7 @@ describe("model setup first-run redirect", () => {
     const context = {
       gateway: { snapshot: {}, subscribe },
       replace: replaceRoute,
-    } as unknown as ApplicationContext<RouteId>;
+    } as unknown as ApplicationContext;
 
     await startModelSetupFirstRunRedirectAfterLocation({
       context,
@@ -308,7 +307,7 @@ describe("model setup first-run redirect", () => {
         },
         agentSelection: { state: { selectedId: "main" } },
         replace: vi.fn(),
-      } as unknown as ApplicationContext<RouteId>;
+      } as unknown as ApplicationContext;
 
       const dispose = await startModelSetupFirstRunRedirectAfterLocation({
         context,

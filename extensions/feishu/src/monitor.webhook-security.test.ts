@@ -1,6 +1,7 @@
 // Feishu tests cover monitor.webhook security plugin behavior.
 import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
+import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
@@ -67,7 +68,6 @@ vi.mock("./monitor.state.js", async (importOriginal) => {
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
-import { resolveRequestClientIp } from "./monitor-transport-runtime-api.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
 import { monitorFeishuProvider } from "./monitor.js";
 import { feishuWebhookRateLimiter, httpServers } from "./monitor.state.js";
@@ -271,7 +271,7 @@ afterEach(async () => {
   preAuthInFlightLimit.value = undefined;
   webhookBodyTimeoutMs.value = 50;
   feishuWebhookRateLimiter.clear();
-  cleanupFeishuMonitorStateForTests();
+  await cleanupFeishuMonitorStateForTests();
 });
 
 afterAll(() => {

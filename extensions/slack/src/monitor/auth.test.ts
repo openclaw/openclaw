@@ -1,5 +1,7 @@
 import { WebAPIPlatformError, WebAPIRequestError } from "@slack/web-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setSlackRuntime } from "../runtime.js";
 import type { SlackMonitorContext } from "./context.js";
 
 const participantDescriptors = vi.hoisted(
@@ -26,6 +28,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  setSlackRuntime(createPluginRuntimeMock());
   readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
   delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
 });

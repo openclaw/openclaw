@@ -126,4 +126,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"कतार में %1$d, चल रहे %2$d, पूरे हुए %3$d, विफल %4$d, छिपे हुए %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"अन्य चरण नहीं दिखाए गए"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"अज्ञात"</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"पूरा उत्तर पढ़ें"</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"लाइव पूर्वावलोकन। जवाब पूरा होने पर उसे पूरा पढ़ें।"</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"पिछला भाग"</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"अगला भाग"</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"पूरा जवाब लोड हो रहा है…"</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"पूरे जवाब पढ़ने के लिए फ़ोन ऐप और Gateway को अपडेट करें।"</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"यह जवाब यहाँ पढ़ने के लिए बहुत लंबा है। इसे अपने फ़ोन पर खोलें।"</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"जवाब या कनेक्शन बदल गया है। शुरुआत से फिर कोशिश करें।"</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"पूरा पाठ अब उपलब्ध नहीं है।"</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"पूरा जवाब लोड नहीं हो सका। फिर से कोशिश करें।"</string>
 </resources>

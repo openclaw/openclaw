@@ -1,5 +1,6 @@
 // Tests for surrogate-safe UTF-16 string slicing helpers.
 import { describe, expect, it } from "vitest";
+import { findGraphemeChunkEnd } from "./grapheme.js";
 import {
   avoidTrailingHighSurrogateBreak,
   sliceUtf16Safe,
@@ -19,6 +20,7 @@ describe("avoidTrailingHighSurrogateBreak", () => {
 
   it("includes the full pair when a one-unit chunk starts with it", () => {
     expect(avoidTrailingHighSurrogateBreak("🤖b", 0, 1)).toBe(2);
+    expect(avoidTrailingHighSurrogateBreak("a🤖b", 1, 2)).toBe(3);
   });
 });
 
@@ -99,5 +101,56 @@ describe("truncateWithMarker", () => {
     },
   ] as const)("$name", ({ value, max, options, expected }) => {
     expect(truncateWithMarker(value, max, options)).toBe(expected);
+  });
+});
+
+describe("findGraphemeChunkEnd", () => {
+  it.each([
+    ["family ZWJ", "👨‍👩‍👧‍👦"],
+    ["flag", "🇺🇸"],
+    ["skin tone", "👍🏽"],
+    ["combining mark", "e\u0301"],
+    ["Indic conjunct", "\u0915\u094D\u0937\u093F"],
+    ["CRLF", "\r\n"],
+    ["whitespace with combining mark", " \u0301"],
+    ["punctuation with combining mark", "。\u0301"],
+    ["prepended whitespace with combining mark", "\u0600 \u0301"],
+  ])("preserves a whole %s cluster", (_name, cluster) => {
+    const text = `a${cluster}b`;
+    for (let end = 2; end < cluster.length + 1; end++) {
+      expect(findGraphemeChunkEnd(text, 0, end)).toBe(1);
+      expect(findGraphemeChunkEnd(text, 0, text.length, end)).toBe(1);
+    }
+    expect(findGraphemeChunkEnd(text, 0, cluster.length + 1)).toBe(cluster.length + 1);
+  });
+
+  it.each([true, false])(
+    "uses the full budget when a preference cannot advance (partial=%s)",
+    (partial) => {
+      const text = "a👨‍👩‍👧‍👦bc";
+      expect(findGraphemeChunkEnd(text, 1, 13, 3, partial)).toBe(13);
+    },
+  );
+
+  it("does not let a malformed preference bypass a whole-grapheme cut", () => {
+    expect(findGraphemeChunkEnd("a👨‍👩‍👧‍👦", 0, 3, Number.NaN)).toBe(1);
+  });
+
+  it.each([
+    { text: "👨‍👩‍👧‍👦", start: 0, maxEnd: 5, expected: 5 },
+    { text: "a👨‍👩‍👧‍👦b", start: 1, maxEnd: 5, expected: 4 },
+    { text: "a🤖b", start: 1, maxEnd: 2, expected: 3 },
+  ])(
+    "splits oversized clusters only when partial cuts are allowed: $text",
+    ({ text, start, maxEnd, expected }) => {
+      expect(findGraphemeChunkEnd(text, start, maxEnd)).toBe(expected);
+      expect(findGraphemeChunkEnd(text, start, maxEnd, maxEnd, false)).toBe(start);
+    },
+  );
+
+  it("does not advance without a budget or beyond the source", () => {
+    expect(findGraphemeChunkEnd("🤖", 0, 0)).toBe(0);
+    expect(findGraphemeChunkEnd("abc", 1, 1)).toBe(1);
+    expect(findGraphemeChunkEnd("abc", 0, 5)).toBe(3);
   });
 });

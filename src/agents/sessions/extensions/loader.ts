@@ -355,7 +355,7 @@ function createExtensionAPI(
 
     setThinkingLevel(level) {
       runtime.assertActive();
-      runtime.setThinkingLevel(level);
+      return runtime.setThinkingLevel(level);
     },
 
     registerProvider(name: string, config: ProviderConfig) {

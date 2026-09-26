@@ -7,7 +7,9 @@ import {
 import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import * as beforeToolCall from "../agent-tools.before-tool-call.js";
+import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { callGatewayTool } from "../tools/gateway.js";
+import { createCliEventHandlers } from "./execute-events.js";
 import {
   closePluginTestAdmissions,
   createExecution,
@@ -15,6 +17,7 @@ import {
   runPlugin,
   SUCCESS_RESULT,
 } from "./execute-plugin.test-support.js";
+import { createCliToolTracking } from "./execute-tool-tracking.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -72,11 +75,20 @@ describe("plugin-owned CLI native tool policy", () => {
   });
 
   it("runs canonical policy before native approval and carries rewritten params plus run context", async () => {
-    const policy = vi.spyOn(beforeToolCall, "runBeforeToolCallHook");
     const hook = vi.fn(async (_event: unknown, _context: unknown) => ({
       params: { url: "https://example.com/rewritten" },
     }));
-    installBeforeToolCallHook(hook);
+    const completions: unknown[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: hook },
+        {
+          hookName: "after_tool_call",
+          matcher: ["web_fetch"],
+          handler: (event) => completions.push(event),
+        },
+      ]),
+    );
     const { context } = await createExecution({ nativeTools: ["WebFetch"] });
     Object.assign(context.params, {
       messageChannel: "telegram",
@@ -90,12 +102,39 @@ describe("plugin-owned CLI native tool policy", () => {
     });
     let decision: CliBackendToolPermissionResult | undefined;
 
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution, "WebFetch", {
-        url: "https://example.com/original",
-      });
-      yield SUCCESS_RESULT;
+    const handlers = createCliEventHandlers({
+      context,
+      toolTracking: createCliToolTracking(context),
+      getRunState: () => ({ failed: false, error: undefined }),
     });
+    const parser = createCliJsonlStreamingParser({
+      backend: { ...context.preparedBackend.backend, jsonlDialect: "claude-stream-json" },
+      providerId: context.backendResolved.id,
+      onAssistantDelta: () => {},
+      onToolUseStart: handlers.emitParsedToolUseStart,
+      onToolResult: handlers.emitParsedToolResult,
+    });
+    await runPlugin(
+      context,
+      async function* (execution) {
+        const input = { url: "https://example.com/original" };
+        yield {
+          type: "assistant",
+          message: {
+            content: [{ type: "tool_use", id: "native-WebFetch", name: "WebFetch", input }],
+          },
+        };
+        decision = await requestNativeTool(execution, "WebFetch", input);
+        yield {
+          type: "user",
+          message: {
+            content: [{ type: "tool_result", tool_use_id: "native-WebFetch", content: "fetched" }],
+          },
+        };
+        yield SUCCESS_RESULT;
+      },
+      { consumeStdout: (chunk) => parser.push(chunk) },
+    );
 
     expect(decision).toEqual({
       behavior: "allow",
@@ -121,18 +160,17 @@ describe("plugin-owned CLI native tool policy", () => {
         senderIsOwner: true,
       },
     });
-    expect(policy.mock.calls[0]?.[0]).toMatchObject({
-      ctx: {
-        config: context.params.config,
-        cwd: "/tmp",
-        workspaceDir: "/tmp",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "chat-1",
-        turnSourceAccountId: "bot-1",
-        turnSourceThreadId: "thread-1",
-        loopDetection: undefined,
-      },
-    });
+    await vi.waitFor(() =>
+      expect(completions).toMatchObject([
+        {
+          toolName: "web_fetch",
+          toolCallId: "native-WebFetch",
+          runId: context.params.runId,
+          params: { url: "https://example.com/rewritten" },
+          result: "fetched",
+        },
+      ]),
+    );
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 

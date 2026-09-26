@@ -3,7 +3,7 @@ import {
   type AssistantMessage,
   type Model,
 } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -18,7 +18,7 @@ const hoistedStreamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
 
-export const streamMocks = hoistedStreamMocks;
+export const streamMocks: { streamSimple: Mock } = hoistedStreamMocks;
 
 export const testModel: Model = {
   id: "test-model",

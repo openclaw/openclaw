@@ -23,9 +23,9 @@ describe("Code Mode bridge settlement and cancellation", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("drains a nested combinator after its outer race wins", async () => {

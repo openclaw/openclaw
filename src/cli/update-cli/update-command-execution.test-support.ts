@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   hasSchemaRefusal: vi.fn(),
   maybeRestartService: vi.fn(),
   maybeStopService: vi.fn(),
-  prepareMutableUpdate: vi.fn<(env?: NodeJS.ProcessEnv) => Promise<void>>(),
+  prepareMutableUpdate: vi.fn<Parameters<typeof executeMutableUpdate>[0]["prepareMutableUpdate"]>(),
   pluginPreflight: vi.fn(),
   pluginTargets: vi.fn(),
   pluginRecords: vi.fn(),
@@ -78,7 +78,8 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: { error: mocks.runtimeError },
 }));
 
-vi.mock("./schema-preflight.js", () => ({
+vi.mock("./schema-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./schema-preflight.js")>()),
   captureTargetDatabaseSchemaContext: mocks.captureSchemaContext,
   checkTargetDatabaseSchemasForContexts: mocks.checkTargetSchemas,
   formatSchemaRefusalLines: mocks.formatSchemaRefusalLines,
@@ -90,7 +91,8 @@ vi.mock("./update-command-git.js", async (importOriginal) => ({
   updateGitInstall: mocks.runGitUpdate,
 }));
 
-vi.mock("./update-command-handoff.js", () => ({
+vi.mock("./update-command-handoff.js", async (original) => ({
+  ...(await original<typeof import("./update-command-handoff.js")>()),
   formatUpdateAncestryBlockMessage: (message: string) => message,
   handoffUpdateFromGateway: vi.fn(),
 }));

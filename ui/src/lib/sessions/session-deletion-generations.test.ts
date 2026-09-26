@@ -28,7 +28,7 @@ describe("session deletion generation ownership", () => {
         if (source === "history") {
           h.sessions.reconcile(h.alpha);
         } else if (source === "changed") {
-          h.sessions.reconcileChanged(payload);
+          h.emitEvent({ type: "event", event: "sessions.changed", payload });
         } else {
           h.emitEvent({ type: "event", event: "session.message", payload });
         }
@@ -220,7 +220,11 @@ describe("session deletion generation ownership", () => {
         await h.sessions.refreshList({ ...currentScope, force: true });
         const operation = h.sessions.delete(current.key, { expectedSessionId: current.sessionId });
         h.sessions.reconcile(h.alpha);
-        h.sessions.reconcileChanged({ ...h.alpha, sessionKey: h.alpha.key, reason: "send" });
+        h.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: { ...h.alpha, sessionKey: h.alpha.key, reason: "send" },
+        });
         h.emitEvent({
           type: "event",
           event: "session.message",

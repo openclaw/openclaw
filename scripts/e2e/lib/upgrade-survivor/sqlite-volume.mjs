@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
+import {
   assertUpgradeVolumeSharedState,
   seedUpgradeVolumeSharedState,
 } from "./sqlite-volume-shared-state.mjs";
@@ -364,7 +368,7 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
         .all();
       const eventRows = db
         .prepare(
-          "SELECT session_id, seq, event_json FROM transcript_events WHERE session_id LIKE 'volume-%'",
+          `SELECT session_id, seq, ${sqliteTranscriptPayloadColumns(db)} FROM transcript_events WHERE session_id LIKE 'volume-%'`,
         )
         .all();
       const sessionsByKey = new Map(sessionRows.map((row) => [row.session_key, row]));
@@ -416,7 +420,7 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
           const event = eventsByIdAndSequence.get(`${fixture.sessionId}\0${sequence}`);
           const expected = getVolumeTranscriptEvent(fixture.index, fixture.sessionId, sequence);
           assertJsonEqual(
-            JSON.parse(event?.event_json ?? "null"),
+            event ? JSON.parse(readSqliteTranscriptPayload(event)) : null,
             expected,
             `volume transcript event changed: ${fixture.index}:${sequence}`,
           );

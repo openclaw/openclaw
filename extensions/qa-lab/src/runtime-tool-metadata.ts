@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements runtime tool metadata behavior.
 import {
   asBoolean as readBoolean,
   isRecord,
@@ -6,22 +5,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
-export type QaRuntimeToolBucket =
-  | "codex-native-workspace"
-  | "openclaw-dynamic-integration"
-  | "optional-profile-or-plugin";
+export type QaRuntimeToolBucket = (typeof QA_RUNTIME_TOOL_BUCKETS)[number];
 
-export type QaRuntimeToolExpectedLayer =
-  | "codex-native-workspace"
-  | "openclaw-dynamic"
-  | "profile-or-plugin";
+export type QaRuntimeToolExpectedLayer = (typeof QA_RUNTIME_TOOL_EXPECTED_LAYERS)[number];
 
-export type QaRuntimeCapabilityLayer =
-  | "codex-native-workspace"
-  | "openclaw-dynamic-direct"
-  | "openclaw-dynamic-searchable"
-  | "optional-profile-or-plugin"
-  | "structural-text";
+export type QaRuntimeCapabilityLayer = (typeof QA_RUNTIME_CAPABILITY_LAYERS)[number];
 
 export type RuntimeParityComparisonMode = "default" | "codex-native-workspace" | "outcome-only";
 
@@ -37,19 +25,19 @@ export type QaRuntimeToolCoverageMetadata = {
   action?: string;
 };
 
-const QA_RUNTIME_TOOL_BUCKETS: readonly QaRuntimeToolBucket[] = [
+const QA_RUNTIME_TOOL_BUCKETS = [
   "codex-native-workspace",
   "openclaw-dynamic-integration",
   "optional-profile-or-plugin",
 ] as const;
 
-const QA_RUNTIME_TOOL_EXPECTED_LAYERS: readonly QaRuntimeToolExpectedLayer[] = [
+const QA_RUNTIME_TOOL_EXPECTED_LAYERS = [
   "codex-native-workspace",
   "openclaw-dynamic",
   "profile-or-plugin",
 ] as const;
 
-const QA_RUNTIME_CAPABILITY_LAYERS: readonly QaRuntimeCapabilityLayer[] = [
+const QA_RUNTIME_CAPABILITY_LAYERS = [
   "codex-native-workspace",
   "openclaw-dynamic-direct",
   "openclaw-dynamic-searchable",

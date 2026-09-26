@@ -5,6 +5,34 @@ import { normalizeCredentialPayloadForKind } from "../qa/convex-credential-broke
 const BUZZ_DRIVER_PRIVATE_KEY = "01".repeat(32);
 const BUZZ_SUT_PRIVATE_KEY = "02".repeat(32);
 const BUZZ_DRIVER_NSEC = "nsec1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqstywftw";
+const TELEGRAM_PRIMARY_ARCHIVE = "YQ==";
+const TELEGRAM_GUEST_ARCHIVE = "Yg==";
+
+function buildTelegramTestUserbotPayload() {
+  return {
+    schemaVersion: 1,
+    environment: "test",
+    groupId: "-1001",
+    forumGroupId: "-1002",
+    forumTopicId: 42,
+    sutToken: "test-token",
+    sutUsername: "test_bot",
+    sutBotId: "700000001",
+    testerUserId: "700000002",
+    tdlibArchiveBase64: TELEGRAM_PRIMARY_ARCHIVE,
+    tdlibArchiveSha256: "a".repeat(64),
+    tdlibVersion: "1.8.67",
+    participants: [
+      {
+        alias: "guest",
+        testerUserId: "700000003",
+        tdlibArchiveBase64: TELEGRAM_GUEST_ARCHIVE,
+        tdlibArchiveSha256: "b".repeat(64),
+        tdlibVersion: "1.8.67",
+      },
+    ],
+  };
+}
 
 describe("QA Convex credential payload validation", () => {
   it("normalizes Buzz credential payloads", () => {
@@ -193,6 +221,51 @@ describe("QA Convex credential payload validation", () => {
       tdlibArchiveSha256: "a".repeat(64),
       tdlibVersion: "1.8.67",
     });
+  });
+
+  it("retains a validated Telegram forum topic and distinct participant sessions", () => {
+    const normalized = normalizeCredentialPayloadForKind(
+      "telegram-test-userbot",
+      buildTelegramTestUserbotPayload(),
+    );
+
+    expect({
+      forumGroupId: normalized.forumGroupId,
+      forumTopicId: normalized.forumTopicId,
+      participants: normalized.participants,
+    }).toEqual({
+      forumGroupId: "-1002",
+      forumTopicId: 42,
+      participants: [
+        {
+          alias: "guest",
+          testerUserId: "700000003",
+          tdlibArchiveBase64: TELEGRAM_GUEST_ARCHIVE,
+          tdlibArchiveSha256: "b".repeat(64),
+          tdlibVersion: "1.8.67",
+        },
+      ],
+    });
+  });
+
+  it("rejects invalid Telegram forum selectors and duplicate participant authority", () => {
+    expect(() =>
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        ...buildTelegramTestUserbotPayload(),
+        forumTopicId: 0,
+      }),
+    ).toThrow(/invalid forumTopicId/u);
+    expect(() =>
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        ...buildTelegramTestUserbotPayload(),
+        participants: [
+          {
+            ...buildTelegramTestUserbotPayload().participants[0],
+            testerUserId: "700000002",
+          },
+        ],
+      }),
+    ).toThrow(/distinct participant identities/u);
   });
 
   it.each([

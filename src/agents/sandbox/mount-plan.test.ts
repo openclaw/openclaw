@@ -62,6 +62,61 @@ function params(access: "none" | "ro" | "rw") {
 }
 
 describe("managed mount plan", () => {
+  it("allocates managed skill mount targets as the workspace host owner before engine create", async () => {
+    const workspace = path.join(root, "agent");
+    fs.mkdirSync(path.join(workspace, ".openclaw"), { mode: 0o750 });
+    fs.writeFileSync(path.join(workspace, ".openclaw/project.json"), "preserved");
+    const plan = await prepareSandboxMountPlan({
+      ...params("rw"),
+      workspaceSource: "managed-worktree",
+    });
+    const target = path.join(workspace, ".openclaw/sandbox-skills/skills");
+    expect(fs.statSync(target).uid).toBe(fs.statSync(workspace).uid);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(path.join(workspace, ".openclaw")).mode & 0o777).toBe(0o750);
+    }
+    expect(fs.readFileSync(path.join(workspace, ".openclaw/project.json"), "utf8")).toBe(
+      "preserved",
+    );
+    expect(plan.binds).toContain(
+      "/host/materialized skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
+    );
+  });
+
+  it("rechecks the workspace owner after namespace lookup before creating scaffold directories", async () => {
+    let current = true;
+    vi.mocked(resolveDockerSourceNamespace).mockImplementationOnce(async () => {
+      current = false;
+      return undefined;
+    });
+    await expect(
+      prepareSandboxMountPlan({
+        ...params("rw"),
+        workspaceSource: "managed-worktree",
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("workspace retired");
+          }
+        },
+      }),
+    ).rejects.toThrow("workspace retired");
+    expect(fs.existsSync(path.join(root, "agent/.openclaw"))).toBe(false);
+  });
+
+  it("refuses an aliased managed mount target without creating outside the workspace", async () => {
+    const outside = path.join(root, "outside");
+    fs.mkdirSync(outside);
+    fs.symlinkSync(
+      outside,
+      path.join(root, "agent/.openclaw"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await expect(
+      prepareSandboxMountPlan({ ...params("rw"), workspaceSource: "managed-worktree" }),
+    ).rejects.toThrow();
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
   it.each(["none", "ro", "rw"] as const)(
     "maps all managed roots with %s permissions",
     async (access) => {

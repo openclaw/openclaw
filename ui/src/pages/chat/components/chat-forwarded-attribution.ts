@@ -1,5 +1,6 @@
 // Attribution row for forwarded agent and automation messages.
 import { html, nothing } from "lit";
+import "./chat-attribution.css";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -11,6 +12,7 @@ registerChatMessageMetadataEnglish();
 
 type ForwardedAttributionOptions = Parameters<typeof renderForwardedAvatar>[1] & {
   mainKey?: string;
+  linkSource?: boolean;
 };
 
 /**
@@ -20,7 +22,10 @@ type ForwardedAttributionOptions = Parameters<typeof renderForwardedAvatar>[1] &
  * the sender is a different agent ("From democlaw · bench"). Subagent
  * sessions keep their session identity instead of presenting as another agent.
  */
-export function renderForwardedAttribution(group: MessageGroup, opts: ForwardedAttributionOptions) {
+export function renderForwardedAttribution(
+  group: Pick<MessageGroup, "senderSession">,
+  opts: ForwardedAttributionOptions,
+) {
   const sourceSessionKey = group.senderSession?.sessionKey;
   const sourceParsed = sourceSessionKey ? parseAgentSessionKey(sourceSessionKey) : null;
   const sourceIsCronRun = /^cron:[^:]+:run:[^:]+$/u.test(sourceParsed?.rest ?? "");
@@ -30,7 +35,8 @@ export function renderForwardedAttribution(group: MessageGroup, opts: ForwardedA
   // Only agent-prefixed keys are navigable: the titler, hovercard, and click
   // handlers all reject other shapes, so a legacy key must stay plain text
   // instead of becoming a focusable link that goes nowhere.
-  const linkableSourceKey = sourceParsed ? sourceSessionKey : undefined;
+  const linkableSourceKey =
+    opts.linkSource !== false && sourceParsed ? sourceSessionKey : undefined;
   const sourceAgentDisplayName = sourceParsed
     ? opts.agents?.find((agent) => agent.id === sourceParsed.agentId)?.identity?.name?.trim() ||
       sourceParsed.agentId

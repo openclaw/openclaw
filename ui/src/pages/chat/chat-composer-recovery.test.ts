@@ -114,6 +114,8 @@ describe("pending send composer ownership", () => {
         region: () => region,
         presented: visible,
         pause: () => pane.controller.pauseComposerPersistence(),
+        takeAttachmentReads: () => pane.controller.takeAttachmentReads(),
+        adoptAttachmentReads: (reads) => pane.controller.adoptAttachmentReads(reads, pane.state),
         resume: (restore) => {
           if (restore) {
             pane.controller.restoreComposer();

@@ -36,6 +36,8 @@ type ApplicationConfig = {
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
   communityInvite: boolean;
+  /** Null until the serving Gateway publishes its bootstrap policy. */
+  newSessionModelDefaults?: "last-used" | "configured" | null;
   terminalEnabled: boolean;
   cliAgentsEnabled?: boolean;
   pluginAssetsRequireAuth: boolean;
@@ -69,6 +71,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   allowExternalEmbedUrls: false,
   automaticallyFetchFavicons: false,
   communityInvite: false,
+  newSessionModelDefaults: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
   cliAgentsEnabled: false,
   pluginAssetsRequireAuth: true,
@@ -115,6 +118,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
     communityInvite: parsed.communityInvite === true,
+    newSessionModelDefaults: parsed.newSessionModelDefaults ?? "last-used",
     terminalEnabled: Boolean(parsed.terminalEnabled),
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
     pluginAssetsRequireAuth: parsed.pluginAssetsRequireAuth !== false,

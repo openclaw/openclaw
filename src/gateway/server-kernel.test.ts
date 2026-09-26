@@ -14,6 +14,7 @@ import {
   getRuntimeConfigSourceSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -34,108 +35,125 @@ import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import type { GatewayHostLifecycle, GatewayServer } from "./server-public.js";
+import { createMaintenanceHandles } from "./server-runtime-services.test-harness.js";
+import { expectCoreAgentDatabaseReadiness } from "./server-startup-readiness.test-support.js";
+
+const KERNEL_TEST_ENV = {
+  OPENCLAW_GATEWAY_PASSWORD: undefined,
+  OPENCLAW_GATEWAY_TOKEN: undefined,
+  OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+  OPENCLAW_SKIP_CANVAS_HOST: "1",
+  OPENCLAW_SKIP_CHANNELS: "1",
+  OPENCLAW_SKIP_CRON: "1",
+  OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  OPENCLAW_SKIP_PROVIDERS: "1",
+  OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+  VITEST: "1",
+};
 
 describe("createGatewayKernel", () => {
-  it("does not start recovered channels after close prelude begins", async () => {
-    const port = await getFreePort();
-    const state = await createOpenClawTestState({
-      label: "gateway-kernel-breaker-recovery-close",
-      layout: "home",
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: undefined,
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: undefined,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        VITEST: "1",
-      },
-    });
-    const originalPluginRegistry = captureActivePluginRegistrySnapshot();
-    const startAccount = vi.fn(async () => {});
-    const channelPlugin: ChannelPlugin = {
-      ...createChannelTestPluginBase({
-        id: "telegram",
-        config: {
-          listAccountIds: (config) => Object.keys(config.channels?.telegram?.accounts ?? {}),
-          resolveAccount: (config, accountId) =>
-            config.channels?.telegram?.accounts?.[accountId ?? "default"] ?? {},
-          isConfigured: (account) =>
-            typeof (account as { botToken?: unknown }).botToken === "string",
+  it.each([false, true])(
+    "starts recovered channels only before close (closing=%s)",
+    async (closing) => {
+      const port = await getFreePort();
+      const state = await createOpenClawTestState({
+        label: "gateway-kernel-breaker-recovery-close",
+        layout: "home",
+        env: {
+          ...KERNEL_TEST_ENV,
+          OPENCLAW_SKIP_CHANNELS: undefined,
+          OPENCLAW_SKIP_PROVIDERS: undefined,
         },
-      }),
-      gateway: { startAccount },
-    };
-    const registry = createTestRegistry([
-      {
-        pluginId: channelPlugin.id,
-        plugin: channelPlugin,
-        source: "gateway-kernel-test",
-      },
-    ]);
-    registry.plugins.push(
-      createPluginRecord({
-        id: channelPlugin.id,
-        source: "gateway-kernel-test",
-        origin: "bundled",
-        enabled: true,
-        configSchema: false,
-      }),
-    );
-    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
-    try {
-      stageActivePluginRegistry(registry, null, "default");
-      const token = "gateway-kernel-breaker-recovery-token";
-      await state.writeConfig({
-        gateway: {
-          auth: { mode: "token", token },
-          controlUi: { enabled: false },
-          port,
+      });
+      const originalPluginRegistry = captureActivePluginRegistrySnapshot();
+      const started = createDeferred();
+      const startAccount = vi.fn<
+        NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>
+      >(async (ctx) => {
+        started.resolve();
+        await waitForAbortSignal(ctx.abortSignal);
+      });
+      const channelPlugin: ChannelPlugin = {
+        ...createChannelTestPluginBase({
+          id: "telegram",
+          config: {
+            listAccountIds: (config) => Object.keys(config.channels?.telegram?.accounts ?? {}),
+            resolveAccount: (config, accountId) =>
+              config.channels?.telegram?.accounts?.[accountId ?? "default"] ?? {},
+            isConfigured: (account) =>
+              typeof (account as { botToken?: unknown }).botToken === "string",
+          },
+        }),
+        gateway: { startAccount },
+      };
+      const registry = createTestRegistry([
+        {
+          pluginId: channelPlugin.id,
+          plugin: channelPlugin,
+          source: "gateway-kernel-test",
         },
-        channels: {
-          telegram: {
-            accounts: {
-              default: { botToken: "telegram-breaker-recovery-token" },
+      ]);
+      registry.plugins.push(
+        createPluginRecord({
+          id: channelPlugin.id,
+          source: "gateway-kernel-test",
+          origin: "bundled",
+          enabled: true,
+          configSchema: false,
+        }),
+      );
+      let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+      try {
+        stageActivePluginRegistry(registry, null, "default");
+        const token = "gateway-kernel-breaker-recovery-token";
+        await state.writeConfig({
+          gateway: {
+            auth: { mode: "token", token },
+            controlUi: { enabled: false },
+            port,
+          },
+          channels: {
+            telegram: {
+              accounts: {
+                default: { botToken: "telegram-breaker-recovery-token" },
+              },
             },
           },
-        },
-      });
-      state.applyEnv();
-      kernel = await createGatewayKernel(port, {
-        auth: { mode: "token", token },
-        bind: "loopback",
-        channelAutostartSuppression: {
-          reason: "crash-loop-breaker",
-          message: "safe mode",
-        },
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-        tryRecoverChannelAutostartSuppression: () => true,
-      });
+        });
+        state.applyEnv();
+        kernel = await createGatewayKernel(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          channelAutostartSuppression: {
+            reason: "crash-loop-breaker",
+            message: "safe mode",
+          },
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+          tryRecoverChannelAutostartSuppression: () => true,
+        });
 
-      await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBe(true);
-      expect(startAccount).not.toHaveBeenCalled();
+        await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBe(true);
+        expect(startAccount).not.toHaveBeenCalled();
 
-      await kernel.beginClosePrelude();
-      kernel.releaseStartupAccountStarts();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+        if (closing) {
+          await kernel.beginClosePrelude();
+        }
+        kernel.releaseStartupAccountStarts();
+        await (closing ? nextTurn() : started.promise);
 
-      expect(startAccount).not.toHaveBeenCalled();
-      expect(kernel.channelManager.isAutoRestartScheduled("telegram", "default")).toBe(false);
-    } finally {
-      try {
-        await kernel?.closeOnStartupFailure();
+        expect(startAccount).toHaveBeenCalledTimes(closing ? 0 : 1);
+        expect(kernel.channelManager.isAutoRestartScheduled("telegram", "default")).toBe(false);
       } finally {
-        restoreActivePluginRegistrySnapshot(originalPluginRegistry);
-        await state.cleanup();
+        try {
+          await kernel?.closeOnStartupFailure();
+        } finally {
+          restoreActivePluginRegistrySnapshot(originalPluginRegistry);
+          await state.cleanup();
+        }
       }
-    }
-  });
+    },
+  );
 
   it.for(["direct", "public"] as const)(
     "fences hosted authority and joins shutdown owners during %s close",
@@ -144,24 +162,14 @@ describe("createGatewayKernel", () => {
       const state = await createOpenClawTestState({
         label: `gateway-kernel-${entry}-close-readiness`,
         layout: "home",
-        env: {
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          VITEST: "1",
-        },
+        env: { ...KERNEL_TEST_ENV },
       });
       const token = "gateway-kernel-close-readiness-token";
       const bootId = `gateway-kernel-${entry}-close`;
       const configReloaderStop = createDeferred();
       const recoveryStop = createDeferred();
       const updateCheckStopped = createDeferred();
+      const periodicStopped = createDeferred();
       const nativePreparation = createDeferred();
       const preparationStarted = createDeferred();
       const acceptRequest = vi.fn();
@@ -186,6 +194,7 @@ describe("createGatewayKernel", () => {
         configReloaderStop.resolve();
         recoveryStop.resolve();
         updateCheckStopped.resolve();
+        periodicStopped.resolve();
         nativePreparation.resolve();
       };
       signal.addEventListener("abort", release, { once: true });
@@ -282,10 +291,19 @@ describe("createGatewayKernel", () => {
           .mockReturnValue(updateWork);
         const terminalDispose = vi.spyOn(kernel.terminalSessions, "disposeAll");
         const gatewayStop = vi.spyOn(kernel.shutdownRuntime, "runGlobalGatewayStopSafely");
+        const prepareShutdown = vi.spyOn(kernel.shutdownRuntime, "prepareGatewayClose");
+        const maintenance = createMaintenanceHandles();
+        maintenance.stopPeriodicTasks.mockReturnValue(periodicStopped.promise);
+        kernel.kernel.setMaintenanceHandles(maintenance);
         const invalidateCron = vi.spyOn(kernel.cronReconciliation, "invalidate");
         const startMaintenance = vi.fn(() => {});
         maintenanceTimer = setTimeout(startMaintenance, 0);
         kernel.postReadyState.maintenanceTimer = maintenanceTimer;
+        kernel.scheduler.schedule({
+          id: "test:post-ready-maintenance",
+          delayMs: 0,
+          run: startMaintenance,
+        });
         closing = server
           ? server.close({ reason: "close ordering test" })
           : kernel.prepareClose({ reason: "close ordering test" }).then((close) => close());
@@ -321,6 +339,9 @@ describe("createGatewayKernel", () => {
         expect(stopUpdateCheck).toHaveBeenCalled();
         expect(closeFirstStop).not.toHaveBeenCalled();
         updateCheckStopped.resolve();
+        await nextTurn();
+        expect(prepareShutdown).not.toHaveBeenCalled();
+        periodicStopped.resolve();
         await closing;
         expect(closeFirstStop).toHaveBeenCalledOnce();
         expect(kernel.runtimeState.discovery).toBeNull();
@@ -359,16 +380,8 @@ describe("createGatewayKernel", () => {
         label: "gateway-kernel-reload-candidate",
         layout: "home",
         env: {
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
+          ...KERNEL_TEST_ENV,
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-          VITEST: "1",
         },
       });
       const previousOverrides = getConfigOverrides();
@@ -523,16 +536,8 @@ describe("createGatewayKernel", () => {
       label: "gateway-kernel-deferred-readiness",
       layout: "home",
       env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
+        ...KERNEL_TEST_ENV,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        VITEST: "1",
       },
     });
     const token = "gateway-kernel-deferred-readiness-token";
@@ -551,6 +556,7 @@ describe("createGatewayKernel", () => {
           controlUi: { enabled: false },
           port,
         },
+        agents: { entries: { main: { default: true }, worker: {} } },
       });
       state.applyEnv();
       kernel = await openKernel();
@@ -588,7 +594,7 @@ describe("createGatewayKernel", () => {
       kernel.kernel.unlockStartupMethods();
       kernel.kernel.markSidecarsReady();
 
-      expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
+      expectCoreAgentDatabaseReadiness(getReadiness, state);
       await expect(
         dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
       ).resolves.toEqual({ runId, status: "ok" });
@@ -759,16 +765,7 @@ describe("createGatewayKernel", () => {
       env: {
         OPENCLAW_DIAGNOSTICS: "1",
         OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
+        ...KERNEL_TEST_ENV,
       },
     });
     const originalPluginRegistry = captureActivePluginRegistrySnapshot();
@@ -911,6 +908,7 @@ describe("createGatewayKernel", () => {
         "plugins.bootstrap",
         "gateway.kernel-state",
         "node-desktop.runtime-import",
+        "host-desktop.runtime-import",
         "computer.runtime-import",
         "runtime.config",
         "control-ui.root",
@@ -959,18 +957,7 @@ describe("createGatewayKernel", () => {
     const state = await createOpenClawTestState({
       label: "gateway-kernel-tls-failure",
       layout: "home",
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
+      env: { ...KERNEL_TEST_ENV },
     });
     const token = "gateway-kernel-tls-failure-token";
     await state.writeConfig({

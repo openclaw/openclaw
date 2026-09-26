@@ -1,40 +1,39 @@
+import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  captureAgentHarnessCompletionCustody,
+  createAgentHarnessTaskEventSink,
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import {
   claimCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
-  type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import type {
   MonitorOptions,
   NativeSubagentMonitorClient,
   NativeSubagentMonitorRuntime,
-  ParentState,
-  ParentOwner,
+  NativeModelToolInputRequest,
+  NativeModelSourceCapture,
+  NativeModelSourceRequest,
+  ParentRegistrationHandle,
 } from "./native-subagent-monitor-types.js";
-
-type ParentRegistration = Pick<
-  ParentState,
-  | "parentThreadId"
-  | "requesterSessionKey"
-  | "taskRuntimeScope"
-  | "historyOwner"
-  | "agentId"
-  | "submissionStore"
-> &
-  Omit<ParentOwner, "turnId">;
+import type { NativeParentRegistration } from "./native-subagent-parent-owner.js";
 
 type NativeMonitor = {
-  registerParent(params: ParentRegistration): {
-    bindTurn: (turnId: string) => void;
-    unregister: () => Promise<void>;
-  };
+  registerParent(params: NativeParentRegistration): Promise<ParentRegistrationHandle>;
   retireParent(parentThreadId: string): void;
+  captureModelSource(
+    request: NativeModelSourceRequest,
+  ): Promise<NativeModelSourceCapture | undefined>;
+  resolveModelThreadId(turnId: string): string | undefined;
+  prepareModelInput(request: NativeModelToolInputRequest): Promise<void>;
+  releasePendingModelInputs(threadId: string): void;
 };
 
 type NativeMonitorConstructor = new (
@@ -44,6 +43,8 @@ type NativeMonitorConstructor = new (
 ) => NativeMonitor;
 
 export const defaultNativeSubagentMonitorRuntime: NativeSubagentMonitorRuntime = {
+  captureAgentHarnessCompletionCustody,
+  createAgentHarnessTaskEventSink,
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
 };
@@ -53,22 +54,18 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
 ) {
   const monitors = new WeakMap<CodexAppServerClient, NativeMonitor>();
 
-  function registerMonitor(params: {
-    client: CodexAppServerClient;
-    parentThreadId: string;
-    requesterSessionKey?: string;
-    taskRuntimeScope?: ParentState["taskRuntimeScope"];
-    historyOwner?: ParentState["historyOwner"];
-    submissionStore?: ParentState["submissionStore"];
-    agentId?: string;
-    runtime?: NativeSubagentMonitorRuntime;
-    retainClient?: () => (() => void) | undefined;
-    retainParentThread?: (threadId: string) => (() => void) | undefined;
-    claimDirectChild?: (threadId: string) => (() => void) | undefined;
-    rejectPendingDirectChild?: (threadId: string, reason: string) => void;
-    onDirectChildAccepted?: () => void;
-  }): { bindTurn: (turnId: string) => void; unregister: () => Promise<void> } {
-    let monitor = monitors.get(params.client);
+  async function registerMonitor({
+    client,
+    runtime,
+    retainClient,
+    retainParentThread,
+    ...registration
+  }: NativeParentRegistration &
+    Pick<MonitorOptions, "retainClient" | "retainParentThread"> & {
+      client: CodexAppServerClient;
+      runtime?: NativeSubagentMonitorRuntime;
+    }): Promise<ParentRegistrationHandle> {
+    let monitor = monitors.get(client);
     if (!monitor) {
       // Native start/completion can race; serialize each child so only its
       // original claim handle may publish or release the same subscription.
@@ -86,24 +83,39 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
           childThreadOwnership.delete(threadId);
         }
       };
-      monitor = new Monitor(params.client, params.runtime ?? defaultNativeSubagentMonitorRuntime, {
-        retainClient: params.retainClient,
-        retainParentThread: params.retainParentThread,
+      monitor = new Monitor(client, runtime ?? defaultNativeSubagentMonitorRuntime, {
+        retainClient,
+        interruptModelExecution: (threadId, turnId) => {
+          void interruptCodexTurnAndWaitBestEffort(client, { threadId, turnId });
+        },
+        retainParentThread,
         hasObservationBacking: (parentThreadId, childThreadId) =>
-          hasCodexAppServerLiveThread(params.client, parentThreadId) ||
-          hasCodexAppServerLiveThread(params.client, childThreadId),
+          hasCodexAppServerLiveThread(client, parentThreadId) ||
+          hasCodexAppServerLiveThread(client, childThreadId),
         claimChildThread: (threadId) =>
           childThreadTransitions.enqueue(threadId, async () => {
             // Codex subscribes fresh children before thread/started; they have
             // no idle entry yet but must already be fenced from manual adoption.
             let ownership: CodexAppServerLiveThreadOwnership | undefined;
             let invalidated = false;
-            ownership = await claimCodexAppServerLiveThread(params.client, threadId, () => {
+            ownership = await claimCodexAppServerLiveThread(client, threadId, () => {
               invalidated = true;
               if (childThreadOwnership.get(threadId) === ownership) {
                 childThreadOwnership.delete(threadId);
               }
               ownership = undefined;
+              void childThreadTransitions
+                .enqueue(threadId, async () => {
+                  if (!hasCodexAppServerLiveThread(client, threadId)) {
+                    monitor?.releasePendingModelInputs(threadId);
+                  }
+                })
+                .catch((error: unknown) => {
+                  embeddedAgentLog.warn("Failed to release Codex native input custody", {
+                    threadId,
+                    error: formatErrorMessage(error),
+                  });
+                });
             });
             if (ownership && !invalidated) {
               childThreadOwnership.set(threadId, ownership);
@@ -118,20 +130,13 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
             }
             let retained = false;
             try {
-              retained = await retainCodexAppServerLiveThread(
-                params.client,
-                threadId,
-                ownership.release,
-              );
+              retained = await retainCodexAppServerLiveThread(client, threadId, ownership.release);
               return retained;
             } finally {
               // A full idle pool can reject terminal child ownership. Release
               // its exact branded claim before the monitor forgets that child.
               if (!retained) {
-                await ownership.release(threadId);
-                if (childThreadOwnership.get(threadId) === ownership) {
-                  childThreadOwnership.delete(threadId);
-                }
+                await releaseOwnership(threadId, ownership);
               }
             }
           }),
@@ -145,24 +150,31 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
             return ownership?.forget;
           }),
       });
-      monitors.set(params.client, monitor);
+      monitors.set(client, monitor);
     }
-    return monitor.registerParent({
-      parentThreadId: params.parentThreadId,
-      requesterSessionKey: params.requesterSessionKey,
-      taskRuntimeScope: params.taskRuntimeScope,
-      historyOwner: params.historyOwner,
-      submissionStore: params.submissionStore,
-      agentId: params.agentId,
-      claimDirectChild: params.claimDirectChild,
-      rejectPendingDirectChild: params.rejectPendingDirectChild,
-      onDirectChildAccepted: params.onDirectChildAccepted,
-    });
+    return monitor.registerParent(registration);
   }
 
   return {
     Monitor,
     register: registerMonitor,
+    captureModelSource: ({
+      client,
+      ...request
+    }: NativeModelSourceRequest & { client: CodexAppServerClient }) =>
+      monitors.get(client)?.captureModelSource(request) ?? Promise.resolve(undefined),
+    resolveModelThreadId: ({ client, turnId }: { client: CodexAppServerClient; turnId: string }) =>
+      monitors.get(client)?.resolveModelThreadId(turnId),
+    prepareModelInput: ({
+      client,
+      ...request
+    }: NativeModelToolInputRequest & { client: CodexAppServerClient }) => {
+      const monitor = monitors.get(client);
+      if (!monitor) {
+        return Promise.reject(new Error("Codex native input has no admitted model source"));
+      }
+      return monitor.prepareModelInput(request);
+    },
     retireParent: (client: CodexAppServerClient, parentThreadId: string): void => {
       monitors.get(client)?.retireParent(parentThreadId);
     },

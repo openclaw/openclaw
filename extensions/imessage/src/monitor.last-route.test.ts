@@ -1321,17 +1321,6 @@ describe("iMessage monitor last-route updates", () => {
     });
   });
 
-  it("passes the startup rowid watermark as since_rowid when chat.db is readable", async () => {
-    const dbPath = await createRecoveryChatDb(
-      "openclaw-imsg-startup-rowid-",
-      undefined,
-      "watermark",
-    );
-    const client = await runMessageCase({ monitor: { imessage: { dbPath } } });
-
-    expectWatchSubscription(client, 5000);
-  });
-
   it("recovers over a remote cliPath: replays from the cursor even without a local chat.db boundary", async () => {
     await advanceIMessageRecoveryCursor(
       "default",

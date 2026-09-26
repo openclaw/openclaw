@@ -309,9 +309,12 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
         keyPath: path.join(dir, "synthetic-missing-key.pem"),
       } } }));
     }
-    acquisition = own(gateway.startTestGatewayServer(address.port, {
+    const startupOptions = {
       bind: "loopback", auth: { mode: "none" }, controlUiEnabled: false,
-    }));
+    };
+    acquisition = own(scenario.failCleanup && !scenario.missingTls
+      ? gateway.startGatewayServerWithRetries({ port: address.port, opts: startupOptions })
+      : gateway.startTestGatewayServer(address.port, startupOptions));
     const [acquired] = await Promise.allSettled([acquisition]);
     expect(acquired.status).toBe("rejected");
     const failure = acquired.reason;

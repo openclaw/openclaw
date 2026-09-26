@@ -1,4 +1,3 @@
-// Telegram plugin module implements durable ingress enqueue + update_id mapping.
 import os from "node:os";
 import path from "node:path";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";

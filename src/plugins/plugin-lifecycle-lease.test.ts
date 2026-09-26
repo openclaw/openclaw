@@ -5,6 +5,7 @@ import type { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { OpenClawStateLeaseError, withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -77,9 +78,11 @@ function runLeaseChild(
   children: Set<LeaseChildRun>,
   scriptPath: string,
   args: string[],
+  env?: NodeJS.ProcessEnv,
 ): LeaseChildRun {
   const child = spawn(process.execPath, ["--import", "tsx", scriptPath, ...args], {
     stdio: ["ignore", "pipe", "pipe"],
+    env,
   });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -286,7 +289,7 @@ describe("plugin lifecycle lease", () => {
         await cleanupEntered.promise;
         await expect(
           withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "acquired"),
-        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_TIMEOUT" });
+        ).rejects.toMatchObject({ outcome: { kind: "held" } });
       } finally {
         releaseCleanup.resolve();
         await completion;
@@ -317,31 +320,26 @@ describe("plugin lifecycle lease", () => {
         waitMs: 3_000,
       });
 
-      vi.useFakeTimers();
+      const first = withPluginLifecycleLease(leaseOptions("state-a"), async () => {
+        events.push("first-enter");
+        firstEntered.resolve();
+        await releaseFirst.promise;
+        events.push("first-exit");
+      });
+      await firstEntered.promise;
+      const second = withPluginLifecycleLease(leaseOptions("state-b"), async () => {
+        events.push("second-enter");
+      });
       try {
-        const first = withPluginLifecycleLease(leaseOptions("state-a"), async () => {
-          events.push("first-enter");
-          firstEntered.resolve();
-          await releaseFirst.promise;
-          events.push("first-exit");
-        });
-        await firstEntered.promise;
-        const second = withPluginLifecycleLease(leaseOptions("state-b"), async () => {
-          events.push("second-enter");
-        });
-        try {
-          await vi.advanceTimersByTimeAsync(100);
-          expect(events).toEqual(["first-enter"]);
-        } finally {
-          releaseFirst.resolve();
-          // Drive the pending acquisition retry after the first owner releases.
-          await vi.advanceTimersByTimeAsync(250);
-          await Promise.all([first, second]);
-        }
-        expect(events).toEqual(["first-enter", "first-exit", "second-enter"]);
+        await expect(
+          withPluginLifecycleLease({ ...leaseOptions("state-b"), waitMs: 0 }, async () => {}),
+        ).rejects.toMatchObject({ outcome: { kind: "held" } });
+        expect(events).toEqual(["first-enter"]);
       } finally {
-        vi.useRealTimers();
+        releaseFirst.resolve();
+        await Promise.all([first, second]);
       }
+      expect(events).toEqual(["first-enter", "first-exit", "second-enter"]);
     });
   });
 
@@ -401,7 +399,7 @@ describe("plugin lifecycle lease", () => {
         let assertionError: unknown;
         try {
           await expect(fs.readFile(secondResult, "utf8")).resolves.toBe(
-            "OPENCLAW_STATE_LEASE_TIMEOUT",
+            "OPENCLAW_STATE_LEASE_HELD",
           );
           await expect(fs.access(secondMarker)).rejects.toMatchObject({ code: "ENOENT" });
         } catch (error) {
@@ -428,29 +426,41 @@ describe("plugin lifecycle lease", () => {
         const recordsModuleUrl = pathToFileURL(
           path.resolve("src/plugins/installed-plugin-index-records.ts"),
         ).href;
-        const seedModuleUrl = pathToFileURL(
-          path.resolve("src/plugins/test-helpers/installed-plugin-index.ts"),
+        const indexModuleUrl = pathToFileURL(
+          path.resolve("src/plugins/installed-plugin-index-store.ts"),
+        ).href;
+        const writeModuleUrl = pathToFileURL(
+          path.resolve("src/plugins/installed-plugin-index-store-write.ts"),
         ).href;
         const alphaGoMarker = state.path("alpha-go");
         const betaGoMarker = state.path("beta-go");
         const releaseAlphaMarker = state.path("release-alpha");
-        // This race owns two synthetic records, not bundled inventory discovery.
-        const bundledDir = state.path("empty-bundled-plugins");
-        await fs.mkdir(bundledDir);
+        // Both processes and their SQLite workers share the lease clock for this cache handoff.
+        const clockPreload = await state.writeText(
+          "lease-clock.cjs",
+          `Date.now = () => ${Date.now()};\n`,
+        );
+        const childEnv = { ...process.env };
+        for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(clockPreload))) {
+          childEnv[key] = key.endsWith("_OPTIONS")
+            ? [childEnv[key], value].filter(Boolean).join(" ")
+            : value;
+        }
         // A missing database skips worker startup, so prime an existing empty index.
         await seedInstalledPluginIndex({}, { env: state.env, candidates: [] });
         const childScript = await state.writeText(
           "record-cache-child.mts",
           `
+          import assert from "node:assert/strict";
           import fs from "node:fs/promises";
           import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
           import {
             loadInstalledPluginIndexInstallRecords,
           } from ${JSON.stringify(recordsModuleUrl)};
-          import { seedInstalledPluginIndex } from ${JSON.stringify(seedModuleUrl)};
-          const [pluginId, stateDir, goMarker, releaseAlphaMarker, bundledDir] = process.argv.slice(2);
+          import { readPersistedInstalledPluginIndex } from ${JSON.stringify(indexModuleUrl)};
+          import { writePersistedInstalledPluginIndexWithLeaseSync } from ${JSON.stringify(writeModuleUrl)};
+          const [pluginId, stateDir, goMarker, releaseAlphaMarker] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
-          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
           async function waitForMarker(marker) {
             while (true) {
@@ -463,24 +473,37 @@ describe("plugin lifecycle lease", () => {
             }
           }
           await loadInstalledPluginIndexInstallRecords();
+          const index = await readPersistedInstalledPluginIndex({ env });
+          assert(index);
           process.stdout.write("ready\\n");
           await waitForMarker(goMarker);
-          const operation = withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
+          if (pluginId === "beta") {
+            await assert.rejects(
+              withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 0 }, async () => {}),
+              { code: "OPENCLAW_STATE_LEASE_HELD" },
+            );
+            process.stdout.write("held\\n");
+          }
+          const operation = withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async (lease) => {
             process.stdout.write("acquired\\n");
             if (pluginId === "alpha") {
               await waitForMarker(releaseAlphaMarker);
             }
             const records = await loadInstalledPluginIndexInstallRecords();
             process.stdout.write("records:" + Object.keys(records).sort().join(",") + "\\n");
-            await seedInstalledPluginIndex({
-              ...records,
-              [pluginId]: {
-                source: "path",
-                spec: pluginId,
-                sourcePath: "/tmp/" + pluginId,
-                installPath: "/tmp/" + pluginId,
+            // Reuse prepared fixture metadata; discovery can block the heartbeat during this race.
+            writePersistedInstalledPluginIndexWithLeaseSync({
+              ...index,
+              installRecords: {
+                ...records,
+                [pluginId]: {
+                  source: "path",
+                  spec: pluginId,
+                  sourcePath: "/tmp/" + pluginId,
+                  installPath: "/tmp/" + pluginId,
+                },
               },
-            });
+            }, { env, lease });
             process.stdout.write("written\\n");
           });
           process.stdout.write("attempted\\n");
@@ -489,29 +512,29 @@ describe("plugin lifecycle lease", () => {
         `,
         );
 
-        const alpha = runLeaseChild(children, childScript, [
-          "alpha",
-          state.stateDir,
-          alphaGoMarker,
-          releaseAlphaMarker,
-          bundledDir,
-        ]);
-        const beta = runLeaseChild(children, childScript, [
-          "beta",
-          state.stateDir,
-          betaGoMarker,
-          releaseAlphaMarker,
-          bundledDir,
-        ]);
+        const alpha = runLeaseChild(
+          children,
+          childScript,
+          ["alpha", state.stateDir, alphaGoMarker, releaseAlphaMarker],
+          childEnv,
+        );
+        const beta = runLeaseChild(
+          children,
+          childScript,
+          ["beta", state.stateDir, betaGoMarker, releaseAlphaMarker],
+          childEnv,
+        );
         await Promise.all([alpha.ready, beta.ready]);
         await fs.writeFile(alphaGoMarker, "go");
         await alpha.waitForPhase("acquired");
         await fs.writeFile(betaGoMarker, "go");
-        // Acquisition attempts before yielding; alpha remains held until beta is waiting.
+        // Observe real contention before alpha commits; acquisition itself is asynchronous.
+        await beta.waitForPhase("held");
         await beta.waitForPhase("attempted");
         expect(beta.phases.has("acquired")).toBe(false);
         await fs.writeFile(releaseAlphaMarker, "release");
         await Promise.all([alpha.completed, beta.completed]);
+        expect(beta.phases.has("records:alpha")).toBe(true);
 
         closeOpenClawStateDatabaseForTest();
         const persisted = await readPersistedInstalledPluginIndex({ env: state.env });

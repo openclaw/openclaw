@@ -33,4 +33,6 @@ export const SIDEBAR_PANEL_SHORTCUTS = {
   dashboard: panel("dashboard", combos.dashboardPanel, (c) => c.dashboardAvailable()),
   detail: panel("detail", combos.reviewPanel),
   conversation: undefined,
+  "link-reader": undefined,
+  portal: undefined,
 };

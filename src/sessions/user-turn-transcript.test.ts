@@ -560,7 +560,7 @@ describe("user turn transcript persistence", () => {
         path: admission.storePath,
       });
       const work = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-        sql.includes("session_transcript_fts")
+        /\bsession_transcript_fts\b/i.test(sql)
           ? "fts"
           : sql.includes("octet_length")
             ? "size"

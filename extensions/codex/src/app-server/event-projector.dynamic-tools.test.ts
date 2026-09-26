@@ -150,24 +150,16 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
       id: "call-browser-1",
       name: "browser",
       arguments: { action: "open", url: "http://127.0.0.1:3000" },
-      input: { action: "open", url: "http://127.0.0.1:3000" },
     });
     const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
-    expect(toolResultMessage.role).toBe("toolResult");
-    expect(toolResultMessage.toolCallId).toBe("call-browser-1");
-    expect(toolResultMessage.toolName).toBe("browser");
-    expect(toolResultMessage.isError).toBe(false);
-    expect(toolResultMessage["__openclaw"]).toMatchObject({ resultContentSource: "network" });
-    const toolResultContent = requireRecord(
-      requireArray(toolResultMessage.content, "tool result content")[0],
-      "tool result content item",
-    );
-    expect(toolResultContent.type).toBe("toolResult");
-    expect(toolResultContent.id).toBe("call-browser-1");
-    expect(toolResultContent.name).toBe("browser");
-    expect(toolResultContent.toolName).toBe("browser");
-    expect(toolResultContent.toolCallId).toBe("call-browser-1");
-    expect(toolResultContent.content).toBe("opened");
+    expect(toolResultMessage).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-browser-1",
+      toolName: "browser",
+      isError: false,
+      content: [{ type: "text", text: "opened" }],
+      __openclaw: { resultContentSource: "network" },
+    });
     expect(
       requireRecord(result.messagesSnapshot[3], "final assistant")["__openclaw"],
     ).toMatchObject({

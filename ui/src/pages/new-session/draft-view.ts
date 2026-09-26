@@ -1,10 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
+import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import { renderNewSessionDraftComposer, renderNewSessionDraftErrors } from "./draft-composer.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -28,6 +29,7 @@ export function renderNewSessionDraftView(options: {
   requestUpdate: () => void;
   onMessage: (message: string, mentions?: readonly HumanMention[]) => void;
   onOpenImage: (item: ImageLightboxItem) => void;
+  onOpenSidebar?: (content: SidebarContent) => void;
 }) {
   const {
     context,
@@ -71,13 +73,17 @@ export function renderNewSessionDraftView(options: {
         canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
         submitDisabledReason: submission.submitDisabledReason(),
         blockedSubmitNotice: submission.blockedSubmitNotice(),
-        dictationActive: dictation.active,
+        get dictationActive() {
+          return dictation.active;
+        },
         dictationPreview: dictation.previewDraft(),
         dictationStatus: dictation.renderStatus(),
         context,
         isCatalogTarget,
         draftOwnerKey,
-        message: submission.message,
+        get message() {
+          return submission.message;
+        },
         mentions: submission.mentions,
         getMentions: () => submission.mentions,
         visibility: submission.visibility,
@@ -96,15 +102,20 @@ export function renderNewSessionDraftView(options: {
             }),
         requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
         requestUpdate,
-        submitting: submission.submitting,
+        get submitting() {
+          return submission.submitting;
+        },
         textareaController: submission.composerTextarea,
         voiceControl,
-        messageLocked: Boolean(submission.pendingPlacement.sessionKey),
+        get messageLocked() {
+          return Boolean(submission.pendingPlacement.sessionKey);
+        },
         nativeTerminal: isCatalogTarget,
         onUnsupportedAttachment: () =>
           submission.setError(t("newSession.terminalAttachmentsUnsupported")),
         onInput: onMessage,
         onOpenImage,
+        onOpenSidebar: options.onOpenSidebar,
         onVisibilityChange: (visibility) => {
           if (!submission.submitting && !submission.pendingPlacement.sessionKey) {
             submission.setVisibility(visibility);

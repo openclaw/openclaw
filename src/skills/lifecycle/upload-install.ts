@@ -1,23 +1,18 @@
-// Upload install helpers install skills from staged uploaded archives.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ArchiveLogger } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   installSkillArchiveFromPath,
   type SkillArchiveInstallFailureKind,
-  validateRequestedSkillSlug,
 } from "./archive-install.js";
+import { validateRequestedSkillSlug } from "./install-paths.js";
+import { SkillUploadRequestError } from "./upload-store-error.js";
 import {
   defaultSkillUploadStore,
   normalizeSkillUploadSha256,
-  SkillUploadRequestError,
   type SkillUploadStore,
 } from "./upload-store.js";
 
-/** Error classes exposed by uploaded skill archive install attempts. */
-type UploadedSkillInstallErrorKind = "invalid-request" | "unavailable";
-
-/** User-facing disabled message for archive upload installs. */
 export const UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE =
   "Uploaded skill archive installs are disabled by skills.install.allowUploadedArchives";
 
@@ -39,15 +34,8 @@ type UploadedSkillInstallResult =
   | {
       ok: false;
       error: string;
-      errorKind: UploadedSkillInstallErrorKind;
+      errorKind: SkillArchiveInstallFailureKind;
     };
-
-// Preserve invalid-request failures for caller feedback; other install failures are unavailable.
-function uploadInstallFailureErrorKind(
-  failureKind: SkillArchiveInstallFailureKind,
-): UploadedSkillInstallErrorKind {
-  return failureKind === "invalid-request" ? "invalid-request" : "unavailable";
-}
 
 export async function installUploadedSkillArchive(params: {
   uploadId: string;
@@ -112,14 +100,13 @@ export async function installUploadedSkillArchive(params: {
         },
       });
       if (!install.ok) {
-        const errorKind = uploadInstallFailureErrorKind(install.failureKind);
         if (install.failureKind === "invalid-request") {
           await upload.remove().catch(() => undefined);
         }
         return {
           ok: false,
           error: install.error,
-          errorKind,
+          errorKind: install.failureKind,
         };
       }
       await upload.remove().catch(() => undefined);

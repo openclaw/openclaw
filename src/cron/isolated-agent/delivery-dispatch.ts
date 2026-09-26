@@ -53,6 +53,7 @@ import {
   waitForCompletedDirectCronDelivery,
 } from "./delivery-dispatch-policy.js";
 import type {
+  CronDeliveryDisposition,
   DispatchCronDeliveryParams,
   DispatchCronDeliveryState,
   SuccessfulCronDeliveryTarget,
@@ -62,7 +63,6 @@ import {
   normalizeDirectCronDeliveryPayloads,
 } from "./delivery-payload-normalization.js";
 import { pickSummaryFromOutput } from "./helpers.js";
-import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
@@ -103,10 +103,10 @@ export async function dispatchCronDelivery(
   }
   let deliveryAttempted = verifiedMessageToolDelivery;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
-  const buildDeliveryState = async (result?: RunCronAgentTurnResult) => {
+  const buildDeliveryState = async (disposition?: CronDeliveryDisposition) => {
     const completion = resolveAdmittedCronCompletionStatus(
       params.job,
-      result?.status === "error" ? "error" : params.undeliveredRunStatus,
+      disposition?.kind === "error" ? "error" : params.undeliveredRunStatus,
       deliveryState.status,
       deliveryState.deliverySuppressionReason,
     );
@@ -120,7 +120,7 @@ export async function dispatchCronDelivery(
     }
     await params.queueSourceSessionMessageToolAwareness?.();
     return {
-      ...(result ? { result } : {}),
+      ...(disposition ? { disposition } : {}),
       deliveryState,
       delivered: deliveryState.delivered,
       deliveryAttempted,
@@ -136,18 +136,11 @@ export async function dispatchCronDelivery(
     params.sourceDeliveryOutcome.unverifiedMessageToolDelivery
       ? `${error}; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target`
       : error;
-  const failDeliveryTarget = (error: string) =>
-    params.withRunSession({
-      status: "error",
-      error: formatDeliveryTargetError(error),
-      errorKind: "delivery-target",
-      summary,
-      outputText,
-      delivered: deliveryState.delivered,
-      deliveryAttempted,
-      deliveryError: deliveryState.error,
-      ...params.telemetry,
-    });
+  const failDeliveryTarget = (error: string): CronDeliveryDisposition => ({
+    kind: "error",
+    error: formatDeliveryTargetError(error),
+    errorKind: "delivery-target",
+  });
   const cleanupDirectCronSessionIfNeeded = async () => {
     const cleanupOutcome = await cleanupCronRunSessionAfterRun({
       job: params.job,
@@ -168,22 +161,14 @@ export async function dispatchCronDelivery(
       });
     }
   };
-  const finishSilentReplyDelivery = (reason: NormalizeReplySkipReason): RunCronAgentTurnResult => {
+  const finishSilentReplyDelivery = (reason: NormalizeReplySkipReason): CronDeliveryDisposition => {
     deliveryAttempted = true;
     recordDelivery("not-delivered", undefined, reason);
-    return params.withRunSession({
-      status: "ok",
-      summary,
-      outputText,
-      delivered: false,
-      deliveryAttempted: true,
-      deliverySuppressionReason: reason,
-      ...params.telemetry,
-    });
+    return { kind: "suppressed" };
   };
   const deliverViaDirect = async (
     delivery: SuccessfulCronDeliveryTarget,
-  ): Promise<RunCronAgentTurnResult | null> => {
+  ): Promise<CronDeliveryDisposition | null> => {
     const {
       buildOutboundSessionContext,
       createOutboundSendDeps,
@@ -234,12 +219,7 @@ export async function dispatchCronDelivery(
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     try {
       if (params.isAborted()) {
-        return params.withRunSession({
-          status: "error",
-          error: params.abortReason(),
-          deliveryAttempted,
-          ...params.telemetry,
-        });
+        return { kind: "error", error: params.abortReason() };
       }
       const deliveryError = params.deliveryRequested
         ? resolveStaleCronDeliveryError(params)
@@ -248,15 +228,7 @@ export async function dispatchCronDelivery(
         deliveryAttempted = true;
         recordDelivery("not-delivered", deliveryError);
         await logCronDeliveryWarn(`[cron:${params.job.id}] ${deliveryError}`);
-        return params.withRunSession({
-          status: "ok",
-          summary,
-          outputText,
-          deliveryAttempted,
-          delivered: false,
-          deliveryError,
-          ...params.telemetry,
-        });
+        return { kind: "suppressed" };
       }
       const payloadsForDelivery = (
         await maybeApplyTtsToCronPayloads({
@@ -585,7 +557,7 @@ export async function dispatchCronDelivery(
 
   const finalizeTextDelivery = async (
     delivery?: SuccessfulCronDeliveryTarget,
-  ): Promise<RunCronAgentTurnResult | null> => {
+  ): Promise<CronDeliveryDisposition | null> => {
     if (
       !synthesizedText &&
       !params.spawnOnlyHandoff &&
@@ -620,13 +592,7 @@ export async function dispatchCronDelivery(
           ? "cron child-session handoff timed out before producing a final assistant payload"
           : "cron child-session handoff completed without a final assistant payload";
       deliveryAttempted = true;
-      return params.withRunSession({
-        status: "error",
-        error,
-        delivered: false,
-        deliveryAttempted,
-        ...params.telemetry,
-      });
+      return { kind: "error", error, delivered: false };
     }
     if (!params.deliveryBestEffort && hasUnsettledDescendants) {
       // Parent orchestration is still in progress; avoid announcing a partial
@@ -634,13 +600,7 @@ export async function dispatchCronDelivery(
       // not fire a redundant enqueueSystemEvent fallback (double-announce bug).
       deliveryAttempted = true;
       recordDelivery("not-delivered", "cron descendants are still active without a final reply");
-      return params.withRunSession({
-        status: "ok",
-        summary,
-        outputText,
-        deliveryAttempted,
-        ...params.telemetry,
-      });
+      return { kind: "pending" };
     }
     if (
       hadDescendants &&
@@ -654,13 +614,7 @@ export async function dispatchCronDelivery(
       // so the timer does not fire a redundant enqueueSystemEvent fallback.
       deliveryAttempted = true;
       recordDelivery("not-delivered", "cron descendants completed without a final reply");
-      return params.withRunSession({
-        status: "ok",
-        summary,
-        outputText,
-        deliveryAttempted,
-        ...params.telemetry,
-      });
+      return { kind: "pending" };
     }
     const normalizedSynthesizedText = normalizeSilentReplyText(synthesizedText);
     const hasStructuredCurrentSessionCompletion =
@@ -691,12 +645,7 @@ export async function dispatchCronDelivery(
       outputText = synthesizedText;
     }
     if (params.isAborted()) {
-      return params.withRunSession({
-        status: "error",
-        error: params.abortReason(),
-        deliveryAttempted,
-        ...params.telemetry,
-      });
+      return { kind: "error", error: params.abortReason() };
     }
     if (requiresCurrentSessionCompletion) {
       deliveryAttempted = true;
@@ -750,17 +699,7 @@ export async function dispatchCronDelivery(
       }
       recordDelivery("not-delivered", params.resolvedDelivery.error.message);
       await logCronDeliveryWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
-      return buildDeliveryState(
-        params.withRunSession({
-          status: "ok",
-          summary,
-          outputText,
-          delivered: deliveryState.delivered,
-          deliveryError: deliveryState.error,
-          deliveryAttempted,
-          ...params.telemetry,
-        }),
-      );
+      return buildDeliveryState({ kind: "suppressed" });
     }
 
     // Finalize descendant/subagent output first for text-only cron runs, then

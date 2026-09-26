@@ -9,6 +9,30 @@ const SLACK_QA_CAPTURE_SETTLE_TIMEOUT_MS = 5_000;
 const SLACK_QA_MESSAGE_TEXT_MAX_CHARS = 2_048;
 const SLACK_QA_BLOCK_TEXT_MAX_ITEMS = 64;
 const SLACK_QA_MESSAGE_WRITE_METHODS = new Set(["chat.postMessage", "chat.update"]);
+const SLACK_QA_NATIVE_WRITE_METHODS = new Set([
+  ...SLACK_QA_MESSAGE_WRITE_METHODS,
+  "chat.delete",
+  "reactions.add",
+  "reactions.remove",
+  "files.completeUploadExternal",
+  "files.delete",
+]);
+
+export type SlackNativeWrite = {
+  evidence: "api-accepted" | "uncertain";
+  reason?:
+    | "response-not-captured"
+    | "transport-error"
+    | "response-undecodable"
+    | "response-indeterminate";
+  requestEventId: number;
+  method: string;
+  channelId?: string;
+  messageId?: string;
+  threadId?: string;
+  emoji?: string;
+  fileIds?: string[];
+};
 
 function readSlackQaCapturePayload(
   store: DebugProxyCaptureReader,
@@ -193,4 +217,96 @@ export async function readSlackQaMessageWrites(params: {
     }
     await sleep(Math.min(25, Math.max(1, deadline - Date.now())));
   }
+}
+
+export function getSlackQaNativeWriteCursor(params: {
+  sessionId: string;
+  store: DebugProxyCaptureReader;
+}): number {
+  return readSlackQaCaptureEvents(params).reduce(
+    (cursor, event) => (typeof event.id === "number" ? Math.max(cursor, event.id) : cursor),
+    0,
+  );
+}
+
+/** Gateway Web API mutations, not Socket Mode delivery or visual evidence. */
+export function readSlackQaNativeWrites(params: {
+  afterRequestEventId: number;
+  sessionId: string;
+  store: DebugProxyCaptureReader;
+}): SlackNativeWrite[] {
+  const events = readSlackQaCaptureEvents(params);
+  const responses = new Map<string, Record<string, unknown>>();
+  const rejected = new Set<string>();
+  const uncertain = new Map<string, SlackNativeWrite["reason"]>();
+  for (const event of events) {
+    if (typeof event.flowId !== "string") {
+      continue;
+    }
+    if (event.kind === "error") {
+      uncertain.set(event.flowId, "transport-error");
+    } else if (event.kind === "response") {
+      const payload = readSlackQaCapturePayload(params.store, event);
+      const response = payload ? parseSlackQaCaptureObject(payload) : undefined;
+      if (event.status === 200 && response?.ok === true) {
+        responses.set(event.flowId, response);
+      } else if (
+        typeof event.status === "number" &&
+        event.status >= 200 &&
+        event.status < 500 &&
+        response?.ok === false &&
+        response.error !== "internal_error" &&
+        response.error !== "fatal_error"
+      ) {
+        rejected.add(event.flowId);
+      } else if (!uncertain.has(event.flowId)) {
+        uncertain.set(
+          event.flowId,
+          typeof response?.ok === "boolean" ? "response-indeterminate" : "response-undecodable",
+        );
+      }
+    }
+  }
+  return events.toReversed().flatMap((event): SlackNativeWrite[] => {
+    const method = readSlackQaMethod(event);
+    if (
+      !method ||
+      !SLACK_QA_NATIVE_WRITE_METHODS.has(method) ||
+      typeof event.id !== "number" ||
+      event.id <= params.afterRequestEventId
+    ) {
+      return [];
+    }
+    const flowId = typeof event.flowId === "string" ? event.flowId : "";
+    const response = responses.get(flowId);
+    if (!response && rejected.has(flowId)) {
+      return [];
+    }
+    const payload = readSlackQaCapturePayload(params.store, event);
+    const request = payload ? parseSlackQaCaptureObject(payload) : undefined;
+    const uploaded = Array.isArray(response?.files) ? response.files : [];
+    const fileIds = uploaded.flatMap((file: unknown) =>
+      file && typeof file === "object" && "id" in file && typeof file.id === "string"
+        ? [file.id]
+        : [],
+    );
+    if (method === "files.delete" && typeof request?.file === "string") {
+      fileIds.push(request.file);
+    }
+    return [
+      {
+        evidence: response ? "api-accepted" : "uncertain",
+        ...(!response ? { reason: uncertain.get(flowId) ?? "response-not-captured" } : {}),
+        requestEventId: event.id,
+        method,
+        channelId: truncateSlackQaText(
+          response?.channel ?? request?.channel ?? request?.channel_id,
+        ),
+        messageId: truncateSlackQaText(response?.ts ?? request?.ts ?? request?.timestamp),
+        threadId: truncateSlackQaText(request?.thread_ts),
+        emoji: truncateSlackQaText(request?.name),
+        ...(fileIds.length ? { fileIds } : {}),
+      },
+    ];
+  });
 }

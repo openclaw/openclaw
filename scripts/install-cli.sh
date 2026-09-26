@@ -102,7 +102,7 @@ OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
-DEFAULT_NODE_VERSION="24.19.0"
+DEFAULT_NODE_VERSION="24.21.0"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
@@ -120,6 +120,7 @@ GIT_UPDATE="${OPENCLAW_GIT_UPDATE:-1}"
 JSON=0
 RUN_ONBOARD=0
 NODE_ONLY=0
+RUNTIME_ONLY=0
 SET_NPM_PREFIX=0
 PNPM_CMD=()
 GIT_REF_KIND=""
@@ -136,8 +137,9 @@ Usage: install-cli.sh [options]
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
-  --node-version <ver>                Node version (default: 24.19.0)
+  --node-version <ver>                Node version (default: 24.21.0)
   --node-only                         Install only a private Node runtime (no system package changes)
+  --runtime-only                      Install CLI runtime without Gateway probes, service changes, or onboarding
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -278,6 +280,10 @@ fail() {
   emit_json error message "$msg"
   log "ERROR: $msg"
   exit 1
+}
+
+fail_freebsd_source_install() {
+  fail "Source/git installation is unsupported on FreeBSD. Use --install-method npm with a published version or compatible built .tgz package and the same --prefix. Keep pkg/Ports-managed installations with pkg or Ports."
 }
 
 prepare_tmpdir() {
@@ -456,6 +462,10 @@ parse_args() {
         NODE_VERSION="$2"
         NODE_VERSION_REQUESTED=1
         shift 2
+        ;;
+      --runtime-only)
+        RUNTIME_ONLY=1
+        shift
         ;;
       --node-only)
         NODE_ONLY=1
@@ -1265,7 +1275,7 @@ install_node() {
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
     sqlite_version="$(linked_node_sqlite_version)"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.19.0 (or newer)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.21.0 (or newer)"
   fi
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
   ln -sfn "$dir" "${PREFIX}/tools/node"
@@ -1276,7 +1286,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.4.0"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.4.2"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1506,6 +1516,9 @@ commit_wrapper_backup() {
 install_openclaw() {
   local requested="${OPENCLAW_VERSION:-latest}"
   if is_openclaw_source_package_install_spec "$requested"; then
+    if [[ "$(os_detect)" == "freebsd" ]]; then
+      fail_freebsd_source_install
+    fi
     fail "npm installs do not support OpenClaw GitHub source targets like '${requested}'. Use --install-method git --version main, latest, beta, an exact version, or a built .tgz package."
   fi
   local freshness_flag="--min-release-age=0"
@@ -1877,6 +1890,11 @@ refresh_gateway_service_if_loaded() {
 
 main() {
   parse_args "$@"
+  # Reject unsupported source installs before changing runtime links or checkouts.
+  # Node-only recovery owns its separate platform refusal and ignores the method.
+  if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" == "git" && "$(os_detect)" == "freebsd" ]]; then
+    fail_freebsd_source_install
+  fi
   PREFIX="$(resolve_installer_path "$PREFIX")"
   local original_tmpdir="${TMPDIR-}" original_tmpdir_set="${TMPDIR+x}"
   local TMPDIR="$original_tmpdir"
@@ -1906,7 +1924,9 @@ main() {
   if [[ "$INSTALL_METHOD" == "git" ]]; then
     install_openclaw_from_git "$GIT_DIR"
   elif [[ "$INSTALL_METHOD" == "npm" ]]; then
-    ensure_git
+    if [[ "$RUNTIME_ONLY" -eq 0 ]]; then
+      ensure_git
+    fi
     if [[ "$SET_NPM_PREFIX" -eq 1 ]]; then
       fix_npm_prefix_if_needed
     fi
@@ -1928,11 +1948,15 @@ main() {
   else
     unset TMPDIR
   fi
-  refresh_gateway_service_if_loaded
+  if [[ "$RUNTIME_ONLY" -eq 1 ]]; then
+    emit_json step name gateway-service status skip reason runtime-only
+  else
+    refresh_gateway_service_if_loaded
+  fi
   emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
 
-  if [[ "$RUN_ONBOARD" -eq 1 ]]; then
+  if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
     "${PREFIX}/bin/openclaw" onboard
   fi
 }

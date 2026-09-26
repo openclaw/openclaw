@@ -1,15 +1,22 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
-import { threadId, Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect } from "vitest";
+import { threadId, type Worker } from "node:worker_threads";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import * as workerCpu from "../../infra/worker-cpu.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { withEnv } from "../../test-utils/env.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
+} from "../plugin-model-catalog.js";
 import { isPreparedModelCatalogFull } from "../prepared-model-runtime.full-catalog.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import type {
@@ -22,15 +29,11 @@ const waitTimeoutMs = 30_000;
 export function usePreparedCatalogWorkerFixtures() {
   const retirements = new Set<() => void | Promise<void>>();
   const workers = new Set<Worker>();
-  // Synchronous capture also covers failures before a worker request is awaited.
-  const workerChannel = channel("worker_threads");
-  function trackWorker(message: unknown): void {
-    if (!isRecord(message) || !(message.worker instanceof Worker)) {
-      throw new Error("worker_threads diagnostics omitted the created Worker");
+  let restoreWorkerFactory: (() => void) | undefined;
+  async function waitForWorkers(options?: { requireCreated?: boolean }): Promise<void> {
+    if (options?.requireCreated) {
+      expect(workers.size, "the catalog worker creation owner was observed").toBeGreaterThan(0);
     }
-    workers.add(message.worker);
-  }
-  async function waitForWorkers(): Promise<void> {
     // Retirement removes exit listeners; Node's threadId still records actual termination.
     await expect
       .poll(() => [...workers].map((worker) => worker.threadId).filter((id) => id !== -1), {
@@ -38,7 +41,21 @@ export function usePreparedCatalogWorkerFixtures() {
       })
       .toEqual([]);
   }
-  beforeEach(() => workerChannel.subscribe(trackWorker));
+  beforeEach(() => {
+    const createWorker = workerCpu.createCpuTrackedWorker;
+    const catalogWorkerUrl = resolveRuntimeWorkerUrl(
+      runtimeProcessEntrypoints.preparedModelCatalog,
+    ).href;
+    const tracking = vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
+      const worker = createWorker(...args);
+      // Compiler services also use Worker threads; this fixture owns only catalog computation.
+      if (String(args[0]) === catalogWorkerUrl) {
+        workers.add(worker);
+      }
+      return worker;
+    });
+    restoreWorkerFactory = () => tracking.mockRestore();
+  });
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(async () => {
       // Direct snapshots bypass registered owners. Fence them even when worker warmup times out,
@@ -53,7 +70,8 @@ export function usePreparedCatalogWorkerFixtures() {
       } finally {
         // Keep a failed retirement assertion, but never leave its threads in the next test.
         await Promise.all([...workers].map((worker) => worker.terminate()));
-        workerChannel.unsubscribe(trackWorker);
+        restoreWorkerFactory?.();
+        restoreWorkerFactory = undefined;
         workers.clear();
         clearRuntimeAuthProfileStoreSnapshots();
         closeOpenClawAgentDatabasesForTest();
@@ -151,7 +169,12 @@ export async function refreshNativeCatalogDuringBoundedRead(params: {
   const { snapshot, inventoryOwner } = params;
   const previous = await snapshot.loadFullModelCatalog!({ refresh: true });
   const previousInventory = inventoryOwner.catalogInventory;
-  const previousModels = snapshot.readPublishedModels?.();
+  const previousProofId = "proof-refresh-1-sqlite-true-shared-true-unrelated-false";
+  const nextProofId = "proof-refresh-2-sqlite-true-shared-true-unrelated-false";
+  expect(previous.entries).toContainEqual(expect.objectContaining({ id: previousProofId }));
+  expect(previous.entries).toContainEqual(
+    expect.objectContaining({ nativeRuntime: params.harnessId }),
+  );
   const nativeHarness = snapshot.pluginRegistry?.agentHarnesses.find(
     ({ harness }) => harness.id === params.harnessId,
   )?.harness;
@@ -169,11 +192,23 @@ export async function refreshNativeCatalogDuringBoundedRead(params: {
   const refresh = snapshot.loadFullModelCatalog!({ refresh: true });
   try {
     await started.promise;
-    // A bounded read must keep one published generation while its native source is held.
-    expect(await snapshot.loadFullModelCatalog!()).toBe(previous);
-    expect(snapshot.readFullModelCatalog!()).toBe(previous);
-    expect(snapshot.readPublishedModels?.()).toBe(previousModels);
-    expect(inventoryOwner.catalogInventory).toBe(previousInventory);
+    // Provider completion publishes independently while the native source retains its last rows.
+    const held = await snapshot.loadFullModelCatalog!();
+    expect(held).not.toBe(previous);
+    expect(snapshot.readFullModelCatalog!()).toBe(held);
+    expect(inventoryOwner.catalogInventory).not.toBe(previousInventory);
+    expect(snapshot.readPublishedModels?.()).toBe(inventoryOwner.catalogInventory?.runtimeModels);
+    for (const key of ["entries", "routeVariants"] as const) {
+      expect(held[key]).toContainEqual(expect.objectContaining({ id: nextProofId }));
+      expect(held[key].some((entry) => entry.id === previousProofId)).toBe(false);
+      expect(held[key].filter((entry) => entry.nativeRuntime)).toEqual(
+        previous[key].filter((entry) => entry.nativeRuntime),
+      );
+      expect(inventoryOwner.catalogInventory?.catalog[key]).toContainEqual(
+        expect.objectContaining({ id: nextProofId }),
+      );
+    }
+    expect(held.nativeHostRows).toEqual(previous.nativeHostRows);
   } finally {
     release.resolve();
     try {
@@ -215,4 +250,53 @@ export async function loadCompletedFullCatalog(
     )
     .toBe(true);
   return completed!;
+}
+
+export function seedFixturePluginModelCatalog(
+  agentDir: string,
+  env: NodeJS.ProcessEnv,
+  pluginId: string,
+  providerId: string,
+): void {
+  withEnv(env, () =>
+    replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath(pluginId)]: JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: {
+            [providerId]: {
+              baseUrl: "https://worker-catalog.invalid/v1",
+              api: "openai-completions",
+              apiKey: "WORKER_CATALOG_API_KEY",
+              models: [{ id: "sqlite-model", name: "SQLite model" }],
+            },
+          },
+        }),
+      },
+    }),
+  );
+}
+
+export function writeCatalogFailureControl(
+  root: string,
+  providerId: string,
+  aliasId: string,
+): string {
+  const catalogControlPath = path.join(root, "catalog-control.txt");
+  fs.writeFileSync(catalogControlPath, "legacy", "utf8");
+  return `const catalogControl = fs.readFileSync(${JSON.stringify(catalogControlPath)}, "utf8");
+          const legacyModels = [{ id: "Learned", name: "Uppercase legacy model" }, { id: "learned", name: "Lowercase legacy model" }];
+          if (catalogControl === "unavailable" || catalogControl === "seed") return {
+            providers: catalogControl === "seed" ? { [${JSON.stringify(providerId)}]: {
+              baseUrl: "https://worker-catalog.invalid/v1", api: "openai-completions",
+              models: [{ id: "Learned", name: "Fallback seed" }],
+            } } : {},
+            outcomes: [{ provider: ${JSON.stringify(providerId)}, status: "unavailable" }],
+          };
+          if (catalogControl === "configured") return undefined;
+          if (catalogControl === "empty") return { provider: { baseUrl: "https://worker-catalog.invalid/v1", api: "openai-completions", models: [] } };
+          if (catalogControl === "alias") return { providers: { [${JSON.stringify(aliasId)}]: {
+            baseUrl: "https://worker-catalog.invalid/v1", api: "openai-completions", models: legacyModels,
+          } } };`;
 }

@@ -8,7 +8,8 @@
  * - Bot mention detection boundaries
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveChannelAuthorization } from "./monitor/authorization.js";
 import {
   extractCites,
@@ -20,7 +21,12 @@ import {
   resolveAuthorizedMessageText,
   resolveTlonGroupMentionDecision,
 } from "./monitor/utils.js";
+import { setTlonRuntime } from "./runtime.js";
 import { normalizeShip } from "./targets.js";
+
+beforeEach(() => {
+  setTlonRuntime(createPluginRuntimeMock());
+});
 
 const allowlistShipMatchingCases = [
   { label: "DM allowlist", isAllowed: isDmAllowedWithIngress },

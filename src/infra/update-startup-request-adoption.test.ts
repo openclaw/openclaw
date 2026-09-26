@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { UpdateCheckResult } from "./update-check.js";
+import { createUpdateRun } from "./update-run-ledger.js";
 
 const checkUpdateStatus = vi.hoisted(() =>
   vi.fn<typeof import("./update-check.js").checkUpdateStatus>(),
@@ -110,7 +111,7 @@ it("aborts and joins early update requests before the post-ready scheduler loads
   owner.start();
   const requests = Promise.allSettled([
     getUpdateEffectiveChannel(),
-    resolveGatewayUpdateAdmission(),
+    resolveGatewayUpdateAdmission(createUpdateRun({ trigger: "api" }).runId),
   ]);
   let stopping: Promise<void> | undefined;
   try {
@@ -131,7 +132,7 @@ it("aborts and joins early update requests before the post-ready scheduler loads
     ]);
     await stopping;
     expect(stopped).toBe(true);
-    expect(checkUpdateStatus).toHaveBeenCalledOnce();
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
     expect(factory).not.toHaveBeenCalled();
   } finally {
     probe.resolve(status);

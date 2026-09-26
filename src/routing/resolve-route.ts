@@ -7,6 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import type { AgentRouteBinding } from "../config/types.agents.js";
 import type { DmScope, GroupScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldLogVerbose } from "../globals.js";
@@ -25,7 +26,6 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeAccountId,
   normalizeAgentId,
-  sanitizeAgentId,
 } from "./session-key.js";
 
 /** @deprecated Use ChatType from channels/chat-type.js */
@@ -121,7 +121,7 @@ export function buildAgentSessionKey(params: {
 
 type AgentLookupCache = {
   agentsRef: OpenClawConfig["agents"] | undefined;
-  byNormalizedId: Map<string, string>;
+  agentIds: Set<string>;
   fallbackSoleAgentId?: string;
 };
 
@@ -134,17 +134,17 @@ function resolveAgentLookupCache(cfg: OpenClawConfig): AgentLookupCache {
     return existing;
   }
 
-  const byNormalizedId = new Map<string, string>();
+  const agentIds = new Set<string>();
   for (const agent of listAgentEntries(cfg)) {
     const rawId = agent.id?.trim();
     if (!rawId) {
       continue;
     }
-    byNormalizedId.set(normalizeAgentId(rawId), sanitizeAgentId(rawId));
+    agentIds.add(normalizeAgentId(rawId));
   }
   const next: AgentLookupCache = {
     agentsRef,
-    byNormalizedId,
+    agentIds,
     fallbackSoleAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
   };
   agentLookupCacheByCfg.set(cfg, next);
@@ -155,7 +155,7 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
   const lookup = resolveAgentLookupCache(cfg);
   const trimmed = (agentId ?? "").trim();
   if (!trimmed) {
-    return sanitizeAgentId(
+    return normalizeAgentId(
       lookup.fallbackSoleAgentId ??
         resolveDefaultAgentId(cfg, {
           surface: "agent lookup",
@@ -164,17 +164,16 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
     );
   }
   const normalized = normalizeAgentId(trimmed);
-  const resolved = lookup.byNormalizedId.get(normalized);
-  if (resolved) {
-    return resolved;
+  if (lookup.agentIds.has(normalized)) {
+    return normalized;
   }
   if (normalized === DEFAULT_AGENT_ID) {
     return DEFAULT_AGENT_ID;
   }
-  if (lookup.byNormalizedId.size === 0) {
-    return sanitizeAgentId(trimmed);
+  if (lookup.agentIds.size === 0) {
+    return normalizeAgentId(trimmed);
   }
-  throw new AgentSelectionRequiredError([...lookup.byNormalizedId.values()], {
+  throw new AgentSelectionRequiredError([...lookup.agentIds], {
     surface: "route binding",
     hint: `Update the binding agentId "${trimmed}" to a configured agent.`,
   });
@@ -283,13 +282,7 @@ function buildEvaluatedBindingsByChannel(
       bucket.byAnyAccount.push(evaluated);
       continue;
     }
-    const accountKey = normalizeAccountId(match.accountPattern);
-    const existing = bucket.byAccount.get(accountKey);
-    if (existing) {
-      existing.push(evaluated);
-      continue;
-    }
-    bucket.byAccount.set(accountKey, [evaluated]);
+    pushToIndexMap(bucket.byAccount, normalizeAccountId(match.accountPattern), evaluated);
   }
   return byChannel;
 }
@@ -308,40 +301,25 @@ function mergeEvaluatedBindingsInSourceOrder(
   let accountIdx = 0;
   let anyIdx = 0;
   while (accountIdx < accountScoped.length && anyIdx < anyAccount.length) {
-    const accountBinding = accountScoped[accountIdx];
-    const anyBinding = anyAccount[anyIdx];
-    if (
-      (accountBinding?.order ?? Number.MAX_SAFE_INTEGER) <=
-      (anyBinding?.order ?? Number.MAX_SAFE_INTEGER)
-    ) {
-      if (accountBinding) {
-        merged.push(accountBinding);
-      }
+    const accountBinding = accountScoped[accountIdx]!;
+    const anyBinding = anyAccount[anyIdx]!;
+    if (accountBinding.order <= anyBinding.order) {
+      merged.push(accountBinding);
       accountIdx += 1;
       continue;
     }
-    if (anyBinding) {
-      merged.push(anyBinding);
-    }
+    merged.push(anyBinding);
     anyIdx += 1;
   }
-  if (accountIdx < accountScoped.length) {
-    merged.push(...accountScoped.slice(accountIdx));
-  }
-  if (anyIdx < anyAccount.length) {
-    merged.push(...anyAccount.slice(anyIdx));
-  }
+  merged.push(...accountScoped.slice(accountIdx), ...anyAccount.slice(anyIdx));
   return merged;
 }
 
 function pushToIndexMap(
   map: Map<string, EvaluatedBinding[]>,
-  key: string | null,
+  key: string,
   binding: EvaluatedBinding,
 ): void {
-  if (!key) {
-    return;
-  }
   const existing = map.get(key);
   if (existing) {
     existing.push(binding);
@@ -479,23 +457,14 @@ function normalizePeerConstraint(
 }
 
 function normalizeBindingMatch(
-  match:
-    | {
-        accountId?: string | undefined;
-        peer?: { kind?: string; id?: string } | undefined;
-        guildId?: string | undefined;
-        teamId?: string | undefined;
-        roles?: string[] | undefined;
-      }
-    | undefined,
+  match: AgentRouteBinding["match"] | undefined,
 ): NormalizedBindingMatch {
-  const rawRoles = match?.roles;
   return {
     accountPattern: (match?.accountId ?? "").trim(),
     peer: normalizePeerConstraint(match?.peer),
     guildId: normalizeRouteBindingId(match?.guildId) || null,
     teamId: normalizeRouteBindingId(match?.teamId) || null,
-    roles: normalizeRouteBindingRoles(rawRoles),
+    roles: normalizeRouteBindingRoles(match?.roles),
   };
 }
 
@@ -571,16 +540,17 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
   return routeBindingScopeMatches(match, scope);
 }
 
+function normalizeRoutePeer(peer: RoutePeer | null | undefined): RoutePeer | null {
+  return peer
+    ? { kind: normalizeChatType(peer.kind) ?? peer.kind, id: normalizeRouteBindingId(peer.id) }
+    : null;
+}
+
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeLowercaseStringOrEmpty(input.channel);
   const defaultAgentId = normalizeLowercaseStringOrEmpty(input.defaultAgentId);
   const accountId = normalizeAccountId(input.accountId);
-  const peer = input.peer
-    ? {
-        kind: normalizeChatType(input.peer.kind) ?? input.peer.kind,
-        id: normalizeRouteBindingId(input.peer.id),
-      }
-    : null;
+  const peer = normalizeRoutePeer(input.peer);
   const guildId = normalizeRouteBindingId(input.guildId);
   const teamId = normalizeRouteBindingId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
@@ -588,12 +558,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const groupScope = input.groupScope ?? input.cfg.session?.groupScope ?? "per-group";
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
-  const parentPeer = input.parentPeer
-    ? {
-        kind: normalizeChatType(input.parentPeer.kind) ?? input.parentPeer.kind,
-        id: normalizeRouteBindingId(input.parentPeer.id),
-      }
-    : null;
+  const parentPeer = normalizeRoutePeer(input.parentPeer);
 
   const routeCache =
     !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(input.cfg) : null;

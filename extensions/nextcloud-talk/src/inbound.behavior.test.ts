@@ -56,6 +56,7 @@ function installRuntime(params?: {
   const runtime = {
     channel: {
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         dispatchReply: vi.fn(async () => undefined),
       },
       pairing: {

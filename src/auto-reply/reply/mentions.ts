@@ -14,7 +14,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
-import { HISTORY_CONTEXT_MARKER } from "./history.js";
+import { HISTORY_CONTEXT_MARKER, RECENT_HISTORY_CONTEXT_MARKER } from "./history.js";
 import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
 export type { BuildMentionRegexesOptions } from "./mentions.types.js";
 export { CURRENT_MESSAGE_MARKER } from "./history.js";
@@ -413,7 +413,10 @@ export function stripStructuralPrefixes(text: string): string {
   }
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
-  if (text.trimStart().startsWith(HISTORY_CONTEXT_MARKER)) {
+  if (
+    text.trimStart().startsWith(HISTORY_CONTEXT_MARKER) ||
+    text.trimStart().startsWith(RECENT_HISTORY_CONTEXT_MARKER)
+  ) {
     // Flat history has no trustworthy current-message range when users can quote
     // marker text. Leave it non-command-shaped instead of guessing a boundary.
     return text.trim();

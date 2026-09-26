@@ -147,7 +147,7 @@ export class GatewayPendingRequests {
           return;
         }
         requestSent = true;
-        this.invoke("sent", () => options?.onSent?.());
+        this.invoke("sent", () => options?.onSent?.(id));
       } catch (error) {
         if (retire("CLIENT_SEND_ERROR")) {
           reject(error instanceof Error ? error : new Error(String(error)));

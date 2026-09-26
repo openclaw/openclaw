@@ -5,7 +5,7 @@ import { z } from "zod";
 /**
  * Twitch user roles that can be allowed to interact with the bot
  */
-const TwitchRoleSchema = z.enum(["moderator", "owner", "vip", "subscriber", "all"]);
+export const TwitchRoleSchema = z.enum(["moderator", "owner", "vip", "subscriber", "all"]);
 
 const TwitchAccountShape = {
   /** Twitch username */
@@ -41,7 +41,7 @@ const TwitchAccountShape = {
 /**
  * Twitch account configuration schema
  */
-const TwitchAccountSchema = z.object(TwitchAccountShape);
+export const TwitchAccountSchema = z.object(TwitchAccountShape);
 
 /**
  * Base configuration properties shared by both single and multi-account modes

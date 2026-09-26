@@ -4,7 +4,6 @@ import {
   mergeSessionIdentity,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
-import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -165,7 +164,6 @@ export async function runManagerInitializeSession(params: {
     agent,
     mode: input.mode,
     cwd: effectiveCwd,
-    configSignature: resolveRuntimeConfigCacheKey(input.cfg),
   });
   return {
     runtime,

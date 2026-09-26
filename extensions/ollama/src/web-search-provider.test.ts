@@ -455,12 +455,17 @@ describe("ollama web search provider", () => {
     );
   });
 
-  it("surfaces Ollama signin guidance for 401 responses", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue(guardedResponse("", { status: 401 }));
-
-    await expect(runOllamaWebSearch({}, "latest openclaw release")).rejects.toThrow(
-      "ollama signin",
-    );
+  it.each([
+    { status: 401, message: "ollama signin" },
+    { status: 403, message: "unavailable" },
+    { status: 429, message: "Ollama web search failed (429)" },
+  ])("preserves status and guidance for HTTP $status", async ({ status, message }) => {
+    fetchWithSsrFGuardMock.mockResolvedValue(guardedResponse("", { status }));
+    await expect(runOllamaWebSearch({}, "latest openclaw release")).rejects.toMatchObject({
+      status,
+      statusCode: status,
+      message: expect.stringContaining(message),
+    });
   });
 
   it("surfaces API-key guidance for hosted Ollama 401 responses", async () => {
@@ -468,7 +473,13 @@ describe("ollama web search provider", () => {
 
     await expect(
       runOllamaWebSearch(createOllamaConfig({ baseUrl: "https://ollama.com" })),
-    ).rejects.toThrow("Set OLLAMA_API_KEY or configure models.providers.ollama.apiKey");
+    ).rejects.toMatchObject({
+      status: 401,
+      statusCode: 401,
+      message: expect.stringContaining(
+        "Set OLLAMA_API_KEY or configure models.providers.ollama.apiKey",
+      ),
+    });
   });
 
   it("reports malformed Ollama web search JSON with a stable provider error", async () => {

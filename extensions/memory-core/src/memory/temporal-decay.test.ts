@@ -42,6 +42,31 @@ async function mergeVectorResultsWithTemporalDecay(
 }
 
 describe("temporal decay", () => {
+  it("uses indexed remote mtimes in hybrid ranking while retaining evergreen and dated paths", async () => {
+    const paths = ["imports/note.md", "MEMORY.md", "memory/2026-02-09.md"];
+    const results = await mergeHybridResults({
+      vector: paths.map((filePath) =>
+        createVectorMemoryEntry({
+          id: filePath,
+          path: filePath,
+          snippet: "host content",
+          vectorScore: 1,
+        }),
+      ),
+      keyword: [],
+      vectorWeight: 1,
+      textWeight: 0,
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+      memorySourceMtimes: new Map(paths.map((filePath) => [filePath, NOW_MS - 30 * DAY_MS])),
+    });
+    expect(results.find((entry) => entry.path === "imports/note.md")?.score).toBeCloseTo(0.5);
+    expect(results.find((entry) => entry.path === "MEMORY.md")?.score).toBe(1);
+    expect(results.find((entry) => entry.path === "memory/2026-02-09.md")?.score).toBeGreaterThan(
+      0.9,
+    );
+  });
+
   it("does not decay evergreen memory files", async () => {
     const dir = await createTempWorkspace("openclaw-temporal-decay-");
 

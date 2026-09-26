@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import type { SessionCostUsagePublication } from "../shared/usage-types.js";
+import { modelSelectionPoliciesMatch } from "./operator-model-presentation.js";
+import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
@@ -8,9 +12,14 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 /** A committed auth change remains successful even if its best-effort UI notification fails. */
 export function broadcastChatMetadataChanged(
   context: Pick<GatewayRequestContext, "broadcast" | "logGateway">,
+  payload: Partial<SessionCostUsagePublication> & {
+    modelSelectionChanged?: boolean;
+    modelCatalogChanged?: boolean;
+    authChanged?: boolean;
+  } = {},
 ): void {
   try {
-    context.broadcast("chat.metadata.changed", {}, { dropIfSlow: true });
+    context.broadcast("chat.metadata.changed", payload, { dropIfSlow: true });
   } catch {
     context.logGateway.warn("chat metadata change notification failed");
   }
@@ -24,8 +33,10 @@ export async function createGatewayChatMetadataLifecycle(params: {
   let context: GatewayRequestContext | undefined;
   let preparedModelRuntimeState: "unobserved" | "available" | "unavailable" = "unobserved";
   let preparedModelRuntimeEventVersion = 0;
-  const { ChatMetadataSnapshotUnavailableError, createGatewayChatMetadataRuntime } =
+  const { createGatewayChatMetadataRuntime } =
     await import("./server-methods/chat-metadata-runtime.js");
+  const { ChatMetadataSnapshotUnavailableError } =
+    await import("./server-methods/chat-metadata-facts.js");
   const runtime = createGatewayChatMetadataRuntime({
     getConfig: params.getConfig,
     getContext: () => {
@@ -48,25 +59,25 @@ export async function createGatewayChatMetadataLifecycle(params: {
           refreshOnRead: true,
         }
       : {}),
-    onChanged: () => {
+    onChanged: (change) => {
       if (context) {
-        broadcastChatMetadataChanged(context);
+        broadcastChatMetadataChanged(context, change);
       }
     },
     log: params.log,
   });
-  const refreshLogged = () => {
-    void runtime.refresh().catch((error: unknown) => {
+  const refreshLogged = (notifyIfUnchanged = false) => {
+    void runtime.refresh({ notifyIfUnchanged }).catch((error: unknown) => {
       params.log.warn(`chat metadata refresh failed: ${String(error)}`);
     });
   };
-  const refreshForSubordinateChange = () => {
+  const refreshForSubordinateChange = (notifyIfUnchanged = false) => {
     // Auth and skill facts are subordinate to the prepared model owner. During replacement the
     // publication event owns the one catch-up refresh after every related fact is committed.
     if (preparedModelRuntimeState === "available") {
       // The metadata owner compares captured facts before fencing changed generations.
       // Unrelated workspace events and repeated catalog statuses must not discard its cache.
-      refreshLogged();
+      refreshLogged(notifyIfUnchanged);
     }
   };
   const registerRefreshListeners = async (): Promise<(() => void) | undefined> => {
@@ -92,7 +103,9 @@ export async function createGatewayChatMetadataLifecycle(params: {
           ) {
             return;
           }
-          refreshForSubordinateChange();
+          refreshForSubordinateChange(
+            event.phase === "catalog-published" && event.refreshStatusChanged === true,
+          );
           return;
         }
         preparedModelRuntimeEventVersion += 1;
@@ -113,8 +126,10 @@ export async function createGatewayChatMetadataLifecycle(params: {
         preparedModelRuntimeState = "available";
         refreshLogged();
       });
-    const unregisterSkillsChange = registerSkillsChangeListener(() => {
-      refreshForSubordinateChange();
+    const unregisterSkillsChange = registerSkillsChangeListener((event) => {
+      if (event.reason !== "watch-available") {
+        refreshForSubordinateChange();
+      }
     });
     const unregisterRuntimeAuthProfileStoreMutation =
       registerRuntimeAuthProfileStoreMutationListener(() => {
@@ -133,11 +148,31 @@ export async function createGatewayChatMetadataLifecycle(params: {
       publishSidecars: GatewaySidecarStopOwner["publish"],
     ) => {
       context = next;
+      let selectionConfig = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
       const unregister = await registerRefreshListeners();
+      const unregisterUsage = onSessionCostUsageUpdated((publication) => {
+        broadcastChatMetadataChanged(next, {
+          ...publication,
+          modelCatalogChanged: false,
+          authChanged: false,
+        });
+      });
+      const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
+        if (change.kind === "config" && change.context === next && context === next) {
+          const config = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
+          const unchanged = modelSelectionPoliciesMatch(selectionConfig, config);
+          selectionConfig = config;
+          if (!unchanged) {
+            broadcastChatMetadataChanged(next, { modelSelectionChanged: true });
+          }
+        }
+      });
       // Minimal Gateways still own read-triggered preparation. Every lifetime
       // must join it before shutdown retires the config and model owners.
       publishSidecars({
         stop: async () => {
+          unregisterUsage();
+          unregisterRolePolicy();
           unregister?.();
           await runtime.stop();
         },

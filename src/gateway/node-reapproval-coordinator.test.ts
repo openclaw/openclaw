@@ -10,6 +10,7 @@ import {
 } from "../infra/device-pairing-node.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-reapproval-" });
@@ -48,6 +49,7 @@ describe("node reapproval coordinator", () => {
   });
 
   afterAll(async () => {
+    await closeStateDatabaseForTest();
     await tempDirs.cleanup();
   });
 

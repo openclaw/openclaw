@@ -1,9 +1,7 @@
-// Msteams plugin module implements access behavior.
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
-  resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -161,7 +159,7 @@ export async function resolveMSTeamsSenderAccess(params: {
     allowNameMatching,
   });
 
-  const resolved = await resolveStableChannelMessageIngress({
+  const resolved = await core.channel.inbound.ingress.resolveStable({
     channelId: "msteams",
     accountId: pairing.accountId,
     identity: {

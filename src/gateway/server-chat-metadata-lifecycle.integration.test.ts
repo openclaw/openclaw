@@ -5,6 +5,7 @@ import {
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "../agents/prepared-model-runtime.test-harness.js";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { revokeRuntimeAuthMaterializations } from "../agents/auth-profiles/runtime-materializations.js";
 import { reportEmbeddedRunSuccessfulAuthBinding } from "../agents/embedded-agent-runner/run/auth-profile-success.js";
@@ -35,6 +36,11 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  configureAuthFixture,
+  configureHarnessOwnedUnresolvedAuth,
+  model,
+} from "./server-chat-metadata-lifecycle.auth.test-support.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import {
   buildModelsListResult,
@@ -64,12 +70,6 @@ const config = {
     list: [{ id: "main", default: true }],
   },
 } as OpenClawConfig;
-const model = {
-  id: "gpt-5.4",
-  name: "GPT-5.4",
-  provider: "openai",
-  api: "openai-chatgpt-responses" as const,
-};
 const context = {
   broadcast: vi.fn(),
   getRuntimeConfig: () => config,
@@ -96,62 +96,6 @@ beforeEach(async () => {
   });
   sidecars = createGatewaySidecarStopOwner();
 });
-
-function configureAuthFixture(
-  kind: "secret-ref" | "external-oauth" | "unresolved-secret-ref",
-  catalogAuthRejected = false,
-) {
-  if (kind === "external-oauth") {
-    return;
-  }
-  const apiKeyModel = { ...model, api: "openai-responses" as const };
-  mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
-    entries: [apiKeyModel],
-    routeVariants: [apiKeyModel],
-    ...(catalogAuthRejected
-      ? {
-          providerOutcomes: [
-            {
-              provider: "openai",
-              profileId: "openai:default",
-              rejectionScope: "catalog",
-              status: "auth-rejected",
-            },
-          ],
-        }
-      : {}),
-  });
-  mocks.authStorage.getAll.mockReturnValue({
-    openai: { type: "api_key", key: "openclaw-secret-ref-configured" },
-  });
-  mocks.preparedAuthStore = {
-    version: 1,
-    profiles: {
-      "openai:default": {
-        type: "api_key",
-        provider: "openai",
-        keyRef: { source: "file", provider: "round4-file", id: "value" },
-        ...(kind === "secret-ref" ? { key: "resolved-at-runtime" } : {}),
-      },
-    },
-  };
-}
-
-function configureHarnessOwnedUnresolvedAuth() {
-  mocks.authStorage.getAll.mockReturnValue({
-    openai: { type: "api_key", key: "openclaw-secret-ref-configured" },
-  });
-  mocks.preparedAuthStore = {
-    version: 1,
-    profiles: {
-      "openai:default": {
-        type: "api_key",
-        provider: "openai",
-        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-      },
-    },
-  };
-}
 
 afterEach(async ({ task }) => {
   await sidecars.stop();
@@ -282,6 +226,8 @@ describe("gateway chat metadata lifecycle composition", () => {
       let result: ReturnType<typeof buildModelsListResult> | undefined;
       try {
         await publishOwner(nativeConfig);
+        expect(loadModelCatalog).toHaveBeenCalled();
+        loadModelCatalog.mockClear();
         const owner = getPreparedModelCatalogOwnerSnapshot({
           agentId: "main",
           config: nativeConfig,
@@ -330,7 +276,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         ready = !initialReady;
         resume.resolve();
         const models = (await result).models;
-        expect(models.map(({ id }) => id)).toEqual(
+        expect(models.map(({ id }) => id).toSorted()).toEqual(
           ready ? ["codex-latest", "gpt-5.6-luna"] : ["gpt-5.6-luna"],
         );
         expect(models.every(({ available }) => available === ready)).toBe(true);
@@ -341,13 +287,17 @@ describe("gateway chat metadata lifecycle composition", () => {
         ready = initialReady;
         for (let read = 0; read < 3; read++) {
           expect(prepared.isCurrent()).toBe(true);
-          expect(prepared.read().models.map(({ id, available }) => [id, available])).toEqual(
-            ready
-              ? [
-                  ["codex-latest", true],
-                  ["gpt-5.6-luna", true],
-                ]
-              : [["gpt-5.6-luna", false]],
+          const membership = prepared.read().models.map(({ id, available }) => [id, available]);
+          expect(membership).toHaveLength(ready ? 2 : 1);
+          expect(membership).toEqual(
+            expect.arrayContaining(
+              ready
+                ? [
+                    ["codex-latest", true],
+                    ["gpt-5.6-luna", true],
+                  ]
+                : [["gpt-5.6-luna", false]],
+            ),
           );
         }
         expect(evaluations).toHaveBeenCalledTimes(hostCalls);
@@ -369,10 +319,10 @@ describe("gateway chat metadata lifecycle composition", () => {
     { wildcard: false, invalidate: "dispose", authoritative: true },
     { wildcard: false, invalidate: "dispose", authoritative: false },
   ])(
-    "registered models.list preserves native metadata and pin authority after no-op discovery (wildcard=$wildcard, $invalidate, authoritative=$authoritative)",
+    "registered models.list preserves native metadata and pin authority after discovery (wildcard=$wildcard, $invalidate, authoritative=$authoritative)",
     async ({ wildcard, invalidate, authoritative }) => {
       const modelRef = wildcard ? "openai/*" : "openai/codex-latest";
-      // An authored picker entry without a primary model does not start native discovery.
+      // Picker preparation discovers native catalogs even without a primary model.
       const nativeConfig: OpenClawConfig = {
         agents: {
           defaults: {
@@ -460,6 +410,10 @@ describe("gateway chat metadata lifecycle composition", () => {
       };
       try {
         await publishOwner(nativeConfig);
+        expect(loadModelCatalog).toHaveBeenCalled();
+        const preparationCalls = loadModelCatalog.mock.calls.length;
+        loadModelCatalog.mockClear();
+        revision += 1;
         const lifecycle = await createLifecycle(() => currentConfig);
         await lifecycle.attachContext(nativeContext, sidecars.publish);
         const expectedModels = (available: boolean) =>
@@ -652,9 +606,9 @@ describe("gateway chat metadata lifecycle composition", () => {
             expect(replacement).toBeDefined();
             expect(replacement).not.toBe(owner);
             expect(replacement?.pluginRegistry).toBe(owner.pluginRegistry);
-            expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+            expect(loadModelCatalog).toHaveBeenCalledTimes(1 + preparationCalls);
             await lifecycle.read({ agentId: "main" });
-            expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+            expect(loadModelCatalog).toHaveBeenCalledTimes(1 + preparationCalls);
             expect({ current: staleCurrent, models: staleModels }).toMatchObject({
               current: false,
               models: expectedModels(false),
@@ -987,9 +941,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       await expect(lifecycle.read({ agentId: "main" })).rejects.toBe(failure);
       // Drain the completed publication's promise continuations before starting a new
       // transaction; this must not exercise two components of one queued transaction.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(phases).toEqual(["invalidated", "failed"]);
       phases.length = 0;
 
@@ -1008,9 +960,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         },
       );
       await expect(healthyDispatch).resolves.toMatchObject({ agentId: "main" });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(phases).toContain("invalidated");
       expect(phases).not.toContain("published");
       expect(getPreparedModelCatalogOwnerSnapshot({ agentId: "worker", config })).toBeUndefined();

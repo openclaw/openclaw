@@ -18,7 +18,12 @@ vi.mock("openclaw/plugin-sdk/config-mutation", () => ({
 }));
 
 // Imported AFTER vi.mock so the mocked module is what policy.ts binds to.
-const { evaluateFilePolicy, persistLiteralGrant } = await import("./policy.js");
+const {
+  evaluateFilePolicy,
+  evaluateFileReadPolicySnapshot,
+  snapshotNodeFileReadPolicy,
+  persistLiteralGrant,
+} = await import("./policy.js");
 
 beforeEach(() => {
   getRuntimeConfigMock.mockReset();
@@ -60,6 +65,41 @@ function expectResultFields(result: unknown, fields: Record<string, unknown>) {
     expect(record[key]).toEqual(value);
   }
 }
+
+it("delegates only the selected node read policy and ignores the Node process policy", () => {
+  const gatewayHome = os.homedir();
+  withConfig({
+    "node-1": {
+      allowReadPaths: ["/workspace/**", "~/shared/**"],
+      allowWritePaths: ["/other/**"],
+      denyPaths: ["/workspace/private.txt"],
+    },
+    "node-2": { allowReadPaths: ["/unrelated/**"] },
+  });
+  const snapshot = snapshotNodeFileReadPolicy({ nodeId: "node-1" });
+  expect(Object.keys(snapshot.pluginConfig.nodes)).toEqual(["node-1"]);
+  expect(snapshot.pluginConfig.nodes["node-1"]).not.toHaveProperty("allowWritePaths");
+  withConfig({ "node-1": { allowReadPaths: ["/**"] } });
+  vi.spyOn(os, "homedir").mockReturnValue("/different-node-home");
+
+  expect(evaluateFileReadPolicySnapshot({ ...snapshot, path: "/workspace/SKILL.md" }).ok).toBe(
+    true,
+  );
+  expect(evaluateFileReadPolicySnapshot({ ...snapshot, path: "/workspace/private.txt" }).ok).toBe(
+    false,
+  );
+  expect(evaluateFileReadPolicySnapshot({ ...snapshot, path: "/unrelated/file.txt" }).ok).toBe(
+    false,
+  );
+  expect(
+    evaluateFileReadPolicySnapshot({ ...snapshot, path: path.join(gatewayHome, "shared/file.txt") })
+      .ok,
+  ).toBe(true);
+  expect(
+    evaluateFileReadPolicySnapshot({ ...snapshot, path: "/different-node-home/shared/file.txt" })
+      .ok,
+  ).toBe(false);
+});
 
 describe("evaluateFilePolicy — default deny", () => {
   it("returns NO_POLICY when no plugin config block is present", () => {

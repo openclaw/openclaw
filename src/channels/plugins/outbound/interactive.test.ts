@@ -4,6 +4,7 @@ import {
   renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
   normalizeMessagePresentation,
+  type MessagePresentation,
 } from "../../../interactive/payload.js";
 import {
   adaptMessagePresentationForChannel,
@@ -899,6 +900,84 @@ describe("presentation capability limits", () => {
         buttons: [{ label: "Open report", url: "https://example.test" }],
       },
     ]);
+  });
+
+  it("keeps local row limits when the raw button count fits the global capacity", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          { type: "buttons", buttons: [{ label: "One", value: "one" }] },
+          { type: "buttons", buttons: [{ label: "Two", value: "two" }] },
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Three", value: "three", priority: 10 },
+              { label: "Four", value: "four", priority: 10 },
+            ],
+          },
+        ],
+      },
+      capabilities: { limits: { actions: { maxActionsPerRow: 2, maxRows: 2 } } },
+    });
+
+    expect(presentation).toStrictEqual({
+      blocks: [
+        { type: "buttons", buttons: [{ label: "One", value: "one" }] },
+        { type: "buttons", buttons: [{ label: "Two", value: "two" }] },
+        { type: "context", text: "Actions:\n- Three\n- Four" },
+      ],
+    });
+  });
+
+  it("adapts repeated button occurrences independently and rereads changed input", () => {
+    const button = { label: "😀 more", value: "first", style: "primary" as const };
+    const block = { type: "buttons" as const, buttons: [button, button] };
+    const presentation: MessagePresentation = { blocks: [block, block] };
+    const actions = {
+      maxActions: 4,
+      maxActionsPerRow: 2,
+      maxRows: 2,
+      maxLabelLength: 1,
+      supportsStyles: false,
+    };
+    const first = adaptMessagePresentationForChannel({
+      presentation,
+      capabilities: { limits: { actions } },
+    });
+    const expectedFirst = {
+      blocks: Array.from({ length: 2 }, () => ({
+        type: "buttons",
+        buttons: [
+          { label: "😀", value: "first" },
+          { label: "😀", value: "first" },
+        ],
+      })),
+    };
+
+    expect(first).toStrictEqual(expectedFirst);
+    const copies = first.blocks.flatMap((entry) => (entry.type === "buttons" ? entry.buttons : []));
+    expect(new Set(copies).size).toBe(4);
+    expect(copies).not.toContain(button);
+    expect(button).toStrictEqual({ label: "😀 more", value: "first", style: "primary" });
+
+    button.label = "Updated";
+    button.value = "second";
+    actions.maxLabelLength = 2;
+    const second = adaptMessagePresentationForChannel({
+      presentation,
+      capabilities: { limits: { actions } },
+    });
+
+    expect(second).toStrictEqual({
+      blocks: Array.from({ length: 2 }, () => ({
+        type: "buttons",
+        buttons: [
+          { label: "Up", value: "second" },
+          { label: "Up", value: "second" },
+        ],
+      })),
+    });
+    expect(first).toStrictEqual(expectedFirst);
   });
 
   it("applies button priority across the shared action budget", () => {

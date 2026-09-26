@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements outbound media contract behavior.
 import path from "node:path";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -61,12 +60,8 @@ const WHATSAPP_VOICE_SAMPLE_RATE_HZ = 48_000;
 const WHATSAPP_VOICE_BITRATE = "64k";
 const WHATSAPP_VOICE_MIMETYPE = "audio/ogg; codecs=opus";
 
-function stripWhatsAppPluralToolXml(text: string): string {
-  return stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true });
-}
-
 function finalizeWhatsAppVisibleText(text: string): string {
-  return sanitizeForPlainText(stripWhatsAppPluralToolXml(text));
+  return sanitizeForPlainText(stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true }));
 }
 
 export function normalizeWhatsAppPayloadText(text: string | undefined): string {
@@ -199,9 +194,15 @@ export async function prepareWhatsAppOutboundMedia(
     return normalized;
   }
 
-  const buffer = await transcodeToWhatsAppVoiceOpus({
-    buffer: media.buffer,
-    fileName: media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl) ?? "audio",
+  const buffer = await transcodeAudioBufferToOpus({
+    audioBuffer: media.buffer,
+    inputFileName: media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl) ?? "audio",
+    tempPrefix: "whatsapp-voice-",
+    outputFileName: WHATSAPP_VOICE_FILE_NAME,
+    maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+    sampleRateHz: WHATSAPP_VOICE_SAMPLE_RATE_HZ,
+    channels: 1,
+    bitrate: WHATSAPP_VOICE_BITRATE,
   });
   return {
     buffer,
@@ -222,22 +223,6 @@ function isWhatsAppNativeVoiceAudio(params: {
   const fileName = params.fileName ?? deriveWhatsAppDocumentFileName(params.mediaUrl) ?? "";
   const ext = path.extname(fileName).toLowerCase();
   return ext === ".ogg" || ext === ".opus";
-}
-
-async function transcodeToWhatsAppVoiceOpus(params: {
-  buffer: Buffer;
-  fileName: string;
-}): Promise<Buffer> {
-  return await transcodeAudioBufferToOpus({
-    audioBuffer: params.buffer,
-    inputFileName: params.fileName,
-    tempPrefix: "whatsapp-voice-",
-    outputFileName: WHATSAPP_VOICE_FILE_NAME,
-    maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
-    sampleRateHz: WHATSAPP_VOICE_SAMPLE_RATE_HZ,
-    channels: 1,
-    bitrate: WHATSAPP_VOICE_BITRATE,
-  });
 }
 
 function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | undefined {

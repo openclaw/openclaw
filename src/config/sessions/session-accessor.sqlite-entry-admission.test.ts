@@ -15,6 +15,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import { resolveStateDir } from "../paths.js";
@@ -178,12 +179,14 @@ it.each([
   if (phase === "preparation") {
     closeOpenClawAgentDatabaseByPath(f.databasePath);
     invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
   }
   const parentChecks = nativeChecks(f.databasePath);
   const update = () => {
     if (phase === "commit") {
       closeOpenClawAgentDatabaseByPath(f.databasePath);
       invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
     }
     return { label: "updated" };
   };
@@ -308,6 +311,7 @@ it("retains FIFO, caller context and publication across cold admission", async (
   const f = fixture();
   closeOpenClawAgentDatabaseByPath(f.databasePath);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
   const gate = holdNative(f.databasePath);
   const contexts = new AsyncLocalStorage<string>();
   const order: string[] = [];
@@ -379,6 +383,7 @@ it.each(["dispose", "sync replacement"] as const)(
     const f = fixture();
     closeOpenClawAgentDatabaseByPath(f.databasePath);
     invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
     const gate = holdNative(f.databasePath);
     const update = vi.fn(() => ({ label: "must not commit" }));
     const committed = vi.fn();
@@ -423,6 +428,7 @@ it.each(["cancel", "revoke"] as const)(
         () => {
           closeOpenClawAgentDatabaseByPath(f.databasePath);
           invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+          clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
           return { sessionId: "uncommitted" };
         },
         {

@@ -166,6 +166,18 @@ describe("runSystemAgentTui", () => {
       async (opts: Parameters<NonNullable<SystemAgentTuiOptions["runTui"]>>[0]) => {
         runTuiCalls += 1;
         runTuiOptions = opts;
+        if (!opts.backend) {
+          throw new Error("Expected the system-agent TUI backend");
+        }
+        for (const sessionKey of ["agent:openclaw:main", "main"]) {
+          await expect(opts.backend.describeSession({ sessionKey })).resolves.toMatchObject({
+            session: { key: "agent:openclaw:main", model: "gpt-5.5", modelProvider: "openai" },
+            defaults: { model: "gpt-5.5", modelProvider: "openai" },
+          });
+        }
+        await expect(
+          opts.backend.describeSession({ sessionKey: "agent:openclaw:missing" }),
+        ).resolves.toMatchObject({ session: null });
         return { exitReason: "exit" as const };
       },
     );

@@ -193,9 +193,6 @@ const embeddedAgentCommandLoader = createLazyPromiseLoader(
   () => import("./agent.js").then((module) => module.agentCommand),
   { cacheRejections: true },
 );
-const localAuditModuleLoader = createLazyPromiseLoader(() => import("./agent-local-audit.js"), {
-  cacheRejections: true,
-});
 const agentSessionModuleCache = createLazyPromiseLoader(
   () => import("./agent/session.runtime.js"),
   { cacheRejections: true },
@@ -267,7 +264,8 @@ async function runEmbeddedAgentCommand(
   let stopLocalAuditWriter: (() => Promise<void>) | undefined;
   if (isExecutionIdentityCollectionEnabled(config)) {
     try {
-      stopLocalAuditWriter = (await localAuditModuleLoader.load()).startAgentLocalAuditWriter();
+      const { startAgentLocalAuditWriter } = await import("./agent-local-audit.js");
+      stopLocalAuditWriter = startAgentLocalAuditWriter(config);
     } catch {
       // Admission emits one bounded warning if evidence cannot be queued.
     }
@@ -351,7 +349,6 @@ const loadReplyPayloadModule = replyPayloadModuleLoader.load;
 export const agentViaGatewayTesting = {
   resetLazyImportsForTests(): void {
     embeddedAgentCommandLoader.clear();
-    localAuditModuleLoader.clear();
     agentSessionModuleCache.clear();
     runtimeConfigModuleLoader.clear();
     embeddedStateLockModuleLoader.clear();

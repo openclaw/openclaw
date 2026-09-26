@@ -13,6 +13,7 @@ import {
   type SpawnResult,
 } from "./exec-result.js";
 import { killProcessTree } from "./kill-tree.js";
+import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import {
@@ -21,6 +22,7 @@ import {
   type CommandSubprocess,
 } from "./spawn-broker/execa-client.js";
 import type { CommandSpawnOptions } from "./spawn-broker/execa-types.js";
+import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
@@ -183,6 +185,7 @@ function retainCommandProcess(
   let pid: number | undefined;
   let startedAt: number | null = null;
   let stopped = false;
+  let groupExtinct = false;
   const nativeChild = child.nodeChildProcess;
   let observedExit = nativeChild.exitCode != null || nativeChild.signalCode != null;
   const onExit = () => {
@@ -197,12 +200,19 @@ function retainCommandProcess(
     stopped = true;
     // A live direct child holds PID custody even when its optional timestamp probe failed.
     if (nativeChild.exitCode !== null || nativeChild.signalCode !== null) {
+      // Descendants can exit after pipe closure retained this command. An absent
+      // group has settled even if another process now owns the retired root PID.
+      if (!isChildProcessTreeAlive({ pid })) {
+        groupExtinct = true;
+        return;
+      }
       const currentStart = getFileLockProcessStartTime(pid);
       if (currentStart !== null && currentStart !== startedAt) {
         throw new CommandProcessCleanupError();
       }
     }
     killProcessTree(pid, { detached: true, force: true });
+    scheduleAdoptedChildZombieReapAfterExit(nativeChild, true);
   };
   const initialize = () => {
     pid = child.pid;
@@ -237,6 +247,9 @@ function retainCommandProcess(
     async settle() {
       await initialized;
       await completed;
+      if (groupExtinct) {
+        return;
+      }
       if (pid === undefined) {
         if (nativeChild instanceof BrokerChild && !nativeChild.notStarted) {
           throw new CommandProcessCleanupError();
@@ -345,6 +358,7 @@ export function spawnCommandWithInvocation<
           remoteOptions,
         )
       : execa(invocation.command, invocation.args, commandOptions);
+  recordChildProcessSpawn(invocation.command, child.nodeChildProcess);
   if (scope) {
     retainCommandProcess(scope, child);
   }

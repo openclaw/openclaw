@@ -180,14 +180,17 @@ describe("doctor-contract-registry module loader", () => {
     expect(mocks.createJiti).toHaveBeenCalledTimes(testCase.expectedLoadCount);
   });
 
-  it("loads a normalizer-only config-repair contract", () => {
+  it.each([false, true])("isolates a normalizer-only config repair (throws=%s)", (throws) => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
     mocks.createJiti.mockImplementation(() => () => ({
-      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => ({
-        config: { ...cfg, repaired: true },
-        changes: ["repaired config"],
-      }),
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => {
+        cfg.repaired = true;
+        if (throws) {
+          throw new Error("fixture repair failed");
+        }
+        return { config: cfg, changes: ["repaired config"] };
+      },
     }));
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
@@ -200,10 +203,22 @@ describe("doctor-contract-registry module loader", () => {
       diagnostics: [],
     });
 
-    expect(applyPluginDoctorCompatibilityMigrations({}, { env: {} })).toEqual({
-      config: { repaired: true },
-      changes: ["repaired config"],
-    });
+    const config = {};
+    const result = applyPluginDoctorCompatibilityMigrations(config, { env: {} });
+    expect(config).toEqual({});
+    expect(result).toEqual(
+      throws
+        ? {
+            config: {},
+            changes: [],
+            warnings: [
+              expect.stringContaining(
+                'Plugin "normalizer-only" config repair failed: fixture repair failed',
+              ),
+            ],
+          }
+        : { config: { repaired: true }, changes: ["repaired config"] },
+    );
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });
 

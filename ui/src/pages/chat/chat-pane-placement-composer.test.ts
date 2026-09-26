@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
@@ -47,9 +47,9 @@ describe("chat placement composer presentation", () => {
   it.each([
     ["active", "ready", undefined],
     ["reclaimed", "ready", undefined],
-    ["provisioning", "busy", "Provisioning environment…"],
-    ["syncing", "busy", "Preparing workspace…"],
-    ["starting", "busy", "Starting…"],
+    ["provisioning", "setup", undefined],
+    ["syncing", "setup", undefined],
+    ["starting", "setup", undefined],
     ["draining", "busy", "Finishing session move…"],
     ["reconciling", "busy", "Finishing session move…"],
   ] as const)("projects %s placement into a %s composer", (state, kind, busyMessage) => {
@@ -145,7 +145,8 @@ describe("chat placement composer presentation", () => {
         title: "Repository worker required",
         actionLabel: "Choose worker…",
       });
-      result.disabledBanner?.onAction();
+      assert(result.disabledBanner?.onAction);
+      result.disabledBanner.onAction();
       expect(onRecover).toHaveBeenCalledOnce();
     },
   );
@@ -177,7 +178,8 @@ describe("chat placement composer presentation", () => {
       expect(result.disabledBanner?.actionLabel).toBe(
         recoveryAction === "restart" ? "Restart session…" : "Stop cloud worker…",
       );
-      result.disabledBanner?.onAction();
+      assert(result.disabledBanner?.onAction);
+      result.disabledBanner.onAction();
       expect(recoveryAction === "restart" ? onRecover : onReclaim).toHaveBeenCalledOnce();
     },
   );

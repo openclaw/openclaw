@@ -24,19 +24,10 @@ describe("openai completions stream", () => {
     const stream: { push(event: unknown): void } = { push() {} };
 
     const mockChunks = [
-      makeCompletionsChunk({}, null, {
-        choices: [
-          {
-            index: 0,
-            delta: {
-              reasoning_details: [
-                { type: "reasoning.text", text: "I need to think about this." },
-                { type: "reasoning.text", text: " Let me analyze." },
-              ],
-            } as Record<string, unknown>,
-            logprobs: null,
-            finish_reason: null,
-          },
+      makeCompletionsChunk({
+        reasoning_details: [
+          { type: "reasoning.text", text: "I need to think about this." },
+          { type: "reasoning.text", text: " Let me analyze." },
         ],
       }),
       makeCompletionsChunk({
@@ -75,19 +66,10 @@ describe("openai completions stream", () => {
 
     const stream: { push(event: unknown): void } = { push() {} };
     const mockChunks = [
-      makeCompletionsChunk({}, null, {
-        choices: [
-          {
-            index: 0,
-            delta: {
-              content: [
-                { type: "thinking", thinking: [{ type: "text", text: "Need to think." }] },
-                { type: "text", content: "Visible answer." },
-              ],
-            } as Record<string, unknown>,
-            logprobs: null,
-            finish_reason: null,
-          },
+      makeCompletionsChunk({
+        content: [
+          { type: "thinking", thinking: [{ type: "text", text: "Need to think." }] },
+          { type: "text", content: "Visible answer." },
         ],
       }),
       makeCompletionsChunk({}, "stop"),

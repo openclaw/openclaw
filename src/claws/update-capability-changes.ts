@@ -1,10 +1,10 @@
-// Builds field-level capability change summaries for Claw update previews.
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope.js";
 import { resolveMemorySearchSourcePolicy } from "../agents/memory-search-source-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
@@ -73,12 +73,9 @@ function compareRankedCapability(
 }
 
 function classifyToolSet(
-  current: unknown,
-  desired: unknown,
+  current: unknown[],
+  desired: unknown[],
 ): ClawUpdateCapabilityChange["classification"] {
-  if (!Array.isArray(current) || !Array.isArray(desired)) {
-    return "neutral";
-  }
   const currentTools = new Set(
     current.filter((value): value is string => typeof value === "string"),
   );
@@ -169,16 +166,13 @@ function classifyAgentCapability(
     return "escalation";
   }
   if (path === "sandbox.workspaceAccess") {
-    const rank = { none: 0, ro: 1, rw: 2 } as Record<string, number>;
-    return compareRankedCapability(current, desired, rank);
+    return compareRankedCapability(current, desired, { none: 0, ro: 1, rw: 2 });
   }
   if (path === "sandbox.mode") {
-    const rank = { all: 0, "non-main": 1, off: 2 } as Record<string, number>;
-    return compareRankedCapability(current, desired, rank);
+    return compareRankedCapability(current, desired, { all: 0, "non-main": 1, off: 2 });
   }
   if (path === "sandbox.scope") {
-    const rank = { session: 0, agent: 1, shared: 2 } as Record<string, number>;
-    return compareRankedCapability(current, desired, rank);
+    return compareRankedCapability(current, desired, { session: 0, agent: 1, shared: 2 });
   }
   if (path === "heartbeat.every") {
     return classifyHeartbeatEvery(current, desired);
@@ -202,7 +196,7 @@ function classifyAgentCapability(
   }
   if (path === "memory.search.sources") {
     if (!Array.isArray(current) || !Array.isArray(desired)) {
-      return desired === undefined ? "reduction" : "escalation";
+      return "escalation";
     }
     const currentSources = new Set(current);
     return desired.some((source) => !currentSources.has(source)) ? "escalation" : "reduction";
@@ -352,8 +346,6 @@ function pushAgentCapabilityChanges(params: {
   }
 }
 
-type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
-
 function normalizeLegacyAgent(
   config: OpenClawConfig,
   currentAgent: AgentConfig,
@@ -365,11 +357,7 @@ function normalizeLegacyAgent(
   }
   const snapshot = resolveClawToolProfileSnapshot({
     ...tools,
-    alsoAllow: (
-      resolvePortableTools(config, currentAgent.id) as {
-        alsoAllow?: string[];
-      }
-    ).alsoAllow,
+    alsoAllow: resolvePortableTools(config, currentAgent.id).alsoAllow,
   });
   if (!snapshot) {
     return currentAgent;
@@ -402,7 +390,7 @@ function resolveHeartbeat(config: OpenClawConfig, agentId: string): unknown {
   };
 }
 
-function resolvePortableTools(config: OpenClawConfig, agentId: string): unknown {
+function resolvePortableTools(config: OpenClawConfig, agentId: string) {
   const globalTools = config.tools;
   const agentTools = listAgentEntries(config).find((agent) => agent.id === agentId)?.tools;
   return {
@@ -608,43 +596,6 @@ function summarizeMcpCapabilityEffect(server: unknown): Record<string, unknown> 
   };
 }
 
-export function mcpCapabilityChange(params: {
-  id: string;
-  action: ClawUpdateCapabilityChange["action"];
-  current?: unknown;
-  desired?: unknown;
-}): ClawUpdateCapabilityChange | undefined {
-  if (params.action === "unchanged") {
-    return undefined;
-  }
-  const reduction = params.desired === undefined;
-  return {
-    kind: "mcpServer",
-    id: params.id,
-    path: `mcpServers.${params.id}`,
-    action: params.action,
-    classification: reduction ? "reduction" : "escalation",
-    requiresDistinctConsent: !reduction,
-    reason: reduction
-      ? "Target manifest removes or releases an MCP tool surface."
-      : "Target manifest adds, restores, or changes an MCP tool surface.",
-    effect:
-      params.desired === undefined
-        ? { removed: true }
-        : summarizeMcpCapabilityEffect(params.desired),
-    ...(params.current === undefined
-      ? {}
-      : {
-          current: capabilityValue(summarizeMcpCapability(params.current), params.current),
-        }),
-    ...(params.desired === undefined
-      ? {}
-      : {
-          desired: capabilityValue(summarizeMcpCapability(params.desired), params.desired),
-        }),
-  };
-}
-
 function summarizeCronCapability(cron: unknown): string {
   if (!cron || typeof cron !== "object") {
     return "not configured";
@@ -675,7 +626,8 @@ function summarizeCronCapabilityEffect(cron: unknown): Record<string, unknown> {
   };
 }
 
-export function cronCapabilityChange(params: {
+export function resourceCapabilityChange(params: {
+  kind: "mcpServer" | "cronJob";
   id: string;
   action: ClawUpdateCapabilityChange["action"];
   current?: unknown;
@@ -684,30 +636,39 @@ export function cronCapabilityChange(params: {
   if (params.action === "unchanged") {
     return undefined;
   }
+  const isMcp = params.kind === "mcpServer";
+  const summarize = isMcp ? summarizeMcpCapability : summarizeCronCapability;
   const reduction = params.desired === undefined;
   return {
-    kind: "cronJob",
+    kind: params.kind,
     id: params.id,
-    path: `cronJobs.${params.id}`,
+    path: `${isMcp ? "mcpServers" : "cronJobs"}.${params.id}`,
     action: params.action,
     classification: reduction ? "reduction" : "escalation",
     requiresDistinctConsent: !reduction,
-    reason: reduction
-      ? "Target manifest removes a scheduled automation."
-      : "Target manifest adds, restores, or changes a scheduled automation.",
+    reason: isMcp
+      ? reduction
+        ? "Target manifest removes or releases an MCP tool surface."
+        : "Target manifest adds, restores, or changes an MCP tool surface."
+      : reduction
+        ? "Target manifest removes a scheduled automation."
+        : "Target manifest adds, restores, or changes a scheduled automation.",
     effect:
       params.desired === undefined
         ? { removed: true }
-        : summarizeCronCapabilityEffect(params.desired),
+        : isMcp
+          ? summarizeMcpCapabilityEffect(params.desired)
+          : summarizeCronCapabilityEffect(params.desired),
+    // Omitted values must stay absent: consent digests distinguish them from undefined fields.
     ...(params.current === undefined
       ? {}
       : {
-          current: capabilityValue(summarizeCronCapability(params.current), params.current),
+          current: capabilityValue(summarize(params.current), params.current),
         }),
     ...(params.desired === undefined
       ? {}
       : {
-          desired: capabilityValue(summarizeCronCapability(params.desired), params.desired),
+          desired: capabilityValue(summarize(params.desired), params.desired),
         }),
   };
 }

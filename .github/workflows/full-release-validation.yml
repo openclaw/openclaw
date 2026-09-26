@@ -14,7 +14,7 @@ on:
         default: ""
         type: string
       trusted_workflow_json:
-        description: Source envelope {trustedWorkflow, validationPurpose, publicationSelection}; null identity permits existing direct-route inference, never intent inference
+        description: Source envelope {trustedWorkflow, validationPurpose, publicationSelection, optional laneInputs}; null identity permits existing direct-route inference, never intent inference
         required: true
         default: ""
         type: string
@@ -170,18 +170,20 @@ env:
   GH_REPO: ${{ github.repository }}
   # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   RELEASE_ISOLATION_TOOLING_CONTRACT: "2"
   FULL_RELEASE_DISPATCH_WITNESS_CONTRACT: "1"
   FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"
+  FULL_RELEASE_LANE_INPUTS_CONTRACT: "1"
+  CHILD_EVIDENCE_REUSE: ${{ inputs.reuse_evidence && inputs.rerun_group == 'all' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
 
 jobs:
   resolve_target:
     name: Resolve target ref
     # Hosted admission delays compound along this serial release path.
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
@@ -189,6 +191,7 @@ jobs:
       npm_dist_tag: ${{ steps.release_inputs.outputs.npm_dist_tag }}
       release_candidate_branch: ${{ steps.release_inputs.outputs.release_candidate_branch }}
       trusted_workflow_json: ${{ steps.tooling_identity.outputs.json }}
+      extension_test_exclude_patterns_json: ${{ steps.publication_dispatch.outputs.extension_test_exclude_patterns_json }}
       live_suite_filter: ${{ steps.filters.outputs.live_suite_filter }}
       cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
       candidate_required: ${{ steps.candidate_request.outputs.required }}
@@ -203,7 +206,14 @@ jobs:
       source_admission_json: ${{ steps.publication_admission.outputs.json }}
       validation_purpose: ${{ steps.publication_request.outputs.validation_purpose }}
       publication_selection_json: ${{ steps.publication_request.outputs.publication_selection_json }}
+      plugin_compatibility_required: ${{ steps.plugin_compatibility.outputs.required }}
     steps:
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Retain root dispatch inputs
         id: dispatch_witness
         env:
@@ -429,6 +439,26 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           submodules: false
+
+      - name: Detect target plugin compatibility gate
+        id: plugin_compatibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if jq -e '.scripts["plugins:boundary-report:ci"] | type == "string"' target/package.json >/dev/null; then
+            echo 'required=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gate_introduction=38ba27834dd3f98c19d5833e0598dfef3abb7587
+          relationship="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${gate_introduction}...${TARGET_SHA}" --jq .status)"
+          if [[ "$relationship" == "ahead" || "$relationship" == "identical" ]]; then
+            echo 'Current target is missing plugins:boundary-report:ci.' >&2
+            exit 1
+          fi
+          echo 'required=false' >> "$GITHUB_OUTPUT"
+          echo '::warning::Frozen target predates the plugin compatibility release gate; skipping target-owned compatibility readiness.'
 
       - name: Validate release inputs
         id: release_inputs
@@ -783,6 +813,7 @@ jobs:
           LIVE_SUITE_FILTER: ${{ steps.filters.outputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ steps.filters.outputs.cross_os_suite_filter }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
+          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.publication_dispatch.outputs.extension_test_exclude_patterns_json }}
         run: |
           plugin_prerelease_node_exclusions="$(jq -c . <<< "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON")"
           {
@@ -813,6 +844,7 @@ jobs:
             fi
             if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "ci" ]]; then
               echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
+              echo "- Locale preflight: generated-locale drift is a warning and does not block dispatch. Strict \`control-ui-i18n\` and \`native-i18n\` jobs still run in normal CI; their failures fail validation."
             else
               echo "- Normal CI: skipped by rerun group"
             fi
@@ -869,11 +901,54 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+  plugin_compatibility_readiness:
+    name: Enforce plugin compatibility release readiness
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.plugin_compatibility_required == 'true'
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout target source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve_target.outputs.sha }}
+          fetch-depth: 1
+          filter: blob:none
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout trusted package-manager setup
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-harness
+          sparse-checkout: .github/actions/setup-pnpm-store-cache
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup target package manager
+        uses: ./.release-harness/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: package.json
+          lockfile-path: pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+          cache-mode: restore
+
+      - name: Install target dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Enforce target compatibility readiness
+        run: pnpm plugins:boundary-report:ci
+
   evidence_reuse:
     name: Check for reusable validation evidence
-    needs: [resolve_target]
-    if: inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/'))
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    needs: [resolve_target, plugin_compatibility_readiness]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     outputs:
       reuse: ${{ steps.find.outputs.reuse }}
@@ -953,6 +1028,7 @@ jobs:
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
+          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
           TRUSTED_WORKFLOW_JSON: ${{ needs.resolve_target.outputs.trusted_workflow_json }}
           CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           PUBLICATION_CANDIDATE_REQUIRED: ${{ needs.resolve_target.outputs.candidate_required }}
@@ -984,6 +1060,7 @@ jobs:
             --arg targetVersion "$TARGET_VERSION" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
+            --arg extensionTestExcludePatternsJson "$EXTENSION_TEST_EXCLUDE_PATTERNS_JSON" \
             '{
               validationPurpose: $validationPurpose,
               publicationSelectionJson: $publicationSelectionJson,
@@ -1001,7 +1078,8 @@ jobs:
               npmTelegramScenario: $npmTelegramScenario,
               skipPackageTelegramE2e: $skipPackageTelegramE2e,
               allowUnreleasedChangelog: $allowUnreleasedChangelog,
-              pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
+              pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson,
+              extensionTestExcludePatternsJson: $extensionTestExcludePatternsJson
             } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver} end)')"
           trusted_workflow_json="${TRUSTED_WORKFLOW_JSON}"
           trusted_workflow_ref="$(jq -er '.ref | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
@@ -1045,11 +1123,11 @@ jobs:
 
   docker_runtime_assets_preflight:
     name: Verify Docker runtime image assets
-    needs: [resolve_target, evidence_reuse]
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     # Release image preparation checks runtime-assets on both native architectures.
     # Alpha has no release image producer, so it retains this standalone proof.
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && inputs.rerun_group == 'all' && contains(needs.resolve_target.outputs.target_version, '-alpha.') && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ubuntu-24.04
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && inputs.rerun_group == 'all' && contains(needs.resolve_target.outputs.target_version, '-alpha.') && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -1073,15 +1151,36 @@ jobs:
 
   normal_ci:
     name: Run normal full CI
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ubuntu-24.04
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       run_attempt: ${{ steps.dispatch.outputs.run_attempt }}
       url: ${{ steps.dispatch.outputs.url }}
+      child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
+      - &child_reuse_checkout
+        name: Checkout child reuse tooling
+        if: env.CHILD_EVIDENCE_REUSE == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: workflow
+          sparse-checkout: |
+            scripts
+            .github/workflows
+          persist-credentials: false
+
+      - &child_reuse_runtime
+        name: Setup child reuse runtime
+        if: env.CHILD_EVIDENCE_REUSE == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
       - name: Dispatch CI
         id: dispatch
         env:
@@ -1177,6 +1276,12 @@ jobs:
             local dispatch_run_name="$2"
             shift 2
             local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id run_json child_head_sha child_run_attempt url encoded_workflow_ref current_workflow_sha expected_workflow_id
+
+            if [[ "${CHILD_EVIDENCE_REUSE:-false}" == true && "$CHILD_WORKFLOW_KIND" != artifact-* ]]; then
+              if node workflow/scripts/find-reusable-release-child.mjs "$workflow" "$@"; then
+                return 0
+              fi
+            fi
 
             encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF" '$value | @uri')"
             current_workflow_sha="$(
@@ -1323,7 +1428,7 @@ jobs:
               } >> "$GITHUB_STEP_SUMMARY"
               dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plugin-prerelease-${PHASE}"
               dispatch_run_name="Plugin Prerelease ${dispatch_id}"
-              args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f phase="$PHASE" -f dispatch_id="$dispatch_id" -f node_test_exclude_patterns_json="$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON")
+              args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f phase="$PHASE" -f dispatch_id="$dispatch_id" -f node_test_exclude_patterns_json="$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" -f extension_test_exclude_patterns_json="$EXTENSION_TEST_EXCLUDE_PATTERNS_JSON")
               if [[ -n "${TARGET_CONTEXT_REF:-}" ]]; then
                 args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
                 args+=(-f allow_frozen_target_scenario_omissions=true)
@@ -1435,11 +1540,7 @@ jobs:
                 echo "- Live OpenAI candidate: \`false\`"
                 echo "- Regression gate: \`${fail_on_regression}\`"
                 echo "- Report publication: disabled (artifacts only)"
-                if [[ "$RELEASE_PROFILE" == "beta" ]]; then
-                  echo "- Release impact: advisory"
-                else
-                  echo "- Release impact: blocking"
-                fi
+                echo "- Release impact: selected execution failures are blocking"
               } >> "$GITHUB_STEP_SUMMARY"
               dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
               dispatch_run_name="OpenClaw Performance ${dispatch_id}"
@@ -1463,15 +1564,19 @@ jobs:
 
   plugin_prerelease_independent:
     name: Run plugin prerelease independent validation
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ubuntu-24.04
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       run_attempt: ${{ steps.dispatch.outputs.run_attempt }}
       url: ${{ steps.dispatch.outputs.url }}
+      child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
+      - *child_reuse_checkout
+      - *child_reuse_runtime
+
       - name: Dispatch plugin prerelease independent phase
         id: dispatch
         env:
@@ -1485,19 +1590,24 @@ jobs:
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
           CANDIDATE_ARTIFACT_JSON: ""
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
+          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
         run: *full_release_child_dispatch
 
   plugin_prerelease_candidate:
     name: Run plugin prerelease candidate validation
     needs: [resolve_target, evidence_reuse, candidate_acquisition]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_candidate_required == 'true' && needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       run_attempt: ${{ steps.dispatch.outputs.run_attempt }}
       url: ${{ steps.dispatch.outputs.url }}
+      child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
+      - *child_reuse_checkout
+      - *child_reuse_runtime
+
       - name: Dispatch plugin prerelease candidate phase
         id: dispatch
         env:
@@ -1511,19 +1621,24 @@ jobs:
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
           CANDIDATE_ARTIFACT_JSON: ${{ needs.candidate_acquisition.outputs.candidate_artifact_json }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
+          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
         run: *full_release_child_dispatch
 
   release_checks_independent:
     name: Run release checks independent validation
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       run_attempt: ${{ steps.dispatch.outputs.run_attempt }}
       url: ${{ steps.dispatch.outputs.url }}
+      child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
+      - *child_reuse_checkout
+      - *child_reuse_runtime
+
       - name: Dispatch release checks independent phase
         id: dispatch
         env:
@@ -1554,15 +1669,19 @@ jobs:
 
   release_checks_candidate:
     name: Run release checks candidate validation
-    needs: [resolve_target, evidence_reuse, candidate_acquisition]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, candidate_acquisition]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       run_attempt: ${{ steps.dispatch.outputs.run_attempt }}
       url: ${{ steps.dispatch.outputs.url }}
+      child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
+      - *child_reuse_checkout
+      - *child_reuse_runtime
+
       - name: Dispatch release checks candidate phase
         id: dispatch
         env:
@@ -1593,16 +1712,19 @@ jobs:
 
   npm_telegram:
     name: Run package Telegram E2E
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && inputs.telegram_waiver == '' && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
-    continue-on-error: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
-    runs-on: ubuntu-24.04
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && inputs.telegram_waiver == '' && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       run_attempt: ${{ steps.dispatch.outputs.run_attempt }}
       url: ${{ steps.dispatch.outputs.url }}
+      child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
+      - *child_reuse_checkout
+      - *child_reuse_runtime
+
       - name: Dispatch npm Telegram E2E
         id: dispatch
         env:
@@ -1618,15 +1740,19 @@ jobs:
 
   performance:
     name: Run product performance evidence
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       run_attempt: ${{ steps.dispatch.outputs.run_attempt }}
       url: ${{ steps.dispatch.outputs.url }}
+      child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
+      - *child_reuse_checkout
+      - *child_reuse_runtime
+
       - name: Dispatch OpenClaw Performance
         id: dispatch
         env:
@@ -1640,9 +1766,9 @@ jobs:
 
   prepare_npm_package:
     name: Prepare release npm artifacts
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
-    runs-on: ubuntu-24.04
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 360
     outputs:
       run_id: ${{ steps.producer.outputs.run_id }}
@@ -1673,6 +1799,12 @@ jobs:
           ref: ${{ github.sha }}
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - &artifact_producer_resolution
         name: Recover original artifact producer
         id: producer
@@ -1693,7 +1825,7 @@ jobs:
     name: Qualify release npm artifacts
     needs: [resolve_target, prepare_npm_package]
     if: ${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 360
     outputs:
       qualified_preflight_bundle_json: ${{ steps.bundle.outputs.qualified_preflight_bundle_json }}
@@ -1711,15 +1843,21 @@ jobs:
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
     steps:
       - *artifact_tooling_checkout
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Wait for exact npm qualification
         id: bundle
         run: node scripts/full-release-artifacts.mjs wait
 
   prepare_docker_release:
     name: Prepare release Docker artifacts
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && !contains(needs.resolve_target.outputs.target_version, '-alpha.') }}
-    runs-on: ubuntu-24.04
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && !contains(needs.resolve_target.outputs.target_version, '-alpha.') }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 360
     outputs:
       prepared_run_id: ${{ steps.bundle.outputs.prepared_run_id }}
@@ -1742,6 +1880,12 @@ jobs:
         if: github.run_attempt == 1
         run: *full_release_child_dispatch
       - *artifact_tooling_checkout
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *artifact_producer_resolution
       - name: Wait for exact Docker preparation
         id: bundle
@@ -1755,7 +1899,7 @@ jobs:
     name: Acquire full release candidate
     needs: [resolve_target, evidence_reuse, prepare_npm_package]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.prepare_npm_package.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && needs.resolve_target.outputs.candidate_required == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 360
     outputs:
       state: ${{ steps.bundle.outputs.state }}
@@ -1779,6 +1923,12 @@ jobs:
         if: github.run_attempt == 1
         run: *full_release_child_dispatch
       - *artifact_tooling_checkout
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *artifact_producer_resolution
       - name: Wait for exact validation candidate
         id: bundle
@@ -1805,7 +1955,7 @@ jobs:
         performance,
       ]
     if: always()
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 15
     outputs:
       sha256: ${{ steps.plan.outputs.sha256 }}
@@ -1848,6 +1998,12 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Seal immutable release execution plan
         id: plan
         env:
@@ -1876,30 +2032,37 @@ jobs:
           NORMAL_CI_RUN_ID: ${{ needs.normal_ci.outputs.run_id }}
           NORMAL_CI_RUN_ATTEMPT: ${{ needs.normal_ci.outputs.run_attempt }}
           NORMAL_CI_URL: ${{ needs.normal_ci.outputs.url }}
+          NORMAL_CI_REUSE: ${{ needs.normal_ci.outputs.child_reuse || 'null' }}
           PLUGIN_PRERELEASE_INDEPENDENT_RESULT: ${{ needs.plugin_prerelease_independent.result }}
           PLUGIN_PRERELEASE_INDEPENDENT_RUN_ID: ${{ needs.plugin_prerelease_independent.outputs.run_id }}
           PLUGIN_PRERELEASE_INDEPENDENT_RUN_ATTEMPT: ${{ needs.plugin_prerelease_independent.outputs.run_attempt }}
           PLUGIN_PRERELEASE_INDEPENDENT_URL: ${{ needs.plugin_prerelease_independent.outputs.url }}
+          PLUGIN_PRERELEASE_INDEPENDENT_REUSE: ${{ needs.plugin_prerelease_independent.outputs.child_reuse || 'null' }}
           PLUGIN_PRERELEASE_CANDIDATE_RESULT: ${{ needs.plugin_prerelease_candidate.result }}
           PLUGIN_PRERELEASE_CANDIDATE_RUN_ID: ${{ needs.plugin_prerelease_candidate.outputs.run_id }}
           PLUGIN_PRERELEASE_CANDIDATE_RUN_ATTEMPT: ${{ needs.plugin_prerelease_candidate.outputs.run_attempt }}
           PLUGIN_PRERELEASE_CANDIDATE_URL: ${{ needs.plugin_prerelease_candidate.outputs.url }}
+          PLUGIN_PRERELEASE_CANDIDATE_REUSE: ${{ needs.plugin_prerelease_candidate.outputs.child_reuse || 'null' }}
           RELEASE_CHECKS_INDEPENDENT_RESULT: ${{ needs.release_checks_independent.result }}
           RELEASE_CHECKS_INDEPENDENT_RUN_ID: ${{ needs.release_checks_independent.outputs.run_id }}
           RELEASE_CHECKS_INDEPENDENT_RUN_ATTEMPT: ${{ needs.release_checks_independent.outputs.run_attempt }}
           RELEASE_CHECKS_INDEPENDENT_URL: ${{ needs.release_checks_independent.outputs.url }}
+          RELEASE_CHECKS_INDEPENDENT_REUSE: ${{ needs.release_checks_independent.outputs.child_reuse || 'null' }}
           RELEASE_CHECKS_CANDIDATE_RESULT: ${{ needs.release_checks_candidate.result }}
           RELEASE_CHECKS_CANDIDATE_RUN_ID: ${{ needs.release_checks_candidate.outputs.run_id }}
           RELEASE_CHECKS_CANDIDATE_RUN_ATTEMPT: ${{ needs.release_checks_candidate.outputs.run_attempt }}
           RELEASE_CHECKS_CANDIDATE_URL: ${{ needs.release_checks_candidate.outputs.url }}
+          RELEASE_CHECKS_CANDIDATE_REUSE: ${{ needs.release_checks_candidate.outputs.child_reuse || 'null' }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
           NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
           NPM_TELEGRAM_RUN_ATTEMPT: ${{ needs.npm_telegram.outputs.run_attempt }}
           NPM_TELEGRAM_URL: ${{ needs.npm_telegram.outputs.url }}
+          NPM_TELEGRAM_REUSE: ${{ needs.npm_telegram.outputs.child_reuse || 'null' }}
           PERFORMANCE_RESULT: ${{ needs.performance.result }}
           PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}
           PERFORMANCE_RUN_ATTEMPT: ${{ needs.performance.outputs.run_attempt }}
           PERFORMANCE_URL: ${{ needs.performance.outputs.url }}
+          PERFORMANCE_REUSE: ${{ needs.performance.outputs.child_reuse || 'null' }}
           RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
           DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT: ${{ needs.docker_runtime_assets_preflight.result }}
           CANDIDATE_REQUIRED: ${{ needs.resolve_target.outputs.candidate_required }}
@@ -1971,6 +2134,13 @@ jobs:
               --arg performanceRunId "$PERFORMANCE_RUN_ID" \
               --arg performanceRunAttempt "$PERFORMANCE_RUN_ATTEMPT" \
               --arg performanceUrl "$PERFORMANCE_URL" \
+              --argjson normalCiReuse "$NORMAL_CI_REUSE" \
+              --argjson pluginPrereleaseIndependentReuse "$PLUGIN_PRERELEASE_INDEPENDENT_REUSE" \
+              --argjson pluginPrereleaseCandidateReuse "$PLUGIN_PRERELEASE_CANDIDATE_REUSE" \
+              --argjson releaseChecksIndependentReuse "$RELEASE_CHECKS_INDEPENDENT_REUSE" \
+              --argjson releaseChecksCandidateReuse "$RELEASE_CHECKS_CANDIDATE_REUSE" \
+              --argjson npmTelegramReuse "$NPM_TELEGRAM_REUSE" \
+              --argjson productPerformanceReuse "$PERFORMANCE_REUSE" \
               '{
                 parentRunId: $parentRunId,
                 parentRunAttempt: $parentRunAttempt,
@@ -2009,7 +2179,8 @@ jobs:
                   npmTelegram: {result: $npmTelegramResult, runId: $npmTelegramRunId, runAttempt: $npmTelegramRunAttempt, url: $npmTelegramUrl},
                   productPerformance: {result: $performanceResult, runId: $performanceRunId, runAttempt: $performanceRunAttempt, url: $performanceUrl}
                 }
-              } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end)'
+              } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end)
+              + ({normalCi: $normalCiReuse, pluginPrereleaseIndependent: $pluginPrereleaseIndependentReuse, pluginPrereleaseCandidate: $pluginPrereleaseCandidateReuse, releaseChecksIndependent: $releaseChecksIndependentReuse, releaseChecksCandidate: $releaseChecksCandidateReuse, npmTelegram: $npmTelegramReuse, productPerformance: $productPerformanceReuse} | with_entries(select(.value != null)) | if length == 0 then {} else {childReuse: .} end)'
             )"
           fi
           node scripts/full-release-validation-state.mjs plan
@@ -2048,7 +2219,7 @@ jobs:
     name: Release Decision
     needs: [resolve_target, release_execution_plan]
     if: always()
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 720
     outputs:
       state: ${{ steps.state.outputs.state }}
@@ -2066,6 +2237,12 @@ jobs:
         with:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Evaluate release decision
         id: state
@@ -2107,7 +2284,7 @@ jobs:
     name: Diagnostic Drain
     needs: [resolve_target, release_execution_plan]
     if: always()
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 720
     outputs:
       state: ${{ steps.state.outputs.state }}
@@ -2133,6 +2310,12 @@ jobs:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Drain child diagnostics
         id: state
         continue-on-error: true
@@ -2146,6 +2329,28 @@ jobs:
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
         run: *full_release_state
+
+      - name: Summarize locale validation
+        if: always() && steps.state.outputs.state != ''
+        env:
+          DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const diagnostics = JSON.parse(fs.readFileSync(process.env.DIAGNOSTIC_DRAIN_PATH, "utf8"));
+          const jobs = diagnostics.children.normalCi?.timing.jobs ?? [];
+          const lines = ["## Generated locale validation", "", "| Job | Result |", "| --- | --- |"];
+          const warnings = [];
+          for (const name of ["control-ui-i18n", "native-i18n"]) {
+            const result = jobs.find((job) => job.name === name)?.conclusion || "not recorded";
+            lines.push(`| ${name} | ${result} |`);
+            if (!["success", "skipped", "not recorded"].includes(result)) {
+              console.log(`::warning::${name}: ${result}. Inspect the strict locale job; generated-locale drift must not prevent FRV dispatch.`);
+              warnings.push("", "> [!WARNING]", `> ${name}: ${result}. Generated-locale drift does not block dispatch; the strict job still fails validation.`);
+            }
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [...lines, ...warnings].join("\n") + "\n");
+          NODE
 
       - name: Upload diagnostic drain manifest
         if: always() && steps.state.outputs.state != ''
@@ -2194,7 +2399,7 @@ jobs:
         diagnostic_drain,
       ]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
       - name: Require qualified publication artifacts
@@ -2245,6 +2450,12 @@ jobs:
         with:
           pattern: full-release-diagnostics-${{ github.run_id }}-*
           path: ${{ runner.temp }}/full-release-diagnostic-attempts
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Select newest compatible release state artifacts
         id: selected_state
@@ -2373,6 +2584,7 @@ jobs:
       - name: Write release validation manifest
         if: ${{ success() }}
         env:
+          GH_TOKEN: ${{ github.token }}
           TARGET_REF: ${{ startsWith(github.ref, 'refs/heads/release-ci/') && needs.resolve_target.outputs.sha || inputs.ref }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -2393,6 +2605,7 @@ jobs:
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
+          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
           RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
           QUALIFIED_NPM_BUNDLE_JSON: ${{ needs.qualify_npm_package.outputs.qualified_preflight_bundle_json }}

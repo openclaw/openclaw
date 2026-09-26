@@ -9,6 +9,7 @@ import { createEmbeddedCallGateway } from "../../agents/tools/embedded-gateway-s
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -120,8 +121,9 @@ it.each(["replaced", "made private"])(
             isWebchatConnect: () => false,
             respond,
           });
-          expect(respond).toHaveBeenCalledTimes(1);
+          // Row workers may yield; the unrelated catalog renewal stays held until cleanup.
           await request;
+          expect(respond).toHaveBeenCalledTimes(1);
           expect(respond.mock.calls[0]?.[0]).toBe(true);
           const result = respond.mock.calls[0]?.[1];
           if (change === "made private") {
@@ -154,7 +156,11 @@ it("lists off-page controller links and deleted-collector totals while a sibling
     { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     async () => {
       clearSubagentRunsReadCacheForTest();
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
+        // Session reads need the real embedded host, but no bundled plugin runtimes.
+        plugins: { enabled: false },
+      };
       setRuntimeConfigSnapshot(cfg);
       const controller = "agent:main:controller";
       const requester = "agent:main:requester";
@@ -184,6 +190,7 @@ it("lists off-page controller links and deleted-collector totals while a sibling
       const key = { pluginId: "session-list-proof", namespace: "mixed-progress", key: "written" };
       const context = requestContext(cfg);
       await initializeSessionReadContext(context);
+      const workerContext = captureOpenClawStateWorkerContext();
       try {
         const [result, written] = await Promise.all([
           listSessions({
@@ -191,17 +198,24 @@ it("lists off-page controller links and deleted-collector totals while a sibling
             context,
             request: { limit: 1 },
           }),
-          runOpenClawStateWorkerOperation(captureOpenClawStateWorkerContext(), (worker) =>
-            worker.execute({
-              type: "pluginState.register",
-              input: {
-                ...key,
-                valueJson: "true",
-                maxEntries: 4,
-                maxPluginEntries: 4,
-                overflowPolicy: "reject-new",
-              },
-            }),
+          runOpenClawStateWorkerOperation(
+            workerContext,
+            (worker) =>
+              worker.execute({
+                type: "pluginState.register",
+                input: {
+                  ...key,
+                  valueJson: "true",
+                  maxEntries: 4,
+                  overflowPolicy: "reject-new",
+                },
+              }),
+            {
+              createAdmission: createSqliteWorkerWriteAdmission(
+                workerContext.admission.assertCurrent,
+                [workerContext.admission.databasePath],
+              ),
+            },
           ),
         ]);
         expect(written).toEqual({ ok: true, value: undefined });

@@ -6,6 +6,54 @@ import { prepareModelRuntimeOwner } from "./prepared-model-runtime.owner.js";
 import { listConfiguredRefreshInputs } from "./prepared-model-runtime.refresh-scope.js";
 
 describe("configured model runtime refresh inputs", () => {
+  it("prefers explicit workspaces over launch candidates on startup and replacement", async () => {
+    await withOpenClawTestState({ label: "model-workspace-precedence" }, async (state) => {
+      const agentDir = state.agentDir("main");
+      const configuredWorkspace = state.path("configured-workspace");
+      const launchWorkspace = state.path("launch-workspace");
+      const nextLaunchWorkspace = state.path("next-launch-workspace");
+      const config = (workspace?: string, directory = agentDir): OpenClawConfig => ({
+        plugins: { enabled: false },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: { agentDir: directory, workspace, model: "fixture/model" } },
+        },
+      });
+      const options = { defaultWorkspaceDir: launchWorkspace };
+      const [explicit] = listConfiguredRefreshInputs(
+        config(` ${configuredWorkspace} `),
+        options,
+        new Map(),
+      );
+      expect.soft(explicit?.workspaceDir).toBe(configuredWorkspace);
+      expect.soft(explicit?.preserveWorkspaceDirOnRefresh).not.toBe(true);
+
+      const [initial] = listConfiguredRefreshInputs(config(), options, new Map());
+      expect(initial?.workspaceDir).toBe(launchWorkspace);
+      const owners = new Map([
+        ["main", prepareModelRuntimeOwner(initial!, "configured", "static")],
+      ]);
+      const [retained] = listConfiguredRefreshInputs(
+        config(),
+        { defaultWorkspaceDir: nextLaunchWorkspace },
+        owners,
+      );
+      expect(retained?.workspaceDir).toBe(launchWorkspace);
+      expect(retained?.preserveWorkspaceDirOnRefresh).toBe(true);
+
+      const [replacement] = listConfiguredRefreshInputs(config(configuredWorkspace), {}, owners);
+      expect.soft(replacement?.workspaceDir).toBe(configuredWorkspace);
+      expect.soft(replacement?.preserveWorkspaceDirOnRefresh).not.toBe(true);
+      const [relocated] = listConfiguredRefreshInputs(
+        config(undefined, state.path("new-agent-dir")),
+        { defaultWorkspaceDir: nextLaunchWorkspace },
+        owners,
+      );
+      expect(relocated?.workspaceDir).toBe(nextLaunchWorkspace);
+    });
+  });
+
   it.each(["entries", "list"] as const)(
     "resolves a %s fleet with bounded roster work and fresh configuration",
     async (representation) => {
@@ -66,14 +114,14 @@ describe("configured model runtime refresh inputs", () => {
             workspaceDir,
           })),
         ).toEqual(
-          entries.map((entry, index) => ({
+          entries.map((entry) => ({
             agentId: entry.id,
             agentDir: path.resolve(entry.agentDir),
-            workspaceDir: index === 0 ? preservedWorkspace : entry.workspace,
+            workspaceDir: entry.workspace,
           })),
         );
         expect(inputs.every((input) => input.allowGatewaySubagentBinding === true)).toBe(true);
-        expect(inputs[0]?.preserveWorkspaceDirOnRefresh).toBe(true);
+        expect(inputs[0]?.preserveWorkspaceDirOnRefresh).not.toBe(true);
         expect(
           inputs.map((input) =>
             input.runtimePluginSelections?.map(({ provider, modelId }) => ({ provider, modelId })),
@@ -90,7 +138,7 @@ describe("configured model runtime refresh inputs", () => {
         expect(refreshed[1]?.runtimePluginSelections).toEqual([
           expect.objectContaining({ provider: "fixture", modelId: "replacement-model" }),
         ]);
-        expect(refreshed[0]?.workspaceDir).toBe(preservedWorkspace);
+        expect(refreshed[0]?.workspaceDir).toBe(entries[0]?.workspace);
       });
     },
   );

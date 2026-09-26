@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { loadCronStore } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-stream-trigger-" });
 
@@ -250,7 +251,9 @@ describe("cron stream trigger composition", () => {
           'Automation "failing stream payload" failed 1 times\n' +
           "Check automation history for details.",
       });
-      expect(alert?.job.state.lastError).toBe("boom");
+      expect(
+        (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)?.state.lastError,
+      ).toBe("boom");
     } finally {
       cron.stop();
     }

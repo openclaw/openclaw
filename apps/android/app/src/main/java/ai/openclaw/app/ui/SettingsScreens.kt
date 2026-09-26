@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidLicenseNotice
 import ai.openclaw.app.AppLanguage
+import ai.openclaw.app.AppearanceTextScale
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
@@ -142,7 +143,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -1568,7 +1568,7 @@ private fun PhoneCapabilitiesScreen(
       showBackgroundLocationExplanation = false
     }
 
-    AlertDialog(
+    AppAlertDialog(
       onDismissRequest = ::cancelBackgroundLocationRequest,
       title = { Text(nativeString("Allow background location?")) },
       text = {
@@ -1604,7 +1604,7 @@ private fun InstalledAppsDisclosureDialog(
   onDismiss: () -> Unit,
   onAgree: () -> Unit,
 ) {
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(nativeString("Share installed app information?")) },
     text = {
@@ -2148,6 +2148,7 @@ private fun AppearanceSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
+  val textScale by viewModel.appearanceTextScale.collectAsState()
   val themeMode by viewModel.appearanceThemeMode.collectAsState()
   val themeFamily by viewModel.appearanceThemeFamily.collectAsState()
   val accentArgb by viewModel.appearanceAccentArgb.collectAsState()
@@ -2207,6 +2208,19 @@ private fun AppearanceSettingsScreen(
             }
           }
         }
+      }
+    }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+        Text(text = nativeString("Text size"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = nativeString("Default: 100%. Only on this device."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        ClawSegmentedControl(
+          options = AppearanceTextScale.entries,
+          selected = textScale,
+          onSelect = viewModel::setAppearanceTextScale,
+          maxOptionsPerRow = 3,
+          optionLabel = { "${it.percent}%" },
+        )
       }
     }
     ClawPanel {

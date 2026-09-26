@@ -1,5 +1,6 @@
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { deriveSessionUnread } from "../shared/session-unread.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isStaleLifecycleEventForSession,
@@ -134,6 +135,7 @@ function buildGatewaySessionEventFields(params: {
     status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
     lastRunError: sessionRow.lastRunError ?? null,
+    providerReview: sessionRow.providerReview ?? null,
     // Explicit null lets a newer start evict the previous terminal run identity.
     lastRunId: sessionRow.lastRunId ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.
@@ -143,8 +145,6 @@ function buildGatewaySessionEventFields(params: {
     startedAt: sessionRow.startedAt,
     endedAt: sessionRow.endedAt ?? null,
     runtimeMs: sessionRow.runtimeMs ?? null,
-    compactionCheckpointCount: sessionRow.compactionCheckpointCount,
-    latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
     pluginExtensions: sessionRow.pluginExtensions,
   };
 }
@@ -154,7 +154,7 @@ export function buildGatewaySessionSnapshot(params: {
   agentId?: string;
   includeSession?: boolean;
   lifecycle?: boolean;
-  event?: AgentEventPayload;
+  event?: AgentEventRuntimePayload;
   lifecycleRunId?: string;
   label?: string;
   displayName?: string;
@@ -182,6 +182,9 @@ export function buildGatewaySessionSnapshot(params: {
       ? deriveGatewaySessionLifecycleProjectionPatch({ entry: lifecycleRow, event })
       : {};
   const sessionRow = { ...storedRow, ...patch };
+  if (Object.hasOwn(patch, "lastActivityAt")) {
+    sessionRow.unread = deriveSessionUnread(sessionRow);
+  }
   for (const key of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
     delete sessionRow[key];
   }

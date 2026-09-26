@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { createCoreHealthChecks } from "../flows/doctor-core-checks.js";
 import { resolveFinalDoctorHealthContributions } from "../flows/doctor-health-contributions-final.js";
+import * as gatewayCall from "../gateway/call.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../gateway/method-scopes.js";
 import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
 import type {
@@ -23,7 +25,6 @@ const {
   collectClawStateHealthFindings: vi.fn(),
   collectWhatsappResponsivenessHealthFindings: vi.fn(),
 }));
-vi.mock("../gateway/call.js", () => ({ callGateway: socketCall }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 vi.mock("../claws/doctor.js", () => ({ collectClawStateHealthFindings }));
 vi.mock("./doctor-whatsapp-responsiveness.js", () => ({
@@ -53,13 +54,19 @@ function contextFor(handlers: GatewayRequestHandlers): GatewayRequestContext {
 describe("Doctor hosted Gateway reads", () => {
   beforeEach(() => {
     socketCall.mockReset().mockRejectedValue(new Error("unexpected Gateway socket"));
+    // Hosted routing and readiness stay real; only socket requests are replaced.
+    vi.spyOn(gatewayCall, "callGateway").mockImplementation(socketCall);
     note.mockReset();
     collectClawStateHealthFindings.mockReset();
     collectWhatsappResponsivenessHealthFindings.mockReset().mockReturnValue([]);
   });
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   it("reads exporter diagnostics locally while retaining the wire health probes", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
     socketCall.mockImplementation(async ({ method }) => {
       if (method === "status" || method === "channels.status") {
         return {};
@@ -80,10 +87,12 @@ describe("Doctor hosted Gateway reads", () => {
           ],
         }),
     });
-    await withPluginRuntimeGatewayContextResolver(
-      () => context,
-      () => checkGatewayHealth({ runtime, cfg: {} }),
-    );
+    await expect(
+      withPluginRuntimeGatewayContextResolver(
+        () => context,
+        () => checkGatewayHealth({ runtime, cfg: {} }),
+      ),
+    ).resolves.toMatchObject({ healthOk: true, authenticated: true });
     expect(note).toHaveBeenCalledWith(
       "diagnostics-otel · logs · started · stdout",
       "Telemetry exporters",
@@ -92,6 +101,10 @@ describe("Doctor hosted Gateway reads", () => {
       "status",
       "channels.status",
     ]);
+    expect(socketCall).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ timeoutMs: DEFAULT_RESTART_HEALTH_TIMEOUT_MS }),
+    );
   });
 
   it("reads cached memory readiness without opening a Gateway socket", async () => {

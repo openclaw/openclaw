@@ -227,6 +227,7 @@ async function preparePendingCodexThreadResume(
     }
     assertCurrent();
     return {
+      modelProvider: observation.modelProvider,
       assertConfigured: observation.assertConfigured,
       assertCurrent,
       dispose,
@@ -306,6 +307,7 @@ function observeCodexThreadConfiguration(
     }
   });
   return {
+    modelProvider: thread.modelProvider,
     dispose,
     settledSystemError,
     assertConfigured: () => {

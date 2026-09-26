@@ -21,11 +21,13 @@ import { createAgentRunSupersededAbortError } from "../../agents/run-termination
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
+import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
@@ -37,6 +39,7 @@ import {
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
+import { prepareCliReplyPayload } from "./cli-reply-payload.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -53,6 +56,16 @@ export async function runCliFallbackCandidate(
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  const onPreparedBlockReply = turn.opts?.onPreparedBlockReply;
+  const onNativeBlockReply =
+    turn.opts?.onBlockReply ??
+    (onPreparedBlockReply
+      ? async (payload: ReplyPayload, context?: BlockReplyContext) => {
+          for (const plan of createStructuredOutboundPayloadPlan([payload])) {
+            await onPreparedBlockReply(plan, context);
+          }
+        }
+      : undefined);
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
   const selectedModelEntry = findModelInCatalog(
     params.candidateRun.thinkingCatalog ?? [],
@@ -116,14 +129,7 @@ export async function runCliFallbackCandidate(
   // from the shared agent-event handler; without it a failed CLI command renders
   // exactly like one that succeeded.
   const deliverCliCommandOutcome = async (
-    payload: {
-      name: string | undefined;
-      phase: "start" | "update" | "result";
-      args: Record<string, unknown> | undefined;
-      toolCallId?: string;
-      isError?: boolean;
-      result?: unknown;
-    },
+    payload: Parameters<typeof cliToolSummaryTracker.noteToolEvent>[0],
     commandBearing: boolean,
   ) => {
     const onCommandOutput = turn.opts?.onCommandOutput;
@@ -208,6 +214,7 @@ export async function runCliFallbackCandidate(
                     return;
                   }
                   await clearCliSessionInStore({
+                    agentId: turn.followupRun.run.agentId,
                     provider: params.cliExecutionProvider,
                     expectedCliSessionId: cliSessionBinding.sessionId,
                     expectedSessionId: sessionEntry?.sessionId,
@@ -236,6 +243,12 @@ export async function runCliFallbackCandidate(
                   : onPartialReply({ text: sanitized.text }),
             );
           },
+          onCompletedReply: async (text, assistantMessageIndex) => {
+            params.runAbortSignal?.throwIfAborted();
+            assertSettlementCurrent();
+            const reply = prepareCliReplyPayload(text, cliCurrentMessageId, assistantMessageIndex);
+            await params.presentation.blockReplyHandler?.(reply, { completed: true });
+          },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
           onPlanUpdate: turn.opts?.onPlanUpdate,
           onReasoningProgress: async (payload) => {
@@ -244,45 +257,32 @@ export async function runCliFallbackCandidate(
           onCompactionStart: turn.opts?.onCompactionStart,
           onCompactionEnd: turn.opts?.onCompactionEnd,
           onToolEvent: async (payload) => {
-            if (!params.preserveProgressCallbackStartOrder) {
-              const commandBearing = await cliToolSummaryTracker.noteToolEvent(payload);
-              if (payload.phase === "result") {
-                await deliverCliCommandOutcome(payload, commandBearing);
-                return;
-              }
-              const { name, phase, args, toolCallId } = payload;
-              await Promise.all([
-                turn.typingSignals.signalToolStart(),
-                turn.opts?.onToolStart?.({
-                  ...(toolCallId ? { toolCallId } : {}),
-                  name,
-                  phase,
-                  args,
-                  detailMode: turn.toolProgressDetail,
-                }),
-              ]);
-              return;
-            }
             const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
             if (payload.phase === "result") {
-              const commandBearing = await summaryPromise;
-              await deliverCliCommandOutcome(payload, commandBearing);
+              await deliverCliCommandOutcome(payload, await summaryPromise);
               return;
             }
             const { name, phase, args, toolCallId } = payload;
+            const deliverToolStart = () =>
+              turn.opts?.onToolStart?.({
+                ...(toolCallId ? { toolCallId } : {}),
+                name,
+                phase,
+                args,
+                detailMode: turn.toolProgressDetail,
+              });
+            if (!params.preserveProgressCallbackStartOrder) {
+              await summaryPromise;
+              await Promise.all([turn.typingSignals.signalToolStart(), deliverToolStart()]);
+              return;
+            }
             // Tool and assistant bridges drain independently. Preserve source order.
             await Promise.all([
               summaryPromise,
               params.presentation.presentWithTyping(
                 turn.typingSignals.signalToolStart(),
                 async () => {
-                  await turn.opts?.onToolStart?.({
-                    ...(toolCallId ? { toolCallId } : {}),
-                    name,
-                    phase,
-                    args,
-                    detailMode: turn.toolProgressDetail,
-                  });
+                  await deliverToolStart();
                 },
               ),
             ]);
@@ -306,12 +306,11 @@ export async function runCliFallbackCandidate(
                   if (bridgeCliDurableCommentary) {
                     // Block mode treats completed CLI text as an ordinary answer block so
                     // the existing pipeline owns coalescing and final-payload dedupe.
-                    deliveries.push(
-                      params.presentation.blockReplyHandler?.({
-                        text: payload.text,
-                        ...(turn.blockStreamingEnabled ? {} : { isCommentary: true }),
-                      }),
-                    );
+                    const reply = prepareCliReplyPayload(payload.text, cliCurrentMessageId);
+                    if (!turn.blockStreamingEnabled) {
+                      reply.isCommentary = true;
+                    }
+                    deliveries.push(params.presentation.blockReplyHandler?.(reply));
                   }
                   await Promise.all(deliveries);
                 }
@@ -405,7 +404,7 @@ export async function runCliFallbackCandidate(
             ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
             cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
             silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
-            allowEmptyAssistantReplyAsSilent: turn.followupRun.run.allowEmptyAssistantReplyAsSilent,
+            terminalReplyExpectation: turn.followupRun.run.terminalReplyExpectation,
             extraSystemPromptStatic: turn.followupRun.run.extraSystemPromptStatic,
             cliSessionBindingFacts: turn.followupRun.run.cliSessionBindingFacts,
             ownerNumbers: turn.followupRun.run.ownerNumbers,
@@ -426,6 +425,7 @@ export async function runCliFallbackCandidate(
             messageChannel: turn.followupRun.originatingChannel ?? undefined,
             messageProvider: hookMessageProvider,
             clientCaps: turn.followupRun.run.clientCaps,
+            bootstrapUserProfileId: turn.followupRun.run.bootstrapUserProfileId,
             gatewayUiCommandTarget: turn.followupRun.run.gatewayUiCommandTarget,
             currentChannelId:
               turn.followupRun.originatingTo ?? turn.sessionCtx.OriginatingTo ?? turn.sessionCtx.To,
@@ -454,7 +454,7 @@ export async function runCliFallbackCandidate(
             abortSignal: params.runAbortSignal,
             // Native input is already host-authored. Keep its stable delivery
             // context out of the model-output normalization wrapper.
-            onBlockReply: turn.opts?.onBlockReply,
+            onBlockReply: onNativeBlockReply,
             onPartialReply: turn.opts?.onPartialReply,
             onExecutionPhase: params.signalExecutionPhaseForTyping,
             replyOperation: turn.replyOperation,
@@ -465,6 +465,7 @@ export async function runCliFallbackCandidate(
           // invalidation remains, and failure must retain the returned turn.
           return await settleCliSessionResult(candidateResult, async () => {
             await clearCliSessionInStore({
+              agentId: turn.followupRun.run.agentId,
               provider: params.cliExecutionProvider,
               expectedCliSessionId: cliSessionBinding?.sessionId,
               expectedSessionId: sessionEntry?.sessionId,
@@ -485,6 +486,7 @@ export async function runCliFallbackCandidate(
           )
         ) {
           return await persistCliSessionBindingResult({
+            agentId: turn.followupRun.run.agentId,
             provider: params.cliExecutionProvider,
             result: candidateResult,
             sessionKey,
@@ -500,6 +502,7 @@ export async function runCliFallbackCandidate(
       {
         preparedRunAdmission: params.preparedRunAdmission,
         lifecycleGeneration: params.lifecycleGeneration,
+        isFinalFallbackAttempt: params.isFinalFallbackAttempt,
         abortSignal: params.runAbortSignal,
         trigger: turn.isHeartbeat ? "heartbeat" : "user",
         inputProvenance: turn.followupRun.run.inputProvenance,

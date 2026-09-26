@@ -32,9 +32,13 @@ export type ActiveWorkerTurn = {
   dispose: () => void;
 };
 
-type WorkerRunOwner = {
-  claim: WorkerSessionTurnClaim;
+export type WorkerTurnLiveEventOwner = {
   record: (event: WorkerLiveEventParams["event"]) => void;
+  isCancelled: () => boolean;
+};
+
+type WorkerRunOwner = WorkerTurnLiveEventOwner & {
+  claim: WorkerSessionTurnClaim;
 };
 
 const activeOwners = new Map<string, WorkerRunOwner>();
@@ -68,15 +72,15 @@ export function createWorkerTurnRunOwner(params: {
           : undefined,
     );
   };
+  const isCurrent = () =>
+    activeOwners.get(claim.sessionId) === owner &&
+    isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+    params.placements.validateTurnClaim(claim);
   const owner: WorkerRunOwner = {
     claim,
+    isCancelled: () => signal.aborted && isCurrent(),
     record: (event) => {
-      if (
-        activeOwners.get(claim.sessionId) !== owner ||
-        signal.aborted ||
-        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-        !params.placements.validateTurnClaim(claim)
-      ) {
+      if (signal.aborted || !isCurrent()) {
         return;
       }
       if (event.kind === "tool" && event.payload.phase !== "update") {
@@ -133,17 +137,22 @@ export function createWorkerTurnRunOwner(params: {
     claim,
     sessionKey,
     signal,
-    dispose: () => clearActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile),
+    dispose: () => {
+      turn.replyOperation?.detachBackend(handle);
+      clearActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile);
+    },
   };
 }
 
 // Capture before buffering or notifying listeners: neither a reused run ID nor
-// a replacement owner may receive an earlier turn's delayed diagnostic event.
-export function captureWorkerTurnDiagnosticRecorder(identity: WorkerConnectionIdentity) {
+// a replacement owner may receive an earlier turn's delayed live event.
+export function captureWorkerTurnLiveEventOwner(
+  identity: WorkerConnectionIdentity,
+): WorkerTurnLiveEventOwner | undefined {
   const owner = identity.sessionId ? activeOwners.get(identity.sessionId) : undefined;
   return owner &&
     identity.turnClaim?.owner.kind === "worker" &&
     sameWorkerSessionTurnClaim(owner.claim, identity.turnClaim)
-    ? owner.record
+    ? owner
     : undefined;
 }

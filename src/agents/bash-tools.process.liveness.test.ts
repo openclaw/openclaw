@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { processPollLivenessEntrypoint } from "./bash-tools.process-liveness-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -11,51 +13,13 @@ test("waiting process poll keeps a one-shot runtime alive through background com
   const workspace = tempDirs.make("openclaw-process-poll-liveness-");
   const root = fileURLToPath(new URL("../../", import.meta.url));
   const resultPath = path.join(workspace, "result.txt");
-  const command =
-    'setTimeout(() => { require("node:fs").writeFileSync("result.txt", "background-complete"); }, 80)';
-  const source = `
-    import { runExecProcess } from "./src/agents/bash-tools.exec-runtime.ts";
-    import { markBackgrounded } from "./src/agents/bash-process-registry.ts";
-    import { createProcessTool } from "./src/agents/bash-tools.process.ts";
-
-    const run = await runExecProcess({
-      command: "one-shot poll liveness",
-      workdir: ${JSON.stringify(workspace)},
-      env: {},
-      sandbox: {
-        containerName: "poll-liveness-fixture",
-        workspaceDir: ${JSON.stringify(workspace)},
-        containerWorkdir: ${JSON.stringify(workspace)},
-        async buildExecSpec() {
-          return {
-            argv: [process.execPath, "-e", ${JSON.stringify(command)}],
-            env: {},
-            stdinMode: "pipe-closed",
-          };
-        },
-      },
-      usePty: false,
-      warnings: [],
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
-      notifyOnExit: false,
-      timeoutSec: 0,
-    });
-    markBackgrounded(run.session);
-    try {
-      const result = await createProcessTool().execute("poll", {
-        action: "poll", sessionId: run.session.id, timeout: 5000,
-      });
-      process.stdout.write(JSON.stringify(result) + "\\n");
-    } finally {
-      run.kill();
-      await run.promise;
-    }
-  `;
   // No IPC, server, or keepalive in this child: Vitest must not mask Node liveness.
   const child = spawnSync(
     process.execPath,
-    ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", source],
+    [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(processPollLivenessEntrypoint)),
+      workspace,
+    ],
     {
       cwd: root,
       env: {

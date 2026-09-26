@@ -1,8 +1,8 @@
 // Delivery context tests cover context normalization for channel delivery.
 import { describe, expect, it } from "vitest";
+import { deliveryContextFromSession } from "./delivery-context.read.js";
 import {
   deliveryContextKey,
-  deliveryContextFromSession,
   hasDeliveryTargetFields,
   mergeDeliveryContext,
   normalizeDeliveryContext,

@@ -2,7 +2,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { normalizeSessionRowChatType, normalizeText } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeStatus } from "./session-accessor.sqlite-status.js";

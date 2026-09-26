@@ -1,7 +1,9 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
+import { createClientHarness } from "./app-server/test-support.js";
+import { observeCodexCatalogClient } from "./session-catalog-events.js";
 import {
   commandRpcMocks,
   config,
@@ -14,6 +16,73 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex catalog failure recovery", () => {
+  it("settles a successful prefix recovery probe before the next activity check", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const native = Array.from({ length: 96 }, (_, i) =>
+      idleThread({ id: `prefix-${i}`, source: "cli", recencyAt: 1_000 - i }),
+    );
+    commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
+      expect(method).toBe("thread/list");
+      const offset = Number(params.cursor ?? 0);
+      return {
+        data: native.slice(offset, offset + 64),
+        nextCursor: offset + 64 < native.length ? String(offset + 64) : null,
+      };
+    });
+    const factory = createCodexSessionCatalogControlFactory({
+      getPluginConfig: () => ({
+        appServer: {
+          transport: "websocket",
+          url: "wss://prefix-recovery.example.test/codex",
+          authToken: "synthetic-catalog-token",
+        },
+      }),
+      getRuntimeConfig: () => undefined,
+    });
+    const source = (await factory.homesForAgent("main"))[0]!;
+    const control = factory.forRequest("main", source);
+    const harness = createClientHarness();
+    try {
+      await observeCodexCatalogClient(harness.client, {
+        startOptions: source.appServer.start,
+        agentDir: source.agentDir,
+      });
+      await control.initialize();
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+      const notify = async (name: string) => {
+        native[0]!.name = name;
+        harness.send({ method: "thread/started", params: { thread: native[0]! } });
+        await vi.waitFor(async () => {
+          expect((await control.listPage({})).sessions[0]?.name).toBe(name);
+        });
+      };
+      await notify("First activity");
+      commandRpcMocks.codexControlRequest.mockRejectedValueOnce(new Error("temporary outage"));
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+      await notify("Recovery activity");
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
+      await notify("Later activity");
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(5);
+      expect(
+        commandRpcMocks.codexControlRequest.mock.calls
+          .slice(2)
+          .every((call) => call[2].useStateDbOnly === true && call[2].cursor === undefined),
+      ).toBe(true);
+    } finally {
+      await harness.client.closeAndWait();
+      await factory.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([true, false])(
     "backs off complete home hydration independently of memory queries (runtime config %s)",
     async (hasConfig) => {

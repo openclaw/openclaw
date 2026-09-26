@@ -19,7 +19,6 @@ import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display
 import {
   assistantTextMessage,
   messageToolCall,
-  messageToolResult,
   textContent,
   userTextMessage,
 } from "./session-history-fixtures.test-support.js";
@@ -394,8 +393,19 @@ describe("session history snapshot reads", () => {
               messageToolCall("call-second", "Second visible reply."),
             ],
           },
-          messageToolResult("call-first", "first", 3),
-          messageToolResult("call-second", "second", 4),
+          {
+            role: "assistant",
+            content: ["First visible reply.", "Second visible reply."].map((text, index) => ({
+              type: "text",
+              text,
+              textSignature: JSON.stringify({
+                v: 1,
+                id: `commentary-${index}`,
+                phase: "commentary",
+              }),
+            })),
+          },
+          assistantTextMessage("NO_REPLY", 4),
           assistantTextMessage("NO_REPLY", 5),
         ];
         const events = [
@@ -429,17 +439,15 @@ describe("session history snapshot reads", () => {
           originalSnapshot ??= refreshed;
 
           expect(refreshed.messages).toMatchObject([
-            { role: "toolResult", toolCallId: "call-first", __openclaw: { seq: 3 } },
-            { role: "toolResult", toolCallId: "call-second", __openclaw: { seq: 4 } },
             {
               content: textContent("First visible reply."),
-              openclawMessageToolMirror: { toolCallId: "call-first" },
+              openclawStreamFallback: { itemId: "commentary-0" },
               __openclaw: { seq: 3 },
             },
             {
               content: textContent("Second visible reply."),
-              openclawMessageToolMirror: { toolCallId: "call-second" },
-              __openclaw: { seq: 4 },
+              openclawStreamFallback: { itemId: "commentary-1" },
+              __openclaw: { seq: 3 },
             },
           ]);
           expect(refreshed.nextCursor).toBe("3");

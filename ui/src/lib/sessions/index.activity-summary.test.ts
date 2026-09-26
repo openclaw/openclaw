@@ -6,7 +6,7 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 it("ignores recap-only changes for canonical, filtered, and child rosters", async () => {
   vi.useFakeTimers();

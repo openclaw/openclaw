@@ -1,4 +1,5 @@
 // Builds deterministic metadata scopes for startup planning.
+import { getConfiguredDecisionProviderIds } from "../agents/decision-model-setting.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { addRequiredAgentHarnessPluginIds } from "./gateway-startup-plugin-activation.js";
@@ -112,6 +113,12 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     return undefined;
   }
   lookup.addDirectProviderOwners(scope, configuredProviderIds);
+
+  const decisionProviderIds = configs.flatMap(getConfiguredDecisionProviderIds);
+  if (!lookup.hasProviderContributionOwners(decisionProviderIds)) {
+    return undefined;
+  }
+  lookup.addProviderContributionOwners(scope, decisionProviderIds);
 
   const workerProviderIds = normalizeWorkerProviderIds([
     ...configs.flatMap(collectConfiguredWorkerProviderIds),

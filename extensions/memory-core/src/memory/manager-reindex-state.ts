@@ -1,4 +1,3 @@
-// Memory Core plugin module implements manager reindex state behavior.
 import {
   hashText,
   MEMORY_CHUNKING_VERSION,
@@ -150,7 +149,7 @@ export function resolveConfiguredScopeHash(params: {
   );
 }
 
-export function resolveMemoryIndexIdentityState(params: {
+type MemoryIndexIdentityParams = {
   meta: MemoryIndexMeta | null;
   provider: { id: string; model?: string } | null;
   providerKey?: string;
@@ -163,7 +162,76 @@ export function resolveMemoryIndexIdentityState(params: {
   vectorReady: boolean;
   hasIndexedChunks?: boolean;
   ftsTokenizer: string;
-}): MemoryIndexIdentityState {
+};
+
+function resolveConfigurationIndexIdentityState(
+  params: Omit<MemoryIndexIdentityParams, "meta">,
+  meta: MemoryIndexMeta,
+): MemoryIndexIdentityState {
+  const expectedModel =
+    params.provider && params.provider.model === undefined
+      ? undefined
+      : params.provider?.model?.trim() || "fts-only";
+  const matchingModelIdentities = [
+    { model: expectedModel, providerKey: params.providerKey },
+    ...(params.providerAliases ?? []),
+  ].filter((identity) => identity.model === meta.model);
+  if (expectedModel !== undefined && matchingModelIdentities.length === 0) {
+    return configuredIndexMismatch(
+      "model",
+      `index was built for model ${meta.model}, expected ${expectedModel}`,
+    );
+  }
+  const expectedProvider = params.provider ? params.provider.id : "none";
+  if (meta.provider !== expectedProvider) {
+    return configuredIndexMismatch(
+      "provider",
+      `index was built for provider ${meta.provider}, expected ${expectedProvider}`,
+    );
+  }
+  if (
+    expectedModel !== undefined &&
+    params.providerKeyKnown !== false &&
+    !matchingModelIdentities.some((identity) => identity.providerKey === meta.providerKey)
+  ) {
+    return configuredIndexMismatch("provider_settings", "index provider settings changed");
+  }
+  const contentIdentity = resolveContentScopeIdentityState(params, meta);
+  if (contentIdentity.status !== "valid") {
+    return contentIdentity;
+  }
+  if (params.vectorReady && params.hasIndexedChunks !== false && !meta.vectorDims) {
+    return configuredIndexMismatch("vector_dims", "index vector dimensions are missing");
+  }
+  return { status: "valid" };
+}
+
+// The constraints that decide whether stored keyword rows still describe the
+// configured corpus. Embedding identity is deliberately absent: keyword reads
+// never consume embeddings, so a changed model or an unavailable provider must
+// not lock the last published keyword index away.
+function resolveContentScopeIdentityState(
+  params: Omit<MemoryIndexIdentityParams, "meta">,
+  meta: MemoryIndexMeta,
+): MemoryIndexIdentityState {
+  if (configuredMetaSourcesDiffer({ meta, configuredSources: params.configuredSources })) {
+    return configuredIndexMismatch("sources", "index sources changed");
+  }
+  if (meta.scopeHash !== params.configuredScopeHash) {
+    return configuredIndexMismatch("scope", "index scope changed");
+  }
+  if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
+    return configuredIndexMismatch("chunking", "index chunking changed");
+  }
+  if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
+    return configuredIndexMismatch("fts_tokenizer", "index FTS tokenizer changed");
+  }
+  return { status: "valid" };
+}
+
+export function resolveMemoryIndexIdentityState(
+  params: MemoryIndexIdentityParams,
+): MemoryIndexIdentityState {
   const { meta } = params;
   if (!meta) {
     return {
@@ -194,59 +262,18 @@ export function resolveMemoryIndexIdentityState(params: {
     );
   }
   if ((meta.chunkingVersion ?? 0) < MEMORY_CHUNKING_VERSION) {
-    return openClawIndexMismatch(
-      "chunking_version",
-      "index chunking implementation changed",
-      "older",
-    );
+    // Only an older chunker may use the last published lexical corpus. Embedding
+    // identities do not authorize lexical reads; source/scope identity does.
+    return {
+      ...openClawIndexMismatch(
+        "chunking_version",
+        "index chunking implementation changed",
+        "older",
+      ),
+      ...(resolveContentScopeIdentityState(params, meta).status === "valid"
+        ? { chunkingVersionOnly: true }
+        : {}),
+    };
   }
-  const expectedModel =
-    params.provider && params.provider.model === undefined
-      ? undefined
-      : params.provider?.model?.trim() || "fts-only";
-  const matchingModelIdentities = [
-    { model: expectedModel, providerKey: params.providerKey },
-    ...(params.providerAliases ?? []),
-  ].filter((identity) => identity.model === meta.model);
-  if (expectedModel !== undefined && matchingModelIdentities.length === 0) {
-    return configuredIndexMismatch(
-      "model",
-      `index was built for model ${meta.model}, expected ${expectedModel}`,
-    );
-  }
-  const expectedProvider = params.provider ? params.provider.id : "none";
-  if (meta.provider !== expectedProvider) {
-    return configuredIndexMismatch(
-      "provider",
-      `index was built for provider ${meta.provider}, expected ${expectedProvider}`,
-    );
-  }
-  if (
-    expectedModel !== undefined &&
-    params.providerKeyKnown !== false &&
-    !matchingModelIdentities.some((identity) => identity.providerKey === meta.providerKey)
-  ) {
-    return configuredIndexMismatch("provider_settings", "index provider settings changed");
-  }
-  if (
-    configuredMetaSourcesDiffer({
-      meta,
-      configuredSources: params.configuredSources,
-    })
-  ) {
-    return configuredIndexMismatch("sources", "index sources changed");
-  }
-  if (meta.scopeHash !== params.configuredScopeHash) {
-    return configuredIndexMismatch("scope", "index scope changed");
-  }
-  if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
-    return configuredIndexMismatch("chunking", "index chunking changed");
-  }
-  if (params.vectorReady && params.hasIndexedChunks !== false && !meta.vectorDims) {
-    return configuredIndexMismatch("vector_dims", "index vector dimensions are missing");
-  }
-  if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
-    return configuredIndexMismatch("fts_tokenizer", "index FTS tokenizer changed");
-  }
-  return { status: "valid" };
+  return resolveConfigurationIndexIdentityState(params, meta);
 }

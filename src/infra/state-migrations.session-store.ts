@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isWithinDir } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
@@ -24,21 +26,23 @@ import {
 import {
   LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
-  isValidAgentId,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
 import {
   deferredPluginSessionStoreIds,
   prepareDeferredPluginSessionImportReader,
   preserveDeferredPluginSessionSource,
 } from "./deferred-plugin-session-sources.js";
-import { readFileWindowFullySync } from "./file-read.js";
+import { readFirstLineSync } from "./first-line-read.js";
 import { expandHomePrefix } from "./home-dir.js";
-import { isWithinDir } from "./path-safety.js";
 import { importLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
 import {
   existsDir,
@@ -54,32 +58,13 @@ import {
   sessionStorePathsMatch,
 } from "./state-migrations.session-store-paths.js";
 import {
+  isLegacyDefaultMainAliasKey,
   isLegacyGroupKey,
+  resolveCanonicalAgentSessionOwner,
   isSurfaceGroupKey,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
 import type { MigrationMessages, SessionStoreAliasPlan } from "./state-migrations.types.js";
-
-export function isLegacyDefaultMainAliasKey(key: string, mainKey: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(key.trim());
-  const canonicalMainKey = normalizeMainKey(mainKey);
-  return (
-    lower === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` ||
-    lower === `agent:${DEFAULT_AGENT_ID}:${canonicalMainKey}`
-  );
-}
-
-function resolveCanonicalAgentSessionOwner(key: string): string | undefined {
-  const parsed = parseAgentSessionKey(key);
-  if (
-    parsed === null ||
-    !isValidAgentId(parsed.agentId) ||
-    normalizeAgentId(parsed.agentId) !== parsed.agentId
-  ) {
-    return undefined;
-  }
-  return parsed.agentId;
-}
 
 function canonicalizeSessionKeyForAgent(params: {
   key: string;
@@ -449,21 +434,7 @@ export function resolveStaleLegacySessionFile(params: {
   if (!migrationFileExists(targetSessionFile) || typeof entry.sessionId !== "string") {
     return undefined;
   }
-  const readFirstLine = () => {
-    const fd = fs.openSync(targetSessionFile, "r");
-    try {
-      const buffer = Buffer.alloc(8192);
-      const bytesRead = readFileWindowFullySync(fd, buffer, 0);
-      if (bytesRead <= 0) {
-        return undefined;
-      }
-      const chunk = buffer.subarray(0, bytesRead).toString("utf8");
-      const newline = chunk.indexOf("\n");
-      return newline >= 0 ? chunk.slice(0, newline) : chunk;
-    } finally {
-      fs.closeSync(fd);
-    }
-  };
+  const readFirstLine = () => readFirstLineSync(targetSessionFile);
   try {
     const firstLine = readFirstLine();
     const header = firstLine ? (JSON.parse(firstLine) as unknown) : undefined;
@@ -604,7 +575,7 @@ export async function migrateOrphanedSessionKeys(params: {
   const changes: string[] = [];
   const warnings: string[] = [];
   const recoverableWarnings: string[] = [];
-  const env = params.env ?? process.env;
+  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   let preparedLegacySessionSurfaces: PreparedLegacySessionSurfaces | undefined;
   const resolveLegacySessionSurfaces = () =>
     (preparedLegacySessionSurfaces ??=
@@ -616,7 +587,11 @@ export async function migrateOrphanedSessionKeys(params: {
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
   const persistedStoreOwner = resolvePersistedSessionStoreOwner(params.cfg);
-  const pendingPluginMigrations = readDeferredPluginMigrations({ env });
+  const pendingPluginMigrations = await withArtifactPreservingStateReads(() =>
+    withOpenClawStateDatabaseReadSnapshot(async () => readDeferredPluginMigrations({ env }), {
+      env,
+    }),
+  );
   const persistedStoreAgentId =
     persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined;
   const persistedStorePath =
@@ -838,7 +813,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  const env = params.env ?? process.env;
+  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   if (params.legacySessionSurfaces.failures.length > 0) {
     return {
       changes,
@@ -846,7 +821,11 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     };
   }
   const now = params.now ?? (() => Date.now());
-  const pending = readDeferredPluginMigrations({ env });
+  const pending = await withArtifactPreservingStateReads(() =>
+    withOpenClawStateDatabaseReadSnapshot(async () => readDeferredPluginMigrations({ env }), {
+      env,
+    }),
+  );
   const stateDir = resolveStateDir(env);
   const storeConfig = params.cfg.session?.store;
   const pluginAgentIds =

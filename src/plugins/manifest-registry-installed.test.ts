@@ -144,6 +144,46 @@ function createIndexWithUnhashedPackageJson(rootDir: string): InstalledPluginInd
 }
 
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
+  it.each([undefined, "plugin-state", "future-store"])(
+    "preserves known backing-store metadata %s through installed records",
+    (backingStore) => {
+      const root = makeTempDir();
+      writePlugin(root, "installed", "installed/");
+      fs.writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/installed",
+          version: "1.0.0",
+          openclaw: {
+            channel: {
+              id: "installed",
+              persistedAuthState: {
+                specifier: "./auth-presence",
+                exportName: "hasAuth",
+                backingStore,
+              },
+            },
+          },
+        }),
+      );
+      const index = createIndex(root);
+      expectDefined(index.plugins[0], "installed fixture record").packageJson = {
+        path: "package.json",
+        hash: "fixture-package-metadata",
+      };
+      const registry = loadPluginManifestRegistryForInstalledIndex({
+        index,
+        env: { VITEST: "true" },
+        includeDisabled: true,
+      });
+      expect(registry.plugins[0]?.packageChannel?.persistedAuthState).toEqual({
+        specifier: "./auth-presence",
+        exportName: "hasAuth",
+        ...(backingStore === "plugin-state" ? { backingStore: "plugin-state" } : {}),
+      });
+    },
+  );
+
   it("loadPluginManifestRegistryForInstalledIndex preserves account-key policy after index persistence", async () => {
     const rootDir = makeTempDir();
     const stateDir = makeTempDir();

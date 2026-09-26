@@ -2,10 +2,18 @@
 // live release history JSON captured by release workflows.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { normalizeUpgradeSurvivorBaselineSpec } from "./lib/docker-e2e-plan.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
-import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
-import { OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE } from "./lib/upgrade-survivor-policy.mjs";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "./lib/release-version.mjs";
+import {
+  assertSupportedUpgradeSurvivorBaselineSpec,
+  MINIMUM_UPGRADE_SURVIVOR_BASELINE,
+  normalizeUpgradeSurvivorBaselineSpec,
+  OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE,
+} from "./lib/upgrade-survivor-policy.mjs";
 
 type ReleaseRecord = Partial<Record<"isPrerelease" | "publishedAt" | "tagName", unknown>>;
 
@@ -42,6 +50,7 @@ function dedupeSpecs(specs: string[]) {
   const normalized = specs
     .map(normalizeUpgradeSurvivorBaselineSpec)
     .filter((spec) => spec !== undefined);
+  normalized.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
   return [...new Set(normalized)];
 }
 
@@ -85,16 +94,16 @@ function readPublishedVersions(file: string | undefined) {
 
 function stableVersionFromTag(tagName: unknown) {
   const version = typeof tagName === "string" ? tagName.replace(/^v/u, "") : "";
-  return parseStableVersion(version) ? version : undefined;
+  return parseVersionForTrain(version) ? version : undefined;
 }
 
-function parseStableVersion(version: unknown) {
+function parseVersionForTrain(version: unknown, train: "stable" | "extended-stable" = "stable") {
   const parsed = parseReleaseVersion(typeof version === "string" ? version : "");
-  return parsed?.channel === "stable" ? parsed : undefined;
+  return parsed && classifyReleaseTrain(parsed) === train ? parsed : undefined;
 }
 
 function compareStableVersions(left: string, right: string) {
-  if (!parseStableVersion(left) || !parseStableVersion(right)) {
+  if (!parseVersionForTrain(left) || !parseVersionForTrain(right)) {
     throw new Error(`cannot compare release versions: ${left} ${right}`);
   }
   const comparison = compareReleaseVersions(left, right);
@@ -132,39 +141,13 @@ function readStableReleases(file: string, publishedVersions?: Set<string>) {
     .flatMap((release) => {
       const publishedAt = typeof release.publishedAt === "string" ? release.publishedAt : undefined;
       const version = npmPublishedVersion(stableVersionFromTag(release.tagName), publishedVersions);
-      return publishedAt && version ? [{ publishedAt, version }] : [];
+      return publishedAt &&
+        version &&
+        compareStableVersions(version, MINIMUM_UPGRADE_SURVIVOR_BASELINE) >= 0
+        ? [{ publishedAt, version }]
+        : [];
     })
     .toSorted((a, b) => b.publishedAt.localeCompare(a.publishedAt));
-}
-
-/**
- * Expands the release-history token into recent stable plus pinned historical baselines.
- */
-function resolveReleaseHistory(args: Map<string, string>) {
-  const releasesJson = args.get("releases-json");
-  if (!releasesJson) {
-    throw new Error("--releases-json is required when requested baselines include release-history");
-  }
-  const historyCount = parsePositiveInteger(args.get("history-count") ?? "6", "--history-count");
-  const includeVersion = args.get("include-version") ?? "2026.4.23";
-  const preDate = args.get("pre-date") ?? "2026-03-15T00:00:00Z";
-  const publishedVersions = readPublishedVersions(args.get("npm-versions-json"));
-  const releases = readStableReleases(releasesJson, publishedVersions);
-  const versions = omitUnpublishedCandidateBaseline(
-    args,
-    releases.map((release) => release.version),
-  ).slice(0, historyCount);
-  const exact = releases.find((release) => release.version === includeVersion);
-  if (exact) {
-    versions.push(exact.version);
-  }
-  const preDateRelease = releases.find(
-    (release) => new Date(release.publishedAt).getTime() < new Date(preDate).getTime(),
-  );
-  if (preDateRelease) {
-    versions.push(preDateRelease.version);
-  }
-  return dedupeSpecs(versions);
 }
 
 /**
@@ -173,7 +156,7 @@ function resolveReleaseHistory(args: Map<string, string>) {
 function resolveLastStable(args: Map<string, string>, count: number) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
-    throw new Error("--releases-json is required when requested baselines include last-stable-*");
+    throw new Error("--releases-json is required for release-history or last-stable-* baselines");
   }
   if (!Number.isInteger(count) || count < 1) {
     throw new Error(`invalid last-stable baseline count: ${count}`);
@@ -220,11 +203,13 @@ function resolveSupportedLines(args: Map<string, string>) {
     throw new Error("npm dist-tags must be a JSON object");
   }
   const latest = "latest" in tags ? tags.latest : undefined;
-  if (typeof latest !== "string" || !parseStableVersion(latest) || !versions.has(latest)) {
+  if (typeof latest !== "string" || !parseVersionForTrain(latest) || !versions.has(latest)) {
     throw new Error("npm latest must name a published stable version");
   }
   const previous = [...versions]
-    .filter((version) => parseStableVersion(version) && compareStableVersions(version, latest) < 0)
+    .filter(
+      (version) => parseVersionForTrain(version) && compareStableVersions(version, latest) < 0,
+    )
     .toSorted((left, right) => compareStableVersions(right, left))[0];
   if (!previous) {
     throw new Error(`no previous stable npm version before ${latest}`);
@@ -237,9 +222,13 @@ function resolveSupportedLines(args: Map<string, string>) {
   const extended = "extended-stable" in tags ? tags["extended-stable"] : undefined;
   if (
     extended !== undefined &&
-    (typeof extended !== "string" || !parseStableVersion(extended) || !versions.has(extended))
+    (typeof extended !== "string" ||
+      !parseVersionForTrain(extended, "extended-stable") ||
+      !versions.has(extended))
   ) {
-    throw new Error("npm extended-stable must name a published stable version when present");
+    throw new Error(
+      "npm extended-stable must name a published extended-stable version when present",
+    );
   }
   return omitUnpublishedCandidateBaseline(
     args,
@@ -267,7 +256,12 @@ export function resolveBaselines(args: Map<string, string>) {
     if (token === "supported-lines") {
       resolved.push(...resolveSupportedLines(args));
     } else if (token === "release-history") {
-      resolved.push(...resolveReleaseHistory(args));
+      resolved.push(
+        ...resolveLastStable(
+          args,
+          parsePositiveInteger(args.get("history-count") ?? "6", "--history-count"),
+        ),
+      );
     } else if (token.startsWith("last-stable-")) {
       const count = parsePositiveInteger(
         token.slice("last-stable-".length),
@@ -276,9 +270,10 @@ export function resolveBaselines(args: Map<string, string>) {
       resolved.push(...resolveLastStable(args, count));
     } else if (token.startsWith("all-since-")) {
       const minimumVersion = token.slice("all-since-".length);
-      if (!parseStableVersion(minimumVersion)) {
+      if (!parseVersionForTrain(minimumVersion)) {
         throw new Error(`invalid all-since baseline token: ${token}`);
       }
+      assertSupportedUpgradeSurvivorBaselineSpec(`openclaw@${minimumVersion}`);
       resolved.push(...resolveAllSince(args, minimumVersion));
     } else {
       resolved.push(token);

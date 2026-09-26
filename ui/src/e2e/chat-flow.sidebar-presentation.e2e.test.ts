@@ -312,7 +312,7 @@ suite.define(() => {
         await expect.poll(offset).toBeLessThan(-2);
         const movingOffset = await offset();
         await expect.poll(offset).toBeLessThan(movingOffset - 5);
-        const controls = row.locator("button[data-session-menu]");
+        const controls = row.locator("button[data-sidebar-session-archive]");
         await expect
           .poll(() => controls.evaluate((element) => Number(getComputedStyle(element).opacity)))
           .toBe(1);
@@ -355,7 +355,7 @@ suite.define(() => {
         await row.locator("a.sidebar-recent-session__link").focus();
         await expect.poll(offset).toBeLessThan(-2);
         const focusedOffset = await offset();
-        await row.locator("button[data-session-menu]").focus();
+        await row.locator("button[data-sidebar-session-archive]").focus();
         await expect.poll(offset).toBeLessThan(focusedOffset - 5);
 
         await page.emulateMedia({ reducedMotion: "reduce" });
@@ -714,7 +714,7 @@ suite.define(() => {
       expect(restingWidth - hoverWidth).toBeCloseTo(actionReserve, 0);
       await page.mouse.move(900, 400);
       await unreadBadge.waitFor({ state: "visible" });
-      await unreadRow.locator("[data-session-menu]").focus();
+      await unreadRow.locator("[data-sidebar-session-archive]").focus();
       await unreadBadge.waitFor({ state: "visible" });
       expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
       expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
@@ -733,7 +733,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           busyRow
-            .locator("[data-session-menu]")
+            .locator("[data-sidebar-session-archive]")
             .evaluate((element) => getComputedStyle(element).opacity),
         )
         .toBe("1");

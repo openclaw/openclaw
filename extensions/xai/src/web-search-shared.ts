@@ -78,18 +78,16 @@ export function resolveXaiInlineCitations(searchConfig?: Record<string, unknown>
   return resolveXaiSearchConfig(searchConfig).inlineCitations === true;
 }
 
-function isAbortError(error: unknown): boolean {
-  return (
+export function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
+  if (
     error instanceof Error &&
-    (error.name === "AbortError" || error.message === "This operation was aborted")
-  );
-}
-
-function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
-  if (isAbortError(error)) {
+    (error.name === "AbortError" ||
+      error.name === "TimeoutError" ||
+      error.message === "This operation was aborted")
+  ) {
     throw Object.assign(
       new Error(
-        `xAI web search timed out after ${timeoutSeconds}s. Increase tools.web.search.timeoutSeconds if queries are complex.`,
+        `xAI web search timed out after ${timeoutSeconds}s. Check xAI authentication or try a simpler request.`,
         { cause: error },
       ),
       { code: "ETIMEDOUT" },

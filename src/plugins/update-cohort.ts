@@ -3,7 +3,10 @@ import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveSourceCheckoutBundledPluginIds } from "./bundled-sources.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
-import { resolvePluginInstallOwnerMigrations } from "./install-transaction.js";
+import {
+  attachPluginInstallOwnerMigrations,
+  resolvePluginInstallOwnerMigrations,
+} from "./install-transaction.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
@@ -16,6 +19,7 @@ import {
   capturePluginPackageUpdateSnapshot,
   reconcilePluginPackageUpdateConfig,
 } from "./plugin-package-update.js";
+import { resolveOfficialPluginCohortNpmSpecs } from "./plugin-version-drift.js";
 import type { PluginChannelSyncResult } from "./update-channel.js";
 import {
   isPluginInstallRecordUpdateSource,
@@ -44,6 +48,7 @@ export async function convergePluginReleaseCohort(params: {
   coreVersion?: string;
   versionBoundPluginIds?: ReadonlySet<string>;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
@@ -112,6 +117,8 @@ async function convergePluginReleaseCohortWithLease(
   const sync = await syncPluginsForUpdateChannel({
     config: params.config,
     channel: params.channel,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     coreVersion: params.coreVersion,
     skipIds: operatorManagedIds,
     workspaceDir: params.workspaceDir,
@@ -123,6 +130,13 @@ async function convergePluginReleaseCohortWithLease(
   });
   params.beforePersistentEffect?.();
   let config = sync.config;
+  const npmInstallSpecOverrides = params.coreVersion
+    ? resolveOfficialPluginCohortNpmSpecs({
+        gatewayVersion: params.coreVersion,
+        installRecords: config.plugins?.installs ?? {},
+        config,
+      })
+    : undefined;
   let changed = sync.changed;
   let npmChanged = false;
   let installOwners = Object.entries(config.plugins?.installs ?? {})
@@ -171,12 +185,15 @@ async function convergePluginReleaseCohortWithLease(
     })
   ).filter((entry) => !operatorManagedIds.has(entry.pluginId));
   const repairedMissingPayloadIds = new Set(missingPayloads.map((entry) => entry.pluginId));
-  let repairOutcomes: PluginUpdateOutcome[] = [];
-  if (repairedMissingPayloadIds.size > 0) {
-    const repair = await updateNpmInstalledPlugins({
+  const updateInstalled = async (
+    selection: Pick<Parameters<typeof updateNpmInstalledPlugins>[0], "pluginIds" | "skipIds">,
+  ) => {
+    const result = await updateNpmInstalledPlugins({
       config,
-      pluginIds: [...repairedMissingPayloadIds],
+      npmInstallSpecOverrides,
+      ...selection,
       timeoutMs: params.timeoutMs,
+      workTimeoutMs: params.workTimeoutMs,
       updateChannel: params.channel,
       coreVersion: params.coreVersion,
       versionBoundPluginIds: params.versionBoundPluginIds,
@@ -189,18 +206,17 @@ async function convergePluginReleaseCohortWithLease(
       beforePersistentEffect: params.beforePersistentEffect,
     });
     params.beforePersistentEffect?.();
-    config = repair.config;
-    changed ||= repair.changed;
-    npmChanged ||= repair.changed;
-    repairOutcomes = repair.outcomes;
-    Object.assign(installOwnerMigrations, resolvePluginInstallOwnerMigrations(repair));
-  }
+    config = result.config;
+    changed ||= result.changed;
+    npmChanged ||= result.changed;
+    Object.assign(installOwnerMigrations, resolvePluginInstallOwnerMigrations(result));
+    return result.outcomes;
+  };
+  const repairOutcomes = repairedMissingPayloadIds.size
+    ? await updateInstalled({ pluginIds: [...repairedMissingPayloadIds] })
+    : [];
 
-  const update = await updateNpmInstalledPlugins({
-    config,
-    timeoutMs: params.timeoutMs,
-    updateChannel: params.channel,
-    coreVersion: params.coreVersion,
+  const updateOutcomes = await updateInstalled({
     skipIds: new Set([
       ...operatorManagedIds,
       ...sync.summary.switchedToClawHub,
@@ -208,20 +224,7 @@ async function convergePluginReleaseCohortWithLease(
       ...repairedMissingPayloadIds,
       ...Object.values(installOwnerMigrations),
     ]),
-    versionBoundPluginIds: params.versionBoundPluginIds,
-    skipDisabledPlugins: true,
-    syncOfficialPluginInstalls: true,
-    retainOnUnavailable: true,
-    logger: params.logger,
-    onIntegrityDrift: params.onIntegrityDrift,
-    onCapabilityConsent: params.onCapabilityConsent,
-    beforePersistentEffect: params.beforePersistentEffect,
   });
-  params.beforePersistentEffect?.();
-  config = update.config;
-  changed ||= update.changed;
-  npmChanged ||= update.changed;
-  Object.assign(installOwnerMigrations, resolvePluginInstallOwnerMigrations(update));
 
   if (beforeIndex && packageUpdateSnapshot) {
     // Reinstall can restore the same path. Reconciliation needs new filesystem facts,
@@ -249,7 +252,7 @@ async function convergePluginReleaseCohortWithLease(
     config = reconciled.config;
   }
 
-  return {
+  const result: PluginCohortConvergenceResult = {
     config,
     changed,
     npmChanged,
@@ -259,7 +262,7 @@ async function convergePluginReleaseCohortWithLease(
     repairOutcomes,
     updateOutcomes: [
       ...operatorManaged,
-      ...update.outcomes.filter(
+      ...updateOutcomes.filter(
         (outcome) =>
           !operatorManagedIds.has(outcome.pluginId) &&
           (outcome.status !== "skipped" || !repairedMissingPayloadIds.has(outcome.pluginId)),
@@ -275,4 +278,7 @@ async function convergePluginReleaseCohortWithLease(
       })
     ).filter((entry) => !operatorManagedIds.has(entry.pluginId)),
   };
+  return Object.keys(installOwnerMigrations).length > 0
+    ? attachPluginInstallOwnerMigrations(result, installOwnerMigrations)
+    : result;
 }

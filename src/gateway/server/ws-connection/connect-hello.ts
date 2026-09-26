@@ -20,6 +20,7 @@ import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import { resolveControlUiIdentity } from "../../control-ui-identity.js";
 import {
   listControlUiPluginTabs,
+  listControlUiLinkReaders,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
 import {
@@ -40,11 +41,11 @@ import {
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";
 import { formatError } from "../../server-utils.js";
+import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { shouldScheduleBackgroundHealthRefresh } from "../health-refresh-admission.js";
 import { buildGatewaySnapshot, getHealthCache, getHealthVersion } from "../health-state.js";
-import { broadcastPresenceSnapshot } from "../presence-events.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -115,11 +116,19 @@ export async function sendGatewayHello(
       ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
+  const sessionRowProjection = getSessionRowProjection(buildRequestContext());
+  while (sessionRowProjection?.needsMembershipPreparation()) {
+    await sessionRowProjection.prepareMembership();
+    if (context.handler.isClosed() || context.handler.getClient()?.invalidated) {
+      throw new Error("Gateway connection closed before hello");
+    }
+  }
   const snapshot = buildGatewaySnapshot({
     client: context.handler.getClient(),
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
     revisionProjector: buildRequestContext().configRevisionProjector,
+    sessionRowProjection,
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth) {
@@ -130,6 +139,10 @@ export async function sendGatewayHello(
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
   const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
+  const controlUiLinkReaders = listControlUiLinkReaders(
+    scopes,
+    buildRequestContext().getGatewayMethodRegistry?.(),
+  );
   const controlUiLocation = resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
@@ -160,6 +173,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
         GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
         GATEWAY_SERVER_CAPS.PROFILE_BINDING,
@@ -182,6 +196,7 @@ export async function sendGatewayHello(
       : {}),
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
+    ...(controlUiLinkReaders.length > 0 ? { controlUiLinkReaders } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
     auth: {
       method: authMethod,
@@ -429,6 +444,6 @@ export async function sendGatewayHello(
   ) {
     // The row is already in hello's snapshot. Notify established readers now,
     // without queueing this connection's redundant snapshot ahead of hello.
-    broadcastPresenceSnapshot(buildRequestContext());
+    buildRequestContext().publishPresence();
   }
 }

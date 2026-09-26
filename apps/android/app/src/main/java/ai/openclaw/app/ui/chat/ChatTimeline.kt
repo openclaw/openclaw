@@ -39,11 +39,7 @@ internal sealed class ChatTimelineItem {
     val text: String,
   ) : ChatTimelineItem()
 
-  data class PendingTools(
-    val toolCalls: List<ChatPendingToolCall>,
-  ) : ChatTimelineItem()
-
-  data class CompletedTools(
+  data class ToolActivity(
     val key: String,
     val tools: List<ChatToolActivity>,
     val turnBoundary: Boolean = false,
@@ -51,6 +47,10 @@ internal sealed class ChatTimelineItem {
     val lastFailureMessageIndex: Int = -1,
     val hasUnresolvedTools: Boolean = false,
     val knownRunIds: Set<String> = emptySet(),
+    val disclosureKey: String = key,
+    val toolKeys: List<String> = tools.mapIndexed { index, tool -> tool.toolCallId ?: "anonymous:$index" },
+    val liveTools: Map<String, ChatPendingToolCall> = emptyMap(),
+    val settledToolKeys: Set<String> = emptySet(),
   ) : ChatTimelineItem()
 
   data class SubagentActivity(
@@ -66,6 +66,7 @@ internal sealed class ChatTimelineItem {
     val key: String,
     val durationMs: Long?,
     val expanded: Boolean,
+    val outcomes: Map<WorkedToolOutcome, Int>,
   ) : ChatTimelineItem()
 
   data class TurnRecapSummary(
@@ -109,6 +110,8 @@ internal data class PreparedChatHistory(
   val latestUserMessageVersion: String?,
   val rawHistoryVersionPrefix: String,
   val workSpans: List<PreparedChatWorkSpan>,
+  val toolScope: String,
+  val toolScopesByRun: Map<String, String>,
 )
 
 internal fun prepareChatHistory(
@@ -116,7 +119,8 @@ internal fun prepareChatHistory(
   sessionKey: String,
   mainSessionKey: String,
 ): PreparedChatHistory {
-  val rows = buildTranscriptTimeline(messages)
+  val toolScopes = toolScopes(messages)
+  val rows = buildTranscriptTimeline(messages, toolScopes)
   val latestUser =
     rows.asReversed().firstNotNullOfOrNull { item ->
       (item as? ChatTimelineItem.Message)?.message?.takeIf {
@@ -143,6 +147,8 @@ internal fun prepareChatHistory(
         append(latest?.turnBoundary ?: false)
       },
     workSpans = prepareCompletedWorkSpans(rows, messages, sessionKey, mainSessionKey),
+    toolScope = messages.indexOfLast { it.startsToolScope() }.takeIf { it >= 0 }?.let { toolScopes[it] } ?: "root",
+    toolScopesByRun = messages.mapIndexedNotNull { index, message -> message.runId?.let { it to toolScopes[index] } }.distinctBy { it.first }.toMap(),
   )
 }
 
@@ -161,7 +167,7 @@ internal fun PreparedChatHistory.buildTimeline(
   val visibleSubagents = visibleSubagentActivities(subagentActivities.values)
   val latestTurnLive = pendingRunCount > 0 || pendingToolCalls.any { !it.isComplete } || stream != null
   var latestUserIndex: Int? = null
-  val items =
+  val sourceItems =
     buildList {
       fun appendHistoryRow(item: ChatTimelineItem) {
         if (latestUserIndex == null && item is ChatTimelineItem.Message && item.message.id == latestUserMessageId) {
@@ -176,7 +182,7 @@ internal fun PreparedChatHistory.buildTimeline(
       recoveryOutboxItems.asReversed().forEach { item -> add(ChatTimelineItem.RecoveryOutboxCommand(item)) }
       if (recoveryOutboxItems.isNotEmpty()) add(ChatTimelineItem.OutboxRecoveryHeader(recoveryOutboxItems.size))
       if (stream != null) add(ChatTimelineItem.StreamingAssistant(stream))
-      if (pendingToolCalls.isNotEmpty()) add(ChatTimelineItem.PendingTools(pendingToolCalls))
+
       if (visibleSubagents.activities.isNotEmpty()) {
         add(
           ChatTimelineItem.SubagentActivity(
@@ -199,7 +205,7 @@ internal fun PreparedChatHistory.buildTimeline(
           } else {
             span.preservedRowIndexes.asReversed().forEach { appendHistoryRow(rows[it]) }
             if (span.key in expandedWorkKeys) span.workRowIndexes.asReversed().forEach { appendHistoryRow(rows[it]) }
-            add(ChatTimelineItem.WorkedSummary(span.key, span.durationMs, span.key in expandedWorkKeys))
+            add(ChatTimelineItem.WorkedSummary(span.key, span.durationMs, span.key in expandedWorkKeys, span.outcomes))
           }
           rowIndex = span.start - 1
           spanIndex--
@@ -208,6 +214,8 @@ internal fun PreparedChatHistory.buildTimeline(
         }
       }
     }
+  val items = projectToolActivity(sourceItems, rows, pendingToolCalls, toolScope, toolScopesByRun)
+  latestUserIndex = items.indexOfFirst { it is ChatTimelineItem.Message && it.message.id == latestUserMessageId }.takeIf { it >= 0 }
   if (items.isEmpty()) {
     return ChatTimeline(
       items = items,
@@ -250,7 +258,10 @@ internal fun ChatMessage.isForwardedBoundary(): Boolean =
     provenance?.kind == "inter_session" && provenance.sourceTool == "sessions_send"
 
 /** Build transcript rows in source order so hidden turn boundaries fence tool groups. */
-private fun buildTranscriptTimeline(messages: List<ChatMessage>): List<ChatTimelineItem> {
+private fun buildTranscriptTimeline(
+  messages: List<ChatMessage>,
+  toolScopes: List<String>,
+): List<ChatTimelineItem> {
   val toolsByMessage = projectTranscriptToolActivity(messages)
   return buildList {
     val completedTools = mutableListOf<TranscriptTool>()
@@ -260,10 +271,11 @@ private fun buildTranscriptTimeline(messages: List<ChatMessage>): List<ChatTimel
     var lastFailureMessageIndex = -1
     var hasUnresolvedTools = false
     var pendingTurnBoundary = false
+    var toolScope = "root"
 
-    fun flushCompletedTools() {
+    fun flushToolActivity() {
       if (completedTools.isEmpty()) return
-      add(ChatTimelineItem.CompletedTools(checkNotNull(completedToolsKey), coalesceToolActivity(completedTools), completedToolsTurnBoundary, lastFailureMessageIndex, hasUnresolvedTools, completedToolsRunIds))
+      add(ChatTimelineItem.ToolActivity(checkNotNull(completedToolsKey), coalesceToolActivity(completedTools), completedToolsTurnBoundary, lastFailureMessageIndex, hasUnresolvedTools, completedToolsRunIds, toolScope, coalescedToolKeys(completedTools, checkNotNull(completedToolsKey)), settledToolKeys = settledToolKeys(completedTools, checkNotNull(completedToolsKey))))
       completedTools.clear()
       completedToolsKey = null
       completedToolsTurnBoundary = false
@@ -273,8 +285,12 @@ private fun buildTranscriptTimeline(messages: List<ChatMessage>): List<ChatTimel
     }
 
     messages.forEachIndexed { index, message ->
+      if (toolScope != toolScopes[index] || message.startsToolScope()) {
+        flushToolActivity()
+        toolScope = toolScopes[index]
+      }
       if (message.turnBoundary || message.isForwardedBoundary()) {
-        flushCompletedTools()
+        flushToolActivity()
         pendingTurnBoundary = true
       }
       val projection = toolsByMessage[index]
@@ -287,7 +303,7 @@ private fun buildTranscriptTimeline(messages: List<ChatMessage>): List<ChatTimel
       if (tools.isEmpty() && !hasVisibleContent && message.transcriptMarker == null) return@forEachIndexed
       val key = message.entryId ?: message.idempotencyKey ?: message.id
       if (tools.isNotEmpty() && !hasVisibleContent && message.transcriptMarker == null) {
-        if (completedTools.isNotEmpty() && completedToolsRunIds != knownRunIds) flushCompletedTools()
+        if (completedTools.isNotEmpty() && completedToolsRunIds != knownRunIds) flushToolActivity()
         if (completedTools.isEmpty()) {
           completedToolsKey = key
           completedToolsTurnBoundary = pendingTurnBoundary
@@ -298,7 +314,7 @@ private fun buildTranscriptTimeline(messages: List<ChatMessage>): List<ChatTimel
         lastFailureMessageIndex = maxOf(lastFailureMessageIndex, lastFailure)
         hasUnresolvedTools = hasUnresolvedTools || unresolvedTools
       } else {
-        flushCompletedTools()
+        flushToolActivity()
         val classified = classifyTranscriptMessage(message, index)
         if (classified is ChatTimelineItem.Message) {
           add(
@@ -313,12 +329,12 @@ private fun buildTranscriptTimeline(messages: List<ChatMessage>): List<ChatTimel
           classified?.let(::add)
         }
         if (tools.isNotEmpty()) {
-          add(ChatTimelineItem.CompletedTools(key, coalesceToolActivity(tools), pendingTurnBoundary, lastFailure, unresolvedTools, knownRunIds))
+          add(ChatTimelineItem.ToolActivity(key, coalesceToolActivity(tools), pendingTurnBoundary, lastFailure, unresolvedTools, knownRunIds, toolScope, coalescedToolKeys(tools, key), settledToolKeys = settledToolKeys(tools, key)))
           pendingTurnBoundary = false
         }
       }
     }
-    flushCompletedTools()
+    flushToolActivity()
   }
 }
 
@@ -503,8 +519,7 @@ internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
     is ChatTimelineItem.OutboxCommand -> "outbox:${item.item.id}"
     is ChatTimelineItem.RecoveryOutboxCommand -> "outbox-recovery:${item.item.id}"
     is ChatTimelineItem.OutboxRecoveryHeader -> "outbox-recovery-header"
-    is ChatTimelineItem.PendingTools -> "tools"
-    is ChatTimelineItem.CompletedTools -> "completed-tools:${item.key}"
+    is ChatTimelineItem.ToolActivity -> "tools:${item.disclosureKey}"
     is ChatTimelineItem.SubagentActivity -> "subagent-activity"
     is ChatTimelineItem.QuestionPrompt -> "question:${item.prompt.record.id}"
     is ChatTimelineItem.WorkedSummary -> "worked:${item.key}"
@@ -619,7 +634,9 @@ private fun projectTranscriptToolActivity(messages: List<ChatMessage>): List<Tra
     } else if (message.role.equals("user", ignoreCase = true)) {
       val continuesRun = turnRunId != null && message.steerTargetRunId == turnRunId
       if (!continuesRun) {
-        calls.clear()
+        // Known runs can finish after a newer prompt. Only unattributed calls are
+        // fenced by an ordinary user turn; explicit reset/hidden boundaries clear all.
+        calls.values.forEach { it.remove(null) }
         turnRunId = message.runId
       }
     }
@@ -713,4 +730,34 @@ internal fun visibleSubagentActivities(activities: Collection<ChatSubagentActivi
     moreWorkingCount =
       working.count { it.status == "running" && it !in visible },
   )
+}
+
+private fun ChatMessage.startsToolScope(): Boolean = role.equals("user", ignoreCase = true) || turnBoundary || isForwardedBoundary() || transcriptMarker != null
+
+internal fun ChatMessage.toolScopeKey(): String = idempotencyKey ?: entryId ?: id
+
+private fun coalescedToolKeys(
+  parts: List<TranscriptTool>,
+  source: String,
+): List<String> = parts.mapIndexed { index, part -> "${part.runId.orEmpty()}:${part.activity.toolCallId ?: "anonymous:$source:$index"}" }.distinct()
+
+private fun settledToolKeys(
+  parts: List<TranscriptTool>,
+  source: String,
+): Set<String> =
+  parts
+    .mapIndexedNotNull { index, part ->
+      if (part.pending) null else "${part.runId.orEmpty()}:${part.activity.toolCallId ?: "anonymous:$source:$index"}"
+    }.toSet()
+
+private fun toolScopes(messages: List<ChatMessage>): List<String> {
+  var scope = "root"
+  val runs = mutableMapOf<String, String>()
+  return messages.map { message ->
+    if (message.startsToolScope()) {
+      scope = message.steerTargetRunId?.let(runs::get) ?: message.toolScopeKey()
+      if (message.transcriptMarker != null || message.turnBoundary || message.isForwardedBoundary()) runs.clear()
+    }
+    message.runId?.let { runs.getOrPut(it) { scope } } ?: scope
+  }
 }

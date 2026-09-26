@@ -6,7 +6,11 @@ import { copyFile, mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
-import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsExecutablePath,
+  resolveWindowsSpawnProgram,
+} from "./windows-spawn.js";
 
 const { createTempDir } = createPluginSdkTestHarness({
   cleanup: {
@@ -80,6 +84,36 @@ describe("resolveWindowsSpawnProgram", () => {
         shell: undefined,
         windowsHide: true,
       });
+    },
+  );
+
+  it.each(["PATH", "relative command"] as const)(
+    "runs a %s launcher from the child cwd",
+    async (kind) => {
+      const root = await realpath(await createTempDir("openclaw-windows-child-cwd-"));
+      const cwd = path.join(root, "child");
+      const directory = "node tools";
+      const bin = path.join(cwd, directory);
+      await mkdir(bin, { recursive: true });
+      await writeFile(
+        path.join(bin, "entry.cjs"),
+        "process.stdout.write(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));\n",
+      );
+      await writeFile(path.join(bin, "tool.cmd"), '@ECHO off\r\n"%~dp0\\entry.cjs" %*\r\n');
+      const env = { PATH: directory, PATHEXT: ".CMD" };
+      const command = resolveWindowsExecutablePath(
+        kind === "PATH" ? "tool" : path.join(directory, "tool.cmd"),
+        env,
+        cwd,
+      );
+      const invocation = materializeWindowsSpawnProgram(
+        resolveWindowsSpawnProgram({ command, platform: "win32", env, execPath: process.execPath }),
+        ["argument with spaces"],
+      );
+      const child = spawnSync(invocation.command, invocation.argv, { cwd, encoding: "utf8" });
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+      expect(JSON.parse(child.stdout)).toEqual({ cwd, args: ["argument with spaces"] });
     },
   );
 

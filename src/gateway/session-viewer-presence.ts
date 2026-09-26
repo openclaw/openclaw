@@ -4,10 +4,10 @@ import { upsertPresence } from "../infra/system-presence.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import { recordClientPresenceActivity } from "./server/client-presence.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
-import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 
-type SessionViewerPresenceDeclarationsDeps = Parameters<typeof broadcastPresenceSnapshot>[0] & {
+type SessionViewerPresenceDeclarationsDeps = {
   clients: GatewayClientRegistry;
+  publishPresence: () => void;
 };
 
 type SessionViewerPresenceDeclarations = {
@@ -61,7 +61,7 @@ export function createSessionViewerPresenceDeclarations(
       if (next.length > 0) {
         recordClientPresenceActivity(deps.clients, client);
       }
-      broadcastPresenceSnapshot(deps);
+      deps.publishPresence();
     }
     return next;
   };

@@ -71,9 +71,19 @@ describe("doctor session transcript health", () => {
       },
     ]);
     const original = await fs.readFile(filePath);
-    const [issue] = await detectSessionTranscriptHealthIssues({
-      sessionDirs: [path.dirname(filePath)],
+    const sessionsDir = path.dirname(filePath);
+    const nestedDir = path.join(sessionsDir, "nested");
+    await fs.mkdir(nestedDir);
+    await fs.writeFile(path.join(nestedDir, "nested.jsonl"), original);
+    if (process.platform !== "win32") {
+      await fs.symlink(filePath, path.join(sessionsDir, "linked.jsonl"));
+    }
+    const entries = await fs.readdir(sessionsDir);
+    const issues = await detectSessionTranscriptHealthIssues({
+      sessionDirs: [sessionsDir],
     });
+    expect(issues).toHaveLength(1);
+    const [issue] = issues;
     expect(issue).toMatchObject({
       filePath,
       broken: true,
@@ -83,7 +93,7 @@ describe("doctor session transcript health", () => {
       legacyOpenAICodexEntries: 0,
     });
     expect(await fs.readFile(filePath)).toEqual(original);
-    expect(await fs.readdir(path.dirname(filePath))).toEqual(["session.jsonl"]);
+    expect(await fs.readdir(sessionsDir)).toEqual(entries);
   });
 
   it.each(["ENOENT", "EACCES"])(

@@ -314,11 +314,17 @@ export function markExited(
   session.pendingOutput = pending.output;
   session.pendingOutputDropped = pending.outputDropped;
   moveToFinished(session);
+  if (!session.finalizing) {
+    settleExecSessionFinalization(session);
+  }
+}
+
+/** Releases scope joins after the process owner's task and notification work settles. */
+export function settleExecSessionFinalization(session: ProcessSession): void {
+  session.finalizing = false;
   const active = activeExecSessions.get(session.id);
   if (active?.session === session) {
     activeExecSessions.delete(session.id);
-    // The exec owner's synchronous task/notification callbacks run before
-    // these promise continuations resume and release the environment state.
     active.settled?.resolve();
   }
 }
@@ -358,9 +364,15 @@ export function acknowledgeNotifyOnExit(record: {
   record.notifyOnExitRemoval = undefined;
 }
 
+/** Returns the promoted process owner even after its presentation record is removed. */
+export function getActiveBackgroundExecSession(sessionId: string): ProcessSession | undefined {
+  const active = activeExecSessions.get(sessionId);
+  return active?.promoted ? active.session : undefined;
+}
+
 /** Reports owner-tracked process liveness even after visibility is removed. */
 export function hasActiveBackgroundExecSession(sessionId: string): boolean {
-  return activeExecSessions.get(sessionId)?.promoted === true;
+  return getActiveBackgroundExecSession(sessionId) !== undefined;
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */

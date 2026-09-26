@@ -89,6 +89,21 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
   return { state, request };
 }
 
+function createMemoryWikiConfigSnapshot() {
+  return {
+    hash: "hash-1",
+    config: {
+      plugins: {
+        entries: {
+          "memory-wiki": {
+            enabled: true,
+          },
+        },
+      },
+    },
+  };
+}
+
 function createConfig(state: DreamingState): DreamingConfigCapability {
   const configState = {
     client: state.client,
@@ -440,18 +455,7 @@ describe("dreaming controller", () => {
   it("loads authoritative wiki import insights", async () => {
     const { state, request } = createState();
     state.hello = gatewayHelloForMethods(["wiki.importInsights"], []);
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
+    state.configSnapshot = createMemoryWikiConfigSnapshot();
     request.mockResolvedValue({
       sourceType: "chatgpt",
       totalItems: 2,
@@ -546,18 +550,7 @@ describe("dreaming controller", () => {
 
   it("falls back to config gating for wiki import insights when methods are not advertised", async () => {
     const { state, request } = createState();
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
+    state.configSnapshot = createMemoryWikiConfigSnapshot();
     request.mockResolvedValue({
       sourceType: "chatgpt",
       totalItems: 1,
@@ -602,18 +595,7 @@ describe("dreaming controller", () => {
   it("skips wiki import insights when the gateway does not advertise the method", async () => {
     const { state, request } = createState();
     state.hello = gatewayHelloForMethods(["doctor.memory.status"], []);
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
+    state.configSnapshot = createMemoryWikiConfigSnapshot();
     state.wikiImportInsights = {
       sourceType: "chatgpt",
       totalItems: 1,
@@ -634,18 +616,7 @@ describe("dreaming controller", () => {
   it("loads and normalizes the wiki wiki overview", async () => {
     const { state, request } = createState();
     state.hello = gatewayHelloForMethods(["wiki.overview"], []);
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
+    state.configSnapshot = createMemoryWikiConfigSnapshot();
     request.mockResolvedValue({
       totalItems: 1,
       totalPages: 2,
@@ -746,18 +717,7 @@ describe("dreaming controller", () => {
 
   it("falls back to config gating for wiki wiki overview when methods are not advertised", async () => {
     const { state, request } = createState();
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
+    state.configSnapshot = createMemoryWikiConfigSnapshot();
     request.mockResolvedValue({
       totalItems: 0,
       totalPages: 0,
@@ -822,18 +782,7 @@ describe("dreaming controller", () => {
   it("skips wiki wiki overview when the gateway does not advertise the method", async () => {
     const { state, request } = createState();
     state.hello = gatewayHelloForMethods(["doctor.memory.status"], []);
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
+    state.configSnapshot = createMemoryWikiConfigSnapshot();
     state.wikiOverview = {
       totalItems: 1,
       totalPages: 1,

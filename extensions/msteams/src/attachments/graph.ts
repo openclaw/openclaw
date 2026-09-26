@@ -1,4 +1,3 @@
-// Msteams plugin module implements graph behavior.
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   readProviderJsonArrayFieldResponse,
@@ -395,8 +394,6 @@ export async function downloadMSTeamsGraphMedia(params: {
         maxBytes: params.maxBytes,
         contentTypeHint: "application/octet-stream",
         preserveFilenames: params.preserveFilenames,
-        ssrfPolicy,
-        useDirectFetch: true,
         fetchImpl: async (input, init) => {
           const requestUrl = resolveRequestUrl(input);
           const headers = ensureUserAgentHeader(init?.headers);

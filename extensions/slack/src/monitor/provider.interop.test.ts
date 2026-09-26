@@ -429,11 +429,12 @@ describe("createSlackBoltApp", () => {
     });
 
     const slackBoltModule = await import("@slack/bolt");
+    const interop = resolveSlackBoltInterop({
+      defaultImport: slackBoltModule.default,
+      namespaceImport: slackBoltModule,
+    });
     const { app, receiver } = createSlackBoltApp({
-      interop: resolveSlackBoltInterop({
-        defaultImport: slackBoltModule.default,
-        namespaceImport: slackBoltModule,
-      }),
+      interop,
       slackMode: "socket",
       token: "xoxb-test",
       appToken: "xapp-test",
@@ -446,13 +447,10 @@ describe("createSlackBoltApp", () => {
           }),
       },
     });
-    if (!receiver || typeof receiver !== "object") {
+    if (!(receiver instanceof interop.SocketModeReceiver)) {
       throw new Error("expected a Socket Mode receiver");
     }
-    const client = Reflect.get(receiver, "client");
-    if (!client || typeof client !== "object") {
-      throw new Error("expected a Socket Mode client");
-    }
+    const client = receiver.client;
     Reflect.set(client, "clientPingTimeoutMS", 20);
     const appStart = vi.spyOn(app, "start");
     const abortController = new AbortController();
@@ -468,7 +466,7 @@ describe("createSlackBoltApp", () => {
 
     try {
       await vi.waitFor(() => expect(socketServer.clients.size).toBe(1));
-      Reflect.get(client, "emit").call(client, "error", new Error("transient transport error"));
+      client.emit("error", new Error("transient transport error"));
       for (const socket of socketServer.clients) {
         socket.terminate();
       }
@@ -481,7 +479,11 @@ describe("createSlackBoltApp", () => {
     } finally {
       abortController.abort();
       await lifecycleOutcome;
-      await gracefulStopSlackApp(app);
+      // Bolt stop resolves before the SDK's close handshake and timer cleanup.
+      const disconnected = new Promise<void>((resolve) => {
+        client.once("disconnected", resolve);
+      });
+      await Promise.all([gracefulStopSlackApp(app), disconnected]);
       for (const socket of socketServer.clients) {
         socket.terminate();
       }
@@ -518,11 +520,12 @@ describe("createSlackBoltApp", () => {
         socket.send(JSON.stringify({ type: "hello" }));
       });
       const slackBoltModule = await import("@slack/bolt");
-      const { app, socketModeLogger } = createSlackBoltApp({
-        interop: resolveSlackBoltInterop({
-          defaultImport: slackBoltModule.default,
-          namespaceImport: slackBoltModule,
-        }),
+      const interop = resolveSlackBoltInterop({
+        defaultImport: slackBoltModule.default,
+        namespaceImport: slackBoltModule,
+      });
+      const { app, receiver, socketModeLogger } = createSlackBoltApp({
+        interop,
         slackMode: "socket",
         token: "xoxb-test",
         appToken: "xapp-test",
@@ -534,6 +537,9 @@ describe("createSlackBoltApp", () => {
             }),
         },
       });
+      if (!(receiver instanceof interop.SocketModeReceiver)) {
+        throw new Error("expected a Socket Mode receiver");
+      }
       const processEvent = vi.spyOn(app, "processEvent").mockImplementation(async (event) => {
         await event.ack();
       });
@@ -563,7 +569,10 @@ describe("createSlackBoltApp", () => {
         expect(warning).toHaveBeenCalledTimes(1);
         expect(socketServer.clients.size).toBe(1);
       } finally {
-        await gracefulStopSlackApp(app);
+        const disconnected = new Promise<void>((resolve) => {
+          receiver.client.once("disconnected", resolve);
+        });
+        await Promise.all([gracefulStopSlackApp(app), disconnected]);
         for (const socket of socketServer.clients) {
           socket.terminate();
         }

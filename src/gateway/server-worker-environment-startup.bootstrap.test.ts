@@ -6,19 +6,25 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import * as packageRoot from "../infra/openclaw-root.js";
+import * as temporaryRoot from "../infra/tmp-openclaw-dir.js";
 import * as metadataState from "../plugins/current-plugin-metadata-state.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as version from "../version.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import {
   createGatewayWorkerEnvironmentRuntime,
   loadGatewayWorkerEnvironmentStartupState,
 } from "./server-worker-environment-startup.js";
+import { withGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.state.test-support.js";
 import * as artifactModule from "./worker-environments/node-bootstrap-artifact.js";
 import {
   buildId,
@@ -27,20 +33,23 @@ import {
 import * as enrollmentModule from "./worker-environments/node-enrollment.js";
 import * as transferModule from "./worker-environments/worker-bootstrap-artifact-transfer-service.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { fixture } = useNodeBootstrapArtifactFixtures();
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
-  resetConfigRuntimeState();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    resetConfigRuntimeState();
+    cleanup();
+  }),
+);
 
 describe("cloud bootstrap plugin generations", () => {
   it.skipIf(process.platform === "win32")(
     "reuses image bytes through Gateway restart with fresh enrollment and download authority",
     async () => {
       const installation = await fixture("package");
+      vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(installation.root);
       const original = await installation.provider.prepare();
       const retainedBytes = gzipSync(gunzipSync(await fs.readFile(original.tarballPath)), {
         level: 1,
@@ -101,7 +110,7 @@ describe("cloud bootstrap plugin generations", () => {
         "createWorkerBootstrapArtifactTransferService",
       );
       const stateDir = tempDirs.make("openclaw-bootstrap-restart-");
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await withGatewayWorkerEnvironmentStartupState(stateDir, async () => {
         setRuntimeConfigSnapshot({ gateway: { publicOrigin: "https://gateway.example.test" } });
         const start = async (environmentId: string) => {
           const startup = await loadGatewayWorkerEnvironmentStartupState();
@@ -113,25 +122,25 @@ describe("cloud bootstrap plugin generations", () => {
             startup,
             log: { child: () => ({ warn: () => {} }) },
           });
-          const managerResult = enrollmentFactory.mock.results.at(-1);
-          const transferResult = transferFactory.mock.results.at(-1);
-          if (managerResult?.type !== "return" || transferResult?.type !== "return") {
-            throw new Error("Gateway managers were not created");
-          }
-          startup.store.createIntent({
-            environmentId,
-            providerId: "fake-provider",
-            profileId: "test-profile",
-            profileSnapshot: { executionMode: "remote-exec", settings: {} },
-            provisionOperationId: `provision:${environmentId}`,
-          });
-          const record = startup.store.transition({
-            environmentId,
-            from: "requested",
-            to: "provisioning",
-            patch: { nodeDeviceId: `${environmentId}-node` },
-          });
           try {
+            const managerResult = enrollmentFactory.mock.results.at(-1);
+            const transferResult = transferFactory.mock.results.at(-1);
+            if (managerResult?.type !== "return" || transferResult?.type !== "return") {
+              throw new Error("Gateway managers were not created");
+            }
+            await startup.store.createIntent({
+              environmentId,
+              providerId: "fake-provider",
+              profileId: "test-profile",
+              profileSnapshot: { executionMode: "remote-exec", settings: {} },
+              provisionOperationId: `provision:${environmentId}`,
+            });
+            const record = await startup.store.transition({
+              environmentId,
+              from: "requested",
+              to: "provisioning",
+              patch: { nodeDeviceId: `${environmentId}-node` },
+            });
             const enrollment = await managerResult.value.begin(record);
             return { runtime, enrollment, transfer: transferResult.value };
           } catch (error) {
@@ -152,6 +161,9 @@ describe("cloud bootstrap plugin generations", () => {
             artifactKey: retainedHash,
           }),
         ).toBeUndefined();
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        );
         closeOpenClawStateDatabaseForTest();
         const second = await start("second-process");
         try {
@@ -271,7 +283,7 @@ describe("cloud bootstrap plugin generations", () => {
       },
     );
 
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    await withGatewayWorkerEnvironmentStartupState(stateDir, async () => {
       setRuntimeConfigSnapshot({ gateway: { publicOrigin: "https://gateway.example.test" } });
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
@@ -289,14 +301,14 @@ describe("cloud bootstrap plugin generations", () => {
       }
       const manager = enrollmentResult.value;
       const begin = async (id: string) => {
-        startup.store.createIntent({
+        await startup.store.createIntent({
           environmentId: id,
           providerId: "fake-provider",
           profileId: "test-profile",
           profileSnapshot: { executionMode: "remote-exec", settings: {} },
           provisionOperationId: `provision:${id}`,
         });
-        const record = startup.store.transition({
+        const record = await startup.store.transition({
           environmentId: id,
           from: "requested",
           to: "provisioning",

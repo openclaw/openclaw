@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import {
   runTaskRecordTransitionOperation,
   type TaskRecordTransitionInput,
   type TaskRecordTransitionOperations,
   type TaskRecordTransitionReceipt,
 } from "./task-registry-transition.operation.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import type {
+  TaskPersistenceReceipt,
+  TaskRecord,
+  TaskRunStateTransitionParams,
+} from "./task-registry.types.js";
 
 const running: TaskRecord = {
   taskId: "task-a",
@@ -57,6 +62,117 @@ function createStore(task: TaskRecord = running) {
 }
 
 describe("task transition settlement", () => {
+  it.each(["ownerKey", "requesterSessionKey", "childSessionKey"] as const)(
+    "redacts Incognito %s progress, notification summaries, and delivery errors without changing cancellation reconciliation",
+    (identityKey) => {
+      const privateSessionKey = "agent:main:dashboard:incognito-synthetic-transition";
+      const store = createStore({
+        ...running,
+        task: "Incognito task",
+        [identityKey]:
+          identityKey === "childSessionKey" ? running.childSessionKey : privateSessionKey,
+      });
+      const content = "Synthetic private transition content";
+      const transition = (params: TaskRunStateTransitionParams) =>
+        runTaskRecordTransitionOperation(
+          { kind: "state", taskId: running.taskId, now: 300, params },
+          store.operations,
+        );
+      transition({
+        runId: "run-a",
+        ...(identityKey === "childSessionKey" ? { childSessionKey: privateSessionKey } : {}),
+        progressSummary: content,
+        eventSummary: content,
+      });
+      expect.soft(store.read().progressSummary).toBeUndefined();
+      expect.soft(store.committed[0]?.nextEvent).toBeUndefined();
+      runTaskRecordTransitionOperation(
+        {
+          kind: "delivery",
+          taskId: running.taskId,
+          now: 300,
+          params: { runId: "run-a", deliveryStatus: "failed", error: content },
+        },
+        store.operations,
+      );
+      expect.soft(store.read().error).toBe("Incognito task error.");
+      transition({
+        runId: "run-a",
+        status: "cancelled",
+        endedAt: 300,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      expect(store.read().error).toBe(SUBAGENT_KILL_TASK_ERROR);
+      transition({ runId: "run-a", status: "succeeded", endedAt: 400, terminalSummary: content });
+      expect(store.read().status).toBe("succeeded");
+      expect.soft(store.read().terminalSummary).toBeUndefined();
+      expect.soft(store.committed.at(-1)?.nextEvent?.summary).toBeUndefined();
+      expect.soft(JSON.stringify(store.committed)).not.toContain(content);
+    },
+  );
+
+  it.each([
+    { taskId: "successor" },
+    { runtime: "acp" as const },
+    { ownerKey: "agent:other:main" },
+    { scopeKind: "system" as const },
+    { runId: "different-run" },
+    { childSessionKey: "agent:other:child" },
+    { createdAt: 101 },
+    { taskKind: "different-kind" },
+  ])("refuses a changed persisted identity before any authority callback: %j", (changed) => {
+    const store = createStore({ ...running, ...changed });
+    const expectedTask: TaskPersistenceReceipt = {
+      taskId: running.taskId,
+      runtime: running.runtime,
+      ownerKey: running.ownerKey,
+      scopeKind: running.scopeKind,
+      runId: "run-a",
+      childSessionKey: running.childSessionKey,
+      createdAt: running.createdAt,
+    };
+    let admitted = false;
+    const result = runTaskRecordTransitionOperation(
+      { ...finalization, expectedTask },
+      {
+        ...store.operations,
+        assertCurrent: () => {
+          admitted = true;
+        },
+      },
+    );
+    expect(result).toBeNull();
+    expect(store.writes()).toBe(0);
+    expect(store.committed).toHaveLength(0);
+    expect(admitted).toBe(false);
+  });
+
+  it("still requires live authority when the persisted receipt matches", () => {
+    const store = createStore();
+    const expectedTask: TaskPersistenceReceipt = {
+      taskId: running.taskId,
+      runtime: running.runtime,
+      ownerKey: running.ownerKey,
+      scopeKind: running.scopeKind,
+      runId: "run-a",
+      childSessionKey: running.childSessionKey,
+      createdAt: running.createdAt,
+    };
+    expect(() =>
+      runTaskRecordTransitionOperation(
+        { ...finalization, expectedTask },
+        {
+          ...store.operations,
+          assertCurrent: () => {
+            throw new Error("Task owner retired");
+          },
+        },
+      ),
+    ).toThrow("Task owner retired");
+    expect(store.writes()).toBe(0);
+    expect(store.committed).toHaveLength(0);
+  });
+
   it("keeps no-op repair receipts without repeating a terminal write or delivery", () => {
     const store = createStore();
     runTaskRecordTransitionOperation(finalization, store.operations);
@@ -82,6 +198,30 @@ describe("task transition settlement", () => {
       becomesTerminal: false,
       deliver: false,
     });
+  });
+
+  it("retains earlier row settlement when the next selected row loses live authority", () => {
+    const first = createStore();
+    const second = createStore({ ...running, taskId: "task-b" });
+    runTaskRecordTransitionOperation(finalization, first.operations);
+    const authorityFailure = new Error("Task owner retired");
+    expect(() =>
+      runTaskRecordTransitionOperation(
+        { ...finalization, taskId: "task-b" },
+        {
+          ...second.operations,
+          assertCurrent: () => {
+            throw authorityFailure;
+          },
+        },
+      ),
+    ).toThrow(authorityFailure);
+
+    expect(first.read().status).toBe("succeeded");
+    expect(first.committed).toHaveLength(1);
+    expect(second.read().status).toBe("running");
+    expect(second.writes()).toBe(0);
+    expect(second.committed).toHaveLength(0);
   });
 
   it("records a confirmed row before a later transaction cleanup error escapes", () => {

@@ -1,7 +1,11 @@
 // Gateway log-tail helpers for status diagnostics.
 // Summaries compact repeated auth/runtime failures while preserving enough context for operators.
 
-import { extractBalancedJsonPrefix, safeParseJson } from "@openclaw/normalization-core";
+import {
+  extractBalancedJsonPrefix,
+  safeParseJson,
+  safeParseJsonRecord,
+} from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
@@ -78,9 +82,10 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
     if (
       trimmedStart.startsWith('"') ||
       trimmedStart.startsWith("}") ||
-      trimmedStart.startsWith("{")
+      (trimmedStart.startsWith("{") && !safeParseJsonRecord(trimmedStart))
     ) {
-      // Tail can cut in the middle of a JSON blob; drop orphaned JSON fragments.
+      // Tail can cut in the middle of a JSON blob; drop orphaned fragments,
+      // but retain complete JSON console records and their structured context.
       continue;
     }
 

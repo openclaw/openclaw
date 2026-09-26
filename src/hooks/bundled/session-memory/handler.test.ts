@@ -17,7 +17,12 @@ import {
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
+import {
+  createInternalHookEvent as createHookEvent,
+  registerInternalHook,
+  triggerInternalHook,
+  unregisterInternalHook,
+} from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
@@ -241,6 +246,35 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("session-memory hook", () => {
+  it.each([
+    { type: "command", action: "new", sessionKey: "agent:main:dashboard:incognito-new" },
+    { type: "command", action: "reset", sessionKey: "agent:main:dashboard:incognito-reset" },
+    { type: "session", action: "auto-reset", sessionKey: "agent:main:dashboard:incognito-idle" },
+    { type: "command", action: "reset", sessionKey: "agent:main:private", incognito: true },
+  ] as const)("does not capture Incognito $type:$action memory ($sessionKey)", async (testCase) => {
+    const workspaceDir = await createCaseWorkspace("incognito");
+    const event = createHookEvent(testCase.type, testCase.action, testCase.sessionKey, {
+      agentId: "main",
+      workspaceDir,
+      sessionEntry: { sessionId: "private-session", incognito: "incognito" in testCase },
+      previousSessionMemory: {
+        status: "available",
+        content: "SYNTHETIC_INCOGNITO_MEMORY_SENTINEL",
+        originClass: "agent",
+      },
+      reason: "idle",
+    });
+    const eventKey = `${testCase.type}:${testCase.action}`;
+    registerInternalHook(eventKey, handler);
+    try {
+      await triggerInternalHook(event);
+      await flushSessionMemoryWritesForTest();
+      await expectPathMissing(path.join(workspaceDir, "memory"));
+    } finally {
+      unregisterInternalHook(eventKey, handler);
+    }
+  });
+
   it("skips non-command events", async () => {
     const tempDir = await createCaseWorkspace("workspace");
 

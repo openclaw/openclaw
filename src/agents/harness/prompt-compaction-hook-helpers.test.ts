@@ -26,8 +26,12 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
           },
         ]),
       );
-      await resolveAgentHarnessBeforePromptBuildResult({
-        prompt: "Prior conversation: remember my preference\nCurrent message: hello",
+      const result = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "Current message: hello",
+        currentInboundContext: {
+          text: "Prior conversation: remember my preference",
+          promptJoiner: "\n",
+        },
         currentUserMessage: "hello",
         currentUserMessageId: "message-1",
         messages: [],
@@ -39,6 +43,10 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
           assertActive: () => undefined,
         },
       });
+      expect(result.prompt).toBe(
+        "Prior conversation: remember my preference\nCurrent message: hello",
+      );
+      expect(result.promptInputRange).toEqual({ start: 0, end: result.prompt.length });
       expect(handler).toHaveBeenCalledOnce();
       expect(handler.mock.calls[0]?.[0]).toMatchObject({
         currentUserMessage: "hello",

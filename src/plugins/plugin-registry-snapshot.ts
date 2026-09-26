@@ -28,10 +28,8 @@ import {
 import {
   diffInstalledPluginIndexInvalidationReasons,
   extractPluginInstallRecordsFromInstalledPluginIndex,
-  getInstalledPluginRecord,
   hasInstalledPluginIndexWorkspaceScopeMismatch,
   hasMissingConfigPathActivationMetadata,
-  isInstalledPluginEnabled,
   loadInstalledPluginIndexWithDiscovery,
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
@@ -80,10 +78,6 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
     allowCurrent?: boolean;
   };
 
-type GetPluginRecordParams = LoadPluginRegistryParams & {
-  pluginId: string;
-};
-
 // Shared with plugin-registry-refresh.ts.
 export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(
   params: T,
@@ -107,8 +101,9 @@ export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginI
   };
 }
 
-function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams): boolean {
+export function canReusePluginRegistrySnapshot(params: LoadPluginRegistryParams): boolean {
   return (
+    params.index === undefined &&
     params.allowCurrent !== false &&
     params.preferPersisted !== false &&
     params.stateDir === undefined &&
@@ -122,17 +117,21 @@ function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams)
   );
 }
 
-function loadCurrentPluginRegistrySnapshotResult(
-  params: LoadPluginRegistryParams,
-): PluginRegistrySnapshotResult | undefined {
-  if (!canReuseCurrentPluginMetadataSnapshot(params)) {
+export function getCurrentPluginMetadataSnapshotForRegistry(params: LoadPluginRegistryParams) {
+  if (!canReusePluginRegistrySnapshot(params)) {
     return undefined;
   }
-  const current = getCurrentPluginMetadataSnapshot({
+  return getCurrentPluginMetadataSnapshot({
     config: params.config,
     env: params.env ?? process.env,
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   });
+}
+
+function loadCurrentPluginRegistrySnapshotResult(
+  params: LoadPluginRegistryParams,
+): PluginRegistrySnapshotResult | undefined {
+  const current = getCurrentPluginMetadataSnapshotForRegistry(params);
   if (!current) {
     return undefined;
   }
@@ -170,11 +169,10 @@ function fileContentMatches(
 
 function hasStaleDoctorContractFiles(
   index: InstalledPluginIndex,
-  params: LoadPluginRegistryParams,
+  params: Pick<LoadPluginRegistryParams, "config" | "env">,
 ): boolean {
   const resolveCandidate = prepareInstalledPluginCandidateResolver({
     config: params.config,
-    workspaceDir: params.workspaceDir,
     env: params.env,
   });
   return index.plugins.some((plugin) => {
@@ -341,6 +339,7 @@ function requiresDerivedRegistryValidation(
   params: LoadPluginRegistryParams,
   env: NodeJS.ProcessEnv,
   hasStalePluginFiles: () => boolean,
+  hasMismatchedBundledRoot: () => boolean,
 ): boolean {
   const bundledRoot = resolveBundledPluginsDir(env);
   return (
@@ -362,7 +361,7 @@ function requiresDerivedRegistryValidation(
     index.diagnostics.some(({ pluginId, source }) =>
       Boolean(pluginId && source && path.isAbsolute(source) && !fs.existsSync(source)),
     ) ||
-    hasMismatchedPersistedBundledRoot(index, env) ||
+    hasMismatchedBundledRoot() ||
     hasRecoveredInstallRecordsMissingFromPersistedIndex(index, params, env) ||
     hasConfiguredGlobalSourcePluginMissingFromPersistedIndex(params, index, env)
   );
@@ -409,6 +408,43 @@ function hasConfiguredGlobalSourcePluginMissingFromPersistedIndex(
 export function loadPluginRegistrySnapshotWithMetadata(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshotResult {
+  return preparePluginRegistrySnapshotReader(params)(params.workspaceDir);
+}
+
+/** A fleet shares one fresh physical inventory check while retaining workspace selection. */
+export function preparePluginRegistrySnapshotReader(params: LoadPluginRegistryParams = {}) {
+  let prepared: ReturnType<typeof preparePersistedRegistryValidation> | undefined;
+  return (workspaceDir: string | undefined): PluginRegistrySnapshotResult =>
+    loadPluginRegistrySnapshotWithPreparedValidation(
+      { ...params, workspaceDir },
+      () => (prepared ??= preparePersistedRegistryValidation(params)),
+    );
+}
+
+function preparePersistedRegistryValidation(params: LoadPluginRegistryParams) {
+  const env = params.env ?? process.env;
+  const persistedIndex = readPersistedInstalledPluginIndexSync(params);
+  let stalePluginFiles: boolean | undefined;
+  let mismatchedBundledRoot: boolean | undefined;
+  return {
+    persistedIndex,
+    hasStalePluginFiles: () =>
+      (stalePluginFiles ??= persistedIndex
+        ? // Freshness precedes derived discovery, which can retain package bytes.
+          hasStalePersistedPluginMetadataFiles(persistedIndex) ||
+          hasStaleDoctorContractFiles(persistedIndex, params)
+        : false),
+    hasMismatchedBundledRoot: () =>
+      (mismatchedBundledRoot ??= persistedIndex
+        ? hasMismatchedPersistedBundledRoot(persistedIndex, env)
+        : false),
+  };
+}
+
+function loadPluginRegistrySnapshotWithPreparedValidation(
+  params: LoadPluginRegistryParams,
+  readPrepared: () => ReturnType<typeof preparePersistedRegistryValidation>,
+): PluginRegistrySnapshotResult {
   if (params.index) {
     return {
       snapshot: params.index,
@@ -438,15 +474,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
   }
 
   const diagnostics: PluginRegistrySnapshotDiagnostic[] = [];
-  const persistedIndex = readPersistedInstalledPluginIndexSync(params);
-  let stalePluginFiles: boolean | undefined;
-  const hasStalePluginFiles = () =>
-    (stalePluginFiles ??= persistedIndex
-      ? // Check metadata before configured discovery can cache its bytes. That scanner
-        // never reads Doctor bytes, which remain fresh until the second check below.
-        hasStalePersistedPluginMetadataFiles(persistedIndex) ||
-        hasStaleDoctorContractFiles(persistedIndex, params)
-      : false);
+  const { persistedIndex, hasStalePluginFiles, hasMismatchedBundledRoot } = readPrepared();
   if (!persistedIndex) {
     diagnostics.push({
       level: "info",
@@ -466,7 +494,15 @@ export function loadPluginRegistrySnapshotWithMetadata(
       message:
         "Persisted plugin registry policy does not match current config; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
     });
-  } else if (!requiresDerivedRegistryValidation(persistedIndex, params, env, hasStalePluginFiles)) {
+  } else if (
+    !requiresDerivedRegistryValidation(
+      persistedIndex,
+      params,
+      env,
+      hasStalePluginFiles,
+      hasMismatchedBundledRoot,
+    )
+  ) {
     return {
       snapshot: persistedIndex,
       source: "persisted",
@@ -489,7 +525,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
     params.discovery === undefined &&
     params.installRecords === undefined &&
     !hasStalePluginFiles() &&
-    !hasMismatchedPersistedBundledRoot(persistedIndex, env)
+    !hasMismatchedBundledRoot()
   ) {
     const derivedPluginIds = new Set(derived.index.plugins.map((plugin) => plugin.pluginId));
     for (const plugin of persistedIndex.plugins) {
@@ -557,18 +593,6 @@ export function loadPluginRegistrySnapshot(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshot {
   return loadPluginRegistrySnapshotWithMetadata(params).snapshot;
-}
-
-export function getPluginRecord(params: GetPluginRecordParams): PluginRegistryRecord | undefined {
-  return getInstalledPluginRecord(loadPluginRegistrySnapshot(params), params.pluginId);
-}
-
-export function isPluginEnabled(params: GetPluginRecordParams): boolean {
-  return isInstalledPluginEnabled(
-    loadPluginRegistrySnapshot(params),
-    params.pluginId,
-    params.config,
-  );
 }
 
 export async function inspectPluginRegistry(

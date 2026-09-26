@@ -38,12 +38,12 @@ async function leaveMeetingInPage<
   sessionMatched?: boolean;
   urlMatched?: boolean;
 }> {
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = performance.now() + params.timeoutMs;
   let clickedLeave = false;
   let clickedConfirmation = false;
   let ownershipRetained = false;
   do {
-    const remainingMs = Math.floor(deadline - Date.now());
+    const remainingMs = Math.floor(deadline - performance.now());
     if (remainingMs <= 0) {
       throw new Error("Meeting browser leave timed out.");
     }
@@ -97,7 +97,7 @@ async function leaveMeetingInPage<
         setTimeout(resolve, 100);
       });
     }
-  } while (Date.now() < deadline);
+  } while (performance.now() < deadline);
   return {
     departed: false,
     clickedLeave,
@@ -146,10 +146,10 @@ export async function leaveMeetingWithBrowser<
     let tabClosed = false;
     try {
       const locked = await runMeetingBrowserAct({
-        deadline: Date.now() + timeoutMs,
+        deadline: performance.now() + timeoutMs,
         targetId,
         operation: async (remainingMs) => {
-          const operationDeadline = Date.now() + remainingMs;
+          const operationDeadline = performance.now() + remainingMs;
           const closeReserveMs = openedByPlugin
             ? Math.min(1_000, Math.max(250, Math.floor(remainingMs / 4)))
             : 0;
@@ -168,7 +168,7 @@ export async function leaveMeetingWithBrowser<
           if (!canCloseTrackedTab) {
             return { leaveResult: result, tabClosed: false };
           }
-          const closeTimeoutMs = Math.floor(operationDeadline - Date.now());
+          const closeTimeoutMs = Math.floor(operationDeadline - performance.now());
           if (closeTimeoutMs <= 0) {
             throw new Error("Meeting browser leave timed out before the tab could close.");
           }
@@ -254,7 +254,7 @@ export async function readMeetingTranscriptWithBrowser<
   timeoutMs: number;
 }): Promise<Transcript> {
   const result = await runMeetingBrowserAct({
-    deadline: Date.now() + Math.max(1, params.timeoutMs),
+    deadline: performance.now() + Math.max(1, params.timeoutMs),
     targetId: params.tab.targetId,
     operation: async (remainingMs) =>
       await params.callBrowser({
@@ -287,5 +287,6 @@ export async function readMeetingTranscriptWithBrowser<
     droppedLines: snapshot.droppedLines,
     ...(snapshot.epoch ? { epoch: snapshot.epoch } : {}),
     lines: snapshot.lines,
+    ...(snapshot.pendingLines ? { pendingLines: snapshot.pendingLines } : {}),
   } as Transcript;
 }

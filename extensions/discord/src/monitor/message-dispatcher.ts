@@ -9,7 +9,6 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { Client } from "../internal/discord.js";
-import { buildDiscordInboundJob } from "./inbound-job.js";
 import type {
   createDiscordIngressMonitor,
   DiscordIngressDispatchResult,
@@ -206,7 +205,7 @@ export function createDiscordMessageDispatcher(
               ctxBatch.MessageSidFirst = ids[0];
               ctxBatch.MessageSidLast = ids[ids.length - 1];
             }
-            messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
+            messageRunQueue.enqueue({ context: ctx, ingressSettlement: ingress });
           } catch (error) {
             if (abortSignal?.aborted) {
               await ingress.cancel();

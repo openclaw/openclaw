@@ -1,4 +1,3 @@
-// Feishu plugin module implements comment reaction behavior.
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -89,14 +88,10 @@ async function requestCommentTypingReactionWithClient(params: {
     params.runtime?.log?.(
       `${params.logPrefix ?? "[feishu]"}: comment typing reaction ${params.action} threw ` +
         `reply=${params.replyId} file=${params.fileType}:${params.fileToken} ` +
-        `error=${formatCommentReactionFailure(error)}`,
+        `error=${formatFeishuApiError(error, { includeNestedErrorLogId: true })}`,
     );
   }
   return false;
-}
-
-function formatCommentReactionFailure(error: unknown): string {
-  return formatFeishuApiError(error, { includeNestedErrorLogId: true });
 }
 
 async function requestCommentTypingReaction(params: {

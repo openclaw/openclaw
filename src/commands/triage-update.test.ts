@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { readTriageUpdateFailure, writeTriageUpdateFailure } from "./triage-update.js";
+import { readTriageUpdateFailure } from "./triage-update.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

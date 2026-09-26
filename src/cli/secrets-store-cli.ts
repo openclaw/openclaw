@@ -294,7 +294,7 @@ export function registerSecretStoreCli(secrets: Command): void {
           ...(allowedHosts !== undefined ? { allowedHosts } : {}),
           updatedBy: "cli",
         });
-        storeModule.purgeExpiredSecretStoreEntries();
+        await storeModule.purgeExpiredSecretStoreEntries();
         defaultRuntime.log(`Stored ${name} (${kind}).`);
         await noteGatewayReload();
       }),
@@ -371,7 +371,7 @@ export function registerSecretStoreCli(secrets: Command): void {
         for (const name of names) {
           deleteSecretStoreEntry({ scope, name });
         }
-        purgeExpiredSecretStoreEntries();
+        await purgeExpiredSecretStoreEntries();
         defaultRuntime.log(
           `Removed ${names.length} team store entr${names.length === 1 ? "y" : "ies"}.`,
         );
@@ -429,7 +429,7 @@ export function registerSecretStoreCli(secrets: Command): void {
         for (const entry of writable) {
           storeModule.writeSecretStoreEntry({ scope, ...entry, updatedBy: "cli" });
         }
-        storeModule.purgeExpiredSecretStoreEntries();
+        await storeModule.purgeExpiredSecretStoreEntries();
         defaultRuntime.log(`Imported ${writable.length} team store entries.`);
         await noteGatewayReload();
       }),

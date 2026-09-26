@@ -1,11 +1,25 @@
-// Deepgram tests cover audio plugin behavior.
+import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
 } from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it, vi } from "vitest";
-import { transcribeDeepgramAudio } from "./audio.js";
+import plugin from "./index.js";
+
+const providers: MediaUnderstandingProvider[] = [];
+plugin.register(
+  createTestPluginApi({
+    registerMediaUnderstandingProvider: (provider) => providers.push(provider),
+  }),
+);
+const transcribeDeepgramAudio = providers.find(
+  (provider) => provider.id === "deepgram",
+)?.transcribeAudio;
+if (!transcribeDeepgramAudio) {
+  throw new Error("Deepgram audio transcription was not registered");
+}
 
 installPinnedHostnameTestHooks();
 
@@ -69,10 +83,50 @@ describe("transcribeDeepgramAudio", () => {
     expect(seenInit.body).toBeInstanceOf(Uint8Array);
   });
 
-  it("throws when the provider response omits transcript", async () => {
+  it.each([
+    {
+      name: "each channel in provider order",
+      transcripts: [" Left track. ", " Right track. "],
+      expected: "Left track.\n\nRight track.",
+    },
+    {
+      name: "speech after a silent first channel",
+      transcripts: ["", "Only second track."],
+      expected: "Only second track.",
+    },
+    {
+      name: "repeated text from distinct channels",
+      transcripts: ["Repeated.", "Repeated."],
+      expected: "Repeated.\n\nRepeated.",
+    },
+  ])("retains $name", async ({ transcripts, expected }) => {
     const { fetchFn } = createRequestCaptureJsonFetch({
-      results: { channels: [{ alternatives: [{}] }] },
+      results: {
+        channels: transcripts.map((transcript) => ({
+          alternatives: [{ transcript }, { transcript: "Unused hypothesis." }],
+        })),
+      },
     });
+    const result = await transcribeDeepgramAudio({
+      buffer: Buffer.from("audio-bytes"),
+      fileName: "voice.wav",
+      apiKey: "test-key",
+      timeoutMs: 1234,
+      query: { multichannel: true },
+      fetchFn,
+    });
+
+    expect(result.text).toBe(expected);
+  });
+
+  it.each([
+    { name: "omitted", channels: [{ alternatives: [{}] }] },
+    {
+      name: "silent across all channels",
+      channels: [{ alternatives: [{ transcript: "" }] }, { alternatives: [{ transcript: "   " }] }],
+    },
+  ])("throws when transcripts are $name", async ({ channels }) => {
+    const { fetchFn } = createRequestCaptureJsonFetch({ results: { channels } });
 
     await expect(
       transcribeDeepgramAudio({
@@ -83,20 +137,6 @@ describe("transcribeDeepgramAudio", () => {
         fetchFn,
       }),
     ).rejects.toThrow("Audio transcription response missing transcript");
-  });
-
-  it("wraps malformed successful transcription JSON with a stable provider error", async () => {
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("{ nope"));
-
-    await expect(
-      transcribeDeepgramAudio({
-        buffer: Buffer.from("audio-bytes"),
-        fileName: "voice.wav",
-        apiKey: "test-key",
-        timeoutMs: 1234,
-        fetchFn,
-      }),
-    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
   });
 
   it("rejects non-object successful transcription JSON with a stable provider error", async () => {
@@ -129,9 +169,14 @@ describe("transcribeDeepgramAudio", () => {
     ).rejects.toThrow("Audio transcription failed: malformed JSON response");
   });
 
-  it("rejects non-string transcript values with a stable provider error", async () => {
+  it.each([
+    { name: "first channel", transcripts: [123] },
+    { name: "later channel", transcripts: ["First track.", 123] },
+  ])("rejects non-string transcript values in the $name", async ({ transcripts }) => {
     const { fetchFn } = createRequestCaptureJsonFetch({
-      results: { channels: [{ alternatives: [{ transcript: 123 }] }] },
+      results: {
+        channels: transcripts.map((transcript) => ({ alternatives: [{ transcript }] })),
+      },
     });
 
     await expect(

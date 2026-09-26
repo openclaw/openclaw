@@ -7,11 +7,16 @@ import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
@@ -27,8 +32,10 @@ function seedSession(env: NodeJS.ProcessEnv, agentId: string, sessionKey: string
   return database.path;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -499,11 +506,14 @@ describe("SqliteBoardStore persistence", () => {
     seedSession(env, "main", sessionKey);
     const opened = openOpenClawAgentDatabase({ agentId: "main", env });
     const databasePath = opened.path;
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const { DatabaseSync } = requireNodeSqlite();
     const existingV14 = new DatabaseSync(databasePath);
+    restoreEmptyV21StorageForHistoricalFixture(existingV14);
     removeCanonicalValidationFromHistoricalAgentFixture(existingV14);
     existingV14.exec(`
       DROP TABLE board_widgets;
@@ -599,6 +609,7 @@ describe("SqliteBoardStore persistence", () => {
       /^CREATE TABLE board_widgets/u,
       "CREATE TABLE board_widgets_legacy",
     );
+    restoreEmptyV21StorageForHistoricalFixture(opened.db);
     removeCanonicalValidationFromHistoricalAgentFixture(opened.db);
     opened.db.exec(`
       PRAGMA foreign_keys = OFF;
@@ -615,6 +626,7 @@ describe("SqliteBoardStore persistence", () => {
       PRAGMA user_version = 14;
       UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
     `);
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
 
     expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
@@ -978,7 +990,9 @@ describe("SqliteBoardStore persistence", () => {
       content: { kind: "html", html: "beta" },
     });
 
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const reopened = new SqliteBoardStore(options);

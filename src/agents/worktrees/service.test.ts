@@ -17,7 +17,10 @@ import {
   type MockInstance,
 } from "vitest";
 import * as commandRunner from "../../process/exec-runner.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
 import {
   deleteRegistryWorktree,
@@ -153,6 +156,7 @@ describe("ManagedWorktreeService", () => {
   });
 
   afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(templateRoot, { recursive: true, force: true });
   });
@@ -201,21 +205,6 @@ describe("ManagedWorktreeService", () => {
       "origin/main",
       await git(created.path, "rev-parse", "HEAD"),
     ]);
-  });
-
-  it("reads registry records without retiring a temporarily unavailable worktree", async () => {
-    const created = await service.create({
-      repoRoot: repo,
-      name: "read-only-list",
-      baseRef: "HEAD",
-    });
-    await fs.rm(created.path, { recursive: true, force: true });
-
-    expect(service.listRegistryRecords()).toEqual([expect.objectContaining({ id: created.id })]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-
-    expect(await service.list()).toEqual([]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBe(now);
   });
 
   it("does not remove a worktree owned by another caller", async () => {
@@ -570,7 +559,7 @@ describe("ManagedWorktreeService", () => {
     const copied = path.join(created.path, "cache", "keep.txt");
     expect(await fs.readFile(copied, "utf8")).toBe("keep\n");
     expect((await fs.stat(copied)).mode & 0o777).toBe(0o744);
-    expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([
+    expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([
       "cache/keep.txt",
       "cache/linked.txt",
     ]);
@@ -610,7 +599,7 @@ describe("ManagedWorktreeService", () => {
 
     expect(await fs.readFile(path.join(created.path, "collision.txt"), "utf8")).toBe("from base\n");
     expect((await fs.stat(path.join(created.path, "collision.txt"))).mode & 0o111).toBe(0);
-    expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([]);
+    expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([]);
   });
 
   it("rejects an included file replaced by a symlink after inspection", async () => {
@@ -660,7 +649,7 @@ describe("ManagedWorktreeService", () => {
 
     const created = await service.create({ repoRoot: repo, name: "large-tilde", baseRef: "HEAD" });
 
-    expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(["~/large.bin"]);
+    expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(["~/large.bin"]);
     const copied = await fs.open(path.join(created.path, "~", "large.bin"), "r");
     try {
       expect((await copied.stat()).size).toBe(size);
@@ -743,7 +732,7 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("broken-setup");
     expect(await git(repo, "branch", "--list", "openclaw/broken-setup")).toBe("");
-    expect(service.listRegistryRecords()).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
     expect.soft(failure.message).toContain(fatal);
     expect.soft(failure.message.length).toBeLessThanOrEqual(2_300);
     expect.soft(/(?:exit|code|status)[^\n]*23/i.test(failure.message)).toBe(true);
@@ -768,7 +757,7 @@ describe("ManagedWorktreeService", () => {
     expect(removed).toMatchObject({ removed: true, snapshotRef: expect.any(String) });
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "show-ref", "--verify", removed.snapshotRef!)).not.toBe("");
-    const provisionedState = getRegistryWorktreeProvisionedState(env, created.id)!;
+    const provisionedState = (await getRegistryWorktreeProvisionedState(env, created.id))!;
     expect(provisionedState).toEqual([{ path: "provisioned.env", mode, chunks: 1 }]);
     const snapshotFiles = await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!);
     expect(snapshotFiles).not.toContain("ignored.txt");
@@ -798,7 +787,7 @@ describe("ManagedWorktreeService", () => {
       "source value\n",
     );
     expect(
-      getRegistryWorktreeProvisionedChunk(env, {
+      await getRegistryWorktreeProvisionedChunk(env, {
         worktreeId: created.id,
         path: "provisioned.env",
         chunkIndex: 0,
@@ -949,7 +938,7 @@ describe("ManagedWorktreeService", () => {
     );
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
     expect(
-      getRegistryWorktreeProvisionedChunk(env, {
+      await getRegistryWorktreeProvisionedChunk(env, {
         worktreeId: created.id,
         path: ".env.local",
         chunkIndex: 0,

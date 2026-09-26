@@ -102,6 +102,66 @@ describe("plugin async iterable protocol", () => {
     },
   );
 
+  it.each(["first", { text: "first" }])(
+    "fences retained and pending data %j after consumer release",
+    async (value) => {
+      const instance = owner();
+      const consumer = instance.retainConsumer();
+      const later = createDeferredCore<IteratorResult<typeof value>>();
+      let calls = 0;
+      const stream = consumer.wrap({
+        [Symbol.asyncIterator]() {
+          return {
+            next: () => (++calls === 1 ? { done: false, value } : later.promise),
+          };
+        },
+      });
+      const iterator = stream[Symbol.asyncIterator]();
+      const retained = await iterator.next();
+      const pending = Promise.resolve(iterator.next());
+      const rejected = expect(pending).rejects.toThrow("stream is closed");
+      try {
+        consumer.release();
+        expect(instance.run(() => "still live")).toBe("still live");
+        expect(() => retained.value).toThrow("stream is closed");
+        later.resolve({ done: false, value });
+        await rejected;
+      } finally {
+        consumer.release();
+        later.resolve({ done: true, value });
+        await pending.catch(() => {});
+      }
+    },
+  );
+
+  it("rechecks Promise inspection when a retained data chunk changes", async () => {
+    const instance = owner();
+    const value = { text: "chunk" };
+    const result = { done: false, value };
+    const stream = instance.wrap({
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => result,
+          return: async () => ({ done: true, value: undefined }),
+        };
+      },
+    });
+    const iterator = stream[Symbol.asyncIterator]();
+    const next = await iterator.next();
+    expect(next.value).toBe(value);
+    const inspected: boolean[] = [];
+    // oxlint-disable-next-line unicorn/no-thenable -- A later plugin mutation must regain admitted Promise inspection.
+    Object.defineProperty(value, "then", {
+      get() {
+        inspected.push(instance.hasActiveCall);
+        return undefined;
+      },
+    });
+    expect(next.value).toBe(value);
+    expect(inspected).toEqual([true]);
+    await iterator.return();
+  });
+
   it.each(["missing", "done-false"] as const)(
     "releases an early-break admission when return is %s",
     async (kind) => {

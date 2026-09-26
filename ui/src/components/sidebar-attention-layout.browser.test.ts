@@ -2,6 +2,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { client, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
@@ -55,7 +56,7 @@ function panelParams(
     context: {
       basePath: "",
       navigate: vi.fn(),
-      gateway: { snapshot: undefined },
+      gateway: createGatewayHarness(client(vi.fn(async () => ({})))).gateway,
     } as unknown as ApplicationContext,
     mentions: {
       snapshot: {
@@ -280,6 +281,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       expect(
         attention.getBoundingClientRect().left - nativeChrome.getBoundingClientRect().right,
       ).toBe(4);
+      expect(paint()).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)" });
+      expect(getComputedStyle(inbox).boxShadow).toBe("none");
+      expect(getComputedStyle(inbox).backdropFilter).toBe("none");
       attention.classList.remove("sidebar-attention--floating");
       expect(paint()).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)" });
       expect(getComputedStyle(inbox).boxShadow).toBe("none");

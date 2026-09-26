@@ -1,5 +1,7 @@
 // Configure channels tests cover interactive channel selection, account prompts, and config mutation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CONFIG_PATH } from "../config/paths.js";
+import { shortenHomePath } from "../utils.js";
 
 const select = vi.hoisted(() => vi.fn());
 const confirm = vi.hoisted(() => vi.fn());
@@ -28,6 +30,7 @@ import { removeChannelConfigWizard } from "./configure.channels.js";
 
 const channelChoice = (id: string) => ({ kind: "channel" as const, id });
 const doneChoice = { kind: "done" as const };
+const configPathLabel = shortenHomePath(CONFIG_PATH);
 
 async function removeUnsafeChannelConfig(unsafeChannel: string) {
   select.mockResolvedValueOnce(channelChoice(unsafeChannel)).mockResolvedValueOnce(doneChoice);
@@ -80,9 +83,7 @@ function optionLabels(options: Array<{ value: unknown; label: string }> | undefi
 
 function expectUnknownChannelRemovalPrompt(unsafeChannel: string, label: string) {
   expectOption(selectArg().options, channelChoice(unsafeChannel), label);
-  expect(confirmArg().message).toBe(
-    `Delete ${label} configuration from ~/.openclaw/openclaw.json?`,
-  );
+  expect(confirmArg().message).toBe(`Delete ${label} configuration from ${configPathLabel}?`);
   expect(note).toHaveBeenCalledWith(
     `${label} selected for removal from config.\nNote: credentials/sessions on disk are unchanged.`,
     "Channel removal",
@@ -138,9 +139,7 @@ describe("removeChannelConfigWizard", () => {
       {} as never,
     );
 
-    expect(confirmArg().message).toBe(
-      "Delete Telegram configuration from ~/.openclaw/openclaw.json?",
-    );
+    expect(confirmArg().message).toBe(`Delete Telegram configuration from ${configPathLabel}?`);
     expect(next.channels).toEqual({ twitch: { token: "secret" } });
     expect(note).toHaveBeenCalledWith(
       "Telegram selected for removal from config.\nNote: credentials/sessions on disk are unchanged.",
@@ -161,7 +160,7 @@ describe("removeChannelConfigWizard", () => {
       {} as never,
     );
 
-    expect(confirmArg().message).toBe("Delete done configuration from ~/.openclaw/openclaw.json?");
+    expect(confirmArg().message).toBe(`Delete done configuration from ${configPathLabel}?`);
     expect(next.channels).toEqual({ telegram: { token: "secret" } });
     expect(note).toHaveBeenCalledWith(
       "done selected for removal from config.\nNote: credentials/sessions on disk are unchanged.",
@@ -228,7 +227,7 @@ describe("removeChannelConfigWizard", () => {
 
     expectOption(selectArg().options, channelChoice("telegram"), "Telegram\\nBot");
     expect(confirmArg().message).toBe(
-      "Delete Telegram\\nBot configuration from ~/.openclaw/openclaw.json?",
+      `Delete Telegram\\nBot configuration from ${configPathLabel}?`,
     );
     expect(note).toHaveBeenCalledWith(
       "Telegram\\nBot selected for removal from config.\nNote: credentials/sessions on disk are unchanged.",

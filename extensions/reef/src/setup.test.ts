@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -42,7 +45,7 @@ describe("Reef setup wizard identity binding", () => {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
-    runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+    runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("reef", {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },

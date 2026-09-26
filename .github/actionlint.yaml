@@ -3,6 +3,8 @@
 
 self-hosted-runner:
   labels:
+    # GitHub's hosted preview label is not yet in actionlint's built-in inventory.
+    - xcode-27
     # Blacksmith CI runners
     - blacksmith-4vcpu-ubuntu-2404
     - blacksmith-8vcpu-ubuntu-2404

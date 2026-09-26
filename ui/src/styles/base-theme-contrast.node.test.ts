@@ -452,6 +452,39 @@ describe("Control UI theme contrast", () => {
     expect(failures).toEqual([]);
   });
 
+  it("keeps selected controls and session labels at WCAG AA across themes", () => {
+    const cases = [
+      ["components.css", ".btn.active", "var(--accent-subtle)"],
+      [
+        "settings-controls.css",
+        ".settings-segmented--accent > .settings-segmented__btn--active",
+        "var(--accent-subtle)",
+      ],
+      ["sessions.css", ".session-label-chip", null],
+      ["sessions.css", ".session-kind--direct", null],
+    ] as const;
+    const failures: string[] = [];
+    for (const [filename, selector, tint] of cases) {
+      const rule = readRuleBody(fs.readFileSync(path.join(stylesDir, filename), "utf8"), selector);
+      const ink = rule.match(/(?:^|;)\s*color:\s*([^;]+);/u)?.[1];
+      if (!ink) {
+        throw new Error(`could not read text color from "${selector}"`);
+      }
+      for (const [themeName, tokens] of themes) {
+        const foreground = resolveOpaqueColor(ink, tokens);
+        for (const surfaceToken of SURFACE_TOKENS) {
+          const host = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
+          const background = tint ? composite(resolveColor(tint, tokens), host) : host;
+          const ratio = contrastRatio(foreground, background);
+          if (ratio < AA_NORMAL_TEXT_MIN) {
+            failures.push(`${themeName}: ${selector} on ${surfaceToken} = ${ratio.toFixed(2)}:1`);
+          }
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
   it("keeps the markdown code chip separated from every surface it sits on", () => {
     const chatTextCss = fs.readFileSync(path.join(stylesDir, "chat", "text.css"), "utf8");
     const chip = readCodeChipTokens(chatTextCss);

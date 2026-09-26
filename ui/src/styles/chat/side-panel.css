@@ -402,13 +402,16 @@ openclaw-chat-detail-panel,
 }
 
 .side-panel-empty--selector {
-  transform: translateY(-18px);
+  justify-content: flex-start;
+  overflow-y: auto;
 }
 
 .side-panel-empty__types {
   display: grid;
+  flex-shrink: 0;
   width: min(100%, 320px);
-  margin-top: 0;
+  /* Center when it fits; overflow starts at the first reachable choice. */
+  margin-block: auto;
   gap: 6px;
 }
 

@@ -7,10 +7,9 @@ import {
   resolveChannelInboundRouteEnvelope,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  resolveStableChannelMessageIngress,
-  type ChannelIngressContextBinding,
-  type ResolvedChannelMessageIngress,
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
@@ -443,7 +442,7 @@ async function authorizeZaloMessage(
   });
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
-    await resolveStableChannelMessageIngress({
+    await core.channel.inbound.ingress.resolveStable({
       channelId: "zalo",
       accountId: account.accountId,
       identity: {

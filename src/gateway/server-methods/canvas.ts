@@ -105,7 +105,7 @@ export const canvasHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            "invalid canvas.document.preview params: html must not exceed 256 KiB of UTF-8 data",
+            "invalid canvas.document.preview params: html must not exceed 2 MiB of UTF-8 data",
           ),
         );
         return;

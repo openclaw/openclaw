@@ -13,12 +13,15 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../sentinel.js";
 import {
+  captureSecretStoreExpiryCutoffs,
+  purgeExpiredSecretStoreEntriesInDatabase,
+} from "./secret-store-expiry.kernel.js";
+import {
   consumeGitHubSetupHandoff,
   deleteHiddenGitHubSecretRecord,
   deleteSecretStoreEntry,
   listHiddenGitHubSecretRecordNames,
   listSecretStoreEntries,
-  purgeExpiredSecretStoreEntries,
   readHiddenGitHubSecretRecord,
   readSecretStoreExecEnvironment,
   readSecretStoreValue,
@@ -26,6 +29,15 @@ import {
   writeHiddenGitHubSecretRecord,
   writeSecretStoreEntry,
 } from "./secret-store.js";
+
+function purgeExpiredSecretStoreEntries(params: {
+  database: ReturnType<typeof createDatabaseOptions>;
+}) {
+  return purgeExpiredSecretStoreEntriesInDatabase(
+    captureSecretStoreExpiryCutoffs(),
+    params.database,
+  );
+}
 
 const roots: string[] = [];
 const team = { kind: "team" } as const;

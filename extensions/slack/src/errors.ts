@@ -1,19 +1,32 @@
-// Slack plugin module implements errors behavior.
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const NO_ERROR_DETAIL = "no error detail";
 const MAX_ERROR_CAUSE_DEPTH = 32;
 
-function redact(value: string): string {
-  return redactSensitiveText(value);
+type SlackWebApiErrorData = {
+  error?: unknown;
+  needed?: unknown;
+  response_metadata?: {
+    scopes?: unknown;
+    acceptedScopes?: unknown;
+  };
+};
+
+export function getSlackWebApiErrorData(error: unknown): SlackWebApiErrorData | undefined {
+  if (!(error instanceof Error)) {
+    return undefined;
+  }
+  // SAFETY: Slack attaches data to Error; the object check and consumer coercers validate its fields.
+  const data = (error as Error & { data?: SlackWebApiErrorData }).data;
+  return data && typeof data === "object" ? data : undefined;
 }
 
 function addStringDetail(details: string[], label: string, value: unknown) {
   if (typeof value !== "string") {
     return;
   }
-  const trimmed = redact(value.trim());
+  const trimmed = redactSensitiveText(value.trim());
   if (trimmed) {
     details.push(label ? `${label}: ${trimmed}` : trimmed);
   }
@@ -37,7 +50,7 @@ function addStringListDetail(details: string[], label: string, value: unknown) {
     if (typeof entry !== "string") {
       return [];
     }
-    const trimmed = redact(entry.trim());
+    const trimmed = redactSensitiveText(entry.trim());
     return trimmed ? [trimmed] : [];
   });
   if (entries.length) {
@@ -58,7 +71,7 @@ function safeStringify(value: unknown): string | undefined {
       seen.add(nested);
       return nested;
     });
-    return result ? redact(result) : undefined;
+    return result ? redactSensitiveText(result) : undefined;
   } catch {
     return undefined;
   }

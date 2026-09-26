@@ -1764,7 +1764,7 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("ultra");
   });
 
-  test("remaps stored Ultra to Max when a model patch selects Codex Luna", async () => {
+  test("preserves stored Ultra when a model patch selects Codex Luna", async () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: {
@@ -1783,7 +1783,7 @@ describe("gateway sessions patch", () => {
       }),
     );
 
-    expect(entry.thinkingLevel).toBe("max");
+    expect(entry.thinkingLevel).toBe("ultra");
   });
 
   test("honors an explicit OpenClaw session runtime override for Luna Ultra", async () => {
@@ -1804,7 +1804,7 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("ultra");
   });
 
-  test("clearing a runtime pin remaps thinking through configured routing and invalidates derived context", async () => {
+  test("clearing a runtime pin preserves supported thinking and invalidates derived context", async () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: { agents: { defaults: { model: "openai/gpt-5.6-luna" } } },
@@ -1817,7 +1817,7 @@ describe("gateway sessions patch", () => {
         loadGatewayModelCatalog: loadCatalog("openai/gpt-5.6-luna"),
       }),
     );
-    expect(entry).toMatchObject({ thinkingLevel: "max", liveModelSwitchPending: true });
+    expect(entry).toMatchObject({ thinkingLevel: "ultra", liveModelSwitchPending: true });
     expect(entry).not.toHaveProperty("agentRuntimeOverride");
     expect(entry).not.toHaveProperty("contextTokens");
   });
@@ -1878,11 +1878,11 @@ describe("gateway sessions patch", () => {
         },
       } as OpenClawConfig,
       store: mainStoreEntry({}),
-      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "xhigh" },
       loadGatewayModelCatalog: async () => [],
     });
 
-    expectPatchError(result, 'thinkingLevel "ultra" is not supported');
+    expectPatchError(result, 'thinkingLevel "xhigh" is not supported');
     expect(acpSessionMetaMocks.readAcpSessionMetaForEntry).toHaveBeenCalledWith({
       sessionKey: MAIN_SESSION_KEY,
       agentId: "main",
@@ -1890,13 +1890,13 @@ describe("gateway sessions patch", () => {
     });
   });
 
-  test("treats the persisted harness id as observational when validating Luna Ultra", async () => {
+  test("treats the persisted harness id as observational when validating unsupported Luna XHigh", async () => {
     const result = await runPatch({
       cfg: {
         agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
       } as OpenClawConfig,
       store: mainStoreEntry({ agentHarnessId: "openclaw" }),
-      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "xhigh" },
       loadGatewayModelCatalog: async () => [],
     });
 

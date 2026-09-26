@@ -6,6 +6,7 @@ import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
 import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { createErrorChannelPlugin } from "./status.channel-plugin.test-helpers.js";
 import type { StatusScanResult } from "./status.scan-result.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -47,37 +48,6 @@ function createUnknownUsageSessionStore() {
       outputTokens: 3_000,
       contextTokens: 10_000,
       model: "test:opus",
-    },
-  };
-}
-
-function createChannelIssueCollector(channel: string) {
-  return (accounts: Array<Record<string, unknown>>) =>
-    accounts
-      .filter((account) => typeof account.lastError === "string" && account.lastError)
-      .map((account) => ({
-        channel,
-        accountId: typeof account.accountId === "string" ? account.accountId : "default",
-        message: `Channel error: ${String(account.lastError)}`,
-      }));
-}
-
-function createErrorChannelPlugin(params: { id: string; label: string; docsPath: string }) {
-  return {
-    id: params.id,
-    meta: {
-      id: params.id,
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: params.docsPath,
-      blurb: "mock",
-    },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-    },
-    status: {
-      collectStatusIssues: createChannelIssueCollector(params.id),
     },
   };
 }
@@ -920,6 +890,7 @@ vi.mock("./status.daemon.js", () => ({
 
 describe("statusCommand", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({ session: {} });
     mocks.loadSessionStore.mockReset();
@@ -1067,6 +1038,7 @@ describe("statusCommand", () => {
   });
 
   it("scopes usage resolution to the scanned config", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
     const snapshotMock = resolveStatusRuntimeSnapshot as Mock;
     const usageMock = resolveStatusUsageSummary as Mock;
     snapshotMock.mockClear();
@@ -1078,21 +1050,29 @@ describe("statusCommand", () => {
       | {
           config: unknown;
           timeoutMs?: number;
+          gatewayProbeDeadlineMs: number;
           usage?: boolean;
-          resolveUsage?: (input: { config: unknown; timeoutMs?: number }) => Promise<unknown>;
+          resolveUsage?: (input: {
+            config: unknown;
+            timeoutMs?: number;
+            gatewayProbeDeadlineMs: number;
+          }) => Promise<unknown>;
         }
       | undefined;
     expect(params?.usage).toBe(true);
     expect(params?.timeoutMs).toBe(1234);
+    expect(params?.gatewayProbeDeadlineMs).toBe(1234);
     if (!params?.resolveUsage) {
       throw new Error("missing status usage resolver");
     }
     await params.resolveUsage({
       timeoutMs: 1234,
+      gatewayProbeDeadlineMs: 1234,
       config: params.config,
     });
     expect(usageMock).toHaveBeenCalledWith({
       timeoutMs: 1234,
+      gatewayProbeDeadlineMs: 1234,
       config: params?.config,
     });
   });
@@ -1157,12 +1137,17 @@ describe("statusCommand", () => {
   });
 
   it("passes deep mode through to the text status scan", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
     const { scanStatus } = await import("./status.scan.js");
     vi.mocked(scanStatus).mockClear();
 
     await statusCommand({ deep: true, timeoutMs: 5000 }, runtime);
 
-    expect(scanStatus).toHaveBeenCalledWith({ timeoutMs: 5000, deep: true });
+    expect(scanStatus).toHaveBeenCalledWith({
+      timeoutMs: 5000,
+      gatewayProbeDeadlineMs: 5000,
+      deep: true,
+    });
   });
 
   it("surfaces unknown usage when totalTokens is missing", async () => {

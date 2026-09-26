@@ -9,12 +9,12 @@ import {
 } from "./openclaw-agent-db-identity.js";
 import { withCommittedOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-companion.js";
 import {
-  openOpenClawAgentDatabaseReadOnly,
-  readOpenClawAgentDatabaseReadOnly,
+  readOpenClawAgentDatabase,
   type OpenClawAgentDatabaseReadOnlyResult,
   type OpenClawAgentReadOnlyDatabase,
 } from "./openclaw-agent-db-readonly-open.js";
 import {
+  retainCachedOpenClawAgentDatabaseReadOnly,
   withScopedOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentDatabaseReadOnlyBehavior,
 } from "./openclaw-agent-db-readonly-scope.js";
@@ -70,14 +70,9 @@ export function retainOpenClawAgentDatabaseReadOnly(
       claim: createOpenClawAgentDatabaseClaim(opened, borrowed.release),
     };
   }
-  const fresh = openOpenClawAgentDatabaseReadOnly(options);
-  return fresh.found
-    ? {
-        found: true,
-        database: fresh.database,
-        claim: createOpenClawAgentDatabaseClaim(fresh.database, fresh.database.close),
-      }
-    : fresh;
+  const agentId = normalizeAgentId(options.agentId);
+  const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+  return retainCachedOpenClawAgentDatabaseReadOnly({ ...options, agentId, path: pathname });
 }
 
 /** Read agent state without creating, registering, migrating, or joining its writable lifecycle. */
@@ -96,7 +91,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
       throw new Error("Extension-capable read-only access is unavailable for incognito databases.");
     }
     return database
-      ? { found: true, value: operation(database) }
+      ? readOpenClawAgentDatabase(database, operation)
       : { found: false, reason: "database-missing" };
   }
   // Borrow only outside a transaction so readers see committed rows.
@@ -105,12 +100,10 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     ? undefined
     : findOpenAgentDatabase({ ...options, agentId });
   if (processOpened?.db.isTransaction) {
-    return withCommittedOpenClawAgentDatabaseReadOnly(
-      processOpened,
-      operation,
-      { ...options, agentId },
-      behavior,
-    );
+    return withCommittedOpenClawAgentDatabaseReadOnly(processOpened, operation, {
+      ...options,
+      agentId,
+    });
   }
   const reusable = processOpened && !processOpened.db.isTransaction ? processOpened : undefined;
   if (!reusable) {
@@ -120,8 +113,8 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
       behavior,
     );
   }
-  // Share only this admission's fresh value; a later read must check again.
+  // The handle's admission owner refreshes these facts after DDL or a foreign commit.
   const userVersion = assertSupportedAgentSchemaVersion(reusable.db, pathname);
   assertCanonicalAgentPersistenceVersion(reusable.db, pathname, userVersion);
-  return readOpenClawAgentDatabaseReadOnly(reusable, operation, behavior);
+  return readOpenClawAgentDatabase(reusable, operation);
 }

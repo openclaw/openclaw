@@ -40,7 +40,10 @@ export type WorkerProviderLifecycleInputOptions = {
     operationId: string;
     sshEndpoint: WorkerSshEndpoint;
     installation: WorkerInstallationArtifact;
-    resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
+    resolveIdentity: (
+      keyRef: SecretRef,
+      context: { assertCurrent: () => void },
+    ) => Promise<WorkerSshIdentity>;
     signal: AbortSignal;
     assertCurrent?: () => void;
   }) => Promise<WorkerAdmissionHandshake>;
@@ -49,6 +52,7 @@ export type WorkerProviderLifecycleInputOptions = {
     leaseId: string;
     profile: WorkerProfile;
     keyRef: SecretRef;
+    assertAuthorized: () => void;
   }) => Promise<WorkerSshIdentity>;
   ensureNodeWorkerBundle?: (params: {
     deviceId: string;
@@ -128,8 +132,9 @@ export type WorkerProviderLifecycleOptions = Omit<
     record: WorkerEnvironmentRecord,
     to: WorkerEnvironmentState,
     patch?: WorkerEnvironmentTransitionPatch,
-  ) => WorkerEnvironmentRecord;
-  saveError: (record: WorkerEnvironmentRecord, error: unknown) => WorkerEnvironmentRecord;
+    assertCurrent?: () => void,
+  ) => Promise<WorkerEnvironmentRecord>;
+  saveError: (record: WorkerEnvironmentRecord, error: unknown) => Promise<WorkerEnvironmentRecord>;
   serviceError: (
     code:
       | "bootstrap_failure"

@@ -69,7 +69,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     fs.writeFileSync(storePath, JSON.stringify(entries, null, 2));
   }
 
-  it("uses runtime session canonicalization before warning", () => {
+  it("uses runtime session canonicalization before warning", async () => {
     const cfg = cfgWithSession("agent:ops:main");
     writeStore(cfg, {
       "agent:ops:work": {
@@ -78,7 +78,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
       },
     });
 
-    expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
+    expect(await describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
   });
 
   it("recognizes a SQLite-resident heartbeat target", async () => {
@@ -89,14 +89,14 @@ describe("describeHeartbeatSessionTargetIssues", () => {
       { sessionId: "sqlite-heartbeat-target", updatedAt: Date.now() },
     );
 
-    expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
+    expect(await describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
   });
 
-  it("warns when the resolved heartbeat session is missing", () => {
+  it("warns when the resolved heartbeat session is missing", async () => {
     const cfg = cfgWithSession("slack:channel:c123");
     writeStore(cfg, {});
 
-    const warnings = describeHeartbeatSessionTargetIssues(cfg);
+    const warnings = await describeHeartbeatSessionTargetIssues(cfg);
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
@@ -120,7 +120,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     );
     const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
     try {
-      const warnings = describeHeartbeatSessionTargetIssues(cfg);
+      const warnings = await describeHeartbeatSessionTargetIssues(cfg);
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
       expect(readFileSyncSpy.mock.calls.map(([file]) => file)).not.toContain(storePath);
@@ -129,7 +129,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     }
   });
 
-  it("does not warn when an explicit heartbeat recipient does not need session history", () => {
+  it("does not warn when an explicit heartbeat recipient does not need session history", async () => {
     const cfg = cfgWithSession("slack:channel:c123");
     const agent = cfg.agents?.list?.[0];
     if (!agent?.heartbeat) {
@@ -139,10 +139,10 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     agent.heartbeat.to = "-100123";
     writeStore(cfg, {});
 
-    expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
+    expect(await describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
   });
 
-  it("does not warn when the heartbeat cadence is disabled", () => {
+  it("does not warn when the heartbeat cadence is disabled", async () => {
     const cfg = cfgWithSession("slack:channel:c123");
     const agent = cfg.agents?.list?.[0];
     if (!agent?.heartbeat) {
@@ -151,7 +151,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     agent.heartbeat.every = "0m";
     writeStore(cfg, {});
 
-    expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
+    expect(await describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
   });
 
   it.each([
@@ -175,7 +175,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     },
   ])(
     "warns for missing sessions owned by $name",
-    ({ configuredAgentIds, heartbeatAgentId, expectedAgentIds }) => {
+    async ({ configuredAgentIds, heartbeatAgentId, expectedAgentIds }) => {
       const cfg = cfgWithDefaultHeartbeat("slack:channel:c123");
       if (!cfg.agents?.defaults?.heartbeat) {
         throw new Error("expected test config to include default heartbeat config");
@@ -184,7 +184,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
       cfg.agents.defaults.heartbeat.agentId = heartbeatAgentId;
       writeStore(cfg, {});
 
-      const warnings = describeHeartbeatSessionTargetIssues(cfg);
+      const warnings = await describeHeartbeatSessionTargetIssues(cfg);
 
       expect(warnings).toHaveLength(expectedAgentIds.length);
       for (const [index, agentId] of expectedAgentIds.entries()) {
@@ -196,7 +196,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     },
   );
 
-  it("warns when an explicit heartbeat inherits a default session", () => {
+  it("warns when an explicit heartbeat inherits a default session", async () => {
     const cfg = cfgWithDefaultHeartbeat("slack:channel:c123");
     const agent = cfg.agents?.list?.[0];
     if (!agent) {
@@ -205,17 +205,17 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     agent.heartbeat = {};
     writeStore(cfg, {});
 
-    const warnings = describeHeartbeatSessionTargetIssues(cfg);
+    const warnings = await describeHeartbeatSessionTargetIssues(cfg);
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
   });
 
-  it("warns when the default owner target has no configured owner route", () => {
+  it("warns when the default owner target has no configured owner route", async () => {
     const cfg = cfgWithSession("slack:channel:c123", null);
     writeStore(cfg, {});
 
-    const warning = describeHeartbeatSessionTargetIssues(cfg)[0];
+    const warning = (await describeHeartbeatSessionTargetIssues(cfg))[0];
     expect(warning).toContain('reason="no-route"');
     expect(warning).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
     expect(warning).toContain('heartbeat.target="telegram"');

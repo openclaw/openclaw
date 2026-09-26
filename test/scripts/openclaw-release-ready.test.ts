@@ -138,14 +138,12 @@ describe("release readiness contract", () => {
       inputs({
         tag,
         npm_dist_tag: channel,
-        stable_soak_waiver: "Operator accepted missing soak",
         publish_openclaw_npm: true,
         publish_docker_only: false,
       }),
     );
     expect(value).toEqual({
       ...inputs({ tag, npm_dist_tag: channel }),
-      stable_soak_waiver: "Operator accepted missing soak",
       plugin_publish_scope: "all-publishable",
       publish_openclaw_npm: "true",
       publish_docker_only: "false",
@@ -156,6 +154,8 @@ describe("release readiness contract", () => {
 
   it.each([
     ["unsealed input", { prepared_plugins: "{}" }],
+    ["retired soak waiver", { stable_soak_waiver: "2026.9.2 approved" }],
+    ["retired lane waiver", { lane_waiver: "2026.9.2 approved" }],
     ["moving source", { tag: "main" }],
     ["missing source", { tag: "" }],
     ["wrong beta channel", { npm_dist_tag: "latest" }],
@@ -2158,22 +2158,24 @@ process.exitCode = 1;
 
 describe("prepared Windows handoff", () => {
   it.each([
-    ["stable", "v2026.9.2", "success", true, true, false, true],
-    ["absent", "v2026.9.2", "success", false, false, false, false],
-    ["incomplete", "v2026.9.2", "success", true, false, false, true],
-    ["beta", "v2026.9.2-beta.1", "success", true, true, false, false],
-    ["alpha", "v2026.9.2-alpha.1", "success", true, true, false, false],
-    ["failed activation", "v2026.9.2", "failure", true, true, false, false],
-    ["skipped activation", "v2026.9.2", "skipped", true, true, false, false],
-    ["dispatch failed", "v2026.9.2", "success", true, true, true, true],
+    ["stable on beta", "v2026.9.2", "beta", "success", true, true, false, true],
+    ["stable on latest", "v2026.9.2", "latest", "success", true, true, false, true],
+    ["absent", "v2026.9.2", "beta", "success", false, false, false, false],
+    ["incomplete", "v2026.9.2", "beta", "success", true, false, false, true],
+    ["beta", "v2026.9.2-beta.1", "beta", "success", true, true, false, false],
+    ["alpha", "v2026.9.2-alpha.1", "alpha", "success", true, true, false, false],
+    ["failed activation", "v2026.9.2", "beta", "failure", true, true, false, false],
+    ["skipped activation", "v2026.9.2", "beta", "skipped", true, true, false, false],
+    ["dispatch failed", "v2026.9.2", "beta", "success", true, true, true, true],
   ] as const)(
     "uses the frozen optional selection after activation: %s",
-    (_label, tag, activation, selected, digests, dispatchFailure, scheduled) => {
+    (_label, tag, channel, activation, selected, digests, dispatchFailure, scheduled) => {
       const fixture = finalizationFixture({ windowsDispatchFailure: dispatchFailure });
       const ready = readyRelease();
       ready.inputs = {
         ...ready.inputs,
         tag,
+        npm_dist_tag: channel,
         windows_node_tag: selected ? "v1.2.3" : "",
         windows_node_installer_digests: digests
           ? JSON.stringify({

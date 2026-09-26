@@ -88,17 +88,8 @@ function resolveQueuedAgentRunId(entry: QueuedAgentTurnSessionDelivery) {
 }
 
 function collectVisiblePayloadMediaUrls(result: AgentDeliveryEvidence): string[] {
-  const urls = new Set<string>();
   const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  for (const payload of payloads) {
-    if (!hasExplicitlyVisibleAgentPayload(payload)) {
-      continue;
-    }
-    for (const url of collectDeliveredMediaUrls({ payloads: [payload] })) {
-      urls.add(url);
-    }
-  }
-  return Array.from(urls);
+  return collectDeliveredMediaUrls({ payloads: payloads.filter(hasExplicitlyVisibleAgentPayload) });
 }
 
 function collectQueuedDeliveredMediaUrls(params: {
@@ -510,8 +501,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       {
         sessionKey: params.canonicalKey,
         message: entry.message,
-        deliver:
-          sourceReplyDeliveryMode === "automatic" && route.channel !== INTERNAL_MESSAGE_CHANNEL,
+        deliver: route.channel !== INTERNAL_MESSAGE_CHANNEL,
         bestEffortDeliver: false,
         channel: route.channel,
         accountId: route.accountId,

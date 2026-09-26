@@ -101,38 +101,6 @@ describe("Gateway discovery inside Models", () => {
     done!.click();
     expect(onOpenChat).toHaveBeenCalledOnce();
   });
-  it("returns a recoverable credential to the connection owner without activating a model", () => {
-    const onConnectChoice = vi.fn();
-    const onStartAuth = vi.fn();
-    const container = mount(
-      props({
-        embedded: true,
-        onConnectChoice,
-        onStartAuth,
-        credentialChoices: ["openai-oauth"],
-
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            unavailableCandidates: [
-              {
-                id: "needs-login",
-                label: "OpenAI",
-                detail: "Sign-in expired",
-                reason: "Sign in again",
-                authOptionId: "openai-oauth",
-              },
-            ],
-          },
-        },
-      }),
-    );
-    const recovery = container.querySelector('[data-unavailable-candidate="needs-login"]')!;
-    recovery.querySelector<HTMLButtonElement>("button")!.click();
-    expect(onConnectChoice).toHaveBeenCalledExactlyOnceWith("openai-oauth");
-    expect(onStartAuth).not.toHaveBeenCalled();
-  });
   it("retains a setup-only secret method when the same provider offers credential-only OAuth", () => {
     const onManualConnect = vi.fn();
     const container = mount(

@@ -58,7 +58,9 @@ export type ComputerToolTransport = {
   }) => Promise<unknown>;
 };
 
-export type ComputerHost = { host: "gateway" } | { host: "node"; nodeId: string };
+export type ComputerHost =
+  | { host: "gateway" }
+  | { host: "node"; nodeId: string; environmentId?: string };
 
 export type ComputerTarget = ComputerHost & { screenIndex: number };
 
@@ -67,7 +69,12 @@ export function computerHostKey(target: ComputerHost): string {
 }
 
 export function computerTargetDetails(target: ComputerHost) {
-  return target.host === "gateway" ? { target: "gateway" as const } : { node: target.nodeId };
+  return target.host === "gateway"
+    ? { target: "gateway" as const }
+    : {
+        node: target.nodeId,
+        ...(target.environmentId ? { environmentId: target.environmentId } : {}),
+      };
 }
 
 export type ComputerFrame = {

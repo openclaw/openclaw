@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { shellEscape } from "../../agents/sandbox/remote-shell-command.js";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -26,6 +27,7 @@ export type PreparedWorkerSsh = {
 
 export type WorkerSshIdentityResolver = (
   keyRef: WorkerSshEndpoint["keyRef"],
+  context: { assertCurrent: () => void },
 ) => Promise<WorkerSshIdentity>;
 
 function normalizeIdentityMaterial(contents: string): string {
@@ -128,11 +130,20 @@ export function resolveWorkerSshSandboxSettings(params: {
 
 /** Materializes one pinned identity/known-hosts context for a complete SSH ownership lifetime. */
 export async function prepareWorkerSsh(params: {
+  assertCurrent?: () => void;
   ssh: WorkerSshEndpoint;
   pinnedHostKey?: string;
   resolveIdentity: WorkerSshIdentityResolver;
   temporaryDirectoryPrefix?: string;
 }): Promise<PreparedWorkerSsh> {
+  let preparing = true;
+  const assertPreparing = () => {
+    if (!preparing) {
+      throw new Error("Worker SSH preparation invocation is closed");
+    }
+    params.assertCurrent?.();
+  };
+  assertPreparing();
   if (params.pinnedHostKey === undefined) {
     throw new Error(
       "Worker SSH setup is missing pinnedHostKey; WorkerProvider.provision() must return ssh.hostKey",
@@ -157,7 +168,11 @@ export async function prepareWorkerSsh(params: {
     ),
   );
   try {
-    const identity = await params.resolveIdentity(params.ssh.keyRef);
+    assertPreparing();
+    const identity = await params.resolveIdentity(params.ssh.keyRef, {
+      assertCurrent: assertPreparing,
+    });
+    assertPreparing();
     let identityPath: string;
     if (identity.kind === "path") {
       const resolvedPath = identity.path.trim();
@@ -176,12 +191,15 @@ export async function prepareWorkerSsh(params: {
       }
       identityPath = path.join(temporaryDir, "identity");
       await fs.writeFile(identityPath, normalizedContents, { mode: 0o600 });
+      assertPreparing();
       await fs.chmod(identityPath, 0o600);
+      assertPreparing();
     }
 
     const knownHostsPath = path.join(temporaryDir, "known_hosts");
     // The isolated file contains only trusted provisioning output; SSH never learns the first key.
     await fs.writeFile(knownHostsPath, knownHosts, { mode: 0o600 });
+    assertPreparing();
     let disposed = false;
     let selectedPort = endpoint.port;
     return {
@@ -211,6 +229,8 @@ export async function prepareWorkerSsh(params: {
   } catch (error) {
     await fs.rm(temporaryDir, { recursive: true, force: true });
     throw error;
+  } finally {
+    preparing = false;
   }
 }
 
@@ -325,10 +345,6 @@ export function workerSshCommandOptions(params: {
     maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
     killProcessTree: true,
   };
-}
-
-function shellEscape(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 export function workerSshRemoteCommand(argv: readonly string[]): string {

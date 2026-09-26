@@ -1,4 +1,3 @@
-// Slack plugin module implements streaming compat behavior.
 // channel-streaming-config exports the same helpers without channel-outbound's
 // reply-pipeline/channel-registry graph, which doctor enumeration cold-loads.
 import {

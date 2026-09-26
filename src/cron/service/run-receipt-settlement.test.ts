@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -9,7 +10,7 @@ import {
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { CronService, type CronEvent } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
-import { saveCronStore } from "../store.js";
+import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { loadedCronStoreFromRows, loadCronRows } from "../store/row-codec.js";
 import {
@@ -17,6 +18,7 @@ import {
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
@@ -70,13 +72,18 @@ function latestReceiptStatus(storePath: string, jobId: string): string | undefin
 }
 
 describe("cron run receipt settlement", () => {
-  it.each(["on-exit", "stream", "empty-stream", "manual"] as const)(
-    "retains the execution owner through an awaited %s payload",
+  it.each(["on-exit", "stream", "empty-stream", "startup", "manual"] as const)(
+    "retains the execution owner through %s execution and settlement",
     async (source) => {
       const { storePath } = await makeStorePath();
       const context = new AsyncLocalStorage<"caller" | "scheduler">();
       const observed: Array<string | undefined> = [];
       let schedulerEntries = 0;
+      const runPayload = async () => {
+        await Promise.resolve();
+        observed.push(context.getStore());
+        return { status: "ok" as const };
+      };
       const service = new CronService({
         storePath,
         cronEnabled: true,
@@ -87,11 +94,13 @@ describe("cron run receipt settlement", () => {
           schedulerEntries += 1;
           return context.run("scheduler", run);
         },
-        runIsolatedAgentJob: async () => {
-          await Promise.resolve();
-          observed.push(context.getStore());
-          return { status: "ok" };
+        onEvent: (event) => {
+          if (event.action === "started" || event.action === "finished") {
+            observed.push(`${event.action}:${context.getStore()}`);
+          }
         },
+        runIsolatedAgentJob: runPayload,
+        runCommandJob: runPayload,
       });
       try {
         const job = await service.add({
@@ -99,40 +108,48 @@ describe("cron run receipt settlement", () => {
           name: `execution context ${source}`,
           enabled: true,
           schedule:
-            source === "on-exit"
-              ? onExitSchedule
-              : source === "manual"
-                ? { kind: "every", everyMs: 60_000 }
-                : { kind: "stream", command: ["true"] },
+            source === "startup"
+              ? { kind: "at", at: new Date(Date.now() - 1_000).toISOString() }
+              : source === "on-exit"
+                ? onExitSchedule
+                : source === "manual"
+                  ? { kind: "every", everyMs: 60_000 }
+                  : { kind: "stream", command: ["true"] },
           sessionTarget: "isolated",
           wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "Read the scheduled result." },
+          payload:
+            source === "startup"
+              ? { kind: "command", argv: ["true"] }
+              : { kind: "agentTurn", message: "Read the scheduled result." },
           delivery: { mode: "none" },
         });
         await context.run("caller", async () => {
           const outcome =
-            source === "on-exit"
-              ? await service.runOnExit(job.id, {
-                  schedule: onExitSchedule,
-                  signal: new AbortController().signal,
-                  commitGuard: () => {},
-                  onReserved: () => {},
-                })
-              : await service.run(
-                  job.id,
-                  "force",
-                  job.schedule.kind === "stream"
-                    ? {
-                        streamBatch: source === "empty-stream" ? "" : "one observed batch",
-                        streamScheduleKey: cronStreamScheduleKey(job.schedule),
-                        streamSourceIdentity: job.state.streamSourceIdentity,
-                      }
-                    : undefined,
-                );
-          expect(outcome).toEqual({ ok: true, ran: true });
+            source === "startup"
+              ? await service.start()
+              : source === "on-exit"
+                ? await service.runOnExit(job.id, {
+                    schedule: onExitSchedule,
+                    signal: new AbortController().signal,
+                    commitGuard: () => {},
+                    onReserved: () => {},
+                  })
+                : await service.run(
+                    job.id,
+                    "force",
+                    job.schedule.kind === "stream"
+                      ? {
+                          streamBatch: source === "empty-stream" ? "" : "one observed batch",
+                          streamScheduleKey: cronStreamScheduleKey(job.schedule),
+                          streamSourceIdentity: job.state.streamSourceIdentity,
+                        }
+                      : undefined,
+                  );
+          expect(outcome).toEqual(source === "startup" ? undefined : { ok: true, ran: true });
           expect(context.getStore()).toBe("caller");
         });
-        expect(observed).toEqual([source === "manual" ? "caller" : "scheduler"]);
+        const owner = source === "manual" ? "caller" : "scheduler";
+        expect(observed).toEqual([`started:${owner}`, owner, `finished:${owner}`]);
         expect(schedulerEntries).toBe(source === "manual" ? 0 : 1);
       } finally {
         service.stop();
@@ -179,6 +196,86 @@ describe("cron run receipt settlement", () => {
       service.stop();
     }
   });
+
+  it.each(["cancel", "stop"] as const)(
+    "does not repair a delayed on-exit proposal after %s",
+    async (action) => {
+      const { storePath } = await makeStorePath();
+      const startedAtMs = Date.now() - 1_000;
+      const job: CronJob = {
+        ...makeTimedJob(`retired-on-exit-proposal-${action}`, startedAtMs),
+        schedule: onExitSchedule,
+        delivery: { mode: "none" },
+        state: { runningAtMs: startedAtMs },
+      };
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      const prepared = prepareCronRunReceiptClaim({
+        storePath,
+        job,
+        agentId: "alpha",
+        startedAtMs,
+      });
+      const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+        claimCronRunReceiptInDatabase({ database: db, prepared, resolveAgentId: () => "alpha" }),
+      );
+      job.state.runningReceiptId = receipt.receiptId;
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      releaseLocalCronRunReceiptOwnership(receipt);
+      const before = await loadCronStore(storePath);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const execute = stateRead.executeExistingOpenClawStateRead;
+      const delayed = vi
+        .spyOn(stateRead, "executeExistingOpenClawStateRead")
+        .mockImplementation(async (context, command) => {
+          const result = await execute(context, command);
+          if (command.type === "cron.observeRunRecovery") {
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        });
+      const runner = vi.fn(async () => ({ status: "ok" as const }));
+      const onEvent = vi.fn();
+      const onReserved = vi.fn();
+      const service = makeService(storePath, runner, onEvent);
+      const controller = new AbortController();
+      const waiting = service.runOnExit(job.id, {
+        schedule: onExitSchedule,
+        signal: controller.signal,
+        commitGuard: () => {},
+        onReserved,
+      });
+      try {
+        await entered.promise;
+        if (action === "cancel") {
+          controller.abort();
+        } else {
+          service.stop();
+        }
+        release.resolve();
+        await expect(waiting).resolves.toEqual({ ok: true, ran: false, reason: "stopped" });
+        // Cancellation can settle the request before its locked continuation retires.
+        await service.readJob(job.id);
+
+        expect(await loadCronStore(storePath)).toEqual(before);
+        expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toEqual(receipt);
+        expect(
+          readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId: job.id }).entries,
+        ).toEqual([]);
+        expect(onEvent).not.toHaveBeenCalled();
+        expect(onReserved).not.toHaveBeenCalled();
+        expect(runner).not.toHaveBeenCalled();
+      } finally {
+        controller.abort();
+        release.resolve();
+        await waiting.catch(() => undefined);
+        await service.readJob(job.id);
+        delayed.mockRestore();
+        service.stop();
+      }
+    },
+  );
 
   it("records a dead receipt before admitting the next observed exit", async () => {
     vi.useRealTimers();
@@ -261,6 +358,7 @@ describe("cron run receipt settlement", () => {
     "keeps a timed-out %s runner fenced until its underlying work settles",
     async (trigger) => {
       vi.useRealTimers();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const { storePath } = await makeStorePath();
       const now = Date.now();
       const job = makeTimedJob(
@@ -284,6 +382,9 @@ describe("cron run receipt settlement", () => {
 
       try {
         await runnerStarted.promise;
+        // Exercise the execution deadline and cleanup guard without waiting on wall time.
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(20_000);
         await first;
         expect(latestReceiptStatus(storePath, job.id)).toBe("running");
         await successor.update(job.id, { schedule: onExitSchedule, enabled: true });
@@ -347,6 +448,8 @@ describe("cron run receipt settlement", () => {
           });
           database.exec("DROP TRIGGER reject_on_exit_receipt_finish");
         }
+        // Allow the retained receipt retry and foreign-owner reconciliation to run.
+        await vi.advanceTimersByTimeAsync(2_000);
         await expect(settlement).resolves.toEqual({ ok: true, ran: true });
         expect(onReserved).toHaveBeenCalledOnce();
         expect((await successor.readJob(job.id))?.enabled).toBe(false);
@@ -365,6 +468,7 @@ describe("cron run receipt settlement", () => {
 
   it("reserves an observed exit atomically after a competing manual run", async () => {
     vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { storePath } = await makeStorePath();
     const job = {
       ...makeTimedJob("on-exit-manual-race", Date.now()),
@@ -421,8 +525,9 @@ describe("cron run receipt settlement", () => {
       expect(onReserved).not.toHaveBeenCalled();
       await service.update(job.id, { payload: { kind: "command", argv: ["updated"] } });
       releaseManual.resolve({ status: "ok" });
-      await expect(observedExit).resolves.toEqual({ ok: true, ran: true });
       await manual;
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(observedExit).resolves.toEqual({ ok: true, ran: true });
       expect(onReserved).toHaveBeenCalledOnce();
       expect(runCommandJob).toHaveBeenCalledTimes(2);
       expect(runCommandJob).toHaveBeenLastCalledWith(
@@ -460,8 +565,13 @@ describe("cron run receipt settlement", () => {
       }));
       await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
       const releaseBlockers = createDeferred<{ status: "ok" }>();
+      const blockersStarted = createDeferred();
+      let startedBlockers = 0;
       const runCommandJob = vi.fn(async ({ job: running }: { job: CronJob }) => {
         if (running.id !== job.id) {
+          if (++startedBlockers === blockers.length) {
+            blockersStarted.resolve();
+          }
           return await releaseBlockers.promise;
         }
         return { status: "ok" as const };
@@ -471,7 +581,8 @@ describe("cron run receipt settlement", () => {
       const runningBlockers = blockers.map((blocker) => service.run(blocker.id, "force"));
       let observedExit: ReturnType<CronService["runOnExit"]> | undefined;
       try {
-        await vi.waitFor(() => expect(runCommandJob).toHaveBeenCalledTimes(blockers.length));
+        await blockersStarted.promise;
+        expect(runCommandJob).toHaveBeenCalledTimes(blockers.length);
         expect((await service.readJob(job.id))?.state.nextRunAtMs).toBeUndefined();
         const reserved = createDeferred();
         observedExit = service.runOnExit(job.id, {

@@ -876,7 +876,7 @@ export async function hasCurrentSystemAgentOwnerPluginArtifacts(
  * switch this frozen run, while relevant runtime plugin membership and the
  * actual selected credential are checked explicitly.
  */
-async function resolveSystemAgentVerifiedInferenceStateInternal(
+export async function resolveSystemAgentVerifiedInferenceState(
   binding: SystemAgentVerifiedInferenceBinding,
   deps: SystemAgentVerifiedInferenceDeps = {},
 ): Promise<SystemAgentVerifiedInferenceState | null> {
@@ -993,17 +993,10 @@ async function resolveSystemAgentVerifiedInferenceStateInternal(
   return { config, route: binding.execution };
 }
 
-export async function resolveSystemAgentVerifiedInferenceState(
-  binding: SystemAgentVerifiedInferenceBinding,
-  deps: SystemAgentVerifiedInferenceDeps = {},
-): Promise<SystemAgentVerifiedInferenceState | null> {
-  return resolveSystemAgentVerifiedInferenceStateInternal(binding, deps);
-}
-
 export async function resolveSystemAgentVerifiedInferenceRoute(
   binding: SystemAgentVerifiedInferenceBinding,
   deps: SystemAgentVerifiedInferenceDeps = {},
 ): Promise<SystemAgentVerifiedExecutionRoute | null> {
-  return (await resolveSystemAgentVerifiedInferenceStateInternal(binding, deps))?.route ?? null;
+  return (await resolveSystemAgentVerifiedInferenceState(binding, deps))?.route ?? null;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

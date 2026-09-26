@@ -112,12 +112,12 @@ suite.define(() => {
           methodResponses: {
             "sessions.list": {
               cases: [
-                { match: { limit: 200, includeUnknown: false }, response: result(searched) },
                 { match: { limit: 50 }, response: result(scenario.source ? searched : primary) },
                 { response: result(primary) },
               ],
             },
             "sessions.search": {
+              sessions: [target],
               results: [
                 {
                   messageId: "target-message",
@@ -174,7 +174,9 @@ suite.define(() => {
         expect(searchRequests).toHaveLength(scenario.source ? 0 : 1);
         if (!scenario.source) {
           expect(searchRequests[0]?.params).toMatchObject({
-            sessionKeys: expect.arrayContaining([targetKey]),
+            query: "Selected target transcript",
+            limit: 25,
+            scope: { agentId: "main" },
           });
         }
         await capture(page, "before-click.png");

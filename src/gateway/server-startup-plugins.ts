@@ -88,6 +88,15 @@ export async function runGatewayStartupMaintenance(params: {
       }),
     ];
     if (!params.minimalTestGateway) {
+      const { migrateLegacyDesktopStreamOptOuts } =
+        await import("../infra/device-pairing-node-desktop-migration.js");
+      const retiredDesktopApprovals =
+        await migrateLegacyDesktopStreamOptOuts(startupMaintenanceConfig);
+      if (retiredDesktopApprovals > 0) {
+        params.log.warn(
+          `Preserved disabled desktop access for ${retiredDesktopApprovals} paired node(s); approve their updated desktop capability to enable sharing.`,
+        );
+      }
       const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
       startupTasks.push(
         runStartupSessionMigration({

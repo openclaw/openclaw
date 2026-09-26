@@ -5,6 +5,8 @@ import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { isVerbose } from "../global-state.js";
+import { hasInternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
+import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
 import {
   formatConsoleTimestamp,
@@ -410,9 +412,25 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     resolvedSubsystem === "model-fallback" ||
     resolvedSubsystem.startsWith("model-fallback/");
   let fileChild: TsLogger<LogObj> | undefined;
+  let fileChildWithoutStack: TsLogger<LogObj> | undefined;
   let formatConsoleLine: ReturnType<typeof createConsoleLineFormatter> | undefined;
 
-  const getFileLogger = () => (fileChild ??= getChildLogger({ subsystem: resolvedSubsystem }));
+  const getFileLogger = (level: LogLevel) => {
+    fileChild ??= getChildLogger({ subsystem: resolvedSubsystem });
+    if (
+      level === "error" ||
+      level === "fatal" ||
+      (areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("log.record"))
+    ) {
+      return fileChild;
+    }
+    if (!fileChildWithoutStack) {
+      fileChildWithoutStack = fileChild.getSubLogger({ stack: { capture: "off" } });
+      // Preserve the subsystem's logger ancestry across capture variants.
+      fileChildWithoutStack.settings.parentNames = fileChild.settings.parentNames;
+    }
+    return fileChildWithoutStack;
+  };
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
@@ -435,7 +453,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      logToFile(getFileLogger(), level, message, fileMeta);
+      logToFile(getFileLogger(level), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -510,7 +528,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        logToFile(getFileLogger(), "info", message, { raw: true });
+        logToFile(getFileLogger("info"), "info", message, { raw: true });
       }
       const consoleSettings = getConsoleSettings();
       if (

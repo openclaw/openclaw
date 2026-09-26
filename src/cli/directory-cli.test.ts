@@ -1,6 +1,7 @@
 // Directory CLI tests cover directory command registration and plugin-backed lookups.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
@@ -123,8 +124,13 @@ describe("registerDirectoryCli", () => {
     ["peers", ["directory", "peers", "list"]],
     ["groups", ["directory", "groups", "list"]],
     ["members", ["directory", "groups", "members", "--group-id", "group-1"]],
-  ])("%s account input", (_leaf, args) => {
-    it.each(["", " \t\n "])("rejects blank %j before command startup", async (account) => {
+  ])("%s selector input", (_leaf, args) => {
+    it.each([
+      ["account", ""],
+      ["account", " \t\n "],
+      ["channel", ""],
+      ["channel", " \t\n "],
+    ])("rejects blank %s=%j before command startup", async (selector, value) => {
       const startup = vi.fn(() => {
         throw new Error("Command startup reached");
       });
@@ -132,10 +138,8 @@ describe("registerDirectoryCli", () => {
       registerDirectoryCli(program);
 
       await expect(
-        program.parseAsync([...args, "--channel", "slack", "--account", account], {
-          from: "user",
-        }),
-      ).rejects.toThrow("--account must not be blank");
+        program.parseAsync([...args, `--${selector}`, value], { from: "user" }),
+      ).rejects.toThrow(new RegExp(`--${selector}.*blank`));
 
       expect(startup).not.toHaveBeenCalled();
     });
@@ -685,40 +689,88 @@ describe("registerDirectoryCli", () => {
     expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it("sanitizes plugin directory entries only for terminal output", async () => {
-    const entry = {
-      id: "user:\u001B]0;directory-id\u0007🦞\nforged-row",
-      name: "Alice\u001B[31m\r\nadmin\tbadge",
-    };
-    const listPeers = vi.fn().mockResolvedValue([entry]);
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: { slack: {} } },
-      channelId: "slack",
-      plugin: { id: "slack", directory: { listPeers } },
-      configChanged: false,
+  describe.each([
+    { args: ["self"], method: "self", title: "Self" },
+    { args: ["peers", "list"], method: "listPeers", title: "Peers" },
+    { args: ["groups", "list"], method: "listGroups", title: "Groups" },
+    {
+      args: ["groups", "members", "--group-id", "group-1"],
+      method: "listGroupMembers",
+      title: "Group Members",
+    },
+  ])("$title output", ({ args, method, title }) => {
+    it.each([60, 80])("preserves table bytes and raw JSON at width %i", async (columns) => {
+      const originalColumns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+      const originalTerm = process.env.TERM;
+      Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
+      process.env.TERM = "xterm";
+      try {
+        for (const [name, expectedName] of [
+          ["  Alice  ", "Alice"],
+          [undefined, ""],
+          ["A\u001B[31m\r\nB\tC", "A\\r\\nB\\tC"],
+        ] as const) {
+          const entry = {
+            id: "u\u001B]0;directory-id\u0007🦞\n1",
+            ...(name === undefined ? {} : { name }),
+          };
+          const original = structuredClone(entry);
+          const isSelf = method === "self";
+          mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+            cfg: { channels: { slack: {} } },
+            channelId: "slack",
+            plugin: {
+              id: "slack",
+              directory: { [method]: vi.fn().mockResolvedValue(isSelf ? entry : [entry]) },
+            },
+            configChanged: false,
+          });
+          runtimeState.defaultRuntime.log.mockClear();
+          runtimeState.defaultRuntime.writeJson.mockClear();
+          const textProgram = new Command().name("openclaw");
+          registerDirectoryCli(textProgram);
+          await textProgram.parseAsync(["directory", ...args, "--channel", "slack"], {
+            from: "user",
+          });
+
+          const leftWidth = columns / 2 - 2;
+          const rightWidth = leftWidth + 1;
+          expect(runtimeState.defaultRuntime.log.mock.calls).toEqual([
+            [isSelf ? theme.heading(title) : `${theme.heading(title)} ${theme.muted("(1)")}`],
+            [
+              [
+                `┌${"─".repeat(leftWidth)}┬${"─".repeat(rightWidth)}┐`,
+                `│ ID${" ".repeat(leftWidth - 3)}│ Name${" ".repeat(rightWidth - 5)}│`,
+                `├${"─".repeat(leftWidth)}┼${"─".repeat(rightWidth)}┤`,
+                `│ u🦞\\n1${" ".repeat(leftWidth - 7)}│ ${expectedName}${" ".repeat(rightWidth - expectedName.length - 1)}│`,
+                `└${"─".repeat(leftWidth)}┴${"─".repeat(rightWidth)}┘`,
+              ].join("\n"),
+            ],
+          ]);
+          expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
+          const jsonProgram = new Command().name("openclaw");
+          registerDirectoryCli(jsonProgram);
+          await jsonProgram.parseAsync(["directory", ...args, "--channel", "slack", "--json"], {
+            from: "user",
+          });
+          expect(runtimeState.defaultRuntime.writeJson.mock.calls).toEqual([
+            [isSelf ? original : [original]],
+          ]);
+          expect(entry).toEqual(original);
+        }
+      } finally {
+        if (originalColumns) {
+          Object.defineProperty(process.stdout, "columns", originalColumns);
+        } else {
+          Reflect.deleteProperty(process.stdout, "columns");
+        }
+        if (originalTerm === undefined) {
+          delete process.env.TERM;
+        } else {
+          process.env.TERM = originalTerm;
+        }
+      }
     });
-
-    const textProgram = new Command().name("openclaw");
-    registerDirectoryCli(textProgram);
-    await textProgram.parseAsync(["directory", "peers", "list", "--channel", "slack"], {
-      from: "user",
-    });
-
-    const textOutput = runtimeState.defaultRuntime.log.mock.calls.flat().join("\n");
-    expect(textOutput).not.toContain("\u001B");
-    expect(textOutput).not.toContain("\nforged-row");
-    expect(textOutput).toContain("\\nforged-row");
-    expect(textOutput).toContain("\\r\\nadmin\\tbadge");
-    expect(textOutput).toContain("🦞");
-
-    runtimeState.defaultRuntime.writeJson.mockClear();
-    const jsonProgram = new Command().name("openclaw");
-    registerDirectoryCli(jsonProgram);
-    await jsonProgram.parseAsync(["directory", "peers", "list", "--channel", "slack", "--json"], {
-      from: "user",
-    });
-
-    expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith([entry]);
   });
 
   it("reports unsupported directory capability instead of continuing setup for installed plugins", async () => {

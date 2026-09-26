@@ -1,7 +1,5 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  appendAudit,
-  appendInboxRead,
   bodyHash as hashMessageBody,
   composeInbound,
   composeOutbound,
@@ -224,7 +222,7 @@ export class ReefMessageFlow {
     // observation per park keeps the audit chain from filling with retries.
     const unreadIds = entries.map((entry) => entry.id).filter((id) => !this.parkedReadIds.has(id));
     if (unreadIds.length > 0) {
-      await appendInboxRead(this.options.audit, unreadIds);
+      await this.options.audit.appendEvent("read", { ids: unreadIds });
     }
     for (const entry of entries) {
       if (entry.kind === "receipt") {
@@ -387,7 +385,7 @@ export class ReefMessageFlow {
   private async quarantineReceipt(entry: InboxEntry): Promise<undefined> {
     // A peer-protocol violation must not poison the relay cursor. Keep any
     // outbound binding intact so a later valid receipt can still complete it.
-    await appendAudit(this.options.audit, "invalid_delivery_receipt", {
+    await this.options.audit.appendEvent("invalid_delivery_receipt", {
       id: entry.id,
       peer: entry.peer,
     });

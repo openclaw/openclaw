@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   persistSessionTranscriptTurn,
   replaceTranscriptEvents,
@@ -9,13 +8,13 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
+  readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
@@ -26,24 +25,22 @@ import {
 } from "./session-transcript-readers.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 describe("session transcript reader facade", () => {
   let tempDir: string;
   let storePath: string;
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let state: OpenClawTestState;
 
-  beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    tempDir = tempDirs.make("openclaw-transcript-readers-");
+  beforeEach(async () => {
+    state = await createOpenClawTestState({
+      prefix: "openclaw-transcript-readers-",
+      layout: "state-only",
+    });
+    tempDir = state.stateDir;
     storePath = path.join(tempDir, "sessions.json");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
   });
 
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    envSnapshot.restore();
+  afterEach(async () => {
+    await state.cleanup();
   });
 
   async function writeTranscript(
@@ -259,6 +256,19 @@ describe("session transcript reader facade", () => {
       line("retained archive"),
     );
 
+    for (const allowResetArchiveFallback of [false, undefined]) {
+      await expect(
+        readSessionMessagesPageWithStatsAsync(scope, {
+          offset: 0,
+          maxMessages: 1,
+          allowResetArchiveFallback,
+        }),
+      ).rejects.toMatchObject({
+        name: "SessionTranscriptStorageUnavailableError",
+        reason: "database-missing",
+      });
+    }
+
     await expect(
       readSessionMessagesAsync(scope, {
         mode: "full",
@@ -266,6 +276,19 @@ describe("session transcript reader facade", () => {
         allowResetArchiveFallback: true,
       }),
     ).resolves.toMatchObject([{ content: "retained archive" }]);
+    await expect(
+      readRecentSessionMessagesWithStatsAsync(scope, {
+        maxMessages: 1,
+        allowResetArchiveFallback: true,
+      }),
+    ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
+    await expect(
+      readSessionMessagesPageWithStatsAsync(scope, {
+        offset: 0,
+        maxMessages: 1,
+        allowResetArchiveFallback: true,
+      }),
+    ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
   });
 
   test("does not fall back to stored custom transcript paths after SQLite migration", async () => {

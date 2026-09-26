@@ -1,14 +1,28 @@
 import crypto from "node:crypto";
-import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { Selectable } from "kysely";
+import type { ChannelProgressDraftCompositorSnapshot } from "../../channels/progress-draft-compositor.types.js";
 import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  prepareSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  type OpenClawAgentDatabase,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import {
+  parseConversationProgressSnapshot,
+  serializeConversationProgressSnapshot,
+} from "./conversation-progress-snapshot.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+
+type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
 type ConversationDeliveryStatus =
   | "created"
@@ -48,25 +62,10 @@ export type ConversationDeliveryStoreScope = {
   storePath?: string;
 };
 
-type ConversationDeliveryRow = {
+type ConversationDeliveryRow = Selectable<
+  OpenClawAgentKyselyDatabase["conversation_deliveries"]
+> & {
   channel: string;
-  conversation_id: string;
-  created_at: number;
-  message_hash: string;
-  operation_kind: string;
-  operation_id: string;
-  platform_message_id: string | null;
-  prepared_message_id: string | null;
-  queue_id: string | null;
-  rejection_error: string | null;
-  reply_message_id: string | null;
-  reply_text: string | null;
-  reply_thread_id: string | null;
-  reply_timestamp: number | null;
-  reply_to_id: string | null;
-  source_session_key: string | null;
-  status: string;
-  updated_at: number;
 };
 
 function resolveDatabaseOptions(scope: ConversationDeliveryStoreScope) {
@@ -230,6 +229,52 @@ export function getConversationDeliveryOperation(
   return record;
 }
 
+/** Reads optional presentation only; callers retain receipt and live-owner checks. */
+export function getConversationProgressSnapshot(
+  scope: ConversationDeliveryStoreScope,
+  operationId: string,
+): ChannelProgressDraftCompositorSnapshot | undefined {
+  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
+  const db = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
+  const row = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("cache_entries")
+      .select("value_json")
+      .where("scope", "=", "conversation-progress")
+      .where("key", "=", normalizeOperationId(operationId)),
+  ).rows[0];
+  return parseConversationProgressSnapshot(row?.value_json);
+}
+
+function writeConversationProgressSnapshot(
+  database: OpenClawAgentDatabase,
+  operationId: string,
+  valueJson: string,
+  updatedAt: number,
+): void {
+  const db = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("cache_entries")
+      .values({
+        scope: "conversation-progress",
+        key: operationId,
+        value_json: valueJson,
+        blob: null,
+        expires_at: null,
+        updated_at: updatedAt,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["scope", "key"]).doUpdateSet({
+          value_json: valueJson,
+          updated_at: updatedAt,
+        }),
+      ),
+  );
+}
+
 /** Creates one idempotent delivery operation or returns its authoritative prior state. */
 export function beginConversationDeliveryOperation(
   scope: ConversationDeliveryStoreScope,
@@ -280,6 +325,114 @@ export function beginConversationDeliveryOperation(
     },
     resolveDatabaseOptions(scope),
     { operationLabel: "conversation-delivery.begin" },
+  );
+}
+
+/** Records positive message identity and its desired presentation in one guarded write. */
+export function recordConversationProgressReceipt(
+  scope: ConversationDeliveryStoreScope,
+  params: {
+    operationId: string;
+    conversationRef: string;
+    sourceSessionKey: string;
+    message: string;
+    platformMessageId: string;
+    progressSnapshot: ChannelProgressDraftCompositorSnapshot;
+    assertCurrent: () => void;
+  },
+): void {
+  const operationId = normalizeOperationId(params.operationId);
+  const sourceSessionKey = params.sourceSessionKey.trim();
+  const platformMessageId = params.platformMessageId.trim();
+  if (!sourceSessionKey || !platformMessageId) {
+    throw new ConversationDeliveryInputError(
+      "Conversation progress receipt requires a source session and platform message id",
+    );
+  }
+  const messageHash = hashMessage(params.message);
+  const progressSnapshotJson = serializeConversationProgressSnapshot(params.progressSnapshot);
+  runOpenClawAgentWriteTransaction(
+    (database) => {
+      const current = selectOperation(database, operationId);
+      if (current) {
+        assertConversationDeliveryInput(current, { ...params, operationKind: "send" }, messageHash);
+        if (
+          (current.platformMessageId && current.platformMessageId !== platformMessageId) ||
+          (current.preparedMessageId && current.preparedMessageId !== platformMessageId) ||
+          !["created", "queued", "sent", "replied"].includes(current.status)
+        ) {
+          throw new ConversationDeliveryInputError(
+            `Conversation progress receipt conflicts with existing delivery: ${operationId}`,
+          );
+        }
+      }
+      const db = getSessionKysely(database.db);
+      const now = Date.now();
+      params.assertCurrent();
+      if (current) {
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .updateTable("conversation_deliveries")
+            .set({
+              status: current.status === "replied" ? "replied" : "sent",
+              platform_message_id: platformMessageId,
+              updated_at: now,
+            })
+            .where("operation_id", "=", operationId),
+        );
+      } else {
+        executeSqliteQuerySync(
+          database.db,
+          db.insertInto("conversation_deliveries").values({
+            operation_id: operationId,
+            operation_kind: "send",
+            conversation_id: params.conversationRef,
+            source_session_key: sourceSessionKey,
+            message_hash: messageHash,
+            status: "sent",
+            platform_message_id: platformMessageId,
+            created_at: now,
+            updated_at: now,
+          }),
+        );
+      }
+      writeConversationProgressSnapshot(database, operationId, progressSnapshotJson, now);
+    },
+    resolveDatabaseOptions(scope),
+    { operationLabel: "conversation-delivery.progress-receipt" },
+  );
+}
+
+/** Saves desired display state, not evidence that an edit was delivered or work completed. */
+export function updateConversationProgressSnapshot(
+  scope: ConversationDeliveryStoreScope,
+  params: {
+    operationId: string;
+    progressSnapshot: ChannelProgressDraftCompositorSnapshot;
+    assertCurrent: () => void;
+  },
+): void {
+  const operationId = normalizeOperationId(params.operationId);
+  const progressSnapshotJson = serializeConversationProgressSnapshot(params.progressSnapshot);
+  runOpenClawAgentWriteTransaction(
+    (database) => {
+      const current = selectOperation(database, operationId);
+      if (!current) {
+        throw new ConversationDeliveryMissingError(
+          `Conversation delivery operation not found: ${operationId}`,
+        );
+      }
+      if (!current.platformMessageId || !["sent", "replied"].includes(current.status)) {
+        throw new ConversationDeliveryInputError(
+          `Conversation progress snapshot requires an identified sent receipt: ${operationId}`,
+        );
+      }
+      params.assertCurrent();
+      writeConversationProgressSnapshot(database, operationId, progressSnapshotJson, Date.now());
+    },
+    resolveDatabaseOptions(scope),
+    { operationLabel: "conversation-delivery.progress-snapshot" },
   );
 }
 

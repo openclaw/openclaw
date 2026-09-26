@@ -341,19 +341,11 @@ export class SidebarSessionNarrationController {
     if (deltaText) {
       if (messageText) {
         const appends = consumed > 0 && messageText.length - deltaText.length === consumed;
-        if (appends) {
-          this.publishText(key, {
-            streamLength: messageText.length,
-            fragment: deltaText,
-            reset: false,
-          });
-        } else {
-          this.publishText(key, {
-            streamLength: messageText.length,
-            fragment: messageText,
-            reset: true,
-          });
-        }
+        this.publishText(key, {
+          streamLength: messageText.length,
+          fragment: appends ? deltaText : messageText,
+          reset: !appends,
+        });
       } else if (consumed > 0) {
         this.publishText(key, {
           streamLength: consumed + deltaText.length,
@@ -538,14 +530,7 @@ export class SidebarSessionNarrationController {
     const record = payload as Record<string, unknown>;
     const key = this.matchingDesiredKey(record.sessionKey, record.agentId);
     const runId = typeof record.runId === "string" ? record.runId.trim() : "";
-    if (
-      !key ||
-      !runId ||
-      typeof record.headline !== "string" ||
-      typeof record.health !== "string" ||
-      typeof record.updatedAt !== "number" ||
-      typeof record.revision !== "number"
-    ) {
+    if (!key || !runId) {
       return;
     }
     const digest = { ...record, runId };

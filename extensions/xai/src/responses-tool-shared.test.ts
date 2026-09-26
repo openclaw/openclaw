@@ -106,20 +106,49 @@ describe("xai responses tool helpers", () => {
     });
   });
 
-  it("prefers explicit top-level citations when present", () => {
-    expect(
-      requireXaiResponseTextAndCitations(
-        {
-          output_text: "Done",
-          citations: ["https://example.com/b"],
-        },
-        "xAI tool failed",
-      ),
-    ).toEqual({
-      content: "Done",
-      citations: ["https://example.com/b"],
-    });
-  });
+  it.each([
+    { name: "absent", citations: undefined, expected: ["https://example.com/annotation"] },
+    { name: "empty", citations: [], expected: ["https://example.com/annotation"] },
+    {
+      name: "invalid",
+      citations: ["not a URL", "javascript:alert(1)"],
+      expected: ["https://example.com/annotation"],
+    },
+    {
+      name: "valid, ordered, and deduplicated",
+      citations: [
+        "not a URL",
+        "https://example.com/b",
+        "https://example.com/b",
+        "https://example.com/a",
+      ],
+      expected: ["https://example.com/b", "https://example.com/a"],
+    },
+    {
+      name: "valid only beyond scan limit",
+      citations: [...Array<string>(1_000).fill("not a URL"), "https://example.com/b"],
+      expected: ["https://example.com/annotation"],
+    },
+  ])(
+    "selects valid explicit citations or retained annotations: $name",
+    ({ citations, expected }) => {
+      expect(
+        requireXaiResponseTextAndCitations(
+          {
+            output: [
+              {
+                type: "output_text",
+                text: "Done",
+                annotations: [{ type: "url_citation", url: "https://example.com/annotation" }],
+              },
+            ],
+            citations,
+          },
+          "xAI tool failed",
+        ),
+      ).toEqual({ content: "Done", citations: expected });
+    },
+  );
 
   it("rejects hostile citation URLs and preserves the first 20 distinct valid sources", () => {
     const annotations = Array.from({ length: 150_000 }, () => ({

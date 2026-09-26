@@ -642,6 +642,66 @@ describe("qa suite runtime agent session helpers", () => {
     });
   });
 
+  it("counts Code Mode nested tool activity as the target tool's completed result", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-nested-tool-");
+    const sessionKey = "agent:qa:nested-tool";
+    const sessionId = "session-nested-tool";
+    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    const execCallId = "call_mock_exec_1|fc_mock_exec_1";
+    const nestedActivity = (toolCallId: string, isError: boolean) => ({
+      role: "custom",
+      customType: "openclaw.nested-tool.v1",
+      display: true,
+      excludeFromContext: true,
+      content: "",
+      details: {
+        runId: "run-1",
+        scopeId: "scope-1",
+        afterEntryId: null,
+        startOrder: 0,
+        parentToolCallId: execCallId,
+        toolCallId,
+        toolName: "web_fetch",
+        input: { url: "https://example.com/" },
+        result: { content: [{ type: "text", text: "{}" }] },
+        isError,
+        startedAt: 100,
+        timestamp: 150,
+      },
+      timestamp: 150,
+    });
+    for (const message of [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: execCallId, name: "exec", arguments: { code: "" } }],
+      },
+      nestedActivity("nested-ok", false),
+      nestedActivity("nested-failed", true),
+      {
+        role: "toolResult",
+        toolCallId: execCallId,
+        toolName: "exec",
+        content: [{ type: "text", text: '{"status":"completed"}' }],
+        isError: false,
+        timestamp: 200,
+      },
+    ]) {
+      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+    }
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey),
+    ).resolves.toMatchObject({
+      assistantToolCallCounts: { exec: 1, web_fetch: 2 },
+      completedToolCallCounts: { exec: 1, web_fetch: 2 },
+      successfulToolCallCounts: { exec: 1, web_fetch: 1 },
+      successfulToolCallEvents: [
+        { name: "web_fetch", timestamp: 150, toolCallId: "nested-ok" },
+        { name: "exec", timestamp: 200, toolCallId: execCallId },
+      ],
+    });
+  });
+
   it("matches pending Code Mode waits to the exec checkpoint that created their run", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-code-mode-wait-");
     const sessionKey = "agent:qa:code-mode-wait";

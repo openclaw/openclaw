@@ -1,4 +1,3 @@
-// Line plugin module implements media control cards behavior.
 import { postbackAction, truncateLineActionLabel } from "../actions.js";
 import type {
   FlexBox,

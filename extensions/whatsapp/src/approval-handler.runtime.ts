@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements approval handler behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelApprovalExpiredText,

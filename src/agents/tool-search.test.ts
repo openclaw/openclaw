@@ -1124,21 +1124,21 @@ describe("Tool Search", () => {
       agentId: "openclaw",
       denyOpenClaw: false,
       expected:
-        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
+        "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell.",
     },
     {
       scenario: "policy removed delegation",
       agentId: "main",
       denyOpenClaw: true,
       expected:
-        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
+        "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell.",
     },
     {
       scenario: "delegation remains authorized",
       agentId: "main",
       denyOpenClaw: false,
       expected:
-        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell. Other system changes: use openclaw tool.",
+        "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell. Other system changes: use openclaw tool.",
     },
   ])(
     "keeps gateway guidance consistent across final and deferred surfaces when $scenario",
@@ -2211,7 +2211,6 @@ describe("Tool Search", () => {
 
       expect(rejection).toBeInstanceOf(Error);
       const message = (rejection as Error).message;
-      expect(message).toContain("SECURITY NOTICE:");
       expect(message).toContain("EXTERNAL_UNTRUSTED_CONTENT");
       expect(message).not.toContain("<|endoftext|>");
       expect(formatToolExecutionErrorMessage(rejection, "fallback")).not.toContain("<|endoftext|>");
@@ -2251,7 +2250,7 @@ describe("Tool Search", () => {
 
     expect(networkResult).toMatchObject({
       status: "rejected",
-      reason: { message: expect.stringContaining("SECURITY NOTICE:") },
+      reason: { message: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT") },
     });
     expect(localResult).toMatchObject({
       status: "rejected",
@@ -2370,7 +2369,7 @@ describe("Tool Search", () => {
       const details = resultDetails(result) as { status: string; error: string };
 
       expect(details.status).toBe("error");
-      expect(details.error).toContain("SECURITY NOTICE:");
+      expect(details.error).toContain("EXTERNAL_UNTRUSTED_CONTENT");
       expect(details.error).not.toContain("<|endoftext|>");
       expect(formatToolExecutionErrorMessage(rejection, "fallback")).not.toContain("<|endoftext|>");
       expect((rejection as Error & { cause?: unknown }).cause).toBeUndefined();
@@ -2434,7 +2433,7 @@ describe("Tool Search", () => {
       }
       expect(JSON.parse(content.text)).toEqual(details);
       if (network) {
-        expect(details.error).toContain("SECURITY NOTICE:");
+        expect(details.error).toContain("EXTERNAL_UNTRUSTED_CONTENT");
         expect(details.error).not.toContain("<|endoftext|>");
         expect(content.text).not.toContain("<|endoftext|>");
       } else {
@@ -2491,7 +2490,7 @@ describe("Tool Search", () => {
         (error: unknown) => error,
       );
 
-    expect((failure as Error).message).toContain("SECURITY NOTICE:");
+    expect((failure as Error).message).toContain("EXTERNAL_UNTRUSTED_CONTENT");
     expect(formatToolExecutionErrorMessage(failure, "fallback")).not.toContain("<|endoftext|>");
   });
 

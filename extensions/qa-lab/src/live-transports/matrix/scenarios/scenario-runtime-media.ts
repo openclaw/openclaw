@@ -1,5 +1,4 @@
 import { createQaVoicePreflightWav } from "../../../voice-preflight.fixture.js";
-// QA Lab Matrix plugin module implements scenario runtime media behavior.
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import { MATRIX_QA_MEDIA_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-contract.js";
 import {
@@ -20,7 +19,7 @@ import {
   buildMatrixReplyDetails,
   isMatrixQaExactMarkerReply,
   isMatrixQaMessageLikeKind,
-  primeMatrixQaActorCursor,
+  primeMatrixQaDriverScenarioClient,
   truncateMatrixQaPreview,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
@@ -46,17 +45,6 @@ function buildMatrixQaAttachmentDetailLines(params: {
     `${params.label} attachment filename: ${params.attachmentEvent.attachment?.filename ?? "<none>"}`,
     `${params.label} body preview: ${truncateMatrixQaPreview(params.attachmentEvent.body) ?? "<none>"}`,
   ];
-}
-
-async function primeMatrixQaDriverMediaClient(context: MatrixQaScenarioContext) {
-  return await primeMatrixQaActorCursor({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    observedEvents: context.observedEvents,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
-  });
 }
 
 function buildMatrixQaMediaTypeCoveragePrompt(params: {
@@ -92,7 +80,7 @@ async function runMatrixQaVoicePhase<T>(phase: string, task: () => Promise<T>): 
 
 export async function runImageUnderstandingAttachmentScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const triggerBody = buildMatrixQaImageUnderstandingPrompt(context.sutUserId);
   const driverEventId = await client.sendMediaMessage({
     body: triggerBody,
@@ -156,7 +144,7 @@ export async function runImageUnderstandingAttachmentScenario(context: MatrixQaS
 
 export async function runMediaTypeCoverageScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const attachments: NonNullable<MatrixQaScenarioExecution["artifacts"]>["attachments"] = [];
   const replies: NonNullable<MatrixQaScenarioExecution["artifacts"]>["replies"] = [];
   const details = [`room id: ${roomId}`];
@@ -246,7 +234,7 @@ export async function runMediaTypeCoverageScenario(context: MatrixQaScenarioCont
 
 export async function runVoicePreflightMentionScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const driverEventId = await client.sendMediaMessage({
     buffer: createQaVoicePreflightWav(),
     contentType: "audio/wav",
@@ -326,7 +314,7 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
 
 export async function runAttachmentOnlyIgnoredScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const driverEventId = await client.sendMediaMessage({
     buffer: createMatrixQaSplitColorImagePng(),
     contentType: "image/png",
@@ -372,7 +360,7 @@ export async function runAttachmentOnlyIgnoredScenario(context: MatrixQaScenario
 
 export async function runUnsupportedMediaSafeScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const token = buildMatrixQaToken("MATRIX_QA_UNSUPPORTED_MEDIA");
   const triggerBody = `${context.sutUserId} Unsupported media QA check: ignore the attached text file and reply with only this exact marker: ${token}`;
   const driverEventId = await client.sendMediaMessage({
@@ -423,7 +411,7 @@ export async function runUnsupportedMediaSafeScenario(context: MatrixQaScenarioC
 
 export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const triggerBody = buildMatrixQaImageGenerationPrompt(context.sutUserId);
   const triggerSentAt = Date.now();
   const driverEventId = await client.sendTextMessage({

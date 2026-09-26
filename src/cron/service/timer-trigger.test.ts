@@ -43,12 +43,17 @@ describe("resolveTransientCronRetryDecision", () => {
       state.store = { version: 1, jobs: [job] };
 
       const result = await executeJobCore(state, job);
-      applyJobResult(state, job, {
-        ...result,
-        executionStarted: true,
-        startedAt,
-        endedAt,
-      });
+      applyJobResult(
+        state,
+        job,
+        {
+          ...result,
+          executionStarted: true,
+          startedAt,
+          endedAt,
+        },
+        { deferredNotifications: [] },
+      );
 
       expect(job.state.lastErrorReason).toBeUndefined();
       expect(job.enabled).toBe(scheduleKind === "every");
@@ -86,12 +91,17 @@ describe("resolveTransientCronRetryDecision", () => {
         });
         state.store = { version: 1, jobs: [job] };
 
-        applyJobResult(state, job, {
-          ...(await executeJobCore(state, job)),
-          executionStarted: true,
-          startedAt,
-          endedAt,
-        });
+        applyJobResult(
+          state,
+          job,
+          {
+            ...(await executeJobCore(state, job)),
+            executionStarted: true,
+            startedAt,
+            endedAt,
+          },
+          { deferredNotifications: [] },
+        );
 
         expect(job.state.lastErrorReason).toBe("overloaded");
         expect(job.enabled).toBe(true);

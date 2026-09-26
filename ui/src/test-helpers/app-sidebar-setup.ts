@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
 import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
 import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle.ts";
 import { settleLitElements } from "./lit-settle.ts";
@@ -58,6 +58,8 @@ export function setupSidebarTest() {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
     await vi.dynamicImportSettled();
     // Removing a prompt's DOM does not settle its promise or release its reentrancy guard.
@@ -84,4 +86,18 @@ export function setupSidebarTest() {
       Reflect.deleteProperty(globalThis, "localStorage");
     }
   });
+}
+
+// jsdom does not reliably track :focus-visible across these synthetic events.
+// Model the keyboard intent requested by each fixture, only while its target
+// is actually focused. Real browser E2E owns pointer/keyboard modality proof.
+export function focusSidebarPersonWithKeyboard(target: HTMLElement): void {
+  const matches = target.matches.bind(target);
+  const keyboardFocus = vi
+    .spyOn(target, "matches")
+    .mockImplementation((selector) =>
+      selector === ":focus-visible" ? matches(":focus") : matches(selector),
+    );
+  onTestFinished(() => keyboardFocus.mockRestore());
+  target.focus();
 }

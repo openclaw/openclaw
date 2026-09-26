@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,12 +9,14 @@ import {
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { activeSessions } from "./capture.js";
+import { transcriptLibraryTimezoneEntrypoint } from "./library-timezone-runtime.test-support.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import {
   createTranscriptLibraryStoreFixture,
@@ -36,6 +39,45 @@ function fixture() {
 }
 
 describe("transcript library SQLite reads", () => {
+  it("skips empty transcription artifacts without losing pagination or rewriting the archive", async () => {
+    const { store } = fixture();
+    const target = session("transcription-artifacts");
+    await store.writeSession(target);
+    const texts = ["context:", "###", "Transcribe the audio.", "Context: ship the fix.", "はい。"];
+    for (const text of texts) {
+      await store.appendUtteranceForSession(target, { text });
+    }
+    let cursor: string | undefined;
+    const visible: string[] = [];
+    do {
+      const page = await getTranscriptLibrary(store, {
+        selector: transcriptSessionSelector(target),
+        includeUtterances: true,
+        limit: 1,
+        cursor,
+      });
+      visible.push(...(page.utterances ?? []).map((utterance) => utterance.text));
+      if (!page.nextCursor) {
+        break;
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(visible).toEqual(texts.slice(3));
+    const exported = await exportTranscriptLibrary(store, {
+      selector: transcriptSessionSelector(target),
+      format: "jsonl",
+    });
+    expect(
+      Buffer.from(exported.data, "base64")
+        .toString("utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).text),
+    ).toEqual(texts.slice(3));
+    expect(
+      (await store.readUtterancesForSession(target)).map((utterance) => utterance.text),
+    ).toEqual(texts);
+  });
   it("orders and filters stored offset dates by instant without rewriting their identities", async () => {
     const { store } = fixture();
     const rows = [
@@ -106,41 +148,14 @@ describe("transcript library SQLite reads", () => {
     { timeout: 45_000 },
     () => {
       const stateDir = tempDirs.make("transcript-library-timezone-");
-      const local = session("local", { startedAt: "2026-08-20T06:00:00" });
-      const earlier = session("earlier", { startedAt: "2026-08-20T06:30:00Z" });
-      const child = spawnNodeEvalSync(
-        `
-        import assert from "node:assert/strict";
-        import { TranscriptsStore, transcriptSessionSelector } from ${JSON.stringify(new URL("./store.ts", import.meta.url).href)};
-        import { listTranscriptLibrary } from ${JSON.stringify(new URL("./library.ts", import.meta.url).href)};
-        import { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } from ${JSON.stringify(new URL("../state/openclaw-state-db.ts", import.meta.url).href)};
-        const store = new TranscriptsStore(${JSON.stringify(path.join(stateDir, "transcripts"))});
-        const local = ${JSON.stringify(local)};
-        try {
-          await store.writeSession(local);
-          await store.writeSession(${JSON.stringify(earlier)});
-          const first = await listTranscriptLibrary(store, { limit: 1 });
-          assert.deepEqual(first.sessions.map(row => row.sessionId), ["local"]);
-          assert.equal(typeof first.nextCursor, "string");
-          const next = await listTranscriptLibrary(store, { limit: 1, cursor: first.nextCursor });
-          assert.deepEqual(next.sessions.map(row => row.sessionId), ["earlier"]);
-          assert.equal(next.nextCursor, null);
-          assert.deepEqual((await listTranscriptLibrary(store, {
-            startedAfter: "2026-08-20T06:00:00",
-            startedBefore: "2026-08-20T13:00:00.001Z",
-          })).sessions.map(row => row.sessionId), ["local"]);
-          assert.deepEqual((await listTranscriptLibrary(store, {
-            startedAfter: "2026-08-20T13:00:00.000Z",
-            startedBefore: "2026-08-20T13:00:00.001Z",
-          })).sessions.map(row => row.sessionId), ["local"]);
-          assert.deepEqual(await store.readSession(transcriptSessionSelector(local)), local);
-        } finally {
-          await closeOpenClawStateDatabaseAsync();
-          closeOpenClawStateDatabaseForTest();
-        }
-      `,
+      const child = spawnSync(
+        resolveTestNodeExecPath(),
+        [
+          ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(transcriptLibraryTimezoneEntrypoint)),
+          stateDir,
+        ],
         {
-          imports: ["tsx"],
+          encoding: "utf8",
           timeout: 30_000,
           env: {
             ...process.env,
@@ -150,6 +165,7 @@ describe("transcript library SQLite reads", () => {
           },
         },
       );
+      expect(child.error, child.stderr).toBeUndefined();
       expect(child.status, child.stderr).toBe(0);
     },
   );

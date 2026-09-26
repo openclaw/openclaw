@@ -55,6 +55,12 @@ immediately after committing the new generation. Only the recorded predecessor
 under that session key can be adopted. Native tool catalogs, connection ownership,
 and supervision checks still apply before the resumed thread executes.
 
+A successful local rewind or branch switch is a context change. It invalidates
+the old native binding as part of the transcript mutation and releases its
+subscription before returning. The next Codex turn starts a fresh native thread
+with the selected OpenClaw history; erased turns cannot return through a native
+resume. Invalid cuts and rolled-back transcript mutations preserve the binding.
+
 When OpenClaw projects an existing session's continuity into a fresh Codex
 thread, it includes saved compaction and branch summaries, even when no
 earlier user messages remain. Context-engine projections preserve those

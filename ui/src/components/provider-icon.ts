@@ -5,6 +5,7 @@
 import { html } from "lit";
 import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
+import { icons } from "./icons.ts";
 
 const PROVIDER_ICON_NAMES = new Set([
   "abacus",
@@ -92,6 +93,7 @@ const PROVIDER_ICON_NAMES = new Set([
 // Canonical provider id → icon asset name for providers whose brand mark ships
 // under a different slug than their catalog id.
 const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
+  "acp-copilot": "copilot",
   anthropic: "claude",
   "amazon-bedrock": "bedrock",
   "aws-bedrock": "bedrock",
@@ -128,7 +130,9 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
 
 // Brand display names for provider ids whose title-cased id reads wrong.
 const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
+  "acp-copilot": "GitHub Copilot CLI",
   anthropic: "Anthropic",
+  "claude-cli": "Claude CLI",
   google: "Google",
   "github-copilot": "GitHub",
   "llama-cpp": "llama.cpp",
@@ -175,6 +179,76 @@ export function hasProviderBrandIcon(provider: string): boolean {
   return resolveProviderIconName(provider) !== null;
 }
 
+type CloudProfileIdentity = { providerId: string; providerDisplayId?: string };
+
+// Cloud backends are a separate identity domain: Google Cloud is not Gemini,
+// and AWS is not Bedrock. Map lookup also keeps prototype keys on the fallback.
+const CLOUD_PROVIDERS = new Map<string, { label: string; brand?: string }>([
+  ["aws", { label: "AWS", brand: "aws" }],
+  ["azure", { label: "Azure", brand: "azure" }],
+  ["daytona", { label: "Daytona", brand: "daytona" }],
+  ["gcp", { label: "Google Cloud", brand: "gcp" }],
+  ["hetzner", { label: "Hetzner", brand: "hetzner" }],
+  ["machine0", { label: "Machine0" }],
+]);
+const CLOUD_ALIASES = new Map([
+  ["google", "gcp"],
+  ["google-cloud", "gcp"],
+  ["docker", "local-container"],
+  ["local-docker", "local-container"],
+  ["podman", "local-container"],
+  ["local-podman", "local-container"],
+]);
+
+function cloudProfileBackendId(profile?: CloudProfileIdentity): string {
+  const raw = (profile?.providerDisplayId ?? profile?.providerId ?? "").trim().toLowerCase();
+  return CLOUD_ALIASES.get(raw) ?? raw;
+}
+
+/** Known cloud services precede local/custom infrastructure, alphabetically within each group. */
+export function compareCloudProfiles(
+  left: CloudProfileIdentity & { id: string },
+  right: CloudProfileIdentity & { id: string },
+): number {
+  // Backend identity, not an editable profile name or the availability of a logo.
+  return (
+    Number(CLOUD_PROVIDERS.has(cloudProfileBackendId(right))) -
+      Number(CLOUD_PROVIDERS.has(cloudProfileBackendId(left))) || left.id.localeCompare(right.id)
+  );
+}
+
+/** One presentation resolver for cloud triggers, menus, and move-session rows. */
+export function resolveCloudProfileIcon(profile?: CloudProfileIdentity) {
+  const id = cloudProfileBackendId(profile);
+  const brand = CLOUD_PROVIDERS.get(id);
+  const label =
+    brand?.label ?? (profile?.providerDisplayId ?? profile?.providerId ?? "").trim().toLowerCase();
+  const icon = brand?.brand
+    ? renderBrandIcon(
+        inferControlUiPublicAssetPath(`cloud-provider-icons/${brand.brand}.svg`),
+        brand.brand,
+        "cloud-provider-icon",
+      )
+    : id === "machine0" || id === "incus"
+      ? icons.server
+      : id === "local-container"
+        ? icons.box
+        : icons.cloud;
+  return {
+    label,
+    icon: html`<span class="cloud-profile-icon" aria-hidden="true">${icon}</span>`,
+  };
+}
+
+function renderBrandIcon(assetPath: string, icon: string, className = "") {
+  return html`<span
+    class="provider-brand-icon ${className}"
+    data-provider-icon=${icon}
+    style=${`--provider-icon-url: url("${assetPath}")`}
+    aria-hidden="true"
+  ></span>`;
+}
+
 function providerIconAssetPath(icon: string): string {
   return inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${icon}.svg`);
 }
@@ -203,12 +277,5 @@ export function renderProviderBrandIcon(provider: string, options?: { className?
   if (!icon) {
     return renderProviderFallbackIcon(provider, options);
   }
-  return html`
-    <span
-      class="provider-brand-icon${surfaceClass}"
-      data-provider-icon=${icon}
-      style=${`--provider-icon-url: url("${providerIconAssetPath(icon)}")`}
-      aria-hidden="true"
-    ></span>
-  `;
+  return renderBrandIcon(providerIconAssetPath(icon), icon, surfaceClass.trim());
 }

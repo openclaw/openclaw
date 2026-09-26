@@ -66,7 +66,7 @@ vi.mock("../commands-text-routing.js", () => ({
   shouldHandleTextCommands: (...args: unknown[]) => textRoutingMocks.shouldHandle(...args),
 }));
 vi.mock("../../skills/discovery/chat-commands.runtime.js", () => ({
-  listSkillCommandsForWorkspace: (...args: unknown[]) =>
+  prepareSkillCommandsForWorkspace: (...args: unknown[]) =>
     skillCommandMocks.listForWorkspace(...args),
 }));
 
@@ -419,7 +419,6 @@ describe("reply directive resolution", () => {
       }),
       blockStreamingEnabled: result.result.blockStreamingEnabled,
       blockReplyPipeline: null,
-      directlySentBlockKeys: new Set(),
       directBlockDeliveries: [],
     });
     const { emit, subscription } = createSubscribedSessionHarness({

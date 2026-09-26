@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
+import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const WORKFLOW = ".github/workflows/openclaw-performance.yml";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -225,7 +226,7 @@ describe("OpenClaw performance workflow", () => {
       default: "kova",
       required: false,
       type: "choice",
-      options: ["kova", "vitest-pair"],
+      options: ["kova", "vitest-pair", "gateway-concurrency"],
     });
     expect(inputs?.baseline_ref).toMatchObject({
       default: "",
@@ -235,7 +236,7 @@ describe("OpenClaw performance workflow", () => {
     expect(benchmark?.if).toBe(
       "${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}",
     );
-    expect(benchmark?.["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(benchmark?.["runs-on"])).toBe("ubuntu-24.04");
     expect(benchmark?.["timeout-minutes"]).toBe(180);
     expect(benchmark?.permissions).toEqual({ contents: "read" });
     expect(JSON.stringify(benchmark)).not.toContain("secrets.");
@@ -324,9 +325,9 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "c2de7c24ea835ea054c416f8bf19d3cb22f104e9";
-    const legacyKovaRef = "c2de7c24ea835ea054c416f8bf19d3cb22f104e9";
-    const trustedLiveKovaRef = "c2de7c24ea835ea054c416f8bf19d3cb22f104e9";
+    const canonicalKovaRef = "14d7413dfc0f2b79c771dad83aca6d99413182bd";
+    const legacyKovaRef = "14d7413dfc0f2b79c771dad83aca6d99413182bd";
+    const trustedLiveKovaRef = "14d7413dfc0f2b79c771dad83aca6d99413182bd";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -495,6 +496,13 @@ describe("OpenClaw performance workflow", () => {
         expectedContract: "legacy-list",
         expectedRef: "18c9eb8c3950a35794d196f4e40ad471e9308e27",
       },
+      {
+        name: "extended-stable correction pin",
+        schema: legacy,
+        version: "2026.7.34",
+        expectedContract: "legacy-list",
+        expectedRef: "18c9eb8c3950a35794d196f4e40ad471e9308e27",
+      },
     ];
     posixIt.each(cases)("resolves $name without executing target metadata", (fixture) => {
       const { outputs, result, sha } = runTargetMetadataResolution(fixture);
@@ -529,7 +537,7 @@ describe("OpenClaw performance workflow", () => {
       expect(outputs).toMatchObject({
         checkout_ref: sha,
         tested_sha: sha,
-        kova_ref: "c2de7c24ea835ea054c416f8bf19d3cb22f104e9",
+        kova_ref: "14d7413dfc0f2b79c771dad83aca6d99413182bd",
         kova_config_contract: "canonical",
       });
     });
@@ -780,12 +788,12 @@ describe("OpenClaw performance workflow", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const installRun = findStep("Install OCM and Kova").run ?? "";
 
-    expect(workflow).toContain("OCM_VERSION: v0.2.33");
+    expect(workflow).toContain("OCM_VERSION: v0.2.47");
     expect(workflow).toContain(
-      "OCM_LINUX_X64_SHA256: 06b0e46791e750eb044e4a898b6643ad5e7b20224fe0c64f160e35a42f08d00a",
+      "OCM_LINUX_X64_SHA256: 05e0bb598fe391c75fe7668e159d7eb09168b4298b5d8d0999786e79e97d0642",
     );
     expect(installRun).toContain(
-      '"https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
+      '"https://github.com/openclaw/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
     );
     expect(installRun).toContain("--max-time 180");
     expect(installRun).toContain(
@@ -974,9 +982,9 @@ describe("OpenClaw performance workflow", () => {
 
     expect(publisher?.needs).toEqual(["resolve_target", "kova", "source_performance"]);
     expect(publisher?.if).toBe(
-      "${{ always() && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}",
+      "${{ always() && (github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency')) && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}",
     );
-    expect(publisher?.["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(publisher?.["runs-on"])).toBe("ubuntu-24.04");
     expect(publisher?.permissions?.actions).toBe("read");
     expect(publisher?.env?.REPORT_PUBLISH_REQUIRED).toBe(
       "${{ github.event_name == 'schedule' || inputs.profile == 'release' }}",
@@ -1016,7 +1024,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(guard?.needs).toEqual(["resolve_target", "kova", "publish"]);
     expect(guard?.if).toBe(
-      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.publish_reports != true }}",
+      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency' && inputs.publish_reports != true }}",
     );
     expect(guard?.permissions?.contents).toBe("read");
     expect(verify.env?.PUBLISH_RESULT).toBe("${{ needs.publish.result }}");

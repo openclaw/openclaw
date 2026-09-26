@@ -10,7 +10,7 @@ describe("splitMediaFromOutput", () => {
   function expectParsedMediaOutputCase(
     input: string,
     expected: {
-      mediaUrls?: string[];
+      mediaUrls?: readonly string[];
       text?: string;
       audioAsVoice?: boolean;
     },
@@ -63,7 +63,9 @@ describe("splitMediaFromOutput", () => {
     ["/tmp/album.v1/photo.png copy.png", "MEDIA:/tmp/album.v1/photo.png copy.png"],
     ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
     ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
+    ["./screenshot.png", " MEDIA:./screenshot.png"],
     ["./screenshot.png", "  MEDIA:./screenshot.png"],
+    ["./screenshot.png", "   MEDIA:./screenshot.png"],
     ["~/Pictures/My File.png", "MEDIA:~/Pictures/My File.png"],
     ["~/.openclaw/media/browser/snap.png", "MEDIA:~/.openclaw/media/browser/snap.png"],
     ["C:\\Users\\pete\\Pictures\\snap.png", "MEDIA:C:\\Users\\pete\\Pictures\\snap.png"],
@@ -248,6 +250,11 @@ describe("splitMediaFromOutput", () => {
       expected: { audioAsVoice: true, text: "Hello world" },
     },
     {
+      name: "extracts an indented paragraph continuation outside a code block",
+      input: "Caption\n    MEDIA:https://example.com/a.png",
+      expected: { text: "Caption", mediaUrls: ["https://example.com/a.png"] },
+    },
+    {
       name: "keeps MEDIA mentions in prose",
       input: "The MEDIA: tag fails to deliver",
       expected: { mediaUrls: undefined, text: "The MEDIA: tag fails to deliver" },
@@ -326,28 +333,49 @@ describe("splitMediaFromOutput", () => {
   it.each([
     {
       name: "a marker carrying trailing text",
+      separator: "\n",
       lines: ["```python", "value = 'a  b'", "``` not a close", "other = 'c  d'", "```"],
     },
     {
       name: "an unclosed fence",
+      separator: "\n",
       lines: ["```python", "value = 'a  b'", "other = 'c  d'"],
     },
     {
       name: "an indented closing fence",
+      separator: "\n",
       lines: ["```python", "value = 'a  b'", "   ```"],
     },
-  ])("preserves canonical code fences with $name", ({ lines }) => {
+    {
+      name: "a four-space indented block",
+      separator: "\n\n",
+      lines: ["    MEDIA:https://example.com/literal.png", "    literal = 'a  b'"],
+    },
+    {
+      name: "an indented block inside a list",
+      separator: "\n\n",
+      lines: ["- Example", "", "      MEDIA:https://example.com/literal.png"],
+    },
+    {
+      name: "a tab-indented block",
+      separator: "\n\n",
+      lines: ["\tMEDIA:https://example.com/literal.png", "\tliteral = 'a  b'"],
+    },
+  ])("preserves canonical code examples with $name", ({ lines, separator }) => {
     const code = lines.join("\n");
 
-    expectParsedMediaOutputCase(`MEDIA:https://example.com/a.png\n${code}`, {
+    expectParsedMediaOutputCase(`MEDIA:https://example.com/a.png${separator}${code}`, {
       text: code,
       mediaUrls: ["https://example.com/a.png"],
     });
-    expectParsedMediaOutputCase(`[[audio_as_voice]]\nMEDIA:https://example.com/a.png\n${code}`, {
-      text: code,
-      mediaUrls: ["https://example.com/a.png"],
-      audioAsVoice: true,
-    });
+    expectParsedMediaOutputCase(
+      `[[audio_as_voice]]\nMEDIA:https://example.com/a.png${separator}${code}`,
+      {
+        text: code,
+        mediaUrls: ["https://example.com/a.png"],
+        audioAsVoice: true,
+      },
+    );
   });
 
   const extractMarkdownImages = { extractMarkdownImages: true } as const;

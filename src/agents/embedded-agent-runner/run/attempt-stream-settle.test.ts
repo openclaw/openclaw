@@ -3,24 +3,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveProviderContext,
-  type ProviderStreamOptions,
-} from "../../../../packages/ai/src/provider-types.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
-import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
-import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
-import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { prepareTaskRegistryRead } from "../../../tasks/task-registry-read.js";
+import { createTaskFixture } from "../../../tasks/task-registry.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
-import type { StreamFn } from "../../runtime/index.js";
+import { holdStateDatabaseCoordinator } from "../../../test-utils/state-database-contention.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -29,9 +25,7 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/index.js";
-import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
-import { testing as extraParamsTesting } from "../extra-params.test-support.js";
 import { log } from "../logger.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -43,25 +37,10 @@ import {
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
-import {
-  prepareEmbeddedAttemptTransport,
-  settleEmbeddedAttemptStream,
-} from "./attempt-stream-settle.js";
+import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 
-const registerProviderStreamForModel = vi.hoisted(() => vi.fn());
-
-vi.mock("../../provider-stream.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../provider-stream.js")>()),
-  registerProviderStreamForModel,
-}));
-
 type SettleInput = Parameters<typeof settleEmbeddedAttemptStream>[0];
-type PrepareTransportInput = Parameters<typeof prepareEmbeddedAttemptTransport>[0];
-const MP4 = Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex");
-const admittedRunContext = {
-  operationalRunInstance: createOperationalRunInstanceRef("test-run"),
-};
 
 function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
   const sessionManager = SessionManager.inMemory();
@@ -126,24 +105,99 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     vi.useRealTimers();
   });
 
-  it("settles past a block-reply flush that never resolves", async () => {
+  it.each([
+    { withMetadata: true, timedOut: false },
+    { withMetadata: false, timedOut: false },
+    { withMetadata: true, timedOut: true },
+  ])(
+    "settles cancellation while task persistence is held, metadata=$withMetadata timeout=$timedOut",
+    async ({ withMetadata, timedOut }) => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const sessionKey = "agent:main:cron:settle:run:private-cancel";
+        const task = createTaskFixture("subagent", {
+          runId: "private-stream-cancel",
+          task: "Private stream cancellation proof",
+          ownerKey: sessionKey,
+          requesterSessionKey: sessionKey,
+          taskKind: "image_generation",
+          childSessionKey: "agent:main:subagent:private-stream-cancel",
+          notifyPolicy: "silent",
+          deliveryStatus: "not_applicable",
+        });
+        await prepareTaskRegistryRead();
+        const context = captureOpenClawStateWorkerContext();
+        expect(context.admission.databasePath.startsWith(state.stateDir)).toBe(true);
+        const holder = holdStateDatabaseCoordinator(
+          context.admission.databasePath,
+          context.coordinatorRuntime,
+          300,
+        );
+        const controller = new AbortController();
+        const input = createSettleFixture({
+          runAbortSignal: controller.signal,
+          readLifecycleState: () => ({
+            aborted: controller.signal.aborted,
+            timedOut: timedOut && controller.signal.aborted,
+            timedOutDuringCompaction: false,
+          }),
+        });
+        input.attempt.sessionKey = sessionKey;
+        input.subscription.toolMetas = withMetadata
+          ? [{ toolName: "image_generate", asyncStarted: true, asyncTaskRunId: task.runId }]
+          : [];
+        let settlement: ReturnType<typeof settleEmbeddedAttemptStream> | undefined;
+        try {
+          await holder.ready;
+          emitAgentEvent({
+            runId: task.runId!,
+            stream: "lifecycle",
+            data: { phase: "end", endedAt: task.createdAt + 1 },
+          });
+          settlement = settleEmbeddedAttemptStream(input);
+          await setImmediate();
+          controller.abort();
+          const result = await settlement;
+          expect(result.promptError).toBeNull();
+          expect(result.sessionIdUsed).toBe("sess-settle-1");
+          expect(
+            Atomics.load(holder.released, 0),
+            "full cancellation settlement must finish before coordinator release",
+          ).toBe(0);
+          holder.release();
+          const read = await prepareTaskRegistryRead();
+          expect(read?.getTaskById(task.taskId)).toMatchObject({ status: "succeeded" });
+        } finally {
+          holder.release();
+          await holder.joined;
+          await Promise.allSettled([settlement]);
+          await closeOpenClawStateDatabaseAsync();
+        }
+      });
+    },
+  );
+
+  it("settles past a held block-reply flush", async () => {
     vi.useFakeTimers();
     // A wedged delivery lane (including the supported blockReplyTimeoutMs: 0
     // path) previously parked settlement until the 48h run budget.
-    const input = createSettleFixture({
-      onBlockReplyFlush: () => new Promise<never>(() => {}),
-    } as Partial<SettleInput>);
+    const release = createDeferredCore();
+    const input = createSettleFixture({ onBlockReplyFlush: () => release.promise });
 
-    const settle = settleEmbeddedAttemptStream(input);
     let settled = false;
-    void settle.then(() => {
+    const settle = settleEmbeddedAttemptStream(input).then((result) => {
       settled = true;
+      return result;
     });
-    await vi.advanceTimersByTimeAsync(RUN_LIVENESS_JOIN_TIMEOUT_MS - 1);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    const result = await settle;
-    expect(result.sessionIdUsed).toBe("sess-settle-1");
+    try {
+      await vi.advanceTimersByTimeAsync(RUN_LIVENESS_JOIN_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await settle;
+      expect(result.sessionIdUsed).toBe("sess-settle-1");
+    } finally {
+      release.resolve();
+      await settle;
+    }
   });
 
   it("keeps the last request observation separate from billing totals", async () => {
@@ -200,6 +254,12 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       const originalEntries = sessionManager.getEntries();
       const controller = new AbortController();
       const promptError = new Error("synthetic provider failure");
+      const assistant = createAssistant(
+        testModel,
+        [{ type: "text", text: "partial reply" }],
+        "error",
+      );
+      const usage = { input: 100, output: 20 };
       const input = createSettleFixture({
         sessionManager,
         runAbortSignal: controller.signal,
@@ -209,6 +269,8 @@ describe("settleEmbeddedAttemptStream liveness", () => {
           timedOutDuringCompaction: false,
         }),
       });
+      input.activeSession.messages.push(assistant);
+      input.subscription.getUsageTotals = () => usage;
       input.attempt = {
         ...input.attempt,
         ...target,
@@ -262,13 +324,16 @@ describe("settleEmbeddedAttemptStream liveness", () => {
         if (heldWriter) {
           await setImmediate();
           expect(settled).toBe(false);
-          controller.abort();
+          controller.abort(new Error("synthetic cancellation"));
           release.resolve();
           await heldWriter;
         }
         const result = await settlement;
         expect(result.promptError).toBe(promptError);
         expect(result.promptErrorSource).toBe("prompt");
+        expect(result.messagesSnapshot).toEqual([assistant]);
+        expect(result.currentAttemptAssistant).toBe(assistant);
+        expect(result.attemptUsage).toEqual(usage);
         const entries = SessionManager.open(target, state.workspaceDir).getEntries();
         if (scenario === "active provider failure") {
           expect(entries).toHaveLength(originalEntries.length + 1);
@@ -475,347 +540,8 @@ describe("attempt projection persistence through settlement", () => {
       }
     } finally {
       clearEmbeddedSessionPromptStates([scope.sessionId]);
+      await closeOpenClawAgentDatabasesAsync(dir);
       await fs.rm(dir, { recursive: true, force: true });
     }
-  });
-});
-
-function createTransportFixture(testCase: {
-  compaction: boolean;
-  pruning: boolean;
-  apiKey: string;
-  baseUrl?: string;
-}) {
-  const streamFn = vi.fn<StreamFn>();
-  bindStreamLlmRuntime(streamFn, {
-    streamSimple: streamFn,
-    registry: { getApiProvider: () => undefined },
-  } as never);
-  const session = {
-    agent: {
-      streamFn,
-      transport: "auto",
-    },
-  };
-  const input = {
-    attempt: {
-      config: {
-        agents: {
-          defaults: { contextPruning: { mode: testCase.pruning ? "cache-ttl" : "off" } },
-        },
-      },
-      model: {
-        api: "anthropic-messages",
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        baseUrl: testCase.baseUrl ?? "https://api.anthropic.com",
-      },
-      modelId: "claude-sonnet-4-6",
-      provider: "anthropic",
-      promptCacheKey: undefined,
-      resolvedApiKey: undefined,
-      authStorage: { getApiKey: async () => testCase.apiKey },
-      runId: "run-transport-1",
-      admittedRunContext,
-      runtimePlan: {
-        auth: { forwardedAuthProfileId: undefined },
-        transport: {
-          resolveExtraParams: () => ({
-            transport: "sse",
-            anthropicServerCompaction: testCase.compaction,
-          }),
-        },
-      },
-      sessionId: "sess-transport-1",
-    },
-    session,
-    settingsManager: {
-      getGlobalSettings: () => ({}),
-      getProjectSettings: () => ({}),
-    },
-    providerThinkingLevel: undefined,
-    sessionAgentId: "main",
-    workspaceDir: "/workspace",
-    workspaceOnly: false,
-    agentDir: "/agent",
-    abortSignal: new AbortController().signal,
-    getProviderRuntimeHandle: () => ({
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-    }),
-    sandboxSessionKey: "agent:main:test",
-    codeModeControlsEnabled: false,
-    providerPromptState: {
-      state: {},
-      effectiveContextTokenBudget: 128_000,
-    },
-  } as unknown as PrepareTransportInput;
-  return { input, session, streamFn };
-}
-
-describe("prepareEmbeddedAttemptTransport", () => {
-  beforeEach(() => {
-    // These cases own prepared auth/config, not runtime plugin discovery.
-    extraParamsTesting.setProviderRuntimeDepsForTest({ wrapProviderStreamFn: () => undefined });
-  });
-  afterEach(() => {
-    extraParamsTesting.resetProviderRuntimeDepsForTest();
-    registerProviderStreamForModel.mockReset();
-  });
-
-  it.each([
-    {
-      compaction: true,
-      apiKey: "test-api-key",
-      replayEnabled: true,
-      pruning: false,
-      clearing: false,
-    },
-    {
-      compaction: true,
-      apiKey: "test-sk-ant-oat-oauth",
-      replayEnabled: false,
-      pruning: true,
-      clearing: false,
-    },
-    {
-      compaction: false,
-      apiKey: "test-api-key",
-      replayEnabled: false,
-      pruning: true,
-      clearing: true,
-    },
-    {
-      compaction: true,
-      apiKey: "test-api-key",
-      replayEnabled: true,
-      pruning: true,
-      clearing: true,
-    },
-    {
-      compaction: false,
-      apiKey: "test-api-key",
-      replayEnabled: false,
-      pruning: true,
-      clearing: false,
-      baseUrl: "https://proxy.example.test/anthropic",
-    },
-  ])("prepares transport and replay from resolved auth/config: %j", async (testCase) => {
-    const { input, session } = createTransportFixture(testCase);
-
-    const result = await prepareEmbeddedAttemptTransport(input);
-
-    expect(result.effectiveAgentTransport).toBe("sse");
-    expect(session.agent.transport).toBe("sse");
-    expect(result.compactionReplayEnabled).toBe(testCase.replayEnabled);
-    expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
-  });
-
-  describe.each([false, true])("with code mode enabled: %s", (codeModeControlsEnabled) => {
-    it.each([
-      { label: "foreground", toolExecutionAllow: undefined, expectedSearch: true },
-      { label: "skill review", toolExecutionAllow: ["skill_workshop"], expectedSearch: false },
-      { label: "explicit search", toolExecutionAllow: ["web_search"], expectedSearch: true },
-      { label: "no execution", toolExecutionAllow: [], expectedSearch: false },
-    ])("keeps $label authority on the provider payload", async (testCase) => {
-      const { input, streamFn } = createTransportFixture({
-        compaction: false,
-        pruning: false,
-        apiKey: "test-api-key",
-      });
-      input.attempt.model = {
-        ...input.attempt.model,
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://chatgpt.com/backend-api",
-      };
-      input.attempt.modelId = input.attempt.model.id;
-      input.attempt.provider = input.attempt.model.provider;
-      input.attempt.toolExecutionAllow = testCase.toolExecutionAllow;
-      input.attempt.config = {
-        auth: { profiles: { test: { provider: "openai", mode: "oauth" } } },
-        tools: { web: { search: { openaiCodex: { enabled: true } } } },
-      };
-      input.codeModeControlsEnabled = codeModeControlsEnabled;
-      extraParamsTesting.setProviderRuntimeDepsForTest({
-        wrapProviderStreamFn: ({ context }) =>
-          createCodexNativeWebSearchWrapper(context.streamFn, context),
-      });
-      const functionTools = (
-        codeModeControlsEnabled ? ["exec", "wait"] : ["read", "skill_workshop"]
-      ).map((name) => ({
-        type: "function",
-        name,
-        description: name,
-        parameters: Type.Object({}),
-      }));
-      const payload: { tools: Array<Record<string, unknown>> } = { tools: [...functionTools] };
-      const foregroundFunctionSchemas = JSON.stringify(functionTools);
-      streamFn.mockImplementation(async (model, _context, options) => {
-        await options?.onPayload?.(payload, model);
-        return createAssistantMessageEventStream();
-      });
-
-      await prepareEmbeddedAttemptTransport(input);
-      await input.session.agent.streamFn?.(
-        input.attempt.model,
-        { messages: [], tools: functionTools },
-        {},
-      );
-
-      expect(JSON.stringify(payload.tools.filter((tool) => tool.type === "function"))).toBe(
-        foregroundFunctionSchemas,
-      );
-      expect(payload.tools.some((tool) => tool.type === "web_search")).toBe(
-        testCase.expectedSearch,
-      );
-    });
-  });
-
-  it("materializes native video from the prepared session agent workspace", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transport-video-"));
-    const videoPath = path.join(workspaceDir, "history.mp4");
-    await fs.writeFile(videoPath, MP4);
-    let providerOptions: ProviderStreamOptions | undefined;
-    const providerStream = vi.fn((_model, _context, options) => {
-      providerOptions = options as ProviderStreamOptions;
-      return {} as never;
-    });
-    bindStreamLlmRuntime(providerStream, {
-      streamSimple: providerStream,
-      registry: { getApiProvider: () => undefined },
-    } as never);
-    const session = {
-      agent: {
-        streamFn: providerStream,
-        transport: "auto",
-      },
-    };
-    const model = {
-      api: "test-api",
-      provider: "test-provider",
-      id: "test-model-video",
-    };
-    registerProviderStreamForModel.mockReturnValue(providerStream);
-
-    try {
-      await prepareEmbeddedAttemptTransport({
-        attempt: {
-          config: { agents: { list: [{ id: "marketing", workspace: workspaceDir }] } },
-          model,
-          modelId: model.id,
-          provider: model.provider,
-          runId: "run-native-video",
-          admittedRunContext,
-          runtimePlan: {
-            auth: { forwardedAuthProfileId: undefined },
-            transport: { resolveExtraParams: () => ({}) },
-          },
-          sessionId: "session-native-video",
-        },
-        session,
-        settingsManager: {
-          getGlobalSettings: () => ({}),
-          getProjectSettings: () => ({}),
-        },
-        sessionAgentId: "marketing",
-        workspaceDir,
-        workspaceOnly: false,
-        agentDir: workspaceDir,
-        abortSignal: new AbortController().signal,
-        getProviderRuntimeHandle: () => ({ provider: model.provider, modelId: model.id }),
-        sandboxSessionKey: "agent:marketing:test",
-        codeModeControlsEnabled: false,
-        providerPromptState: { state: {}, effectiveContextTokenBudget: 128_000 },
-      } as unknown as PrepareTransportInput);
-      const message = attachRuntimePromptMediaFacts(
-        castAgentMessage({ role: "user", content: [{ type: "text", text: "inspect" }] }),
-        [{ kind: "video", path: videoPath, contentType: "video/mp4" }],
-      );
-      const context = { systemPrompt: "system", messages: [message], tools: [] };
-
-      session.agent.streamFn(model as never, context as never, {});
-      const provider = await resolveProviderContext(context as never, providerOptions);
-
-      expect(provider.messages[0]?.content).toEqual([
-        { type: "text", text: "inspect" },
-        { type: "video", data: MP4.toString("base64"), mimeType: "video/mp4" },
-      ]);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("records image hydration failures at the provider handoff", async () => {
-    let providerOptions: ProviderStreamOptions | undefined;
-    const providerStream = vi.fn((_model, _context, options) => {
-      providerOptions = options as ProviderStreamOptions;
-      return {} as never;
-    });
-    bindStreamLlmRuntime(providerStream, {
-      streamSimple: providerStream,
-      registry: { getApiProvider: () => undefined },
-    } as never);
-    const session = {
-      agent: { streamFn: providerStream, transport: "auto" },
-    };
-    const model = { api: "test-api", provider: "test-provider", id: "test-model-image" };
-    const onCurrentTurnImageFailure = vi.fn();
-    registerProviderStreamForModel.mockReturnValue(providerStream);
-    await prepareEmbeddedAttemptTransport({
-      attempt: {
-        config: {},
-        model,
-        modelId: model.id,
-        provider: model.provider,
-        runId: "run-native-image-failure",
-        admittedRunContext,
-        runtimePlan: {
-          auth: { forwardedAuthProfileId: undefined },
-          transport: { resolveExtraParams: () => ({}) },
-        },
-        sessionId: "session-native-image-failure",
-      },
-      session,
-      settingsManager: {
-        getGlobalSettings: () => ({}),
-        getProjectSettings: () => ({}),
-      },
-      onCurrentTurnImageFailure,
-      sessionAgentId: "main",
-      workspaceDir: "/tmp",
-      workspaceOnly: false,
-      agentDir: "/tmp",
-      abortSignal: new AbortController().signal,
-      getProviderRuntimeHandle: () => ({ provider: model.provider, modelId: model.id }),
-      sandboxSessionKey: "agent:main:test",
-      codeModeControlsEnabled: false,
-      providerPromptState: { state: {}, effectiveContextTokenBudget: 128_000 },
-    } as unknown as PrepareTransportInput);
-    const message = attachRuntimePromptMediaFacts(
-      castAgentMessage({
-        role: "user",
-        content: [
-          { type: "text", text: "inspect" },
-          { type: "image", data: "%%%", mimeType: "image/png" },
-        ],
-      }),
-      [{ kind: "image" }],
-      ["inline"],
-    );
-    const context = { systemPrompt: "system", messages: [message], tools: [] };
-
-    session.agent.streamFn(model as never, context as never, {});
-    const provider = await resolveProviderContext(context as never, providerOptions);
-
-    expect(onCurrentTurnImageFailure).toHaveBeenCalledWith(1);
-    expect(provider.messages[0]?.content).toEqual([
-      { type: "text", text: "inspect" },
-      {
-        type: "text",
-        text: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
-      },
-    ]);
   });
 });

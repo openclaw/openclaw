@@ -1,4 +1,5 @@
 // Synology Chat tests cover core plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -10,6 +11,7 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
+import { setSynologyRuntime } from "./runtime.js";
 import {
   authorizeUserForDmWithIngress,
   RateLimiter,
@@ -81,6 +83,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  setSynologyRuntime(createPluginRuntimeMock());
   vi.stubEnv("SYNOLOGY_CHAT_TOKEN", undefined);
   vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", undefined);
   vi.stubEnv("SYNOLOGY_NAS_HOST", undefined);

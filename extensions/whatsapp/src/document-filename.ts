@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements document filename behavior.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 
 const WHATSAPP_DEFAULT_DOCUMENT_FILE_NAME = "file";

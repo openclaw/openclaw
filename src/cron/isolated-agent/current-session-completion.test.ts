@@ -60,7 +60,6 @@ async function createCompletionFixture(state: OpenClawTestState) {
   const payload: ReplyPayload = { text: "Example report", mediaUrl: imagePath };
   const job = makeCronJob({ id: "report-job", sessionTarget: "current", sessionKey });
   const params: DispatchCronDeliveryParams = {
-    cfg,
     cfgWithAgentDefaults: cfg,
     deps: createCliDeps(),
     job,
@@ -73,7 +72,6 @@ async function createCompletionFixture(state: OpenClawTestState) {
     lifecycleRevision: "run-generation",
     sessionUpdatedAt: 1000,
     runStartedAt: 1000,
-    runEndedAt: 2000,
     timeoutMs: 30000,
     resolvedDelivery: { ok: false, mode: "implicit", error: new Error("No external channel") },
     deliveryPlan: resolveCronDeliveryPlan(job),
@@ -91,7 +89,6 @@ async function createCompletionFixture(state: OpenClawTestState) {
     deliveryPayloads: [payload],
     isAborted: () => false,
     abortReason: () => "aborted",
-    withRunSession: (result) => ({ ...result, sessionId: "report-run" }),
   };
   const records = () => listManagedImageRecordEntries({ stateDir: state.stateDir, sessionKey });
   const database = openOpenClawStateDatabase({ env: state.env });

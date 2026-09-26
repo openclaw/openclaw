@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements gateway rpc client behavior.
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   GatewayClient,

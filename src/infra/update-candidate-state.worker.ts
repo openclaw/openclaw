@@ -1,4 +1,5 @@
 import { collectErrorGraphCandidates, formatErrorMessageWithCode } from "./errors.js";
+import { createUpdateStateInspectionReporter } from "./update-candidate-state.diagnostics.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateCandidateStateInventoryInProcess,
@@ -13,31 +14,69 @@ async function snapshotCandidateState(): Promise<void> {
   for await (const chunk of process.stdin) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  // SAFETY: Only the updater's typed snapshot/versions launchers serialize this private worker's stdin.
+  // SAFETY: Only the updater's typed state inspection launchers serialize this private worker's stdin.
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as
-    | (Parameters<typeof snapshotUpdateCandidateState>[0] & { mode: "snapshot" })
+    | (Parameters<typeof snapshotUpdateCandidateState>[0] & {
+        mode: "snapshot";
+        streamProgress?: boolean;
+      })
     | (Parameters<typeof discoverUpdateStateSchemaInspectionInProcess>[0] & { mode: "discover" })
     | (Parameters<typeof readUpdateStateSchemaVersionsInProcess>[0] & { mode: "versions" })
-    | (Parameters<typeof readUpdateCandidateStateInventoryInProcess>[0] & { mode: "inventory" });
+    | (Parameters<typeof readUpdateCandidateStateInventoryInProcess>[0] & {
+        mode: "inventory";
+        streamProgress?: boolean;
+      })
+    | (Parameters<
+        typeof import("./update-database-backup.js").createUpdateDatabaseBackupInProcess
+      >[0] & { mode: "database-backup" })
+    | { mode: "database-generations"; paths: string[] };
   if (
     input.mode !== "snapshot" &&
     input.mode !== "versions" &&
     input.mode !== "inventory" &&
-    input.mode !== "discover"
+    input.mode !== "discover" &&
+    input.mode !== "database-backup" &&
+    input.mode !== "database-generations"
   ) {
     throw new Error("Unknown update state inspection mode");
   }
+  if (input.mode === "database-generations") {
+    const { readUpdateDatabaseGenerations } = await import("./update-database-generations.js");
+    process.stdout.write(JSON.stringify(readUpdateDatabaseGenerations(input.paths)));
+    return;
+  }
   if (input.mode === "inventory") {
-    const { databases, ...inventory } = await readUpdateCandidateStateInventoryInProcess(input);
+    const { databases, ...inventory } = await readUpdateCandidateStateInventoryInProcess({
+      ...input,
+      onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
+    });
     process.stdout.write(JSON.stringify({ ...inventory, databases: [...databases] }));
+    return;
+  }
+  if (input.mode === "database-backup") {
+    const { createUpdateDatabaseBackupInProcess } = await import("./update-database-backup.js");
+    const backup = await createUpdateDatabaseBackupInProcess({
+      ...input,
+      onProgress: createUpdateStateInspectionReporter(),
+    });
+    process.stdout.write(JSON.stringify(backup));
     return;
   }
   const versions =
     input.mode === "snapshot"
-      ? await snapshotUpdateCandidateState(input)
+      ? await snapshotUpdateCandidateState({
+          ...input,
+          onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
+        })
       : input.mode === "discover"
-        ? await discoverUpdateStateSchemaInspectionInProcess(input)
-        : await readUpdateStateSchemaVersionsInProcess(input);
+        ? await discoverUpdateStateSchemaInspectionInProcess({
+            ...input,
+            onProgress: createUpdateStateInspectionReporter(),
+          })
+        : await readUpdateStateSchemaVersionsInProcess({
+            ...input,
+            onProgress: createUpdateStateInspectionReporter(!input.inspectionPlan),
+          });
   process.stdout.write(JSON.stringify(versions));
 }
 

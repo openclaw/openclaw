@@ -4,12 +4,20 @@ import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  encodeMemoryEmbedding,
+  ensureMemoryIndexSchema,
+  loadSqliteVecExtension,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  readSessionIngestionState,
+  writeSessionIngestionState,
+} from "./dreaming-ingestion-state.js";
 import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
@@ -27,7 +35,6 @@ import {
   seedMemoryForgetSession,
 } from "./memory-forget.test-helpers.js";
 import { runSessionBackfill } from "./session-backfill.js";
-import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
 
@@ -50,7 +57,7 @@ describe("memory forget", () => {
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     const insert = db.prepare(`INSERT INTO memory_index_chunks
       (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-      VALUES (?, ?, ?, 1, 1, 'fixture-hash', 'test', ?, '[]', 1)`);
+      VALUES (?, ?, ?, 1, 1, 'fixture-hash', 'test', ?, x'', 1)`);
     const provenance = db.prepare(`INSERT INTO memory_index_chunk_provenance
       (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'agent', 'interactive', 1)`);
     const body = "unrelated session body 🚀\0".repeat(4_096);
@@ -143,7 +150,7 @@ describe("memory forget", () => {
       const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
       db.prepare(`INSERT INTO memory_embedding_cache
       (provider, model, provider_key, hash, embedding, dims, updated_at)
-      VALUES ('test', 'test', 'test', 'unrelated', '[1,0]', 2, 1)`).run();
+      VALUES ('test', 'test', 'test', 'unrelated', ?, 2, 1)`).run(encodeMemoryEmbedding([1, 0]));
       const report = await forgetMemoryEntries({
         cfg,
         agentId: "main",
@@ -344,13 +351,13 @@ describe("memory forget", () => {
         `INSERT INTO memory_index_chunks
         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
        VALUES ('unrelated', 'MEMORY.md', 'memory', 1, 2,
-         'unrelated-hash', 'test', 'Keep this.', '[1,0]', 1)`,
-      ).run();
+         'unrelated-hash', 'test', 'Keep this.', ?, 1)`,
+      ).run(encodeMemoryEmbedding([1, 0]));
       db.prepare(
         `INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
-       VALUES ('test', 'test', 'test', 'unrelated-hash', '[1,0]', 2, 1)`,
-      ).run();
+       VALUES ('test', 'test', 'test', 'unrelated-hash', ?, 2, 1)`,
+      ).run(encodeMemoryEmbedding([1, 0]));
 
       const preview = await forgetMemoryEntries({
         cfg,
@@ -515,8 +522,8 @@ describe("memory forget", () => {
         `INSERT INTO memory_index_chunks
         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
        VALUES ('survivor-chunk', ?, 'sessions', 1, 1,
-         'survivor-hash', 'test', 'Preserve this unrelated fact.', '[1,0]', 1)`,
-      ).run(`sessions/main/${survivorId}.jsonl`);
+         'survivor-hash', 'test', 'Preserve this unrelated fact.', ?, 1)`,
+      ).run(`sessions/main/${survivorId}.jsonl`, encodeMemoryEmbedding([1, 0]));
       db.prepare(
         `INSERT INTO memory_index_chunk_provenance
         (chunk_id, origin_class, session_kind, observed_at)
@@ -676,11 +683,9 @@ describe("memory forget", () => {
       const db = agentDatabase.db;
       const loaded = await loadSqliteVecExtension({ db });
       expect(loaded.ok).toBe(true);
+      const schema = ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+      expect(schema.ftsAvailable, schema.ftsError).toBe(true);
       db.exec(`
-      CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(
-        text, id UNINDEXED, path UNINDEXED, source UNINDEXED,
-        model UNINDEXED, start_line UNINDEXED, end_line UNINDEXED
-      );
       CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
         id TEXT PRIMARY KEY, embedding FLOAT[2]
       );
@@ -744,16 +749,11 @@ describe("memory forget", () => {
         db.prepare(
           `INSERT INTO memory_index_chunks (
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-        ) VALUES (?, ?, ?, 1, 1, ?, 'test', ?, '[1,0]', 1)`,
-        ).run(chunkId, file.path, file.source, hash, text);
+        ) VALUES (?, ?, ?, 1, 1, ?, 'test', ?, ?, 1)`,
+        ).run(chunkId, file.path, file.source, hash, text, encodeMemoryEmbedding([1, 0]));
         db.prepare(
           "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 1, 1)",
         ).run(file.path, file.source, hash);
-        db.prepare(
-          `INSERT INTO memory_index_chunks_fts
-          (text, id, path, source, model, start_line, end_line)
-         VALUES (?, ?, ?, ?, 'test', 1, 1)`,
-        ).run(text, chunkId, file.path, file.source);
         db.prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)").run(
           chunkId,
           new Float32Array([1, 0]),
@@ -761,8 +761,8 @@ describe("memory forget", () => {
         db.prepare(
           `INSERT INTO memory_embedding_cache
           (provider, model, provider_key, hash, embedding, dims, updated_at)
-         VALUES ('test', 'test', 'test', ?, '[1,0]', 2, 1)`,
-        ).run(hash);
+         VALUES ('test', 'test', 'test', ?, ?, 2, 1)`,
+        ).run(hash, encodeMemoryEmbedding([1, 0]));
         db.prepare(
           `INSERT INTO memory_index_chunk_provenance
           (chunk_id, origin_class, session_kind, observed_at)

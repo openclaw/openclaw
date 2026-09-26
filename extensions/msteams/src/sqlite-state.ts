@@ -1,4 +1,3 @@
-// Msteams plugin module implements sqlite state behavior.
 import path from "node:path";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";

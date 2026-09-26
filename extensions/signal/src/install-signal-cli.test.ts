@@ -275,10 +275,10 @@ describe("pickAsset", () => {
 });
 
 describe("downloadToFile", () => {
-  it("cancels non-success response bodies before rejecting", async () => {
+  it("releases non-success responses before rejecting", async () => {
     const response = new Response("service unavailable", { status: 503 });
-    const cancel = vi.spyOn(response.body!, "cancel").mockRejectedValueOnce(new Error("closed"));
-    fetchWithSsrFGuardMock.mockResolvedValue({ response, release: vi.fn() });
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
 
     await withTempFile(async (filePath) => {
       await expect(downloadToFile("https://example.com/signal-cli.tgz", filePath)).rejects.toThrow(
@@ -286,26 +286,7 @@ describe("downloadToFile", () => {
       );
     });
 
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
-  it("cancels the response body when the declared length exceeds the download cap", async () => {
-    const response = new Response("archive", {
-      status: 200,
-      headers: { "content-length": "12" },
-    });
-    const cancel = vi.spyOn(response.body!, "cancel").mockRejectedValueOnce(new Error("closed"));
-    fetchWithSsrFGuardMock.mockResolvedValue({ response, release: vi.fn() });
-
-    await withTempFile(async (filePath) => {
-      await expect(
-        downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8),
-      ).rejects.toThrow("declared 12");
-
-      await expectPathMissing(filePath);
-    });
-
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("downloads through the SSRF guard with an explicit timeout", async () => {
@@ -316,6 +297,9 @@ describe("downloadToFile", () => {
       await downloadToFile("https://example.com/signal-cli.tgz", filePath);
 
       await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("archive");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(filePath)).mode & 0o777).toBe(0o666 & ~process.umask());
+      }
     });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
@@ -327,6 +311,30 @@ describe("downloadToFile", () => {
       auditContext: "signal-cli-install-archive",
     });
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves an existing destination without locking or consuming the response", async () => {
+    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+      controller.enqueue(new Uint8Array([1, 2, 3]));
+      controller.close();
+    });
+    const body = new ReadableStream<Uint8Array>({ pull }, { highWaterMark: 0 });
+    const fetchResult = okDownloadResponse(body);
+    fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
+
+    await withTempFile(async (filePath) => {
+      await fs.writeFile(filePath, "keep this");
+      await expect(
+        downloadToFile("https://example.com/signal-cli.tgz", filePath),
+      ).rejects.toMatchObject({
+        code: "already-exists",
+      });
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("keep this");
+    });
+
+    expect(body.locked).toBe(false);
+    expect(pull).not.toHaveBeenCalled();
+    expect(fetchResult.release).toHaveBeenCalledOnce();
   });
 
   it("rejects declared archives above the download cap", async () => {
@@ -388,9 +396,8 @@ describe("downloadToFile", () => {
 });
 
 describe("installSignalCliFromRelease", () => {
-  it("cancels non-success release metadata before returning the fetch error", async () => {
+  it("releases non-success metadata responses before returning the fetch error", async () => {
     const response = new Response("service unavailable", { status: 503 });
-    const cancel = vi.spyOn(response.body!, "cancel").mockRejectedValueOnce(new Error("closed"));
     const release = vi.fn().mockResolvedValue(undefined);
     fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
 
@@ -399,7 +406,6 @@ describe("installSignalCliFromRelease", () => {
       error: "Failed to fetch release info (503)",
     });
 
-    expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -606,11 +612,15 @@ describe("installSignalCliFromRelease", () => {
 });
 
 describe("installSignalCli", () => {
-  it("uses Homebrew on macOS instead of downloading the first GitHub release archive", async () => {
+  it.each([
+    { binaryDir: "bin", found: true },
+    { binaryDir: path.join("libexec", "native", "bin"), found: true },
+    { binaryDir: path.join("libexec", "nested", "native", "bin"), found: false },
+  ])("finds Homebrew binaries within four levels: $binaryDir", async ({ binaryDir, found }) => {
     setProcessPlatform("darwin", "arm64");
     const brewPrefix = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-brew-"));
-    await fs.mkdir(path.join(brewPrefix, "bin"), { recursive: true });
-    await fs.writeFile(path.join(brewPrefix, "bin", "signal-cli"), "");
+    await fs.mkdir(path.join(brewPrefix, binaryDir), { recursive: true });
+    await fs.writeFile(path.join(brewPrefix, binaryDir, "signal-cli"), "");
     resolveBrewExecutableMock.mockReturnValue("/opt/homebrew/bin/brew");
     runPluginCommandWithTimeoutMock
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
@@ -620,11 +630,15 @@ describe("installSignalCli", () => {
     try {
       const result = await installSignalCli(createRuntimeSpies());
 
-      expect(result).toEqual({
-        ok: true,
-        cliPath: path.join(brewPrefix, "bin", "signal-cli"),
-        version: "0.14.5",
-      });
+      expect(result).toEqual(
+        found
+          ? {
+              ok: true,
+              cliPath: path.join(brewPrefix, binaryDir, "signal-cli"),
+              version: "0.14.5",
+            }
+          : { ok: false, error: "brew install succeeded but signal-cli binary was not found." },
+      );
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     } finally {
       await fs.rm(brewPrefix, { recursive: true, force: true });

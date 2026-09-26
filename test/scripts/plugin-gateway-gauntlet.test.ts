@@ -1,11 +1,11 @@
 // Plugin Gateway Gauntlet tests cover plugin gateway gauntlet script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,10 +27,12 @@ import {
   discoverBundledPluginManifests,
   selectPluginEntries,
 } from "../../scripts/lib/plugin-gateway-gauntlet.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { withTestTimeout } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const tsxImport = import.meta.resolve("tsx");
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -966,7 +968,7 @@ setInterval(() => {}, 1000);
         harnessPath,
         `
 import { runMeasuredCommand } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mts")).href,
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.pluginGatewayGauntlet).href,
         )};
 
 await runMeasuredCommand({
@@ -1060,11 +1062,11 @@ import fs from "node:fs";
 import { mock } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { runMeasuredCommand } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mts")).href,
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.pluginGatewayGauntlet).href,
         )};
 
 import { inspectManagedProcessGroup } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href,
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.managedChildProcess).href,
         )};
 
 const realDelay = delay;
@@ -1241,7 +1243,32 @@ try {
   it("force kills timed-out live measured process groups that ignore SIGTERM", async () => {
     const logDir = path.join(repoRoot, "logs");
     const markerPath = path.join(repoRoot, "timeout-marker.txt");
-    const row = await runMeasuredCommand({
+    const watcher = watch(repoRoot);
+    const ready = new Promise<void>((resolve, reject) => {
+      watcher.on("error", reject);
+      watcher.on("change", (_event, filename) => {
+        if (filename?.toString() === path.basename(markerPath)) {
+          resolve();
+        }
+      });
+    });
+    const scheduleTimeout = globalThis.setTimeout;
+    let fireDeadline: (() => void) | undefined;
+    // Drive only the policy deadline after the real child's signal handler is ready.
+    const timerSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, ms, ...args) => {
+        const timer = scheduleTimeout(callback, ms, ...args);
+        if (ms === 100 && !fireDeadline) {
+          clearTimeout(timer);
+          fireDeadline = () => {
+            fireDeadline = undefined;
+            callback(...args);
+          };
+        }
+        return timer;
+      });
+    const command = runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -1251,8 +1278,8 @@ try {
         [
           "const fs = require('node:fs');",
           "const marker = process.argv[1];",
-          "fs.writeFileSync(marker, 'start\\n');",
           "process.on('SIGTERM', () => fs.appendFileSync(marker, 'term\\n'));",
+          "fs.writeFileSync(marker, 'start\\n');",
           "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 1);",
         ].join(""),
         markerPath,
@@ -1262,6 +1289,19 @@ try {
       timeoutMs: 100,
       timeoutKillGraceMs: 10,
     });
+    let row: Awaited<ReturnType<typeof runMeasuredCommand>>;
+    try {
+      await withTestTimeout(ready, 5_000, "measured process fixture did not become ready");
+      watcher.close();
+      timerSpy.mockRestore();
+      expectDefined(fireDeadline, "command deadline should be armed before readiness")();
+      row = await command;
+    } finally {
+      watcher.close();
+      timerSpy.mockRestore();
+      fireDeadline?.();
+      await command;
+    }
 
     expect(row.status).toBe(1);
     expect(row.timedOut).toBe(true);

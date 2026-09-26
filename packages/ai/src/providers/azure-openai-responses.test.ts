@@ -165,6 +165,7 @@ describe("azure-openai-responses", () => {
   });
 
   it.each<{
+    id?: string;
     reasoning: "minimal" | "xhigh" | "max" | undefined;
     compat: Model<"azure-openai-responses">["compat"];
     effort: string;
@@ -174,6 +175,8 @@ describe("azure-openai-responses", () => {
     { reasoning: "minimal", compat: undefined, effort: "minimal", temperature: 0.5 },
     { reasoning: "xhigh", compat: undefined, effort: "high", temperature: 0.5 },
     { reasoning: "max", compat: undefined, effort: "high", temperature: 0.5 },
+    { id: "gpt-6-sol", reasoning: "max", compat: undefined, effort: "high", temperature: 0.5 },
+    { id: "gpt-6-luna", reasoning: "max", compat: undefined, effort: "high", temperature: 0.5 },
     {
       reasoning: "xhigh",
       compat: {
@@ -191,7 +194,7 @@ describe("azure-openai-responses", () => {
     },
   ])(
     "preserves Azure deployment capabilities for $reasoning with compat=$compat",
-    async ({ reasoning, compat, effort, temperature }) => {
+    async ({ id = "gpt-6-astra", reasoning, compat, effort, temperature }) => {
       let sentParams: { reasoning?: { effort?: unknown }; temperature?: unknown } | undefined;
       configureAiTransportHost({
         buildModelFetch: () => async (input, init) => {
@@ -200,11 +203,11 @@ describe("azure-openai-responses", () => {
         },
       });
       try {
-        await streamSimpleAzureOpenAIResponses(
-          { ...azureResponsesModel, id: "gpt-6-astra", compat },
-          context,
-          { apiKey: "test-api-key", reasoning, temperature: 0.5 },
-        ).result();
+        await streamSimpleAzureOpenAIResponses({ ...azureResponsesModel, id, compat }, context, {
+          apiKey: "test-api-key",
+          reasoning,
+          temperature: 0.5,
+        }).result();
         expect(sentParams?.reasoning?.effort).toBe(effort);
         expect(sentParams?.temperature).toBe(temperature);
       } finally {

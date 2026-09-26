@@ -113,6 +113,7 @@ describe("resolveModelDirectiveSelection", () => {
       };
       const entries = [{ provider: "anthropic", id: "claude-sonnet-4-6", name: "Sonnet" }];
       const state = await createModelSelectionState({
+        agentId: "main",
         cfg,
         agentCfg: cfg.agents?.defaults,
         defaultProvider: "anthropic",

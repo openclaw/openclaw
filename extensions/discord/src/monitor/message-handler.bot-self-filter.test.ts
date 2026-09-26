@@ -1,3 +1,6 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover message handler.bot self filter plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {

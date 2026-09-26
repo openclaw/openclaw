@@ -1,3 +1,4 @@
+import type { CommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
 import type { SessionWriterDeliveryAuthority } from "../../auto-reply/reply-payload.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
@@ -24,8 +25,10 @@ import {
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-registry.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  isSameOpenClawAgentDatabasePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
@@ -71,6 +74,10 @@ export type DurableDeliveryCompletion =
     }
   | {
       kind: "pending-final";
+      /** Null means an owner was admitted without recoverable authority; fail closed. */
+      commandOwnerReference?: CommandOwnerAssertion["recoveryReference"];
+      /** Older queue records retain the canonical locator's original owner selection. */
+      agentId?: string;
       deliveryId: string;
       intentId: string;
       sessionId: string;
@@ -164,6 +171,7 @@ export async function settlePendingFinalDelivery(
   let deliveredHarnessClaim: HarnessCompletionRecovery | undefined;
   await patchSessionEntryCore(
     {
+      agentId: completion.agentId,
       sessionKey: completion.sessionKey,
       storePath: completion.storePath,
       env: resolveDeliveryQueueStateEnv(options.stateDir, options.stateContext),
@@ -183,6 +191,15 @@ export async function settlePendingFinalDelivery(
       }
       const authority = completion.sessionWriterDeliveryAuthority;
       const claim = authority?.harnessCompletion;
+      if (
+        completion.agentId !== undefined &&
+        ((authority?.agentId !== undefined &&
+          normalizeAgentId(authority.agentId) !== normalizeAgentId(completion.agentId)) ||
+          (claim &&
+            normalizeAgentId(claim.requesterAgentId) !== normalizeAgentId(completion.agentId)))
+      ) {
+        return null;
+      }
       if (
         claim &&
         (!authority ||
@@ -316,6 +333,7 @@ export async function settlePendingFinalDelivery(
     const { scheduleMainSessionRecoveryPendingTarget } =
       await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");
     scheduleMainSessionRecoveryPendingTarget({
+      ...(completion.agentId !== undefined ? { agentId: completion.agentId } : {}),
       sessionId: completion.sessionId,
       sessionKey: completion.sessionKey,
       ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),

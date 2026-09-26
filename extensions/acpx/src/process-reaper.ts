@@ -56,12 +56,14 @@ type AcpxProcessInfo = {
   command: string;
 };
 
-/** Injectable process-listing and termination hooks for tests. */
+/** Process inspection, termination, and caller-owned cleanup admission. */
 export type AcpxProcessCleanupDeps = {
   listProcesses?: () => Promise<AcpxProcessInfo[]>;
   killProcess?: (pid: number, signal: NodeJS.Signals) => void;
   platform?: NodeJS.Platform;
   sleep?: (ms: number) => Promise<void>;
+  /** Revalidate recovery ownership immediately before each process signal. */
+  assertCurrent?: () => void;
 };
 
 /** Result from cleaning up a single ACPX process tree. */
@@ -286,6 +288,7 @@ async function terminatePids(
   const terminated: number[] = [];
 
   for (const pid of pids) {
+    deps?.assertCurrent?.();
     try {
       killProcess(pid, "SIGTERM");
       terminated.push(pid);
@@ -298,6 +301,7 @@ async function terminatePids(
   }
   await sleep(750);
   for (const pid of terminated) {
+    deps?.assertCurrent?.();
     if (deps?.killProcess || isPidAlive(pid)) {
       try {
         killProcess(pid, "SIGKILL");

@@ -138,6 +138,56 @@ describe("buildAssistantMessage", () => {
     const msg = buildAssistantMessage(response, MODEL_INFO);
     expect(msg.stopReason).toBe("length");
   });
+
+  it("anchors context usage on measured prompt and output including cached tokens", () => {
+    const response = {
+      ...makeOllamaResponse({ content: "ok" }),
+      prompt_eval_cached_count: 80,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.usage).toMatchObject({
+      input: 20,
+      cacheRead: 80,
+      contextUsage: { state: "available", promptTokens: 100, totalTokens: 150 },
+    });
+  });
+
+  it("omits context usage when the prompt counter is missing", () => {
+    const response: Parameters<typeof buildAssistantMessage>[0] = {
+      model: "qwen3.5",
+      created_at: new Date().toISOString(),
+      message: { role: "assistant", content: "ok" },
+      done: true,
+      eval_count: 50,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO, { input: 321, output: 123 });
+    expect(msg.usage.contextUsage).toBeUndefined();
+  });
+
+  it("omits context usage when the output counter is missing", () => {
+    const response: Parameters<typeof buildAssistantMessage>[0] = {
+      model: "qwen3.5",
+      created_at: new Date().toISOString(),
+      message: { role: "assistant", content: "ok" },
+      done: true,
+      prompt_eval_count: 100,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO, { input: 321, output: 123 });
+    expect(msg.usage.contextUsage).toBeUndefined();
+  });
+
+  it("does not promote invalid counters or fallback estimates into measured context", () => {
+    const response: Parameters<typeof buildAssistantMessage>[0] = {
+      model: "qwen3.5",
+      created_at: new Date().toISOString(),
+      message: { role: "assistant", content: "ok" },
+      done: true,
+      prompt_eval_count: -1,
+      eval_count: 50,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO, { input: 321, output: 123 });
+    expect(msg.usage.contextUsage).toBeUndefined();
+  });
 });
 
 describe("createOllamaStreamFn thinking events", () => {

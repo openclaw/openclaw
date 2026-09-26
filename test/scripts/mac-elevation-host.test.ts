@@ -724,7 +724,7 @@ function writeMockWorkerPair(root: string, sourceCommit: string): void {
     mkdirSync(path.join(worker, "bin"), { recursive: true });
     mkdirSync(dist, { recursive: true });
     writeExecutable(path.join(worker, "bin", "node"), "fixture-node");
-    writeFileSync(path.join(dist, "entry.js"), "fixture-entry");
+    writeFileSync(path.join(dist, "mac-node-worker.js"), "fixture-entry");
     writeFileSync(
       path.join(dist, "build-info.json"),
       JSON.stringify({
@@ -4673,7 +4673,7 @@ describe("mac elevation host command contract", () => {
         "mac-elevation-host.sh verifies the signed app, so its duplicated signing constants must match codesign-mac-app.sh",
       ).toEqual([
         constant(codesignScript, "ELEVATION_TEAM_ID"),
-        constant(codesignScript, "ELEVATION_IDENTITY"),
+        constant(readFileSync("scripts/lib/mac-signing-identity.sh", "utf8"), "ELEVATION_IDENTITY"),
       ]);
     }));
 

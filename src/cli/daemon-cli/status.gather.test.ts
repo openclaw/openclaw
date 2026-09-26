@@ -15,9 +15,9 @@ import type { ExtraGatewayService } from "../../daemon/inspect.js";
 import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
-import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.js";
 import { gatewayEdgeAuthValueForTarget } from "../../gateway/edge-auth.js";
 import {
   buildMinimalGatewayHelloOkPayload,
@@ -36,7 +36,6 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { VERSION } from "../../version.js";
 import { registerGatewayCli } from "../gateway-cli/register.js";
 import { registerDaemonCli } from "./register.js";
@@ -54,12 +53,13 @@ import {
   type PortUsageTestSummary,
 } from "./status.gather.probes.test-support.js";
 import { registerProxyAuthStatusTests } from "./status.gather.proxy-auth.test-support.js";
+import { registerServiceInspectionStatusTests } from "./status.gather.service-inspection.test-support.js";
 import { printDaemonStatus } from "./status.print.js";
 
 const readFile = fs.readFile.bind(fs);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let readFileSpy: ReturnType<typeof vi.spyOn>;
-const serviceFixture = vi.hoisted(() => ({ label: "LaunchAgent" }));
+const serviceFixture = vi.hoisted(() => ({ label: "LaunchAgent", useSystemdCommand: false }));
 
 const preflightOpenClawDatabaseSchemas = vi.fn<
   typeof import("../../state/openclaw-database-preflight.js").preflightOpenClawDatabaseSchemas
@@ -280,7 +280,9 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
     createMockGatewayService({
       label: serviceFixture.label,
       isLoaded: serviceIsLoaded,
-      readCommand: serviceReadCommand,
+      readCommand: serviceFixture.useSystemdCommand
+        ? readSystemdServiceExecStart
+        : serviceReadCommand,
       readRuntime: serviceReadRuntime,
     }),
 }));
@@ -415,6 +417,7 @@ describe("gatherDaemonStatus", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
+    serviceFixture.useSystemdCommand = false;
     readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
       if (
         filePath === "/tmp/openclaw-cli/openclaw.json" ||
@@ -1309,89 +1312,6 @@ describe("gatherDaemonStatus", () => {
     ]);
   });
 
-  it.each(["darwin", "linux"] as const)(
-    "renders Gateway-specific timeout recovery on %s",
-    async (platform) =>
-      withMockedPlatform(platform, async () => {
-        serviceIsLoaded.mockImplementationOnce(async (args?: { timeoutMs?: number }) => {
-          if (args?.timeoutMs === undefined) {
-            return await new Promise<boolean>(() => {});
-          }
-          throw new Error("systemctl is-enabled timed out");
-        });
-        serviceReadRuntime.mockImplementationOnce(async (_env, opts) => {
-          if (opts?.timeoutMs === undefined) {
-            return await new Promise<{ status: string }>(() => {});
-          }
-          throw new Error("錯誤: 系統找不到指定的檔案。");
-        });
-
-        const status = await gatherStatus({
-          rpc: { timeout: "100", json: true },
-          probe: false,
-          deep: true,
-        });
-
-        expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
-        expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
-        expect(auditGatewayServiceConfig).toHaveBeenCalledWith(
-          expect.objectContaining({ timeoutMs: 100 }),
-        );
-        expect(status.service.loadState).toEqual({
-          status: "unknown",
-          detail: "Error: systemctl is-enabled timed out",
-        });
-        expect(status.service.loaded).toBeNull();
-        expect(status.service.runtime).toEqual({
-          status: "unknown",
-          detail: "service runtime inspection failed; retry with openclaw gateway status --deep",
-          inspectionFailure: {
-            code: "service-runtime-inspection-failed",
-            detail: "錯誤: 系統找不到指定的檔案。",
-          },
-        });
-
-        const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-        try {
-          printDaemonStatus(status, { json: true, deep: true });
-          expect(writeJson).toHaveBeenCalledOnce();
-          const serialized = JSON.stringify(writeJson.mock.calls[0]?.[0]);
-          if (!serialized) {
-            throw new Error("expected terminal JSON output");
-          }
-          expect(JSON.parse(serialized)).toMatchObject({
-            service: {
-              loaded: null,
-              loadState: {
-                status: "unknown",
-                detail: "Error: systemctl is-enabled timed out",
-              },
-              runtime: {
-                status: "unknown",
-                detail:
-                  "service runtime inspection failed; retry with openclaw gateway status --deep",
-                inspectionFailure: {
-                  code: "service-runtime-inspection-failed",
-                  detail: "錯誤: 系統找不到指定的檔案。",
-                },
-              },
-            },
-          });
-        } finally {
-          writeJson.mockRestore();
-        }
-
-        const output = capturePrintedDaemonStatus(status, { json: false, deep: true }).logs;
-        expect(output).toContain("Service: LaunchAgent (unknown)");
-        expect(output).not.toContain("Service: LaunchAgent (not loaded)");
-        expect(output).toContain(
-          "Runtime: unknown (service runtime inspection failed; retry with openclaw gateway status --deep)",
-        );
-        expect(output).not.toContain("系統找不到指定的檔案");
-      }),
-    1_000,
-  );
-
   it.each(["bogus", "0", "-1", "1.5"])(
     "rejects invalid status timeout %s before reading service state",
     async (timeout) => {
@@ -1405,69 +1325,21 @@ describe("gatherDaemonStatus", () => {
     },
   );
 
-  it("keeps gateway status read-only when service management is unsupported", async () => {
-    serviceReadCommand.mockResolvedValueOnce(null);
-    serviceIsLoaded.mockResolvedValueOnce(false);
-    serviceReadRuntime.mockResolvedValueOnce({
-      status: "unknown",
-      detail: "Gateway service install not supported on aix",
-    });
-
-    const status = await gatherStatus({ probe: false });
-
-    expect(status.service.command).toBeNull();
-    expect(status.service.loaded).toBe(false);
-    expect(status.service.loadState).toEqual({ status: "not-loaded" });
-    expect(status.service.runtime).toEqual({
-      status: "unknown",
-      detail: "Gateway service install not supported on aix",
-    });
-    expect(inspectGatewayRestart).not.toHaveBeenCalled();
+  registerServiceInspectionStatusTests({
+    serviceFixture,
+    setCliConfig: (config) => {
+      cliLoadedConfig = config;
+    },
+    isGatewayExternallySupervised,
+    findSystemdGatewayInstallation,
+    loadInstalledPluginIndexInstallRecords,
+    serviceIsLoaded,
+    serviceReadCommand,
+    serviceReadRuntime,
+    inspectGatewayRestart,
+    gatherStatus,
+    auditGatewayServiceConfig,
   });
-
-  it.each([
-    { platform: "linux", reason: "service-manager-unavailable", recorded: true },
-    { platform: "linux", reason: "service-manager-unavailable", recorded: false },
-    { platform: "linux", reason: "systemd-user-bus-unavailable", recorded: true },
-    { platform: "darwin", reason: "launchd-gui-domain-unavailable", recorded: true },
-  ] as const)(
-    "reports $reason with recorded service=$recorded without inventing manager availability",
-    async ({ platform, reason, recorded }) =>
-      withMockedPlatform(platform, async () => {
-        const inspectionError = new ServiceInspectionError(reason);
-        serviceIsLoaded.mockRejectedValueOnce(inspectionError);
-        serviceReadRuntime.mockRejectedValueOnce(inspectionError);
-        if (!recorded) {
-          serviceReadCommand.mockResolvedValueOnce(null);
-        }
-        const status = await gatherStatus({ probe: false, deep: true });
-        expect(status.service.inspectionReason).toBe(reason);
-        expect(status.service.loaded).toBeNull();
-        const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-        const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-        try {
-          printDaemonStatus(status, { json: false, deep: true });
-          const output = [...log.mock.calls, ...error.mock.calls].flat().join("\n");
-          if (reason === "service-manager-unavailable") {
-            expect(output).toContain("Service: no supported service manager detected");
-            expect(status.config?.daemon?.path).toBe(status.config?.cli.path);
-            expect(status.gateway?.port).toBe(18789);
-            expect(status.service.targetRole).toBe("diagnostic-only");
-            expect(output.includes("recorded service unit is stale")).toBe(recorded);
-            expect(output.includes("Recorded command:")).toBe(recorded);
-            expect(output).toContain("Restart the Gateway you launched manually");
-            expect(output).not.toContain("Service: LaunchAgent (unknown)");
-            expect(output).not.toContain("Retry: openclaw gateway status --deep");
-          } else {
-            expect(output).toContain("Service: LaunchAgent (unknown)");
-            expect(output).not.toContain("no supported service manager detected");
-          }
-        } finally {
-          log.mockRestore();
-          error.mockRestore();
-        }
-      }),
-  );
 
   it("surfaces recent service restart handoffs only during deep status", async () => {
     readGatewayRestartHandoffSync.mockReturnValueOnce({

@@ -1,10 +1,11 @@
 // Sessions cleanup tests cover stale session cleanup and runtime output.
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { sessionsCleanupLargeLabelsEntrypoint } from "./sessions-cleanup-runtime.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
@@ -559,9 +560,7 @@ describe("sessionsCleanupCommand", () => {
       process.execPath,
       [
         "--experimental-test-module-mocks",
-        "--import",
-        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
-        fileURLToPath(new URL("./sessions-cleanup.large-labels.test-support.ts", import.meta.url)),
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(sessionsCleanupLargeLabelsEntrypoint)),
       ],
       {
         encoding: "utf8",

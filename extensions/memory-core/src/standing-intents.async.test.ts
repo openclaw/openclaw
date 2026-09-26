@@ -177,7 +177,7 @@ const context = {
   senderId: "owner",
 };
 
-async function registeredIntentTool() {
+async function registeredIntentTool(assertInvocationCurrent?: () => void) {
   const { registry, config } = await registerHooks();
   const registration = registry.tools.find((tool) => tool.names.includes("intent"));
   const registered = registration?.factory({
@@ -186,6 +186,7 @@ async function registeredIntentTool() {
     senderIsOwner: true,
     messageChannel: "webchat",
     requesterSenderId: "owner",
+    assertInvocationCurrent: assertInvocationCurrent ?? (() => {}),
   });
   const tool = Array.isArray(registered)
     ? registered.find((entry) => entry.name === "intent")
@@ -197,6 +198,47 @@ async function registeredIntentTool() {
 }
 
 describe("standing-intent admitted operations", () => {
+  it.each(["create", "list", "cancel"] as const)(
+    "rejects %s after owner revocation during writer admission without changing persisted rows",
+    async (action) => {
+      const existing = await seed(action === "list");
+      let current = true;
+      const tool = await registeredIntentTool(() => {
+        if (!current) {
+          throw new Error("owner revoked");
+        }
+      });
+      const held = await holdWriter();
+      const work = keep(
+        tool.execute("revoked-intent-call", {
+          action,
+          id: existing.id,
+          description: "Must not persist",
+          triggerKeywords: ["revocation"],
+        }),
+      );
+      await expectWaiting(work, held.entered);
+      current = false;
+      held.release();
+      await expect(work).rejects.toThrow("owner revoked");
+      await held.drain();
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      closeOpenClawAgentDatabasesForTest();
+      const reopened = new DatabaseSync(databasePath);
+      try {
+        expect(
+          reopened.prepare("SELECT status FROM standing_intents WHERE id = ?").get(existing.id)
+            ?.status,
+        ).toBe("armed");
+        expect(
+          reopened.prepare("SELECT COUNT(*) AS count FROM standing_intents").get()?.count,
+        ).toBe(1);
+      } finally {
+        reopened.close();
+      }
+    },
+  );
+
   it("waits for the writer before restoring the first-use standing-intent schema", async () => {
     const held = await holdWriter();
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;

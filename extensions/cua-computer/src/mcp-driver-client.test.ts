@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { execution } from "./commands.test-helpers.js";
 import { CUA_DRIVER_CONTRACT_FIXTURES } from "./cua-driver-contract.test-fixtures.js";
-import { ClickButton, EscalationReason } from "./driver-client.js";
+import { ClickButton } from "./driver-client.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
 
 type RpcRequest = {
@@ -303,7 +303,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
       isError: false,
     });
-    await expect(driver.escalateScope(EscalationReason.Other)).resolves.toMatchObject({
+    await expect(driver.getSessionState()).resolves.toMatchObject({
       desktopCaptureAuthorized: true,
       desktopUnlocked: true,
     });

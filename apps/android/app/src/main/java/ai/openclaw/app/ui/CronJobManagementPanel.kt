@@ -38,7 +38,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -77,7 +76,7 @@ internal fun CronJobManagementPanel(
   var showDeleteConfirmation by remember(job.id) { mutableStateOf(false) }
 
   if (showDeleteConfirmation) {
-    AlertDialog(
+    AppAlertDialog(
       onDismissRequest = { showDeleteConfirmation = false },
       confirmButton = {
         TextButton(

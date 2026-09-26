@@ -53,6 +53,29 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
     expect(chunks.every((chunk) => chunk.rendered.endsWith("</b>"))).toBe(true);
   });
 
+  it.each(["A".repeat(128), `${"A".repeat(230)}😀`])(
+    "keeps internal code whitespace away from message edges: %s",
+    (first) => {
+      const second = "B".repeat(128);
+      const chunks = renderMarkdownIRChunksWithinLimit({
+        ir: markdownToIR(`    ${first}\n\n    ${second}`),
+        limit: 256,
+        renderChunk: (source) => ({
+          html: renderEscapedHtml(source),
+          receivedText: source.text.trim(),
+        }),
+        measureRendered: (rendered) => rendered.html.length,
+      });
+
+      expect(chunks.map((chunk) => chunk.rendered.receivedText).join("")).toBe(
+        `${first}\n\n${second}`,
+      );
+      expect(chunks.every((chunk) => chunk.rendered.html.length <= 256)).toBe(true);
+      expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk.source.text))).toBe(true);
+      expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk.source.text))).toBe(true);
+    },
+  );
+
   it("checks exact candidates instead of assuming rendered length is monotonic", () => {
     const ir: MarkdownIR = {
       text: "README.md<",
@@ -177,6 +200,57 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
 
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.source.text).toBe(text);
+  });
+});
+
+describe("grapheme-safe rendered chunk boundaries", () => {
+  it.each([false, true])("keeps clusters whole with render expansion=%s", (expand) => {
+    const prefix = "a".repeat(expand ? 12 : 10);
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir: markdownToIR(`${prefix}👨‍👩‍👧‍👦Z`),
+      limit: expand ? 26 : 12,
+      renderChunk: (chunk) => (expand ? chunk.text.replaceAll("a", "aa") : chunk.text),
+      measureRendered: (rendered) => rendered.length,
+    });
+    expect(chunks.map((chunk) => chunk.source.text)).toEqual([prefix, "👨‍👩‍👧‍👦Z"]);
+    expect(chunks.map((chunk) => chunk.rendered)).toEqual([
+      expand ? prefix.repeat(2) : prefix,
+      "👨‍👩‍👧‍👦Z",
+    ]);
+  });
+
+  it.each([
+    { text: "ab \u0301cd", limit: 4, styled: false, expected: ["ab", " \u0301cd"] },
+    { text: "\u0600 \u0301abcd", limit: 4, styled: false, expected: ["\u0600 \u0301a", "bcd"] },
+    { text: "ab\r\n😀", limit: 3, styled: false, expected: ["ab", "😀"] },
+    { text: "ab\r\n😀", limit: 3, styled: true, expected: ["ab", "\r\n", "😀"] },
+    { text: "abc\r\n\r\nx", limit: 4, styled: false, expected: ["abc", "x"] },
+    { text: "abc\r\n\r\nx", limit: 4, styled: true, expected: ["abc", "\r\n\r\n", "x"] },
+  ])(
+    "keeps whitespace cuts outside clusters: $text (styled=$styled)",
+    ({ text, limit, styled, expected }) => {
+      const chunks = renderMarkdownIRChunksWithinLimit({
+        ir: {
+          text,
+          styles: styled ? [{ start: 0, end: text.length, style: "code_block" }] : [],
+          links: [],
+        },
+        limit,
+        renderChunk: (chunk) => chunk.text,
+        measureRendered: (rendered) => rendered.length,
+      });
+      expect(chunks.map((chunk) => chunk.rendered)).toEqual(expected);
+    },
+  );
+
+  it("makes surrogate-safe progress through an oversized cluster", () => {
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir: markdownToIR("👨‍👩‍👧‍👦"),
+      limit: 4,
+      renderChunk: (chunk) => chunk.text,
+      measureRendered: (rendered) => rendered.length,
+    });
+    expect(chunks.map((chunk) => chunk.rendered)).toEqual(["👨‍", "👩‍", "👧‍", "👦"]);
   });
 });
 

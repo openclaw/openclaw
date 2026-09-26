@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runGitBuffered } from "../../agents/worktrees/git.js";
 import { FsSafeError, type Root } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
-import { runCommandBuffered } from "../../process/exec.js";
+import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
 import type { WorkspaceNode } from "./workspace-manifest-comparison.js";
 import { computeWorkspaceFileSnapshot } from "./workspace-manifest-worker.js";
 import {
@@ -48,18 +50,6 @@ export async function removeEmptyWorkspaceDirectory(root: Root, entryPath: strin
   }
 }
 
-type WorkspaceFileSnapshot =
-  | { type: "file"; mode: number; size: number; sha256: string }
-  | { type: "unsupported" };
-
-async function readWorkspaceFileSnapshot(
-  root: string,
-  entryPath: string,
-): Promise<WorkspaceFileSnapshot> {
-  const absolute = localPath(root, entryPath);
-  return await computeWorkspaceFileSnapshot(absolute, MAX_RECONCILIATION_FILE_BYTES, root);
-}
-
 export async function localWorkspaceNode(root: string, entryPath: string): Promise<WorkspaceNode> {
   const absolute = localPath(root, entryPath);
   const stats = await fs.lstat(absolute).catch((error: unknown) => {
@@ -80,7 +70,11 @@ export async function localWorkspaceNode(root: string, entryPath: string): Promi
   if (!stats.isFile()) {
     return { path: entryPath, type: "unsupported" };
   }
-  const snapshot = await readWorkspaceFileSnapshot(root, entryPath);
+  const snapshot = await computeWorkspaceFileSnapshot(
+    absolute,
+    MAX_RECONCILIATION_FILE_BYTES,
+    root,
+  );
   if (snapshot.type === "unsupported") {
     return { path: entryPath, type: "unsupported" };
   }
@@ -93,8 +87,27 @@ export async function localWorkspaceNode(root: string, entryPath: string): Promi
   };
 }
 
-async function readAbsoluteFileSnapshot(absolute: string): Promise<WorkspaceFileSnapshot> {
-  return await computeWorkspaceFileSnapshot(absolute, MAX_RECONCILIATION_FILE_BYTES);
+async function fileEntryMatches(
+  absolute: string,
+  entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
+  root?: string,
+): Promise<boolean> {
+  const snapshot = await computeWorkspaceFileSnapshot(
+    absolute,
+    MAX_RECONCILIATION_FILE_BYTES,
+    root,
+  ).catch((error: unknown) => {
+    if (error instanceof WorkerTaskError) {
+      throw error;
+    }
+    return undefined;
+  });
+  return (
+    snapshot?.type === "file" &&
+    snapshot.mode === entry.mode &&
+    snapshot.size === entry.size &&
+    snapshot.sha256 === entry.sha256
+  );
 }
 
 export async function absoluteEntryMatches(
@@ -111,18 +124,7 @@ export async function absoluteEntryMatches(
   if (!stats.isFile() || stats.isSymbolicLink()) {
     return false;
   }
-  const snapshot = await readAbsoluteFileSnapshot(absolute).catch((error: unknown) => {
-    if (error instanceof WorkerTaskError) {
-      throw error;
-    }
-    return undefined;
-  });
-  return (
-    snapshot?.type === "file" &&
-    snapshot.mode === entry.mode &&
-    snapshot.size === entry.size &&
-    snapshot.sha256 === entry.sha256
-  );
+  return await fileEntryMatches(absolute, entry);
 }
 
 export async function entryMatches(
@@ -132,18 +134,7 @@ export async function entryMatches(
   if (entry.type === "symlink") {
     return await absoluteEntryMatches(localPath(root, entry.path), entry);
   }
-  const snapshot = await readWorkspaceFileSnapshot(root, entry.path).catch((error: unknown) => {
-    if (error instanceof WorkerTaskError) {
-      throw error;
-    }
-    return undefined;
-  });
-  return (
-    snapshot?.type === "file" &&
-    snapshot.mode === entry.mode &&
-    snapshot.size === entry.size &&
-    snapshot.sha256 === entry.sha256
-  );
+  return await fileEntryMatches(localPath(root, entry.path), entry, root);
 }
 
 export async function readWorkspaceTreeFile(params: {
@@ -151,19 +142,9 @@ export async function readWorkspaceTreeFile(params: {
   tree: string;
   entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>;
 }): Promise<Uint8Array> {
-  const listed = await runCommandBuffered(
-    [
-      "git",
-      "--literal-pathspecs",
-      "-C",
-      params.repositoryRoot,
-      "ls-tree",
-      "-z",
-      "--full-tree",
-      params.tree,
-      "--",
-      params.entry.path,
-    ],
+  const listed = await runGitBuffered(
+    params.repositoryRoot,
+    ["--literal-pathspecs", "ls-tree", "-z", "--full-tree", params.tree, "--", params.entry.path],
     {
       timeoutMs: PATCH_TIMEOUT_MS,
       maxOutputBytes: 1024 * 1024,
@@ -184,15 +165,18 @@ export async function readWorkspaceTreeFile(params: {
   if (!match || !listedPath.equals(Buffer.from(params.entry.path))) {
     throw new Error(`Cloud workspace recovery snapshot is invalid: ${params.entry.path}`);
   }
-  const blob = await runCommandBuffered(
-    ["git", "-C", params.repositoryRoot, "cat-file", "blob", match[1]!],
-    {
-      timeoutMs: PATCH_TIMEOUT_MS,
-      maxOutputBytes: MAX_RECONCILIATION_FILE_BYTES + 1,
-    },
-  );
+  const blob = await runGitBuffered(params.repositoryRoot, ["cat-file", "blob", match[1]!], {
+    timeoutMs: PATCH_TIMEOUT_MS,
+    maxOutputBytes: MAX_RECONCILIATION_FILE_BYTES + 1,
+  });
   if (blob.termination !== "exit" || blob.code !== 0) {
     throw new Error(blob.stderr.toString("utf8").trim() || "git cat-file failed");
+  }
+  if (
+    blob.stdout.byteLength !== params.entry.size ||
+    createHash("sha256").update(blob.stdout).digest("hex") !== params.entry.sha256
+  ) {
+    throw new Error(`Cloud workspace recovery snapshot is invalid: ${params.entry.path}`);
   }
   return blob.stdout;
 }
@@ -206,6 +190,9 @@ export async function directoryContainsOnlyJournalPaths(
 ): Promise<boolean> {
   for (const name of await fs.readdir(localPath(root, directory))) {
     const child = `${directory}/${name}`;
+    if (isManagedSandboxSkillsPath(child)) {
+      return false;
+    }
     if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
       continue;
     }
@@ -239,6 +226,9 @@ export async function directoryContainsOnlyDerivedWorkspaceEntries(
   let foundDerivedEntry = false;
   for (const name of names) {
     const child = `${directory}/${name}`;
+    if (isManagedSandboxSkillsPath(child)) {
+      return false;
+    }
     if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
       foundDerivedEntry = true;
       continue;
@@ -254,12 +244,4 @@ export async function directoryContainsOnlyDerivedWorkspaceEntries(
     foundDerivedEntry = true;
   }
   return foundDerivedEntry;
-}
-
-export async function clearTemporaryWorkspace(repositoryRoot: string): Promise<void> {
-  for (const name of await fs.readdir(repositoryRoot)) {
-    if (name !== ".git") {
-      await fs.rm(path.join(repositoryRoot, name), { recursive: true, force: true });
-    }
-  }
 }

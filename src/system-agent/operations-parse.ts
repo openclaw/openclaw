@@ -2,7 +2,6 @@
 import { listAgentRoles } from "../agents/agent-roles.js";
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
-import type { DoctorOptions } from "../commands/doctor.types.js";
 import { DEFAULT_SECRET_PROVIDER_ALIAS } from "../config/types.secrets.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -37,7 +36,6 @@ export type SystemAgentOperationResult = {
   nextInput?: string;
   /** Agent TUI exited via /openclaw: re-enter the shell even without a request. */
   returnToShell?: boolean;
-  followUp?: Extract<SystemAgentOperation, { kind: "model-setup" }>;
 };
 
 /** Injectable command dependencies used by tests and alternate runners. */
@@ -55,7 +53,6 @@ export type SystemAgentCommandDeps = {
     cliOptions: ConfigSetOptions;
     beforePersistentApply?: () => void;
   }) => Promise<void>;
-  runDoctor?: (runtime: RuntimeEnv, options: DoctorOptions) => Promise<void>;
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
@@ -107,7 +104,7 @@ const MODEL_SETUP_RE = new RegExp(
   "i",
 );
 const CREATE_AGENT_RE = new RegExp(
-  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+name\s+(?<name>${ARG_WORD}))?(?:\s+role\s+(?<role>\S+))?(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
+  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+name\s+(?<name>${ARG_WORD}))?(?:\s+role\s+(?<role>\S+))?(?:\s+purpose\s+(?<purpose>${ARG_WORD}))?(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
   "i",
 );
 const CREATE_TEAM_RE = new RegExp(
@@ -470,11 +467,13 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     }
     const workspace = trimShellishToken(createMatch.groups.workspace);
     const name = trimShellishToken(createMatch.groups.name);
+    const purpose = trimShellishToken(createMatch.groups.purpose);
     const model = createMatch.groups.model;
     return {
       kind: "create-agent",
       agentId: normalizeExplicitSystemAgentId(createMatch.groups.agent),
       ...(name ? { name } : {}),
+      ...(purpose ? { purpose } : {}),
       ...(role ? { role } : {}),
       ...(workspace ? { workspace } : {}),
       ...(model ? { model } : {}),
@@ -590,6 +589,7 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
       return [
         `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`,
         operation.name ? `name: ${JSON.stringify(operation.name)}` : undefined,
+        operation.purpose ? `purpose: ${JSON.stringify(operation.purpose)}` : undefined,
         operation.role
           ? `role: ${operation.role === "coordinator" ? "Chief of staff" : operation.role.charAt(0).toUpperCase() + operation.role.slice(1)}`
           : undefined,

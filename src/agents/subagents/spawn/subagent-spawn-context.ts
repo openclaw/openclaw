@@ -5,8 +5,12 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ContextEngine, SubagentSpawnPreparation } from "../../../context-engine/types.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
-import { resolveGatewaySessionStoreTarget } from "./subagent-spawn.runtime.js";
+import {
+  ensureContextEnginesInitialized,
+  forkSessionEntryFromParent,
+  resolveContextEngine,
+  resolveGatewaySessionStoreTarget,
+} from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentContextMode } from "./subagent-spawn.types.js";
 
 type PreparedSpawnContext =
@@ -57,7 +61,7 @@ export async function prepareSubagentSessionContext(params: {
       );
     }
 
-    const forkedResult = await getSubagentSpawnDeps().forkSessionEntryFromParent({
+    const forkedResult = await forkSessionEntryFromParent({
       commitGuard: params.assertActive,
       storePath: childTarget.storePath,
       parentSessionKey: parentTarget.canonicalKey,
@@ -132,9 +136,8 @@ export async function prepareContextEngineSubagentSpawn(params: {
       }
     })());
   try {
-    const deps = getSubagentSpawnDeps();
-    deps.ensureContextEnginesInitialized();
-    engine = await deps.resolveContextEngine(params.cfg);
+    ensureContextEnginesInitialized();
+    engine = await resolveContextEngine(params.cfg);
     // Resolution may outlive the caller. Returned preparation must still reach
     // the pipeline rollback owner before its next authority check.
     params.assertActive?.();

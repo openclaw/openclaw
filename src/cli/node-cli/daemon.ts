@@ -116,7 +116,8 @@ async function warnIfSystemdUserLingerDisabled(warn: (message: string) => void):
 }
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
-  const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
+  const { json, stdout, warnings, warn, emit, emitMessage, fail } =
+    createDaemonInstallActionContext(opts.json);
   const installBlock = resolveDaemonInstallBlockMessage("node");
   if (installBlock) {
     fail(installBlock);
@@ -193,13 +194,6 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     fail(`Invalid runtime pin: ${formatErrorMessage(error)}`);
     return;
   }
-  const warn = (message: string) => {
-    if (json) {
-      warnings.push(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  };
   let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
@@ -209,7 +203,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
   if (loaded && !opts.force) {
     await warnIfSystemdUserLingerDisabled(warn);
-    emit({
+    emitMessage({
       ok: true,
       result: "already-installed",
       message: `Node service already ${service.loadedText}.`,
@@ -217,7 +211,6 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       warnings: warnings.length ? warnings : undefined,
     });
     if (!json) {
-      defaultRuntime.log(`Node service already ${service.loadedText}.`);
       defaultRuntime.log(`Reinstall with: ${formatCliCommand("openclaw node install --force")}`);
     }
     return;
@@ -238,13 +231,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       allCommands: opts.allCommands,
       runtime: runtimeRaw,
       pinnedRuntimePath,
-      warn: (message) => {
-        if (json) {
-          warnings.push(message);
-        } else {
-          defaultRuntime.log(message);
-        }
-      },
+      warn,
     });
 
   await installDaemonServiceAndEmit({

@@ -1,4 +1,3 @@
-// Msteams plugin module implements graph group management behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
 import { findMSTeamsConversationMember } from "./graph-conversation-members.js";
 import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";

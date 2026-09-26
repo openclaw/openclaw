@@ -37,7 +37,7 @@ set -euo pipefail
 printf '%s\\t%s\\n' "$(basename "$0")" "$*" >> "$OPENCLAW_TEST_GH_CALLS"
 case "$1 $2" in
   "auth token") printf 'forwarded-test-token\\n' ;;
-  "pr view")
+  "api repos/openclaw/openclaw/pulls/12345")
     if [ -e "$OPENCLAW_TEST_GH_DISPATCHED" ] && [ "\${OPENCLAW_TEST_GH_MODE:-}" = "head-change" ]; then
       printf '%s\\n' "$OPENCLAW_TEST_CHANGED_HEAD_SHA"
     else
@@ -172,6 +172,8 @@ describePosix("scripts/pr ci-dispatch", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain(`observed_run_url=${runUrl}`);
     const calls = readFileSync(fakeGh.calls, "utf8");
+    expect(calls).toContain("gh\tapi repos/openclaw/openclaw/pulls/12345 --jq .head.sha");
+    expect(calls).not.toContain("pr view");
     expect(calls).toContain(
       `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${headSha} -f release_gate=true -f pull_request_number=12345`,
     );

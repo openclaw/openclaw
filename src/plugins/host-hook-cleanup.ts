@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { appendPluginInstanceCleanupFailures } from "./host-hook-cleanup-result.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import type {
   PluginHostCleanupFailure,
@@ -24,6 +25,7 @@ import {
 } from "./host-hook-runtime.js";
 import type { PluginHostCleanupReason } from "./host-hooks.js";
 import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import type { PluginInstanceDisposalResult } from "./plugin-instance.types.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
@@ -370,7 +372,7 @@ export function createPluginHostRegistryRetirement(params: {
       : undefined;
     // Instance disposal retains its real completion even when this caller receives a self-ack.
     // Rollback may already have started the exact instance disposal before registry retirement.
-    const completion = instance
+    const completion: Promise<PluginInstanceDisposalResult> = instance
       ? instance.dispose(instance.disposing ? undefined : cleanup)
       : Promise.resolve()
           .then(cleanup)
@@ -383,12 +385,11 @@ export function createPluginHostRegistryRetirement(params: {
         return { ...result, deferredPluginIds: [pluginId] };
       }
       const disposed = await (instance ? instance.dispose() : completion);
+      const failures = [...result.failures];
+      appendPluginInstanceCleanupFailures(failures, pluginId, disposed);
       return {
         cleanupCount: result.cleanupCount,
-        failures: [
-          ...result.failures,
-          ...disposed.errors.map((error) => ({ pluginId, hookId: "instance", error })),
-        ],
+        failures,
       };
     });
   }

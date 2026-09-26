@@ -16,7 +16,10 @@ import {
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { createLifecycleDiagnosticOperation } from "./session-lifecycle-diagnostics.js";
-import { decodeSessionIdentity, normalizeSessionIdentities } from "./session-lifecycle-identity.js";
+import {
+  collectSessionIdentityTargets,
+  normalizeSessionIdentities,
+} from "./session-lifecycle-identity.js";
 import { createSessionIdentityLockRunner } from "./session-lifecycle-locks.js";
 import {
   clearSessionWorkAdmissionHandoffs,
@@ -462,24 +465,14 @@ export function getSessionWorkAdmissionOwnerRelease(
 export function collectActiveSessionWorkAdmissions(
   owners?: ReadonlySet<object>,
 ): Map<string, Set<string>> {
-  const targets = new Map<string, Set<string>>();
-  for (const [normalizedIdentity, admissions] of ACTIVE_SESSION_WORK_ADMISSIONS) {
-    if (
-      ![...admissions].some(
+  const identities = [...ACTIVE_SESSION_WORK_ADMISSIONS]
+    .filter(([, admissions]) =>
+      [...admissions].some(
         (admission) => admission.phase === "acquired" && (!owners || owners.has(admission)),
-      )
-    ) {
-      continue;
-    }
-    const decoded = decodeSessionIdentity(normalizedIdentity);
-    if (!decoded) {
-      continue;
-    }
-    const identities = targets.get(decoded.scope) ?? new Set<string>();
-    identities.add(decoded.identity);
-    targets.set(decoded.scope, identities);
-  }
-  return targets;
+      ),
+    )
+    .map(([identity]) => identity);
+  return collectSessionIdentityTargets(identities);
 }
 
 /** Capture exact host-owned admissions; replacements after an await cannot inherit the snapshot. */
@@ -523,13 +516,21 @@ export function getActiveSessionLifecycleMutationCount(): number {
   return ACTIVE_SESSION_LIFECYCLE_MUTATIONS.size > 0 ? 1 : 0;
 }
 
+/** Snapshot the existing lifecycle identity index for off-thread maintenance planning. */
+export function collectActiveSessionLifecycleMutationIdentities(scope: string): string[] {
+  const identities = [...ACTIVE_SESSION_LIFECYCLE_MUTATIONS]
+    .filter(([, count]) => count > 0)
+    .map(([identity]) => identity);
+  return [...(collectSessionIdentityTargets(identities).get(scope.trim()) ?? [])].toSorted();
+}
+
 export async function beginSessionWorkAdmission(params: {
   scope: string;
   identities: Iterable<string | undefined>;
   /** Stable process-wide identity for owners that must be observable while still pending. */
   owner?: symbol;
   resolveGatewayContext?: GatewayContextResolver;
-  assertAllowed: () => Promise<void> | void;
+  assertAllowed: (signal: AbortSignal) => Promise<void> | void;
   /** Final writer-ordered validation; use when one-time effects must not run during the first check. */
   revalidateAllowed?: () => Promise<void> | void;
   onInterrupt?: SessionWorkAdmissionInterrupt;
@@ -643,7 +644,7 @@ export async function beginSessionWorkAdmission(params: {
       run: async () => {
         const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
         current.add(admission);
-        await CURRENT_SESSION_WORK_ADMISSIONS.run(current, params.assertAllowed);
+        await CURRENT_SESSION_WORK_ADMISSIONS.run(current, params.assertAllowed, signal);
         if (isGatewaySubordinateWorkAdmissionClosed()) {
           throw new GatewayDrainingError();
         }
@@ -654,7 +655,8 @@ export async function beginSessionWorkAdmission(params: {
           async () => {
             writerBarrierStarted = true;
             signal.throwIfAborted();
-            await lease.run(async () => await (params.revalidateAllowed ?? params.assertAllowed)());
+            const revalidate = params.revalidateAllowed ?? (() => params.assertAllowed(signal));
+            await lease.run(async () => await revalidate());
           },
           { reentrant: true },
         );

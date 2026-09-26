@@ -533,10 +533,10 @@ function enforceMessageActionConversationReadGate(
   );
 }
 
-function prepareScheduledMessageWriteContext(
+async function prepareScheduledMessageWriteContext(
   ctx: ChannelMessageActionDispatchContext,
   prepared: PreparedMessageActionReadContext,
-): ChannelMessageActionContext | undefined {
+): Promise<ChannelMessageActionContext | undefined> {
   const action = prepared.actionContext.action;
   const policy = SCHEDULED_MESSAGE_WRITE_POLICIES.get(action);
   if (!policy || !ctx.messageActionAuthorization?.scheduled) {
@@ -594,16 +594,16 @@ function prepareScheduledMessageWriteContext(
 }
 
 /** Admit provider preparation before resolving an external target. */
-export function prepareExternalMessageActionTargetForResolution(
+export async function prepareExternalMessageActionTargetForResolution(
   ctx: ChannelMessageActionDispatchContext,
-): {
+): Promise<{
   params: Record<string, unknown>;
   accountId?: string | null;
   assertReadAuthorityCurrent?: () => void;
   assertTargetAuthorityCurrent?: () => void;
-} {
+}> {
   const prepared = prepareMessageActionReadContext(ctx);
-  const scheduledWrite = prepared && prepareScheduledMessageWriteContext(ctx, prepared);
+  const scheduledWrite = prepared && (await prepareScheduledMessageWriteContext(ctx, prepared));
   if (scheduledWrite) {
     return {
       params: ctx.params,
@@ -675,7 +675,11 @@ export async function dispatchChannelMessageAction(
   if (!prepared) {
     return null;
   }
-  const scheduledWrite = prepareScheduledMessageWriteContext(ctx, prepared);
+  const scheduledWrite =
+    ctx.messageActionAuthorization?.scheduled &&
+    SCHEDULED_MESSAGE_WRITE_POLICIES.has(prepared.actionContext.action)
+      ? await prepareScheduledMessageWriteContext(ctx, prepared)
+      : undefined;
   const run = (actionContext: ChannelMessageActionContext) =>
     withChannelReadAuthority(prepared.assertReadAuthorityCurrent, async () => {
       const { plugin } = prepared;

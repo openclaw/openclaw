@@ -462,40 +462,6 @@ describe("web_fetch extraction fallbacks", () => {
     }
   });
 
-  it("spills truncated fetched text to a private temp file", async () => {
-    const fullText = "web fetch content ".repeat(400);
-    installPlainTextFetch(fullText);
-
-    const tool = createFetchTool({
-      firecrawl: { enabled: false },
-      maxChars: 500,
-    });
-
-    const result = await tool?.execute?.("call", { url: "https://example.com/spill" });
-    const details = result?.details as {
-      text?: string;
-      truncated?: boolean;
-      rawLength?: number;
-      length?: number;
-      spill?: { path: string; chars: number; truncated?: true };
-    };
-    if (!details.spill) {
-      throw new Error("expected spill");
-    }
-
-    expect(details.truncated).toBe(true);
-    expect(details.text).toContain(`Full output: ${details.spill.path}`);
-    expect(details.text?.length).toBeLessThanOrEqual(500);
-    expect(details.rawLength).toBe(fullText.length);
-    expect(details.length).toBe(details.text?.length);
-    expect(details.spill.chars).toBe(fullText.length);
-    expect(details.spill.truncated).toBeUndefined();
-    const spilledText = await readFile(details.spill.path, "utf8");
-    expect(spilledText).toContain("SECURITY NOTICE");
-    expect(spilledText).toContain(fullText);
-    await rm(details.spill.path, { force: true });
-  });
-
   it("caps oversized web_fetch spill files and says so in the footer", async () => {
     const fullText = "x".repeat(WEB_FETCH_SPILL_MAX_CHARS + 123);
     installPlainTextFetch(fullText);
@@ -520,7 +486,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.spill.chars).toBe(WEB_FETCH_SPILL_MAX_CHARS);
     expect(details.spill.truncated).toBe(true);
     const spilledText = await readFile(details.spill.path, "utf8");
-    expect(spilledText).toContain("SECURITY NOTICE");
+    expect(spilledText).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(spilledText.length).toBeGreaterThan(WEB_FETCH_SPILL_MAX_CHARS);
     expect(spilledText.length).toBeLessThan(WEB_FETCH_SPILL_MAX_CHARS + 1_000);
     await rm(details.spill.path, { force: true });
@@ -579,7 +545,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.spill.chars).toBe(32_000);
     expect(details.spill.truncated).toBe(true);
     const spilledText = await readFile(details.spill.path, "utf8");
-    expect(spilledText).toContain("SECURITY NOTICE");
+    expect(spilledText).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(spilledText).not.toContain(fullText);
     await rm(details.spill.path, { force: true });
   });
@@ -918,7 +884,10 @@ describe("web_fetch extraction fallbacks", () => {
     };
     expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toContain("Source: Web Fetch");
-    expect(withoutSpillFooter(details.text).length).toBeLessThanOrEqual(10_000);
+    expect(details.text).toContain("a".repeat(100));
+    expect(details.text?.split("<<<EXTERNAL_UNTRUSTED_CONTENT")[0]?.trim()).not.toBe("");
+    expect(details.text).toMatch(/<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(details.text?.length).toBeLessThanOrEqual(10_000);
     expect(details.length).toBe(details.text?.length);
     expect(details.truncated).toBe(true);
     if (details.spill) {
@@ -1074,7 +1043,6 @@ describe("web_fetch extraction fallbacks", () => {
 
     expect(message).toContain("Web fetch failed (404):");
     expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
-    expect(message).toContain("SECURITY NOTICE");
     expect(message).toContain("Not Found");
     expect(message).not.toContain("<html");
     expect(message.length).toBeLessThan(5_000);

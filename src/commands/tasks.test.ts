@@ -23,7 +23,6 @@ import {
   configureTaskFlowRegistryRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import type {
@@ -119,12 +118,11 @@ async function writeSessionEntries(
   }
 }
 
-function resetTaskCommandRuntime() {
-  taskRegistryMaintenance.stopTaskRegistryMaintenance();
-  taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
+async function resetTaskCommandRuntime() {
+  await taskRegistryMaintenance.stopTaskRegistryMaintenance();
+  taskRegistryMaintenance.configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetConfigRuntimeState();
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   closeOpenClawAgentDatabasesForTest();
@@ -136,11 +134,11 @@ async function withTaskCommandStateDir(
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-command-" },
     async (state) => {
-      resetTaskCommandRuntime();
+      await resetTaskCommandRuntime();
       try {
         await run(state);
       } finally {
-        resetTaskCommandRuntime();
+        await resetTaskCommandRuntime();
       }
     },
   );
@@ -151,9 +149,9 @@ describe("tasks commands", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetTaskCommandRuntime();
     vi.useRealTimers();
-    resetTaskCommandRuntime();
     mocks.callGateway.mockReset();
   });
 

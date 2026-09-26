@@ -86,6 +86,9 @@ export function capturePluginGenerationArtifact(
     const packageId = `package-${packages.size}`;
     const moduleRoot = path.join(directory, packageId, "node_modules");
     const parentName = path.basename(path.dirname(boundary));
+    const sourceModuleRoot = parentName.startsWith("@")
+      ? path.dirname(path.dirname(boundary))
+      : path.dirname(boundary);
     const destination = path.join(
       moduleRoot,
       parentName.startsWith("@") ? parentName : "",
@@ -236,9 +239,12 @@ export function capturePluginGenerationArtifact(
     ) => {
       const captured = copyPackage(dependency.root, undefined, captureMetadataOnly);
       // Preserve real nested installs; synthetic per-file node_modules confuse native addon roots.
+      // Installed peers also need sibling paths for native assets read directly from disk.
       const lookupDirectory = inPackage(boundary, dependency.lookupDirectory)
         ? path.join(capturedBoundary, path.relative(boundary, dependency.lookupDirectory))
-        : capturedBoundary;
+        : path.join(dependency.lookupDirectory, "node_modules") === sourceModuleRoot
+          ? path.dirname(moduleRoot)
+          : capturedBoundary;
       const link = path.join(lookupDirectory, "node_modules", name);
       packages.get(dependency.root)!.links.add(link);
       if (!fs.existsSync(link)) {

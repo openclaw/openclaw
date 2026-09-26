@@ -22,7 +22,7 @@ import {
   promoteAuthProfileInOrder,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
-import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store-runtime.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -112,7 +112,7 @@ function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | und
   return expires;
 }
 
-function guardCancel<T>(value: T | symbol): T {
+function guardCancel<T>(value: T | typeof import("@clack/prompts").CANCEL_SYMBOL): T {
   if (typeof value === "symbol" || isCancel(value)) {
     cancel("Cancelled.");
     process.exit(0);
@@ -300,7 +300,8 @@ async function resolveModelsAuthAgent(rawAgentId?: string | null, config?: OpenC
   return resolveModelsTargetAgent(cfg, rawAgentId ?? undefined, { kind: "mutation" });
 }
 
-function resolveRequestedProviderOrThrow(
+/** Resolves a requested login provider or throws with available provider details. */
+export function resolveRequestedLoginProviderOrThrow(
   providers: ProviderPlugin[],
   rawProvider?: string,
 ): ProviderPlugin | null {
@@ -517,7 +518,7 @@ async function persistProviderAuthResult(params: {
 
     for (const profile of persistedProfiles) {
       params.runtime.log(
-        `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
+        `Auth profile: ${profile.profileId} (${profile.credential.provider}/${profile.credential.type})`,
       );
     }
     if (defaultModel) {
@@ -627,9 +628,18 @@ async function runProviderAuthMethod(params: {
     provider: params.provider.id,
     providerLabel: params.provider.label,
   });
+  const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+  const existingProfiles = Object.entries(store.profiles)
+    .filter(
+      ([profileId, credential]) =>
+        credential.provider === params.provider.id &&
+        (!params.profileId || profileId === params.profileId),
+    )
+    .map(([profileId, credential]) => ({ profileId, credential }));
   const result = await runProviderPluginAuthMethodUnpersisted({
     method: params.method,
     config: params.config,
+    existingProfiles,
     credentialOnly: params.credentialOnly,
     assertCurrent: params.assertCurrent,
     env: params.env ?? process.env,
@@ -727,7 +737,9 @@ export async function modelsAuthSetupTokenCommand(
   }
 
   const provider =
-    resolveRequestedProviderOrThrow(tokenProviders, opts.provider) ?? tokenProviders[0] ?? null;
+    resolveRequestedLoginProviderOrThrow(tokenProviders, opts.provider) ??
+    tokenProviders[0] ??
+    null;
   if (!provider) {
     throw new Error(
       `No token-capable provider is available. Run ${formatCliCommand("openclaw plugins list")} to verify provider plugins are installed.`,
@@ -915,7 +927,7 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
       : provider;
 
   const providerPlugin =
-    provider === "custom" ? null : resolveRequestedProviderOrThrow(tokenProviders, providerId);
+    provider === "custom" ? null : resolveRequestedLoginProviderOrThrow(tokenProviders, providerId);
   if (providerPlugin) {
     const tokenMethods = listTokenAuthMethods(providerPlugin);
     const methodId =
@@ -1037,24 +1049,6 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   /** Publish a hosted login through its current Gateway instead of a separate CLI connection. */
   refreshAfterLogin?: (agentId: string) => Promise<void>;
 };
-
-/** Resolves a requested login provider or throws with available provider details. */
-export function resolveRequestedLoginProviderOrThrow(
-  providers: ProviderPlugin[],
-  rawProvider?: string,
-): ProviderPlugin | null {
-  return resolveRequestedProviderOrThrow(providers, rawProvider);
-}
-
-function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" | "token" {
-  if (credential.type === "api_key") {
-    return "api_key";
-  }
-  if (credential.type === "token") {
-    return "token";
-  }
-  return "oauth";
-}
 
 function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {
   if (providerId !== "openai") {
@@ -1301,7 +1295,7 @@ async function runModelsAuthLoginFlow(
     profiles: profiles.map((profile) => ({
       profileId: profile.profileId,
       provider: profile.credential.provider,
-      mode: credentialMode(profile.credential),
+      mode: profile.credential.type,
     })),
   };
 }

@@ -8,10 +8,12 @@ import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlit
 import { makeAttemptResult } from "../../agents/embedded-agent-runner/run.overflow-compaction.fixture.js";
 import type { EmbeddedRunAttemptParams } from "../../agents/embedded-agent-runner/run/types.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentCleanupScope } from "../../agents/run-cleanup-timeout.js";
 import { loadExactSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObject } from "../../config/validation.js";
+import * as gatewayLock from "../../infra/gateway-lock.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -27,201 +29,228 @@ import {
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as testState from "../../test-utils/openclaw-test-state.js";
 import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
+import { inspectModelReference } from "./model-reference-validation.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 const attempt = vi.hoisted(() => vi.fn<(params: EmbeddedRunAttemptParams) => unknown>());
 vi.mock("../../agents/embedded-agent-runner/run/attempt.js", () => ({
   runEmbeddedAttempt: attempt,
 }));
 
-it.each([
+const resourceModes = [
   "late-success",
   "exclusive",
   "sigterm",
   "late-failure",
   "db-close-failure",
   "discovery",
-] as const)("keeps probe-owned state through bounded engine cleanup (%s)", async (mode) => {
-  const state = await createOpenClawTestState({
+] as const;
+
+async function runProbeResourceFixture(mode: (typeof resourceModes)[number]) {
+  const state = await testState.createOpenClawTestState({
     label: "probe-cleanup-resources",
     env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "25" },
   });
-  const pluginId = "probe-resource-fixture";
-  const provider = "probe-resource-provider";
-  const pluginRoot = state.path("plugin");
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  fs.mkdirSync(state.agentDir(), { recursive: true });
-  const entry = path.join(pluginRoot, "index.cjs");
-  fs.writeFileSync(
-    path.join(pluginRoot, "package.json"),
-    JSON.stringify({
-      name: pluginId,
-      version: "1.0.0",
-      openclaw: { extensions: ["./index.cjs"] },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({ id: pluginId, providers: [provider], configSchema: { type: "object" } }),
-  );
-  fs.writeFileSync(
-    entry,
-    `module.exports = { id: '${pluginId}', register(api) { api.registerProvider({ id: '${provider}', label: 'Probe resource fixture', auth: [] }); } };`,
-  );
-  const cfg: OpenClawConfig = {
-    agents: {
-      entries: { main: { workspace: state.workspaceDir } },
-      defaults: { workspace: state.workspaceDir, model: { primary: `${provider}/probe-model` } },
-    },
-    models: {
-      providers: {
-        [provider]: {
-          api: "openai-completions",
-          apiKey: "synthetic-probe-credential",
-          baseUrl: "https://fixture.invalid/v1",
-          models: [
-            {
-              id: "probe-model",
-              name: "Probe model",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 8192,
-              maxTokens: 64,
-            },
-          ],
-        },
-      },
-    },
-    plugins: {
-      allow: [pluginId],
-      load: { paths: [pluginRoot] },
-      slots: { memory: "none", contextEngine: pluginId },
-      entries: { [pluginId]: { enabled: true } },
-    },
-  };
-  expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
-  await state.writeConfig(cfg);
-  const builder = createPluginRegistry({
-    runtime: createPluginRuntime(),
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    activateGlobalSideEffects: false,
-  });
-  const record = createPluginRecord({ id: pluginId, source: entry });
-  const source = new PluginRegistryInspectionResources(async () => {
-    await getPluginInstance(record)?.dispose();
-  });
-  source.attach(builder.registry);
-  builder.registry.plugins.push(record);
-  const api = builder.createApi(record, {
-    config: cfg,
-    registrationMode: mode === "discovery" ? "discovery" : "full",
-  });
-  const disposalStarted = createDeferredCore();
-  const finishDisposal = createDeferredCore();
-  const childStarted = createDeferredCore();
-  const finishChild = createDeferredCore();
-  const childFinished = createDeferredCore();
-  const signals = new EventEmitter();
-  const lockDir = state.path("locks");
-  const lockPath = path.join(lockDir, "gateway.state.lock");
-  const exclusive = mode !== "late-success";
-  let factoryCalls = 0;
-  let probeTarget: EmbeddedRunAttemptParams["sessionTarget"];
-  let attemptAgentDir: string | undefined;
-  const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
-  let cleanupSignal: AbortSignal | undefined;
-  let stagedAgentDir: string | undefined;
-  let profileId: string | undefined;
-  let assertAdmitted: (() => void) | undefined;
-  const reads: boolean[] = [];
-  const readProbeState = () => {
-    if (!stagedAgentDir || !profileId) {
-      throw new Error("Probe factory did not capture its owned state");
-    }
-    reads.push(fs.readFileSync(path.join(stagedAgentDir, "probe-marker"), "utf8") === "owned");
-    reads.push(Boolean(loadPersistedAuthProfileStore(stagedAgentDir)?.profiles[profileId]));
-  };
-  source.runRegistration(pluginId, () => {
-    api.registerContextEngine(pluginId, (ctx) => {
-      factoryCalls++;
-      stagedAgentDir = ctx.agentDir;
-      if (!stagedAgentDir) {
-        throw new Error("Probe factory needs its staged agent directory");
-      }
-      profileId = Object.keys(loadPersistedAuthProfileStore(stagedAgentDir)?.profiles ?? {}).find(
-        (id) => id.includes(":probe-"),
-      );
-      fs.writeFileSync(path.join(stagedAgentDir, "probe-marker"), "owned");
-      return {
-        info: { id: pluginId, name: "Probe cleanup fixture" },
-        ingest: async () => ({ ingested: false }),
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-        compact: async () => ({ ok: true, compacted: false }),
-        async dispose() {
-          cleanupSignal = getAsyncWorkSignal();
-          disposalStarted.resolve();
-          await finishDisposal.promise;
-          readProbeState();
-          if (mode === "late-failure") {
-            throw new Error("synthetic engine disposal failure");
-          }
-          void trackAsyncWork(async () => {
-            childStarted.resolve();
-            await finishChild.promise;
-            try {
-              readProbeState();
-            } finally {
-              childFinished.resolve();
-            }
-          }).catch(() => {});
-        },
-      };
-    });
-  });
-  setActivePluginRegistry(builder.registry);
-  attempt.mockImplementation((params) => {
-    expect(params.disableTools).toBe(true);
-    expect(params.modelRun).toBe(true);
-    attemptAgentDir = params.agentDir;
-    probeTarget = params.sessionTarget;
-    if (mode !== "discovery") {
-      expect(params.agentDir).toBe(stagedAgentDir);
-    }
-    assertAdmitted = resolveAdmittedRunActiveAssertion(params.admittedRunContext);
-    assertAdmitted?.();
-    return makeAttemptResult({ sessionIdUsed: params.sessionId, assistantTexts: ["OK"] });
-  });
-  if (mode === "db-close-failure") {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
-    const dispose = agentDatabase.disposeOpenClawAgentDatabaseByPath;
-    vi.spyOn(agentDatabase, "disposeOpenClawAgentDatabaseByPath").mockImplementation(
-      (pathname, options) => {
-        const closed = dispose(pathname, options);
-        if (stagedAgentDir && pathname.startsWith(stagedAgentDir + path.sep)) {
-          throw new Error("synthetic late database disposal failure");
-        }
-        return closed;
-      },
-    );
-  }
-  const readProbeSession = () => {
-    if (!probeTarget?.sessionKey || !probeTarget.storePath) {
-      throw new Error("Probe did not provide its hidden session target");
-    }
-    return loadExactSessionEntry({
-      storePath: probeTarget.storePath,
-      sessionKey: probeTarget.sessionKey,
-      agentId: probeTarget.agentId,
-    });
-  };
-  const parent = new AsyncWorkScope();
-  const cleanup = createAgentCleanupScope();
-  let operation: ReturnType<typeof runAuthProbes> | undefined;
-  let drain: Promise<void> | undefined;
+  const failures = new Set<unknown>();
+  const releases: Array<() => unknown> = [
+    resetPreparedModelRuntimeSnapshotsForTest,
+    clearPluginMetadataLifecycleCaches,
+    resetPluginRuntimeStateForTest,
+    () => attempt.mockReset(),
+    () => vi.restoreAllMocks(),
+    () => setLoggerOverride(null),
+    () => state.cleanup(),
+  ];
   try {
-    operation = parent.track(() =>
+    const pluginId = "probe-resource-fixture";
+    const provider = "probe-resource-provider";
+    const pluginRoot = state.path("plugin");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(state.agentDir(), { recursive: true });
+    const entry = path.join(pluginRoot, "index.cjs");
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        name: pluginId,
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify({ id: pluginId, providers: [provider], configSchema: { type: "object" } }),
+    );
+    fs.writeFileSync(
+      entry,
+      `module.exports = { id: '${pluginId}', register(api) { api.registerProvider({ id: '${provider}', label: 'Probe resource fixture', auth: [] }); } };`,
+    );
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { main: { workspace: state.workspaceDir } },
+        defaults: { workspace: state.workspaceDir, model: { primary: `${provider}/probe-model` } },
+      },
+      models: {
+        providers: {
+          [provider]: {
+            api: "openai-completions",
+            apiKey: "synthetic-probe-credential",
+            baseUrl: "https://fixture.invalid/v1",
+            models: [
+              {
+                id: "probe-model",
+                name: "Probe model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 8192,
+                maxTokens: 64,
+              },
+            ],
+          },
+        },
+      },
+      plugins: {
+        allow: [pluginId],
+        load: { paths: [pluginRoot] },
+        slots: { memory: "none", contextEngine: pluginId },
+        entries: { [pluginId]: { enabled: true } },
+      },
+    };
+    expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
+    await state.writeConfig(cfg);
+    const builder = createPluginRegistry({
+      runtime: createPluginRuntime(),
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({ id: pluginId, source: entry });
+    const source = new PluginRegistryInspectionResources(async () => {
+      await getPluginInstance(record)?.dispose();
+    });
+    releases.unshift(() => source.release());
+    source.attach(builder.registry);
+    builder.registry.plugins.push(record);
+    const api = builder.createApi(record, {
+      config: cfg,
+      registrationMode: mode === "discovery" ? "discovery" : "full",
+    });
+    const disposalStarted = createDeferredCore();
+    const finishDisposal = createDeferredCore();
+    const childStarted = createDeferredCore();
+    const finishChild = createDeferredCore();
+    const childFinished = createDeferredCore();
+    const signals = new EventEmitter();
+    const lockDir = state.path("locks");
+    const lockPath = path.join(lockDir, "gateway.state.lock");
+    const exclusive = mode !== "late-success";
+    let factoryCalls = 0;
+    let probeTarget: EmbeddedRunAttemptParams["sessionTarget"];
+    let attemptAgentDir: string | undefined;
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let cleanupSignal: AbortSignal | undefined;
+    let stagedAgentDir: string | undefined;
+    let profileId: string | undefined;
+    let assertAdmitted: (() => void) | undefined;
+    const reads: boolean[] = [];
+    const readProbeState = () => {
+      if (!stagedAgentDir || !profileId) {
+        throw new Error("Probe factory did not capture its owned state");
+      }
+      reads.push(fs.readFileSync(path.join(stagedAgentDir, "probe-marker"), "utf8") === "owned");
+      reads.push(Boolean(loadPersistedAuthProfileStore(stagedAgentDir)?.profiles[profileId]));
+    };
+    source.runRegistration(pluginId, () => {
+      api.registerContextEngine(pluginId, (ctx) => {
+        factoryCalls++;
+        stagedAgentDir = ctx.agentDir;
+        if (!stagedAgentDir) {
+          throw new Error("Probe factory needs its staged agent directory");
+        }
+        profileId = Object.keys(loadPersistedAuthProfileStore(stagedAgentDir)?.profiles ?? {}).find(
+          (id) => id.includes(":probe-"),
+        );
+        fs.writeFileSync(path.join(stagedAgentDir, "probe-marker"), "owned");
+        return {
+          info: { id: pluginId, name: "Probe cleanup fixture" },
+          ingest: async () => ({ ingested: false }),
+          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+          compact: async () => ({ ok: true, compacted: false }),
+          async dispose() {
+            cleanupSignal = getAsyncWorkSignal();
+            disposalStarted.resolve();
+            await finishDisposal.promise;
+            readProbeState();
+            if (mode === "late-failure") {
+              throw new Error("synthetic engine disposal failure");
+            }
+            void trackAsyncWork(async () => {
+              childStarted.resolve();
+              await finishChild.promise;
+              try {
+                readProbeState();
+              } finally {
+                childFinished.resolve();
+              }
+            }).catch((error: unknown) => {
+              failures.add(error);
+            });
+          },
+        };
+      });
+    });
+    setActivePluginRegistry(builder.registry);
+    attempt.mockImplementation((params) => {
+      expect(params.disableTools).toBe(true);
+      expect(params.modelRun).toBe(true);
+      attemptAgentDir = params.agentDir;
+      probeTarget = params.sessionTarget;
+      if (mode !== "discovery") {
+        expect(params.agentDir).toBe(stagedAgentDir);
+      }
+      assertAdmitted = resolveAdmittedRunActiveAssertion(params.admittedRunContext);
+      assertAdmitted?.();
+      return makeAttemptResult({ sessionIdUsed: params.sessionId, assistantTexts: ["OK"] });
+    });
+    if (mode === "db-close-failure") {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+      const dispose = agentDatabase.disposeOpenClawAgentDatabaseByPath;
+      vi.spyOn(agentDatabase, "disposeOpenClawAgentDatabaseByPath").mockImplementation(
+        (pathname, options) => {
+          const closed = dispose(pathname, options);
+          if (stagedAgentDir && pathname.startsWith(stagedAgentDir + path.sep)) {
+            throw new Error("synthetic late database disposal failure");
+          }
+          return closed;
+        },
+      );
+    }
+    const readProbeSession = () => {
+      if (!probeTarget?.sessionKey || !probeTarget.storePath) {
+        throw new Error("Probe did not provide its hidden session target");
+      }
+      return loadExactSessionEntry({
+        storePath: probeTarget.storePath,
+        sessionKey: probeTarget.sessionKey,
+        agentId: probeTarget.agentId,
+      });
+    };
+    const parent = new AsyncWorkScope();
+    const cleanup = createAgentCleanupScope();
+    const pending: Promise<unknown>[] = [];
+    // Release gates and join all admitted work before retiring resources or state.
+    releases.unshift(async () => {
+      finishDisposal.resolve();
+      finishChild.resolve();
+      for (const result of await Promise.allSettled(pending)) {
+        if (result.status === "rejected") {
+          failures.add(result.reason);
+        }
+      }
+      await parent.drain();
+    });
+    const operation = parent.track(() =>
       cleanup.run(() =>
         runAuthProbes({
           cfg,
@@ -255,6 +284,7 @@ it.each([
         }),
       ),
     );
+    pending.push(operation);
     if (mode === "discovery") {
       expect((await operation).results).toMatchObject([{ status: "ok" }]);
       await parent.drain();
@@ -264,83 +294,206 @@ it.each([
       expect(fs.existsSync(attemptAgentDir!)).toBe(false);
       expect(fs.existsSync(lockPath)).toBe(false);
       expect(signals.listenerCount("SIGTERM")).toBe(0);
-      return;
-    }
-    await Promise.race([
-      disposalStarted.promise,
-      operation.then((result) => {
-        throw new Error(
-          `Probe returned without engine disposal: ${JSON.stringify(result.results.map((probe) => ({ status: probe.status, error: probe.error })))}`,
-        );
-      }),
-    ]);
-    const reported = await operation;
-    expect(reported.results).toMatchObject([{ status: "ok" }]);
-    expect(attempt).toHaveBeenCalledOnce();
-    expect(stagedAgentDir).toContain("openclaw-auth-probe-");
-    expect(stagedAgentDir).not.toBe(state.agentDir());
-    expect(assertAdmitted).toBeTypeOf("function");
-    expect(() => assertAdmitted?.()).toThrow();
-    expect(fs.existsSync(stagedAgentDir!)).toBe(true);
-    expect(readProbeSession()?.entry).toBeDefined();
-    expect(
-      agentDatabase.isOpenClawAgentDatabaseOpen(resolveAuthProfileDatabasePath(stagedAgentDir!)),
-    ).toBe(true);
-    if (exclusive) {
-      expect(fs.existsSync(lockPath)).toBe(true);
-      expect(signals.listenerCount("SIGTERM")).toBe(1);
-    }
-    expect(cleanupSignal?.aborted).toBe(false);
-    if (mode === "sigterm") {
-      signals.emit("SIGTERM");
-      expect(cleanupSignal?.aborted).toBe(true);
-      expect(fs.existsSync(lockPath)).toBe(true);
-    }
-    finishDisposal.resolve();
-    if (mode !== "late-failure") {
-      await childStarted.promise;
+    } else {
+      await Promise.race([
+        disposalStarted.promise,
+        operation.then((result) => {
+          throw new Error(
+            `Probe returned without engine disposal: ${JSON.stringify(result.results.map((probe) => ({ status: probe.status, error: probe.error })))}`,
+          );
+        }),
+      ]);
+      const reported = await operation;
+      expect(reported.results).toMatchObject([{ status: "ok" }]);
+      expect(attempt).toHaveBeenCalledOnce();
+      expect(stagedAgentDir).toContain("openclaw-auth-probe-");
+      expect(stagedAgentDir).not.toBe(state.agentDir());
+      expect(assertAdmitted).toBeTypeOf("function");
+      expect(() => assertAdmitted?.()).toThrow();
       expect(fs.existsSync(stagedAgentDir!)).toBe(true);
-      finishChild.resolve();
-      await childFinished.promise;
+      expect(readProbeSession()?.entry).toBeDefined();
+      expect(
+        agentDatabase.isOpenClawAgentDatabaseOpen(resolveAuthProfileDatabasePath(stagedAgentDir!)),
+      ).toBe(true);
+      if (exclusive) {
+        expect(fs.existsSync(lockPath)).toBe(true);
+        expect(signals.listenerCount("SIGTERM")).toBe(1);
+      }
+      expect(cleanupSignal?.aborted).toBe(false);
+      if (mode === "sigterm") {
+        signals.emit("SIGTERM");
+        expect(cleanupSignal?.aborted).toBe(true);
+        expect(fs.existsSync(lockPath)).toBe(true);
+      }
+      finishDisposal.resolve();
+      if (mode !== "late-failure") {
+        await childStarted.promise;
+        expect(fs.existsSync(stagedAgentDir!)).toBe(true);
+        finishChild.resolve();
+        await childFinished.promise;
+      }
+      const drain = parent.drain();
+      pending.push(drain);
+      await drain;
+      expect(reads).toEqual(mode === "late-failure" ? [true, true] : [true, true, true, true]);
+      expect(fs.existsSync(lockPath)).toBe(false);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+      expect(fs.existsSync(stagedAgentDir!)).toBe(false);
+      expect(readProbeSession()?.entry).toBeUndefined();
+      if (mode === "db-close-failure") {
+        expect(warnings).toHaveBeenCalledWith(
+          expect.stringContaining("synthetic late database disposal failure"),
+        );
+      }
+      expect(
+        agentDatabase.isOpenClawAgentDatabaseOpen(resolveAuthProfileDatabasePath(stagedAgentDir!)),
+      ).toBe(false);
+      expect(fs.existsSync(state.agentDir())).toBe(true);
+      expect(cleanup.outcome).toBe("uncertain");
     }
-    drain = parent.drain();
-    await drain;
-    expect(reads).toEqual(mode === "late-failure" ? [true, true] : [true, true, true, true]);
-    expect(fs.existsSync(lockPath)).toBe(false);
-    expect(signals.listenerCount("SIGTERM")).toBe(0);
-    expect(fs.existsSync(stagedAgentDir!)).toBe(false);
-    expect(readProbeSession()?.entry).toBeUndefined();
-    if (mode === "db-close-failure") {
-      expect(warnings).toHaveBeenCalledWith(
-        expect.stringContaining("synthetic late database disposal failure"),
-      );
-    }
-    expect(
-      agentDatabase.isOpenClawAgentDatabaseOpen(resolveAuthProfileDatabasePath(stagedAgentDir!)),
-    ).toBe(false);
-    expect(fs.existsSync(state.agentDir())).toBe(true);
-    expect(cleanup.outcome).toBe("uncertain");
+  } catch (error) {
+    failures.add(error);
   } finally {
-    finishDisposal.resolve();
-    finishChild.resolve();
-    await operation;
-    await drain;
-    await parent.drain();
-    await source.release();
-    await resetPreparedModelRuntimeSnapshotsForTest();
-    clearPluginMetadataLifecycleCaches();
-    resetPluginRuntimeStateForTest();
-    attempt.mockReset();
+    // A settled rejection must not skip later owners, especially direct env writes.
+    for (const release of releases) {
+      try {
+        await release();
+      } catch (error) {
+        failures.add(error);
+      }
+    }
+  }
+  if (failures.size === 1) {
+    throw [...failures][0];
+  }
+  if (failures.size > 1) {
+    throw new AggregateError([...failures], "Probe resource fixture cleanup failed");
+  }
+}
+
+it.each(resourceModes)(
+  "keeps probe-owned state through bounded engine cleanup (%s)",
+  runProbeResourceFixture,
+);
+
+it.each([false, true])(
+  "restores provider observers after a rejected probe fixture (cleanup failure: %s)",
+  async (cleanupFailure) => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+    const createState = testState.createOpenClawTestState;
+    let state: testState.OpenClawTestState | undefined;
+    vi.spyOn(testState, "createOpenClawTestState").mockImplementationOnce(async (options) => {
+      state = await createState(options);
+      return state;
+    });
+    const cleanupError = new Error("synthetic inspection release failure");
+    if (cleanupFailure) {
+      const release = vi.spyOn(PluginRegistryInspectionResources.prototype, "release");
+      release.mockImplementationOnce(async function (this: PluginRegistryInspectionResources) {
+        release.mockRestore();
+        await this.release();
+        throw cleanupError;
+      });
+    }
+    const inspect = gatewayLock.readActiveGatewayLockIdentity;
+    let inspectedPaths: unknown[] = [];
+    let inspectionError: unknown;
+    vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockImplementationOnce(
+      async (options) => {
+        expect(options?.timeoutMs).toBe(100);
+        const reads = vi.spyOn(fs.promises, "readFile");
+        // Expire the real shared inspection deadline after both absent lock reads.
+        const clock = vi
+          .spyOn(performance, "now")
+          .mockReturnValueOnce(0)
+          .mockReturnValueOnce(0)
+          .mockReturnValueOnce(0)
+          .mockReturnValueOnce(0)
+          .mockReturnValue(101);
+        try {
+          return await inspect(options);
+        } catch (error) {
+          inspectionError = error;
+          throw error;
+        } finally {
+          inspectedPaths = reads.mock.calls.map(([pathname]) => pathname);
+          reads.mockRestore();
+          clock.mockRestore();
+        }
+      },
+    );
+    try {
+      const error = await runProbeResourceFixture("db-close-failure").then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+      expect(inspectionError).toBeInstanceOf(gatewayLock.GatewayLockError);
+      expect(inspectionError).toMatchObject({
+        message: "Gateway lock inspection deadline expired",
+      });
+      expect(inspectedPaths).toEqual([
+        expect.stringMatching(/gateway\.[a-f0-9]+\.lock$/),
+        expect.stringContaining("gateway.state.lock"),
+      ]);
+      if (cleanupFailure) {
+        expect(error).toBeInstanceOf(AggregateError);
+        expect(error).toMatchObject({ errors: [inspectionError, cleanupError] });
+      } else {
+        expect(error).toBe(inspectionError);
+      }
+      const observers = {
+        disabled: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
+        rootExists: fs.existsSync(state!.root),
+        alias: createModelCatalogProviderAliasCanonicalizer({ cfg: {} }).ref({
+          provider: "z.ai",
+          model: "glm-4.7",
+        }).provider,
+        authAlias: resolveProviderIdForAuth("x-ai", { config: {} }),
+        admission: inspectModelReference({ cfg: {}, ref: { provider: "openai", model: "gpt-5" } })
+          .status,
+      };
+      expect(observers).toMatchObject({
+        disabled: undefined,
+        rootExists: false,
+        alias: "zai",
+        authAlias: "xai",
+      });
+      expect(observers.admission).not.toBe("unknown-provider");
+    } finally {
+      vi.restoreAllMocks();
+      await state?.cleanup();
+      clearPluginMetadataLifecycleCaches();
+      resetPluginRuntimeStateForTest();
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+it("restores probe fixture state when initialization rejects", async () => {
+  const previousDisabled = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  const original = new Error("synthetic probe config write failure");
+  const createState = testState.createOpenClawTestState;
+  let state: testState.OpenClawTestState | undefined;
+  vi.spyOn(testState, "createOpenClawTestState").mockImplementationOnce(async (options) => {
+    state = await createState(options);
+    vi.spyOn(state, "writeConfig").mockRejectedValueOnce(original);
+    return state;
+  });
+  try {
+    await expect(runProbeResourceFixture("db-close-failure")).rejects.toBe(original);
+    expect(process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe(previousDisabled);
+    expect(fs.existsSync(state!.root)).toBe(false);
+  } finally {
     vi.restoreAllMocks();
-    setLoggerOverride(null);
-    await state.cleanup();
+    await state?.cleanup();
   }
 });
 
 it.each([false, true])(
   "releases direct state ownership before propagating no-tail failure (async: %s)",
   async (asynchronous) => {
-    const state = await createOpenClawTestState({ label: "probe-no-tail-failure" });
+    const state = await testState.createOpenClawTestState({ label: "probe-no-tail-failure" });
     const signals = new EventEmitter();
     const lockDir = state.path("locks");
     const original = new Error("synthetic direct probe failure");

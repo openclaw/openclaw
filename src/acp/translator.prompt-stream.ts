@@ -330,26 +330,21 @@ export class AcpTranslatorPromptStream {
           return false;
         };
 
-        const sendChat = async (payload: Record<string, unknown>): Promise<boolean> => {
+        const sendChat = async (payload: Record<string, unknown>): Promise<void> => {
           const ack = await this.gateway.request<ChatSendAck>("chat.send", payload, {
             timeoutMs: null,
           });
-          return await applyTerminalAck(ack);
+          if (!(await applyTerminalAck(ack)) && markSendAccepted()) {
+            await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
+          }
         };
 
         try {
-          const terminal = await sendChat({
+          await sendChat({
             ...requestParams,
             systemInputProvenance,
             systemProvenanceReceipt,
           });
-          if (terminal) {
-            return;
-          }
-          if (!markSendAccepted()) {
-            return;
-          }
-          await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
         } catch (err) {
           if (
             (systemInputProvenance || systemProvenanceReceipt) &&
@@ -358,14 +353,7 @@ export class AcpTranslatorPromptStream {
             if (!this.getPendingPrompt(params.sessionId, runId)) {
               return;
             }
-            const terminal = await sendChat(requestParams);
-            if (terminal) {
-              return;
-            }
-            if (!markSendAccepted()) {
-              return;
-            }
-            await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
+            await sendChat(requestParams);
             return;
           }
           throw err;

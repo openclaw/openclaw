@@ -1,7 +1,13 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../../src/test-utils/node-process.js";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { EventHub } from "./event-hub.js";
+import { eventHubRetentionEntrypoint } from "./retention-runtime.test-support.js";
 
 describe("EventHub subscriber ownership", () => {
   it("releases retired iterator payloads without discarding a closed hub's unread event", async ({
@@ -10,9 +16,10 @@ describe("EventHub subscriber ownership", () => {
     const result = await runNodeScript(
       [
         "--expose-gc",
-        "--import",
-        "./scripts/tsx.mjs",
-        fileURLToPath(new URL("./event-hub.retention.test-support.ts", import.meta.url)),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(eventHubRetentionEntrypoint),
+          resolveTestNodeExecPath(),
+        ),
       ],
       { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
       15_000,

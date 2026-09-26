@@ -11,7 +11,7 @@ import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   writeSkillProposalRollback,
   readSkillProposalRollback,
-} from "../skills/workshop/store-sqlite-rollback.js";
+} from "../skills/workshop/store-rollback.js";
 import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
 import * as workshopStore from "../skills/workshop/store.js";
 import {
@@ -20,7 +20,7 @@ import {
   type SkillProposalRecord,
   type SkillProposalRollback,
 } from "../skills/workshop/types.js";
-import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
+import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -590,7 +590,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     );
 
     const workshopRoot = resolveWorkshopSkillsDir({}, "main", testState.env);
-    repairOpenClawStateDatabaseSchemaIfNeeded({ env: testState.env });
+    await prepareOpenClawStateDatabaseSchema({ env: testState.env });
     await expectRelocationWriteFailure({
       env: testState.env,
       proposalId: records[0]!.record.id,
@@ -769,7 +769,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       fs.access(path.join(recoveryRoot, recoveryDir, "proposal.json")),
     ).resolves.toBeUndefined();
 
-    importLegacySkillProposal({ record, ownerAgentId: "main" });
+    await importLegacySkillProposal({ record, ownerAgentId: "main" });
     await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
     await fs.writeFile(path.join(proposalDir, "references", "leftover.md"), "leftover\n", "utf8");
     await expect(

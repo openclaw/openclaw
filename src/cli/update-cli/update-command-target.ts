@@ -1,9 +1,9 @@
 import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
 import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
 import {
   channelToNpmTag,
@@ -28,30 +28,33 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
-import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   describeUpdateInstallRoot,
   resolveUnmanagedUpdateInstallReason,
   resolveUpdateInstallSurface,
 } from "../../infra/update-runner-install-surface.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { VERSION } from "../../version.js";
+import { CLI_NAME } from "../cli-name.js";
 import {
   DEFAULT_PACKAGE_NAME,
   normalizeTag,
   readPackageName,
   readPackageVersion,
   resolveGlobalManager,
+  resolveNodeRunner,
   resolveTargetVersion,
   UpdatePreMutationError,
+  usesCandidateUpdateAdmission,
   type UpdateCommandOptions,
 } from "./shared.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -63,11 +66,11 @@ import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-co
 import {
   assertUpdatePackageActivationAdmission,
   readDevUpdateTarget,
+  recordUpdateCommandTarget,
   type prepareUpdateCommand,
 } from "./update-command-run.js";
 import {
   resolveManagedServicePackageUpdatePlan,
-  formatManagedServicePackageUpdatePlan,
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
@@ -87,6 +90,50 @@ export async function resolveFreshUpdateMetadata(target: {
   );
   await target.refuseUpdate("target-metadata-preflight", failure.message, failure.failureFacts);
   return undefined;
+}
+
+/** Describe the selected plan without changing roots, runtime, or service authority. */
+function printManagedServicePackageUpdatePlan(params: {
+  rootRedirect: ManagedServiceRootRedirect | null;
+  serviceRoot?: string;
+  nodeRunner?: string;
+}): void {
+  const { rootRedirect, nodeRunner } = params;
+  if (rootRedirect) {
+    defaultRuntime.log(
+      theme.muted(`Targeting managed gateway service package root: ${rootRedirect.root}`),
+    );
+    defaultRuntime.log(
+      theme.warn(
+        `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
+      ),
+    );
+    defaultRuntime.log(
+      theme.muted(
+        `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
+      ),
+    );
+    if (nodeRunner) {
+      defaultRuntime.log(theme.muted(`Managed gateway service Node: ${nodeRunner}`));
+    }
+  } else if (params.serviceRoot) {
+    defaultRuntime.log(
+      theme.muted(
+        `Updating this installation and rebinding the managed Gateway from ${params.serviceRoot} after ownership and runtime verification.`,
+      ),
+    );
+  } else if (nodeRunner) {
+    defaultRuntime.log(
+      theme.warn(
+        `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${nodeRunner}).`,
+      ),
+    );
+    defaultRuntime.log(
+      theme.muted(
+        "Using the managed service Node for this update so the gateway can start after the upgrade.",
+      ),
+    );
+  }
 }
 
 export async function resolveUpdateCommandTarget(
@@ -135,8 +182,11 @@ export async function resolveUpdateCommandTarget(
         const report = {
           root,
           installKind: updateInstallKind,
-          // Invalid config refuses before manager probes; retain the known install kind.
-          mode: reason === "invalid-config" ? packageManager : await resolveMode(),
+          // Config failures refuse before manager probes; retain the known install kind.
+          mode:
+            reason === "invalid-config" || reason === "config-read-failed"
+              ? packageManager
+              : await resolveMode(),
           reason,
           message,
           failureFacts,
@@ -170,21 +220,47 @@ export async function resolveUpdateCommandTarget(
         );
       }
 
+      recordUpdateCommandTarget(opts.run, {
+        step: { step: "installation-inspection", status: "in_progress" },
+      });
       if (requestedChannel === "extended-stable" && installKind === "git") {
         await refuseUpdate("unsupported_git_channel");
         return undefined;
       }
 
-      const { configSnapshot, legacyConfigPlan, storedChannel } = await readUpdateChannelConfig(
-        Boolean(opts.channel),
-      );
+      const readChannelConfig = () =>
+        readUpdateChannelConfig(Boolean(opts.channel), {
+          tolerateReadFailure: usesCandidateUpdateAdmission(opts, installKind),
+        });
+      let channelConfig: Awaited<ReturnType<typeof readUpdateChannelConfig>>;
+      let inspectionWarning: string | undefined;
+      try {
+        channelConfig = await readChannelConfig();
+      } catch (error) {
+        if (!(error instanceof SqliteReadOnlyInspectionContentionError)) {
+          throw error;
+        }
+        channelConfig = await readChannelConfig();
+        inspectionWarning = `Read-only SQLite inspection recovered after temporary contention; continuing the update. ${formatErrorMessage(error)}`;
+        recordUpdateCommandTarget(opts.run, {
+          step: {
+            step: "warning:installation-inspection",
+            status: "completed",
+            detail: inspectionWarning,
+          },
+        });
+        defaultRuntime.error(`Warning: ${inspectionWarning}`);
+      }
+      const { configSnapshot, configReadFailure, legacyConfigPlan, storedChannel } = channelConfig;
 
-      if (opts.channel && !configSnapshot.valid && !legacyConfigPlan) {
-        const issues = formatConfigIssueLines(configSnapshot.issues, "-");
-        await refuseUpdate(
-          "invalid-config",
-          ["Config is invalid; cannot set update channel.", ...issues].join("\n"),
-        );
+      if (
+        opts.channel &&
+        !configSnapshot.valid &&
+        !legacyConfigPlan &&
+        !usesCandidateUpdateAdmission(opts, installKind)
+      ) {
+        const failure = createUpdateConfigFailure(configSnapshot);
+        await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
         return undefined;
       }
 
@@ -212,6 +288,20 @@ export async function resolveUpdateCommandTarget(
       const switchToPackage =
         requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
       updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
+      if (updateInstallKind !== "package" && configReadFailure) {
+        throw configReadFailure;
+      }
+      if (
+        opts.channel &&
+        !configSnapshot.valid &&
+        !legacyConfigPlan &&
+        updateInstallKind !== "package" &&
+        usesCandidateUpdateAdmission(opts, installKind)
+      ) {
+        const failure = createUpdateConfigFailure(configSnapshot);
+        await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
+        return undefined;
+      }
       if (channel === "dev" && requestedChannel !== "dev" && !opts.sourceUpdate) {
         try {
           devTarget = readDevUpdateTarget();
@@ -245,6 +335,7 @@ export async function resolveUpdateCommandTarget(
       let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
       let packageRuntimeTarget: { version: string; nodeEngine: string | null } | undefined;
       let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
+      let managedServiceRoot: string | undefined;
       // The service's Node can differ even when its package root matches the shell.
       let managedServiceNodeRunner: string | undefined;
       let packageUpdateNodeRunner: string | undefined;
@@ -253,33 +344,42 @@ export async function resolveUpdateCommandTarget(
       if (updateInstallKind === "package") {
         const servicePlan =
           prepared.servicePlan ??
-          (await resolveManagedServicePackageUpdatePlan({ root, pkgOwnership }));
+          (await resolveManagedServicePackageUpdatePlan({
+            root,
+            pkgOwnership,
+            rebind: prepared.shouldRestart,
+          }));
         await pkgOwnership.assertUnowned(servicePlan.rootRedirect?.root ?? root);
         managedServiceRootRedirect = servicePlan.rootRedirect;
         serviceUnitTarget = servicePlan.serviceUnitTarget;
+        managedServiceRoot = servicePlan.serviceRoot;
         managedServiceNodeRunner = servicePlan.nodeRunner;
         if (managedServiceRootRedirect) {
           root = managedServiceRootRedirect.root;
         }
         if (!opts.json) {
-          for (const { level, message } of formatManagedServicePackageUpdatePlan(servicePlan)) {
-            defaultRuntime.log(theme[level](message));
-          }
+          printManagedServicePackageUpdatePlan(servicePlan);
         }
-        packageUpdateNodeRunner = managedServiceNodeRunner;
+        packageUpdateNodeRunner = managedServiceRoot
+          ? resolveNodeRunner()
+          : managedServiceNodeRunner;
       }
 
       // Read-only native/root admission is complete. Own interruption settlement
       // before metadata can block, but defer mutable housekeeping until target admission.
       if (updateInstallKind === "package" && !opts.dryRun) {
-        assertUpdatePackageActivationAdmission(root);
-        const fence = await executor.enter(root, { preflight: true });
+        assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
+        const fence = await executor.enter(root, {
+          preflight: true,
+          serviceRoot: managedServiceRoot,
+        });
         if (opts.run) {
           opts.run.executorFence = fence;
         }
         fence.assertCurrent();
         assertUpdatePackageActivationAdmission(
           captureUpdateCommandExecutorAuthority(fence).installKey,
+          { serviceRoot: managedServiceRoot },
         );
       }
 
@@ -315,18 +415,23 @@ export async function resolveUpdateCommandTarget(
             throw new UnreportedUpdateAdmissionOutcome(report, { exitCode: 0 });
           });
           packageManager = manager;
+          recordUpdateCommandTarget(opts.run, {
+            target: { kind: updateInstallKind, tag, installationMethod: `${manager}-global` },
+          });
           packageInstallTarget = await resolveGlobalInstallTarget({
             manager,
             runCommand: runCommandWithTimeout,
             timeoutMs: updateStepTimeoutMs,
             pkgRoot: root,
             honorPackageRoot:
-              managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
+              managedServiceRootRedirect !== null ||
+              managedServiceRoot !== undefined ||
+              managedServiceNodeRunner !== undefined,
             packageName: installedPackageName,
             pkgOwnership,
           });
           if (packageInstallTarget.manager === "npm") {
-            const destination = await inspectNpmGlobalDestination(root, updateStepTimeoutMs);
+            const destination = await inspectNpmGlobalDestination(root, packageInstallTarget);
             if (destination.kind !== "owned" && destination.kind !== "empty") {
               await refuseUpdate(destination.reason, destination.message, destination.failureFacts);
               return undefined;
@@ -344,15 +449,13 @@ export async function resolveUpdateCommandTarget(
             } else {
               defaultRuntime.log(theme.warn(diskWarning));
             }
-            if (opts.run) {
-              opts.run.executorFence?.assertCurrent();
-              for (const step of updateRunStepsFromResultStep({
-                name: "disk-space-preflight",
-                exitCode: 0,
-                warnings: [diskWarning],
-              })) {
-                recordUpdateRunStep(opts.run.runId, step, { env: opts.run.env });
-              }
+            opts.run?.executorFence?.assertCurrent();
+            for (const step of updateRunStepsFromResultStep({
+              name: "disk-space-preflight",
+              exitCode: 0,
+              warnings: [diskWarning],
+            })) {
+              recordUpdateCommandTarget(opts.run, { step });
             }
           }
           const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
@@ -361,6 +464,13 @@ export async function resolveUpdateCommandTarget(
             return undefined;
           }
         }
+        recordUpdateCommandTarget(opts.run, {
+          step: { step: "installation-inspection", status: "completed", endedAtMs: Date.now() },
+        });
+        recordUpdateCommandTarget(opts.run, {
+          target: { kind: updateInstallKind, tag },
+          step: { step: "target-resolution", status: "in_progress", startedAtMs: Date.now() },
+        });
         const npmMetadataCommand =
           packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
         if (channel === "extended-stable") {
@@ -410,6 +520,7 @@ export async function resolveUpdateCommandTarget(
           env: packageInstallEnv,
         });
         packageAlreadyCurrent =
+          !managedServiceRoot &&
           updateInstallKind === "package" &&
           !switchToPackage &&
           isPackageTargetAlreadyCurrent({
@@ -461,8 +572,27 @@ export async function resolveUpdateCommandTarget(
         }
       }
 
+      recordUpdateCommandTarget(opts.run, {
+        target: {
+          kind: updateInstallKind,
+          tag,
+          ...(targetVersion ? { version: targetVersion } : {}),
+          ...(updateInstallKind === "git" ? { installationMethod: "git-checkout" } : {}),
+        },
+        step: {
+          step: updateInstallKind === "git" ? "installation-inspection" : "target-resolution",
+          status: "completed",
+          endedAtMs: Date.now(),
+        },
+      });
       // No-op updates need no candidate snapshot; package-space warnings remain advisory above.
-      if (updateInstallKind === "package" && !packageAlreadyCurrent && !opts.dryRun) {
+      if (
+        updateInstallKind === "package" &&
+        !packageAlreadyCurrent &&
+        !opts.dryRun &&
+        (!usesCandidateUpdateAdmission(opts, installKind) ||
+          (configSnapshot.valid && !configReadFailure))
+      ) {
         const env = opts.run?.env ?? process.env;
         const source = await readUpdateCandidateSource(env, legacyConfigPlan);
         const snapshot = await assessInitialUpdateSnapshotCapacity({
@@ -471,10 +601,8 @@ export async function resolveUpdateCommandTarget(
           env,
         });
         opts.run?.executorFence?.assertCurrent();
-        if (opts.run) {
-          for (const step of updateRunStepsFromResultStep(snapshot)) {
-            recordUpdateRunStep(opts.run.runId, step, { env });
-          }
+        for (const step of updateRunStepsFromResultStep(snapshot)) {
+          recordUpdateCommandTarget(opts.run, { step });
         }
         if (snapshot.exitCode !== 0) {
           await refuseUpdate("snapshot-capacity-insufficient", snapshot.stderrTail ?? undefined);
@@ -491,10 +619,12 @@ export async function resolveUpdateCommandTarget(
 
       return {
         root,
+        ...(inspectionWarning ? { inspectionWarning } : {}),
         mode: await resolveMode(),
         updateInstallKind,
         refuseUpdate,
         configSnapshot,
+        configReadFailure,
         legacyConfigPlan,
         storedChannel,
         requestedChannel,
@@ -514,6 +644,7 @@ export async function resolveUpdateCommandTarget(
         packageTargetSchemaVersions,
         packageRuntimeTarget,
         managedServiceRootRedirect,
+        managedServiceRoot,
         managedServiceNodeRunner,
         packageUpdateNodeRunner,
         devTarget,

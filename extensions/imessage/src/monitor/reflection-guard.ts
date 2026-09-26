@@ -1,4 +1,3 @@
-// Imessage plugin module implements reflection guard behavior.
 import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 
 const INTERNAL_SEPARATOR_RE = /(?:#\+){2,}#?/;

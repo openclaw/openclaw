@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
@@ -12,6 +13,8 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseForTest,
@@ -30,6 +33,51 @@ afterEach(() => {
 });
 
 describe("Claw tool policy consent provenance", () => {
+  it("refreshes runtime consent without copying the live database on each catalog generation", async () => {
+    const root = tempDirs.make("openclaw-claw-runtime-consent-");
+    const env = stateEnv(root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const { plan } = await makeProvenancePlan(
+      root,
+      { schemaVersion: 1, agent: { id: "worker" } },
+      {
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { profile: "full", allow: ["read"] } },
+        },
+      },
+    );
+    persistClawInstallRecord(plan, { env });
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    closeOpenClawStateDatabase();
+    const external = new DatabaseSync(databasePath);
+    const snapshot = vi.spyOn(sqliteSnapshot, "prepareSqliteReadOnlyLocationSync");
+    const config = { agents: { list: [plan.agent.config] } };
+    try {
+      setRuntimeConfigSnapshot(config);
+      expect(() =>
+        resolveConversationCapabilityProfile({ agentId: "worker", config }),
+      ).not.toThrow();
+      external
+        .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
+        .run("openclaw.clawInstallRecord.v1", "worker");
+      setRuntimeConfigSnapshot(config);
+      expect(() => resolveConversationCapabilityProfile({ agentId: "worker", config })).toThrow(
+        "legacy dynamic tool policy",
+      );
+      expect(snapshot).not.toHaveBeenCalled();
+
+      withArtifactPreservingStateReads(() => setRuntimeConfigSnapshot(config));
+      expect(snapshot).toHaveBeenCalledOnce();
+      expect(() => resolveConversationCapabilityProfile({ agentId: "worker", config })).toThrow(
+        "legacy dynamic tool policy",
+      );
+    } finally {
+      snapshot.mockRestore();
+      external.close();
+    }
+  });
+
   it("does not create writable state for an ordinary named profile", () => {
     const root = tempDirs.make("openclaw-non-claw-tool-consent-");
     vi.stubEnv("OPENCLAW_STATE_DIR", join(root, "state"));

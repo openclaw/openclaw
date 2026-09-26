@@ -635,8 +635,8 @@ describe("Claw exec approvals removal", () => {
       const plan = await buildClawRemovePlan("worker", { env, config });
       const state = openOpenClawStateDatabase({ env });
       state.db.exec(`
-        CREATE TRIGGER fail_claw_deletion_completion
-        BEFORE UPDATE OF cleanup_completed ON agent_deletion_journal
+        CREATE TEMP TRIGGER fail_claw_deletion_completion
+        BEFORE UPDATE OF cleanup_completed ON main.agent_deletion_journal
         WHEN NEW.cleanup_completed = 1
         BEGIN
           SELECT RAISE(ABORT, 'injected deletion journal completion failure');

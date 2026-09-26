@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createEmptyTransportUsage } from "../transports/transport-stream-shared.js";
 import type { Context, Tool } from "../types.js";
+import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import { convertGoogleTools, projectGoogleMessages } from "./google-messages.js";
 import {
   assertRecord,
@@ -22,6 +23,30 @@ const convertMessagesForTest = convertMessages as unknown as (
 ) => ReturnType<typeof convertMessages>;
 
 describe("google-shared convertTools", () => {
+  it("omits optional metadata from normalized Gemini function declarations", () => {
+    const parameters = normalizeToolParameterSchema(
+      {
+        type: "object",
+        properties: {
+          message: { type: "string" },
+          timeout: { type: "number", "~optional": true },
+        },
+        required: ["message"],
+      },
+      { modelProvider: "google", modelId: "gemini-2.5-flash" },
+    );
+    const converted = expectDefined(
+      convertGoogleTools([{ name: "demo", description: "Demo", parameters }]),
+      "normalized Gemini tool declarations",
+    );
+
+    expect(getFirstToolParameters(converted)).toStrictEqual({
+      type: "object",
+      properties: { message: { type: "string" }, timeout: { type: "number" } },
+      required: ["message"],
+    });
+  });
+
   it("keeps Google tool declarations stable across discovery order", () => {
     const tools = [
       { name: "zeta", description: "Last", parameters: { type: "object" } },

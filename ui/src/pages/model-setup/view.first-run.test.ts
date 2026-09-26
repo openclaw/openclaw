@@ -47,7 +47,6 @@ function mount(overrides: Partial<ModelSetupViewProps> = {}): HTMLDivElement {
     onStartAuth: noop,
     onStartPrepare: noop,
     onManualProviderChange: noop,
-    onUseManualProvider: noop,
     onManualApiKeyChange: noop,
     onManualConnect: noop,
     onMoreSignInToggle: noop,

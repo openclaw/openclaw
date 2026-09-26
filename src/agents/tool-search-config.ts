@@ -14,6 +14,10 @@ const DEFAULT_MAX_SEARCH_LIMIT = 20;
 function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
   const toolSearch = tools?.toolSearch;
+  // Only the unauthored default changes; explicit shorthand and objects retain their modes.
+  if (toolSearch === undefined) {
+    return { enabled: true, mode: "tools" };
+  }
   if (toolSearch === true) {
     return { enabled: true };
   }

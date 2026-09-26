@@ -97,6 +97,7 @@ export function patchChatSessionSettings(
     agentId?: string;
     expectedSessionId?: string;
     ownsModelOverride?: () => boolean;
+    canDispatch?: () => boolean;
     reconcile?: (result: SessionPatchResult) => Promise<void> | void;
   } = {},
 ): Promise<SessionPatchResult | null> {
@@ -109,6 +110,7 @@ export function patchChatSessionSettings(
       agentId: options.agentId,
       expectedSessionId: options.expectedSessionId,
       ownsModelOverride: options.ownsModelOverride,
+      canDispatch: options.canDispatch,
       waitFor: previous,
     });
     if (result) {

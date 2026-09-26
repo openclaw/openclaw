@@ -5,22 +5,26 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { MessageSendResult } from "../infra/outbound/message.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayDetachedWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import { observeAsyncWorkScopeRuns } from "../shared/async-work-scope.test-support.js";
 import {
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
 } from "./task-registry-delivery.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
 import type { TaskDeliveryState, TaskEventRecord, TaskRecord } from "./task-registry.types.js";
 
 const storage = vi.hoisted(() => ({
   tasks: new Map<string, TaskRecord>(),
   delivery: new Map<string, TaskDeliveryState>(),
-  pending: new Set<string>(),
+  pending: new Map<string, symbol>(),
   ensureReady: vi.fn(),
   update: vi.fn<(taskId: string, patch: Partial<TaskRecord>) => TaskRecord | null>(),
   upsertDelivery: vi.fn<(state: TaskDeliveryState) => TaskDeliveryState>(),
@@ -42,6 +46,7 @@ vi.mock("./task-registry-state.js", () => ({
   taskDeliveryStates: storage.delivery,
   tasksWithPendingDelivery: storage.pending,
   ensureTaskRegistryReady: storage.ensureReady,
+  assertTaskRegistryRestoreNotFailed: storage.ensureReady,
   withTaskRegistryMutation: <T>(operation: () => T) => operation(),
   getTasksByRunId: (runId: string) =>
     [...storage.tasks.values()].filter((task) => task.runId === runId),
@@ -49,12 +54,83 @@ vi.mock("./task-registry-state.js", () => ({
 }));
 vi.mock("./task-registry-mutation.js", () => ({
   updateTask: storage.update,
-  upsertTaskDeliveryState: storage.upsertDelivery,
   getTaskDeliveryState: (taskId: string) => storage.delivery.get(taskId),
 }));
+vi.mock("./task-notification-mutation.async.js", async () => {
+  const { sameTaskRunScope } = await import("./task-registry-records.js");
+  const { captureTaskNotificationTarget, updateTaskNotificationDelivery } =
+    await import("./task-notification.operation.js");
+  return {
+    settleNotificationMutationAfterPreparationFailure: async (pending: unknown) => {
+      expect(pending).toBeUndefined();
+    },
+    captureTaskNotificationMutationOwner: (assertCurrent: () => void) => ({
+      async prepare<T>(
+        consume: (flows: import("./task-flow-registry.read.js").TaskFlowRegistryRead) => T,
+      ): Promise<T> {
+        assertCurrent();
+        storage.ensureReady();
+        return consume({
+          assertOwnerCurrent: assertCurrent,
+          assertCurrent,
+          listTaskFlowIds: () => [],
+          isTaskFlowCurrent: () => true,
+          getTaskFlowById: () => undefined,
+        });
+      },
+      async updateDelivery(
+        task: TaskRecord,
+        outcome: import("./task-notification.operation.js").TaskNotificationDeliveryOutcome,
+      ): Promise<TaskRecord | null> {
+        assertCurrent();
+        const receipt = updateTaskNotificationDelivery(
+          { taskId: task.taskId, expectedTask: captureTaskNotificationTarget(task), ...outcome },
+          {
+            readCurrent: () => ({
+              task: storage.tasks.get(task.taskId),
+              deliveryState: storage.delivery.get(task.taskId),
+            }),
+            write: (operation) => operation(),
+            assertCurrent,
+            upsertDelivery: storage.upsertDelivery,
+            upsertTask: (updated) => {
+              storage.update(updated.taskId, updated);
+            },
+            deferCommit: (publish) => publish(),
+            onCommitted: () => {},
+            onFailure: (_stage, error) => {
+              throw error;
+            },
+          },
+        );
+        return receipt?.task ?? null;
+      },
+      bindStateChange(task: TaskRecord, eventAt: number) {
+        assertCurrent();
+        const expected = { ...task };
+        return async (): Promise<TaskRecord | null> => {
+          assertCurrent();
+          const current = storage.tasks.get(expected.taskId);
+          if (!current || !sameTaskRunScope(current, expected)) {
+            return null;
+          }
+          const delivery = storage.delivery.get(expected.taskId);
+          storage.upsertDelivery({
+            taskId: expected.taskId,
+            requesterOrigin: delivery?.requesterOrigin,
+            lastNotifiedEventAt: Math.max(delivery?.lastNotifiedEventAt ?? 0, eventAt),
+          });
+          assertCurrent();
+          return storage.update(expected.taskId, { lastEventAt: Date.now() });
+        };
+      },
+    }),
+  };
+});
 vi.mock("./task-flow-runtime-internal.js", () => ({ getTaskFlowById: () => undefined }));
-vi.mock("./task-registry-runtime-loaders.js", () => ({
-  loadTaskRegistryDeliveryRuntime: async () => ({ sendMessage: storage.send }),
+vi.mock("./task-registry-delivery-runtime.js", () => ({
+  sendMessage: storage.send,
+  prepareTaskControlUiSessionUrl: async () => () => undefined,
 }));
 vi.mock("../infra/system-events.js", () => ({ enqueueSystemEvent: storage.enqueue }));
 vi.mock("../infra/heartbeat-wake.js", () => ({ requestHeartbeat: storage.heartbeat }));
@@ -128,7 +204,7 @@ it.each(["absent", "released"] as const)(
     const caller = await closeCaller(parent);
     const outcomes = await caller.run(() =>
       Promise.allSettled([
-        maybeDeliverTaskStateChangeUpdate(task.taskId, event),
+        maybeDeliverTaskStateChangeUpdate(task, event),
         maybeDeliverTaskTerminalUpdate(task.taskId),
       ]),
     );
@@ -152,11 +228,22 @@ it.each([
 ] as const)(
   "owns $kind delivery and its cleanup after the $parent producer closes",
   async ({ kind, parent }) => {
+    using deliveries = captureTaskDeliveryWork();
+    // A shorter observer must leave this fixture subscribed to later deliveries.
+    const siblingObserver = observeAsyncWorkScopeRuns();
+    siblingObserver[Symbol.dispose]();
     const task = seed(kind);
     const caller = await closeCaller(parent);
     const started = createDeferred();
     const send = createDeferred<MessageSendResult>();
     const cleanup = createDeferred();
+    const releaseUnrelated = createDeferred();
+    const unrelated = runWithGatewayDetachedWorkAdmission(
+      () => releaseUnrelated.promise,
+      "fixture:unrelated",
+    );
+    let settlement: Promise<void> | undefined;
+    let fixtureSettled = false;
     let cleanupWork: Promise<void> | undefined;
     let deliverySignal: AbortSignal | undefined;
     storage.send.mockImplementation(async () => {
@@ -168,7 +255,7 @@ it.each([
     const result = caller.run(() =>
       (kind === "terminal"
         ? maybeDeliverTaskTerminalUpdate(task.taskId)
-        : maybeDeliverTaskStateChangeUpdate(task.taskId, event)
+        : maybeDeliverTaskStateChangeUpdate(task, event)
       ).then(
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),
@@ -181,11 +268,15 @@ it.each([
       expect(deliverySignal).toBeDefined();
       expect(deliverySignal).not.toBe(caller.signal);
       expect(deliverySignal?.aborted).toBe(false);
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
       expect(storage.tasks.get(task.taskId)?.deliveryStatus).toBe("pending");
       send.resolve(sent);
       expect(await result).toMatchObject({ ok: true });
+      settlement = deliveries.settle().then(() => {
+        fixtureSettled = true;
+      });
       await setImmediate();
+      expect(fixtureSettled).toBe(false);
       expect(storage.send).toHaveBeenCalledOnce();
       expect(storage.send).toHaveBeenCalledWith(
         expect.objectContaining({ ...origin, agentId: "main" }),
@@ -199,12 +290,20 @@ it.each([
         expect(storage.tasks.get(task.taskId)?.deliveryStatus).toBe("pending");
       }
       expect(deliverySignal?.aborted).toBe(false);
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      cleanup.resolve();
+      await cleanupWork;
+      await setImmediate();
+      expect(fixtureSettled).toBe(true);
+      expect(getActiveGatewayRootWorkHolders()).toEqual(["fixture:unrelated"]);
     } finally {
       send.resolve(sent);
       cleanup.resolve();
+      releaseUnrelated.resolve();
       await cleanupWork;
       await result;
+      await unrelated;
+      await settlement;
       await setImmediate();
     }
     expect(deliverySignal?.aborted).toBe(true);
@@ -255,16 +354,24 @@ it.each(["resume", "restart"] as const)(
   },
 );
 
-it("preserves initial restore failure even when restart would defer delivery", async () => {
-  const task = seed("terminal");
-  const caller = await closeCaller("absent");
-  const failure = new Error("Task registry restore failed");
-  storage.ensureReady.mockImplementation(() => {
-    throw failure;
-  });
-  markGatewayRestartDraining();
-  await expect(caller.run(() => maybeDeliverTaskTerminalUpdate(task.taskId))).rejects.toBe(failure);
-  expect(storage.send).not.toHaveBeenCalled();
-  expect(storage.update).not.toHaveBeenCalled();
-  expect(storage.tasks.get(task.taskId)).toEqual(task);
-});
+it.each(["terminal", "state"] as const)(
+  "preserves initial restore failure in its admitted %s delivery lifetime",
+  async (kind) => {
+    const task = seed(kind);
+    const caller = await closeCaller("absent");
+    const failure = new Error("Task registry restore failed");
+    storage.ensureReady.mockImplementation(() => {
+      throw failure;
+    });
+    await expect(
+      caller.run(() =>
+        kind === "terminal"
+          ? maybeDeliverTaskTerminalUpdate(task.taskId)
+          : maybeDeliverTaskStateChangeUpdate(task, event),
+      ),
+    ).rejects.toBe(failure);
+    expect(storage.send).not.toHaveBeenCalled();
+    expect(storage.update).not.toHaveBeenCalled();
+    expect(storage.tasks.get(task.taskId)).toEqual(task);
+  },
+);

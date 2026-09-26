@@ -37,12 +37,12 @@ read_when:
         ownership: "explicit",
         entries: {
           coder: {
-            model: "xiaomi/mimo-v2.5-pro",
+            model: "xiaomi/mimo-v2.6-pro",
             thinkingDefault: "high",
             params: { temperature: 0.1 },
           },
           chat: {
-            model: "xiaomi/mimo-v2.5-pro",
+            model: "xiaomi/mimo-v2.6-pro",
             thinkingDefault: "off",
             params: { temperature: 0.8 },
           },

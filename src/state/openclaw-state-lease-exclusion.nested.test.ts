@@ -1,6 +1,7 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as fileGeneration from "../infra/sqlite-file-generation.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -28,6 +29,51 @@ function options(env: NodeJS.ProcessEnv, key: string) {
 }
 
 describe("nested lease-backed capture", () => {
+  it.each(["live", "expired"] as const)(
+    "preserves the %s owner across delayed capture admission",
+    async (authority) => {
+      await withOpenClawTestState({ label: "capture-admission-handoff" }, async (state) => {
+        let entered = false;
+        const readGeneration = fileGeneration.readStableSqliteFileGeneration;
+        try {
+          const operation = withOpenClawStateLease(
+            { ...options(state.env, "handoff"), heartbeat: undefined, leaseMs: 1_000 },
+            async (lease) => {
+              const row = openOpenClawStateDatabase({ env: state.env })
+                .db.prepare("SELECT expires_at FROM state_leases WHERE lease_key = 'handoff'")
+                .get();
+              const expiresAt = Number(row?.expires_at);
+              const clock = vi
+                .spyOn(Date, "now")
+                .mockReturnValue(expiresAt + (authority === "live" ? -300 : 1));
+              vi.spyOn(fileGeneration, "readStableSqliteFileGeneration").mockImplementation(
+                (...args) => {
+                  const generation = readGeneration(...args);
+                  // Inject delayed admission without sleeping or driving the real lease timers.
+                  clock.mockReturnValue(expiresAt + 100);
+                  return generation;
+                },
+              );
+              await capture(lease)(async (assertCurrent) => {
+                entered = true;
+                assertCurrent();
+                lease.assertOwned();
+              });
+            },
+          );
+          if (authority === "expired") {
+            await expect(operation).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+          } else {
+            await operation;
+          }
+          expect(entered).toBe(authority === "live");
+        } finally {
+          vi.restoreAllMocks();
+        }
+      });
+    },
+  );
+
   it("captures through the real plugin and agent-maintenance owners", async () => {
     await withOpenClawTestState({ label: "nested-plugin-maintenance-capture" }, async (state) => {
       const sourcePath = openOpenClawStateDatabase({ env: state.env }).path;

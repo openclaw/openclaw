@@ -236,7 +236,7 @@ describe.each(removalPaths)("cron one-shot removal via %s", (path) => {
       nowMs,
       onEvent: (event) => events.push(structuredClone(event)),
     });
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     state.pendingQuarantineConfigJobs = [
       { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
     ];

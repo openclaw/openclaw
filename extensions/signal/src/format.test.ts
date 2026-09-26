@@ -87,6 +87,20 @@ describe("markdownToSignalText", () => {
 
   it.each([
     {
+      name: "nested styles across multiple expanded links and emoji",
+      markdown: "**[😀](https://a.test) _[two](https://b.test) tail_**",
+      expected: {
+        text: "😀 (https://a.test) two (https://b.test) tail",
+        styles: [
+          { start: 0, length: 2, style: "BOLD" },
+          { start: 19, length: 4, style: "BOLD" },
+          { start: 20, length: 3, style: "ITALIC" },
+          { start: 40, length: 5, style: "BOLD" },
+          { start: 40, length: 5, style: "ITALIC" },
+        ],
+      },
+    },
+    {
       name: "nested style around an expanded link",
       markdown: "**[docs](https://example.com) _nested_ tail**",
       expected: {
@@ -121,12 +135,34 @@ describe("markdownToSignalText", () => {
         { input: "[example.com](https://www.example.com)", expected: "example.com" },
         { input: "[EXAMPLE.COM](https://example.com)", expected: "EXAMPLE.COM" },
         { input: "[example.com/page](https://example.com/page)", expected: "example.com/page" },
+        {
+          input: "[HTTPS://EXAMPLE.COM/Report](https://example.com/Report)",
+          expected: "HTTPS://EXAMPLE.COM/Report",
+        },
+        {
+          input: "[WWW.EXAMPLE.COM/Report](https://example.com/Report)",
+          expected: "WWW.EXAMPLE.COM/Report",
+        },
+        { input: "[USER@EXAMPLE.COM](mailto:user@example.com)", expected: "USER@EXAMPLE.COM" },
+        {
+          input: "[USER@EXAMPLE.COM?subject=HELLO](mailto:user@example.com?subject=hello)",
+          expected: "USER@EXAMPLE.COM?subject=HELLO",
+        },
       ] as const;
 
       for (const { input, expected } of equivalentCases) {
         const res = markdownToSignalText(input);
         expect(res.text).toBe(expected);
       }
+    });
+
+    it.each([
+      ["example.com/Report", "https://example.com/report"],
+      ["example.com?id=AbC", "https://example.com?id=abc"],
+      ["example.com#Install", "https://example.com#install"],
+    ])("retains the case-distinct destination for [%s](%s)", (label, href) => {
+      const res = markdownToSignalText(`[${label}](${href})`);
+      expect(res.text).toBe(`${label} (${href})`);
     });
 
     it("still shows URL when label is meaningfully different", () => {

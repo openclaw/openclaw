@@ -479,15 +479,21 @@ describe("resume command registration", () => {
 
 describe("real Gateway session boundary", () => {
   let harness: Awaited<ReturnType<typeof startMinimalRealGateway>>;
+  let closeHarness: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
-    harness = await startMinimalRealGateway([
-      { agentId: "work", key: "agent:work:global", visibility: "shared" },
-      { agentId: "main", key: "agent:main:alpha" },
-    ]);
+    harness = await startMinimalRealGateway({
+      sessions: [
+        { agentId: "work", key: "agent:work:global", visibility: "shared" },
+        { agentId: "main", key: "agent:main:alpha" },
+      ],
+      registerCleanup: (cleanup) => {
+        closeHarness = cleanup;
+      },
+    });
   });
 
-  afterAll(() => harness.close());
+  afterAll(() => closeHarness?.());
 
   it("preserves an agent-qualified global session through the TUI handoff", async () => {
     const { GatewayChatClient } =
@@ -599,7 +605,7 @@ describe("real Gateway session boundary", () => {
     const storeDeviceAuthToken = vi.fn(({ token, scopes }: { token: string; scopes: string[] }) => {
       authState.value = { token, scopes };
     });
-    let helloCount = 0;
+    const authMethods: (string | undefined)[] = [];
     const client = new GatewayClient({
       url: harness.url,
       bootstrapToken: await harness.issueNodeBootstrapToken(),
@@ -610,18 +616,18 @@ describe("real Gateway session boundary", () => {
       clientVersion: "test",
       platform: "test",
       mode: GATEWAY_CLIENT_MODES.NODE,
-      deviceIdentity: harness.createDeviceIdentity("reconnect"),
+      deviceIdentity: await harness.createDeviceIdentity("reconnect"),
       hostDeps: {
         loadDeviceAuthToken: () => authState.value,
         storeDeviceAuthToken,
       },
-      onHelloOk: () => {
-        helloCount += 1;
+      onHelloOk: (hello) => {
+        authMethods.push(hello.auth?.method);
       },
     });
     client.start();
     try {
-      await vi.waitFor(() => expect(helloCount).toBe(1), { timeout: 5_000 });
+      await vi.waitFor(() => expect(authMethods).toEqual(["bootstrap-token"]), { timeout: 5_000 });
       expect(storeDeviceAuthToken).toHaveBeenCalledOnce();
       expect(storeDeviceAuthToken).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -631,8 +637,10 @@ describe("real Gateway session boundary", () => {
       );
       expect(authState.value?.token).toBeTruthy();
 
-      await harness.restart();
-      await vi.waitFor(() => expect(helloCount).toBe(2), { timeout: 5_000 });
+      client.updateNodeManifest({ caps: [], commands: [] });
+      await vi.waitFor(() => expect(authMethods).toEqual(["bootstrap-token", "device-token"]), {
+        timeout: 5_000,
+      });
     } finally {
       await client.stopAndWait();
     }

@@ -1,4 +1,3 @@
-// Msteams plugin module implements html behavior.
 import {
   ATTACHMENT_TAG_RE,
   extractHtmlFromAttachment,

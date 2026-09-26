@@ -4,6 +4,24 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { attachModelProviderRequestRouteFacts } from "../provider-request-config.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+
+const providerMetadataOwners: PluginMetadataSnapshotOwnerMaps = {
+  channels: new Map(),
+  channelConfigs: new Map(),
+  providers: new Map(),
+  modelCatalogProviders: new Map(),
+  cliBackends: new Map(),
+  setupProviders: new Map(),
+  commandAliases: new Map(),
+  contracts: new Map(),
+  modelIdNormalizationPolicies: new Map(),
+  providerAuthContributions: [],
+  providerEndpoints: [],
+  providerRequests: new Map([["openrouter", { family: "openrouter" }]]),
+};
 
 type StreamPayload = {
   messages: Array<{
@@ -24,15 +42,17 @@ function runOpenRouterPayload(
     return {} as ReturnType<StreamFn>;
   };
   const streamFn = createOpenRouterSystemCacheWrapper(baseStreamFn);
-  void streamFn(
-    {
+  // Payload tests consume prepared route facts without starting plugin discovery.
+  const model = attachModelProviderRequestRouteFacts(
+    makeProviderModelFixture<"openai-completions">({
       api: "openai-completions",
       provider: "openrouter",
       id: modelId,
-    } as never,
-    { messages: [] } as never,
-    streamOptions,
+      baseUrl: "",
+    }),
+    providerMetadataOwners,
   );
+  void streamFn(model, { messages: [] }, streamOptions);
 }
 
 describe("extra-params: OpenRouter Anthropic cache_control", () => {

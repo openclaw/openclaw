@@ -71,7 +71,7 @@ export const CLAUDE_CLI_CLEAR_ENV = [
 ] as const;
 
 /** Default Claude CLI model ref for agent defaults and live tests. */
-export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-5`;
+export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-5-5`;
 /** Provider-relative model id for Anthropic runtime-policy resolution. */
 const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(
   CLAUDE_CLI_BACKEND_ID.length + 1,

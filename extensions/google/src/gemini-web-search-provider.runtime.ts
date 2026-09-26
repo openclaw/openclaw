@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import {
   createProviderHttpError,
   formatProviderHttpErrorMessage,
+  ProviderHttpError,
+  redactProviderResponseErrorText,
   readProviderJsonObjectResponse,
   truncateErrorDetail,
 } from "openclaw/plugin-sdk/provider-http";
@@ -262,6 +264,11 @@ async function runGeminiSearch(params: {
   const endpoint = `${params.baseUrl}/models/${params.model}:generateContent`;
   const googleSearch =
     params.timeRangeFilter === undefined ? {} : { timeRangeFilter: params.timeRangeFilter };
+  const headers = buildGeminiRequestHeaders({
+    apiKey: params.apiKey,
+    baseUrl: params.baseUrl,
+    operatorHeaders: params.headers,
+  });
 
   return withTrustedWebSearchEndpoint(
     {
@@ -270,11 +277,7 @@ async function runGeminiSearch(params: {
       signal: params.signal,
       init: {
         method: "POST",
-        headers: buildGeminiRequestHeaders({
-          apiKey: params.apiKey,
-          baseUrl: params.baseUrl,
-          operatorHeaders: params.headers,
-        }),
+        headers,
         body: JSON.stringify({
           contents: [{ parts: [{ text: params.query }] }],
           tools: [{ google_search: googleSearch }],
@@ -283,8 +286,12 @@ async function runGeminiSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
-        const error = await createProviderHttpError(res, "Gemini API error");
-        throw new Error(error.message.replace(/key=[^&\s]+/giu, "key=***"));
+        const error = await createProviderHttpError(res, "Gemini API error", {
+          signal: params.signal,
+          requestHeaders: headers,
+        });
+        error.message = error.message.replace(/key=[^&\s]+/giu, "key=***");
+        throw error;
       }
 
       const data = await readProviderJsonObjectResponse(res, "Gemini API error");
@@ -297,12 +304,17 @@ async function runGeminiSearch(params: {
           normalizeOptionalString(data.error.message) ??
           normalizeOptionalString(data.error.status) ??
           "unknown";
-        throw new Error(
+        const status = typeof data.error.code === "number" ? data.error.code : 0;
+        throw new ProviderHttpError(
           formatProviderHttpErrorMessage({
             label: "Gemini API error",
-            status: typeof data.error.code === "number" ? data.error.code : 0,
-            detail: rawMessage.replace(/key=[^&\s]+/giu, "key=***"),
+            status,
+            detail: redactProviderResponseErrorText(rawMessage, headers).replace(
+              /key=[^&\s]+/giu,
+              "key=***",
+            ),
           }),
+          { status },
         );
       }
 

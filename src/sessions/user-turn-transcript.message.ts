@@ -61,6 +61,9 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     if (fact.fileName) {
       media.fileName = fact.fileName;
     }
+    if (fact.origin) {
+      media.origin = fact.origin;
+    }
     if (fact.sizeBytes !== undefined) {
       media.sizeBytes = fact.sizeBytes;
     }

@@ -26,6 +26,34 @@ const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 describe("dynamic tool execution helpers", () => {
+  it("releases an ordinary successful tool operation before returning its result", async () => {
+    const runController = new AbortController();
+    let operationSignal: AbortSignal | undefined;
+    const remove = vi.spyOn(runController.signal, "removeEventListener");
+    const response = await handleDynamicToolCallWithTimeout({
+      call: {
+        ...dynamicCallContext,
+        callId: "ordinary-cleanup",
+        tool: "session_status",
+        arguments: {},
+      },
+      toolBridge: {
+        consumeToolExecutionSnapshot: () => undefined,
+        handleToolCall: async (_call, options) => {
+          operationSignal = options?.signal;
+          return { success: true, contentItems: [{ type: "inputText", text: "done" }] };
+        },
+      },
+      signal: runController.signal,
+      timeoutMs: 1_000,
+    });
+    expect(response.success).toBe(true);
+    expect(operationSignal?.aborted).toBe(true);
+    expect(String(operationSignal?.reason)).toContain("OpenClaw dynamic tool call finished.");
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(runController.signal.aborted).toBe(false);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();

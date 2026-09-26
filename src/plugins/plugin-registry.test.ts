@@ -11,6 +11,7 @@ import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js"
 import type { PluginCandidate } from "./discovery.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
+  isInstalledPluginEnabled,
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
@@ -18,8 +19,6 @@ import { loadPluginLookUpTable } from "./plugin-lookup-table.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   createPluginRegistryIdNormalizer,
-  getPluginRecord,
-  isPluginEnabled,
   listPluginContributionIds,
   loadPluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata,
@@ -230,11 +229,14 @@ describe("plugin registry facade", () => {
     });
 
     expect(listPluginRecords({ index }).map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-    expectPluginRecordFields(getPluginRecord({ index, pluginId: "demo" }), {
-      pluginId: "demo",
-      enabled: true,
-    });
-    expect(isPluginEnabled({ index, pluginId: "demo" })).toBe(true);
+    expectPluginRecordFields(
+      index.plugins.find((plugin) => plugin.pluginId === "demo"),
+      {
+        pluginId: "demo",
+        enabled: true,
+      },
+    );
+    expect(isInstalledPluginEnabled(index, "demo")).toBe(true);
     expect(listPluginContributionIds({ index, contribution: "providers" })).toEqual(["demo"]);
     expect(listPluginContributionIds({ index, contribution: "modelCatalogProviders" })).toEqual([
       "demo",
@@ -282,10 +284,13 @@ describe("plugin registry facade", () => {
       preferPersisted: false,
     });
 
-    expectPluginRecordFields(getPluginRecord({ index, pluginId: "demo" }), {
-      pluginId: "demo",
-      enabled: false,
-    });
+    expectPluginRecordFields(
+      index.plugins.find((plugin) => plugin.pluginId === "demo"),
+      {
+        pluginId: "demo",
+        enabled: false,
+      },
+    );
     const config = {
       plugins: {
         entries: {
@@ -295,7 +300,7 @@ describe("plugin registry facade", () => {
         },
       },
     };
-    expect(isPluginEnabled({ index, pluginId: "demo", config })).toBe(false);
+    expect(isInstalledPluginEnabled(index, "demo", config)).toBe(false);
     expect(resolveProviderOwners({ index, providerId: "demo", config })).toStrictEqual([]);
     expect(
       resolveProviderOwners({ index, providerId: "demo", config, includeDisabled: true }),
@@ -319,10 +324,13 @@ describe("plugin registry facade", () => {
     const result = loadPluginRegistrySnapshotWithMetadata({ stateDir, config, env });
 
     expect(result.source).toBe("persisted");
-    expectPluginRecordFields(getPluginRecord({ index: result.snapshot, pluginId: "demo" }), {
-      pluginId: "demo",
-      enabled: false,
-    });
+    expectPluginRecordFields(
+      result.snapshot.plugins.find((plugin) => plugin.pluginId === "demo"),
+      {
+        pluginId: "demo",
+        enabled: false,
+      },
+    );
   });
 
   it("preserves raw declarations and indexed owners without rereading manifests", () => {

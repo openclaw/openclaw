@@ -115,14 +115,17 @@ function resolveSlashRouteInFlightKey(authorization: string | undefined): string
     : SLASH_ROUTE_IN_FLIGHT_KEY;
 }
 
-function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
+function resolveSlashHandler(
+  source: SlashHandlerMatchSource,
+  matchesState: (state: SlashCommandAccountState) => boolean,
+): SlashHandlerMatch {
   const matches: Array<{
     accountId: string;
     handler: SlashHandler;
   }> = [];
 
   for (const [accountId, state] of accountStates) {
-    if (state.commandTokens.has(token) && state.handler) {
+    if (state.handler && matchesState(state)) {
       matches.push({ accountId, handler: state.handler });
     }
   }
@@ -137,7 +140,7 @@ function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
     }
     return {
       kind: "single",
-      source: "token",
+      source,
       handler: match.handler,
       accountIds: [match.accountId],
     };
@@ -145,7 +148,7 @@ function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
 
   return {
     kind: "ambiguous",
-    source: "token",
+    source,
     accountIds: matches.map((entry) => entry.accountId),
   };
 }
@@ -159,43 +162,9 @@ function resolveSlashHandlerForCommand(params: {
     return { kind: "none" };
   }
 
-  const matches: Array<{
-    accountId: string;
-    handler: SlashHandler;
-  }> = [];
-
-  for (const [accountId, state] of accountStates) {
-    if (
-      state.handler &&
-      state.registeredCommands.some(
-        (cmd) => cmd.teamId === params.teamId && cmd.trigger === trigger,
-      )
-    ) {
-      matches.push({ accountId, handler: state.handler });
-    }
-  }
-
-  if (matches.length === 0) {
-    return { kind: "none" };
-  }
-  if (matches.length === 1) {
-    const match = matches[0];
-    if (!match) {
-      return { kind: "none" };
-    }
-    return {
-      kind: "single",
-      source: "command",
-      handler: match.handler,
-      accountIds: [match.accountId],
-    };
-  }
-
-  return {
-    kind: "ambiguous",
-    source: "command",
-    accountIds: matches.map((entry) => entry.accountId),
-  };
+  return resolveSlashHandler("command", (state) =>
+    state.registeredCommands.some((cmd) => cmd.teamId === params.teamId && cmd.trigger === trigger),
+  );
 }
 
 /**
@@ -393,7 +362,9 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       // parse failed — will be caught by handler
     }
 
-    let match: SlashHandlerMatch = token ? resolveSlashHandlerForToken(token) : { kind: "none" };
+    let match: SlashHandlerMatch = token
+      ? resolveSlashHandler("token", (state) => state.commandTokens.has(token))
+      : { kind: "none" };
     if (match.kind === "none") {
       const payload = parseSlashCommandPayload(bodyStr, ct);
       if (payload) {

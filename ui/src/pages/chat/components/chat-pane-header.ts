@@ -174,6 +174,9 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
       @input=${(event: InputEvent) =>
         props.onRenameInput((event.currentTarget as HTMLInputElement).value)}
       @keydown=${(event: KeyboardEvent) => {
+        if (event.isComposing || event.keyCode === 229) {
+          return;
+        }
         if (event.key === "Enter") {
           event.preventDefault();
           props.onCommitRename();

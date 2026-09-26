@@ -283,7 +283,7 @@ describe("current attachments in an active remote placement", () => {
           ...unusedEnvironments(),
           get: () => attachedEnvironment(),
           acquireTurnCredential: async () => credential(),
-          acknowledgeCredentialDelivery: () => true,
+          acknowledgeCredentialDelivery: async () => true,
           startTunnel: async () => tunnel,
         },
       });

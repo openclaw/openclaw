@@ -399,6 +399,8 @@ describe("streamOpenAICodexResponses transport", () => {
     { id: "gpt-5.6-sol", withCatalog: false },
     { id: "gpt-6-astra", withCatalog: true },
     { id: "gpt-6-astra", withCatalog: false },
+    { id: "gpt-6-sol", withCatalog: false },
+    { id: "gpt-6-luna", withCatalog: false },
   ])(
     "preserves max for $id simple requests with catalog=$withCatalog",
     async ({ id, withCatalog }) => {
@@ -439,6 +441,8 @@ describe("streamOpenAICodexResponses transport", () => {
     { id: "gpt-6-astra", effort: "none", map: undefined, expected: undefined },
     { id: "gpt-6-astra", effort: "none", map: { off: null }, expected: undefined },
     { id: "gpt-6-astra", effort: "minimal", map: undefined, expected: "low" },
+    { id: "gpt-6-sol", effort: "none", map: undefined, expected: "none" },
+    { id: "gpt-6-luna", effort: "none", map: undefined, expected: "none" },
     { id: "custom-reasoning", effort: "xhigh", map: undefined, expected: "xhigh" },
     { id: "custom-reasoning", effort: "high", map: { high: "HIGH" }, expected: "HIGH" },
   ] as const)("normalizes raw $id $effort with map=$map", async ({ id, effort, map, expected }) => {
@@ -466,11 +470,14 @@ describe("streamOpenAICodexResponses transport", () => {
 
     expect(result.errorMessage).toBe("stop after payload");
     expect(capturedPayload?.reasoning).toEqual(
-      expected ? { effort: expected, summary: "auto" } : undefined,
+      expected
+        ? { effort: expected, ...(expected === "none" ? {} : { summary: "auto" }) }
+        : undefined,
     );
   });
 
   it.each<{
+    id?: string;
     reasoning: boolean;
     requested: "off" | "high";
     supported?: string[];
@@ -481,6 +488,10 @@ describe("streamOpenAICodexResponses transport", () => {
     { reasoning: true, requested: "off", supported: ["none", "high"], expected: "none" },
     { reasoning: true, requested: "off", expected: undefined },
     { reasoning: true, requested: "off", supported: ["high"], expected: undefined },
+    { id: "gpt-6-sol", reasoning: true, requested: "off", expected: "none" },
+    { id: "gpt-6-luna", reasoning: true, requested: "off", expected: "none" },
+    { id: "gpt-6-sol", reasoning: true, requested: "off", supported: ["low", "high"] },
+    { id: "gpt-6-luna", reasoning: true, requested: "off", supported: ["low", "high"] },
     {
       reasoning: true,
       requested: "off",
@@ -493,7 +504,7 @@ describe("streamOpenAICodexResponses transport", () => {
     { reasoning: false, requested: "high", supported: ["none", "high"], expected: undefined },
   ])(
     "preserves $requested with reasoning=$reasoning supported=$supported scalar=$scalar off=$off in simple ChatGPT requests",
-    async ({ reasoning, requested, supported, scalar, off, expected }) => {
+    async ({ id = "custom-reasoning", reasoning, requested, supported, scalar, off, expected }) => {
       let capturedPayload: { reasoning?: { effort?: string } } | undefined;
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init);
@@ -507,7 +518,7 @@ describe("streamOpenAICodexResponses transport", () => {
       const result = await streamSimpleOpenAICodexResponses(
         {
           ...model,
-          id: "custom-reasoning",
+          id,
           reasoning,
           thinkingLevelMap: { off: off ?? "none" },
           compat: { supportedReasoningEfforts: supported, supportsReasoningEffort: scalar },

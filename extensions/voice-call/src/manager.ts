@@ -1,4 +1,3 @@
-// Voice Call plugin module implements manager behavior.
 import fs from "node:fs";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";

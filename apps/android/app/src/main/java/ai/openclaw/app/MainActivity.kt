@@ -82,7 +82,8 @@ class MainActivity : AppCompatActivity() {
         }
       } else {
         val appearanceThemeMode by currentViewModel.appearanceThemeMode.collectAsState()
-        OpenClawTheme(themeMode = appearanceThemeMode) {
+        val appearanceTextScale by currentViewModel.appearanceTextScale.collectAsState()
+        OpenClawTheme(themeMode = appearanceThemeMode, textScale = appearanceTextScale) {
           RootScreen(viewModel = currentViewModel)
         }
       }

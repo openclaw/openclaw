@@ -62,7 +62,7 @@ export async function resolveDiscordPreflightRoute(params: {
   const effectiveRoute = runtimeRoute.boundSessionKey
     ? runtimeRoute.route
     : resolveDiscordEffectiveRoute({
-        route,
+        route: configuredRoute?.route ?? runtimeRoute.route,
         boundSessionKey,
         configuredRoute,
         matchedBy: "binding.channel",

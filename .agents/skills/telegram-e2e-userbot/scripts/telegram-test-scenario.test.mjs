@@ -47,10 +47,12 @@ function fixture() {
             : {
                 ok: true,
                 authorized: true,
+                ...(args.includes("--require-chat") ? { chatId: -1001 } : {}),
                 testerGroupWriteAccess: true,
                 testDc: true,
                 tdlibVersion: "1.8.67",
                 user: { id: 123 },
+                chatId: -1001,
               },
       ),
     }),
@@ -166,6 +168,7 @@ test("DM reaches its SUT with an unusable group and group privacy enabled", asyn
   f.options.runCommandImpl = async (name, args) => {
     commands.push(args.includes("status") ? "status" : "group-operation");
     if (!args.includes("status")) throw new Error("DM must not mutate a group");
+    assert.equal(args.includes("--require-chat"), false);
     return await command(name, args);
   };
   f.options.fetchImpl = async (url) => {
@@ -218,6 +221,7 @@ for (const selector of [
         };
       }
       assert.ok(args.includes("status"), "a ready forum must not create or delete a basic group");
+      assert.equal(args.includes("--require-chat"), false);
       return await command(name, args);
     };
     const fetch = f.options.fetchImpl;

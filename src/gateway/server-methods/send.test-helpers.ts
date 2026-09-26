@@ -136,3 +136,22 @@ export function firstRespondCall(respond: {
     Record<string, any> | undefined,
   ];
 }
+
+export function createTelegramSourceSendRequest(
+  to: string,
+  message: string,
+  idempotencyKey: string,
+) {
+  return {
+    channel: "telegram",
+    action: "send",
+    params: { to, message },
+    sessionKey: "agent:main:telegram:direct:chat-123",
+    agentId: "main",
+    toolContext: {
+      currentChannelProvider: "telegram",
+      currentChannelId: "chat-123",
+    },
+    idempotencyKey,
+  };
+}

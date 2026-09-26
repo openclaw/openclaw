@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { resolveExecutablePath } from "../../infra/executable-path.js";
+import { resolveNodeRuntimeExecutable } from "../../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -177,7 +177,7 @@ export function startComputerHostProcess(params: {
       return;
     }
     try {
-      const node = resolveExecutablePath("node", { env: params.env });
+      const node = resolveNodeRuntimeExecutable({ env: params.env });
       if (!node) {
         throw new Error("Gateway computer control requires Node.js in PATH");
       }

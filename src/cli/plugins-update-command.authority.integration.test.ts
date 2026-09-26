@@ -11,8 +11,8 @@ import {
   retainPluginInstallTransaction,
   withPluginInstallTransactions,
 } from "../plugins/install-transaction.js";
+import { readPersistedInstalledPluginIndexRowSync } from "../plugins/installed-plugin-index-record-state.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../plugins/installed-plugin-index-row.js";
 import {
   markRetainedManagedNpmInstall,
   resolveRetainedManagedNpmInstallMarkerPath,

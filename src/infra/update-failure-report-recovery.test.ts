@@ -22,7 +22,7 @@ import {
 } from "./restart-sentinel.js";
 import { prepareUpdateFailureReport, submitUpdateFailureReport } from "./update-failure-report.js";
 import { mockCreatedIssue, mockFallbackIssue } from "./update-failure-report.test-support.js";
-import type { UpdateRunResult } from "./update-runner.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

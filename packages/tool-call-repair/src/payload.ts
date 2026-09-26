@@ -672,7 +672,7 @@ export function stripPlainTextToolCallBlocks(
 ): string {
   if (
     !text ||
-    (!/\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
+    (!/(?:^|[\r\n])[^\S\r\n]*\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
       !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(
         text,
       ) &&

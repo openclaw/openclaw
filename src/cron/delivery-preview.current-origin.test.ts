@@ -7,8 +7,12 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
@@ -77,6 +81,177 @@ async function withCurrentOrigin(
 }
 
 describe("current cron delivery origin", () => {
+  it.each(["single", "batch"] as const)(
+    "resolves %s previews without routing history beside healthy jobs",
+    async (mode) => {
+      await withCurrentOrigin(
+        { source: { channel: "telegram", to: "recipient" } },
+        async ({ job }) => {
+          const cfg: OpenClawConfig = {
+            agents: { entries: { main: {}, missing: {} } },
+          };
+          const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "missing" });
+          expect(fs.existsSync(databasePath)).toBe(false);
+          const missing = makeCronJob({
+            id: "missing-current",
+            agentId: "missing",
+            sessionTarget: "current",
+            sessionKey: "agent:missing:dashboard:current-origin",
+            delivery: { mode: "announce" },
+          });
+          const explicit = {
+            ...missing,
+            id: "missing-explicit",
+            delivery: { mode: "announce", channel: "telegram", to: "explicit-recipient" },
+          } satisfies CronJob;
+          const jobs = [
+            { ...job, id: "healthy" },
+            missing,
+            { ...missing, id: "missing-last", sessionTarget: "isolated" as const },
+            explicit,
+          ];
+          await expect(
+            resolveDeliveryTarget(cfg, "missing", {
+              ...explicit.delivery,
+              sessionKey: explicit.sessionKey,
+              sessionTarget: explicit.sessionTarget,
+            }),
+          ).resolves.toMatchObject({
+            ok: true,
+            channel: "telegram",
+            to: "explicit-recipient",
+          });
+
+          const previews =
+            mode === "batch"
+              ? await resolveCronDeliveryPreviews({ cfg, jobs })
+              : Object.fromEntries(
+                  await Promise.all(
+                    jobs.map(async (entry) => [
+                      entry.id,
+                      await resolveCronDeliveryPreview({ cfg, job: entry }),
+                    ]),
+                  ),
+                );
+          expect(previews).toEqual({
+            healthy: {
+              label: "announce -> telegram:recipient",
+              detail: `resolved from last, session ${job.sessionKey}`,
+            },
+            "missing-current": {
+              label: "announce -> current session",
+              detail: "commits to this conversation (no external channel route)",
+            },
+            "missing-last": {
+              label: "announce -> last",
+              detail: "last -> no route, will fail-closed: Delivering to telegram requires target",
+            },
+            "missing-explicit": {
+              label: "announce -> telegram:explicit-recipient",
+              detail: "explicit",
+            },
+          });
+          expect(fs.existsSync(databasePath)).toBe(false);
+        },
+      );
+    },
+  );
+
+  it("records a lost metadata table beside two healthy delivery previews", async () => {
+    await withCurrentOrigin(
+      { source: { channel: "telegram", to: "recipient" } },
+      async ({ job }) => {
+        const cfg: OpenClawConfig = { agents: { entries: { main: {}, interrupted: {} } } };
+        const interrupted = makeCronJob({
+          id: "interrupted",
+          agentId: "interrupted",
+          sessionTarget: "current",
+          sessionKey: "agent:interrupted:dashboard:current-origin",
+          delivery: { mode: "announce" },
+        });
+        replaceSessionEntrySync(
+          { agentId: "interrupted", sessionKey: interrupted.sessionKey! },
+          { sessionId: "interrupted-source", updatedAt: 1 },
+        );
+        const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "interrupted" })!;
+        clearNodeSqliteKyselyCacheForDatabase(db);
+        const prepare = db.prepare.bind(db);
+        const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+          if (sql.includes('from "session_key_contract"')) {
+            prepareSpy.mockRestore();
+            db.exec("DROP TABLE session_key_contract");
+          }
+          return prepare(sql);
+        });
+        try {
+          const previews = await resolveCronDeliveryPreviews({
+            cfg,
+            jobs: [
+              { ...job, id: "healthy-current" },
+              interrupted,
+              {
+                ...job,
+                id: "healthy-explicit",
+                delivery: { mode: "announce", channel: "telegram", to: "other-recipient" },
+              },
+            ],
+          });
+          expect(previews).toEqual({
+            "healthy-current": {
+              label: "announce -> telegram:recipient",
+              detail: `resolved from last, session ${job.sessionKey}`,
+            },
+            interrupted: {
+              label: "announce -> last",
+              detail: expect.stringMatching(/^delivery preview unavailable: .*table-missing/u),
+            },
+            "healthy-explicit": {
+              label: "announce -> telegram:other-recipient",
+              detail: "explicit",
+            },
+          });
+        } finally {
+          prepareSpy.mockRestore();
+        }
+      },
+    );
+  });
+
+  it("uses a recovered source route when the configured primary store is absent", async () => {
+    await withCurrentOrigin(
+      { source: { channel: "telegram", to: "recipient", accountId: "work", threadId: "topic" } },
+      async ({ cfg, job }) => {
+        const primaryPath = path.join(path.dirname(cfg.session!.store!), "absent-primary.sqlite");
+        cfg.session = { store: primaryPath };
+        expect(fs.existsSync(primaryPath)).toBe(false);
+
+        await expect(
+          resolveDeliveryTarget(cfg, "main", {
+            channel: "last",
+            sessionKey: job.sessionKey,
+            sessionTarget: job.sessionTarget,
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          channel: "telegram",
+          to: "recipient",
+          accountId: "work",
+          threadId: "topic",
+          mode: "implicit",
+        });
+        const expected = {
+          label: "announce -> telegram:recipient",
+          detail: `resolved from last, session ${job.sessionKey}`,
+        };
+        expect(await resolveCronDeliveryPreview({ cfg, job })).toEqual(expected);
+        expect(await resolveCronDeliveryPreviews({ cfg, jobs: [job] })).toEqual({
+          [job.id]: expected,
+        });
+        expect(fs.existsSync(primaryPath)).toBe(false);
+      },
+    );
+  });
+
   it("shares alias reads across a preview batch and refreshes routes on the next request", async () => {
     await withCurrentOrigin({ channelCount: 1 }, async ({ cfg, job }) => {
       const storePath = cfg.session!.store!;

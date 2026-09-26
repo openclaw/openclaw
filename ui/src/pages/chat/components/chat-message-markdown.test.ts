@@ -147,6 +147,110 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
 });
 
 describe("user message disclosure", () => {
+  it("batches and retains overflow measurements while observing content, fonts and lifetime", async () => {
+    const fonts = Object.assign(new EventTarget(), { ready: Promise.resolve() });
+    const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+    Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    const restoreStyles: Array<() => void> = [];
+    const markdown = "A long prompt with unchanged layout. ".repeat(50);
+    const draw = (text = markdown, expanded = false) =>
+      render(
+        html`${["first", "second"].map((key) =>
+          renderMessageMarkdown(
+            text,
+            key,
+            {
+              role: "user",
+              isStreaming: false,
+              isUserMessageExpanded: () => expanded,
+              onToggleUserMessageExpanded: vi.fn(),
+            },
+            {},
+          ),
+        )}`,
+        container,
+      );
+    const settle = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    try {
+      const part = draw();
+      const phases: string[] = [];
+      const measure = vi.fn(() => {
+        phases.push("read");
+        return 300;
+      });
+      for (const content of container.querySelectorAll<HTMLElement>(
+        ".chat-message-disclosure__content",
+      )) {
+        Object.defineProperties(content, {
+          scrollHeight: { get: measure },
+          clientHeight: { get: () => 100 },
+        });
+        const remove = content.style.removeProperty.bind(content.style);
+        const removal = vi.spyOn(content.style, "removeProperty").mockImplementation((property) => {
+          phases.push("write");
+          return remove(property);
+        });
+        restoreStyles.push(() => removal.mockRestore());
+      }
+      await settle();
+      expect(measure).toHaveBeenCalled();
+      expect(phases.slice(phases.indexOf("read"), phases.lastIndexOf("read") + 1)).not.toContain(
+        "write",
+      );
+      measure.mockClear();
+      for (let index = 0; index < 5; index += 1) {
+        draw();
+        await settle();
+      }
+      expect(measure).not.toHaveBeenCalled();
+
+      draw(`${markdown}Updated content.`);
+      await settle();
+      expect(measure).toHaveBeenCalled();
+      measure.mockClear();
+      draw(`${markdown}Updated content.`, true);
+      await settle();
+      expect(measure).toHaveBeenCalled();
+      expect(container.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
+      measure.mockClear();
+      fonts.dispatchEvent(new Event("loadingdone"));
+      await settle();
+      expect(measure).toHaveBeenCalled();
+
+      draw(`${markdown}Retired before measurement.`);
+      part.setConnected(false);
+      measure.mockClear();
+      await settle();
+      fonts.dispatchEvent(new Event("loadingdone"));
+      await settle();
+      expect(measure).not.toHaveBeenCalled();
+      part.setConnected(true);
+      await settle();
+      expect(measure).toHaveBeenCalled();
+    } finally {
+      render(nothing, container);
+      container.remove();
+      restoreStyles.forEach((restore) => restore());
+      vi.unstubAllGlobals();
+      if (previousFonts) {
+        Object.defineProperty(document, "fonts", previousFonts);
+      } else {
+        Reflect.deleteProperty(document, "fonts");
+      }
+    }
+  });
+
   it.each([
     {
       name: "seven short lines",

@@ -1,9 +1,9 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 // @vitest-environment node
 // Control UI tests cover chat behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -2335,6 +2335,26 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toEqual([message]);
     expect(state.lastError).toBeNull();
     expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-1" });
+  });
+
+  it("keeps the current stream partial when a message-less error ends the run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial answer before the failure",
+      chatStreamStartedAt: 9,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "provider disconnected",
+    };
+
+    expect(handleChatGatewayEvent(state, payload)).toBe("error");
+    expect(state.chatStream).toBeNull();
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Partial answer before the failure");
   });
 
   it("preserves a legacy terminal message that completes streamed assistant content", () => {

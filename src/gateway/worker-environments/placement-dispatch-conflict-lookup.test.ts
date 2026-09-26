@@ -2,10 +2,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { MANIFEST_REF, type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness as createPlacementHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -48,8 +48,8 @@ describe("worker placement dispatch conflict lookup", () => {
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
   });
 
   it("reclaims an unchanged worker with unknown conflict state without silently clearing its report", async () => {
@@ -85,7 +85,7 @@ describe("worker placement dispatch conflict lookup", () => {
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }
-      const claim = placementStore.claimTurn({
+      const claim = await placementStore.claimTurn({
         ...REQUEST,
         claimId: "restarted-turn-claim",
         runId: "restarted-turn-run",

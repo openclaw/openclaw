@@ -3,19 +3,33 @@
  * routing, notification fanout, server request handlers, and version checks.
  */
 import { randomUUID } from "node:crypto";
-import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import {
   closeCodexCatalogClientSource,
   codexCatalogSourceForClient,
 } from "../session-catalog-source.js";
-import { buildCodexAppServerInitializeParams } from "./client-initialize.js";
+import { CodexCatalogWorker, codexCatalogRequestId } from "./client-catalog-worker.js";
+import {
+  appendBoundedTail,
+  buildCodexAppServerExitError,
+  logCodexAppServerParseFailure,
+  observeCodexAppServerStderr,
+} from "./client-diagnostics.js";
+import {
+  buildCodexAppServerInitializeParams,
+  buildCodexAppServerRuntimeIdentity,
+} from "./client-initialize.js";
+import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
 import { CodexAppServerMessageDecoder } from "./client-message-decoder.js";
+import {
+  listenCodexAppServerLines,
+  stringifyCodexAppServerMessage,
+  readCodexCatalogDecodeRoute,
+  type CodexCatalogDecodeRoute,
+} from "./client-message-frames.js";
 import { dispatchCodexAppServerResponse } from "./client-response.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
@@ -47,14 +61,11 @@ import {
 } from "./transport.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
 
-const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
 const CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS = 50;
 const CODEX_APP_SERVER_PENDING_STARTUP_WARNINGS_MAX = 32;
 const CODEX_APP_SERVER_CLIENT_INSTANCE_IDS = new WeakMap<object, string>();
-const UNPAIRED_SURROGATE_RE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 type RequestOptions = {
   timeoutMs?: number;
@@ -211,9 +222,12 @@ export type CodexAppServerRuntimeIdentity = {
 /** Stateful app-server JSON-RPC client over stdio or websocket transport. */
 export class CodexAppServerClient {
   private readonly instanceId = randomUUID();
-  private readonly messageDecoder = new CodexAppServerMessageDecoder(logCodexAppServerParseFailure);
   private readonly child: CodexAppServerTransport;
-  private readonly lines: ReadlineInterface;
+  private readonly closeMessageReader: () => void;
+  private readonly decoder = new CodexAppServerMessageDecoder(logCodexAppServerParseFailure);
+  private readonly catalogWorker = new CodexCatalogWorker();
+  private catalogWorkerClosed: Promise<void> | undefined;
+  private serverRequestsClosed: Promise<void> | undefined;
   private readonly pending = new Map<number | string, CodexRequestAttempt>();
   private readonly catalogResponses = new WeakMap<
     CodexRequestAttempt,
@@ -249,28 +263,31 @@ export class CodexAppServerClient {
 
   private constructor(child: CodexAppServerTransport) {
     this.child = child;
-    this.lines = createInterface({ input: child.stdout });
-    this.lines.on("line", (line) => this.handleParsedMessage(this.messageDecoder.parse(line)));
-    this.lines.on("error", (error) => this.closeWithError(toStringifiedError(error)));
+    this.closeMessageReader = listenCodexAppServerLines(
+      child.stdout,
+      (line) => {
+        const route =
+          this.catalogWorker.continuation ??
+          (this.decoder.hasPending ? undefined : readCodexCatalogDecodeRoute(line));
+        if (route) {
+          return this.decodeCatalogLine(line, route);
+        }
+        return this.handleParsedMessage(this.decoder.parse(line.toString("utf8")));
+      },
+      (error) => this.closeWithError(toStringifiedError(error)),
+    );
     child.stdout.on("error", (error) => this.closeWithError(toStringifiedError(error)));
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
+    observeCodexAppServerStderr(child.stderr, (chunk) => {
       const text = this.redactPrivateStderr(chunk);
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
-      const trimmed = text.trim();
-      if (trimmed) {
-        embeddedAgentLog.debug(`codex app-server stderr: ${trimmed}`);
-      }
-    });
-    // Codex reserves stderr for diagnostics; losing that stream must not tear
-    // down an otherwise healthy JSON-RPC connection on stdout.
-    child.stderr.on("error", (error) => {
-      embeddedAgentLog.warn("codex app-server stderr stream failed", { error });
+      return text;
     });
     child.once("error", (error) => this.closeWithError(toStringifiedError(error)));
     child.once("exit", (code, signal) => {
       this.transportExited = true;
-      this.closeWithError(buildCodexAppServerExitError(code, signal, this.stderrTail));
+      this.closeWithError(
+        child.startupFailure?.error ?? buildCodexAppServerExitError(code, signal, this.stderrTail),
+      );
     });
     // Guard against unhandled EPIPE / write-after-close errors on the stdin
     // stream. When the child process terminates abruptly the pipe can break
@@ -307,10 +324,13 @@ export class CodexAppServerClient {
     } catch (error) {
       assertCurrent?.();
       if (client?.transportExited && hasCodexAppServerNaturalExit(client.child)) {
-        throw buildCodexAppServerExitError(
-          client.child.exitCode,
-          client.child.signalCode,
-          client.stderrTail,
+        throw (
+          client.child.startupFailure?.error ??
+          buildCodexAppServerExitError(
+            client.child.exitCode,
+            client.child.signalCode,
+            client.stderrTail,
+          )
         );
       }
       // Cleanup must not turn a live-child registration refusal into
@@ -337,6 +357,7 @@ export class CodexAppServerClient {
     // The handshake identifies the exact app-server process we will keep using,
     // which matters when callers override the binary or app-server args.
     const response = await this.request("initialize", buildCodexAppServerInitializeParams());
+    this.child.startupFailure?.complete();
     this.serverVersion = assertSupportedCodexAppServerVersion(response);
     this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, this.serverVersion);
     this.notify("initialized");
@@ -654,7 +675,7 @@ export class CodexAppServerClient {
         ),
       );
     }
-    const id = this.nextId++;
+    const id = codexCatalogRequestId(method, params, this.nextId++, options.catalogPreview);
     if (
       method === "account/login/start" ||
       method === "account/logout" ||
@@ -692,7 +713,7 @@ export class CodexAppServerClient {
           : error,
     });
     this.pending.set(id, attempt);
-    if (options.catalogPreview && method === "thread/list") {
+    if (options.catalogPreview) {
       this.catalogResponses.set(attempt, {
         preview: options.catalogPreviewCache,
         remainingRows: options.catalogRows,
@@ -782,10 +803,20 @@ export class CodexAppServerClient {
     forceKillDelayMs?: number;
   }): Promise<CodexAppServerCloseResult> {
     this.markClosed(new Error("codex app-server client is closed"));
-    const result = await closeCodexAppServerTransportAndWait(this.child, options);
+    const [result] = await Promise.all([
+      closeCodexAppServerTransportAndWait(this.child, options),
+      this.waitForCloseWork(),
+    ]);
     // Codex can discard terminal handles before OS cleanup. Later ancestry
     // containment cannot discharge a command whose descendants already reparented.
     return this.nativeExecutionObserved ? { ...result, cleanup: "uncertain" } : result;
+  }
+
+  /** Joins local settlement already started by close without changing transport policy. */
+  async waitForCloseWork(): Promise<void> {
+    // Refresh settlement must finish even if catalog cleanup has failed.
+    await this.serverRequestsClosed;
+    await this.catalogWorkerClosed;
   }
 
   /** Closes this transport and runs cleanup only after physical process exit. */
@@ -876,13 +907,13 @@ export class CodexAppServerClient {
     return held ? text.slice(0, -held) : text;
   }
 
-  private handleParsedMessage(parsed: unknown): void {
+  private handleParsedMessage(parsed: unknown, previewStates?: (boolean | undefined)[]): void {
     if (this.closed || !parsed || typeof parsed !== "object") {
       return;
     }
     const message = parsed as RpcMessage;
     if (isRpcResponse(message)) {
-      this.handleResponse(message);
+      this.handleResponse(message, previewStates);
       return;
     }
     if (!("method" in message)) {
@@ -902,13 +933,34 @@ export class CodexAppServerClient {
     });
   }
 
-  private handleResponse(response: RpcResponse): void {
+  private async decodeCatalogLine(line: Buffer, route: CodexCatalogDecodeRoute): Promise<void> {
+    const decoded = await this.catalogWorker.decode(
+      line,
+      route,
+      this.pending,
+      this.catalogResponses,
+    );
+    if (!decoded || this.closed) {
+      return;
+    }
+    for (const failure of decoded.failures) {
+      logCodexAppServerParseFailure(failure.value, failure.error, failure.fragmentCount);
+    }
+    if (decoded.projectionError) {
+      this.pending.get(decoded.projectionError.id)?.reject(decoded.projectionError.error, false);
+    } else if (decoded.message) {
+      this.handleParsedMessage(decoded.message, decoded.previewStates);
+    }
+  }
+
+  private handleResponse(response: RpcResponse, previewStates?: (boolean | undefined)[]): void {
     this.nativeExecutionObserved =
       dispatchCodexAppServerResponse(
         response,
         this.pending,
         this.catalogResponses,
         codexCatalogSourceForClient(this),
+        previewStates,
       ) || this.nativeExecutionObserved;
   }
 
@@ -964,9 +1016,13 @@ export class CodexAppServerClient {
     this.closed = true;
     closeCodexCatalogClientSource(this);
     this.closeError = error;
-    this.messageDecoder.clear();
-    this.lines.close();
-    this.serverRequests.close(error);
+    this.closeMessageReader();
+    this.decoder.clear();
+    this.catalogWorkerClosed = this.catalogWorker.close(error);
+    void this.catalogWorkerClosed?.catch((closeError: unknown) => {
+      embeddedAgentLog.warn("codex catalog worker shutdown failed", { error: closeError });
+    });
+    this.serverRequestsClosed = this.serverRequests.close(error);
     this.rejectPendingRequests(error);
     return true;
   }
@@ -985,14 +1041,6 @@ export class CodexAppServerClient {
       }
     }
   }
-}
-
-function stringifyCodexAppServerMessage(message: RpcRequest | RpcResponse): string {
-  return (
-    JSON.stringify(message, (_key, value) =>
-      typeof value === "string" ? value.replace(UNPAIRED_SURROGATE_RE, "") : value,
-    ) ?? "null"
-  );
 }
 
 /** Raised when the initialize handshake detects an unsupported app-server version. */
@@ -1036,23 +1084,6 @@ export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean
   return error instanceof CodexAppServerVersionError;
 }
 
-function buildCodexAppServerRuntimeIdentity(
-  response: CodexInitializeResponse,
-  serverVersion: string,
-): CodexAppServerRuntimeIdentity {
-  const userAgent = normalizeOptionalString(response.userAgent);
-  const codexHome = normalizeOptionalString(response.codexHome);
-  const platformFamily = normalizeOptionalString(response.platformFamily);
-  const platformOs = normalizeOptionalString(response.platformOs);
-  return {
-    serverVersion,
-    ...(userAgent ? { userAgent } : {}),
-    ...(codexHome ? { codexHome } : {}),
-    ...(platformFamily ? { platformFamily } : {}),
-    ...(platformOs ? { platformOs } : {}),
-  };
-}
-
 /** Extracts the Codex version from the app-server initialize user-agent field. */
 function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
   // Codex returns `<originator>/<codex-version> ...`; the originator can be
@@ -1062,52 +1093,6 @@ function readCodexVersionFromUserAgent(userAgent: string | undefined): string | 
     /^[^/]+\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?:[\s(]|$)/,
   );
   return match?.[1];
-}
-
-function redactCodexAppServerLinePreview(value: string): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-  const redacted = compact
-    .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]+/gi, "$1<redacted>")
-    .replace(
-      /("(?:api_?key|authorization|token|access_token|refresh_token)"\s*:\s*")([^"]+)(")/gi,
-      "$1<redacted>$3",
-    )
-    .replace(
-      /\b([a-z0-9_]*(?:api_?key|authorization|access_token|refresh_token|token))(\s*=\s*)(["']?)[^\s"']+(\3)/gi,
-      "$1$2$3<redacted>$4",
-    );
-  return redacted.length > CODEX_APP_SERVER_PARSE_LOG_MAX
-    ? `${truncateUtf16Safe(redacted, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
-    : redacted;
-}
-
-function appendBoundedTail(current: string, next: string, maxLength: number): string {
-  const combined = `${current}${next}`;
-  return combined.length > maxLength ? sliceUtf16Safe(combined, -maxLength) : combined;
-}
-
-function buildCodexAppServerExitError(code: unknown, signal: unknown, stderrTail: string): Error {
-  const stderrPreview = redactCodexAppServerLinePreview(stderrTail);
-  const suffix = stderrPreview ? ` stderr=${JSON.stringify(stderrPreview)}` : "";
-  return new Error(
-    `codex app-server exited: code=${formatExitValue(code)} signal=${formatExitValue(
-      signal,
-    )}${suffix}`,
-  );
-}
-
-function logCodexAppServerParseFailure(value: string, error: unknown, fragmentCount: number): void {
-  const linePreview = redactCodexAppServerLinePreview(value);
-  const suffix = fragmentCount > 1 ? ` fragments=${fragmentCount}` : "";
-  embeddedAgentLog.warn("failed to parse codex app-server message", {
-    error,
-    errorMessage: coerceErrorMessage(error),
-    fragmentCount,
-    linePreview,
-    consoleMessage: `failed to parse codex app-server message${suffix}: preview=${JSON.stringify(
-      linePreview,
-    )}`,
-  });
 }
 
 const CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS = new Set([
@@ -1121,13 +1106,4 @@ export function isCodexAppServerApprovalRequest(method: string): boolean {
   return CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS.has(method);
 }
 
-function formatExitValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return "null";
-  }
-  if (typeof value === "string" || typeof value === "number") {
-    return String(value);
-  }
-  return "unknown";
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

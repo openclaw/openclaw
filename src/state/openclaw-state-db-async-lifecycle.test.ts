@@ -85,6 +85,34 @@ describe("canonical shared-state resource drainage", () => {
     expect(observed.assertCurrent).toThrow(/admission changed/);
   });
 
+  it("normalizes relative paths for identity, invalidation, exclusion, and closure", async () => {
+    const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
+    const pathname = databasePath();
+    const relative = path.relative(process.cwd(), pathname);
+    writeFileSync(pathname, "");
+    const original = lifecycle.capture(relative);
+    expect(original.databasePath).toBe(pathname);
+    expect(lifecycle.publish(relative)).toEqual(original.identity);
+    expect(lifecycle.identity(relative)).toBe(original.identity);
+    expect(lifecycle.knownIdentity(relative)).toBe(original.identity);
+    lifecycle.invalidate(relative);
+    expect(original.assertCurrent).toThrow(/admission changed/);
+    const current = lifecycle.capture(pathname);
+    const release = lifecycle.holdExclusion(relative);
+    try {
+      expect(current.assertCurrent).toThrow(/admission is closed/);
+      expect(() => lifecycle.capture(pathname)).toThrow(/admission is closed/);
+    } finally {
+      release();
+    }
+    expect(lifecycle.knownIdentity(relative)).toBeUndefined();
+    const reopened = lifecycle.capture(pathname);
+    const retireNative = vi.fn(() => false);
+    await lifecycle.close(relative, retireNative);
+    expect(retireNative).toHaveBeenCalledWith(reopened.identity);
+    expect(reopened.assertCurrent).toThrow(/admission changed/);
+  });
+
   it("shares recorded admission and closes native owners for one physical database", async () => {
     const pathname = databasePath();
     const original = openOpenClawStateDatabase({ path: pathname });
@@ -95,8 +123,14 @@ describe("canonical shared-state resource drainage", () => {
     expect(aliasAdmission.identity.key).toBe(originalAdmission.identity.key);
     expect(aliasAdmission.databasePath).toBe(alias);
     const identityReads = vi.spyOn(databaseIdentity, "readDatabasePathIdentitySync");
-    captureOpenClawStateDatabaseReadAdmission(pathname).assertCurrent();
-    captureOpenClawStateDatabaseReadAdmission(alias).assertCurrent();
+    const resolvePath = vi.spyOn(path, "resolve");
+    try {
+      captureOpenClawStateDatabaseReadAdmission(pathname).assertCurrent();
+      captureOpenClawStateDatabaseReadAdmission(alias).assertCurrent();
+      expect(resolvePath.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally {
+      resolvePath.mockRestore();
+    }
     expect(identityReads).not.toHaveBeenCalled();
     identityReads.mockRestore();
     const closed = vi.fn(async (_identity?: DatabasePathIdentity) => {});
@@ -203,6 +237,42 @@ describe("canonical shared-state resource drainage", () => {
       failFirst = false;
       await closeOpenClawStateDatabaseAsync();
       unregister();
+    }
+  });
+
+  it("retains an unregistered finalizer skipped after an ordinary drain failure", async () => {
+    const owner = openOpenClawStateDatabase({ path: databasePath() });
+    const reader = openOpenClawStateReadConnection(owner.path, owner.path);
+    const failure = new Error("ordinary resource did not settle");
+    const finalize = vi.fn(async () => {
+      reader.close();
+    });
+    const unregisterFinalizer = registerOpenClawStateDatabaseAsyncResource({
+      phase: "after-resources",
+      close: finalize,
+    });
+    const close = vi.fn<() => Promise<void>>().mockResolvedValue();
+    close.mockImplementationOnce(async () => {
+      unregisterFinalizer();
+      throw failure;
+    });
+    const unregister = registerOpenClawStateDatabaseAsyncResource({ close });
+    try {
+      await expect(closeOpenClawStateDatabaseAsync()).rejects.toBe(failure);
+      expect(finalize).not.toHaveBeenCalled();
+      expect(owner.db.isOpen).toBe(true);
+      expect(reader.database.db.isOpen).toBe(true);
+      expect(() => captureOpenClawStateDatabaseReadAdmission(owner.path)).toThrow(/closed/);
+      await closeOpenClawStateDatabaseAsync();
+      expect(close).toHaveBeenCalledTimes(2);
+      expect(finalize).toHaveBeenCalledOnce();
+      expect(reader.database.db.isOpen).toBe(false);
+      expect(owner.db.isOpen).toBe(false);
+    } finally {
+      unregister();
+      unregisterFinalizer();
+      reader.close();
+      await closeOpenClawStateDatabaseAsync();
     }
   });
 

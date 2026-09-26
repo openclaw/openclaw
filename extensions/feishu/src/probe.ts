@@ -1,4 +1,3 @@
-// Feishu plugin module implements probe behavior.
 import { createHash } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {

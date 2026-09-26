@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { stageAgentModelFallbacks, stageAgentPrimaryModel } from "./model-config.ts";
+import { createAgentModelActions } from "./model-config.ts";
 
 function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   const client = {
@@ -30,7 +30,77 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   });
 }
 
+function modelActionsFor(runtimeConfig: ReturnType<typeof createRuntimeConfig>) {
+  return createAgentModelActions({
+    getRuntimeConfig: () => runtimeConfig,
+    canUpdate: () => true,
+    onPrimaryChanged: () => undefined,
+  });
+}
+
 describe("agent model config", () => {
+  it("rechecks the current agent and permissions before editing the current config", async () => {
+    const original = createRuntimeConfig({ agents: { entries: { main: {} } } });
+    const replacement = createRuntimeConfig({ agents: { entries: { scout: {} } } });
+    await Promise.all([original.ensureLoaded(), replacement.ensureLoaded()]);
+    let current = original;
+    let selected = "main";
+    let allowed = true;
+    const onPrimaryChanged = vi.fn();
+    const actions = createAgentModelActions({
+      getRuntimeConfig: () => current,
+      canUpdate: (agentId) => allowed && agentId === selected,
+      onPrimaryChanged,
+    });
+    current = replacement;
+    selected = "scout";
+    actions.onModelChange("main", "fixture/chat");
+    actions.onDecisionModelChange("main", "typesafe/jev-latest");
+    actions.onModelFallbacksChange("main", ["fixture/fallback"]);
+    allowed = false;
+    actions.onModelChange("scout", "fixture/chat");
+    actions.onDecisionModelChange("scout", "typesafe/jev-latest");
+    actions.onModelFallbacksChange("scout", ["fixture/fallback"]);
+    expect(original.state.configFormDirty).toBe(false);
+    expect(replacement.state.configFormDirty).toBe(false);
+    expect(onPrimaryChanged).not.toHaveBeenCalled();
+    allowed = true;
+    actions.onModelChange("scout", "fixture/chat");
+    actions.onDecisionModelChange("scout", "");
+    actions.onModelFallbacksChange("scout", ["fixture/fallback"]);
+    expect(replacement.state.configForm).toEqual({
+      agents: {
+        entries: {
+          scout: {
+            model: { primary: "fixture/chat", fallbacks: ["fixture/fallback"] },
+            decisionModel: "",
+          },
+        },
+      },
+    });
+    expect(original.state.configFormDirty).toBe(false);
+    expect(onPrimaryChanged).toHaveBeenCalledOnce();
+    original.dispose();
+    replacement.dispose();
+  });
+  it("distinguishes an explicit decision disable from inheritance without changing other settings", async () => {
+    const defaults = { decisionModel: "typesafe/jev-latest", model: "openai/gpt-5.4" };
+    const runtimeConfig = createRuntimeConfig({ agents: { defaults } });
+    await runtimeConfig.ensureLoaded();
+    modelActionsFor(runtimeConfig).onDecisionModelChange("main", null);
+    expect(runtimeConfig.state.configFormDirty).toBe(false);
+    modelActionsFor(runtimeConfig).onDecisionModelChange("main", "");
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { defaults, entries: { main: { decisionModel: "" } } },
+    });
+    modelActionsFor(runtimeConfig).onDecisionModelChange("main", "typesafe/jev-preview");
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { defaults, entries: { main: { decisionModel: "typesafe/jev-preview" } } },
+    });
+    modelActionsFor(runtimeConfig).onDecisionModelChange("main", null);
+    expect(runtimeConfig.state.configForm).toEqual({ agents: { defaults, entries: { main: {} } } });
+    runtimeConfig.dispose();
+  });
   it("writes primary and fallback changes through keyed agent entries", async () => {
     const runtimeConfig = createRuntimeConfig({
       agents: {
@@ -40,8 +110,8 @@ describe("agent model config", () => {
     });
     await runtimeConfig.ensureLoaded();
 
-    stageAgentPrimaryModel(runtimeConfig, "main", "anthropic/claude-sonnet-4-6");
-    stageAgentModelFallbacks(runtimeConfig, "main", ["openai/gpt-5.4"]);
+    modelActionsFor(runtimeConfig).onModelChange("main", "anthropic/claude-sonnet-4-6");
+    modelActionsFor(runtimeConfig).onModelFallbacksChange("main", ["openai/gpt-5.4"]);
 
     expect(runtimeConfig.state.configForm).toEqual({
       agents: {
@@ -75,7 +145,7 @@ describe("agent model config", () => {
     });
     await runtimeConfig.ensureLoaded();
 
-    stageAgentModelFallbacks(runtimeConfig, "main", [
+    modelActionsFor(runtimeConfig).onModelFallbacksChange("main", [
       "google/gemini-3-pro",
       "anthropic/claude-sonnet-4-6",
     ]);
@@ -126,7 +196,7 @@ describe("agent model config", () => {
       });
       await runtimeConfig.ensureLoaded();
 
-      stageAgentModelFallbacks(runtimeConfig, "main", []);
+      modelActionsFor(runtimeConfig).onModelFallbacksChange("main", []);
 
       expect(runtimeConfig.state.configForm).toEqual({
         agents: {
@@ -148,7 +218,7 @@ describe("agent model config", () => {
     expect(runtimeConfig.state.configForm).toEqual({ agents: { defaults } });
     expect(runtimeConfig.state.configFormDirty).toBe(false);
 
-    stageAgentModelFallbacks(runtimeConfig, "main", []);
+    modelActionsFor(runtimeConfig).onModelFallbacksChange("main", []);
 
     expect(runtimeConfig.state.configForm).toEqual({
       agents: { defaults, entries: { main: { model: { fallbacks: [] } } } },
@@ -172,7 +242,7 @@ describe("agent model config", () => {
       });
       await runtimeConfig.ensureLoaded();
 
-      stageAgentPrimaryModel(runtimeConfig, "main", null);
+      modelActionsFor(runtimeConfig).onModelChange("main", null);
 
       expect(runtimeConfig.state.configForm).toEqual({
         agents: {
@@ -194,7 +264,7 @@ describe("agent model config", () => {
     });
     await runtimeConfig.ensureLoaded();
 
-    stageAgentPrimaryModel(runtimeConfig, "main", null);
+    modelActionsFor(runtimeConfig).onModelChange("main", null);
 
     expect(runtimeConfig.state.configForm).toEqual({
       agents: { entries: { main: { default: true } } },

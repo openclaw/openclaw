@@ -39,6 +39,8 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { sessionActivitySummaryHandlers } from "./server-methods/session-activity-summary.js";
+import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
+import type { RespondFn } from "./server-methods/types.js";
 import {
   createSessionActivitySummaries,
   type SessionActivitySummaryService,
@@ -46,6 +48,8 @@ import {
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import type { defaultCompleteModel } from "./session-observer-model.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   beforeMaterialize: undefined as (() => Promise<void>) | undefined,
@@ -258,6 +262,102 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     service.ensure(target);
     await vi.waitFor(() => expect(view()?.state).toBe("current"));
     expect(complete).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps describe non-current while the newer first-turn recap is queued or held", async () => {
+    await messages(1);
+    complete.mockResolvedValueOnce(result("Only the request is recorded."));
+    service.ensure(target);
+    await vi.waitFor(() => expect(view()?.state).toBe("current"));
+    const previousWatermark = readSessionTranscriptWatermark(scope);
+    const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
+    const context = bindSessionRowProjection(
+      createDirectChatContext({ getRuntimeConfig: () => cfg }),
+      () => projection,
+    );
+    const describeSession = async () => {
+      const responses: Parameters<RespondFn>[] = [];
+      await sessionByKeyReadHandlers["sessions.describe"]!({
+        req: { type: "req", id: "recap-readiness", method: "sessions.describe", params: target },
+        params: target,
+        client: null,
+        context,
+        respond: (...response) => responses.push(response),
+        isWebchatConnect: () => false,
+      });
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.[0]).toBe(true);
+      return responses[0]?.[1];
+    };
+    const completion = createDeferred<ReturnType<typeof result>>();
+    try {
+      // Prime the real resident projection with the older, valid current summary.
+      expect(await describeSession()).toMatchObject({
+        session: {
+          key: target.key,
+          sessionId: scope.sessionId,
+          activitySummary: { state: "current", text: "Only the request is recorded." },
+        },
+      });
+      expect(read()?.activitySummary).toMatchObject({
+        ...previousWatermark,
+        coveredMessages: 1,
+        totalMessages: 1,
+      });
+      complete.mockImplementationOnce(() => completion.promise);
+      await messages(1, 1);
+      const latestWatermark = readSessionTranscriptWatermark(scope);
+      expect(latestWatermark.maxSeq).not.toBe(previousWatermark.maxSeq);
+      service.handleTranscript({ target: { ...scope }, lifecycleRevision: "lifecycle-1" });
+      const updating = {
+        session: {
+          key: target.key,
+          sessionId: scope.sessionId,
+          activitySummary: { state: "updating", text: "Only the request is recorded." },
+        },
+      };
+      expect(await describeSession()).toMatchObject(updating);
+
+      terminal(service);
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+      // No model result can commit while this exact completion is held.
+      expect(await describeSession()).toMatchObject(updating);
+      expect(read()?.activitySummary).toMatchObject({
+        ...previousWatermark,
+        coveredMessages: 1,
+        totalMessages: 1,
+      });
+
+      const published = createDeferred<ReturnType<typeof view>>();
+      changed.mockImplementationOnce(() => published.resolve(view()));
+      completion.resolve(result("Completed the first turn."));
+      expect(await published.promise).toMatchObject({
+        state: "current",
+        text: "Completed the first turn.",
+      });
+      expect(await describeSession()).toMatchObject({
+        session: {
+          key: target.key,
+          sessionId: scope.sessionId,
+          activitySummary: { state: "current", text: "Completed the first turn." },
+        },
+      });
+      expect(read()?.activitySummary).toMatchObject({
+        ...latestWatermark,
+        sessionId: scope.sessionId,
+        lifecycleRevision: "lifecycle-1",
+        coveredMessages: 2,
+        totalMessages: 2,
+      });
+      expect(complete).toHaveBeenCalledTimes(2);
+    } finally {
+      completion.resolve(result("Completed the first turn."));
+      try {
+        await service.dispose();
+      } finally {
+        projection.dispose();
+      }
+    }
   });
 
   it("commits a recap without decoding unrelated retained session entries", async () => {

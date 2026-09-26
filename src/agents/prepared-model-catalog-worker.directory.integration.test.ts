@@ -64,8 +64,10 @@ describe("catalog worker captured directory ownership", () => {
     } satisfies OpenClawConfig;
     const agentDir = resolveAgentDir(config, "main", fixture.env);
     let current = true;
+    const retirement = new AbortController();
     retireAfterTest(() => {
       current = false;
+      retirement.abort();
       unregisterResolvedAgentDir({ agentId: "main", agentDir, env: fixture.env });
     });
     const profileId = `${PROVIDER_ID}:directory-main`;
@@ -95,6 +97,7 @@ describe("catalog worker captured directory ownership", () => {
       pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: prepared.pluginGeneration.pluginRegistry,
       isCurrent: () => current,
+      retirementSignal: retirement.signal,
     });
     expect(fs.existsSync(fixture.marker)).toBe(false);
     for (const attempt of [1, 2]) {
@@ -182,8 +185,10 @@ module.exports = {
       },
     };
     let current = true;
+    const retirement = new AbortController();
     retireAfterTest(() => {
       current = false;
+      retirement.abort();
       for (const [agentId, { agentDir }] of Object.entries(entries)) {
         unregisterResolvedAgentDir({ agentId, agentDir });
       }
@@ -221,6 +226,7 @@ module.exports = {
         pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
         pluginRegistry: prepared.pluginGeneration.pluginRegistry,
         isCurrent: () => current,
+        retirementSignal: retirement.signal,
       });
     const workers = prepared.agentFacts.map(createWorker);
     for (const attempt of [1, 2]) {

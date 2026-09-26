@@ -1,8 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { hasSameContextEngineInstance } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
+import { CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND as TURN_MAINTENANCE_TASK_KIND } from "../../tasks/context-engine-maintenance-task-owner.js";
+import { createQueuedTaskRun } from "../../tasks/detached-task-runtime.js";
 import type { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
 import { log } from "./logger.js";
 
@@ -15,6 +18,7 @@ export type ContextEngineMaintenanceResources = {
 export async function runContextEngineMaintenanceWork(
   run: () => Promise<void>,
   signal: AbortSignal,
+  releaseResources?: () => Promise<void>,
 ): Promise<void> {
   const work = new AsyncWorkScope();
   const context = work.run(() => AsyncLocalStorage.snapshot());
@@ -31,7 +35,19 @@ export async function runContextEngineMaintenanceWork(
       // Normal completion must not abort work that returned an early result.
       await AsyncWorkScope.runWhenAllIdle(
         () => [work],
-        () => context(() => work.drain()),
+        () => context(() => work.beginClose()),
+      );
+      // Abort descendants still own resources; lease release can then admit its cleanup here.
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [work],
+        () =>
+          context(async () => {
+            try {
+              await releaseResources?.();
+            } finally {
+              await work.drain();
+            }
+          }),
       );
     } finally {
       signal.removeEventListener("abort", cancel);
@@ -49,35 +65,45 @@ export async function disposeDeferredMaintenanceContextEngine(
 ): Promise<void> {
   const failures: unknown[] = [];
   const resources = [...(params.factoryResourceOwners ?? [])];
+  let releasing: Promise<void> | undefined;
+  const releaseResources = () =>
+    (releasing ??= Promise.allSettled(resources.map(async (owner) => await owner.release())).then(
+      (outcomes) => {
+        for (const outcome of outcomes) {
+          if (outcome.status === "rejected") {
+            failures.push(outcome.reason);
+          }
+        }
+      },
+    ));
   try {
     await params.runInContext(() =>
       maintenance.run(() =>
-        runContextEngineMaintenanceWork(async () => {
-          const disposal = (async () => {
-            await params.contextEngine.dispose?.();
-          })();
-          const factoryWork = resources.map(({ closeFactoryWork }) =>
-            trackAsyncWork(closeFactoryWork),
-          );
-          const outcomes = await Promise.allSettled([disposal, ...factoryWork]);
-          for (const outcome of outcomes) {
-            if (outcome.status === "rejected") {
-              failures.push(outcome.reason);
+        runContextEngineMaintenanceWork(
+          async () => {
+            const disposal = (async () => {
+              await params.contextEngine.dispose?.();
+            })();
+            const factoryWork = resources.map(({ closeFactoryWork }) =>
+              trackAsyncWork(closeFactoryWork),
+            );
+            const outcomes = await Promise.allSettled([disposal, ...factoryWork]);
+            for (const outcome of outcomes) {
+              if (outcome.status === "rejected") {
+                failures.push(outcome.reason);
+              }
             }
-          }
-        }, maintenance.signal),
+          },
+          maintenance.signal,
+          releaseResources,
+        ),
       ),
     );
   } catch (error) {
     failures.push(error);
   }
-  // The maintenance owner retains leases until engine and factory descendants have joined.
-  const releases = await Promise.allSettled(resources.map(async (owner) => await owner.release()));
-  for (const outcome of releases) {
-    if (outcome.status === "rejected") {
-      failures.push(outcome.reason);
-    }
-  }
+  // Admission failure still joins the same release, without repeating an admitted cleanup.
+  await releaseResources();
   for (const error of failures) {
     log.warn("context engine dispose failed after deferred maintenance", {
       errorMessage: formatErrorMessage(error),
@@ -109,4 +135,31 @@ export function mergeContextEngineFactoryWork(
     return activeResources;
   }
   return params.factoryResourceOwners;
+}
+
+export function buildTurnMaintenanceTaskDescriptor(params: {
+  sessionKey: string;
+  runId?: string;
+  notifyPolicy?: "silent" | "done_only" | "state_changes";
+  deliveryStatus?: "not_applicable" | "pending";
+}) {
+  const runId =
+    params.runId ??
+    `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
+  return createQueuedTaskRun({
+    runtime: "acp",
+    taskKind: TURN_MAINTENANCE_TASK_KIND,
+    sourceId: TURN_MAINTENANCE_TASK_KIND,
+    requesterSessionKey: params.sessionKey,
+    ownerKey: params.sessionKey,
+    scopeKind: "session",
+    runId,
+    label: "Context engine turn maintenance",
+    task: "Deferred context-engine maintenance after turn.",
+    notifyPolicy: params.notifyPolicy ?? "silent",
+    // Fast maintenance stays silent and must not create a one-task flow.
+    // Long-running and failed workers promote it to pending before notifying.
+    deliveryStatus: params.deliveryStatus ?? "not_applicable",
+    preferMetadata: true,
+  });
 }

@@ -223,7 +223,6 @@ export function resolveExistingSessionActTimeouts(request: BrowserActRequest) {
     requestedTimeoutMs ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   );
   let actionTimeoutMs = timeoutMs;
-  let timerOnlyWait = false;
   if (request.kind === "wait") {
     const timeMs = resolveNonNegativeTimerMs(request.timeMs);
     const hasCondition = [
@@ -234,7 +233,6 @@ export function resolveExistingSessionActTimeouts(request: BrowserActRequest) {
       request.loadState,
       request.fn,
     ].some((value) => typeof value === "string" && Boolean(value.trim()));
-    timerOnlyWait = !hasCondition;
     actionTimeoutMs = hasCondition
       ? addExecutionBudgetMs(timeMs, Math.max(250, timeoutMs))
       : Math.max(timeMs, timeoutMs);
@@ -245,8 +243,8 @@ export function resolveExistingSessionActTimeouts(request: BrowserActRequest) {
       : addExecutionBudgetMs(timeoutMs, EXISTING_SESSION_NAVIGATION_GRACE_MS);
   return {
     timeoutMs,
-    // A pure wait's own cancellable timer must win at the requested delay boundary.
-    bodyTimeoutMs: timerOnlyWait ? undefined : actionTimeoutMs,
+    // Waits own their delay and condition deadlines; only the request bounds preparation.
+    bodyTimeoutMs: request.kind === "wait" ? undefined : actionTimeoutMs,
     verificationTimeoutMs,
     requestTimeoutMs: addExecutionBudgetMs(actionTimeoutMs, verificationTimeoutMs),
   };

@@ -200,8 +200,9 @@ NODE
           PNPM_CONFIG_LOCKFILE_DIR: root,
           pnpm_config_lockfile_dir: root,
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: scenario === "explicit-declarations" ? "0" : undefined,
-          OPENCLAW_UPDATE_RESTART_CMD:
-            '[[ "$COREPACK_ENABLE_DOWNLOAD_PROMPT" == 1 && "$PATH" == "$FIXTURE/bin" && "$NPM_CONFIG_WORKSPACE_DIR" == "$FIXTURE" && "$npm_config_workspace_dir" == "$FIXTURE" && "$PNPM_CONFIG_LOCKFILE_DIR" == "$FIXTURE" && "$pnpm_config_lockfile_dir" == "$FIXTURE" && "${OPENCLAW_UPDATE_IN_PROGRESS+x}" != x ]] && echo restart >> "$FIXTURE/steps"',
+          // Bootstrap coverage uses the documented operator-owned lifecycle.
+          // Automatic recovery and lifecycle environment are covered separately.
+          OPENCLAW_UPDATE_RESTART_CMD: "",
         },
       });
       const preflightFailure = [
@@ -245,7 +246,7 @@ NODE
         beforeProbe
           ? []
           : succeeded
-            ? ["probe", "install", "build", "nested", "restart"]
+            ? ["probe", "install", "build", "nested"]
             : scenario === "build-failure"
               ? ["probe", "install", "build"]
               : ["install-failure", "symlink"].includes(scenario)

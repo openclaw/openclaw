@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Dedicated sidebar for the full-page settings takeover (see app-host.ts).
 import { html, nothing } from "lit";
-import type { AgentsListResult, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { AgentsListResult } from "../api/types.ts";
 import {
   cancelRoutePreload,
   isSettingsNavigationRouteVisible,
@@ -19,23 +19,17 @@ import {
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
-import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
-import type { UpdateProgress } from "../app/update-confirmation.ts";
-import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
-import { redactLoginFailureError } from "../lib/connection-hints.ts";
+import type { GatewayStatus } from "../lib/gateway-status.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
+import { renderGatewayStatus } from "./gateway-status.ts";
 import { icons } from "./icons.ts";
-import {
-  renderSidebarConnectionStatus,
-  resolveSidebarConnectionStatus,
-} from "./session-row-badges.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
 import "./agent-select-registration.ts";
 import "./settings-save-indicator.ts";
@@ -54,33 +48,15 @@ type SettingsSidebarProps = {
   activePathname?: string;
   activeSearch?: string;
   activeHash?: string;
-  offline: boolean;
-  phase?: ApplicationGatewaySnapshot["phase"];
-  restartPending?: boolean;
-  suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
-  queuedOutboxCount?: number;
+  connectionStatus: GatewayStatus | null;
   lastError: string | null;
   gatewayVersion: string;
-  updateAvailable: UpdateAvailable | null;
-  updateSchedule?: UpdateScheduleState | null;
-  heldUpdateCampaignId?: string | null;
-  updateBusy: boolean;
-  updateStatusBanner?: ApplicationStatusBanner | null;
-  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
-  canUpdate?: boolean;
-  canHoldUpdate?: boolean;
-  onUpdate: () => void;
-  refreshRequired: boolean;
-  onRefresh: () => Promise<boolean>;
-  onHoldUpdate?: () => Promise<boolean>;
-  onReviewUpdate?: () => void;
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
   searchParams?: Parameters<typeof findSettingsSearchBlocks>[0];
   onExit: () => void;
   onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
-  onOpenApprovals?: () => void;
   onPreload?: (routeId: RouteId) => Promise<void> | void;
   onSearchQueryChange: (query: string) => void;
   preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
@@ -193,7 +169,7 @@ function filterSettingsNavigationGroups(
   ];
 }
 
-function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: string) {
+function renderItem(props: SettingsSidebarProps, routeId: RouteId) {
   const active = settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
   return html`
     <a
@@ -206,8 +182,11 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
       @pointerenter=${(event: Event) =>
         scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active)}
       @pointerleave=${(event: Event) => cancelRoutePreload(props.preloadTimers, event)}
-      @touchstart=${(event: TouchEvent) =>
-        scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true)}
+      @touchstart=${{
+        handleEvent: (event: TouchEvent) =>
+          scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true),
+        passive: true,
+      }}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           return;
@@ -220,7 +199,7 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
         >${icons[navigationIconForRoute(routeId)]}</span
       >
       <span class="settings-sidebar__item-label"
-        >${label ?? settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span
+        >${settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span
       >
       ${props.presentation === "embed-list" ? html`<span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>` : nothing}
     </a>
@@ -332,8 +311,19 @@ function renderSettingsAgentSelector(props: SettingsSidebarProps) {
   </div>`;
 }
 
+function renderSettingsConnectionStatus(props: SettingsSidebarProps) {
+  return props.connectionStatus !== null
+    ? renderGatewayStatus({
+        kind: props.connectionStatus,
+        lastError: props.lastError,
+        onRetry: props.onRetryConnect,
+      })
+    : html`<openclaw-settings-save-indicator
+        .props=${props.saveIndicator}
+      ></openclaw-settings-save-indicator>`;
+}
+
 function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
-  const connectionStatus = resolveSidebarConnectionStatus(props);
   return html`<header class="native-embed-header">
     ${
       props.presentation === "embed-page"
@@ -350,20 +340,7 @@ function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
     <h1 class="page-title">
       ${props.presentation === "embed-list" ? t("nav.settings") : settingsNavigationLabelForRoute(props.activeRouteId, props.nativeDeviceSettings?.snapshot)}
     </h1>
-    ${
-      connectionStatus
-        ? renderSidebarConnectionStatus({
-            kind: connectionStatus,
-            queuedOutboxCount: props.queuedOutboxCount ?? 0,
-            title: props.lastError
-              ? redactLoginFailureError(props.lastError)
-              : t("connection.reconnecting"),
-            onRetry: props.onRetryConnect,
-          })
-        : html`<openclaw-settings-save-indicator
-            .props=${props.saveIndicator}
-          ></openclaw-settings-save-indicator>`
-    }
+    ${renderSettingsConnectionStatus(props)}
   </header>`;
 }
 
@@ -371,8 +348,6 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
   if (props.presentation === "embed-page") {
     return html`${renderEmbeddedSettingsHeader(props)} ${renderSettingsAgentSelector(props)}`;
   }
-  const connectionStatus = resolveSidebarConnectionStatus(props);
-  const reconnecting = t("connection.reconnecting");
   const searchBlockMatches =
     props.searchBlockMatches ??
     (props.searchParams ? findSettingsSearchBlocks(props.searchParams) : []);
@@ -474,18 +449,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       </div>
       ${navigation}
       <footer class="settings-sidebar__footer">
-        ${
-          connectionStatus
-            ? renderSidebarConnectionStatus({
-                kind: connectionStatus,
-                queuedOutboxCount: props.queuedOutboxCount ?? 0,
-                title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
-                onRetry: props.onRetryConnect,
-              })
-            : html`<openclaw-settings-save-indicator
-                .props=${props.saveIndicator}
-              ></openclaw-settings-save-indicator>`
-        }
+        ${renderSettingsConnectionStatus(props)}
         <openclaw-sidebar-build-chip
           .basePath=${props.basePath}
           .gatewayVersion=${props.gatewayVersion || null}

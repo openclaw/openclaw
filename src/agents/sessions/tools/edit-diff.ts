@@ -5,6 +5,7 @@
 
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createPatch, FILE_HEADERS_ONLY, structuredPatch, type StructuredPatchHunk } from "diff";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { normalizeToLF } from "../../line-endings.js";
@@ -197,7 +198,6 @@ interface MatchedEdit extends TextReplacement {
 interface AppliedEdits {
   baseContent: string;
   newContent: string;
-  replacementBaseContent: string;
   replacements: MatchedEdit[];
 }
 
@@ -302,23 +302,10 @@ interface EditCandidate {
   score: number;
 }
 
-function truncateCandidateText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  const cut =
-    maxChars > 0 &&
-    /[\uD800-\uDBFF]/.test(text.charAt(maxChars - 1)) &&
-    /[\uDC00-\uDFFF]/.test(text.charAt(maxChars))
-      ? maxChars - 1
-      : maxChars;
-  return text.slice(0, cut);
-}
-
 function getBoundedLines(text: string, maxLines: number, maxScanChars: number): string[] {
-  return truncateCandidateText(text, maxScanChars)
+  return truncateUtf16Safe(text, maxScanChars)
     .split("\n", maxLines)
-    .map((line) => truncateCandidateText(line, EDIT_CANDIDATE_MAX_LINE_CHARS));
+    .map((line) => truncateUtf16Safe(line, EDIT_CANDIDATE_MAX_LINE_CHARS));
 }
 
 function scoreCandidate(expected: string, candidate: string): number {
@@ -510,15 +497,13 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
   const fuzzyFile: FuzzyNormalizedFile | undefined = needsFuzzyMapping
     ? { text: normalizeForFuzzyMatch(normalizedContent), boundaries: undefined }
     : undefined;
-  const replacementBaseContent = normalizedContent;
-
   const matchedEdits: MatchedEdit[] = [];
   for (const [i, edit] of normalizedEdits.entries()) {
     const matchResult = fuzzyFindText(normalizedContent, edit.oldText, fuzzyFile);
     const occurrences =
       fuzzyFile && matchResult.usedFuzzyMatch
         ? countOccurrences(fuzzyFile.text, edit.oldText)
-        : countExactOccurrences(replacementBaseContent, edit.oldText);
+        : countExactOccurrences(normalizedContent, edit.oldText);
     if (occurrences > 1) {
       throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
     }
@@ -551,28 +536,17 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
     }
   }
 
-  const baseContent = normalizedContent;
-  const newContent = applyReplacements(replacementBaseContent, matchedEdits);
+  const newContent = applyReplacements(normalizedContent, matchedEdits);
 
-  if (baseContent === newContent) {
+  if (normalizedContent === newContent) {
     throw getNoChangeError(path, normalizedEdits.length);
   }
 
   return {
-    baseContent,
+    baseContent: normalizedContent,
     newContent,
-    replacementBaseContent,
     replacements: matchedEdits,
   };
-}
-
-function applyEditsToNormalizedContent(
-  normalizedContent: string,
-  edits: Edit[],
-  path: string,
-): { baseContent: string; newContent: string } {
-  const { baseContent, newContent } = applyEdits(normalizedContent, edits, path);
-  return { baseContent, newContent };
 }
 
 export function applyEditsPreservingLineEndings(
@@ -583,7 +557,7 @@ export function applyEditsPreservingLineEndings(
   const applied = applyEdits(normalizeToLF(originalContent), edits, path);
   const finalContent = applyReplacementsPreservingLineEndings(
     originalContent,
-    applied.replacementBaseContent,
+    applied.baseContent,
     applied.replacements,
   );
   if (normalizeToLF(finalContent) !== applied.newContent) {
@@ -679,7 +653,7 @@ export function validateNoOpEditTargets(
   path: string,
 ): void {
   if (noOpEdits.length > 0) {
-    applyEditsToNormalizedContent(
+    applyEdits(
       normalizedContent,
       noOpEdits.map((edit) => ({ oldText: edit.oldText, newText: "" })),
       path,
@@ -689,7 +663,7 @@ export function validateNoOpEditTargets(
     normalizedContent.includes(normalizeToLF(edit.oldText)),
   );
   if (exactNoOpEdits.length > 0 && realEdits.length > 0) {
-    applyEditsToNormalizedContent(
+    applyEdits(
       normalizedContent,
       [...exactNoOpEdits, ...realEdits].map((edit) => ({
         oldText: edit.oldText,
@@ -709,11 +683,7 @@ export function splitNoOpEdits(
   const realEdits: Edit[] = [];
   for (const edit of edits) {
     if (edit.oldText === edit.newText) {
-      applyEditsToNormalizedContent(
-        normalizedContent,
-        [{ oldText: edit.oldText, newText: "" }],
-        path,
-      );
+      applyEdits(normalizedContent, [{ oldText: edit.oldText, newText: "" }], path);
       noOpEdits.push(edit);
     } else {
       realEdits.push(edit);
@@ -769,11 +739,7 @@ export async function computeEditsDiff(
     if (realEdits.length === 0) {
       return { diff: "", firstChangedLine: undefined };
     }
-    const { baseContent, newContent } = applyEditsToNormalizedContent(
-      normalizedContent,
-      realEdits,
-      path,
-    );
+    const { baseContent, newContent } = applyEdits(normalizedContent, realEdits, path);
 
     // Generate the diff
     return generateDiffString(baseContent, newContent);

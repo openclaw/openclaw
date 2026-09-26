@@ -435,6 +435,78 @@ describe("installSessionToolResultGuard", () => {
     expect(guard.getPendingIds()).toStrictEqual(["call_2"]);
   });
 
+  it.each([
+    {
+      name: "provider response id",
+      first: { responseId: "resp_1" },
+      last: { responseId: "resp_1" },
+    },
+    {
+      // The runtime assigns turnId before the provider reports responseId, then carries it.
+      name: "runtime turn id with a late response id",
+      first: { turnId: "turn_1" },
+      last: { turnId: "turn_1", responseId: "resp_1" },
+    },
+  ])(
+    "keeps async tool calls pending across later fragments of the same response ($name)",
+    ({ first, last }) => {
+      const sm = SessionManager.inMemory();
+      const guard = installSessionToolResultGuard(sm, { missingToolResultText: "aborted" });
+
+      // Async tool execution commits each tool call as its own fragment of one provider
+      // response; the closing text fragment arrives while that tool is still running.
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+          ...first,
+          stopReason: "toolUse",
+        }),
+      );
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "Checking now." }],
+          ...last,
+          stopReason: "toolUse",
+        }),
+      );
+      expect(guard.getPendingIds()).toStrictEqual(["call_1"]);
+      sm.appendMessage(
+        asAppendMessage(textToolResult("call_1", "exec", "real output", { isError: false })),
+      );
+
+      const messages = expectPersistedRoles(sm, ["assistant", "assistant", "toolResult"]);
+      expect(getToolResultText(messages)).toBe("real output");
+      expect(guard.getPendingIds()).toStrictEqual([]);
+    },
+  );
+
+  it("synthesizes results before an assistant message from a later response", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, { missingToolResultText: "aborted" });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+        responseId: "resp_1",
+        stopReason: "toolUse",
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        responseId: "resp_2",
+        stopReason: "stop",
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult", "assistant"]);
+    expect(getToolResultText(messages)).toBe("aborted");
+  });
+
   it("clears pending when a sanitized assistant message is dropped and synthetic results are disabled", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {

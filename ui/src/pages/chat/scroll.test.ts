@@ -605,7 +605,7 @@ describe("scheduleChatScroll", () => {
     expect(host.chatReadingHistory).toBe(false);
   });
 
-  it.each(["commit", "resize", "schedule"] as const)(
+  it.each(["commit", "resize", "schedule", "remote-input"] as const)(
     "preserves a pending manual jump across an automatic %s",
     (update) => {
       const frames = installAnimationFrameQueue();
@@ -615,7 +615,9 @@ describe("scheduleChatScroll", () => {
       host.chatUserNearBottom = false;
 
       scheduleChatScroll(host, true, false, { source: "manual" });
-      if (update === "schedule") {
+      if (update === "remote-input") {
+        lockChatScroll(host, "remote-input");
+      } else if (update === "schedule") {
         scheduleChatScroll(host);
       } else {
         scheduleCommittedChatScroll(host, false, false, {

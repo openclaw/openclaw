@@ -68,7 +68,7 @@ export function hasCompletedModelProgressForIdleBreaker(
 
 export function buildTraceToolSummary(params: {
   toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"];
-  fallbackHadFailure: boolean;
+  lastToolError?: EmbeddedRunAttemptForRunner["lastToolError"];
 }): ToolSummaryTrace | undefined {
   if (!params.toolMetas?.length) {
     return undefined;
@@ -89,7 +89,10 @@ export function buildTraceToolSummary(params: {
     tools,
     // Per-call error metadata is additive to the shipped harness result contract.
     // Keep the prior any-failure signal for external harnesses that do not emit it yet.
-    failures: failedToolCalls || Number(params.fallbackHadFailure),
+    failures: failedToolCalls || Number(Boolean(params.lastToolError)),
+    ...(params.lastToolError
+      ? { unresolvedError: { toolName: params.lastToolError.toolName } }
+      : {}),
   };
 }
 

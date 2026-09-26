@@ -53,7 +53,7 @@ extension OpenClawChatViewModel {
             (entry.agentId ?? self.currentSessionSnapshot().deliveryAgentID) == target.agentID
     }
 
-    var canRequestSessionCompact: Bool {
+    public var canRequestSessionCompact: Bool {
         !self.isCompacting &&
             !self.isSending &&
             !self.hasBlockingRunActivity &&

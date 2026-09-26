@@ -2,27 +2,35 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import {
+  deleteCronJobRowInDatabase,
   loadCronRows,
   loadedCronStoreFromRows,
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import {
   buildCronExecOperationBinding,
   consumeCronStandingGrant,
   listCronStandingGrants,
+  mintCronStandingGrantLocked,
   parseCronExecOperationBinding,
   revokeCronStandingGrant,
 } from "./operator-approval-standing-grants.js";
@@ -31,10 +39,15 @@ import {
   insertOperatorApproval,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
+import { insertOperatorApprovalInDatabase as insertOperatorApprovalNative } from "./operator-approval-store.kernel.js";
+import { resolveOperatorApprovalInDatabase as resolveOperatorApprovalNative } from "./operator-approval-store.transitions.js";
 
 type StandingGrantDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "operator_approval_standing_grants" | "operator_approvals" | "cron_jobs"
+  | "operator_approval_standing_grants"
+  | "operator_approval_standing_grant_generations"
+  | "operator_approvals"
+  | "cron_jobs"
 >;
 type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
 
@@ -44,6 +57,20 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60_000;
 
 const tempDirs: string[] = [];
 
+const PREVIOUS_STANDING_GRANT_SCHEMA = OPENCLAW_STATE_SCHEMA_SQL.replace(
+  `CREATE TABLE IF NOT EXISTS operator_approval_standing_grant_generations (
+  grant_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES operator_approval_standing_grants(grant_id) ON DELETE CASCADE,
+  job_definition_generation INTEGER NOT NULL CHECK (job_definition_generation >= 1)
+) STRICT;
+
+`,
+  "",
+)
+  .replace("  grant_definition_revision TEXT,\n", "")
+  .replace("  grant_definition_generation INTEGER,\n", "")
+  .replace("  grant_definition_updated_at INTEGER,\n", "");
+
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
   const stateDir = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-standing-grant-")),
@@ -52,7 +79,8 @@ function createDatabaseOptions(): OpenClawStateDatabaseOptions {
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -128,20 +156,20 @@ const OPERATION_BINDING = buildCronExecOperationBinding({
   env: undefined,
 });
 
-function mintGrant(params: {
+async function mintGrant(params: {
   databaseOptions: OpenClawStateDatabaseOptions;
   approvalId?: string;
   jobConfigRevision: string;
   operationBinding?: string;
   nowMs?: number;
   expiresAtMs?: number | null;
-}): void {
+}): Promise<void> {
   const approvalId = params.approvalId ?? "approval-1";
-  insertOperatorApproval({
+  await insertOperatorApproval({
     approval: approval(approvalId),
     databaseOptions: params.databaseOptions,
   });
-  const resolved = resolveOperatorApproval({
+  const resolved = await resolveOperatorApproval({
     id: approvalId,
     decision: "allow-always",
     resolver: { kind: "device", id: "reviewer-1" },
@@ -172,10 +200,10 @@ function readGrantRows(databaseOptions: OpenClawStateDatabaseOptions) {
 }
 
 describe("cron standing grant mint", () => {
-  it("mints a scoped grant in the allow-always resolution transaction", () => {
+  it("mints a scoped grant in the allow-always resolution transaction", async () => {
     const databaseOptions = createDatabaseOptions();
     const revision = seedCronJob(databaseOptions);
-    mintGrant({ databaseOptions, jobConfigRevision: revision });
+    await mintGrant({ databaseOptions, jobConfigRevision: revision });
     const rows = readGrantRows(databaseOptions);
     expect(rows).toHaveLength(1);
     const grant = rows![0]!;
@@ -183,6 +211,13 @@ describe("cron standing grant mint", () => {
     expect(grant.agent_id).toBe("main");
     expect(grant.cron_job_id).toBe("job-1");
     expect(grant.job_config_revision).toBe(revision);
+    const database = openOpenClawStateDatabase(databaseOptions);
+    const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(database.db);
+    const generationRows = executeSqliteQuerySync(
+      database.db,
+      stateDb.selectFrom("operator_approval_standing_grant_generations").selectAll(),
+    ).rows;
+    expect(generationRows).toEqual([{ grant_id: grant.grant_id, job_definition_generation: 1 }]);
     expect(grant.operation_binding).toBe(OPERATION_BINDING);
     expect(grant.created_at_ms).toBe(NOW_MS + 1_000);
     expect(grant.expires_at_ms).toBeNull();
@@ -190,10 +225,116 @@ describe("cron standing grant mint", () => {
     expect(grant.use_count).toBe(0);
   });
 
-  it("stamps frozen terms when the mint carries an expiry", () => {
+  it("rolls back first-use companion creation and retries on the same database", async () => {
     const databaseOptions = createDatabaseOptions();
     const revision = seedCronJob(databaseOptions);
-    mintGrant({
+    await insertOperatorApproval({ approval: approval("approval-1"), databaseOptions });
+    const database = openOpenClawStateDatabase(databaseOptions);
+    database.db.exec(`
+      CREATE TABLE operator_approval_standing_grants (
+        grant_id TEXT NOT NULL PRIMARY KEY CHECK (length(grant_id) > 0),
+        minted_by_approval_id TEXT NOT NULL
+          REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+        agent_id TEXT NOT NULL CHECK (length(agent_id) > 0),
+        cron_job_id TEXT NOT NULL CHECK (length(cron_job_id) > 0),
+        job_config_revision TEXT NOT NULL CHECK (length(job_config_revision) > 0),
+        operation_binding TEXT NOT NULL CHECK (length(operation_binding) > 0),
+        created_at_ms INTEGER NOT NULL,
+        expires_at_ms INTEGER CHECK (expires_at_ms IS NULL OR expires_at_ms >= created_at_ms),
+        revoked_at_ms INTEGER,
+        revoked_by TEXT,
+        last_used_at_ms INTEGER,
+        use_count INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+    `);
+
+    expect(() =>
+      runOpenClawStateWriteTransaction((lockedDatabase) => {
+        mintCronStandingGrantLocked(lockedDatabase, {
+          approvalId: "approval-1",
+          agentId: "main",
+          cronJobId: "job-1",
+          jobConfigRevision: revision,
+          operationBinding: OPERATION_BINDING,
+          nowMs: NOW_MS + 1_000,
+          expiresAtMs: null,
+        });
+        throw new Error("force outer rollback");
+      }, databaseOptions),
+    ).toThrow("force outer rollback");
+    expect(tableExists(database.db, "operator_approval_standing_grant_generations")).toBe(false);
+
+    const resolved = await resolveOperatorApproval({
+      id: "approval-1",
+      decision: "allow-always",
+      resolver: { kind: "device", id: "reviewer-1" },
+      nowMs: NOW_MS + 2_000,
+      databaseOptions,
+      standingGrant: {
+        kind: "cron",
+        agentId: "main",
+        cronJobId: "job-1",
+        jobConfigRevision: revision,
+        operationBinding: OPERATION_BINDING,
+        expiresAtMs: null,
+      },
+    });
+    expect(resolved.outcome).toBe("resolved");
+    expect(tableExists(database.db, "operator_approval_standing_grant_generations")).toBe(true);
+    expect(
+      consumeCronStandingGrant({
+        agentId: "main",
+        cronJobId: "job-1",
+        jobConfigRevision: revision,
+        operationBinding: OPERATION_BINDING,
+        nowMs: NOW_MS + 3_000,
+        databaseOptions,
+      }).outcome,
+    ).toBe("consumed");
+  });
+
+  it("survives a previous-schema reader and candidate reopen", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const revision = seedCronJob(databaseOptions);
+    await mintGrant({ databaseOptions, jobConfigRevision: revision });
+    const pathname = openOpenClawStateDatabase(databaseOptions).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const previousReader = new DatabaseSync(pathname);
+    try {
+      expect(() =>
+        assertSqliteSchemaContains(
+          previousReader,
+          "previous standing-grant schema",
+          PREVIOUS_STANDING_GRANT_SCHEMA,
+          OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+        ),
+      ).not.toThrow();
+      expect(
+        previousReader
+          .prepare("SELECT COUNT(*) AS count FROM operator_approval_standing_grants")
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      previousReader.close();
+    }
+
+    expect(
+      consumeCronStandingGrant({
+        agentId: "main",
+        cronJobId: "job-1",
+        jobConfigRevision: revision,
+        operationBinding: OPERATION_BINDING,
+        nowMs: NOW_MS + 2_000,
+        databaseOptions,
+      }).outcome,
+    ).toBe("consumed");
+  });
+
+  it("stamps frozen terms when the mint carries an expiry", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const revision = seedCronJob(databaseOptions);
+    await mintGrant({
       databaseOptions,
       jobConfigRevision: revision,
       expiresAtMs: NOW_MS + 1_000 + THIRTY_DAYS_MS,
@@ -203,10 +344,10 @@ describe("cron standing grant mint", () => {
     expect(rows![0]!.expires_at_ms).toBe(NOW_MS + 1_000 + THIRTY_DAYS_MS);
   });
 
-  it("does not create the table or mint for non-allow-always decisions", () => {
+  it("does not create the table or mint for non-allow-always decisions", async () => {
     const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({ approval: approval("approval-1"), databaseOptions });
-    const resolved = resolveOperatorApproval({
+    await insertOperatorApproval({ approval: approval("approval-1"), databaseOptions });
+    const resolved = await resolveOperatorApproval({
       id: "approval-1",
       decision: "allow-once",
       resolver: { kind: "device", id: "reviewer-1" },
@@ -225,11 +366,11 @@ describe("cron standing grant mint", () => {
     expect(readGrantRows(databaseOptions)).toBeNull();
   });
 
-  it("replaces the prior grant for the same agent, job, and binding", () => {
+  it("replaces the prior grant for the same agent, job, and binding", async () => {
     const databaseOptions = createDatabaseOptions();
     const revision = seedCronJob(databaseOptions);
-    mintGrant({ databaseOptions, jobConfigRevision: revision });
-    mintGrant({
+    await mintGrant({ databaseOptions, jobConfigRevision: revision });
+    await mintGrant({
       databaseOptions,
       approvalId: "approval-2",
       jobConfigRevision: revision,
@@ -240,7 +381,7 @@ describe("cron standing grant mint", () => {
     expect(rows![0]!.minted_by_approval_id).toBe("approval-2");
   });
 
-  it("mints through the manager only when the mint resolver returns a spec", () => {
+  it("mints through the manager only when the mint resolver returns a spec", async () => {
     const databaseOptions = createDatabaseOptions();
     const revision = seedCronJob(databaseOptions);
     const request = {
@@ -270,8 +411,8 @@ describe("cron standing grant mint", () => {
       },
     });
     const record = manager.create(request, 60_000, "approval-mgr");
-    void manager.register(record, 60_000);
-    const resolved = manager.resolveDetailed("approval-mgr", "allow-always", {
+    await manager.register(record, 60_000);
+    const resolved = await manager.resolveDetailed("approval-mgr", "allow-always", {
       kind: "device",
       id: "reviewer-1",
     });
@@ -282,15 +423,15 @@ describe("cron standing grant mint", () => {
 
     // A non-cron request never mints: the resolver returns null.
     const plainRecord = manager.create({ ...request, cronExecutionSource: null }, 60_000, "plain");
-    void manager.register(plainRecord, 60_000);
+    await manager.register(plainRecord, 60_000);
     expect(
-      manager.resolveDetailed("plain", "allow-always", { kind: "device", id: "reviewer-1" })
+      (await manager.resolveDetailed("plain", "allow-always", { kind: "device", id: "reviewer-1" }))
         .outcome,
     ).toBe("resolved");
     expect(readGrantRows(databaseOptions)).toHaveLength(1);
   });
 
-  it("freezes terms at resolve: config default applies, per-resolve override wins", () => {
+  it("freezes terms at resolve: config default applies, per-resolve override wins", async () => {
     const databaseOptions = createDatabaseOptions();
     const revision = seedCronJob(databaseOptions);
     const request = {
@@ -323,12 +464,14 @@ describe("cron standing grant mint", () => {
       resolveStandingGrantExpiresAtMs: () => configuredExpiresAtMs,
     });
     const record = manager.create(request, 60_000, "approval-default");
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     expect(
-      manager.resolveDetailed("approval-default", "allow-always", {
-        kind: "device",
-        id: "reviewer-1",
-      }).outcome,
+      (
+        await manager.resolveDetailed("approval-default", "allow-always", {
+          kind: "device",
+          id: "reviewer-1",
+        })
+      ).outcome,
     ).toBe("resolved");
     expect(readGrantRows(databaseOptions)![0]!.expires_at_ms).toBe(configuredExpiresAtMs);
 
@@ -343,15 +486,17 @@ describe("cron standing grant mint", () => {
       60_000,
       "approval-override",
     );
-    void manager.register(overrideRecord, 60_000);
+    await manager.register(overrideRecord, 60_000);
     expect(
-      manager.resolveDetailed(
-        "approval-override",
-        "allow-always",
-        { kind: "device", id: "reviewer-1" },
-        null,
-        "operator",
-        { grantExpiresAtMs: overrideExpiresAtMs },
+      (
+        await manager.resolveDetailed(
+          "approval-override",
+          "allow-always",
+          { kind: "device", id: "reviewer-1" },
+          null,
+          "operator",
+          { grantExpiresAtMs: overrideExpiresAtMs },
+        )
       ).outcome,
     ).toBe("resolved");
     const overrideRow = readGrantRows(databaseOptions)!.find(
@@ -362,10 +507,10 @@ describe("cron standing grant mint", () => {
 });
 
 describe("cron standing grant consumption", () => {
-  function seedMintedGrant(opts: { expiresAtMs?: number | null } = {}) {
+  async function seedMintedGrant(opts: { expiresAtMs?: number | null } = {}) {
     const databaseOptions = createDatabaseOptions();
     const revision = seedCronJob(databaseOptions);
-    mintGrant({ databaseOptions, jobConfigRevision: revision, ...opts });
+    await mintGrant({ databaseOptions, jobConfigRevision: revision, ...opts });
     return { databaseOptions, revision };
   }
 
@@ -385,8 +530,8 @@ describe("cron standing grant consumption", () => {
     });
   }
 
-  it("consumes a valid grant and records usage facts", () => {
-    const { databaseOptions, revision } = seedMintedGrant();
+  it("consumes a valid grant and records usage facts", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
     const first = consume({ databaseOptions, revision });
     expect(first.outcome).toBe("consumed");
     if (first.outcome !== "consumed") {
@@ -411,8 +556,8 @@ describe("cron standing grant consumption", () => {
     expect(readGrantRows(databaseOptions)).toBeNull();
   });
 
-  it("fails closed for a different operation binding", () => {
-    const { databaseOptions, revision } = seedMintedGrant();
+  it("fails closed for a different operation binding", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
     const otherBinding = buildCronExecOperationBinding({
       command: "echo different",
       cwd: "/work",
@@ -423,8 +568,8 @@ describe("cron standing grant consumption", () => {
     );
   });
 
-  it("fails closed after a stamped expiry passes", () => {
-    const { databaseOptions, revision } = seedMintedGrant({
+  it("fails closed after a stamped expiry passes", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant({
       expiresAtMs: NOW_MS + 1_000 + THIRTY_DAYS_MS,
     });
     expect(
@@ -432,15 +577,15 @@ describe("cron standing grant consumption", () => {
     ).toBe("expired");
   });
 
-  it("keeps until-revoked grants valid far past any calendar horizon", () => {
-    const { databaseOptions, revision } = seedMintedGrant();
+  it("keeps until-revoked grants valid far past any calendar horizon", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
     expect(
       consume({ databaseOptions, revision, nowMs: NOW_MS + 1_000 + 400 * THIRTY_DAYS_MS }).outcome,
     ).toBe("consumed");
   });
 
-  it("fails closed after revocation", () => {
-    const { databaseOptions, revision } = seedMintedGrant();
+  it("fails closed after revocation", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
     const database = openOpenClawStateDatabase(databaseOptions);
     const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(database.db);
     executeSqliteQuerySync(
@@ -452,16 +597,86 @@ describe("cron standing grant consumption", () => {
     expect(consume({ databaseOptions, revision }).outcome).toBe("revoked");
   });
 
-  it("fails closed when the cron job was deleted", () => {
-    const { databaseOptions, revision } = seedMintedGrant();
+  it("fails closed when the cron job was deleted", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
     const database = openOpenClawStateDatabase(databaseOptions);
     const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(database.db);
     executeSqliteQuerySync(database.db, stateDb.deleteFrom("cron_jobs"));
     expect(consume({ databaseOptions, revision }).outcome).toBe("job-missing");
   });
 
-  it("fails closed when the job config revision changed", () => {
-    const { databaseOptions } = seedMintedGrant();
+  it("does not restore a grant when a deleted job is recreated", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
+    const database = openOpenClawStateDatabase(databaseOptions);
+    deleteCronJobRowInDatabase(database.db, CRON_STORE_KEY, "job-1");
+    const recreatedRevision = seedCronJob(databaseOptions);
+    expect(recreatedRevision).toBe(revision);
+
+    expect(consume({ databaseOptions, revision: recreatedRevision }).outcome).toBe("revoked");
+  });
+
+  it("does not reuse a grant generation after an older writer deletes the job", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
+    const database = openOpenClawStateDatabase(databaseOptions);
+    const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(database.db);
+    const originalRow = executeSqliteQuerySync(
+      database.db,
+      stateDb.selectFrom("cron_jobs").selectAll().where("job_id", "=", "job-1"),
+    ).rows[0]!;
+    const pathname = database.path;
+    closeOpenClawStateDatabaseForTest();
+    const previousWriter = new DatabaseSync(pathname);
+    try {
+      previousWriter.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run("job-1");
+      previousWriter
+        .prepare(
+          `INSERT INTO cron_jobs (
+             store_key, job_id, declaration_key, owner_agent_id, name, description,
+             enabled, agent_id, payload_kind, job_json, state_json,
+             runtime_updated_at_ms, schedule_identity, sort_order, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          originalRow.store_key,
+          originalRow.job_id,
+          originalRow.declaration_key,
+          originalRow.owner_agent_id,
+          originalRow.name,
+          originalRow.description,
+          originalRow.enabled,
+          originalRow.agent_id,
+          originalRow.payload_kind,
+          originalRow.job_json,
+          originalRow.state_json,
+          originalRow.runtime_updated_at_ms,
+          originalRow.schedule_identity,
+          originalRow.sort_order,
+          originalRow.updated_at,
+        );
+    } finally {
+      previousWriter.close();
+    }
+    const recreatedRevision = seedCronJob(
+      databaseOptions,
+      cronJob({ updatedAtMs: NOW_MS + 2_000 }),
+    );
+    expect(recreatedRevision).toBe(revision);
+
+    expect(consume({ databaseOptions, revision: recreatedRevision }).outcome).toBe(
+      "job-revision-changed",
+    );
+    const reopened = openOpenClawStateDatabase(databaseOptions);
+    const reopenedDb = getNodeSqliteKysely<StandingGrantDatabase>(reopened.db);
+    expect(
+      executeSqliteQuerySync(
+        reopened.db,
+        reopenedDb.selectFrom("cron_jobs").select("grant_definition_generation"),
+      ).rows[0]?.grant_definition_generation,
+    ).toBeGreaterThan(1);
+  });
+
+  it("fails closed when the job config revision changed", async () => {
+    const { databaseOptions } = await seedMintedGrant();
     const changedRevision = seedCronJob(
       databaseOptions,
       cronJob({ payload: { kind: "agentTurn", message: "run something else" } }),
@@ -472,15 +687,114 @@ describe("cron standing grant consumption", () => {
     );
   });
 
-  it("fails closed when the authoritative job row disagrees with a stale thread", () => {
-    const { databaseOptions, revision } = seedMintedGrant();
+  it("keeps a grant invalid after a substantive definition edit is restored", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
+    seedCronJob(
+      databaseOptions,
+      cronJob({ payload: { kind: "agentTurn", message: "run something else" } }),
+    );
+    const restoredRevision = seedCronJob(databaseOptions);
+    expect(restoredRevision).toBe(revision);
+
+    expect(consume({ databaseOptions, revision: restoredRevision }).outcome).toBe(
+      "job-revision-changed",
+    );
+  });
+
+  it("keeps a grant invalid when restoring an edit left by an older writer", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
+    const database = openOpenClawStateDatabase(databaseOptions);
+    const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(database.db);
+    const originalRow = executeSqliteQuerySync(
+      database.db,
+      stateDb.selectFrom("cron_jobs").selectAll().where("job_id", "=", "job-1"),
+    ).rows[0]!;
+    seedCronJob(
+      databaseOptions,
+      cronJob({ payload: { kind: "agentTurn", message: "run something else" } }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      stateDb
+        .updateTable("cron_jobs")
+        .set({
+          grant_definition_revision: originalRow.grant_definition_revision,
+          grant_definition_generation: originalRow.grant_definition_generation,
+        })
+        .where("job_id", "=", "job-1"),
+    );
+    const restoredRevision = seedCronJob(databaseOptions);
+    expect(restoredRevision).toBe(revision);
+
+    expect(consume({ databaseOptions, revision: restoredRevision }).outcome).toBe(
+      "job-revision-changed",
+    );
+  });
+
+  it("detects an edit and restore completed entirely by an older writer", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
+    const database = openOpenClawStateDatabase(databaseOptions);
+    const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(database.db);
+    const originalRow = executeSqliteQuerySync(
+      database.db,
+      stateDb.selectFrom("cron_jobs").selectAll().where("job_id", "=", "job-1"),
+    ).rows[0]!;
+    seedCronJob(
+      databaseOptions,
+      cronJob({
+        payload: { kind: "agentTurn", message: "run something else" },
+        updatedAtMs: NOW_MS + 2_000,
+      }),
+    );
+    seedCronJob(databaseOptions, cronJob({ updatedAtMs: NOW_MS + 3_000 }));
+    executeSqliteQuerySync(
+      database.db,
+      stateDb
+        .updateTable("cron_jobs")
+        .set({
+          grant_definition_revision: originalRow.grant_definition_revision,
+          grant_definition_generation: originalRow.grant_definition_generation,
+          grant_definition_updated_at: originalRow.grant_definition_updated_at,
+        })
+        .where("job_id", "=", "job-1"),
+    );
+
+    expect(consume({ databaseOptions, revision }).outcome).toBe("job-revision-changed");
+  });
+
+  it("fails closed for a grant created before definition generations were recorded", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
+    const database = openOpenClawStateDatabase(databaseOptions);
+    const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      stateDb.deleteFrom("operator_approval_standing_grant_generations"),
+    );
+
+    expect(consume({ databaseOptions, revision }).outcome).toBe("job-revision-changed");
+  });
+
+  it("keeps a grant valid across disable and re-enable", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
+    seedCronJob(databaseOptions, cronJob({ enabled: false, updatedAtMs: NOW_MS + 2_000 }));
+    const reenabledRevision = seedCronJob(
+      databaseOptions,
+      cronJob({ updatedAtMs: NOW_MS + 3_000 }),
+    );
+    expect(reenabledRevision).toBe(revision);
+
+    expect(consume({ databaseOptions, revision: reenabledRevision }).outcome).toBe("consumed");
+  });
+
+  it("fails closed when the authoritative job row disagrees with a stale thread", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
     seedCronJob(databaseOptions, cronJob({ payload: { kind: "agentTurn", message: "changed" } }));
     // A raced run that still threads the minted revision must also fail closed.
     expect(consume({ databaseOptions, revision }).outcome).toBe("job-revision-changed");
   });
 
-  it("fails closed when the minting approval row is gone or reversed", () => {
-    const { databaseOptions, revision } = seedMintedGrant();
+  it("fails closed when the minting approval row is gone or reversed", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
     const database = openOpenClawStateDatabase(databaseOptions);
     const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(database.db);
     executeSqliteQuerySync(
@@ -493,8 +807,9 @@ describe("cron standing grant consumption", () => {
     expect(["approval-missing", "no-grant"]).toContain(outcome);
   });
 
-  it("survives a gateway restart and orphan cleanup of pending approvals", () => {
-    const { databaseOptions, revision } = seedMintedGrant();
+  it("survives a gateway restart and orphan cleanup of pending approvals", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     // New runtime epoch: startup cancels orphaned pending approvals only; the
     // resolved allow-always parent and its grant remain valid durable truth.
@@ -508,15 +823,15 @@ describe("cron standing grant consumption", () => {
 });
 
 describe("standing grant operator surfaces", () => {
-  function seedListedGrant(opts: { expiresAtMs?: number | null } = {}) {
+  async function seedListedGrant(opts: { expiresAtMs?: number | null } = {}) {
     const databaseOptions = createDatabaseOptions();
     const revision = seedCronJob(databaseOptions);
-    mintGrant({ databaseOptions, jobConfigRevision: revision, ...opts });
+    await mintGrant({ databaseOptions, jobConfigRevision: revision, ...opts });
     return { databaseOptions, revision };
   }
 
-  it("lists grants with the owning job name and parseable operation", () => {
-    const { databaseOptions } = seedListedGrant();
+  it("lists grants with the owning job name and parseable operation", async () => {
+    const { databaseOptions } = await seedListedGrant();
     const grants = listCronStandingGrants({ databaseOptions });
     expect(grants).toHaveLength(1);
     const grant = grants[0]!;
@@ -535,8 +850,8 @@ describe("standing grant operator surfaces", () => {
     expect(listCronStandingGrants({ databaseOptions })).toEqual([]);
   });
 
-  it("revokes once, reports already-revoked after, and fails closed at consume", () => {
-    const { databaseOptions, revision } = seedListedGrant();
+  it("revokes once, reports already-revoked after, and fails closed at consume", async () => {
+    const { databaseOptions, revision } = await seedListedGrant();
     const grantId = listCronStandingGrants({ databaseOptions })[0]!.grantId;
     const revoked = revokeCronStandingGrant({
       grantId,
@@ -563,12 +878,12 @@ describe("standing grant operator surfaces", () => {
     expect(listed.revokedBy).toBe("operator-cli");
   });
 
-  it("reports not-found for unknown grants and before the table exists", () => {
+  it("reports not-found for unknown grants and before the table exists", async () => {
     const databaseOptions = createDatabaseOptions();
     expect(
       revokeCronStandingGrant({ grantId: "missing", revokedBy: "x", databaseOptions }).outcome,
     ).toBe("not-found");
-    seedListedGrant();
+    await seedListedGrant();
     expect(
       revokeCronStandingGrant({ grantId: "missing", revokedBy: "x", databaseOptions }).outcome,
     ).toBe("not-found");
@@ -595,7 +910,25 @@ describe("standing grant operator surfaces", () => {
         use_count INTEGER NOT NULL DEFAULT 0
       ) STRICT;
     `);
-    mintGrant({ databaseOptions, jobConfigRevision: revision });
+    // This deliberately noncanonical boot fixture cannot enter an admitted worker.
+    insertOperatorApprovalNative({ approval: approval("approval-1"), databaseOptions });
+    expect(
+      resolveOperatorApprovalNative({
+        id: "approval-1",
+        decision: "allow-always",
+        resolver: { kind: "device", id: "reviewer-1" },
+        nowMs: NOW_MS + 1_000,
+        databaseOptions,
+        standingGrant: {
+          kind: "cron",
+          agentId: "main",
+          cronJobId: "job-1",
+          jobConfigRevision: revision,
+          operationBinding: OPERATION_BINDING,
+          expiresAtMs: null,
+        },
+      }),
+    ).toMatchObject({ outcome: "resolved" });
     const grants = listCronStandingGrants({ databaseOptions });
     expect(grants).toHaveLength(1);
     expect(grants[0]!.expiresAtMs).toBeNull();

@@ -65,8 +65,6 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialExpiresAtMs: 10_000,
 };
 
-const ADMITTED_OWNER = { identity: IDENTITY, assertCurrent: () => undefined };
-
 const ZERO_USAGE = createZeroUsageFixture();
 const PROVIDER_REPLAY = {
   v: 1 as const,
@@ -169,6 +167,7 @@ describe("worker transcript commit application", () => {
   let stateDatabasePath: string;
   let storePath: string;
   let sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>;
+  let ADMITTED_OWNER: Omit<Parameters<WorkerTranscriptCommitter["commit"]>[0], "request">;
   let cfg: OpenClawConfig;
   let committer: WorkerTranscriptCommitter;
   let ledgerStore: WorkerTranscriptCommitStore;
@@ -200,6 +199,7 @@ describe("worker transcript commit application", () => {
       sessionKey: SESSION_KEY,
       storePath,
     });
+    ADMITTED_OWNER = { identity: IDENTITY, sessionTarget, assertCurrent: () => undefined };
     const database = openOpenClawStateDatabase();
     stateDatabasePath = database.path;
     ledgerStore = createWorkerTranscriptCommitStore({ database });
@@ -436,6 +436,7 @@ describe("worker transcript commit application", () => {
     });
     const outcome = await committer.commit({
       ...ADMITTED_OWNER,
+      sessionTarget: workTarget,
       request: createRequest({
         messages: [
           {
@@ -788,6 +789,7 @@ describe("worker transcript commit application", () => {
     await expect(
       committer.commit({
         identity: IDENTITY,
+        sessionTarget,
         request,
         assertCurrent: () => {
           if (++authorityChecks === 2) {

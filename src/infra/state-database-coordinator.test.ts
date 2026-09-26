@@ -3,9 +3,9 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
@@ -183,11 +183,11 @@ describe("state database coordinator", () => {
         uid: typeof process.getuid === "function" ? process.getuid() : undefined,
         coordinatorPath: explicit ? path.join(root, "custom", "coordinator.sqlite") : undefined,
       };
-      const nativeMode = getFsSafeNativeConfig().mode;
+      const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
       // fs-safe's Bun realpath workaround bypasses node:fs spies until oven-sh/bun#42374.
       // Select its portable path so this probe-count assertion observes the realpath owner.
       if (process.versions.bun) {
-        configureFsSafeNative({ mode: "off" });
+        setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
       }
       const resolvePath = vi.spyOn(fsSync, "realpathSync");
       try {
@@ -210,9 +210,7 @@ describe("state database coordinator", () => {
         }
       } finally {
         resolvePath.mockRestore();
-        if (process.versions.bun) {
-          configureFsSafeNative({ mode: nativeMode });
-        }
+        nativeModeEnv.restore();
       }
     },
   );
@@ -328,33 +326,6 @@ describe("state database coordinator", () => {
       }
     },
   );
-
-  it("reference-counts same-process owners", async () => {
-    const root = tempDirs.make("openclaw-state-database-coordinator-");
-    const databasePath = path.join(root, "selected-state", "state", "openclaw.sqlite");
-    const runtimeDirectory = path.join(root, "runtime");
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const first = acquireStateDatabaseCoordinator({
-      databasePath,
-      runtimeDirectory,
-      busyTimeoutMs: 0,
-    });
-    const nested = acquireStateDatabaseCoordinator({
-      databasePath,
-      runtimeDirectory,
-      busyTimeoutMs: 0,
-    });
-
-    first.release();
-    nested.release();
-
-    const next = acquireStateDatabaseCoordinator({
-      databasePath,
-      runtimeDirectory,
-      busyTimeoutMs: 0,
-    });
-    next.release();
-  });
 
   it("keeps Gateway presence independent from short state operations", async () => {
     const root = tempDirs.make("openclaw-gateway-lifecycle-coordinator-");

@@ -166,7 +166,9 @@ Important lanes:
 - `test:docker:published-upgrade-survivor` first installs the latest stable release,
   configures it through a baked `openclaw config set` recipe, updates it to the
   candidate tarball, runs doctor, checks legacy cleanup, starts the Gateway, and
-  probes `/healthz`, `/readyz`, and RPC status.
+  probes `/healthz`, `/readyz`, and RPC status. The baseline recipe configures
+  Anthropic, Google Gemini, and OpenAI through env-referenced API keys, keeping
+  OpenAI as the agents' primary model.
 - `test:docker:update-restart-auth` installs the candidate package, starts a
   managed token-auth Gateway, unsets caller gateway auth env for
   `openclaw update --yes --json`, and requires the candidate update command to
@@ -178,10 +180,44 @@ Important lanes:
   postinstall must remove package-local debris while update and Doctor preserve
   the shared runtime roots.
 
+Set `OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS` to a whitespace-separated list of
+model refs to run one `openclaw agent --local` marker turn per model after the
+update. Anthropic uses `ANTHROPIC_API_KEY`, Google uses `GEMINI_API_KEY`, and
+OpenAI uses `OPENAI_API_KEY`; missing selected keys fail the lane. Docker forwards
+only selected provider keys. Each turn has its own session and
+`live-<provider>.json` / `.err` artifacts (additional models from the same provider
+use `-2`, `-3`, etc.). `summary.json` records `liveModels.models` entries with
+`model`, `ok`, and `latencyMs`.
+
+The legacy `OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1` form still selects
+`openai/gpt-5.5`, or `OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL` when supplied.
+An explicit model list takes precedence over that flag; the summary records
+`liveModels.source` and `overridesLiveOpenai`. The existing
+`OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS` budget (default 180 seconds)
+applies separately to each turn. Live turns use the recipe's configured thinking
+default so each model can apply its supported reasoning levels. Scenarios that
+prohibit live providers retain that restriction.
+
+Frozen extended-stable candidate targets use their historical runner and reject
+both live-selection variables before Docker starts, with exit code 2.
+
+```bash
+# Export the three provider keys before invoking the lane.
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.5 \
+OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS="openai/gpt-5.5 anthropic/claude-opus-5 google/gemini-3.1-pro-preview" \
+pnpm test:docker:published-upgrade-survivor
+```
+
+Source-pinned tarball runs of `base` and `sqlite-volume` verify the candidate
+commit before the update and compare the installed application payload with the
+frozen tarball afterward, before candidate probes. This distinguishes different
+builds with the same version string. npm still owns dependency reification;
+manual tarball runs without a selected source SHA retain their existing contract.
+
 Useful published-upgrade survivor variants:
 
 ```bash
-OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.4.23 \
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.6.1 \
 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=versioned-runtime-deps \
 pnpm test:docker:published-upgrade-survivor
 
@@ -259,6 +295,16 @@ and reads two task pages on the same Gateway connection. Complete task, delivery
 and flow records are checked again after Gateway shutdown. The taskflow cell covers
 terminal persisted state; it does not exercise active task recovery or provider work.
 
+The opt-in `channel-owner-policy` scenario uses the same pinned `openclaw@2026.9.4`
+published-driver and candidate-package checks. It seeds an existing
+`operator.channelPolicy` JSON specimen in the published database's machine-state
+table, then runs the installed updater. It requires state schema 19 content,
+preserved role/identity policy and configured owners, and a stable configured-owner
+reference across two candidate Gateway starts. The specimen is synthetic existing
+state, not a claim that the published baseline minted recovery references. This
+cell uses isolated state and manual restart; it does not prove updater-owned
+service restart or older-reader downgrade behavior.
+
 The `legacy-operator-state` scenario uses the published baseline's own CLI to
 create a second agent, allowlist exec approvals, and two command cron jobs: one
 without an explicit agent and one owned by `ops`. It leaves `systemAgent`
@@ -277,6 +323,13 @@ the lane checks approvals and legacy-file retirement, effective cron owners,
 the candidate plugin artifact, the candidate state schema, an idempotent update,
 and Gateway health. Assertions run before a standalone Doctor can conceal an
 incomplete update migration.
+
+Published companion package versions retain identical archive bytes throughout
+the fixture. If a source candidate still uses the published companion's version,
+the registry and installation assertions preserve that published archive. A new
+companion version instead uses the prepared candidate artifact. The npm integrity
+guard remains enabled in both cases; the fixture never replaces a published
+version's bytes to make an update pass.
 
 The ownerless cron job is created before adding the second agent because newer
 baselines reject ambiguous new jobs. Approval snapshots are written back through
@@ -376,15 +429,15 @@ when that tag exists, and the supported floor `2026.6.34`. Duplicate versions
 run once. It updates each baseline to the selected `package_ref` artifact
 (`main` by default), exercising plugin cleanup and legacy operator state.
 Leave `baselines` blank to use that default. For an explicit historical replay
-from every published stable release since 2026.4.23, pass
-`baselines=all-since-2026.4.23`:
+from every published stable release since 2026.6.1, pass
+`baselines=all-since-2026.6.1`:
 
 ```bash
 gh workflow run update-migration.yml \
   --ref main \
   -f workflow_ref=main \
   -f package_ref=main \
-  -f baselines=all-since-2026.4.23 \
+  -f baselines=all-since-2026.6.1 \
   -f scenarios=plugin-deps-cleanup
 ```
 
@@ -463,8 +516,13 @@ and also runs on every canonical `main` push that runs CI. Docs-only pushes
 matching `**/*.md` and `docs/**` skip CI; mixed docs and code pushes still run it.
 
 For manual historical coverage, `last-stable-4` selects four recent stable
-npm-published releases. Exact versions, `all-since-2026.4.23`, and
+npm-published releases. Exact versions, `all-since-2026.6.1`, and
 `release-history` remain available through `published_upgrade_survivor_baselines`.
+Current tooling executes baselines from `2026.6.1` onward. `release-history`
+selects the six most recent supported stable releases without adding older
+March or April anchors. To replay pre-June upgrades, select matching historical
+tooling; for an old installation, [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+before installing the latest release.
 Use those overrides when replaying migrations outside the bounded supported
 baseline set.
 
@@ -513,18 +571,15 @@ in Testbox unless explicitly doing local proof.
 
 ## Legacy compatibility
 
-Compatibility leniency is narrow and time boxed:
+Package Acceptance applies current metadata and persistence contracts without
+the retired pre-June 2026 warning or skip paths. Reproducing acceptance of those
+historical candidates requires their historical `workflow_ref` tooling.
 
-- Packages through `2026.4.25`, including `2026.4.25-beta.*`, may tolerate
-  already-shipped package metadata gaps in Package Acceptance.
-- The published `2026.4.26` package may warn for local build metadata stamp
-  files already shipped.
-- Later packages must satisfy modern contracts. The same gaps fail instead of
-  warning or skipping.
-
-Do not add new startup migrations for these old shapes. Add or extend a doctor
-repair, then prove it with `upgrade-survivor`, `published-upgrade-survivor`, or
-`update-restart-auth` when the update command owns the restart.
+For retained upgrade contracts, keep migrations in Doctor and prove changes with
+`upgrade-survivor`, `published-upgrade-survivor`, or `update-restart-auth` when the
+update command owns the restart. Pre-June task and flow sidecar imports are
+retired; use the [intermediate upgrade procedure](/install/updating) to preserve
+those records.
 
 ## Adding coverage
 

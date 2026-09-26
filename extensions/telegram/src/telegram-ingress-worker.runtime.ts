@@ -1,6 +1,6 @@
-// Telegram plugin module implements telegram ingress worker behavior.
 import { parentPort, workerData } from "node:worker_threads";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   computeBackoff,
@@ -11,7 +11,6 @@ import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "./network-errors.js";
-import { makeProxyFetch } from "./proxy.js";
 import {
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS,
   resolveTelegramLongPollTimeoutSeconds,
@@ -231,7 +230,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
     queued: number;
   }): Promise<number> => {
     const requestId = String(++nextSpoolRequestId);
-    const updateId = await new Promise<number>((resolve, reject) => {
+    return await new Promise<number>((resolve, reject) => {
       pendingSpoolRequests.set(requestId, { resolve, reject });
       port.postMessage({
         type: "update",
@@ -240,7 +239,6 @@ export async function runTelegramIngressWorkerRuntime(params: {
         queued: requestParams.queued,
       });
     });
-    return updateId;
   };
 
   try {

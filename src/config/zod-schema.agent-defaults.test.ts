@@ -347,7 +347,7 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("accepts experimental.localModelLean", () => {
+  it("accepts experimental agent flags", () => {
     const result = AgentDefaultsSchema.parse({
       experimental: {
         localModelLean: true,
@@ -626,9 +626,8 @@ describe("agent defaults schema", () => {
         tools: {
           codeMode: {
             enabled: true,
-            runtime: "quickjs-wasi",
+            executor: "quickjs",
             timeoutMs: 5000,
-            languages: ["javascript"],
           },
         },
       }),
@@ -636,7 +635,7 @@ describe("agent defaults schema", () => {
     expectSchemaFailurePath(
       AgentEntrySchema.safeParse({
         id: "ops",
-        tools: { codeMode: { unknownKey: 1 } },
+        tools: { codeMode: { languages: ["javascript"] } },
       }),
       "tools.codeMode",
     );

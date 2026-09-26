@@ -631,6 +631,125 @@ it.each(["cancellation", "replacement", "foreground retirement"] as const)(
   },
 );
 
+it("rejects oversized direct bridge responses", async () => {
+  await withOpenClawTestState({ label: "relay-oversized-response" }, async () => {
+    const relay = registerOwnedNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-oversized-bridge-response",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const server = new Server((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("x".repeat(5_000_001));
+    });
+    try {
+      await relay.ready;
+      const record = await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId });
+      if (!record) {
+        throw new Error("test bridge registration unavailable");
+      }
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("test bridge server address unavailable");
+      }
+      await store.writeNativeHookRelayBridgeRecord({
+        record: {
+          ...record,
+          port: address.port,
+          token: "test-token",
+          expiresAtMs: Date.now() + 10_000,
+        },
+      });
+
+      // Cold locator startup must not consume this byte-limit fixture's caller deadline.
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      try {
+        await expect(
+          invokeNativeHookRelayBridge({
+            provider: "codex",
+            relayId: relay.relayId,
+            generation: relay.generation,
+            event: "pre_tool_use",
+            timeoutMs: 500,
+            rawPayload: {
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: "pnpm test" },
+            },
+          }),
+        ).rejects.toThrow("native hook relay bridge response too large");
+      } finally {
+        clock.mockRestore();
+      }
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      relay.unregister();
+      await relay.drain();
+    }
+  });
+});
+
+it("binds direct bridge tokens to the relay they were issued for", async () => {
+  await withOpenClawTestState({ label: "relay-token-binding" }, async () => {
+    const first = registerOwnedNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-first-bridge-session",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const second = registerOwnedNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-second-bridge-session",
+      sessionId: "session-2",
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+    });
+    try {
+      await Promise.all([first.ready, second.ready]);
+      const firstRecord = await store.readNativeHookRelayBridgeRecord({ relayId: first.relayId });
+      if (!firstRecord) {
+        throw new Error("test bridge registration unavailable");
+      }
+      await store.writeNativeHookRelayBridgeRecord({
+        record: { ...firstRecord, relayId: second.relayId, expiresAtMs: Date.now() + 10_000 },
+      });
+      // Cold locator startup must not consume this token-binding fixture's caller deadline.
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      try {
+        await expect(
+          invokeNativeHookRelayBridge({
+            provider: "codex",
+            relayId: second.relayId,
+            generation: second.generation,
+            event: "pre_tool_use",
+            timeoutMs: 500,
+            rawPayload: {
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: "pnpm test" },
+            },
+          }),
+        ).rejects.toThrow("native hook relay bridge target mismatch");
+        expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+      } finally {
+        clock.mockRestore();
+      }
+    } finally {
+      first.unregister();
+      second.unregister();
+      await Promise.all([first.drain(), second.drain()]);
+    }
+  });
+});
+
 it("does not start transport when locator lookup consumes the caller deadline", async () => {
   await withOpenClawTestState({ label: "relay-lookup-deadline" }, async () => {
     const relay = registerOwnedNativeHookRelay({

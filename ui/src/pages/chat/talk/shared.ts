@@ -9,7 +9,7 @@ import {
 } from "../../../../../src/talk/agent-run-control-shared.js";
 import type { RealtimeVoiceAgentControlMode } from "../../../../../src/talk/agent-run-control-shared.js";
 import type { RealtimeVoiceBrowserSession } from "../../../../../src/talk/provider-types.js";
-import type { TalkEvent } from "../../../../../src/talk/talk-events.js";
+import type { TalkEvent, TalkEventInput } from "../../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { RealtimeTalkInputController } from "./input.ts";
@@ -24,6 +24,7 @@ export type RealtimeTalkTranscript = {
   /** Literal fragments append; complete snapshots replace without inferred turn boundaries. */
   textMode?: "verbatim" | "snapshot";
   itemId?: string;
+  transcriptId?: string;
   order?: number;
 };
 
@@ -38,6 +39,7 @@ export type RealtimeTalkTranscriptItem =
 
 export type RealtimeTalkCallbacks = {
   onStatus?: (status: RealtimeTalkStatus, detail?: string) => void;
+  onInputNotice?: (detail: string) => void;
   onVideoCapability?: (capable: boolean) => void;
   onInputLevel?: (level: number) => void;
   onTranscript?: (entry: RealtimeTalkTranscript) => void;
@@ -48,16 +50,10 @@ export type RealtimeTalkCallbacks = {
   onVideoError?: (error: unknown) => void;
 };
 
-export type RealtimeTalkEventInput<TPayload = unknown> = {
-  type: RealtimeTalkEvent["type"];
-  payload?: TPayload;
-  turnId?: string;
-  captureId?: string;
-  final?: boolean;
-  callId?: string;
-  itemId?: string;
-  parentId?: string;
-};
+export type RealtimeTalkEventInput<TPayload = unknown> = Omit<
+  TalkEventInput<TPayload>,
+  "payload" | "timestamp"
+> & { payload?: TPayload };
 
 export type RealtimeTalkSessionResult = RealtimeVoiceBrowserSession & {
   voiceSessionId?: string;
@@ -145,11 +141,7 @@ export function createRealtimeTalkEventEmitter(
   };
 
   function resolveRealtimeTalkTurnId(input: RealtimeTalkEventInput): string | undefined {
-    if (input.type === "turn.started") {
-      activeTurnId = input.turnId ?? activeTurnId ?? `turn-${++turnSeq}`;
-      return activeTurnId;
-    }
-    if (!isTurnScopedTalkEvent(input.type)) {
+    if (input.type !== "turn.started" && !isTurnScopedTalkEvent(input.type)) {
       return input.turnId;
     }
     activeTurnId = input.turnId ?? activeTurnId ?? `turn-${++turnSeq}`;

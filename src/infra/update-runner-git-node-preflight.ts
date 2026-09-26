@@ -5,7 +5,7 @@ import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../node-
 import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { tryReadJson } from "./json-files.js";
 import { nodeVersionSatisfiesEngine } from "./runtime-guard.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 
@@ -20,10 +20,7 @@ async function readCandidateNodeEngine(root: string): Promise<string | null> {
 }
 
 /** Reports a proven candidate Node mismatch without changing the active runtime. */
-export async function checkGitCandidateNodeRuntime(
-  root: string,
-  shortSha: string,
-): Promise<UpdateStepResult | null> {
+export async function checkGitCandidateNodeRuntime(root: string): Promise<UpdateStepResult | null> {
   const startedAt = Date.now();
   const engine = await readCandidateNodeEngine(root);
   let currentVersion = process.versions.node;
@@ -75,7 +72,7 @@ export async function checkGitCandidateNodeRuntime(
   }
 
   return {
-    name: `preflight node runtime (${shortSha})`,
+    name: "preflight-node-runtime",
     command: `check Node ${currentVersion} against engines.node ${engine}`,
     cwd: root,
     durationMs: Date.now() - startedAt,

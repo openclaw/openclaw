@@ -1,3 +1,4 @@
+import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginDiscoveryEntry, PluginListResult } from "../../lib/plugins/index.ts";
 import {
   fetchCatalogIconBlobUrl,
@@ -19,6 +20,18 @@ type PluginIconControllerHost = {
   onLoadingChange?: () => void;
 };
 
+export function pluginIconFetchContext(context: ApplicationContext): PluginIconFetchContext {
+  return {
+    resourceBasePath: context.resourceBasePath,
+    gatewayUrl: context.gateway.connection.gatewayUrl,
+    auth: {
+      hello: context.gateway.snapshot.hello,
+      settings: { token: context.gateway.connection.token },
+      password: context.gateway.connection.password,
+    },
+  };
+}
+
 export class PluginIconController {
   private readonly misses = new Set<string>();
   private readonly requests = new Map<
@@ -29,14 +42,30 @@ export class PluginIconController {
 
   constructor(private readonly host: PluginIconControllerHost) {}
 
-  syncCatalog(entries: readonly PluginDiscoveryEntry[], extraUrls: readonly string[] = []): void {
+  syncCatalog(
+    entries: readonly PluginDiscoveryEntry[],
+    extraUrls: readonly string[] = [],
+    renderedPluginIds?: ReadonlySet<string>,
+  ): void {
     const eligible = new Set([
       ...entries.flatMap((entry) => (entry.catalog.imageUrl ? [entry.catalog.imageUrl] : [])),
       ...extraUrls,
     ]);
     this.reconcileKeys(eligible);
-    for (const key of eligible) {
-      this.load(key);
+    // Retain artwork while its bounded catalog result is current, including the
+    // empty render between a card and its detail. Only visible entries start reads.
+    for (const entry of entries) {
+      if (
+        entry.catalog.imageUrl &&
+        (!renderedPluginIds ||
+          renderedPluginIds.has(entry.id) ||
+          Boolean(entry.local.pluginId && renderedPluginIds.has(entry.local.pluginId)))
+      ) {
+        this.load(entry.catalog.imageUrl);
+      }
+    }
+    for (const url of extraUrls) {
+      this.load(url);
     }
   }
 

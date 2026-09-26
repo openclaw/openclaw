@@ -14,6 +14,10 @@ import * as operatorApprovalMigration from "./openclaw-state-db-operator-approva
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
+// SQLite's default trim removes only spaces; task records use ECMAScript String.trim.
+const taskIdentifierWhitespace =
+  "\u0009\u000a\u000b\u000c\u000d \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+
 export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   if (!tableExists(db, "operator_approvals")) {
     return;
@@ -144,9 +148,9 @@ export function repairLegacySubagentTaskBindings(db: DatabaseSync): void {
   // v2026.6.34 replaced runId/createdAt but retained sessionStartedAt. A reused
   // child session is not an owner: require one task/run, matching requester and
   // timing, and no competing binding. Running replacements need repair too.
-  db.exec(`
+  db.prepare(`
     WITH runs AS MATERIALIZED (
-      SELECT run_id, child_session_key, requester_session_key, created_at,
+      SELECT run_id, trim(child_session_key, ?) AS child_session_key, requester_session_key, created_at,
         CASE WHEN json_valid(payload_json) THEN payload_json ELSE 'null' END AS payload
       FROM subagent_runs
     ), bindings AS MATERIALIZED (
@@ -172,14 +176,14 @@ export function repairLegacySubagentTaskBindings(db: DatabaseSync): void {
         AND NOT EXISTS (SELECT 1 FROM runs AS sibling
           WHERE json_type(sibling.payload) <> 'object' OR coalesce(
             CASE WHEN json_type(sibling.payload, '$.taskRunId') = 'text'
-              THEN nullif(trim(json_extract(sibling.payload, '$.taskRunId')), '') END,
+              THEN nullif(trim(json_extract(sibling.payload, '$.taskRunId'), ?), '') END,
             sibling.run_id
           ) = task.run_id)
     )
     UPDATE subagent_runs SET payload_json = json_set(payload_json, '$.taskRunId',
       (SELECT task_run_id FROM bindings WHERE bindings.run_id = subagent_runs.run_id))
     WHERE run_id IN (SELECT run_id FROM bindings);
-  `);
+  `).run(taskIdentifierWhitespace, taskIdentifierWhitespace);
 }
 
 function nullableTextValue(record: Record<string, unknown> | null, key: string) {
@@ -281,7 +285,7 @@ export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
       const primary = nullableTextValue(completion, "resultText");
       const fallback = nullableTextValue(completion, "fallbackResultText");
       updateRun.run(JSON.stringify(payload), row.run_id);
-      const taskRunId = textField(payload, "taskRunId") ?? row.run_id;
+      const taskRunId = textField(payload, "taskRunId")?.trim() ?? row.run_id;
       const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
       const taskResult = selectLegacyRetainedTaskResult(completion, primary, fallback);
       if (updateTask && (taskResult || terminalReply)) {

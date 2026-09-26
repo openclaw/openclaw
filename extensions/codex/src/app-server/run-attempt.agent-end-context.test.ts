@@ -4,7 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import {
   createCodexRuntimePlanFixture,
   createParams,
@@ -58,9 +58,7 @@ describe("runCodexAppServerAttempt agent-end context", () => {
       params.messageChannel = "discord";
       params.memberRoleIds = ["maintainer-role"];
       setCodexTestModelSupportsTools(params, true);
-      dynamicToolBuildState.openClawCodingToolsFactory = () => [
-        createRuntimeDynamicTool("skill_workshop"),
-      ];
+      setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("skill_workshop")]);
 
       // Protocol events drive these cases; host load must not spend the execution budget.
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });

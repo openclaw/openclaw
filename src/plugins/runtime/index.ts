@@ -210,6 +210,10 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
+    decisions: {
+      evaluate: async (...args) =>
+        (await import("../../decisions/runtime.js")).evaluateDecision(...args),
+    },
     gateway: _options.gateway ?? createRuntimeGateway(),
     config: base.config,
     agent,

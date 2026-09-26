@@ -1,3 +1,4 @@
+import type { UpdateRecovery } from "../infra/update-recovery.js";
 import type { NodeVersionManager } from "./version-manager-path.js";
 
 export type UpdateRecoveryStep =
@@ -103,6 +104,7 @@ export const SKIPPED_UPDATE_OUTCOMES: Readonly<Record<string, "pending" | "noop"
   "restart-health-pending": "pending",
   "already-current": "noop",
   "gateway-readiness-unverified": "noop",
+  "still-starting": "noop",
   "managed-service-handoff-already-running": "noop",
   "managed-service-handoff-cancelled": "noop",
   "container-image-install": "noop",
@@ -129,6 +131,15 @@ export function classifyUpdateOutcome(outcome: {
   return outcome.reason !== undefined && Object.hasOwn(SKIPPED_UPDATE_OUTCOMES, outcome.reason)
     ? SKIPPED_UPDATE_OUTCOMES[outcome.reason]
     : "failed";
+}
+
+/** The restored package and its running service have both passed verification. */
+export function isVerifiedUpdateRollback(result: { recovery?: UpdateRecovery }): boolean {
+  return (
+    result.recovery?.serviceRestartSafe === true &&
+    result.recovery.packageRollbackVerified === true &&
+    result.recovery.service === "healthy"
+  );
 }
 
 /** Ledger refusals can be failed attempts even when no update work started. */

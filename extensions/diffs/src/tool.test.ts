@@ -9,7 +9,7 @@ import type { DiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffsPluginDefaults } from "./config.js";
 import { registerDiffsPlugin } from "./plugin.js";
 import { DiffArtifactStore } from "./store.js";
-import { createDiffStoreHarness } from "./test-helpers.js";
+import { createDiffStoreHarness, expireDiffArtifactForTest } from "./test-helpers.js";
 import { createDiffsTool } from "./tool.js";
 import type { DiffRenderOptions } from "./types.js";
 
@@ -277,13 +277,14 @@ describe("diffs tool", () => {
   });
 
   it("honors ttlSeconds for artifact-only file output", async () => {
-    vi.useFakeTimers();
-    const now = new Date("2026-02-27T16:00:00Z");
-    vi.setSystemTime(now);
+    await fs.mkdir(rootDir, { recursive: true });
+    const fixture = await createDiffStoreHarness("openclaw-diffs-tool-ttl-", {
+      nativeKernel: true,
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
     try {
       const screenshotter = createPngScreenshotter();
-      const tool = createToolWithScreenshotter(store, screenshotter);
-
+      const tool = createToolWithScreenshotter(fixture.store, screenshotter);
       const result = await tool.execute?.("tool-2c-ttl", {
         before: "one\n",
         after: "two\n",
@@ -292,64 +293,64 @@ describe("diffs tool", () => {
       });
       const filePath = requireString(readDetails(result).filePath, "filePath");
       await fs.access(filePath);
-
-      vi.setSystemTime(new Date(now.getTime() + 2_000));
-      await store.cleanupExpired();
+      await fixture.store.stopCleanup();
+      await expireDiffArtifactForTest(
+        fixture.rootDir,
+        requireString(readDetails(result).artifactId, "artifactId"),
+        1000,
+      );
+      await fixture.store.cleanupExpired();
       await expectFsEnoent(fs.stat(filePath));
     } finally {
       vi.useRealTimers();
+      await fixture.cleanup();
     }
   });
 
   it("caps artifact-only ttlSeconds that bypass schema validation", async () => {
-    vi.useFakeTimers();
-    const now = new Date("2026-02-27T16:00:00Z");
-    vi.setSystemTime(now);
-    try {
-      const screenshotter = createPngScreenshotter();
-      const tool = createToolWithScreenshotter(store, screenshotter);
+    const screenshotter = createPngScreenshotter();
+    const tool = createToolWithScreenshotter(store, screenshotter);
 
-      const result = await tool.execute?.("tool-2c-ttl-cap", {
-        before: "one\n",
-        after: "two\n",
-        mode: "file",
-        ttlSeconds: Number.MAX_SAFE_INTEGER,
-      });
+    const result = await tool.execute?.("tool-2c-ttl-cap", {
+      before: "one\n",
+      after: "two\n",
+      mode: "file",
+      ttlSeconds: Number.MAX_SAFE_INTEGER,
+    });
 
-      expect(Date.parse(requireString(readDetails(result).expiresAt, "expiresAt"))).toBe(
-        now.getTime() + 21_600_000,
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    const details = readDetails(result);
+    const entry = await blobStore.lookup(requireString(details.artifactId, "artifactId"));
+    expect(entry).toBeDefined();
+    expect(entry!.expiresAt! - entry!.createdAt).toBe(21_600_000);
+    expect(requireString(details.expiresAt, "expiresAt")).toBe(
+      new Date(entry!.expiresAt!).toISOString(),
+    );
   });
 
   it("uses default ttlSeconds when tool input omits ttlSeconds", async () => {
-    vi.useFakeTimers();
-    const now = new Date("2026-02-27T16:00:00Z");
-    vi.setSystemTime(now);
-    try {
-      const screenshotter = createPngScreenshotter();
-      const tool = createToolWithScreenshotter(store, screenshotter, {
-        ...DEFAULT_DIFFS_TOOL_DEFAULTS,
-        ttlSeconds: 60,
-      });
+    const screenshotter = createPngScreenshotter();
+    const tool = createToolWithScreenshotter(store, screenshotter, {
+      ...DEFAULT_DIFFS_TOOL_DEFAULTS,
+      ttlSeconds: 60,
+    });
 
-      const result = await tool.execute?.("tool-2c-default-ttl", {
-        before: "one\n",
-        after: "two\n",
-        mode: "file",
-      });
-      const filePath = (result.details as Record<string, unknown>).filePath as string;
-      const stat = await fs.stat(filePath);
-      expect(stat.isFile()).toBe(true);
+    const result = await tool.execute?.("tool-2c-default-ttl", {
+      before: "one\n",
+      after: "two\n",
+      mode: "file",
+    });
+    const filePath = (result.details as Record<string, unknown>).filePath as string;
+    const stat = await fs.stat(filePath);
+    expect(stat.isFile()).toBe(true);
 
-      vi.setSystemTime(new Date(now.getTime() + 61_000));
-      await store.cleanupExpired();
-      await expectFsEnoent(fs.stat(filePath));
-    } finally {
-      vi.useRealTimers();
-    }
+    await store.stopCleanup();
+    await expireDiffArtifactForTest(
+      rootDir,
+      requireString(readDetails(result).artifactId, "artifactId"),
+      60000,
+    );
+    await store.cleanupExpired();
+    await expectFsEnoent(fs.stat(filePath));
   });
 
   it("honors defaults.mode=file when mode is omitted", async () => {

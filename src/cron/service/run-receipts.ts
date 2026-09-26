@@ -14,7 +14,6 @@ import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStoreKey } from "../store/key.js";
 import { loadedCronStoreFromRows, loadCronRows } from "../store/row-codec.js";
 import {
-  activateCronRunReceiptInDatabase,
   adjudicateActiveCronRunReceiptInDatabase,
   assertCronRunReceiptCurrent,
   assertCronRunReceiptCurrentInDatabase,
@@ -30,11 +29,10 @@ import {
   readCronRunReceiptCurrentJob,
   trackCronRunReceiptSettlement,
   type PreparedCronRunReceiptClaim,
-  type CronRunReceiptHandle,
-  type CronRunReceiptStatus,
   type CronRunReceiptSettlementDisposition,
 } from "../store/run-receipt-store.js";
 import { retireCronRunTriggerStateInDatabase } from "../store/run-receipt-trigger-state.js";
+import type { CronRunReceiptHandle, CronRunReceiptStatus } from "../store/run-receipt.types.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronRunStatus, CronStoredJob } from "../types.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
@@ -142,20 +140,6 @@ export function claimServiceCronRunReceiptInDatabase(
   return claimCronRunReceiptInDatabase({
     database,
     prepared,
-    resolveAgentId: resolveAgentId(state),
-  });
-}
-
-export function activateServiceCronRunReceiptInDatabase(
-  state: CronServiceState,
-  database: DatabaseSync,
-  handle: CronRunReceiptHandle,
-  startedAtMs: number,
-): CronRunReceiptHandle {
-  return activateCronRunReceiptInDatabase({
-    database,
-    handle,
-    startedAtMs,
     resolveAgentId: resolveAgentId(state),
   });
 }
@@ -367,7 +351,7 @@ export function cronRunReceiptPersistHooks(params: {
       const recordsUnavailableGuard =
         terminal?.status === "error" && params.terminal?.disposition === "owner-unavailable";
       if (
-        params.state.deps.isAgentAvailable?.(params.handle.agentId) === false &&
+        params.state.deps.isAgentAvailable?.(params.handle.agentId, database) === false &&
         !recordsUnavailableGuard
       ) {
         throw new CronRunReceiptRevisionError(
@@ -401,31 +385,6 @@ export function cronRunReceiptPersistHooks(params: {
     ...(terminal && deferTerminal
       ? { afterCommit: () => finishReceiptAfterCommit(params.state, terminal) }
       : {}),
-  };
-}
-
-export function cronRunReceiptSupersedeHooks(params: {
-  state: CronServiceState;
-  handle: CronRunReceiptHandle;
-  finishedAtMs: number;
-  error: string;
-}): CronStoreTransactionHooks {
-  const terminal = {
-    handle: params.handle,
-    status: "superseded" as const,
-    finishedAtMs: params.finishedAtMs,
-    error: params.error,
-  };
-  if (isCronRunReceiptSettlementPending(params.handle)) {
-    return { afterCommit: () => finishReceiptAfterCommit(params.state, terminal) };
-  }
-  return {
-    afterWrite: (database) => {
-      finishCronRunReceiptInDatabase({
-        database,
-        ...terminal,
-      });
-    },
   };
 }
 

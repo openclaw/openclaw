@@ -2,22 +2,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
-import {
-  resetPluginBlobStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 // Matrix tests cover send plugin behavior.
+import type * as TableRuntime from "openclaw/plugin-sdk/markdown-table-runtime";
+import type * as ChunkRuntime from "openclaw/plugin-sdk/reply-chunking";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { getMatrixRuntime, setMatrixRuntime } from "../runtime.js";
-import { installMatrixTestRuntime } from "../test-runtime.js";
+import { installMatrixTestRuntime, resetMatrixTestStores } from "../test-runtime.js";
+import type { CoreConfig } from "../types.js";
 import { voteMatrixPoll } from "./actions/polls.js";
 import {
   loadMatrixDeliveryPlan,
   reconcileMatrixUnknownSend,
   resolveMatrixDurableDeliveryIdentity,
 } from "./delivery-plan.js";
+import { createMatrixDraftStream } from "./draft-stream.js";
 import { markdownToMatrixBody, markdownToMatrixHtml } from "./format.js";
 import { createBundledReplacementEvent } from "./monitor/test-events.js";
 import { matrixEventToRaw } from "./sdk/event-helpers.js";
@@ -29,6 +30,11 @@ import {
   sendSingleTextMessageMatrix,
   sendTypingMatrix,
 } from "./send.js";
+import {
+  createEncryptedMediaPayload,
+  makeClient,
+  makeEncryptedMediaClient,
+} from "./send.test-support.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "./send/types.js";
 
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
@@ -46,10 +52,10 @@ const mediaKindFromMimeMock = vi.fn((_mime: string | null | undefined) => "image
 const isVoiceCompatibleAudioMock = vi.fn(
   (_options: { contentType?: string | null; fileName?: string | null }) => false,
 );
-const resolveTextChunkLimitMock = vi.fn<
-  (cfg: unknown, channel: unknown, accountId?: unknown) => number
->(() => 4000);
-const resolveMarkdownTableModeMock = vi.fn((_params?: unknown) => "code");
+const { resolveTextChunkLimitMock, resolveMarkdownTableModeMock } = vi.hoisted(() => ({
+  resolveTextChunkLimitMock: vi.fn<typeof ChunkRuntime.resolveTextChunkLimit>(() => 4000),
+  resolveMarkdownTableModeMock: vi.fn<typeof TableRuntime.resolveMarkdownTableMode>(() => "code"),
+}));
 const chunkMarkdownTextWithModeMock = vi.fn<
   (text: string, limit?: number, mode?: unknown) => string[]
 >((text) => (text ? [text] : []));
@@ -64,7 +70,15 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
   };
 });
 
-vi.mock("./outbound-media-runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
+  resolveMarkdownTableMode: resolveMarkdownTableModeMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/reply-chunking", () => ({
+  resolveTextChunkLimit: resolveTextChunkLimitMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
 }));
 
@@ -86,102 +100,16 @@ const runtimeStub = {
   },
   channel: {
     text: {
-      resolveTextChunkLimit: (cfg: unknown, channel: unknown, accountId?: unknown) =>
-        resolveTextChunkLimitMock(cfg, channel, accountId),
+      resolveTextChunkLimit: resolveTextChunkLimitMock,
       resolveChunkMode: () => "length",
       chunkMarkdownText: (text: string) => (text ? [text] : []),
       chunkMarkdownTextWithMode: (text: string, limit: number, mode: unknown) =>
         chunkMarkdownTextWithModeMock(text, limit, mode),
-      resolveMarkdownTableMode: (params: unknown) => resolveMarkdownTableModeMock(params),
+      resolveMarkdownTableMode: resolveMarkdownTableModeMock,
       convertMarkdownTables: (text: string) => text,
     },
   },
 } as unknown as PluginRuntime;
-
-function applyMatrixSendRuntimeStub() {
-  setMatrixRuntime(runtimeStub);
-}
-
-function createEncryptedMediaPayload() {
-  return {
-    buffer: Buffer.from("encrypted"),
-    file: {
-      key: {
-        kty: "oct",
-        key_ops: ["encrypt", "decrypt"],
-        alg: "A256CTR",
-        k: "secret",
-        ext: true,
-      },
-      iv: "iv",
-      hashes: { sha256: "hash" },
-      v: "v2",
-    },
-  };
-}
-
-const makeClient = () => {
-  const sendMessage = vi.fn().mockResolvedValue("evt1");
-  const sendEvent = vi.fn().mockResolvedValue("evt-poll-vote");
-  const getEvent = vi.fn();
-  const getRelations = vi.fn().mockResolvedValue({ events: [], nextBatch: null });
-  const getJoinedRoomMembers = vi.fn().mockResolvedValue([]);
-  const uploadContent = vi.fn().mockResolvedValue("mxc://example/file");
-  const prepareRoomForMessageSend = vi.fn();
-  const client = {
-    sendMessage,
-    sendEvent,
-    getEvent,
-    getRelations,
-    getJoinedRoomMembers,
-    uploadContent,
-    prepareRoomForMessageSend,
-    getTransactionScopeId: vi.fn().mockResolvedValue("scope-1"),
-    getMessageWireEventType: vi.fn().mockResolvedValue("m.room.message"),
-    getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
-    prepareForOneOff: vi.fn(async () => undefined),
-    start: vi.fn(async () => undefined),
-    stop: vi.fn(() => undefined),
-    stopAndPersist: vi.fn(async () => undefined),
-  } as unknown as import("./sdk.js").MatrixClient;
-  prepareRoomForMessageSend.mockImplementation(
-    async (roomId: string, content?: import("./sdk.js").MessageEventContent) => {
-      const eventType = await client.getMessageWireEventType(roomId);
-      if (eventType === "m.room.encrypted" && !client.crypto) {
-        throw new Error("Encrypted Matrix room: enable encryption before sending messages");
-      }
-      if (
-        eventType === "m.room.encrypted" &&
-        (typeof content?.url === "string" ||
-          (content?.info &&
-            "thumbnail_url" in content.info &&
-            typeof content.info.thumbnail_url === "string"))
-      ) {
-        throw new Error("Encrypted Matrix room contains unencrypted media; retry the send");
-      }
-      return eventType;
-    },
-  );
-  return {
-    client,
-    sendMessage,
-    sendEvent,
-    getEvent,
-    getRelations,
-    getJoinedRoomMembers,
-    uploadContent,
-  };
-};
-
-function makeEncryptedMediaClient() {
-  const result = makeClient();
-  (result.client as { crypto?: object }).crypto = {
-    isRoomEncrypted: vi.fn().mockResolvedValue(true),
-    encryptMedia: vi.fn().mockResolvedValue(createEncryptedMediaPayload()),
-  };
-  vi.spyOn(result.client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
-  return result;
-}
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -283,7 +211,6 @@ function resetMatrixSendRuntimeMocks() {
   chunkMarkdownTextWithModeMock
     .mockReset()
     .mockImplementation((text: string) => (text ? [text] : []));
-  applyMatrixSendRuntimeStub();
 }
 
 describe("Matrix formatted chunk boundaries", () => {
@@ -484,9 +411,8 @@ describe("sendMessageMatrix durable delivery", () => {
     setMatrixRuntime({ ...getMatrixRuntime(), media: runtimeStub.media });
   });
 
-  afterEach(() => {
-    resetPluginBlobStoreForTests({ closeDatabase: false });
-    resetPluginStateStoreForTests();
+  afterEach(async () => {
+    await resetMatrixTestStores();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
@@ -1555,28 +1481,84 @@ describe("sendSingleTextMessageMatrix", () => {
     );
   });
 
-  it("supports partial draft preview sends without activating mention-looking text", async () => {
-    const { client, sendMessage } = makeClient();
-
-    await sendSingleTextMessageMatrix(
-      "room:!room:example",
-      "Working...\n- `read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed`",
-      {
-        client,
-        cfg: {} as never,
-        includeMentions: false,
-        live: true,
+  it("supports retained partial draft sends and edits without a Matrix runtime", async () => {
+    const { client, sendMessage, getEvent } = makeClient();
+    const [tableRuntime, chunkRuntime] = await Promise.all([
+      vi.importActual<typeof TableRuntime>("openclaw/plugin-sdk/markdown-table-runtime"),
+      vi.importActual<typeof ChunkRuntime>("openclaw/plugin-sdk/reply-chunking"),
+    ]);
+    resolveMarkdownTableModeMock.mockImplementation(tableRuntime.resolveMarkdownTableMode);
+    resolveTextChunkLimitMock.mockImplementation(chunkRuntime.resolveTextChunkLimit);
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          textChunkLimit: 8,
+          accounts: { retained: { textChunkLimit: 256 } },
+        },
       },
-    );
+    };
+    const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
+      pluginId: "matrix",
+      errorMessage: "Matrix runtime not initialized",
+    });
+    const previousRuntime = getMatrixRuntime();
+    vi.useFakeTimers();
+    const stream = createMatrixDraftStream({
+      roomId: "!room:example",
+      threadId: "$thread",
+      client,
+      cfg,
+      accountId: "retained",
+    });
+    try {
+      runtimeStore.clearRuntime();
+      expect(() => getMatrixRuntime()).toThrow("Matrix runtime not initialized");
+      getEvent.mockResolvedValue({
+        content: { "m.relates_to": { rel_type: "m.thread", event_id: "$thread" } },
+      });
+      stream.update(
+        "Working...\n- `read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed`",
+      );
+      await stream.flush();
 
-    const content = sentContent(sendMessage);
-    expect(content.msgtype).toBe("m.text");
-    expect(content).not.toHaveProperty("m.mentions");
-    expect(content["org.matrix.msc4357.live"]).toEqual({});
-    expect((content as { formatted_body?: string }).formatted_body).toContain(
-      "<code>read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed</code>",
-    );
-    expect((content as { formatted_body?: string }).formatted_body).not.toContain("matrix.to");
+      const content = sentContent(sendMessage);
+      expect(content.msgtype).toBe("m.text");
+      expect(content).not.toHaveProperty("m.mentions");
+      expect(content["org.matrix.msc4357.live"]).toEqual({});
+      expect(content.formatted_body).toContain(
+        "<code>read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed</code>",
+      );
+      expect(content.formatted_body).not.toContain("matrix.to");
+      expect(content["m.relates_to"]).toMatchObject({
+        rel_type: "m.thread",
+        event_id: "$thread",
+      });
+
+      const editedText = "Still working in the retained account";
+      stream.update(editedText);
+      await stream.flush();
+      expect(sendMessage.mock.calls.map(([roomId]) => roomId)).toEqual([
+        "!room:example",
+        "!room:example",
+      ]);
+      expect(newContent(sentContent(sendMessage, 1)).body).toBe(editedText);
+      expect(sentContent(sendMessage, 1)["m.relates_to"]).toEqual({
+        rel_type: "m.replace",
+        event_id: "evt1",
+      });
+
+      stream.update("x".repeat(257));
+      await stream.flush();
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(stream.mustDeliverFinalNormally()).toBe(true);
+    } finally {
+      try {
+        await stream.discardPending();
+      } finally {
+        runtimeStore.setRuntime(previousRuntime);
+        vi.useRealTimers();
+      }
+    }
   });
 
   it("does not activate mentions inside Matrix tool-progress code spans", async () => {

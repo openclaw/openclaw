@@ -1,6 +1,7 @@
 import type { bindDeliveryQueueEntry } from "./delivery-queue-sqlite-bound.js";
 import type { DeliveryQueueStoredStatus } from "./delivery-queue-sqlite.kernel.js";
 import type { QueuedSessionDelivery } from "./session-delivery-queue.records.js";
+import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 
 export type SessionDeliveryAgentRunUpdate = {
   expectedMediaUrls?: string[];
@@ -37,3 +38,24 @@ export type SessionDeliveryWorkerOperations = {
   "sessionDelivery.list": { input: undefined; output: QueuedSessionDelivery[] };
   "sessionDelivery.moveToFailed": { input: { id: string }; output: void };
 };
+
+export function isSessionDeliveryCommand(command: {
+  type: string;
+  input: unknown;
+}): command is SqliteWorkerCommand<SessionDeliveryWorkerOperations> {
+  return (
+    command.type === "sessionDelivery.enqueue" ||
+    command.type === "sessionDelivery.enqueueClaimed" ||
+    command.type === "sessionDelivery.releaseClaim" ||
+    command.type === "sessionDelivery.defer" ||
+    command.type === "sessionDelivery.advanceAgentRun" ||
+    command.type === "sessionDelivery.mergePreparedMedia" ||
+    command.type === "sessionDelivery.markAttemptStarted" ||
+    command.type === "sessionDelivery.markSettlement" ||
+    command.type === "sessionDelivery.complete" ||
+    command.type === "sessionDelivery.fail" ||
+    command.type === "sessionDelivery.load" ||
+    command.type === "sessionDelivery.list" ||
+    command.type === "sessionDelivery.moveToFailed"
+  );
+}

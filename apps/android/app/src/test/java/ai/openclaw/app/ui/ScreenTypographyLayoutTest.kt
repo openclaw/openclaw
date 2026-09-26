@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidScreenshotFixture
 import ai.openclaw.app.AndroidScreenshotScene
+import ai.openclaw.app.AppearanceTextScale
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
@@ -21,16 +22,21 @@ import android.graphics.Bitmap
 import android.provider.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -41,13 +47,16 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.sp
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import com.google.mlkit.common.sdkinternal.MlKitContext
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -84,6 +93,7 @@ class ScreenTypographyLayoutTest {
     app = RuntimeEnvironment.getApplication() as NodeApp
     originalRuntime = app.peekRuntime()
     prefs = SecurePrefs(app, app.getSharedPreferences("screen-type-" + UUID.randomUUID(), Context.MODE_PRIVATE))
+    prefs.setOnboardingCompleted(true)
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
     runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     bindNodeRuntimeTestFixture(app, runtime)
@@ -110,6 +120,233 @@ class ScreenTypographyLayoutTest {
         }
       }
     }
+  }
+
+  @Test
+  fun appearanceOffersWebTextSizeChoices() {
+    show { SettingsDetailScreen(model, SettingsRoute.Appearance, onBack = {}) }
+    composeRule.onNodeWithText("App language").performScrollTo()
+    capture("appearance-text-size")
+    composeRule.onNodeWithText("Text size").assertIsDisplayed()
+    for (percent in listOf(90, 100, 110, 125, 140)) {
+      composeRule.onNodeWithText("$percent%").performScrollTo().assertIsDisplayed()
+    }
+    composeRule.onNodeWithText("100%").assertIsSelected()
+  }
+
+  @Test
+  fun appearanceInteractionUpdatesShellAndRestoresEveryChoice() {
+    model.requestHomeDestination(HomeDestination.Settings)
+    showApp { RootScreen(model) }
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasText("Appearance"))
+    composeRule.onNodeWithText("Appearance").performClick()
+    for (percent in listOf(90, 110, 125, 140, 100)) {
+      composeRule
+        .onNodeWithText("$percent%")
+        .performScrollTo()
+        .performClick()
+        .assertIsSelected()
+      assertEquals(percent, prefs.appearanceTextScale.value.percent)
+      val restored = SecurePrefs(app, app.getSharedPreferences("text-size-restored", Context.MODE_PRIVATE))
+      assertEquals(percent, restored.appearanceTextScale.value.percent)
+    }
+    composeRule.onNodeWithText("140%").performScrollTo().performClick()
+    composeRule.onNodeWithText("App language").performScrollTo()
+    composeRule.onNodeWithText("140%").assertIsDisplayed().assertIsSelected()
+    capture("appearance-140")
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasContentDescription("Back"))
+    composeRule.onNodeWithContentDescription("Back").performClick()
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasText("Settings"))
+    val heading = assertTextStyle("Settings", type.display)
+    assertEquals(1.4f, heading.layoutInput.density.fontScale, 0.001f)
+    capture("settings-140")
+    composeRule.runOnIdle { model.setAppearanceTextScale(AppearanceTextScale.Standard) }
+    assertEquals(1f, assertTextStyle("Settings", type.display).layoutInput.density.fontScale, 0.001f)
+    capture("settings-100")
+  }
+
+  @Test
+  @Config(qualifiers = "w320dp-h800dp-mdpi")
+  fun textSizeCombinesWithNonlinearSystemScalingOnNarrowScreens() {
+    model.setAppearanceTextScale(AppearanceTextScale.Largest)
+    showApp(fontScale = 2f) { SettingsDetailScreen(model, SettingsRoute.Appearance, onBack = {}) }
+    val heading = assertTextStyle("Appearance", type.display)
+    assertFalse("Large text must not clip the page title", heading.hasVisualOverflow)
+    val density = heading.layoutInput.density
+    assertEquals(2.8f, density.fontScale, 0.001f)
+    assertEquals(1f, density.density, 0.001f)
+    // Compose 1.12 intentionally extrapolates linearly above its largest (2x) table.
+    // Match the platform conversion here rather than inventing a different accessibility curve.
+    for (size in listOf(12.sp, 32.sp)) {
+      assertEquals(with(Density(1f, 2.8f)) { size.toDp() }, with(density) { size.toDp() })
+    }
+    for (percent in listOf(90, 100, 110, 125, 140)) {
+      val node = composeRule.onNodeWithText("$percent%", useUnmergedTree = true)
+      node.performScrollTo().assertIsDisplayed()
+      val layouts = mutableListOf<TextLayoutResult>()
+      node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+      if (percent == 90) capture("high-text-choices")
+      val measured = layouts.single()
+      val bounds = node.getUnclippedBoundsInRoot()
+      // Semantics can report a wider paragraph box than the natural-width Text node.
+      // Check the complete rendered line against its actual bounds, not that box.
+      assertEquals("Text-size choice $percent% must stay on one line", 1, measured.lineCount)
+      assertTrue("Text-size choice $percent% must fit horizontally", measured.getLineRight(0) <= (bounds.right - bounds.left).value * measured.layoutInput.density.density + 0.5f)
+      assertTrue("Text-size choice $percent% must fit vertically", measured.getLineBottom(0) <= (bounds.bottom - bounds.top).value * measured.layoutInput.density.density + 0.5f)
+    }
+    capture("appearance-system-200-app-140")
+    composeRule.onNodeWithText("100%").performScrollTo().performClick()
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasText("Appearance"))
+    val restoredDensity = assertTextStyle("Appearance", type.display).layoutInput.density
+    assertEquals(2f, restoredDensity.fontScale, 0.001f)
+    assertTrue("Restoring 100% retains Android nonlinear scaling", with(restoredDensity) { 12.sp.toDp().value / 12 > 32.sp.toDp().value / 32 })
+  }
+
+  @Test
+  fun appChoiceRetainsNonlinearConversionWithinPlatformRange() {
+    model.setAppearanceTextScale(AppearanceTextScale.Small)
+    showApp(fontScale = 2f) { SettingsDetailScreen(model, SettingsRoute.Appearance, onBack = {}) }
+    val density = assertTextStyle("Appearance", type.display).layoutInput.density
+    assertEquals(1.8f, density.fontScale, 0.001f)
+    assertTrue("Combined platform scaling remains nonlinear", with(density) { 12.sp.toDp().value / 12 > 32.sp.toDp().value / 32 })
+  }
+
+  @Test
+  fun textSizeReachesRealChatAndReturnsToUnchangedDefault() {
+    model.enterScreenshotFixtureMode(AndroidScreenshotScene.Chat)
+    showApp { RootScreen(model) }
+    val message = "Summarize the open review feedback for me."
+    composeRule.onNodeWithText(message, useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+
+    fun messageDensity(): Density {
+      val layouts = mutableListOf<TextLayoutResult>()
+      composeRule
+        .onNodeWithText(message, useUnmergedTree = true)
+        .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+      return layouts.single().layoutInput.density
+    }
+    assertEquals(1f, messageDensity().fontScale, 0.001f)
+    capture("chat-100")
+    composeRule.runOnIdle { model.setAppearanceTextScale(AppearanceTextScale.Largest) }
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasText(message))
+    assertEquals(1.4f, messageDensity().fontScale, 0.001f)
+    capture("chat-140")
+    composeRule.runOnIdle { model.setAppearanceTextScale(AppearanceTextScale.Standard) }
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasText(message))
+    assertEquals(1f, messageDensity().fontScale, 0.001f)
+  }
+
+  @Test
+  fun textSizeReachesOnboardingWithoutResettingScreenshotPreferences() {
+    model.setAppearanceTextScale(AppearanceTextScale.ExtraLarge)
+    model.enterScreenshotFixtureMode(AndroidScreenshotScene.Home)
+    assertEquals(AppearanceTextScale.ExtraLarge, model.appearanceTextScale.value)
+    MlKitContext.initializeIfNeeded(app)
+    showApp { OnboardingFlow(model) }
+    val layouts = mutableListOf<TextLayoutResult>()
+    composeRule
+      .onNodeWithText("Welcome to OpenClaw", useUnmergedTree = true)
+      .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+    assertEquals(
+      1.25f,
+      layouts
+        .single()
+        .layoutInput.density.fontScale,
+      0.001f,
+    )
+    capture("onboarding-125")
+  }
+
+  @Test
+  fun appTextSizeReachesNativePromptWindow() {
+    model.setAppearanceTextScale(AppearanceTextScale.Largest)
+    showApp {
+      FoldAwarePrompt(
+        onDismissRequest = {},
+        title = "Native prompt scale",
+        text = { androidx.compose.material3.Text("Prompt body") },
+        actions = {},
+      )
+    }
+    val layouts = mutableListOf<TextLayoutResult>()
+    composeRule
+      .onNodeWithText("Native prompt scale", useUnmergedTree = true)
+      .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+    assertEquals(
+      1.4f,
+      layouts
+        .single()
+        .layoutInput.density.fontScale,
+      0.001f,
+    )
+  }
+
+  @Test
+  fun appTextSizeReachesNativeMenuWindow() {
+    model.setAppearanceTextScale(AppearanceTextScale.Largest)
+    showApp {
+      AppDropdownMenu(expanded = true, onDismissRequest = {}) {
+        androidx.compose.material3.Text("Native menu scale")
+      }
+    }
+    val layouts = mutableListOf<TextLayoutResult>()
+    composeRule
+      .onNodeWithText("Native menu scale", useUnmergedTree = true)
+      .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+    assertEquals(
+      1.4f,
+      layouts
+        .single()
+        .layoutInput.density.fontScale,
+      0.001f,
+    )
+  }
+
+  @Test
+  fun appTextSizeReachesTheNativeMessageReaderTitle() {
+    model.setAppearanceTextScale(AppearanceTextScale.Largest)
+    showApp {
+      ai.openclaw.app.ui.chat
+        .ChatTextReaderDialog("Reader body", "Native reader scale", "Done", {})
+    }
+    val layouts = mutableListOf<TextLayoutResult>()
+    composeRule
+      .onNodeWithText("Native reader scale", useUnmergedTree = true)
+      .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+    assertEquals(
+      1.4f,
+      layouts
+        .single()
+        .layoutInput.density.fontScale,
+      0.001f,
+    )
+  }
+
+  @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+  @Test
+  fun appTextSizeReachesMaterialSheetWindow() {
+    model.setAppearanceTextScale(AppearanceTextScale.Largest)
+    showApp {
+      AppModalBottomSheet(
+        onDismissRequest = {},
+        sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = ClawTheme.colors.surface,
+        contentColor = ClawTheme.colors.text,
+      ) {
+        androidx.compose.material3.Text("Native sheet scale")
+      }
+    }
+    val layouts = mutableListOf<TextLayoutResult>()
+    composeRule
+      .onNodeWithText("Native sheet scale", useUnmergedTree = true)
+      .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+    assertEquals(
+      1.4f,
+      layouts
+        .single()
+        .layoutInput.density.fontScale,
+      0.001f,
+    )
   }
 
   @Test
@@ -224,6 +461,27 @@ class ScreenTypographyLayoutTest {
     val image = composeRule.onRoot().captureToImage().asAndroidBitmap()
     assertTrue("Capture must contain the full phone viewport", image.width in listOf(320, 360) && image.height > 600)
     target.outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+  }
+
+  private fun showApp(
+    fontScale: Float = 1f,
+    content: @Composable () -> Unit,
+  ) {
+    composeRule.setContent {
+      if (mounted.value) {
+        val scale by model.appearanceTextScale.collectAsState()
+        val density = LocalDensity.current
+        CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+          OpenClawTheme(textScale = scale) {
+            ClawDesignTheme {
+              type = ClawTheme.type
+              content()
+            }
+          }
+        }
+      }
+    }
+    composeRule.waitForIdle()
   }
 
   private fun show(

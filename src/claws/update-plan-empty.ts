@@ -1,4 +1,5 @@
 import { CLAW_OUTPUT_STABILITY, type ClawDiagnostic, type ClawSourceIdentity } from "./types.js";
+import { summarizeClawUpdatePlan } from "./update-plan-summary.js";
 import { CLAW_UPDATE_PLAN_SCHEMA_VERSION, type ClawUpdatePlan } from "./update-plan-types.js";
 
 export function makeEmptyClawUpdatePlan(params: {
@@ -27,18 +28,7 @@ export function makeEmptyClawUpdatePlan(params: {
           },
         }
       : {}),
-    summary: {
-      totalActions: 0,
-      added: 0,
-      changed: 0,
-      removed: 0,
-      released: 0,
-      unchanged: 0,
-      manual: 0,
-      blocked: 0,
-      capabilityChanges: 0,
-      capabilityEscalations: 0,
-    },
+    summary: summarizeClawUpdatePlan([], []),
     actions: [],
     capabilityChanges: [],
     readiness: { ready: true, requirements: [] },

@@ -5,11 +5,14 @@ import type {
   PreparedInboundReply,
   runChannelInboundEvent,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { setSignalRuntime } from "../runtime.js";
 import type { SignalEventHandlerDeps, SignalReactionMessage } from "./event-handler.types.js";
 
 export function createBaseSignalEventHandlerDeps(
   overrides: Partial<SignalEventHandlerDeps> = {},
 ): SignalEventHandlerDeps {
+  setSignalRuntime(createPluginRuntimeMock());
   return {
     runtime: { log: () => {}, error: () => {} } as SignalEventHandlerDeps["runtime"],
     statusReactionTiming: {

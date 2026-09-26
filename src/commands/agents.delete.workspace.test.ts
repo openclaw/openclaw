@@ -462,4 +462,29 @@ describe("agents delete workspace lifecycle", () => {
       expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
     });
   });
+
+  it("reports local trash failures on the text path", async () => {
+    await withStateDirEnv("openclaw-agents-delete-trash-text-", async ({ stateDir }) => {
+      const opsWorkspace = path.join(stateDir, "workspace-ops");
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: opsWorkspace },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
+      fsSafeMocks.movePathToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
+
+      await agentsDeleteCommand({ id: "ops", force: true }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith("Deleted agent: ops");
+      expect(runtime.error).toHaveBeenCalledWith(
+        `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${opsWorkspace}`,
+      );
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
+    });
+  });
 });

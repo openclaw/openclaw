@@ -225,9 +225,6 @@ export type DiscordVoiceConfig = {
 export type DiscordExecApprovalConfig = ChannelExecApprovalConfig<string> & {
   /** Delete approval DMs after approval, denial, or timeout. Default: false. */
   cleanupAfterResolve?: boolean;
-  /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
-   *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
-   *  are only usable by resolved approvers; other users receive an ephemeral denial. */
 };
 
 export type DiscordAgentComponentsConfig = {
@@ -267,9 +264,6 @@ export type DiscordAutoPresenceConfig = {
   intervalMs?: number;
   /** Minimum spacing between actual gateway presence updates (ms). Default: 15000. */
   minUpdateIntervalMs?: number;
-  /** Optional custom status text while runtime is healthy; supports plain text. */
-  /** Optional custom status text while runtime/quota state is degraded or unknown. */
-  /** Optional custom status text while runtime detects quota/token exhaustion. */
   /** @deprecated Doctor-only legacy input. */
   exhaustedText?: string;
 };
@@ -317,7 +311,6 @@ export type DiscordAccountConfig = Omit<
     execApprovals?: DiscordExecApprovalConfig;
     /** Agent-controlled interactive components (buttons, select menus). */
     agentComponents?: DiscordAgentComponentsConfig;
-    /** Discord UI customization (components, modals, etc.). */
     /** Slash command configuration. */
     slashCommand?: DiscordSlashCommandConfig;
     /** Thread binding lifecycle settings. */

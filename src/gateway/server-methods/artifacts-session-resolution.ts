@@ -13,7 +13,8 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
+import { prepareTaskRegistryRead } from "../../tasks/task-registry-read.js";
+import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -25,7 +26,8 @@ import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import type { GatewayClient } from "./types.js";
+import type { ArtifactLookup } from "./artifacts-content.js";
+import type { GatewayClient, RespondFn } from "./types.js";
 
 export type ArtifactQuery = ArtifactsListParams;
 
@@ -92,7 +94,8 @@ function resolveScopedArtifactSessionKey(
 
 function resolveQuerySession(
   query: ArtifactQuery,
-  cfg?: OpenClawConfig,
+  cfg: OpenClawConfig | undefined,
+  task: TaskRecord | undefined,
 ): ResolvedArtifactSession | undefined {
   if (query.sessionKey) {
     const sessionKey = resolveScopedArtifactSessionKey(query.sessionKey, query.agentId, cfg);
@@ -117,7 +120,6 @@ function resolveQuerySession(
   if (!query.taskId) {
     return undefined;
   }
-  const task = getTaskSessionLookupByIdForStatus(query.taskId);
   const requesterSessionKey = normalizeOptionalString(task?.requesterSessionKey);
   const ownerAgentId = parseAgentSessionKey(task?.ownerKey)?.agentId;
   const persistedRequesterOwner = requesterSessionKey
@@ -160,37 +162,74 @@ export class ArtifactSessionResolutionError extends Error {
   }
 }
 
-export function resolveAuthorizedArtifactSession(
-  query: ArtifactQuery,
-  cfg: OpenClawConfig | undefined,
-  client: GatewayClient | null,
-): ResolvedArtifactSession | undefined {
-  const resolved = resolveQuerySession(query, cfg);
-  if (!resolved) {
-    return undefined;
+export function artifactResponseIsCurrent(found: ArtifactLookup, respond: RespondFn): boolean {
+  try {
+    found.assertCurrent?.();
+    return true;
+  } catch (error) {
+    if (!(error instanceof ArtifactSessionResolutionError)) {
+      throw error;
+    }
+    respond(false, undefined, error.shape);
+    return false;
   }
-  const target = resolveSessionSharingTarget({
-    cfg: cfg ?? {},
-    sessionKey: resolved.sessionKey,
-    agentId: resolved.agentId,
-  });
-  const error = authorizeIncognitoSessionTarget({
-    client,
-    sessionKey: query.sessionKey ?? resolved.sessionKey,
-    target,
-  });
-  const visibilityDenied = Boolean(
-    target &&
-    createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false,
-  );
-  if (!error && !visibilityDenied) {
-    return resolved;
+}
+
+export async function prepareArtifactSessionResolution(
+  input: ArtifactQuery,
+): Promise<
+  (
+    cfg: OpenClawConfig | undefined,
+    client: GatewayClient | null,
+  ) => ResolvedArtifactSession | undefined
+> {
+  const query = { ...input };
+  const taskId = !query.sessionKey && !query.runId ? query.taskId : undefined;
+  const read = taskId ? await prepareTaskRegistryRead() : undefined;
+  if (taskId && !read) {
+    throw new ArtifactSessionResolutionError(
+      errorShape(ErrorCodes.UNAVAILABLE, "Task activity did not stabilize. Refresh the artifacts."),
+    );
   }
-  throw new ArtifactSessionResolutionError(
-    query.sessionKey && error
-      ? error
-      : errorShape(ErrorCodes.INVALID_REQUEST, "no session found for artifact query", {
-          details: { type: "artifact_scope_not_found" },
-        }),
-  );
+  // The consuming frame rechecks task identity and current disclosure policy without yielding.
+  return (cfg, client) => {
+    const task = taskId ? read?.getTaskById(taskId) : undefined;
+    const sessionKey = normalizeOptionalString(query.sessionKey);
+    let scopedQuery = query;
+    if (sessionKey && cfg) {
+      const owner = resolveRequestedSessionAgentId(cfg, sessionKey, query.agentId);
+      if (!owner.ok) {
+        throw new ArtifactSessionResolutionError(owner.error);
+      }
+      scopedQuery = { ...query, agentId: owner.agentId };
+    }
+    const resolved = resolveQuerySession(scopedQuery, cfg, task);
+    if (!resolved) {
+      return undefined;
+    }
+    const target = resolveSessionSharingTarget({
+      cfg: cfg ?? {},
+      sessionKey: resolved.sessionKey,
+      agentId: resolved.agentId,
+    });
+    const error = authorizeIncognitoSessionTarget({
+      client,
+      sessionKey: query.sessionKey ?? resolved.sessionKey,
+      target,
+    });
+    const visibilityDenied = Boolean(
+      target &&
+      createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false,
+    );
+    if (!error && !visibilityDenied) {
+      return resolved;
+    }
+    throw new ArtifactSessionResolutionError(
+      query.sessionKey && error
+        ? error
+        : errorShape(ErrorCodes.INVALID_REQUEST, "no session found for artifact query", {
+            details: { type: "artifact_scope_not_found" },
+          }),
+    );
+  };
 }

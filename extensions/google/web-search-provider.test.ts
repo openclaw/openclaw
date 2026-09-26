@@ -435,6 +435,39 @@ describe("google web search provider", () => {
     expect(String(result?.content)).toContain("Today's date is Sunday, June 7, 2026.");
   });
 
+  it.each([
+    { httpStatus: 401, embedded: false },
+    { httpStatus: 403, embedded: false },
+    { httpStatus: 429, embedded: false },
+    { httpStatus: 403, embedded: true },
+  ])(
+    "preserves typed status $httpStatus (embedded=$embedded)",
+    async ({ httpStatus, embedded }) => {
+      vi.stubGlobal(
+        "fetch",
+        withFetchPreconnect(
+          vi.fn(
+            async () =>
+              new Response(
+                JSON.stringify({
+                  error: { code: httpStatus, message: "denied key=AIza-plugin-test" },
+                }),
+                { status: embedded ? 200 : httpStatus },
+              ),
+          ),
+        ),
+      );
+      const tool = createGeminiWebSearchProvider().createTool(createGeminiToolOptions());
+      await expect(
+        tool?.execute({ query: `synthetic-http-${embedded}-${httpStatus}` }),
+      ).rejects.toMatchObject({
+        status: httpStatus,
+        statusCode: httpStatus,
+        message: expect.not.stringContaining("AIza-plugin-test"),
+      });
+    },
+  );
+
   it("reports malformed Gemini API JSON with a stable provider error", async () => {
     vi.stubGlobal(
       "fetch",

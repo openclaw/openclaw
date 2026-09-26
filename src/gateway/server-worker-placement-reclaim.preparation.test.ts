@@ -398,7 +398,7 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
         await secondLoaded.promise;
       }
     });
-    vi.mocked(f.harness.environments.create).mockImplementationOnce(async () => {
+    vi.mocked(f.harness.environments.createWithRequest).mockImplementationOnce(async () => {
       provisioning.resolve();
       await provisioned.promise;
       return f.harness.ready;
@@ -677,7 +677,7 @@ it.each(
         : {},
     );
     if (phase === "provisioning") {
-      vi.mocked(f.harness.environments.create).mockImplementationOnce(async () => {
+      vi.mocked(f.harness.environments.createWithRequest).mockImplementationOnce(async () => {
         entered.resolve();
         await released.promise;
         return f.harness.ready;
@@ -777,14 +777,12 @@ it.each([
     const attaching = createDeferredCore();
     const attached = createDeferredCore();
     let dispatchSignal: AbortSignal | undefined;
-    vi.mocked(harness.environments.create).mockImplementationOnce(
-      async (_profile, _key, _machine, _mode, _project, signal) => {
-        dispatchSignal = signal;
-        provisioning.resolve();
-        await provisioned.promise;
-        return harness.ready;
-      },
-    );
+    vi.mocked(harness.environments.createWithRequest).mockImplementationOnce(async ({ signal }) => {
+      dispatchSignal = signal;
+      provisioning.resolve();
+      await provisioned.promise;
+      return harness.ready;
+    });
     if (advance === "syncing") {
       const attach = harness.environments.attachSession;
       harness.environments.attachSession = vi.fn(async (request) => {
@@ -1005,7 +1003,7 @@ it.each([
         expect.soft(f.placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
         expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
         expect(f.placements.listPendingWorkspaceResults()).toEqual([]);
-        expect(f.harness.environments.create).toHaveBeenCalledOnce();
+        expect(f.harness.environments.createWithRequest).toHaveBeenCalledOnce();
         expect(f.harness.log.filter((event) => event === "placement:requested")).toHaveLength(1);
       }
     } finally {

@@ -788,35 +788,37 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.categories).toEqual(["web", "tools"]);
   });
 
-  it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
-    const dirA = makeTempDir();
-    const dirB = makeTempDir();
-    const manifest = { id: "test-plugin", configSchema: { type: "object" } };
-    writeManifest(dirA, manifest);
-    writeManifest(dirB, manifest);
-
-    const candidates: PluginCandidate[] = [
-      createPluginCandidate({
-        idHint: "test-plugin",
-        rootDir: dirA,
-        origin: "bundled",
-      }),
-      createPluginCandidate({
-        idHint: "test-plugin",
-        rootDir: dirB,
-        origin: "global",
-      }),
-    ];
-
-    const registry = loadRegistry(candidates);
-    expect(countDuplicateWarnings(registry)).toBe(1);
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]?.origin).toBe("bundled");
-    expectRegistryDiagnosticContains(
-      registry,
-      "global plugin will be overridden by bundled plugin",
-    );
-  });
+  it.each([
+    { origins: ["bundled", "global"], winner: "bundled", level: "warn" },
+    { origins: ["bundled", "global", "workspace", "config"], winner: "config", level: "info" },
+    { origins: ["config", "workspace", "global", "bundled"], winner: "config", level: "info" },
+    { origins: ["config", "config"], winner: "config", level: "warn" },
+  ] as const)(
+    "selects $winner from $origins with one $level diagnostic",
+    ({ origins, winner, level }) => {
+      const candidates = origins.map((origin) => {
+        const rootDir = makeTempDir();
+        writeManifest(rootDir, { id: "test-plugin", configSchema: { type: "object" } });
+        return createPluginCandidate({ idHint: "test-plugin", rootDir, origin });
+      });
+      const registry = loadRegistry(candidates);
+      expect(registry.plugins).toEqual([expect.objectContaining({ origin: winner })]);
+      expect(registry.diagnostics).toEqual([
+        expect.objectContaining({ level, pluginId: "test-plugin" }),
+      ]);
+      expect(candidates.map((candidate) => candidate.source)).toContain(
+        registry.diagnostics[0]?.source,
+      );
+      expect(registry.diagnostics[0]?.source).not.toBe(registry.plugins[0]?.source);
+      expect(registry.diagnostics[0]?.message).toContain(registry.plugins[0]?.source);
+      expectRegistryDiagnosticContains(
+        registry,
+        level === "info"
+          ? "resolved by explicit config-selected plugin"
+          : "duplicate plugin id detected",
+      );
+    },
+  );
 
   it("rejects plugins whose declared ids collide after case folding", () => {
     const upperDir = makeTempDir();
@@ -886,34 +888,6 @@ describe("loadPluginManifestRegistry", () => {
         }),
       ),
     );
-  });
-
-  it("lets config-loaded plugins replace bundled duplicates", () => {
-    const bundledDir = makeTempDir();
-    const configDir = makeTempDir();
-    const manifest = { id: "config-shadow", configSchema: { type: "object" } };
-    writeManifest(bundledDir, manifest);
-    writeManifest(configDir, manifest);
-
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "config-shadow",
-        rootDir: bundledDir,
-        origin: "bundled",
-      }),
-      createPluginCandidate({
-        idHint: "config-shadow",
-        rootDir: configDir,
-        origin: "config",
-      }),
-    ]);
-
-    expect(countDuplicateWarnings(registry)).toBe(1);
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]?.origin).toBe("config");
-    const warning = registry.diagnostics.find((diag) => diag.pluginId === "config-shadow");
-    expect(warning?.source).toBe(path.join(bundledDir, "index.ts"));
-    expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });
 
   it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
@@ -2464,32 +2438,6 @@ describe("loadPluginManifestRegistry", () => {
       memory_store: {
         sideEffecting: true,
       },
-    });
-  });
-
-  it("preserves provider hook contracts from plugin manifests", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "acme-ai",
-      providers: ["acme-ai"],
-      contracts: {
-        externalAuthProviders: ["acme-ai"],
-        usageProviders: ["acme-ai"],
-        workerProviders: [" static-ssh ", ""],
-      },
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "acme-ai",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.contracts).toEqual({
-      externalAuthProviders: ["acme-ai"],
-      usageProviders: ["acme-ai"],
-      workerProviders: ["static-ssh"],
     });
   });
 

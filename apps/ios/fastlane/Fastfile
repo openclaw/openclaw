@@ -55,6 +55,7 @@ REQUIRED_IOS_SCREENSHOT_NAMES = RELEASE_IOS_SCREENSHOT_TESTS.map { |entry| entry
 IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS = 180
 IOS_SCREENSHOT_XCARGS = [
   "-allowProvisioningUpdates",
+  "-parallel-testing-enabled NO",
   "-test-timeouts-enabled YES",
   "-default-test-execution-time-allowance #{IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS}",
   "-maximum-test-execution-time-allowance #{IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS}"
@@ -207,7 +208,9 @@ def available_simulator_devices
     UI.user_error!("Failed to list simulator devices: #{detail}")
   end
 
-  JSON.parse(stdout).fetch("devices").values.flatten
+  JSON.parse(stdout).fetch("devices").flat_map do |runtime, devices|
+    devices.map { |device| device.merge("runtime" => runtime) }
+  end
 rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from simctl device list: #{e.message}")
 end
@@ -864,7 +867,7 @@ def release_notes_metadata_path(release_version:, app_store_revision:)
 end
 
 def app_review_notes_markdown_path
-  File.join(ios_root, "APP-REVIEW-NOTES.md")
+  File.join(ios_root, "APP-REVIEW-NOTES-APPLE.md")
 end
 
 def app_review_notes_pdf_path
@@ -1865,6 +1868,16 @@ def record_release_ios_screenshot_attempt!(
   )
 end
 
+def run_screenshot_xcodebuild!(arguments, log_path:)
+  started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  command = "source #{Shellwords.escape(File.join(repo_root, "scripts", "lib", "swift-toolchain.sh"))}; " \
+    "#{shell_join(["run_apple_command_logged", log_path, "xcodebuild", *arguments])}"
+  sh("/bin/bash", "-c", command)
+ensure
+  elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+  UI.message("Screenshot xcodebuild #{arguments.last}: #{elapsed.round(2)}s (#{log_path})")
+end
+
 def capture_release_ios_screenshot!(
   project:,
   device:,
@@ -1872,70 +1885,50 @@ def capture_release_ios_screenshot!(
   output_directory:,
   result_bundle_path:,
   result_bundle_archive_directory:,
+  log_directory:,
   capture_attempts:,
   capture_attempts_path:,
   derived_data_path:,
-  clear_previous_screenshots:
+  device_udid:,
+  snapshot_cache_directory:
 )
   test_name = screenshot.fetch(:test)
   screenshot_name = screenshot.fetch(:name)
-  expected_screenshot_path = File.join(output_directory, "en-US", "#{device}-#{screenshot_name}.png")
+  filename = "#{device}-#{screenshot_name}.png"
+  expected_screenshot_path = File.join(output_directory, "en-US", filename)
+  captured_screenshot_path = File.join(snapshot_cache_directory, "screenshots", filename)
 
-  1.upto(2) do |attempt|
-    FileUtils.rm_f(expected_screenshot_path)
-    FileUtils.rm_rf(result_bundle_path)
-    begin
-      # OpenClaw owns retries of the whole capture action; Fastlane may still
-      # retry simulator launch internally. Each action call creates a new
-      # xcodebuild/TestManager session and reboots the selected simulator.
-      capture_ios_screenshots(
-        project: project,
-        scheme: "OpenClawUITests",
-        configuration: "Debug",
-        devices: [device],
-        languages: ["en-US"],
-        only_testing: ["OpenClawUITests/OpenClawSnapshotUITests/#{test_name}"],
-        launch_arguments: ["--openclaw-screenshot-mode"],
-        output_directory: output_directory,
-        clear_previous_screenshots: clear_previous_screenshots && attempt == 1,
-        derived_data_path: derived_data_path,
-        test_without_building: true,
-        result_bundle: true,
-        number_of_retries: 0,
-        stop_after_first_error: true,
-        reinstall_app: true,
-        concurrent_simulators: false,
-        override_status_bar: true,
-        override_status_bar_arguments: SNAPSHOT_STATUS_BAR_ARGUMENTS,
-        skip_open_summary: true,
-        xcargs: IOS_SCREENSHOT_XCARGS
-      )
-      verify_snapshot_test_result!(result_bundle_path, "#{device} #{screenshot_name} attempt #{attempt}")
-    rescue StandardError => error
-      archive_snapshot_test_result!(
-        result_bundle_path: result_bundle_path,
-        archive_directory: result_bundle_archive_directory,
-        device: device,
-        screenshot_name: screenshot_name,
-        attempt: attempt
-      )
-      record_release_ios_screenshot_attempt!(
-        attempts: capture_attempts,
-        output_path: capture_attempts_path,
-        device: device,
-        screenshot_name: screenshot_name,
-        attempt: attempt,
-        capture_outcome: "failed"
-      )
-      raise if attempt == 2
-
-      UI.important(
-        "Screenshot #{screenshot_name} failed on #{device}; " \
-          "retrying once in a fresh simulator session (#{error.message})."
-      )
-      next
+  attempt = 1
+  FileUtils.rm_f(expected_screenshot_path)
+  FileUtils.rm_f(captured_screenshot_path)
+  FileUtils.rm_rf(result_bundle_path)
+  FileUtils.mkdir_p(File.dirname(result_bundle_path))
+  begin
+    installed_apps = sh(
+      "/bin/bash", "-o", "pipefail", "-c",
+      "#{shell_join(["xcrun", "simctl", "listapps", device_udid])} | /usr/bin/plutil -convert json -o - -",
+      log: false
+    )
+    if JSON.parse(installed_apps).key?(APP_STORE_APP_IDENTIFIER)
+      sh("xcrun", "simctl", "uninstall", device_udid, APP_STORE_APP_IDENTIFIER)
     end
-
+    # Keep independent XCTest sessions without Snapshot rebooting the simulator or
+    # querying build settings again just to choose its log filename.
+    run_screenshot_xcodebuild!(
+      [
+        "-project", project, "-scheme", "OpenClawUITests", "-configuration", "Debug",
+        "-derivedDataPath", derived_data_path,
+        "-destination", "platform=iOS Simulator,id=#{device_udid}",
+        "-resultBundlePath", result_bundle_path,
+        "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/#{test_name}",
+        *Shellwords.split(IOS_SCREENSHOT_XCARGS),
+        "FASTLANE_SNAPSHOT=YES", "FASTLANE_LANGUAGE=en-US", "test-without-building"
+      ],
+      log_path: File.join(log_directory, "#{device}-#{screenshot_name}.log")
+    )
+    verify_snapshot_test_result!(result_bundle_path, "#{device} #{screenshot_name} attempt #{attempt}")
+    FileUtils.cp(captured_screenshot_path, expected_screenshot_path)
+  rescue StandardError
     archive_snapshot_test_result!(
       result_bundle_path: result_bundle_path,
       archive_directory: result_bundle_archive_directory,
@@ -1949,10 +1942,26 @@ def capture_release_ios_screenshot!(
       device: device,
       screenshot_name: screenshot_name,
       attempt: attempt,
-      capture_outcome: "succeeded"
+      capture_outcome: "failed"
     )
-    return
+    raise
   end
+
+  archive_snapshot_test_result!(
+    result_bundle_path: result_bundle_path,
+    archive_directory: result_bundle_archive_directory,
+    device: device,
+    screenshot_name: screenshot_name,
+    attempt: attempt
+  )
+  record_release_ios_screenshot_attempt!(
+    attempts: capture_attempts,
+    output_path: capture_attempts_path,
+    device: device,
+    screenshot_name: screenshot_name,
+    attempt: attempt,
+    capture_outcome: "succeeded"
+  )
 end
 
 def build_app_store_release(context)
@@ -2477,10 +2486,13 @@ platform :ios do
     output_directory = File.join(ios_root, "fastlane", "screenshots")
     result_bundle_path = File.join(output_directory, "test_output", "en-US", "OpenClawUITests.xcresult")
     result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")
+    log_directory = File.join(ios_root, "build", "SnapshotLogs")
     capture_attempts_path = File.join(result_bundle_archive_directory, "capture-attempts.json")
     derived_data_path = File.join(ios_root, "build", "SnapshotDerivedData")
     FileUtils.rm_rf(result_bundle_archive_directory)
     FileUtils.mkdir_p(result_bundle_archive_directory)
+    FileUtils.rm_rf(log_directory)
+    FileUtils.mkdir_p(log_directory)
     capture_attempts = []
     write_release_ios_screenshot_attempts!(
       attempts: capture_attempts,
@@ -2489,34 +2501,57 @@ platform :ios do
     FileUtils.rm_rf(derived_data_path)
     devices = snapshot_devices
     project = File.join(ios_root, "OpenClaw.xcodeproj")
-    run_tests(
-      project: project,
-      scheme: "OpenClawUITests",
-      configuration: "Debug",
-      devices: [devices.first],
-      derived_data_path: derived_data_path,
-      build_for_testing: true,
-      clean: true,
-      number_of_retries: 0,
-      xcargs: "-allowProvisioningUpdates"
+    simulator_devices = available_simulator_devices
+    selected_devices = devices.map do |name|
+      simulator_devices.select { |device| device.fetch("name") == name }.max_by do |device|
+        Gem::Version.new(device.fetch("runtime").delete_prefix("com.apple.CoreSimulator.SimRuntime.iOS-").tr("-", "."))
+      end || UI.user_error!("Screenshot simulator '#{name}' is unavailable.")
+    end
+    run_screenshot_xcodebuild!(
+      [
+        "-project", project, "-scheme", "OpenClawUITests", "-configuration", "Debug",
+        "-derivedDataPath", derived_data_path,
+        "-destination", "platform=iOS Simulator,id=#{selected_devices.first.fetch("udid")}",
+        "-allowProvisioningUpdates", "build-for-testing"
+      ],
+      log_path: File.join(log_directory, "build.log")
     )
 
-    capture_index = 0
-    devices.each do |device|
-      RELEASE_IOS_SCREENSHOT_TESTS.each do |screenshot|
-        capture_release_ios_screenshot!(
-          project: project,
-          device: device,
-          screenshot: screenshot,
-          output_directory: output_directory,
-          result_bundle_path: result_bundle_path,
-          result_bundle_archive_directory: result_bundle_archive_directory,
-          capture_attempts: capture_attempts,
-          capture_attempts_path: capture_attempts_path,
-          derived_data_path: derived_data_path,
-          clear_previous_screenshots: capture_index.zero?
-        )
-        capture_index += 1
+    # SnapshotHelper.swift consumes these files from SIMULATOR_HOST_HOME.
+    snapshot_cache_directory = File.expand_path("~/Library/Caches/tools.fastlane")
+    FileUtils.mkdir_p(File.join(snapshot_cache_directory, "screenshots"))
+    File.write(File.join(snapshot_cache_directory, "language.txt"), "en-US")
+    File.write(File.join(snapshot_cache_directory, "locale.txt"), "")
+    File.write(File.join(snapshot_cache_directory, "snapshot-launch_arguments.txt"), "--openclaw-screenshot-mode")
+    FileUtils.mkdir_p(File.join(output_directory, "en-US"))
+    FileUtils.rm_f(Dir[File.join(output_directory, "*", "*.png")])
+
+    selected_devices.each do |device|
+      device_udid = device.fetch("udid")
+      unless ENV.fetch("OPENCLAW_CI_SIMSLIM_BINARY", "").empty?
+        sh("/bin/bash", File.expand_path("../../../scripts/ios-simulator-prepare.sh", __dir__), device_udid)
+      end
+      sh("xcrun", "simctl", "bootstatus", device_udid, "-b")
+      sh("xcrun", "simctl", "status_bar", device_udid, "override", *Shellwords.split(SNAPSHOT_STATUS_BAR_ARGUMENTS))
+      begin
+        RELEASE_IOS_SCREENSHOT_TESTS.each do |screenshot|
+          capture_release_ios_screenshot!(
+            project: project,
+            device: device.fetch("name"),
+            screenshot: screenshot,
+            output_directory: output_directory,
+            result_bundle_path: result_bundle_path,
+            result_bundle_archive_directory: result_bundle_archive_directory,
+            log_directory: log_directory,
+            capture_attempts: capture_attempts,
+            capture_attempts_path: capture_attempts_path,
+            derived_data_path: derived_data_path,
+            device_udid: device_udid,
+            snapshot_cache_directory: snapshot_cache_directory
+          )
+        end
+      ensure
+        sh("xcrun", "simctl", "status_bar", device_udid, "clear")
       end
     end
     verify_release_ios_screenshot_manifest!(

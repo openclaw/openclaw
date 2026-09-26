@@ -151,19 +151,25 @@ def group_signal(pgid, signum, deadline):
     except ProcessLookupError:
         return False
     except PermissionError:
-        # Darwin can report EPERM for a zombie-only group. Only a checked
-        # census proving no live members can authorize continuing.
-        if group_alive(pgid, deadline):
+        # Darwin can refuse signals while members are exiting but not yet zombies.
+        # Keep those members pending until drain proves termination; never accept a live denial.
+        states = group_states(pgid, deadline)
+        if any(not state.startswith("Z") and not (sys.platform == "darwin" and "E" in state)
+               for state in states):
             raise
-        return False
+        return any(not state.startswith("Z") for state in states)
     return True
 
 
 def group_alive(pgid, deadline):
+    return any(not state.startswith("Z") for state in group_states(pgid, deadline))
+
+
+def group_states(pgid, deadline):
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
-        return False
+        return []
     except PermissionError:
         pass  # EPERM can mean zombie-only; the census must still prove extinction.
     # Darwin -g selects a group; procps selects its session (a superset because
@@ -192,13 +198,13 @@ def group_alive(pgid, deadline):
         states = [state for group, state in (line.split() for line in result.stdout.splitlines())
                   if int(group) == pgid]
     if states:
-        return any(not state.startswith("Z") for state in states)
+        return states
     # Empty selection (exit 1), or a session with only other groups, can race
     # extinction. Require native ESRCH; a bare status 1 or EPERM proves nothing.
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
-        return False
+        return []
     raise RuntimeError("Process group census missed a present group")
 
 
@@ -454,8 +460,17 @@ def checkout_selected_ref():
 
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
+    node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
     evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+    platform_scripts = ("scripts/lib/swift-toolchain.sh",)
     upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
+    npm_lock_scripts = (
+        "scripts/ci-npm-lock-admission.mjs",
+        "scripts/generate-npm-package-lock.mjs",
+        "scripts/generate-npm-package-lock.mts",
+        "scripts/changed-lanes.mts",
+        "scripts/lib/merge-head-diff-base.mjs",
+    )
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
     harness = os.path.join(workspace, ".ci-harness")
@@ -471,23 +486,27 @@ def checkout_harness(sha):
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
         # retained harness files without updating the index or trusting later edits.
-        pathspecs = [".github/actions"]
+        pathspecs = [".github/actions", *node_setup_scripts]
         if kind in ("platform", "linux-node"):
             pathspecs += evidence_scripts
         elif kind == "preflight":
             pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+        if kind == "platform":
+            pathspecs += platform_scripts
         if kind == "linux-node":
-            pathspecs += upgrade_scripts
+            pathspecs += (*upgrade_scripts, *npm_lock_scripts)
         paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
         run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
     else:
         run_git(harness, "init", harness)
         run_git(harness, "remote", "add", "origin", remote)
-        sparse_paths = ["/.github/actions/"]
+        sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
         if kind in ("platform", "linux-node"):
             sparse_paths += [f"/{path}" for path in evidence_scripts]
+        if kind == "platform":
+            sparse_paths += [f"/{path}" for path in platform_scripts]
         if kind == "linux-node":
-            sparse_paths += [f"/{path}" for path in upgrade_scripts]
+            sparse_paths += [f"/{path}" for path in (*upgrade_scripts, *npm_lock_scripts)]
         # Rooted non-cone patterns keep the kind-owned workflow files exact.
         # Sparse first, then blob-less avoids downloading a second repository snapshot.
         run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)
@@ -603,7 +622,7 @@ def main():
                 check_cancelled()
                 if not reset:
                     raise SystemExit(124 if isinstance(error, FetchTimeout) else error.code)
-                print(f"{label} attempt {attempt}/5 failed", flush=True)
+                print(f"::warning::{label} attempt {attempt}/5 failed", flush=True)
                 backoff(attempt * 5)
         print(f"{label} failed after 5 attempts", file=sys.stderr)
         raise SystemExit(1)

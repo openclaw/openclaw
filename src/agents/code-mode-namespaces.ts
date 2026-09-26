@@ -129,7 +129,7 @@ export type CodeModeNamespaceRuntime = {
     executeTool: (params: {
       pluginId: string;
       toolName: string;
-      catalogId?: string;
+      catalogId: string;
       input: unknown;
       namespaceId: string;
       path: string[];

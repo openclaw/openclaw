@@ -1,4 +1,5 @@
 // Qa Lab plugin module owns gateway child runtime environment behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -120,6 +121,11 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  // Path isolation alone still lets CLI bootstrap discover the operator's service.
+  normalizedEnv.OPENCLAW_PROFILE = `qa-${createHash("sha256")
+    .update(params.tempRoot)
+    .digest("hex")
+    .slice(0, 24)}`;
   if (params.developmentSourceRoot === null) {
     delete normalizedEnv.OPENCLAW_DEV_SOURCE_ROOT;
   } else {

@@ -95,6 +95,51 @@ describe("chat goal status", () => {
     expect(onGoalAction).toHaveBeenCalledWith("goal-1", "resume");
   });
 
+  it("exposes the pause reason in a keyboard-accessible tooltip and freezes elapsed time", () => {
+    const container = document.createElement("div");
+    const now = Date.now();
+    const selectedSession = goalSession({ createdAt: now - 60_000 });
+    const onGoalAction = vi.fn();
+    renderChatInto(container, { selectedSession, onGoalAction });
+    const runningIcon = container.querySelector(".agent-chat__goal-icon")?.innerHTML;
+
+    const pausedSession = {
+      ...selectedSession,
+      goal: {
+        ...selectedSession.goal!,
+        status: "paused" as const,
+        pausedAt: now - 10_000,
+        lastStatusNote: "Paused after an error. Resume to continue.",
+      },
+    };
+    renderChatInto(container, { selectedSession: pausedSession, onGoalAction });
+
+    const goal = container.querySelector(".agent-chat__goal");
+    expect(goal?.querySelector(".agent-chat__goal-label")?.textContent).toBe("Goal paused");
+    const label = goal?.querySelector(".agent-chat__goal-label");
+    expect(label?.getAttribute("tabindex")).toBe("0");
+    expect(label?.closest("openclaw-tooltip")?.content).toBe(
+      "Paused after an error. Resume to continue.",
+    );
+    expect(goal?.querySelector(".agent-chat__goal-detail-note")?.textContent).toBe(
+      "Paused after an error. Resume to continue.",
+    );
+    expect(goal?.querySelector(".agent-chat__goal-icon")?.innerHTML).not.toBe(runningIcon);
+    expect(goal?.querySelector(".agent-chat__goal-icon")?.getAttribute("aria-hidden")).toBe("true");
+    expect(goal?.querySelector(".agent-chat__goal-elapsed")?.textContent).toBe("50s");
+    expect(goal?.querySelector('button[aria-label="Pause goal"]')).toBeNull();
+    goal?.querySelector<HTMLButtonElement>('button[aria-label="Resume goal"]')?.click();
+    expect(onGoalAction).toHaveBeenCalledWith("goal-1", "resume");
+
+    renderChatInto(container, {
+      selectedSession: goalSession({ lastStatusNote: "Continuing after the pause" }),
+      onGoalAction,
+    });
+    const runningLabel = container.querySelector(".agent-chat__goal-label");
+    expect(runningLabel?.hasAttribute("tabindex")).toBe(false);
+    expect(runningLabel?.closest("openclaw-tooltip")?.content).toBe("");
+  });
+
   it("edits the plain objective and restores the conversation draft on cancellation", () => {
     let draft = "Keep my conversation draft";
     const container = document.createElement("div");

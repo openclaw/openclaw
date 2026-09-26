@@ -32,7 +32,7 @@ const rejection = (idempotencyKey: string) => ({
   idempotencyKey,
 });
 
-function sharedAdmission(surface: "local" | "deferred" | "claim") {
+async function sharedAdmission(surface: "local" | "deferred" | "claim") {
   const database = openOpenClawStateDatabase();
   const db = database.db;
   const placements = createWorkerSessionPlacementStore({ database });
@@ -49,7 +49,7 @@ function sharedAdmission(surface: "local" | "deferred" | "claim") {
   }
   const claim =
     surface === "claim"
-      ? placements.claimTurn({
+      ? await placements.claimTurn({
           sessionId,
           sessionKey,
           agentId: "main",
@@ -159,7 +159,7 @@ describe("GitHub publication selection admission", () => {
   it.each(["local", "deferred", "claim"] as const)(
     "records a fresh %s selection rejection before any durable request or Git effect",
     async (surface) => {
-      const fixture = sharedAdmission(surface);
+      const fixture = await sharedAdmission(surface);
       const error = await fixture.request().catch((caught: unknown) => caught);
       expect(fixture.read()).toBeUndefined();
       expect(commands).toEqual([]);
@@ -170,7 +170,7 @@ describe("GitHub publication selection admission", () => {
   it.each(["local", "deferred", "claim"] as const)(
     "does not reinterpret an existing %s receipt as a pre-admission rejection",
     async (surface) => {
-      const fixture = sharedAdmission(surface);
+      const fixture = await sharedAdmission(surface);
       await fixture.request(publisher);
       const before = fixture.read();
       const effects = [...commands];
@@ -185,7 +185,7 @@ describe("GitHub publication selection admission", () => {
   it.each(["deferred", "claim"] as const)(
     "observes a same-key %s admission committed while identity preparation awaits",
     async (surface) => {
-      const fixture = sharedAdmission(surface);
+      const fixture = await sharedAdmission(surface);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const identity = await mocks.prepareIdentity();
@@ -211,7 +211,7 @@ describe("GitHub publication selection admission", () => {
   );
 
   it("does not make a key-wide promise when another invocation is still preparing", async () => {
-    const fixture = sharedAdmission("local");
+    const fixture = await sharedAdmission("local");
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const identity = await mocks.prepareIdentity();
@@ -237,7 +237,7 @@ describe("GitHub publication selection admission", () => {
   });
 
   it("does not forget a receipt already observed before an awaited identity refresh", async () => {
-    const fixture = sharedAdmission("deferred");
+    const fixture = await sharedAdmission("deferred");
     await fixture.request(publisher);
     mocks.refreshIdentity.mockImplementationOnce(async () => {
       fixture.db

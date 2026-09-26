@@ -7,7 +7,6 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
 import {
-  reconcileTaskFlowWorkerReceipts,
   runTaskFlowRegistryWorkerMutation,
   syncFlowFromTaskResult,
 } from "./task-flow-runtime-internal.js";
@@ -35,10 +34,14 @@ type TaskFlowSyncLiveOwner = {
 };
 type TaskFlowSyncRetrySelection =
   | { kind: "restored" }
-  | { kind: "live"; owner: TaskFlowSyncLiveOwner };
+  | {
+      kind: "live";
+      owner: TaskFlowSyncLiveOwner;
+      afterSync?: (context: OpenClawStateWorkerContext) => Promise<void>;
+    };
 type TaskFlowSyncRetryTimer = {
   timer: ReturnType<typeof setTimeout>;
-  kind: TaskFlowSyncRetrySelection["kind"];
+  selection: TaskFlowSyncRetrySelection;
 };
 const taskFlowSyncRetryTimers = new Map<TaskRegistryStore, Map<string, TaskFlowSyncRetryTimer>>();
 
@@ -46,8 +49,10 @@ async function syncLiveTaskFlow(
   context: OpenClawStateWorkerContext,
   store: TaskRegistryStore,
   owner: TaskFlowSyncLiveOwner,
+  projectionPrepared = false,
+  onPublicationError?: (error: unknown) => void,
 ): Promise<TaskLiveFlowSyncOutcome> {
-  const prepared = await owner.prepare(context, store, 1);
+  const prepared = projectionPrepared || (await owner.prepare(context, store, 1));
   owner.assertCurrent(context, store);
   if (!prepared) {
     return { kind: "retry", reason: "projection_changed" };
@@ -65,7 +70,7 @@ async function syncLiveTaskFlow(
     }
   };
   const outcome = await runTaskFlowRegistryWorkerMutation(
-    { flowId, admission: context.admission },
+    { flowId, admission: context.admission, onPublicationError },
     () =>
       store.syncLiveTaskFlowAsync(
         context,
@@ -96,7 +101,7 @@ async function syncLiveTaskFlow(
 export function clearTaskFlowSyncRetries(kind?: TaskFlowSyncRetrySelection["kind"]): void {
   for (const [store, timers] of taskFlowSyncRetryTimers) {
     for (const [key, retry] of timers) {
-      if (kind === undefined || retry.kind === kind) {
+      if (kind === undefined || retry.selection.kind === kind) {
         clearTimeout(retry.timer);
         timers.delete(key);
       }
@@ -114,12 +119,28 @@ function scheduleTaskFlowSyncRetry(
   operation: string,
   selection: TaskFlowSyncRetrySelection,
   attempt = 0,
+  upgradePending = false,
 ): void {
   const id = taskId.trim();
   const identityKey = context.admission.identity.key;
   const key = `${identityKey}\u0000${selection.kind}\u0000${id}`;
   const timers = taskFlowSyncRetryTimers.get(store) ?? new Map<string, TaskFlowSyncRetryTimer>();
-  if (!id || timers.has(key)) {
+  if (!id) {
+    return;
+  }
+  const pending = timers.get(key);
+  if (pending) {
+    if (selection.kind === "live" && pending.selection.kind === "live") {
+      const hasIncomingEffects = selection.afterSync !== undefined;
+      const hasPendingEffects = pending.selection.afterSync !== undefined;
+      if (
+        (hasIncomingEffects && !hasPendingEffects) ||
+        (upgradePending && (hasIncomingEffects || !hasPendingEffects))
+      ) {
+        // Keep effects with their owner; an older retry cannot replace newer pending effects.
+        pending.selection = selection;
+      }
+    }
     return;
   }
   const delayMs = TASK_FLOW_SYNC_RETRY_DELAYS_MS[attempt];
@@ -128,6 +149,7 @@ function scheduleTaskFlowSyncRetry(
     return;
   }
   const retry = () => {
+    const retrySelection = scheduled.selection;
     timers.delete(key);
     if (timers.size === 0) {
       taskFlowSyncRetryTimers.delete(store);
@@ -140,32 +162,35 @@ function scheduleTaskFlowSyncRetry(
       if (current.admission.identity.key !== identityKey) {
         return;
       }
-      if (selection.kind === "live") {
+      if (retrySelection.kind === "live") {
         if (getTaskRegistryStore() !== store) {
           return;
         }
-        let outcome: TaskLiveFlowSyncOutcome;
         try {
-          outcome = await syncLiveTaskFlow(current, store, selection.owner);
+          const outcome = await syncLiveTaskFlow(current, store, retrySelection.owner);
+          const failure =
+            outcome.kind === "result" && !outcome.result.ok ? outcome.result : undefined;
+          if (outcome.kind === "retry" || failure) {
+            log.warn("Failed to retry parent flow sync from task", {
+              operation,
+              taskId: id,
+              flowId: failure?.current.flowId,
+              reason: outcome.kind === "retry" ? outcome.reason : failure?.reason,
+            });
+            scheduleTaskFlowSyncRetry(current, store, id, operation, retrySelection, attempt + 1);
+          } else {
+            retrySelection.owner.assertCurrent(current, store);
+            await retrySelection.afterSync?.(current);
+            retrySelection.owner.assertCurrent(current, store);
+          }
         } catch (error) {
           if (isSqliteWorkerError(error, "overloaded")) {
             current.admission.assertCurrent();
             if (getTaskRegistryStore() === store) {
-              scheduleTaskFlowSyncRetry(current, store, id, operation, selection, attempt + 1);
+              scheduleTaskFlowSyncRetry(current, store, id, operation, retrySelection, attempt + 1);
             }
           }
           throw error;
-        }
-        const failure =
-          outcome.kind === "result" && !outcome.result.ok ? outcome.result : undefined;
-        if (outcome.kind === "retry" || failure) {
-          log.warn("Failed to retry parent flow sync from task", {
-            operation,
-            taskId: id,
-            flowId: failure?.current.flowId,
-            reason: outcome.kind === "retry" ? outcome.reason : failure?.reason,
-          });
-          scheduleTaskFlowSyncRetry(current, store, id, operation, selection, attempt + 1);
         }
         return;
       }
@@ -178,13 +203,13 @@ function scheduleTaskFlowSyncRetry(
           // Capacity rejects before dispatch; retain only the still-admitted bounded attempt.
           current.admission.assertCurrent();
           if (current.admission.identity.key === identityKey) {
-            scheduleTaskFlowSyncRetry(current, store, id, operation, selection, attempt + 1);
+            scheduleTaskFlowSyncRetry(current, store, id, operation, retrySelection, attempt + 1);
           }
         }
         throw error;
       }
       if (outcome.kind === "error") {
-        scheduleTaskFlowSyncRetry(current, store, id, operation, selection, attempt + 1);
+        scheduleTaskFlowSyncRetry(current, store, id, operation, retrySelection, attempt + 1);
         throw restoreAgentSchemaInspectionError(outcome.error);
       }
       if (!outcome.result.ok) {
@@ -194,10 +219,7 @@ function scheduleTaskFlowSyncRetry(
           flowId: outcome.flowId,
           reason: outcome.result.reason,
         });
-        scheduleTaskFlowSyncRetry(current, store, id, operation, selection, attempt + 1);
-      }
-      if (outcome.flowId) {
-        await reconcileTaskFlowWorkerReceipts(current, [outcome.flowId]);
+        scheduleTaskFlowSyncRetry(current, store, id, operation, retrySelection, attempt + 1);
       }
     }, "tasks:mutation").catch((error: unknown) => {
       log.warn("Failed to admit parent flow sync retry from task", {
@@ -209,7 +231,8 @@ function scheduleTaskFlowSyncRetry(
   };
   const timer = runOutsideOpenClawDatabaseMaintenanceScope(() => setTimeout(retry, delayMs));
   timer.unref?.();
-  timers.set(key, { timer, kind: selection.kind });
+  const scheduled: TaskFlowSyncRetryTimer = { timer, selection };
+  timers.set(key, scheduled);
   taskFlowSyncRetryTimers.set(store, timers);
 }
 
@@ -285,4 +308,63 @@ export function syncTaskFlowWithLiveRetry(
       error,
     });
   }
+}
+
+/** Report completed flow work while retaining the existing retry when it is deferred. */
+export async function syncTaskFlowWithLiveRetryAsync(
+  context: OpenClawStateWorkerContext,
+  store: TaskRegistryStore,
+  task: TaskRecord,
+  operation: string,
+  owner: TaskFlowSyncLiveOwner,
+): Promise<boolean> {
+  let outcome: TaskLiveFlowSyncOutcome;
+  let publicationSettled = true;
+  try {
+    outcome = await syncLiveTaskFlow(context, store, owner, true, () => {
+      publicationSettled = false;
+    });
+  } catch (error) {
+    if (!isSqliteWorkerError(error, "overloaded")) {
+      throw error;
+    }
+    owner.assertCurrent(context, store);
+    scheduleTaskFlowSyncRetry(context, store, task.taskId, operation, { kind: "live", owner });
+    return false;
+  }
+  if (outcome.kind === "retry" || (outcome.kind === "result" && !outcome.result.ok)) {
+    log.warn("Failed to sync parent flow from task mutation", {
+      operation,
+      taskId: task.taskId,
+      flowId: task.parentFlowId,
+    });
+    scheduleTaskFlowSyncRetry(context, store, task.taskId, operation, { kind: "live", owner });
+    return false;
+  }
+  return publicationSettled;
+}
+
+/** A known commit whose publication hook never ran still owns its flow follow-up. */
+export function retainCommittedTaskFlowEffects(
+  context: OpenClawStateWorkerContext,
+  store: TaskRegistryStore,
+  task: TaskRecord,
+  operation: string,
+  owner: TaskFlowSyncLiveOwner,
+  afterSync?: (context: OpenClawStateWorkerContext) => Promise<void>,
+): void {
+  if (!task.parentFlowId?.trim()) {
+    return;
+  }
+  owner.assertCurrent(context, store);
+  // Upgrade pending work without moving its deadline or dropping cancellation settlement.
+  scheduleTaskFlowSyncRetry(
+    context,
+    store,
+    task.taskId,
+    operation,
+    { kind: "live", owner, afterSync },
+    0,
+    true,
+  );
 }

@@ -53,6 +53,11 @@ function resultBlock(card: ToolCard): Record<string, unknown> {
     details: card.details,
     isError: card.isError,
     exitCode: card.exitCode,
+    __openclaw: {
+      id: card.resultMessageId,
+      toolOutput: card.toolOutput,
+      truncated: card.outputTruncated,
+    },
   };
 }
 
@@ -149,7 +154,17 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       block: {
         ...raw,
         id,
-        ...(call ? { arguments: card?.args } : { text: card?.outputText }),
+        ...(call
+          ? { arguments: card?.args }
+          : {
+              text: card?.outputText,
+              // Preserve the result owner when the call becomes the grouped row.
+              __openclaw: {
+                id: card?.resultMessageId,
+                toolOutput: card?.toolOutput,
+                truncated: card?.outputTruncated,
+              },
+            }),
         ...(card?.details !== undefined ? { details: card.details } : {}),
         ...(card?.isError !== undefined ? { isError: card.isError } : {}),
         ...(card?.exitCode !== undefined ? { exitCode: card.exitCode } : {}),
@@ -246,7 +261,11 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       invocation.live = projection.source.message;
     }
     if (projection.source.standalone) {
-      invocation.attachments.push(...projection.source.remaining);
+      // Attachment pixels follow the winning result too; a live omission must
+      // not survive beside its persisted image or return on a late tool event.
+      if (invocation.result?.source === projection.source) {
+        invocation.attachments = projection.source.remaining;
+      }
       projection.source.remaining = [];
     }
     invocations.set(invocationKey, invocation);

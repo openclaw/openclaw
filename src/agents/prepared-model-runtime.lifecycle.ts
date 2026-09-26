@@ -1,6 +1,25 @@
 /** Process close owns every admitted model runtime and native catalog worker. */
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type {
+  PreparedModelRuntimeOwner,
+  PreparedModelRuntimeReplacement,
+} from "./prepared-model-runtime.types.js";
+
+/** Notifications supplement the owner's generation and registration checks. */
+export function capturePreparedModelRuntimeGeneration(
+  owner: Pick<PreparedModelRuntimeOwner, "generationRetirement">,
+): AbortSignal {
+  return (owner.generationRetirement ??= new AbortController()).signal;
+}
+
+export function retirePreparedModelRuntimeGeneration(
+  owner: Pick<PreparedModelRuntimeOwner, "generationRetirement">,
+): void {
+  const retirement = owner.generationRetirement;
+  owner.generationRetirement = undefined;
+  retirement?.abort();
+}
 
 type ModelRuntimeClose = (error: Error) => Promise<void>;
 class ProcessModelRuntimeLifetimes {
@@ -68,4 +87,12 @@ export function closePreparedModelRuntimeSnapshots(): Promise<void> {
     }
   });
   return closed.promise;
+}
+
+export function createPreparedModelRuntimeReplacement(): PreparedModelRuntimeReplacement {
+  const { promise, resolve, reject } = createDeferredCore();
+  // Readers await the original promise. This handler only prevents an unobserved rejected gate
+  // when a reload fails before any request reaches the stale generation.
+  void promise.catch(() => undefined);
+  return { gateId: Symbol("prepared-model-runtime-replacement"), promise, resolve, reject };
 }

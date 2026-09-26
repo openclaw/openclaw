@@ -34,6 +34,55 @@ function createStore(
 }
 
 describe("MeetingSessionTranscriptStore", () => {
+  it("observes pending and corrected sources before transcript dedup without persisting pending text", async () => {
+    const session = createSession();
+    const source = {
+      id: "caption-1",
+      epoch: "page-1",
+      revision: "1",
+      finalized: false,
+      ownEcho: false,
+    };
+    const pending = { text: "A pending invitation", source };
+    const committed = {
+      text: "A completed invitation",
+      source: { ...source, revision: "2", finalized: true },
+    };
+    const correction = { text: "A pending correction", source: { ...source, revision: "3" } };
+    const snapshots: MeetingTranscriptSnapshot[] = [
+      { droppedLines: 0, epoch: "page-1", lines: [], pendingLines: [pending] },
+      { droppedLines: 0, epoch: "page-1", lines: [committed], pendingLines: [] },
+      { droppedLines: 0, epoch: "page-1", lines: [committed], pendingLines: [correction] },
+    ];
+    const observed: string[][] = [];
+    const delivered: string[] = [];
+    const store = new MeetingSessionTranscriptStore({
+      getSession: () => session,
+      isBrowserSession: () => true,
+      isTranscribeSession: () => true,
+      hasBrowserTab: () => true,
+      capture: async () => snapshots.shift(),
+      onSnapshot: (_session, snapshot) => {
+        observed.push(
+          [...snapshot.lines, ...(snapshot.pendingLines ?? [])].map(
+            (line) => line.source?.revision ?? "",
+          ),
+        );
+      },
+      onLines: async (_session, lines) => {
+        expect(observed.at(-1)).toEqual(["2"]);
+        delivered.push(...lines.map((line) => line.text));
+      },
+    });
+
+    expect((await store.read(session.id)).lines).toEqual([]);
+    await store.read(session.id);
+    const result = await store.read(session.id);
+    expect(observed).toEqual([["1"], ["2"], ["2", "3"]]);
+    expect(delivered).toEqual(["A completed invitation"]);
+    expect(result.lines).toEqual([committed]);
+  });
+
   it("trims an oversized initial snapshot to the retained tail", async () => {
     const session = createSession();
     const store = createStore(session, [

@@ -293,7 +293,7 @@ describe("managed plugin installation", () => {
       env: {},
     }).catch((error: unknown) => error);
     expect(rejected).toMatchObject({ message: failure.error });
-    expect(pluginLifecycleError(rejected)).toMatchObject({
+    expect(pluginLifecycleError(rejected, { entered: true })).toMatchObject({
       message: failure.error,
       details: {
         pluginInstallRejected: true,
@@ -330,7 +330,7 @@ describe("managed plugin installation", () => {
         message: reason,
         cause: expect.any(PluginInstallConfigError),
       });
-      expect(pluginLifecycleError(rejected)).toEqual({
+      expect(pluginLifecycleError(rejected, { entered: true })).toEqual({
         code: "INVALID_REQUEST",
         message: `${reason} | INVALID_CONFIG`,
         details: {

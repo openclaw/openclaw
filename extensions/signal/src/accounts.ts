@@ -15,6 +15,7 @@ import {
   assignSignalManagedNativePort,
   DEFAULT_SIGNAL_MANAGED_NATIVE_PORT,
   isSignalManagedNativeConnectionUrlForBind,
+  reserveSignalTransportPorts,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
 import {
@@ -191,32 +192,9 @@ function resolveSignalManagedNativePort(params: {
     ) {
       continue;
     }
-    const transport = accountConfig.transport;
-    if (transport?.kind === "external-native" || transport?.kind === "container") {
-      const localPort = resolveLocalSignalTransportPort(transport.url);
-      if (localPort !== undefined) {
-        reservedPorts.add(localPort);
-      }
-      continue;
+    if (reserveSignalTransportPorts(accountConfig.transport, reservedPorts)) {
+      implicitManagedAccountIds.push(accountId);
     }
-    if (transport?.kind === "managed-native") {
-      if (transport.socketPath !== undefined) {
-        continue;
-      }
-      if (transport.httpPort !== undefined) {
-        reservedPorts.add(transport.httpPort);
-      } else {
-        implicitManagedAccountIds.push(accountId);
-      }
-      if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
-        const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
-        if (localConnectionPort !== undefined) {
-          reservedPorts.add(localConnectionPort);
-        }
-      }
-      continue;
-    }
-    implicitManagedAccountIds.push(accountId);
   }
 
   for (const accountId of implicitManagedAccountIds) {

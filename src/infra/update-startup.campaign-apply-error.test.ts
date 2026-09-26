@@ -7,6 +7,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import type { UpdateCheckResult } from "./update-check.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
 import { readUpdateRunStatus } from "./update-run-status.js";
@@ -170,12 +171,19 @@ describe("update campaign apply exception boundary", () => {
 
     const runId = listUpdateRuns()[0]?.runId ?? "";
     const run = getUpdateRun(runId);
+    const diagnostic = code ? `${message} | ${code}` : message;
     expect(run).toMatchObject({
       status: "failed",
       reason: code ?? "unexpected-error",
       steps: expect.arrayContaining([
-        expect.objectContaining({ status: "failed", detail: message }),
+        expect.objectContaining({
+          status: "failed",
+          detail: diagnostic,
+          failureFacts: [expect.objectContaining({ code: code ?? "Error", message: diagnostic })],
+        }),
       ]),
+      target: { kind: "git", installationMethod: "git-checkout" },
+      verification: { rollbackOutcome: { status: "not-attempted" } },
     });
     const runStatus = readUpdateRunStatus();
     assert(!("runStatusError" in runStatus));
@@ -186,6 +194,20 @@ describe("update campaign apply exception boundary", () => {
     expect(report.headline).toContain(code ?? "unexpected-error");
     expect(report.markdown).toContain(message);
     expect(report.markdown.length).toBeLessThanOrEqual(1500);
+    const prepared = await prepareUpdateFailureReport({
+      attemptId: lastRun.runId,
+      recordedRun: lastRun,
+      result: {
+        status: "error",
+        mode: "git",
+        reason: lastRun.reason ?? undefined,
+        steps: [],
+        durationMs: 0,
+      },
+    });
+    expect(prepared.body).toContain(message);
+    expect(prepared.body).toContain("git-checkout");
+    expect(prepared.body).toContain("startup campaign does not roll back");
     expect(runAutoUpdate).not.toHaveBeenCalled();
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
     const failureLog = log.info.mock.calls.find(([line]) => String(line).includes(message));

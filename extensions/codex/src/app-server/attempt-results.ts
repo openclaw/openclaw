@@ -2,12 +2,12 @@
  * Result-shaping helpers for Codex app-server attempt terminal text, replay
  * safety, startup failures, and malformed image errors.
  */
+import type { AgentHarnessAttemptTimeout } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import type {
   AgentMessage,
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexSystemPromptReport } from "./attempt-context.js";
-import type { CodexAttemptTimeout } from "./attempt-deadlines.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 
 /** Joins terminal assistant text blocks into the final attempt answer. */
@@ -17,7 +17,7 @@ export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): 
 
 /** Reports the owner's deadline without guessing whether native work finished. */
 export function buildCodexAppServerPromptTimeoutOutcome(
-  timeout: CodexAttemptTimeout | undefined,
+  timeout: AgentHarnessAttemptTimeout | undefined,
 ): EmbeddedRunAttemptResult["promptTimeoutOutcome"] {
   if (!timeout) {
     return undefined;

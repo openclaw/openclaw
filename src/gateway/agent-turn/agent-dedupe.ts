@@ -109,6 +109,7 @@ export function setGatewayDedupeEntries(params: {
   keys: readonly string[];
   entry: Parameters<typeof setGatewayDedupeEntry>[0]["entry"];
   startNewAttempt?: true;
+  session?: Parameters<typeof setGatewayDedupeEntry>[0]["session"];
 }): void {
   for (const key of params.keys) {
     setGatewayDedupeEntry({
@@ -116,8 +117,26 @@ export function setGatewayDedupeEntries(params: {
       key,
       entry: params.entry,
       startNewAttempt: params.startNewAttempt,
+      session: params.session,
     });
   }
+}
+
+export function buildAbortedAgentPayload(
+  runId: string,
+  stopReason: string,
+  session?: { agentId?: string; sessionKey?: string },
+) {
+  return {
+    runId,
+    ...(session?.agentId ? { agentId: session.agentId } : {}),
+    ...(session?.sessionKey ? { sessionKey: session.sessionKey } : {}),
+    status: "timeout" as const,
+    summary: "aborted",
+    stopReason,
+    timeoutPhase: "queue" as const,
+    providerStarted: false,
+  };
 }
 
 export function setAbortedAgentDedupeEntries(params: {
@@ -127,23 +146,16 @@ export function setAbortedAgentDedupeEntries(params: {
   sessionKey?: string;
   runId: string;
   stopReason: string;
+  session?: Parameters<typeof setGatewayDedupeEntry>[0]["session"];
 }): void {
   setGatewayDedupeEntries({
     dedupe: params.dedupe,
     keys: params.keys,
+    session: params.session,
     entry: {
       ts: Date.now(),
       ok: true,
-      payload: {
-        runId: params.runId,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        status: "timeout" as const,
-        summary: "aborted",
-        stopReason: params.stopReason,
-        timeoutPhase: "queue",
-        providerStarted: false,
-      },
+      payload: buildAbortedAgentPayload(params.runId, params.stopReason, params),
     },
   });
 }
@@ -151,7 +163,7 @@ export function setAbortedAgentDedupeEntries(params: {
 export function replayAgentTurnIfCached(params: {
   acceptedOnly?: boolean;
   preflight: { agentDedupeKeys: readonly string[]; runId: string };
-  context: GatewayRequestContext;
+  context: Pick<GatewayRequestContext, "dedupe" | "chatAbortControllers">;
   io: AgentTurnIo;
 }): boolean {
   const { agentDedupeKeys, runId } = params.preflight;
@@ -196,7 +208,10 @@ export function replayAgentTurnIfCached(params: {
       { cached: true, runId: cachedRunId },
     );
   } else {
-    params.io.emitAcceptance([cached.ok, cached.payload, cached.error], { cached: true });
+    params.io.emitAcceptance([cached.ok, cached.payload, cached.error], {
+      cached: true,
+      ...(cached.incognito && cached.error ? { errorMessage: "Incognito agent error." } : {}),
+    });
   }
   return true;
 }

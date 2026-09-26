@@ -239,6 +239,7 @@ describe("sidebar child snapshot freshness", () => {
   ])(
     "keeps an expanded $childCount-child query across unrelated publications (selected: $selected)",
     async ({ childCount, selected }) => {
+      vi.useFakeTimers();
       const queryChildKey = selected ? "agent:main:selected-child" : childKey;
       const parent = {
         key: parentKey,
@@ -314,7 +315,11 @@ describe("sidebar child snapshot freshness", () => {
           toggle.click();
         }
         await waitForFast(() => expect(sidebar.textContent).toContain("Original child"));
-        const initialReads = Math.ceil(childCount / 100);
+        const pageReads = Math.ceil(childCount / 100);
+        expect(childList).toHaveBeenCalledTimes(pageReads);
+        // The initial selected descriptor is a fresh read and still invalidates membership.
+        await vi.advanceTimersByTimeAsync(5_000);
+        const initialReads = pageReads + Number(selected);
         expect(childList).toHaveBeenCalledTimes(initialReads);
         await settleLitElement(sidebar);
         const childScope = sidebar.sessionData.childSessionScope;
@@ -337,38 +342,28 @@ describe("sidebar child snapshot freshness", () => {
           sidebar.querySelector(`[data-session-key="${queryChildKey}"]`)?.textContent,
         ).toContain("Original child");
 
-        vi.useFakeTimers();
-        try {
-          const reconcileHistory = sessions.captureReconcile();
-          reconcileHistory({
-            key: "agent:main:unrelated-chat",
-            sessionId: "unrelated-session",
-            kind: "direct",
-            label: "Unrelated history",
-            updatedAt: 30,
-          });
-          await vi.advanceTimersByTimeAsync(1_000);
-          expect(childList).toHaveBeenCalledTimes(initialReads);
-        } finally {
-          vi.useRealTimers();
-        }
+        const reconcileHistory = sessions.captureReconcile();
+        reconcileHistory({
+          key: "agent:main:unrelated-chat",
+          sessionId: "unrelated-session",
+          kind: "direct",
+          label: "Unrelated history",
+          updatedAt: 30,
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(childList).toHaveBeenCalledTimes(initialReads);
 
-        vi.useFakeTimers();
-        try {
-          currentChild = { ...currentChild, label: "Changed child", updatedAt: 20 };
-          gatewayHarness.publishEvent("sessions.changed", {
-            sessionKey: queryChildKey,
-            agentId: selected ? "main" : "worker",
-            reason: "patch",
-            spawnedBy: parentKey,
-          });
-          await vi.advanceTimersByTimeAsync(1_000);
-          await sidebar.updateComplete;
-          expect(sidebar.textContent).toContain("Changed child");
-          expect(childList).toHaveBeenCalledTimes(initialReads + 1);
-        } finally {
-          vi.useRealTimers();
-        }
+        currentChild = { ...currentChild, label: "Changed child", updatedAt: 20 };
+        gatewayHarness.publishEvent("sessions.changed", {
+          sessionKey: queryChildKey,
+          agentId: selected ? "main" : "worker",
+          reason: "patch",
+          spawnedBy: parentKey,
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        await sidebar.updateComplete;
+        expect(sidebar.textContent).toContain("Changed child");
+        expect(childList).toHaveBeenCalledTimes(initialReads + 1);
         provider.remove();
         const readsBeforeDisconnect = childList.mock.calls.length;
         await sidebar.sessionData.loadChildSessions(parentKey);
@@ -379,6 +374,7 @@ describe("sidebar child snapshot freshness", () => {
         bootstrapRun.mockRestore();
         projectSections.mockRestore();
         projectRows.mockRestore();
+        vi.useRealTimers();
       }
     },
   );
@@ -421,7 +417,7 @@ describe("sidebar child snapshot freshness", () => {
     vi.useFakeTimers();
     try {
       publishChildChanged();
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(sidebar.sessionData.loadingChildSessionKeys.has(parentKey)).toBe(true);
       expand();
       await sidebar.updateComplete;
@@ -467,7 +463,7 @@ describe("sidebar child snapshot freshness", () => {
     vi.useFakeTimers();
     try {
       publishChildChanged();
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(harness.list).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
@@ -485,8 +481,14 @@ describe("sidebar child snapshot freshness", () => {
 
     const refresh = deferred<SessionsListResult>();
     harness.list.mockReturnValue(refresh.promise);
-    publishChildChanged();
-    await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
+    vi.useFakeTimers();
+    try {
+      publishChildChanged();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(harness.list).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
     await sidebar.updateComplete;
     expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2);
     expect(sidebar.querySelector(".sidebar-session-tree__loading")).toBeNull();
@@ -514,10 +516,16 @@ describe("sidebar child snapshot freshness", () => {
     expand();
     await sidebar.updateComplete;
 
-    publishChildChanged();
-    expect(harness.list).toHaveBeenCalledTimes(1);
-    stale.resolve(result([{ ...child, label: "Retired child", updatedAt: 10 }]));
-    await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
+    vi.useFakeTimers();
+    try {
+      publishChildChanged();
+      expect(harness.list).toHaveBeenCalledTimes(1);
+      stale.resolve(result([{ ...child, label: "Retired child", updatedAt: 10 }]));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(harness.list).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
     current.resolve(result([{ ...child, label: "Current child", updatedAt: 20 }]));
     await oldLoad;
     await waitForFast(() => expect(sidebar.textContent).toContain("Current child"));
@@ -545,7 +553,7 @@ describe("sidebar child snapshot freshness", () => {
         if (!retained) {
           shared.dispose();
           publishChildChanged();
-          await vi.advanceTimersByTimeAsync(250);
+          await vi.advanceTimersByTimeAsync(5_000);
         }
         expect(harness.list).toHaveBeenCalledTimes(1);
 
@@ -572,7 +580,7 @@ describe("sidebar child snapshot freshness", () => {
     vi.useFakeTimers();
     try {
       publishChildChanged();
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(harness.list).toHaveBeenCalledTimes(4);
       expect(sidebar.textContent).toContain("kept changing");
 
@@ -599,10 +607,10 @@ describe("sidebar child snapshot freshness", () => {
     vi.useFakeTimers();
     try {
       publishChildChanged();
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(harness.list).toHaveBeenCalledTimes(1);
       initial.resolve(result([child]));
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(harness.list).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(harness.list).toHaveBeenCalledTimes(2);

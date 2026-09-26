@@ -10,7 +10,7 @@ import {
 } from "./bundled-discovery-state.js";
 import {
   INSTALLED_PLUGIN_INDEX_STATE_KEY,
-  readPersistedInstalledPluginIndexRowSync,
+  readPluginMetadataStateRowSync,
   readPluginMetadataStateRowsSync,
 } from "./installed-plugin-index-row.js";
 import {
@@ -21,6 +21,20 @@ import {
 import type { PersistedInstalledPluginIndexCacheEntry } from "./plugin-cache-management.js";
 import { getPluginCache, preparePluginCacheFact } from "./plugin-cache.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
+
+/** Read failures must escape before either projection can authorize recovery or rebuilding. */
+export function readPersistedInstalledPluginIndexRowSync(
+  options: InstalledPluginIndexStoreOptions,
+): { value_json: string } | undefined {
+  if (options.filePath?.endsWith(".json")) {
+    return undefined;
+  }
+  return readPluginMetadataStateRowSync(
+    "installed-index",
+    resolveInstalledPluginIndexStateDatabaseOptions(options),
+    options.artifactPreservingReadOnly,
+  );
+}
 
 /** Share the SQLite row while validating install records independently from index metadata. */
 export function getPersistedInstalledPluginIndexCacheEntry(

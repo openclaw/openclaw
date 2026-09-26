@@ -1,7 +1,12 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { hasErrnoCode, isErrno } from "../../infra/errno.js";
-import { isValidAgentId, LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
+import {
+  isValidAgentId,
+  LEGACY_IMPLICIT_AGENT_ID,
+  normalizeAgentId,
+} from "../../routing/session-key.js";
+import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionStoreTarget } from "./targets-collision.js";
 
@@ -54,7 +59,7 @@ function isWithinRoot(realPath: string, realRoot: string): boolean {
   return realPath === realRoot || realPath.startsWith(`${realRoot}${path.sep}`);
 }
 
-export function shouldSkipDiscoveredAgentDirName(dirName: string, agentId: string): boolean {
+function shouldSkipDiscoveredAgentDirName(dirName: string, agentId: string): boolean {
   return (
     !/[a-z0-9]/i.test(dirName) ||
     !isValidAgentId(agentId) ||
@@ -146,4 +151,36 @@ export function isValidatedRecoveryCandidateSessionsDir(params: {
     }
     throw err;
   }
+}
+
+export function toDiscoveredSessionStoreTarget(
+  sessionsDir: string,
+  storePath: string,
+): SessionStoreTarget | undefined {
+  const dirName = path.basename(path.dirname(sessionsDir));
+  const agentId = normalizeAgentId(dirName);
+  if (shouldSkipDiscoveredAgentDirName(dirName, agentId)) {
+    return undefined;
+  }
+  return {
+    agentId,
+    // Keep the actual on-disk store path so retired/manual agent dirs remain discoverable
+    // even if their directory name no longer round-trips through normalizeAgentId().
+    storePath,
+  };
+}
+
+export function resolveExplicitSessionStoreTarget(params: {
+  defaultAgentId: string;
+  env: NodeJS.ProcessEnv;
+  store: string;
+}): SessionStoreTarget {
+  const storePath = resolveSessionStorePathCore(params.store, {
+    agentId: params.defaultAgentId,
+    env: params.env,
+  });
+  const discovered = resolveAgentsDirFromSessionStorePath(storePath)
+    ? toDiscoveredSessionStoreTarget(path.dirname(storePath), storePath)
+    : undefined;
+  return discovered ?? { agentId: params.defaultAgentId, storePath };
 }

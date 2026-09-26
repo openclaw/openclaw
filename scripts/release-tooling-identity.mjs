@@ -17,6 +17,13 @@ const RELEASE_PUBLISH_PARENT_STATE_POLICIES = new Set([
 ]);
 const GH_COMMAND_TIMEOUT_MS = 60_000;
 
+function isLiveWorkflowRun(run) {
+  return (
+    ["in_progress", "waiting", "queued", "requested", "pending"].includes(run?.status) &&
+    run?.conclusion === null
+  );
+}
+
 function fail(message) {
   throw new Error(message);
 }
@@ -268,7 +275,7 @@ export function validateReleasePublishParentRun({
   if (workflowFullRef && workflowFullRef !== parentFullRef) {
     fail("release publish parent run workflow full ref does not match trusted tooling.");
   }
-  const active = run?.status === "in_progress" && !run?.conclusion;
+  const active = isLiveWorkflowRun(run);
   const completedSuccess = run?.status === "completed" && run?.conclusion === "success";
   const completedFailure = run?.status === "completed" && run?.conclusion === "failure";
   if (
@@ -355,7 +362,7 @@ export function verifyReleaseWorkflowRun({
     headBranch: ref,
     workflowPath: path,
     event,
-    status: runStatePolicy === "active" ? "in_progress" : "completed",
+    status: true,
     conclusion: runStatePolicy === "active" ? null : "success",
   };
   const actual = {
@@ -366,7 +373,7 @@ export function verifyReleaseWorkflowRun({
     headBranch: run.head_branch,
     workflowPath: refSeparator === -1 ? observedPath : observedPath.slice(0, refSeparator),
     event: run.event,
-    status: run.status,
+    status: runStatePolicy === "active" ? isLiveWorkflowRun(run) : run.status === "completed",
     conclusion: run.conclusion,
   };
   for (const key of Object.keys(expected)) {

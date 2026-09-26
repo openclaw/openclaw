@@ -36,6 +36,7 @@ public struct ChatSessionsSheet: View {
     @State private var inspectedSession: OpenClawChatSessionEntry?
     @State private var isPresentingGroups = false
 
+    // periphery:ignore - ChatWindowShell constructs this sheet; Xcode 27 indexing misses the reference.
     public init(viewModel: OpenClawChatViewModel) {
         self.viewModel = viewModel
     }
@@ -63,6 +64,7 @@ public struct ChatSessionsSheet: View {
         "\(self.viewModel.selectedAgentID ?? "")|\(self.scope.rawValue)|\(self.trimmedSearchText.lowercased())"
     }
 
+    // periphery:ignore - The public View conformance requires this public witness.
     public var body: some View {
         NavigationStack {
             List(selection: self.$selectedSessionKeys) {

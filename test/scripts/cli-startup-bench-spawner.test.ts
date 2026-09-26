@@ -3,13 +3,19 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATHS = [
   "scripts/test-cli-startup-bench-budget.mts",
   "scripts/test-update-cli-startup-bench.mts",
 ];
+
+beforeEach(() => {
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  vi.stubEnv("GITHUB_STEP_SUMMARY", "");
+});
+afterEach(() => vi.unstubAllEnvs());
 
 describe("CLI startup benchmark script spawners", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -120,7 +126,7 @@ describe("CLI startup benchmark script spawners", () => {
         ],
       },
     });
-    const run = (skipBaseline = false) =>
+    const run = (skipBaseline = false, actions = false) =>
       spawnSync(
         process.execPath,
         [
@@ -140,6 +146,7 @@ describe("CLI startup benchmark script spawners", () => {
           encoding: "utf8",
           env: {
             ...process.env,
+            GITHUB_ACTIONS: actions ? "true" : "",
             OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH: "1",
             OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT: "20",
           },
@@ -157,9 +164,14 @@ describe("CLI startup benchmark script spawners", () => {
     const regression = run();
     expect(regression.status).toBe(1);
     expect(regression.stderr).toContain("avg RSS 13.0MiB exceeded 12.0MiB");
+    const advisory = run(false, true);
+    expect(advisory.status, advisory.stderr).toBe(0);
+    expect(advisory.stderr).toContain("::warning file=");
+    expect(advisory.stderr).toContain("avg RSS 13.0MiB exceeded 12.0MiB");
 
     fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, "unknown-metric")));
     expect(run().stderr).toContain("Unknown CLI RSS metric");
+    expect(run(false, true).status).toBe(1);
 
     for (const [before, after, error] of [
       [undefined, "native", null],

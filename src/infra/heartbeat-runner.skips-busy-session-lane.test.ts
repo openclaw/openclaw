@@ -498,6 +498,76 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     });
   });
 
+  it.each([
+    "main",
+    "cron",
+    "cron-nested",
+    "hook-dispatch",
+    "active-cron",
+    "reply",
+    "embedded",
+    "session",
+    "session-reply",
+    "session-embedded",
+  ] as const)(
+    "delivers a targeted exec failure with %s work active unless its own session is busy",
+    async (busy) => {
+      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+        const cfg = createHeartbeatTelegramConfig(storePath);
+        cfg.agents!.defaults!.heartbeat = { every: "0m", target: "last" };
+        const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
+        const siblingSessionKey = "agent:main:dashboard:other-work";
+        const text = "Exec failed (ci-watch, code 1) :: GitHub connection closed";
+        enqueueSystemEvent(text, { sessionKey, contextKey: "exec:ci-watch" });
+        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+        const activeCron = busy === "active-cron" ? markCronJobActive("unrelated-job") : undefined;
+
+        try {
+          const result = await runHeartbeat(
+            cfg,
+            replySpy,
+            { source: "exec-event", intent: "event", reason: "exec-event", sessionKey },
+            {
+              getQueueSize: (lane) =>
+                Number(lane === (busy === "session" ? `session:${sessionKey}` : busy)),
+              listActiveReplyRunSessionKeys: () =>
+                busy === "reply"
+                  ? [siblingSessionKey]
+                  : busy === "session-reply"
+                    ? [sessionKey]
+                    : [],
+              isReplyRunActive: (key) => busy === "session-reply" && key === sessionKey,
+              listActiveEmbeddedRunSessionKeys: () =>
+                busy === "embedded"
+                  ? [siblingSessionKey]
+                  : busy === "session-embedded"
+                    ? [sessionKey]
+                    : [],
+            },
+          );
+
+          if (busy.startsWith("session")) {
+            expect(result).toEqual({
+              status: "skipped",
+              reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+            });
+            expect(replySpy).not.toHaveBeenCalled();
+            expect(peekSystemEvents(sessionKey)).toEqual([text]);
+          } else {
+            expect(result.status).toBe("ran");
+            expect(replySpy).toHaveBeenCalledOnce();
+            expect(replySpy.mock.calls[0]?.[0].Body).toContain(text);
+            expect(peekSystemEvents(sessionKey)).toEqual([]);
+          }
+        } finally {
+          if (activeCron) {
+            clearCronJobActive(activeCron.jobId, activeCron);
+          }
+        }
+      });
+    },
+  );
+
   it("ignores unscoped active reply runs when checking same-agent heartbeat work", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig(storePath);

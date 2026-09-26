@@ -3,10 +3,8 @@ import { describe, expect, it } from "vitest";
 import { resolveSessionStoreEntryCore } from "../config/sessions/store-entry.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
-import {
-  deliveryContextFromSession,
-  normalizeSessionDeliveryState,
-} from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   normalizeSessionPeerId,
@@ -142,9 +140,19 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
     );
   });
 
-  it("preserves the Matrix room id AND the :thread:<event> suffix", () => {
-    const key = `agent:main:matrix:channel:${ROOM_A}:thread:${EVENT}`;
-    expect(normalizeSessionKeyPreservingOpaquePeerIds(key)).toBe(key);
+  it.each([
+    {
+      name: "room and thread event ids",
+      key: `agent:main:matrix:channel:${ROOM_A}:thread:${EVENT}`,
+      expected: `agent:main:matrix:channel:${ROOM_A}:thread:${EVENT}`,
+    },
+    {
+      name: "Signal-shaped segments inside room and event ids",
+      key: `Agent:Main:Matrix:Channel:${ROOM_A}:Signal:Group: AbC :Thread:${EVENT}:Signal:Group: XyZ :End`,
+      expected: `agent:main:matrix:channel:${ROOM_A}:Signal:Group: AbC :thread:${EVENT}:Signal:Group: XyZ :End`,
+    },
+  ])("preserves Matrix $name", ({ key, expected }) => {
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(key)).toBe(expected);
   });
 
   it("lowercases the Matrix thread marker while preserving room and event ids", () => {
@@ -205,14 +213,15 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
     ).toBe("agent:main:matrix:direct:@bob:example.org");
   });
 
-  it("preserves Signal group id segment (scoped and unscoped), unchanged behavior", () => {
-    expect(normalizeSessionKeyPreservingOpaquePeerIds("agent:ops:signal:group:AbC123=")).toBe(
-      "agent:ops:signal:group:AbC123=",
-    );
-    // Unscoped (no agent: head) still preserved, matching prior behavior.
-    expect(normalizeSessionKeyPreservingOpaquePeerIds("Signal:Group:AbC123=")).toBe(
-      "signal:group:AbC123=",
-    );
+  it.each([
+    ["agent:ops:signal:group:AbC123=", "agent:ops:signal:group:AbC123="],
+    ["Signal:Group:AbC123=", "signal:group:AbC123="],
+    [
+      "Signal:Group: AbC123= :Signal:Group: XyZ987= :THREAD:Mixed",
+      "signal:group:AbC123=:signal:group:XyZ987=:thread:mixed",
+    ],
+  ])("preserves Signal group id segments in %s", (key, expected) => {
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(key)).toBe(expected);
   });
 
   it("keeps lowercasing a Signal thread suffix (segment span, not tail)", () => {

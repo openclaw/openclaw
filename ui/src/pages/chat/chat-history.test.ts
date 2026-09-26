@@ -10,7 +10,7 @@ import { syncSelectedSessionMessageSubscription } from "./chat-history-subscript
 import { createState, type TestState } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
+import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjection,

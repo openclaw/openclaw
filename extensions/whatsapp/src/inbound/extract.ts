@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements extract behavior.
 import type { proto } from "baileys";
 import { extractMessageContent, getContentType, normalizeMessageContent } from "baileys";
 import {
@@ -233,15 +232,12 @@ export function extractText(source: WhatsAppInboundMessageSource): string | unde
       }
     }
   }
-  const contactPlaceholder =
+  return (
     extractContactPlaceholder(projection) ??
     (extracted && extracted !== message
       ? extractContactPlaceholder(extracted as proto.IMessage | undefined)
-      : undefined);
-  if (contactPlaceholder) {
-    return contactPlaceholder;
-  }
-  return undefined;
+      : undefined)
+  );
 }
 
 export function extractExternalAdReplyContext(source: WhatsAppInboundMessageSource):
@@ -311,14 +307,10 @@ export function extractContactContext(
   }
   const contact = message.contactMessage ?? undefined;
   if (contact) {
-    const { name, phones } = describeContact({
-      displayName: contact.displayName,
-      vcard: contact.vcard,
-    });
     return {
       kind: "contact",
       total: 1,
-      contacts: [{ name, phones }],
+      contacts: [describeContact(contact)],
     };
   }
   const contactsArray = message.contactsArrayMessage?.contacts ?? undefined;
@@ -328,9 +320,7 @@ export function extractContactContext(
   return {
     kind: "contacts",
     total: contactsArray.length,
-    contacts: contactsArray.map((entry) =>
-      describeContact({ displayName: entry.displayName, vcard: entry.vcard }),
-    ),
+    contacts: contactsArray.map(describeContact),
   };
 }
 
@@ -348,51 +338,39 @@ export function extractLocationData(
   source: WhatsAppInboundMessageSource,
 ): NormalizedLocation | null {
   const message = unwrapMessage(source);
-  if (!message) {
-    return null;
-  }
-
-  const live = message.liveLocationMessage ?? undefined;
-  if (live) {
-    const latitudeRaw = live.degreesLatitude;
-    const longitudeRaw = live.degreesLongitude;
-    if (latitudeRaw != null && longitudeRaw != null) {
-      const latitude = latitudeRaw;
-      const longitude = longitudeRaw;
-      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-        return {
-          latitude,
-          longitude,
-          accuracy: live.accuracyInMeters ?? undefined,
-          caption: live.caption ?? undefined,
-          source: "live",
-          isLive: true,
-        };
-      }
+  for (const [location, locationSource] of [
+    [message?.liveLocationMessage, "live"],
+    [message?.locationMessage, "pin"],
+  ] as const) {
+    const latitude = location?.degreesLatitude;
+    const longitude = location?.degreesLongitude;
+    if (
+      !location ||
+      latitude == null ||
+      longitude == null ||
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude)
+    ) {
+      continue;
     }
-  }
-
-  const location = message.locationMessage ?? undefined;
-  if (location) {
-    const latitudeRaw = location.degreesLatitude;
-    const longitudeRaw = location.degreesLongitude;
-    if (latitudeRaw != null && longitudeRaw != null) {
-      const latitude = latitudeRaw;
-      const longitude = longitudeRaw;
-      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-        const isLive = Boolean(location.isLive);
-        return {
-          latitude,
-          longitude,
-          accuracy: location.accuracyInMeters ?? undefined,
-          name: location.name ?? undefined,
-          address: location.address ?? undefined,
-          caption: location.comment ?? undefined,
-          source: isLive ? "live" : location.name || location.address ? "place" : "pin",
-          isLive,
-        };
-      }
+    const coordinates = { latitude, longitude, accuracy: location.accuracyInMeters ?? undefined };
+    if (locationSource === "live") {
+      return {
+        ...coordinates,
+        caption: location.caption ?? undefined,
+        source: locationSource,
+        isLive: true,
+      };
     }
+    const isLive = Boolean(location.isLive);
+    return {
+      ...coordinates,
+      name: location.name ?? undefined,
+      address: location.address ?? undefined,
+      caption: location.comment ?? undefined,
+      source: isLive ? "live" : location.name || location.address ? "place" : "pin",
+      isLive,
+    };
   }
 
   return null;
@@ -438,7 +416,7 @@ export function describeReplyContext(
     ? { kind: mediaKind, contentType: resolveInboundMediaMimetype(quoted) }
     : undefined;
   if (!body && !media) {
-    const quotedType = quoted ? getContentType(quoted) : undefined;
+    const quotedType = getContentType(quoted);
     logVerbose(
       `Quoted message missing extractable body${quotedType ? ` (type ${quotedType})` : ""}`,
     );
@@ -446,26 +424,10 @@ export function describeReplyContext(
   }
   return {
     id: contextInfo?.stanzaId || undefined,
-    body: body ?? "",
+    body,
     media,
     sender,
   };
-}
-
-function hasInteractiveResponseContent(message: proto.IMessage | undefined): boolean {
-  if (!message) {
-    return false;
-  }
-  // Button/list/template/interactive selections that the existing four
-  // extractors do not cover. Treat any presence of these keys as user
-  // content — Baileys never delivers these as receipts or protocol
-  // envelopes, only as explicit user choices.
-  return Boolean(
-    message.buttonsResponseMessage ||
-    message.listResponseMessage ||
-    message.templateButtonReplyMessage ||
-    message.interactiveResponseMessage,
-  );
 }
 
 /**
@@ -477,24 +439,17 @@ function hasInteractiveResponseContent(message: proto.IMessage | undefined): boo
  */
 export function hasInboundUserContent(source: WhatsAppInboundMessageSource): boolean {
   const projection = resolveWhatsAppInboundMessageProjection(source);
-  if (projection.length === 0) {
-    return false;
-  }
-  if (extractText(projection)) {
-    return true;
-  }
-  if (extractMediaKind(projection)) {
-    return true;
-  }
-  if (extractLocationData(projection)) {
-    return true;
-  }
-  // Walk wrappers (ephemeral, viewOnce, etc.) — interactive responses
-  // can arrive nested.
-  for (const candidate of projection) {
-    if (hasInteractiveResponseContent(candidate)) {
-      return true;
-    }
-  }
-  return false;
+  return Boolean(
+    extractText(projection) ||
+    extractMediaKind(projection) ||
+    extractLocationData(projection) ||
+    // Interactive choices can be nested in wrappers and carry no extractable text.
+    projection.some(
+      (message) =>
+        message.buttonsResponseMessage ||
+        message.listResponseMessage ||
+        message.templateButtonReplyMessage ||
+        message.interactiveResponseMessage,
+    ),
+  );
 }

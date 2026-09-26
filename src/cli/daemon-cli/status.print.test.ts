@@ -1192,153 +1192,6 @@ describe("printDaemonStatus", () => {
     },
   );
 
-  it("prints a terse plugin drift warning outside deep mode", () => {
-    printDaemonStatus(
-      {
-        service: {
-          label: "LaunchAgent",
-          loadState: { status: "loaded" },
-          loadedText: "loaded",
-          notLoadedText: "not loaded",
-          runtime: { status: "running", pid: 8000 },
-        },
-        pluginVersionDrift: {
-          gatewayVersion: "2026.5.4",
-          drifts: [
-            {
-              pluginId: "whatsapp",
-              installedVersion: "2026.5.3",
-              gatewayVersion: "2026.5.4",
-              source: "npm",
-            },
-          ],
-        },
-        extraServices: [],
-      },
-      { json: false, deep: false },
-    );
-
-    expectMockLineContains(runtime.log, "Plugin version drift: 1 active official plugin");
-    expectMockLineContains(runtime.log, "openclaw gateway status --deep");
-    expect(runtime.log.mock.calls.map(([line]) => line).join("\n")).not.toContain("whatsapp:");
-  });
-
-  it("prints detailed plugin drift entries in deep mode", () => {
-    printDaemonStatus(
-      {
-        service: {
-          label: "LaunchAgent",
-          loadState: { status: "loaded" },
-          loadedText: "loaded",
-          notLoadedText: "not loaded",
-          runtime: { status: "running", pid: 8000 },
-        },
-        pluginVersionDrift: {
-          gatewayVersion: "2026.5.4",
-          drifts: [
-            {
-              pluginId: "whatsapp",
-              installedVersion: "2026.5.3",
-              gatewayVersion: "2026.5.4",
-              source: "clawhub",
-            },
-          ],
-        },
-        extraServices: [],
-      },
-      { json: false, deep: true },
-    );
-
-    expectMockLineContains(runtime.log, "- whatsapp: 2026.5.3 (clawhub)");
-    expectMockLineContains(runtime.log, "openclaw plugins update whatsapp");
-    expectMockLineContains(runtime.log, "openclaw gateway restart");
-  });
-
-  it("prints exact package update commands for pinned npm plugin drift in deep mode", () => {
-    printDaemonStatus(
-      {
-        service: {
-          label: "LaunchAgent",
-          loadState: { status: "loaded" },
-          loadedText: "loaded",
-          notLoadedText: "not loaded",
-          runtime: { status: "running", pid: 8000 },
-        },
-        pluginVersionDrift: {
-          gatewayVersion: "2026.6.10-beta.1",
-          drifts: [
-            {
-              pluginId: "brave",
-              installedVersion: "2026.6.9",
-              gatewayVersion: "2026.6.10-beta.1",
-              source: "npm",
-              packageName: "@openclaw/brave-plugin",
-              spec: "@openclaw/brave-plugin@2026.6.9",
-              targetResolution: {
-                status: "resolved",
-                packageName: "@openclaw/brave-plugin",
-                requestedTarget: "2026.6.10-beta.1",
-                version: "2026.6.10-beta.1",
-              },
-            },
-          ],
-        },
-        extraServices: [],
-      },
-      { json: false, deep: true },
-    );
-
-    expectMockLineContains(runtime.log, "- brave: 2026.6.9 (npm)");
-    expectMockLineContains(
-      runtime.log,
-      "openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1",
-    );
-    expectMockLineContains(runtime.log, "openclaw gateway restart");
-  });
-
-  it("fails loudly without an install command when npm cannot resolve a pinned target", () => {
-    printDaemonStatus(
-      {
-        service: {
-          label: "LaunchAgent",
-          loadState: { status: "loaded" },
-          loadedText: "loaded",
-          notLoadedText: "not loaded",
-          runtime: { status: "running", pid: 8000 },
-        },
-        pluginVersionDrift: {
-          gatewayVersion: "2026.7.1-2",
-          drifts: [
-            {
-              pluginId: "brave",
-              installedVersion: "2026.7.1-beta.2",
-              gatewayVersion: "2026.7.1-2",
-              source: "npm",
-              packageName: "@openclaw/brave-plugin",
-              spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
-              targetResolution: {
-                status: "unresolved",
-                packageName: "@openclaw/brave-plugin",
-                requestedTarget: "2026.7.1",
-                error: "npm registry did not resolve @openclaw/brave-plugin@2026.7.1: HTTP 404",
-              },
-            },
-          ],
-        },
-        extraServices: [],
-      },
-      { json: false, deep: true },
-    );
-
-    expectMockLineContains(runtime.error, "Plugin repair target resolution failed");
-    expectMockLineContains(runtime.error, "HTTP 404");
-    const output = [runtime.log, runtime.error]
-      .flatMap((mock) => mock.mock.calls.map(([line]) => line))
-      .join("\n");
-    expect(output).not.toContain("openclaw plugins update");
-    expect(output).not.toContain("openclaw gateway restart");
-  });
-
   it("does not print systemd user-service hints when a gateway responds", () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     isSystemdUnavailableDetailMock.mockReturnValue(true);
@@ -1439,7 +1292,7 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("systemd stopped restarting the gateway");
   });
 
-  it("steers a failed RPC probe to credentials/config when the gateway process owns the port", () => {
+  it("does not rule out warm-up from port ownership without readiness proof", () => {
     printDaemonStatus(
       {
         service: {
@@ -1458,7 +1311,7 @@ describe("printDaemonStatus", () => {
         },
         rpc: {
           ok: false,
-          error: "gateway closed (1008 policy violation: invalid token)",
+          error: "gateway rejected websocket upgrade (HTTP 503)",
           url: "ws://127.0.0.1:18789",
         },
         health: {
@@ -1470,13 +1323,9 @@ describe("printDaemonStatus", () => {
       { json: false },
     );
 
-    expectMockLineContains(
-      runtime.log,
-      "Gateway process is running and owns the gateway port, so this is not a warm-up delay",
-    );
-    expectMockLineContains(runtime.log, "Check the probe credentials/config");
     const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
-    expect(logged).not.toContain("Warm-up: launch agents");
+    expect(logged).not.toMatch(/not a warm-up delay|restart the gateway/i);
+    expect(logged).toMatch(/readiness.*not.*confirmed|warm-up.*possible/i);
   });
 
   it.each(

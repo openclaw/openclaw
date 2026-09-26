@@ -11,20 +11,18 @@ import {
   readActiveTranscriptEntryAnchor,
 } from "../config/sessions/session-accessor.js";
 import {
-  findTranscriptEvent,
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { readCommittedTranscriptMessageSequence } from "../config/sessions/session-accessor.sqlite-transcript-sequences.js";
+import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
-import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { resolveRawAssistantAnswerText } from "../shared/assistant-answer-text.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import {
-  isOpenClawDeliveryMirrorAssistantMessage,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../shared/transcript-only-openclaw-assistant.js";
@@ -89,7 +87,10 @@ export async function publishHeartbeatSessionReply(params: {
       ) {
         throw new Error("heartbeat publication no longer owns the active transcript");
       }
-      const unavailable = resolveSessionWorkStartError(scope.sessionKey, current, expected);
+      const unavailable = resolveSessionWorkStartError(scope.sessionKey, current, {
+        ...expected,
+        purpose: "accepted-result-settlement",
+      });
       if (unavailable) {
         throw new Error(unavailable);
       }
@@ -119,31 +120,19 @@ export async function publishHeartbeatSessionReply(params: {
       .digest("hex")}`;
     const ownedKey = mirror?.idempotencyKey ?? metadata?.assistantTranscriptIdempotencyKey;
     const lookupKey = owned ? ownedKey : key;
-    let prior = lookupKey
-      ? await findTranscriptEvent(scope, (event) => {
-          const message = readTranscriptEventMessage(event);
-          return (
-            message?.role === "assistant" &&
-            message.idempotencyKey === lookupKey &&
-            (!owned ||
-              (mirror
-                ? isOpenClawDeliveryMirrorAssistantMessage(message)
-                : Boolean(writerRunId && readSessionTranscriptRunId(message) === writerRunId)))
-          );
-        })
-      : undefined;
+    let prior =
+      lookupKey && (!owned || mirror || writerRunId)
+        ? await findTranscriptEvent(scope, {
+            kind: "idempotency",
+            key: lookupKey,
+            assistant: true,
+            ...(owned && mirror ? { deliveryMirror: true } : {}),
+            ...(owned && !mirror ? { runId: writerRunId } : {}),
+          })
+        : undefined;
     if (owned && !ownedKey && writerRunId) {
       // Stream indices advance between content blocks, not persisted messages.
-      // The current writer's newest active assistant supplies the receipt identity.
-      prior = await findTranscriptEvent(scope, (event) => {
-        const message = readTranscriptEventMessage(event);
-        const messageId = readTranscriptEventId(event);
-        return (
-          message?.role === "assistant" &&
-          readSessionTranscriptRunId(message) === writerRunId &&
-          Boolean(messageId && readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId }))
-        );
-      });
+      prior = await findTranscriptEvent(scope, { kind: "active-assistant", runId: writerRunId });
     }
     const priorMessage = prior && readTranscriptEventMessage(prior.event);
     const priorId = prior && readTranscriptEventId(prior.event);

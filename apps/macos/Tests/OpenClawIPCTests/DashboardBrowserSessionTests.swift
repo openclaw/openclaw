@@ -251,7 +251,7 @@ struct DashboardBrowserSessionTests {
 
     @Test(arguments: [false, true])
     func `only browser sign-in profiles use an isolated website store`(_ browserSignIn: Bool) async throws {
-        let tls = try DashboardTLSFixture()
+        let tls = try await DashboardTLSFixture()
         let server = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity)
         defer { server.stop() }
         let session = try GatewayBrowserSession(

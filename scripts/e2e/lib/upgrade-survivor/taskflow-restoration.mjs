@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import {
   assertTaskflowGatewayReads,
+  assertTaskflowIdentifiers,
   assertTaskflowSdkReads,
   assertTaskflowSnapshot,
   createTaskflowFixture,
@@ -31,14 +32,16 @@ const { positionals, values } = parseArgs({
   options: {
     "package-root": { type: "string" },
     "expected-commit": { type: "string" },
+    attempt: { type: "string", default: "first" },
     url: { type: "string" },
   },
 });
 const [mode] = positionals;
 assert(
-  positionals.length === 1 && ["seed", "assert-state", "probe"].includes(mode),
-  "Expected seed, assert-state, or probe",
+  positionals.length === 1 && ["seed", "assert-migrated", "assert-state", "probe"].includes(mode),
+  "Expected seed, assert-migrated, assert-state, or probe",
 );
+assert(["first", "second"].includes(values.attempt), "Expected first or second attempt");
 assert(values["package-root"], "--package-root is required");
 const packageRoot = await fs.realpath(values["package-root"]);
 const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
@@ -183,22 +186,45 @@ async function databaseMetrics() {
   }
 }
 
+async function readTaskIdentifiers() {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), { readOnly: true });
+  try {
+    return db
+      .prepare("SELECT task_id, run_id, child_session_key FROM task_runs ORDER BY task_id")
+      .all()
+      .map(({ task_id, run_id, child_session_key }) => ({ task_id, run_id, child_session_key }));
+  } finally {
+    db.close();
+  }
+}
+
 async function seed() {
   const fixture = createTaskflowFixture(Date.now());
+  const legacyFixture = {
+    ...fixture,
+    tasks: fixture.tasks.map((task, index) => ({
+      ...task,
+      runId: index === 0 ? ` ${task.runId} ` : index === 1 ? `\t${task.runId}\u00a0` : task.runId,
+      childSessionKey: task.childSessionKey ? ` \t${task.childSessionKey}\n` : " \t\u00a0",
+    })),
+  };
   const restored = await withStores((task, flow) => {
     for (const record of fixture.flows) {
       flow.upsertTaskFlowRegistryRecordToSqlite(record);
     }
-    for (const [index, record] of fixture.tasks.entries()) {
+    for (const [index, record] of legacyFixture.tasks.entries()) {
       task.upsertTaskWithDeliveryStateToSqlite({
         task: record,
         deliveryState: fixture.deliveryStates[index],
       });
     }
     const actual = snapshot(task, flow);
-    assertTaskflowSnapshot(actual, fixture);
+    assertTaskflowSnapshot(actual, legacyFixture);
     return actual;
   });
+  const identifiers = await readTaskIdentifiers();
+  assertTaskflowIdentifiers(identifiers, legacyFixture);
   const pluginRoot = path.join(runtimeRoot, "taskflow-plugin");
   await fs.mkdir(pluginRoot, { recursive: true });
   for (const file of ["taskflow-restoration-plugin.mjs", "taskflow-restoration-fixture.mjs"]) {
@@ -229,20 +255,32 @@ async function seed() {
       entries: { [pluginId]: { enabled: true } },
     },
   });
+  const expectedSnapshot = normalizeTaskflowSnapshot(fixture);
   await writeJson(expectedFile, {
     build,
     fixture,
-    snapshot: restored,
+    snapshot: expectedSnapshot,
+    seedSnapshot: restored,
+    seedSha256: digest(JSON.stringify(restored)),
+    identifiers,
     modules: moduleEvidence,
-    sha256: digest(JSON.stringify(restored)),
+    sha256: digest(JSON.stringify(expectedSnapshot)),
     database: await databaseMetrics(),
   });
+}
+
+async function assertMigrated() {
+  const expected = await readJson(expectedFile);
+  // Do not import candidate store owners: only the updater's Doctor may repair this specimen.
+  const identifiers = await readTaskIdentifiers();
+  await writeJson(path.join(artifacts, "taskflow-after-update.json"), { build, identifiers });
+  assertTaskflowIdentifiers(identifiers, expected.fixture);
 }
 
 async function assertState() {
   const expected = await readJson(expectedFile);
   const actual = await withStores(snapshot);
-  await writeJson(path.join(artifacts, "taskflow-after.json"), {
+  await writeJson(path.join(artifacts, `taskflow-after-${values.attempt}.json`), {
     build,
     snapshot: actual,
     modules: moduleEvidence,
@@ -289,7 +327,7 @@ async function probe() {
   );
   const started = performance.now();
   const evidence = { build, sdkPath, calls: [] };
-  const output = path.join(artifacts, "taskflow-gateway.json");
+  const output = path.join(artifacts, `taskflow-gateway-${values.attempt}.json`);
   const request = async (method, params) => {
     const start = performance.now();
     try {
@@ -333,5 +371,11 @@ async function probe() {
   }
 }
 
-await (mode === "seed" ? seed() : mode === "assert-state" ? assertState() : probe());
+await (mode === "seed"
+  ? seed()
+  : mode === "assert-migrated"
+    ? assertMigrated()
+    : mode === "assert-state"
+      ? assertState()
+      : probe());
 console.log(`taskflow-restoration:${mode} passed commit=${build.commit}`);

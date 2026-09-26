@@ -4,7 +4,6 @@ import type {
   ControlUiPageNavigationOptions,
   ControlUiPageTarget,
 } from "../../../src/plugin-sdk/control-ui.js";
-import type { RouteId } from "../app-route-paths.ts";
 import { isRouteId, pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -20,7 +19,7 @@ import { createControlUiComponents } from "./control-ui-components.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
 export function createControlUiPluginHost(
-  getContext: () => ApplicationContext<RouteId>,
+  getContext: () => ApplicationContext,
   runtime: ControlUiPluginRuntime,
   owner: Omit<ControlUiPluginOwner, "host">,
 ): ControlUiHost {
@@ -41,7 +40,7 @@ export function createControlUiPluginHost(
       dispose();
     };
   };
-  const call = async <T>(operation: (context: ApplicationContext<RouteId>) => Promise<T>) => {
+  const call = async <T>(operation: (context: ApplicationContext) => Promise<T>) => {
     const result = await operation(current());
     current();
     return result;

@@ -170,6 +170,24 @@ describe("openclaw-modal-dialog", () => {
     expect(document.activeElement).toBe(container.querySelector("#autofocus-target"));
   });
 
+  it("focuses slotted input once the opening update commits, without waiting for a frame", async () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    render(
+      html`<openclaw-modal-dialog label="Edit">
+        <textarea autofocus></textarea>
+      </openclaw-modal-dialog>`,
+      container,
+    );
+    const modal = container.querySelector("openclaw-modal-dialog")!;
+    await modal.updateComplete;
+    const webAwesomeDialog = modal.shadowRoot!.querySelector("wa-dialog")!;
+    await webAwesomeDialog.updateComplete;
+    await webAwesomeDialog.updateComplete;
+    await Promise.resolve();
+    expect(webAwesomeDialog.shadowRoot!.querySelector("dialog")!.open).toBe(true);
+    expect(document.activeElement).toBe(container.querySelector("textarea"));
+  });
+
   it("keeps focus on a field the user selected when the show animation settles", async () => {
     render(
       html`<openclaw-modal-dialog label="Edit">

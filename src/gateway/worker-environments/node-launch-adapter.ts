@@ -11,6 +11,7 @@ import {
   formatNodeRunnerUpdateRequired,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
 import {
   nodeWorkerPlanHash,
@@ -333,7 +334,8 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       });
       if (
         params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
-        node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION
+        (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION ||
+          resolveNodeWorkerExecutionIssue(node.workerHost))
       ) {
         throw new Error(
           formatNodeRunnerUpdateRequired(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),

@@ -20,24 +20,6 @@ import {
   type RemoteMountInfo,
 } from "./remote-fs-bridge-paths.js";
 
-/** Maps a resolver action to the mutation action label used in errors. */
-const REMOTE_PINNED_ACTION_LABELS: Record<
-  "write" | "create" | "mkdir" | "remove" | "copy-destination",
-  string
-> = {
-  write: "write files",
-  create: "create files",
-  mkdir: "create directories",
-  remove: "remove files",
-  "copy-destination": "copy files",
-};
-
-export function remotePinnedActionLabel(
-  action: "write" | "create" | "mkdir" | "remove" | "copy-destination",
-): string {
-  return REMOTE_PINNED_ACTION_LABELS[action];
-}
-
 /**
  * Builds the canonical frame for an already-authorized pinned destination.
  * File-backed operations pin the canonical parent (the filename is stripped

@@ -9,11 +9,12 @@ import type {
 import {
   deliverAgentHarnessUserInputPrompt,
   type AgentHarnessUserInputPromptOptions,
-  type AgentHarnessUserInputQuestion,
 } from "./user-input-bridge.js";
+import type { AgentHarnessUserInputQuestion } from "./user-input-types.js";
 
 const QUESTION_BATCH_SIZE = 3;
 const STATUS_TEXT_LIMIT = 1_024;
+const EMPTY_FORM_ALLOW_LABEL = "Allow";
 
 type StructuredInputExecutionResult =
   | {
@@ -53,28 +54,52 @@ export async function runStructuredInput(
   if (!isActive(params)) {
     return { status: "cancelled", message: "Input request is no longer active." };
   }
-  return params.input.plan.kind === "url"
-    ? runUrl(params, params.input.plan.question)
-    : runForm(params, params.input.plan.intro, params.input.plan.fields);
+  const { plan } = params.input;
+  if (plan.kind === "url") {
+    return runConfirmation(params, plan.question, {
+      acceptLabel: STRUCTURED_INPUT_URL_COMPLETED_LABEL,
+      subject: "URL confirmation",
+      intro: params.promptOptions?.urlIntro,
+    });
+  }
+  if (plan.fields.length === 0) {
+    return runConfirmation(
+      params,
+      {
+        id: "confirm",
+        header: "Confirm",
+        question: plan.intro || "Allow this request?",
+        isOther: false,
+        isSecret: false,
+        options: [{ label: EMPTY_FORM_ALLOW_LABEL }, { label: "Decline" }],
+      },
+      { acceptLabel: EMPTY_FORM_ALLOW_LABEL, subject: "Form confirmation" },
+    );
+  }
+  return runForm(params, plan.intro, plan.fields);
 }
 
-async function runUrl(
+async function runConfirmation(
   params: StructuredInputExecutionParams,
   question: AgentHarnessUserInputQuestion,
+  confirmation: { acceptLabel: string; subject: string; intro?: string },
 ): Promise<StructuredInputExecutionResult> {
-  const result = await ask(params, [question], 0, params.promptOptions?.urlIntro);
+  const result = await ask(params, [question], 0, confirmation.intro);
   if (!isActive(params)) {
-    return { status: "cancelled", message: "URL confirmation was cancelled before commit." };
+    return {
+      status: "cancelled",
+      message: `${confirmation.subject} was cancelled before commit.`,
+    };
   }
   if (result.status !== "answered") {
-    const cancellation = cancellationFor(result, "URL confirmation");
+    const cancellation = cancellationFor(result, confirmation.subject);
     if (cancellation.message) {
       await showStatus(params, cancellation.message);
     }
     return cancellation;
   }
   const answer = result.answers.answers[question.id]?.[0];
-  return answer?.toLowerCase() === STRUCTURED_INPUT_URL_COMPLETED_LABEL.toLowerCase()
+  return answer?.toLowerCase() === confirmation.acceptLabel.toLowerCase()
     ? { status: "answered", answers: result.answers.answers, content: {} }
     : { status: "declined" };
 }
@@ -91,50 +116,38 @@ async function runForm(
     if (!isActive(params)) {
       return { status: "cancelled", message: "Form input was cancelled before completion." };
     }
-    const field = fields[index]!;
-    if (field.question.isSecret) {
-      index += 1;
-      const result = await ask(params, [field.question], batch, intro);
-      batch += 1;
-      if (!isActive(params)) {
-        return { status: "cancelled", message: "Secret input was cancelled before commit." };
+    const secret = fields[index]!.question.isSecret;
+    const subject = secret ? "Secret input" : "Form input";
+    const batchFields: StructuredInputField[] = [];
+    if (secret) {
+      batchFields.push(fields[index++]!);
+    } else {
+      while (
+        index < fields.length &&
+        batchFields.length < QUESTION_BATCH_SIZE &&
+        !fields[index]?.question.isSecret
+      ) {
+        batchFields.push(fields[index++]!);
       }
-      if (result.status !== "answered") {
-        const cancellation = cancellationFor(result, "Secret input");
-        if (cancellation.message) {
-          await showStatus(params, cancellation.message);
-        }
-        return cancellation;
-      }
-      answers[field.question.id] = result.answers.answers[field.question.id] ?? [];
-      continue;
-    }
-    const ordinary: StructuredInputField[] = [];
-    while (
-      index < fields.length &&
-      ordinary.length < QUESTION_BATCH_SIZE &&
-      !fields[index]?.question.isSecret
-    ) {
-      ordinary.push(fields[index++]!);
     }
     const result = await ask(
       params,
-      ordinary.map((entry) => entry.question),
+      batchFields.map((entry) => entry.question),
       batch,
       intro,
     );
     batch += 1;
     if (!isActive(params)) {
-      return { status: "cancelled", message: "Form input was cancelled before commit." };
+      return { status: "cancelled", message: `${subject} was cancelled before commit.` };
     }
     if (result.status !== "answered") {
-      const cancellation = cancellationFor(result, "Form input");
+      const cancellation = cancellationFor(result, subject);
       if (cancellation.message) {
         await showStatus(params, cancellation.message);
       }
       return cancellation;
     }
-    for (const entry of ordinary) {
+    for (const entry of batchFields) {
       answers[entry.question.id] = result.answers.answers[entry.question.id] ?? [];
     }
   }

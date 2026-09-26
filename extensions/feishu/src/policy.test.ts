@@ -1,6 +1,7 @@
 // Feishu tests cover policy plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
   hasExplicitFeishuGroupConfig,
@@ -9,7 +10,12 @@ import {
   resolveFeishuGroupToolPolicy,
   resolveFeishuReplyPolicy,
 } from "./policy.js";
+import { setFeishuRuntime } from "./runtime.js";
 import type { FeishuConfig } from "./types.js";
+
+beforeEach(() => {
+  setFeishuRuntime(createPluginRuntimeMock());
+});
 
 function createCfg(feishu: Record<string, unknown>): OpenClawConfig {
   return {

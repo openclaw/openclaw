@@ -347,3 +347,55 @@ describe("irc client privmsg byte-limit chunking", () => {
     }
   });
 });
+
+describe("irc client PRIVMSG chunking", () => {
+  it("does not split an emoji surrogate pair across PRIVMSG chunks", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const text = `${"x".repeat(9)}\u{1F642}rest`;
+      const bodies = await collectPrivmsgBodies(server, text, 10);
+
+      expect(bodies).toEqual(["xxxxxxxxx", "\u{1F642}rest"]);
+      expect(bodies.join("")).toBe(text);
+      expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps a leading emoji whole when the UTF-16 budget is one code unit", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const text = "\u{1F642}A";
+      const bodies = await collectPrivmsgBodies(server, text, 1);
+
+      expect(bodies).toEqual(["\u{1F642}", "A"]);
+      expect(bodies.join("")).toBe(text);
+      expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("preserves one-unit chunks for BMP text", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const bodies = await collectPrivmsgBodies(server, "ABC", 1);
+
+      expect(bodies).toEqual(["A", "B", "C"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("still prefers a nearby space when splitting long PRIVMSG text", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const bodies = await collectPrivmsgBodies(server, "alpha beta gamma", 10);
+
+      expect(bodies).toEqual(["alpha beta", "gamma"]);
+    } finally {
+      await server.close();
+    }
+  });
+});

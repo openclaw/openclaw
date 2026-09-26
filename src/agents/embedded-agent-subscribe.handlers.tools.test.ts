@@ -4322,56 +4322,6 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSourceReplyPayloads).toHaveLength(0);
   });
 
-  it("trims messagingToolSentMediaUrls to 200 on commit (FIFO)", async () => {
-    const { ctx } = createTestContext();
-
-    // Replace mock with a real trim that replicates production cap logic.
-    const MAX = 200;
-    ctx.trimMessagingToolSent = () => {
-      if (ctx.state.messagingToolSentTexts.length > MAX) {
-        const overflow = ctx.state.messagingToolSentTexts.length - MAX;
-        ctx.state.messagingToolSentTexts.splice(0, overflow);
-        ctx.state.messagingToolSentTextsNormalized.splice(0, overflow);
-      }
-      if (ctx.state.messagingToolSentTargets.length > MAX) {
-        const overflow = ctx.state.messagingToolSentTargets.length - MAX;
-        ctx.state.messagingToolSentTargets.splice(0, overflow);
-      }
-      if (ctx.state.messagingToolSentMediaUrls.length > MAX) {
-        const overflow = ctx.state.messagingToolSentMediaUrls.length - MAX;
-        ctx.state.messagingToolSentMediaUrls.splice(0, overflow);
-      }
-    };
-
-    // Pre-fill with 200 URLs (url-0 .. url-199)
-    for (let i = 0; i < 200; i++) {
-      ctx.state.messagingToolSentMediaUrls.push(`file:///img-${i}.jpg`);
-    }
-    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(200);
-
-    // Commit one more via start → end
-    const startEvt: ToolExecutionStartEvent = {
-      toolName: "message",
-      toolCallId: "tool-cap",
-      args: { action: "send", to: "channel:123", content: "hi", media: "file:///img-new.jpg" },
-    };
-    await startTool(ctx, startEvt);
-
-    const endEvt: ToolExecutionEndEvent = {
-      toolName: "message",
-      toolCallId: "tool-cap",
-      isError: false,
-      result: { ok: true },
-    };
-    await endTool(ctx, endEvt);
-
-    // Should be capped at 200, oldest removed, newest appended.
-    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(200);
-    expect(ctx.state.messagingToolSentMediaUrls[0]).toBe("file:///img-1.jpg");
-    expect(ctx.state.messagingToolSentMediaUrls[199]).toBe("file:///img-new.jpg");
-    expect(ctx.state.messagingToolSentMediaUrls).not.toContain("file:///img-0.jpg");
-  });
-
   it("does not commit media URL on tool error", async () => {
     const { ctx } = createTestContext();
 

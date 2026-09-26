@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveWorkerCellExport } from "./worker-cell-package.mjs";
+import {
+  resolveWorkerCellExport,
+  resolveWorkerCellFunctionBinding,
+} from "./worker-cell-package.mjs";
 
 // These chunks belong to the integrity-pinned published 2026.9.4 package.
 const BASELINE_CHUNKS = {
@@ -167,33 +170,37 @@ async function artifactPreservingReader(ctx, stage, packageRoot) {
     "Snapshot package differs from the verified installed CLI",
   );
   const symbol = "withExistingOpenClawStateDatabaseArtifactPreservingReadOnly";
-  const matches = [];
-  for (const [relative, expected] of Object.entries(identity.files)) {
-    if (!/^dist\/openclaw-state-db-readonly-[\w-]+\.mjs$/.test(relative)) {
-      continue;
-    }
-    const file = path.join(packageRoot, relative);
-    assert(fs.lstatSync(file).isFile(), `Expected a regular snapshot owner: ${file}`);
-    const bytes = fs.readFileSync(file);
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
-    assert.equal(sha256, expected.sha256, `Installed snapshot owner changed: ${relative}`);
-    const alias = resolveWorkerCellExport(bytes.toString("utf8"), symbol);
-    if (alias) {
-      matches.push({ file, relative, sha256, alias });
-    }
+  const { createNativeTypeScriptParser } = await import("../../../lib/native-typescript.mts");
+  const parser = createNativeTypeScriptParser({ cwd: packageRoot });
+  let binding;
+  try {
+    binding = await resolveWorkerCellFunctionBinding(
+      identity,
+      packageRoot,
+      "openclaw-state-db-readonly",
+      symbol,
+      parser,
+    );
+  } finally {
+    parser.close();
   }
+  const [name, exportName, sha256] = binding;
+  const relative = `dist/${name}`;
+  const file = path.join(packageRoot, relative);
+  const bytes = fs.readFileSync(file);
   assert.equal(
-    matches.length,
-    1,
-    "Expected exactly one installed artifact-preserving state reader",
+    createHash("sha256").update(bytes).digest("hex"),
+    sha256,
+    `Installed snapshot owner changed: ${relative}`,
   );
-  const binding = matches[0];
-  const module = await import(pathToFileURL(binding.file).href);
-  const read = module[binding.alias];
+  const alias = resolveWorkerCellExport(bytes.toString("utf8"), exportName);
+  assert(alias, "Installed artifact-preserving state reader export is missing");
+  const module = await import(pathToFileURL(file).href);
+  const read = module[alias];
   assert.equal(typeof read, "function", "Installed artifact-preserving state reader is missing");
   return {
     read,
-    evidence: { file: binding.relative, sha256: binding.sha256, export: binding.alias },
+    evidence: { file: relative, sha256, export: alias },
   };
 }
 

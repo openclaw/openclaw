@@ -283,6 +283,27 @@ describe("renderMemoryOverview", () => {
     ).toBe(false);
   });
 
+  it.each([
+    { searchRuntimeRegistered: false, error: "memory plugin unavailable", neutral: true },
+    { searchRuntimeRegistered: true, error: "search manager failed", neutral: false },
+    { searchRuntimeRegistered: undefined, error: "plugin load failed", neutral: false },
+  ])("distinguishes absent search support from $error", ({ neutral, ...diagnostic }) => {
+    const container = renderOverview({
+      kind: "ready",
+      payload: {
+        agentId: "main",
+        searchRuntimeRegistered: diagnostic.searchRuntimeRegistered,
+        embedding: { ok: false, error: diagnostic.error },
+      },
+    });
+
+    expect(container.querySelector(".memory-overview__hero h2")?.textContent).toBe(
+      neutral ? "Host memory search is unavailable" : "Memory needs attention",
+    );
+    expect(container.textContent?.includes("Engine health")).toBe(!neutral);
+    expect(container.textContent?.includes(diagnostic.error)).toBe(!neutral);
+  });
+
   it("opens the Memories tab from the overview shortcut", () => {
     const onNavigate = vi.fn();
     const container = document.createElement("div");

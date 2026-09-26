@@ -1,4 +1,3 @@
-// Control UI chat module implements bounded visible-message caching.
 import {
   createSessionProjection,
   readSessionMessageSequence,
@@ -94,14 +93,6 @@ export function applyChatCacheSnapshot(
   state.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
 }
 
-function publishChatSnapshot(
-  cache: ChatMessageCache,
-  cacheKey: string,
-  snapshot: ChatSessionSnapshot,
-): void {
-  chatCacheObservers.get(cache)?.write(cacheKey, snapshot);
-}
-
 export function appendChatMessageToCache(
   cache: ChatMessageCache,
   host: ChatMessageCacheHost,
@@ -155,7 +146,7 @@ export function appendChatMessageToCache(
     weight,
   });
   trimChatSessionSnapshotCache(cache);
-  publishChatSnapshot(cache, cacheKey, snapshot);
+  chatCacheObservers.get(cache)?.write(cacheKey, snapshot);
 }
 
 export function readChatMessagesFromCache(
@@ -208,7 +199,7 @@ export function cacheChatSessionSnapshot(
   }
   setSessionCacheValue(cache, cacheKey, bounded);
   trimChatSessionSnapshotCache(cache);
-  publishChatSnapshot(cache, cacheKey, bounded.snapshot);
+  chatCacheObservers.get(cache)?.write(cacheKey, bounded.snapshot);
 }
 
 export function readChatSessionSnapshot(

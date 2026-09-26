@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
 import { readRestartSentinelReadOnly, writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { triageCommand } from "./triage.js";
 import { createTriageRuntime, withTriageTerminal } from "./triage.test-support.js";
@@ -161,65 +162,71 @@ describe("triage external recovery handoff", () => {
             : path.join(originalState, "workspace");
         const bin = path.join(home, "bin");
         await fs.mkdir(bin, { recursive: true });
-        vi.stubEnv("HOME", home);
-        vi.stubEnv("OPENCLAW_HOME", home);
-        vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
-        vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
-        vi.stubEnv("OPENCLAW_WORKSPACE_DIR", undefined);
-        // Doctor's dotenv phase can establish the original custom selectors.
-        mocks.collectDoctorFindings.mockImplementation(async () => {
-          process.env.OPENCLAW_CONFIG_PATH = configPath;
-          if (workspaceSelector === "custom") {
-            process.env.OPENCLAW_WORKSPACE_DIR = defaultWorkspaceDir;
-          }
-          return [];
-        });
-        for (const command of [
-          "claude",
-          "codex",
-          "cursor-agent",
-          "grok",
-          "kimi",
-          "muse",
-          "opencode",
-          "pi",
-          "qwen",
-          "openclaw",
-        ]) {
-          const readPrompt =
-            command === "openclaw"
-              ? ""
-              : command === "muse"
-                ? 'test "$1" = exec && test "$2" = --prompt-file && cat "$3"\n'
-                : command === "grok"
-                  ? 'test "$1" = --prompt-file && cat "$2"\n'
-                  : command === "kimi"
-                    ? 'test "$1" = --prompt && prompt_path=${2#Read the debugging prompt at } && prompt_path=${prompt_path% and follow its repair and verification instructions.} && cat "$prompt_path"\n'
-                    : "cat\n";
-          await fs.writeFile(
-            path.join(bin, command),
-            `#!/bin/sh\nprintf "%s\\n" "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_WORKSPACE_DIR"\n${readPrompt}`,
-            { mode: 0o700 },
-          );
-        }
-        const runtime = createTriageRuntime();
-        await triageCommand(runtime, { json: true, noExport: true });
-        const report = runtime.writeJson.mock.calls[0]?.[0] as {
-          promptPath: string;
-          suggestedCommands: string[];
-        };
-        const prompt = await fs.readFile(report.promptPath, "utf8");
-        for (const [index, command] of report.suggestedCommands.entries()) {
-          const { stdout } = await promisify(execFile)("/bin/sh", ["-c", command], {
-            env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
-            timeout: 10_000,
-          });
-          expect(stdout).toBe(
-            `${originalState}\n${configPath}\n${defaultWorkspaceDir}\n${index < agents.length ? prompt : ""}`,
-          );
-        }
-        expect(await fs.readFile(report.promptPath, "utf8")).not.toContain(home);
-        expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+        await withEnvAsync(
+          {
+            HOME: home,
+            OPENCLAW_HOME: home,
+            OPENCLAW_STATE_DIR: undefined,
+            OPENCLAW_CONFIG_PATH: undefined,
+            OPENCLAW_WORKSPACE_DIR: undefined,
+          },
+          async () => {
+            // Doctor's dotenv phase can establish the original custom selectors.
+            mocks.collectDoctorFindings.mockImplementation(async () => {
+              process.env.OPENCLAW_CONFIG_PATH = configPath;
+              if (workspaceSelector === "custom") {
+                process.env.OPENCLAW_WORKSPACE_DIR = defaultWorkspaceDir;
+              }
+              return [];
+            });
+            for (const command of [
+              "claude",
+              "codex",
+              "cursor-agent",
+              "grok",
+              "kimi",
+              "muse",
+              "opencode",
+              "pi",
+              "qwen",
+              "openclaw",
+            ]) {
+              const readPrompt =
+                command === "openclaw"
+                  ? ""
+                  : command === "muse"
+                    ? 'test "$1" = exec && test "$2" = --prompt-file && cat "$3"\n'
+                    : command === "grok"
+                      ? 'test "$1" = --prompt-file && cat "$2"\n'
+                      : command === "kimi"
+                        ? 'test "$1" = --prompt && prompt_path=${2#Read the debugging prompt at } && prompt_path=${prompt_path% and follow its repair and verification instructions.} && cat "$prompt_path"\n'
+                        : "cat\n";
+              await fs.writeFile(
+                path.join(bin, command),
+                `#!/bin/sh\nprintf "%s\\n" "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_WORKSPACE_DIR"\n${readPrompt}`,
+                { mode: 0o700 },
+              );
+            }
+            const runtime = createTriageRuntime();
+            await triageCommand(runtime, { json: true, noExport: true });
+            const report = runtime.writeJson.mock.calls[0]?.[0] as {
+              promptPath: string;
+              suggestedCommands: string[];
+            };
+            const prompt = await fs.readFile(report.promptPath, "utf8");
+            for (const [index, command] of report.suggestedCommands.entries()) {
+              const { stdout } = await promisify(execFile)("/bin/sh", ["-c", command], {
+                env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
+                timeout: 10_000,
+              });
+              expect(stdout).toBe(
+                `${originalState}\n${configPath}\n${defaultWorkspaceDir}\n${index < agents.length ? prompt : ""}`,
+              );
+            }
+            expect(await fs.readFile(report.promptPath, "utf8")).not.toContain(home);
+            expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+          },
+        );
       });
     },
   );
@@ -294,7 +301,11 @@ describe("triage external recovery handoff", () => {
         expect(output).toContain("No repair agent was started.");
         expect(output).not.toContain("Ready-to-run agent handoffs:");
         if (!agent) {
-          expect(output).toContain("Install Claude Code or Codex");
+          expect(output).toContain(
+            "No supported coding-agent CLI executable was found on this process's PATH.",
+          );
+          expect(output).toContain("If already installed, add its executable to this shell's PATH");
+          expect(output).toContain("open the saved debugging prompt in an agent you already use");
         }
         expect(mocks.spawn).not.toHaveBeenCalled();
         expect(mocks.runUtf8CommandWithTimeout).not.toHaveBeenCalled();
@@ -369,7 +380,7 @@ describe("triage external recovery handoff", () => {
           `${agent} is not found or unavailable for direct launch on PATH.`,
         );
         expect(runtime.log).toHaveBeenCalledWith(
-          `Install ${agent === "cursor" ? "Cursor Agent (cursor-agent)" : agent} on PATH, then run triage again.`,
+          `No ${agent === "cursor" ? "Cursor Agent (cursor-agent)" : agent} CLI executable was found on this process's PATH.`,
         );
         expect(runtime.exit).toHaveBeenCalledWith(1);
         expect(mocks.spawn).not.toHaveBeenCalled();

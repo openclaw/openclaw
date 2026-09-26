@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { Message, Usage } from "openclaw/plugin-sdk/llm";
+import type { Message } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it } from "vitest";
 import { createReadTool } from "../agents/sessions/tools/read.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -11,9 +11,19 @@ import {
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
+import {
+  assistantMessage,
+  userMessage,
+  writeSimpleSessionFile,
+  writeToolCallOnlySessionFile,
+  writeToolCallSessionFile,
+} from "./export.test-helpers.js";
 import {
   TRAJECTORY_POINTER_FILE_MAX_BYTES,
   TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
@@ -30,53 +40,6 @@ function makeTempDir(): string {
   const dir = path.join(tempRoot, `case-${tempDirId++}`);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
-}
-
-const emptyUsage: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-};
-
-function userMessage(content: string): Message {
-  return {
-    role: "user",
-    content,
-    timestamp: 1,
-  };
-}
-
-function assistantMessage(content: Extract<Message, { role: "assistant" }>["content"]): Message {
-  return {
-    role: "assistant",
-    content,
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.4",
-    usage: emptyUsage,
-    stopReason: "stop",
-    timestamp: 2,
-  };
-}
-
-function toolResultMessage(content: Extract<Message, { role: "toolResult" }>["content"]): Message {
-  return {
-    role: "toolResult",
-    toolCallId: "call_1",
-    toolName: "read",
-    content,
-    isError: false,
-    timestamp: 3,
-  };
 }
 
 function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] {
@@ -99,38 +62,6 @@ function runtimeAttemptEvents(
     runId,
     ...(data ? { data } : {}),
   }));
-}
-
-function writeSimpleSessionFile(
-  sessionFile: string,
-  params: { userEntryTimestamp?: string | number; userMessage?: Message } = {},
-): void {
-  const header = {
-    type: "session",
-    version: 3,
-    id: "session-1",
-    timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: path.dirname(sessionFile),
-  };
-  const userEntry = {
-    type: "message",
-    id: "entry-user",
-    parentId: null,
-    timestamp: params.userEntryTimestamp ?? "2026-04-01T05:46:40.000Z",
-    message: params.userMessage ?? userMessage("hello"),
-  };
-  const assistantEntry = {
-    type: "message",
-    id: "entry-assistant",
-    parentId: "entry-user",
-    timestamp: "2026-04-01T05:46:41.000Z",
-    message: assistantMessage([{ type: "text", text: "done" }]),
-  };
-  fs.writeFileSync(
-    sessionFile,
-    `${[header, userEntry, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    "utf8",
-  );
 }
 
 async function exportRuntimeArtifacts(
@@ -159,94 +90,10 @@ async function exportRuntimeArtifacts(
     : undefined;
 }
 
-function writeToolCallOnlySessionFile(sessionFile: string): void {
-  const header = {
-    type: "session",
-    version: 3,
-    id: "session-1",
-    timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: path.dirname(sessionFile),
-  };
-  const assistantEntry = {
-    type: "message",
-    id: "entry-assistant",
-    parentId: null,
-    timestamp: "2026-04-01T05:46:41.000Z",
-    message: assistantMessage([
-      {
-        type: "toolCall",
-        id: "call_1",
-        name: "read",
-        arguments: { filePath: "README.md" },
-      },
-    ]),
-  };
-  fs.writeFileSync(
-    sessionFile,
-    `${[header, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    "utf8",
-  );
-}
-
-function writeToolCallSessionFile(sessionFile: string, toolResultText = "README contents"): void {
-  const header = {
-    type: "session",
-    version: 3,
-    id: "session-1",
-    timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: path.dirname(sessionFile),
-    title: "Trajectory Test",
-  };
-  const entries = [
-    header,
-    {
-      type: "message",
-      id: "entry-user",
-      parentId: null,
-      timestamp: "2026-04-01T05:46:40.000Z",
-      message: userMessage("hello"),
-    },
-    {
-      type: "message",
-      id: "entry-tool-call",
-      parentId: "entry-user",
-      timestamp: "2026-04-01T05:46:41.000Z",
-      message: assistantMessage([
-        {
-          type: "toolCall",
-          id: "call_1",
-          name: "read",
-          arguments: {
-            filePath: path.join(path.dirname(sessionFile), "skills", "weather", "SKILL.md"),
-          },
-        },
-      ]),
-    },
-    {
-      type: "message",
-      id: "entry-tool-result",
-      parentId: "entry-tool-call",
-      timestamp: "2026-04-01T05:46:42.000Z",
-      message: toolResultMessage([{ type: "text", text: toolResultText }]),
-    },
-    {
-      type: "message",
-      id: "entry-assistant",
-      parentId: "entry-tool-result",
-      timestamp: "2026-04-01T05:46:43.000Z",
-      message: assistantMessage([{ type: "text", text: "done" }]),
-    },
-  ];
-  fs.writeFileSync(
-    sessionFile,
-    `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    "utf8",
-  );
-}
-
-afterAll(() => {
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 

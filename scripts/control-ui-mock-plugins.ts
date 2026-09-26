@@ -171,7 +171,7 @@ export function buildPluginDiscoveryCategoriesMock(): PluginsCatalogCategoriesRe
         slug: "voice",
         label: "Voice",
         description: "Speech synthesis, transcription, voice calls, and audio interaction.",
-        icon: "message-square",
+        icon: "mic",
         order: 4,
       },
       {

@@ -96,12 +96,12 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
   }),
 }));
 vi.mock("../infra/state-database-coordinator.js", () => ({
-  prepareStateDatabaseCanonicalMutation: () => undefined,
   hasStateDatabaseSourceExclusion: () => false,
   acquireStateDatabaseHandleLease: mocks.forbidden,
 }));
 vi.mock("../infra/sqlite-snapshot-source.js", () => ({
   prepareSqliteReadOnlyLocation: mocks.prepare,
+  prepareSqliteReadOnlyLocationAsync: mocks.prepare,
   prepareSqliteReadOnlyLocationSync: mocks.forbidden,
 }));
 vi.mock("../infra/sqlite-readonly-location.js", () => ({
@@ -112,7 +112,7 @@ vi.mock("../infra/node-sqlite.js", () => ({
   requireNodeSqlite: mocks.forbidden,
 }));
 vi.mock("./openclaw-state-db-read-connection.js", () => ({
-  openOpenClawStateReadConnection: mocks.forbidden,
+  openOpenClawStateReadOnlyLocation: mocks.forbidden,
   withOpenClawStateReadOnlyLocation: mocks.forbidden,
 }));
 vi.mock("./openclaw-state-db-schema-version.js", () => ({
@@ -123,7 +123,6 @@ vi.mock("./openclaw-state-read-worker.js", () => ({
     validateFresh: async () => {},
     read: mocks.read,
     close: mocks.close,
-    readFailure: async () => undefined,
   }),
 }));
 

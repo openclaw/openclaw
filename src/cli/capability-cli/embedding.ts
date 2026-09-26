@@ -1,39 +1,20 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
-import { createEmbeddingProvider } from "../../plugin-sdk/memory-core-bundled-runtime.js";
-import { listEmbeddingProviders } from "../../plugins/embedding-provider-runtime.js";
-import { listRegisteredMemoryEmbeddingProviderAdapters } from "../../plugins/memory-embedding-provider-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import { getMemoryEmbeddingCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
-import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
-import {
-  providerHasGenericConfig,
-  registerLocalProvidersCommand,
-  requireProviderModelOverride,
-  resolveCapabilityAgentOption,
-  resolveCapabilityProviderAgentId,
-  resolveLocalCapabilityRuntimeConfig,
-} from "./shared.js";
+import { registerLocalProvidersCommand } from "./providers-command.js";
 
 async function closeEmbeddingProviderWithRetry(provider: {
   close?: () => Promise<void> | void;
 }): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await provider.close?.();
-      return;
-    } catch (err) {
-      lastError = err;
-    }
+  try {
+    await provider.close?.();
+  } catch {
+    await provider.close?.();
   }
-  throw lastError;
 }
 
 async function runMemoryEmbeddingCreate(params: {
@@ -42,6 +23,15 @@ async function runMemoryEmbeddingCreate(params: {
   model?: string;
   agent?: string;
 }) {
+  const {
+    requireProviderModelOverride,
+    resolveCapabilityProviderAgentId,
+    resolveLocalCapabilityRuntimeConfig,
+  } = await import("./shared.js");
+  const { getMemoryEmbeddingCommandSecretTargetIds } = await import("../command-secret-targets.js");
+  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
+  const { createEmbeddingProvider } =
+    await import("../../plugin-sdk/memory-core-bundled-runtime.js");
   const modelRef = requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer embedding create",
@@ -50,6 +40,7 @@ async function runMemoryEmbeddingCreate(params: {
   const requestedProvider =
     normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer embedding create");
+  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
   await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const result = await createEmbeddingProvider({
     config: cfg,
@@ -62,29 +53,15 @@ async function runMemoryEmbeddingCreate(params: {
     throw new Error(result.providerUnavailableReason ?? "No embedding provider available.");
   }
   const provider = result.provider;
-  let embeddings: number[][] = [];
-  let operationError: unknown;
-  let operationFailed = false;
+  let embeddings: number[][];
   try {
     embeddings = await provider.embedBatch(params.texts, { inputType: "document" });
   } catch (err) {
-    operationError = err;
-    operationFailed = true;
+    // Cleanup failure must not replace the embedding error.
+    await closeEmbeddingProviderWithRetry(provider).catch(() => {});
+    throw err;
   }
-  let closeError: unknown;
-  let closeFailed = false;
-  try {
-    await closeEmbeddingProviderWithRetry(provider);
-  } catch (err) {
-    closeError = err;
-    closeFailed = true;
-  }
-  if (operationFailed) {
-    throw operationError;
-  }
-  if (closeFailed) {
-    throw closeError;
-  }
+  await closeEmbeddingProviderWithRetry(provider);
   return {
     ok: true,
     capability: "embedding.create",
@@ -121,6 +98,7 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { resolveCapabilityAgentOption } = await import("./shared.js");
         const result = await runMemoryEmbeddingCreate({
           texts: opts.text as string[],
           agent: resolveCapabilityAgentOption(command, opts.agent),
@@ -134,7 +112,13 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
   registerLocalProvidersCommand(
     embedding,
     "List embedding providers",
-    (cfg, agentId) => {
+    async (cfg, agentId) => {
+      const { providerHasGenericConfig } = await import("./shared.js");
+      const { resolveMemorySearchConfig } = await import("../../agents/memory-search.js");
+      const { listEmbeddingProviders } =
+        await import("../../plugins/embedding-provider-runtime.js");
+      const { listRegisteredMemoryEmbeddingProviderAdapters } =
+        await import("../../plugins/memory-embedding-provider-runtime.js");
       const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
       const selectedProvider = resolvedMemory?.provider;
       const providers = new Map(

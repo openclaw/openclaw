@@ -1,15 +1,19 @@
 // Devices page renders the mobile device pairing setup dialog.
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { handleCopyButton, renderCopyButton } from "../../components/copy-button.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import type {
   DevicePairSetupAccess,
   DevicePairSetupLifecycle,
 } from "../../lib/device-pair-setup.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatCountdown } from "../../lib/format.ts";
+
+registerDevicesEnglish();
 
 const MOBILE_PAIRING_DOCS_URL =
   "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended";
@@ -249,14 +253,17 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                     ${
                       isNodeSetup
                         ? nothing
-                        : html`<button
-                            class="btn primary"
-                            type="button"
-                            @click=${(event: Event) =>
-                              void handleCopyButton(event, setup.setupCode, copyLabel)}
-                          >
-                            ${icons.copy} <span data-copy-label>${copyLabel}</span>
-                          </button>`
+                        : keyed(
+                            setup.setupCode,
+                            html`<button
+                              class="btn primary"
+                              type="button"
+                              @click=${(event: Event) =>
+                                void handleCopyButton(event, setup.setupCode, copyLabel)}
+                            >
+                              ${icons.copy} <span data-copy-label>${copyLabel}</span>
+                            </button>`,
+                          )
                     }
                     <button class="btn" type="button" @click=${props.onRefresh}>
                       ${icons.refresh} ${t("devices.pairing.newCode")}

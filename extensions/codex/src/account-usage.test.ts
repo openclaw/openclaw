@@ -116,6 +116,43 @@ describe("codex.accountUsage", () => {
     );
   });
 
+  it("distinguishes reserve quota from ordinary Luna in selected-account usage", async () => {
+    const ordinary = usage(100).rateLimits.rateLimits;
+    vi.mocked(readCodexAppServerUsage).mockResolvedValue({
+      rateLimits: {
+        rateLimits: ordinary,
+        rateLimitsByLimitId: {
+          codex: ordinary,
+          base_model_inference: {
+            limitId: "base_model_inference",
+            limitName: "gpt-reserve",
+            normalModelSlug: "gpt-5.6-luna",
+            secondary: { usedPercent: 0, windowDurationMins: 10_080 },
+          },
+        },
+        ordinaryUsageAllowed: null,
+        rateLimitUpsell: null,
+      },
+    });
+    const respond = await request({ agentId: "work", profileId: "openai:alex" });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        providers: [
+          expect.objectContaining({
+            summary: expect.stringContaining("Ordinary Luna does not use this reserve"),
+            windows: expect.arrayContaining([
+              expect.objectContaining({
+                groupLabel: "Luna Reserve (separate route)",
+                usedPercent: 0,
+              }),
+            ]),
+          }),
+        ],
+      }),
+    );
+  });
+
   it("rejects proxy launches before sending the selected account to a shared daemon", async () => {
     config.plugins = {
       entries: {

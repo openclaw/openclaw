@@ -36,6 +36,7 @@ function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey =
   const context = {
     basePath: "",
     chatSubmissions: createChatSubmissions(),
+    placementStartup: { get: vi.fn(() => null) },
     router: { getState: () => ({ matches: [], pendingMatches: [] }), subscribe: () => () => {} },
     gateway: {
       snapshot: { phase: "connected", client, hello: null },

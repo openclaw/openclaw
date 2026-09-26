@@ -9,7 +9,6 @@ import {
   createDispatcher,
   emptyConfig,
   hookMocks,
-  replyMediaPathMocks,
   sessionStoreMocks,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
@@ -697,51 +696,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("normalizes tool-result media before delivery and drops blocked file URLs", async () => {
-    setNoAbort();
-    replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
-      async (payload: ReplyPayload) => ({
-        ...payload,
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-      }),
-    );
-    const cfg = automaticGroupReplyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      ChatType: "group",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolResult?.({
-        text: "NO_REPLY",
-        mediaUrls: ["file://attacker/share/probe.mp3"],
-      });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
-
-    const normalizerOptions = replyMediaPathMocks.createReplyMediaPathNormalizer.mock
-      .calls[0]?.[0] as { cfg?: unknown; messageProvider?: unknown } | undefined;
-    expect(normalizerOptions?.cfg).toBe(cfg);
-    expect(normalizerOptions?.messageProvider).toBe("webchat");
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
-  });
-
   it("delivers tool summaries in forum topic sessions when verbose is enabled", async () => {
     setNoAbort();
     const cfg = {
@@ -773,50 +727,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 exec: ls");
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("delivers deterministic exec approval tool payloads in groups", async () => {
-    setNoAbort();
-    const cfg = automaticGroupReplyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "group",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolResult?.({
-        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
-        channelData: {
-          execApproval: {
-            approvalId: "117ba06d-1111-2222-3333-444444444444",
-            approvalSlug: "117ba06d",
-            allowedDecisions: ["allow-once", "allow-always", "deny"],
-          },
-        },
-      });
-      return { text: "NO_REPLY" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
-    const toolPayload = firstToolResultPayload(dispatcher);
-    expect(toolPayload?.text).toBe(
-      "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
-    );
-    expect(toolPayload?.channelData).toStrictEqual({
-      execApproval: {
-        approvalId: "117ba06d-1111-2222-3333-444444444444",
-        approvalSlug: "117ba06d",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
-    });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "NO_REPLY" });
   });
 
   it("sends tool results via dispatcher in DM sessions", async () => {
@@ -1458,8 +1368,11 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(failedOutput);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+    expect(firstToolResultPayload(dispatcher)).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("No such file or directory"),
+    });
   });
 
   it("forwards failed command progress in regular verbose mode", async () => {

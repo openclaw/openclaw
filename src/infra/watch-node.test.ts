@@ -774,49 +774,56 @@ describe("watch-node script", () => {
   });
 
   it("prints recovery guidance when chokidar fails with invalid package config", async () => {
-    const error = Object.assign(
-      new Error(
-        'Invalid package config /tmp/openclaw/.pnpm/chokidar/package.json while importing "chokidar" from /tmp/openclaw/scripts/watch-node.mjs.',
-      ),
-      { code: "ERR_INVALID_PACKAGE_CONFIG" },
-    );
-    const child = createKillableChild();
-    const spawn = vi.fn(() => child);
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await withTestDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
+      const packageConfigPath = path.join(cwd, ".pnpm", "chokidar", "package.json");
+      const scriptPath = path.join(cwd, "scripts", "watch-node.mjs");
+      const error = Object.assign(
+        new Error(
+          `Invalid package config ${packageConfigPath} while importing "chokidar" from ${scriptPath}.`,
+        ),
+        { code: "ERR_INVALID_PACKAGE_CONFIG" },
+      );
+      const child = createKillableChild();
+      const spawn = vi.fn(() => child);
+      const loadChokidar = vi.fn(async () => {
+        throw error;
+      });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    try {
-      await expect(
-        runWatch({
-          args: ["gateway", "--force"],
-          cwd: "/tmp/openclaw",
-          loadChokidar: vi.fn(async () => {
-            throw error;
+      try {
+        await expect(
+          runWatch({
+            args: ["gateway", "--force"],
+            cwd,
+            loadChokidar,
+            process: createFakeProcess(),
+            spawn,
           }),
-          process: createFakeProcess(),
-          spawn,
-        }),
-      ).rejects.toBe(error);
+        ).rejects.toBe(error);
 
-      expect(spawn).toHaveBeenCalledTimes(1);
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-      expect(errorSpy.mock.calls).toEqual([
-        [""],
-        [
-          "[openclaw] gateway:watch could not start because a dependency package config looks corrupted.",
-        ],
-        ["[openclaw] Invalid package config: /tmp/openclaw/.pnpm/chokidar/package.json"],
-        ["[openclaw] This usually means a file in node_modules is empty or truncated."],
-        ["[openclaw] Recommended recovery:"],
-        ["[openclaw]   rm -rf node_modules"],
-        ["[openclaw]   pnpm store prune"],
-        ["[openclaw]   pnpm install"],
-        [""],
-        ["[openclaw] Original error:"],
-        [error],
-      ]);
-    } finally {
-      errorSpy.mockRestore();
-    }
+        expect(loadChokidar).toHaveBeenCalledOnce();
+        expect(spawn).toHaveBeenCalledTimes(1);
+        expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+        expect(fs.existsSync(resolveTestWatchLockPath(cwd, ["gateway", "--force"]))).toBe(false);
+        expect(errorSpy.mock.calls).toEqual([
+          [""],
+          [
+            "[openclaw] gateway:watch could not start because a dependency package config looks corrupted.",
+          ],
+          [`[openclaw] Invalid package config: ${packageConfigPath}`],
+          ["[openclaw] This usually means a file in node_modules is empty or truncated."],
+          ["[openclaw] Recommended recovery:"],
+          ["[openclaw]   rm -rf node_modules"],
+          ["[openclaw]   pnpm store prune"],
+          ["[openclaw]   pnpm install"],
+          [""],
+          ["[openclaw] Original error:"],
+          [error],
+        ]);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
   });
 
   it("does not log non-package-config chokidar import errors before rethrowing", async () => {

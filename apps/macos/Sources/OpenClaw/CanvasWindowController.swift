@@ -42,7 +42,6 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         config.userContentController = WKUserContentController()
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.tabFocusesLinks = true
-        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         canvasWindowLogger.debug("CanvasWindowController init config ready")
         for scheme in CanvasScheme.allSchemes {
             config.setURLSchemeHandler(self.schemeHandler, forURLScheme: scheme)
@@ -188,6 +187,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
     }
 
     func updateDebugStatus(enabled: Bool, title: String?, subtitle: String?) {
+        self.webView.configuration.preferences.setValue(enabled, forKey: "developerExtrasEnabled")
         self.debugStatusEnabled = enabled
         self.debugStatusTitle = title
         self.debugStatusSubtitle = subtitle

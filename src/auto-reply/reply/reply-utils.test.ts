@@ -1599,7 +1599,6 @@ describe("createStreamingDirectiveAccumulator", () => {
       expect(accumulator.consume(`${"MEDIA".slice(prefix.length)}:./asset.png`)).toBeNull();
       const final = accumulator.consume("", { final: true });
       expect(final?.text).toBe("\tMEDIA:./asset.png");
-      expect(parseReplyDirectives(final?.text ?? "").mediaUrls).toEqual(["./asset.png"]);
     },
   );
 

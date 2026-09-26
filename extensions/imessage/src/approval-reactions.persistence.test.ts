@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listPendingIMessageApprovalReactionPollTargets } from "./approval-reaction-poll-targets.js";
 import {
@@ -32,7 +32,7 @@ describe("iMessage approval reaction persistence", () => {
     const pollWrites: Promise<void>[] = [];
     const openSpy = vi
       .spyOn(state, "openKeyedStore")
-      .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
+      .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = openStore<T>(options);
         const register = store.register.bind(store);
         const remove = store.delete.bind(store);

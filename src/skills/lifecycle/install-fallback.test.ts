@@ -24,7 +24,7 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
 
 vi.mock("../loading/workspace-skill-loader.js", () => {
   return {
-    loadWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
+    prepareWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
   };
 });
 

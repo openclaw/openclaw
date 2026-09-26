@@ -275,8 +275,9 @@ describe("one-shot diagnostics registration resources", () => {
     let released: Promise<void> | undefined;
     vi.useFakeTimers();
     try {
+      // One-shot service views omit the inspection runtime binding.
       starting = startPluginServices({
-        registry: acquired.registry,
+        registry: { ...acquired.registry },
         config: fixture.config,
         oneShotStopTimeouts: { eventDrainMs: 5_000, serviceStopMs: 10_000 },
       });
@@ -389,7 +390,7 @@ describe("one-shot diagnostics registration resources", () => {
     const broadcast = vi.fn();
     const services = await work.track(() =>
       startPluginServices({
-        registry: acquired.registry,
+        registry: { ...acquired.registry },
         config: fixture.config,
         broadcastPluginEvent: broadcast,
         oneShotStopTimeouts: { eventDrainMs: 5_000, serviceStopMs: 10_000 },

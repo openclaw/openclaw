@@ -108,16 +108,31 @@ describe("nextcloud-talk send cfg threading", () => {
     return { source: "provided" } as const;
   }
 
-  it("rejects sends before HTTP when the configured account credential is unavailable", async () => {
-    const cfg = useUnavailableBotSecretAccount();
+  it.each([
+    ["configured_unavailable", /bot secret.*configured.*unavailable.*"work".*check/i],
+    ["missing", /bot secret missing.*"work".*(set|configure)/i],
+  ] as const)(
+    "distinguishes %s credentials before signing or sending",
+    async (tokenStatus, error) => {
+      hoisted.resolveNextcloudTalkAccount.mockReturnValue({
+        ...defaultAccount,
+        accountId: "work",
+        secret: "",
+        tokenStatus,
+      });
 
-    await expect(sendMessageNextcloudTalk("room:abc123", "hello", { cfg })).rejects.toThrow(
-      /secret|unavailable/i,
-    );
+      await expect(
+        sendMessageNextcloudTalk("room:abc123", "hello", {
+          cfg: { source: "provided" },
+          accountId: "work",
+        }),
+      ).rejects.toThrow(error);
 
-    expect(hoisted.mockFetchGuard).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
+      expect(hoisted.generateNextcloudTalkSignature).not.toHaveBeenCalled();
+      expect(hoisted.mockFetchGuard).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses an explicit per-call credential when the configured account SecretRef is unavailable", async () => {
     const cfg = useUnavailableBotSecretAccount();

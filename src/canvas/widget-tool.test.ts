@@ -12,8 +12,14 @@ import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
 import { registerTestWidgetContentKind as registerDiagramContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
@@ -31,7 +37,9 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -623,7 +631,7 @@ describe("show_widget", () => {
       `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://cdnjs.cloudflare.com`,
     );
     expect(html).toContain("font-src data:");
-    expect(html).toContain("img-src data:; connect-src 'none'");
+    expect(html).toContain("img-src data:; media-src data: https: blob:; connect-src 'none'");
     expect(html).toContain("<title>&lt;Status&gt;</title>");
     expect(html).toContain("--accent:#bd4531");
     expect(html).toContain("--accent:#ff5c5c");

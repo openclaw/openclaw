@@ -107,6 +107,7 @@ export function resolveAcpSpawnRuntimeOptions(params: {
     cfg: params.cfg,
     agentId: policyAgentId,
     modelOverride: params.model,
+    modelRuntime: "acp",
   });
   const modelSelection = splitTrailingAuthProfile(rawModel ?? "");
   if (modelExplicit && modelSelection.profile) {

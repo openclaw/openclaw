@@ -2,6 +2,7 @@
 // whose producer-owned source may disappear before retry.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileStore } from "@openclaw/fs-safe/store";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { hasNonEmptyString as isNonEmptyMediaSource } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -11,8 +12,10 @@ import {
   type OutboundMediaAccess,
 } from "../../media/load-options.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
-import { fileStore } from "../file-store.js";
+import {
+  captureDeliveryQueueStateContext,
+  type DeliveryQueueStateContext,
+} from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
 import {
   ARTIFACT_NAME_RE,
@@ -72,6 +75,7 @@ export async function stageQueuePayloadMedia(
     mediaAccess?: OutboundMediaAccess;
     maxBytes: number;
     stateDir?: string;
+    artifactFormat?: "session-generation-v1" | "command-owner-v1";
   },
   context?: DeliveryQueueStateContext,
 ): Promise<StageQueueMediaResult> {
@@ -81,12 +85,23 @@ export async function stageQueuePayloadMedia(
   }
 
   const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(stateDir));
+  // Older queue readers skip these artifacts instead of collecting media whose
+  // authority-bound queue namespace they cannot inventory.
+  const artifactPrefix =
+    params.artifactFormat === "command-owner-v1"
+      ? "c1-"
+      : params.artifactFormat === "session-generation-v1"
+        ? "g1-"
+        : "";
   const artifactsBySource = new Map<string, string>();
   for (const source of params.payloads.flatMap(payloadMediaSources)) {
     if (isSpoolableSource(source) && !artifactsBySource.has(source)) {
       artifactsBySource.set(
         source,
-        path.join(spoolRoot, `${generateSecureUuid()}${resolveArtifactExtension(source)}`),
+        path.join(
+          spoolRoot,
+          `${artifactPrefix}${generateSecureUuid()}${resolveArtifactExtension(source)}`,
+        ),
       );
     }
   }
@@ -244,22 +259,24 @@ async function pruneDeliveryQueueMedia(params: {
 }
 
 /** Reclaims queue media using the complete pending inventory as the retain set. */
-export async function pruneOrphanedDeliveryQueueMedia(params?: {
-  stateDir?: string;
-  nowMs?: number;
-}): Promise<void> {
+export async function pruneOrphanedDeliveryQueueMedia(
+  params?: { stateDir?: string; nowMs?: number },
+  context?: DeliveryQueueStateContext,
+): Promise<void> {
+  const captured = context ?? captureDeliveryQueueStateContext(params?.stateDir);
+  const stateDir = captured.stateDir;
   const nowMs = params?.nowMs ?? Date.now();
-  const snapshot = loadDeliveryQueueMediaRetentionSnapshot({
-    expireBeforeMs: nowMs - ORPHAN_GRACE_MS,
-    stateDir: params?.stateDir,
-  });
+  const snapshot = await loadDeliveryQueueMediaRetentionSnapshot(
+    { expireBeforeMs: nowMs - ORPHAN_GRACE_MS },
+    captured,
+  );
   await pruneDeliveryQueueMedia({
     retainPaths: new Set(
       snapshot.stagedArtifacts.concat(
-        snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, params?.stateDir)),
+        snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, stateDir)),
       ),
     ),
-    stateDir: params?.stateDir,
+    stateDir,
     nowMs,
   });
 }

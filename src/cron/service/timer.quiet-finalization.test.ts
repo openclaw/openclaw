@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
-import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
+import { findTaskByRunId, listTaskRecords } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { advanceCronActiveJobGeneration } from "../active-jobs.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
@@ -36,7 +36,7 @@ function createDueIsolatedAgentJob(params: { now: number }): CronJob {
 function findCronTaskByBaseRunId(baseRunId: string) {
   return (
     findTaskByRunId(baseRunId) ??
-    listTaskRecordsUnsorted().find((task) => task.runId?.startsWith(`${baseRunId}:`))
+    listTaskRecords().find((task) => task.runId?.startsWith(`${baseRunId}:`))
   );
 }
 

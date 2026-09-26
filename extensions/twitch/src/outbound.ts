@@ -124,16 +124,15 @@ export const twitchOutbound: ChannelOutboundAdapter = {
       throw new Error("Outbound delivery aborted");
     }
 
-    const resolvedAccountId = accountId ?? resolveTwitchAccountContext(cfg).accountId;
     const {
       account,
       accountId: normalizedAccountId,
       availableAccountIds,
       configured,
-    } = resolveTwitchAccountContext(cfg, resolvedAccountId);
+    } = resolveTwitchAccountContext(cfg, accountId);
     if (!account) {
       throw new Error(
-        `Twitch account not found: ${resolvedAccountId}. ` +
+        `Twitch account not found: ${accountId ?? normalizedAccountId}. ` +
           `Available accounts: ${availableAccountIds.join(", ") || "none"}`,
       );
     }

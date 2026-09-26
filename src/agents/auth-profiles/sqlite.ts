@@ -4,15 +4,11 @@
  * store/state layers that own compatibility rules.
  */
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -44,10 +40,11 @@ import {
   SHARED_STORE_STATE_KEY,
   SHARED_STATE_STATE_KEY,
   getAgentAuthProfileKysely,
-  getSharedAuthProfileKysely,
   inspectAuthProfileJsonCell,
   inspectAgentAuthProfileJsonCellReadOnly,
   readSharedAuthKvCell,
+  writeAuthProfileJsonCell,
+  deleteAuthProfileJsonCell,
 } from "./sqlite-json.js";
 import {
   acquireAuthProfileReadDatabase,
@@ -102,28 +99,6 @@ type AuthProfileDatabaseTarget =
   | { kind: "agent"; agentId: string; path: string; env: NodeJS.ProcessEnv }
   | { kind: "shared-state"; path: string; env: NodeJS.ProcessEnv };
 
-function writeSharedAuthKvCell(db: DatabaseSync, stateKey: string, valueJson: string): void {
-  executeSqliteQuerySync(
-    db,
-    getSharedAuthProfileKysely(db)
-      .insertInto("config_machine_state")
-      .values({ state_key: stateKey, value_json: valueJson, updated_at_ms: Date.now() })
-      .onConflict((conflict) =>
-        conflict
-          .column("state_key")
-          .doUpdateSet({ value_json: valueJson, updated_at_ms: Date.now() }),
-      ),
-  );
-}
-
-function deleteSharedAuthKvCell(db: DatabaseSync, stateKey: string): void {
-  executeSqliteQuerySync(
-    db,
-    getSharedAuthProfileKysely(db)
-      .deleteFrom("config_machine_state")
-      .where("state_key", "=", stateKey),
-  );
-}
 const authProfileTransactions = new WeakMap<
   AuthProfileDatabase,
   { owner: PreparedAuthProfileStoreOwner }
@@ -360,34 +335,14 @@ export function writePersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): void {
-  const databaseKind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const write = (target: AuthProfileDatabase) => {
-    if (databaseKind === "shared-state") {
-      writeSharedAuthKvCell(target.db, SHARED_STORE_STATE_KEY, JSON.stringify(payload));
-      return;
-    }
-    executeSqliteQuerySync(
-      target.db,
-      getAgentAuthProfileKysely(target.db)
-        .insertInto("auth_profile_store")
-        .values({
-          store_key: PRIMARY_ROW_KEY,
-          store_json: JSON.stringify(payload),
-          updated_at: Date.now(),
-        })
-        .onConflict((conflict) =>
-          conflict.column("store_key").doUpdateSet({
-            store_json: JSON.stringify(payload),
-            updated_at: Date.now(),
-          }),
-        ),
-    );
-  };
+  const kind = resolveAuthProfileDatabaseKind(agentDir, database);
+  const write = (target: AuthProfileDatabase) =>
+    writeAuthProfileJsonCell(target.db, "store", kind, payload);
   if (database) {
     write(database);
-    return;
+  } else {
+    runAuthProfileWriteTransaction(agentDir, write);
   }
-  runAuthProfileWriteTransaction(agentDir, write);
 }
 
 /** Deletes the persisted secrets-store row while leaving runtime state intact. */
@@ -395,24 +350,14 @@ export function deletePersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): void {
-  const databaseKind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const remove = (target: AuthProfileDatabase) => {
-    if (databaseKind === "shared-state") {
-      deleteSharedAuthKvCell(target.db, SHARED_STORE_STATE_KEY);
-      return;
-    }
-    executeSqliteQuerySync(
-      target.db,
-      getAgentAuthProfileKysely(target.db)
-        .deleteFrom("auth_profile_store")
-        .where("store_key", "=", PRIMARY_ROW_KEY),
-    );
-  };
+  const kind = resolveAuthProfileDatabaseKind(agentDir, database);
+  const remove = (target: AuthProfileDatabase) =>
+    deleteAuthProfileJsonCell(target.db, "store", kind);
   if (database) {
     remove(database);
-    return;
+  } else {
+    runAuthProfileWriteTransaction(agentDir, remove);
   }
-  runAuthProfileWriteTransaction(agentDir, remove);
 }
 
 /** Writes or deletes the persisted runtime-state payload. */
@@ -421,46 +366,16 @@ export function writePersistedAuthProfileStateRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): void {
-  const databaseKind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const write = (target: AuthProfileDatabase) => {
-    if (databaseKind === "shared-state") {
-      if (!payload) {
-        deleteSharedAuthKvCell(target.db, SHARED_STATE_STATE_KEY);
-        return;
-      }
-      writeSharedAuthKvCell(target.db, SHARED_STATE_STATE_KEY, JSON.stringify(payload));
-      return;
-    }
-    const db = getAgentAuthProfileKysely(target.db);
-    if (!payload) {
-      executeSqliteQuerySync(
-        target.db,
-        db.deleteFrom("auth_profile_state").where("state_key", "=", PRIMARY_ROW_KEY),
-      );
-      return;
-    }
-    executeSqliteQuerySync(
-      target.db,
-      db
-        .insertInto("auth_profile_state")
-        .values({
-          state_key: PRIMARY_ROW_KEY,
-          state_json: JSON.stringify(payload),
-          updated_at: Date.now(),
-        })
-        .onConflict((conflict) =>
-          conflict.column("state_key").doUpdateSet({
-            state_json: JSON.stringify(payload),
-            updated_at: Date.now(),
-          }),
-        ),
-    );
-  };
+  const kind = resolveAuthProfileDatabaseKind(agentDir, database);
+  const write = (target: AuthProfileDatabase) =>
+    payload
+      ? writeAuthProfileJsonCell(target.db, "state", kind, payload)
+      : deleteAuthProfileJsonCell(target.db, "state", kind);
   if (database) {
     write(database);
-    return;
+  } else {
+    runAuthProfileWriteTransaction(agentDir, write);
   }
-  runAuthProfileWriteTransaction(agentDir, write);
 }
 
 type AuthProfileWriteOptions = {
@@ -469,7 +384,7 @@ type AuthProfileWriteOptions = {
   stateDir?: string;
 };
 
-function prepareAuthProfileWriteTransaction(
+export function prepareAuthProfileWriteTransaction(
   agentDir: string | undefined,
   options: AuthProfileWriteOptions,
 ) {

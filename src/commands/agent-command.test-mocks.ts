@@ -275,9 +275,14 @@ vi.mock("../skills/loading/workspace-skill-prompt.js", () => ({
 }));
 
 vi.mock("../skills/loading/workspace-skill-loader.js", () => {
+  const loadVisibleSkills = vi.fn<
+    typeof import("../skills/loading/workspace-skill-loader.js").loadVisibleSkills
+  >(() => []);
   return {
     filterWorkspaceSkills: (entries: unknown[]) => entries,
-    loadVisibleSkills: vi.fn(() => []),
+    loadVisibleSkills,
+    prepareWorkspaceSkills: async (...args: Parameters<typeof loadVisibleSkills>) =>
+      loadVisibleSkills(...args),
     loadWorkspaceSkills: vi.fn(() => []),
   };
 });

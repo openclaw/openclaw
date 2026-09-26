@@ -96,13 +96,23 @@ function isAwsValueCharacter(char: string): boolean {
 
 const AWS_SECRET_ACCESS_KEY_VALUE_RE =
   /(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[G-Zg-z/+=])[A-Za-z0-9/+=]{40}/u;
+const AWS_SECRET_ACCESS_KEY_RUN_RE = /[A-Za-z0-9/+=]{40}/u;
+
+function couldMatchAwsSecretAccessKey(text: string): boolean {
+  // Reject short word runs before the value rule retries its lookaheads at every character.
+  return (
+    text.length >= 40 &&
+    AWS_SECRET_ACCESS_KEY_RUN_RE.test(text) &&
+    AWS_SECRET_ACCESS_KEY_VALUE_RE.test(text)
+  );
+}
 
 const AWS_VALUE_WHITESPACE_RE = /\s/;
 const AWS_URL_SCHEME_CHARACTER_RE = /[A-Za-z0-9+.-]/;
 const AWS_URL_SCHEME_START_RE = /[A-Za-z]/;
 
 function* matchAwsSecretAccessKeys(text: string): Iterable<RedactMatch> {
-  if (!AWS_SECRET_ACCESS_KEY_VALUE_RE.test(text)) {
+  if (!couldMatchAwsSecretAccessKey(text)) {
     return;
   }
   type UrlContext = {
@@ -253,7 +263,7 @@ function* matchAwsSecretAccessKeys(text: string): Iterable<RedactMatch> {
 export const AWS_SECRET_ACCESS_KEY_MATCHER = Object.freeze({
   source: "aws-secret-access-key",
   exec: matchAwsSecretAccessKeys,
-  couldMatch: (text: string) => AWS_SECRET_ACCESS_KEY_VALUE_RE.test(text),
+  couldMatch: couldMatchAwsSecretAccessKey,
 });
 const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;

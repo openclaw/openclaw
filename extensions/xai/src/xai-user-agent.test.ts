@@ -2,6 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { xaiUserAgent, xaiUserAgentHeaderFor } from "./xai-user-agent.js";
 
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => {
+  throw new Error("xAI attribution must not load the harness execution runtime");
+});
+
 describe("xaiUserAgent", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

@@ -17,13 +17,12 @@ import {
 import { loadPendingFinalDeliveryPayload } from "../registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
-import {
-  bindSubagentRunRecord,
-  loadSubagentRegistryFromSqlite,
-  upsertSubagentRunRowInDatabase,
-} from "../registry/subagent-registry.store.sqlite.js";
+import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
+import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import {
   blockSubagentCompletionDelivery,
+  settleRequesterCompletionBatch,
   settleSubagentCompletionDelivery,
 } from "./subagent-completion-admission.store.js";
 import {
@@ -88,6 +87,36 @@ describe("persisted subagent requester wakes", () => {
     }
     ensureTaskRegistryReady();
   }
+
+  it.each([true, false])(
+    "keeps active cleanup unless requester delivery is blocked (delivered=%s)",
+    (delivered) => {
+      const input = armRequesterWake(records());
+      input.subagent.cleanupCompletedAt = undefined;
+      persistOwner(input);
+      const driver = requesterWakeDriver([input]);
+      const generation = driver.controller.bumpCleanupGeneration(input.subagent);
+
+      settleRequesterCompletionBatch({
+        entries: [{ subagent: input.subagent, taskId: input.task.taskId }],
+        outcome: {
+          delivered,
+          path: "direct",
+          error: delivered ? undefined : "requester unavailable",
+        },
+        isCurrent: () => true,
+        databaseOptions: { database },
+      });
+
+      expect(
+        driver.controller.isCleanupAttemptCurrent(input.subagent.runId, input.subagent, generation),
+      ).toBe(delivered);
+      expect(input.subagent.requesterSettleWake).toBeUndefined();
+      expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.cleanupHandled).toBe(
+        false,
+      );
+    },
+  );
 
   it("settles a rejected dispatch transition after rollback without another wake", async () => {
     const input = armRequesterWake(records());
@@ -819,17 +848,16 @@ describe("persisted subagent requester wakes", () => {
         reopenOwners();
         const restored = subagentRuns.get(input.subagent.runId)!;
         expect(restored.execution).toEqual(before.execution);
-        expect(restored.cleanupCompletedAt).toBe(endedAt);
+        expect(restored.cleanupCompletedAt).toBe(
+          change === "unchanged" ? restored.delivery?.discardedAt : endedAt,
+        );
         if (change === "unchanged") {
           expect(restored.requesterSettleWake).toBeUndefined();
-          expect(restored.completion).toEqual({
-            required: true,
-            resultText: null,
-            capturedAt: endedAt,
-          });
+          expect(restored.completion).toEqual(before.completion);
           expect(restored.delivery).toMatchObject({
-            status: "failed",
-            lastError: "requester unavailable",
+            status: "discarded",
+            discardReason: "task-missing",
+            discardedAt: expect.any(Number),
           });
           expect(restored.suppressCompletionDelivery).toBe(true);
         } else {

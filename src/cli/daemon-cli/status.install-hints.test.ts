@@ -235,6 +235,7 @@ describe.each(deniedInvocations)(
           expect(output).toMatch(recovery);
           expect(output).not.toMatch(/\bgateway\s+install\b/);
           expect(output).not.toMatch(/\bdoctor\s+--repair\b/);
+          expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
           expect(output).not.toContain("launchctl bootout");
           expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
         });
@@ -244,6 +245,30 @@ describe.each(deniedInvocations)(
 );
 
 describe("eligible status recovery", () => {
+  it("directs version-manager runtime findings to Doctor before reinstall", async () => {
+    await withStatusFixture(
+      () => ({}),
+      async (accountHome, print) => {
+        const status = await createStatus("config-audit", accountHome);
+        status.service.configAudit = {
+          ok: false,
+          issues: [
+            {
+              code: "gateway-runtime-node-version-manager",
+              message:
+                "Gateway service uses Node from a version manager; it can break after upgrades.",
+              level: "recommended",
+            },
+          ],
+        };
+        print(status, { json: false });
+        expect(humanOutput()).toContain("openclaw doctor");
+        expect(humanOutput()).toContain("Reinstalling alone may select the same runtime");
+        expect(humanOutput()).not.toContain("openclaw gateway install --force");
+      },
+    );
+  });
+
   it.each([false, true])(
     "keeps remote service-install facts diagnostic-only when install blocked=%s",
     async (blocked) => {
@@ -262,6 +287,7 @@ describe("eligible status recovery", () => {
           expect(output).toContain("The Gateway did not report its own version");
           expect(output).not.toMatch(/\breinstall\b/i);
           expect(output).not.toMatch(/\bgateway\s+install\b/);
+          expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
           expect(output).not.toContain("Nix mode detected");
         },
       );
@@ -339,6 +365,9 @@ describe("eligible status recovery", () => {
         print(await createStatus("missing-unit", accountHome), { json: false });
         expect(humanOutput()).toContain("openclaw --profile work gateway install");
         expect(humanOutput()).not.toContain("service management skipped");
+        print(await createStatus("version-mismatch", accountHome), { json: false });
+        expect(humanOutput()).toContain("openclaw --profile work doctor --fix");
+        expect(humanOutput()).toContain("openclaw --profile work gateway install --force");
       },
     );
   });

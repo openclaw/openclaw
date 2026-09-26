@@ -6,8 +6,14 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { handleBoardHttpRequest } from "./board-http.js";
 import {
   BOARD_VIEW_TICKET_TTL_MS,
@@ -123,7 +129,9 @@ afterAll(async () => {
       resolve();
     });
   });
+  await closeOpenClawAgentDatabasesAsync(stateDir);
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   rmSync(stateDir, { recursive: true, force: true });
 });

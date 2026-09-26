@@ -125,7 +125,7 @@ esac
 fixture=$(/bin/cat "$last")
 if [ "$mode" = "-extract" ]; then
   if [ "$fixture" = "same-label" ]; then
-    printf '%s\\n' "ai.openclaw.gateway"
+    printf '%s' "ai.openclaw.gateway"
     exit 0
   fi
   printf '%s\\n' "No value at that key path: Label" >&2
@@ -417,7 +417,7 @@ describe("system LaunchDaemon ownership", () => {
 
     expect(script).toContain('launchctl print "$openclaw_system_launchd_target"');
     expect(script).toContain(
-      '/usr/bin/plutil -extract Label raw -o - -- "$openclaw_system_launchd_plist"',
+      '/usr/bin/plutil -extract Label raw -expect string -n -o - -- "$openclaw_system_launchd_plist"',
     );
     expect(script).toContain(
       '/usr/bin/plutil -lint -- "$openclaw_system_launchd_plist" >/dev/null 2>&1',

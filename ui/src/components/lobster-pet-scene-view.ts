@@ -1,4 +1,8 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import {
+  isThemeCritterId,
+  type ThemeArtwork,
+} from "../../../packages/gateway-protocol/src/theme.ts";
 import { lobsterHonorific } from "./lobster-dex.ts";
 import type {
   LobsterPasserKind,
@@ -20,6 +24,21 @@ import {
   type LobsterSceneTravel,
 } from "./lobster-pet-scene.ts";
 import { BALLOON, PASSER_SPRITES, PASSER_TITLES, renderBottleSvg } from "./lobster-pet-sprites.ts";
+import { renderPluginThemeArtwork } from "./plugin-theme-artwork.ts";
+import {
+  THEME_CRITTER_SPRITES,
+  THEME_CRITTER_TITLES,
+  themeCritterBaseStyle,
+} from "./theme-flair-sprites.ts";
+
+const PASSER_RENDERERS: Partial<Record<string, () => TemplateResult>> = {
+  ...PASSER_SPRITES,
+  ...THEME_CRITTER_SPRITES,
+};
+const PASSER_LABELS: Partial<Record<string, string>> = {
+  ...PASSER_TITLES,
+  ...THEME_CRITTER_TITLES,
+};
 
 function strangerLookFor(seed: number, own: LobsterPetPaletteId): LobsterPetLook {
   for (let offset = 1; offset <= 24; offset++) {
@@ -51,6 +70,8 @@ export function renderLobsterPetScene(args: {
   presence: "out" | "in" | "leaving";
   shellVisible: boolean;
   visitsEnabled: boolean;
+  residentEnabled: boolean;
+  critterArtwork?: ThemeArtwork["critters"];
   dismissed: boolean;
   passer: {
     kind: LobsterPasserKind;
@@ -202,13 +223,20 @@ export function renderLobsterPetScene(args: {
       </div>
     `;
   };
-  const showSprites = args.presence !== "out";
+  const showSprites = args.residentEnabled && args.presence !== "out";
   // The shell may outlive the visit while it fades, but dismissal and the
   // visits setting silence it like everything else.
-  const showShell = args.shellVisible && args.visitsEnabled && !args.dismissed;
+  const showShell =
+    args.residentEnabled && args.shellVisible && args.visitsEnabled && !args.dismissed;
+  const passerArtwork =
+    args.passer && !isThemeCritterId(args.passer.kind)
+      ? args.critterArtwork?.[args.passer.kind]
+      : undefined;
+  const stranger = args.passer?.kind === "stranger" && !passerArtwork;
   const showPasser =
     args.passer !== null &&
     args.visitsEnabled &&
+    (args.residentEnabled || !stranger) &&
     !args.dismissed &&
     (args.passer.anchor === "top" || (args.floorEnabled && args.scene.floor !== null));
   // The bottle washes ashore whether or not the pet is around; it belongs to
@@ -231,16 +259,15 @@ export function renderLobsterPetScene(args: {
   // A pass-through visitor: crosses the ledge once and is gone. Strangers
   // are other lobsters (never your palette); everyone else is at most
   // lobster-adjacent. None perch, none count for the Lobsterdex.
-  const passerLook =
-    args.passer?.kind === "stranger" ? strangerLookFor(args.seed, args.look.palette.id) : args.look;
+  const passerLook = stranger ? strangerLookFor(args.seed, args.look.palette.id) : args.look;
   const passerClasses = args.passer
     ? [
         "lobster-pet",
         "lobster-pet--passer",
-        args.passer.kind === "stranger"
+        stranger
           ? `lobster-pet--palette-${passerLook.palette.id}`
           : `lobster-pet--${args.passer.kind}`,
-        args.passer.kind === "stranger" && passerLook.shiny ? "lobster-pet--shiny" : "",
+        stranger && passerLook.shiny ? "lobster-pet--shiny" : "",
         args.passer.direction === 1 ? "lobster-pet--passer-ltr" : "lobster-pet--passer-rtl",
         args.passer.hops && args.scene.passage ? "lobster-pet--passer-hop" : "",
       ]
@@ -255,8 +282,16 @@ export function renderLobsterPetScene(args: {
   const fromX = args.passer?.direction === 1 ? passingGap[0] : passingGap[1];
   const toX = args.passer?.direction === 1 ? passingGap[1] : passingGap[0];
   const passerStyle = args.passer
-    ? `${passerBaseStyle(args.passer.kind, args.passer.direction, passerLook)};--lob-cross:${args.passer.crossMs}ms;--lob-cross-from:${fromX}px;--lob-cross-to:${toX}px;--lob-y:${passerLane?.y ?? 0}px`
+    ? `${passerBaseStyle(args.passer.kind, args.passer.direction, passerLook, Boolean(passerArtwork))};--lob-cross:${args.passer.crossMs}ms;--lob-cross-from:${fromX}px;--lob-cross-to:${toX}px;--lob-y:${passerLane?.y ?? 0}px`
     : "";
+  const passerRenderer =
+    args.passer && Object.hasOwn(PASSER_RENDERERS, args.passer.kind)
+      ? PASSER_RENDERERS[args.passer.kind]
+      : undefined;
+  const passerTitle =
+    args.passer && Object.hasOwn(PASSER_LABELS, args.passer.kind)
+      ? PASSER_LABELS[args.passer.kind]
+      : undefined;
   const bottlePoint = lobsterLanePoint(args.scene.top, args.bottle?.spotPct ?? 50);
   return html`
     ${
@@ -296,13 +331,15 @@ export function renderLobsterPetScene(args: {
               class=${passerClasses}
               style=${passerStyle}
               aria-hidden="true"
-              title=${PASSER_TITLES[args.passer.kind]}
+              title=${(passerArtwork ? passerArtwork.title : passerTitle) ?? args.passer.kind}
             >
               <div class="lobster-pet__body">
                 ${
-                  args.passer.kind === "stranger"
-                    ? renderLobsterSvg(passerLook, { standalone: true })
-                    : PASSER_SPRITES[args.passer.kind]()
+                  passerArtwork
+                    ? renderPluginThemeArtwork(passerArtwork.url, "lobster-pet__svg")
+                    : stranger
+                      ? renderLobsterSvg(passerLook, { standalone: true })
+                      : (passerRenderer?.() ?? nothing)
                 }
               </div>
             </div>
@@ -319,15 +356,25 @@ function passerBaseStyle(
   kind: LobsterPasserKind,
   direction: 1 | -1,
   passerLook: LobsterPetLook,
+  pluginArtwork: boolean,
 ): string {
+  if (pluginArtwork) {
+    return `--lob-scale:1.8;--lob-w:1;--lob-h:1;--lob-face:${direction}`;
+  }
   if (kind === "stranger") {
     return lobsterPetSpriteStyle(passerLook, Math.min(passerLook.scale, 2), 0, direction);
   }
-  const fixed: Record<Exclude<LobsterPasserKind, "stranger">, string> = {
+  if (isThemeCritterId(kind)) {
+    return themeCritterBaseStyle(kind, direction);
+  }
+  const fixed: Partial<Record<string, string>> = {
     crab: "--lob-scale:2;--lob-w:1;--lob-h:0.82;--lob-face:1",
     snail: `--lob-scale:1.7;--lob-w:1;--lob-h:0.9;--lob-face:${direction}`,
     duck: `--lob-scale:1.9;--lob-w:1;--lob-h:1;--lob-face:${direction}`,
     jellyfish: "--lob-scale:1.7;--lob-w:0.9;--lob-h:1.1;--lob-face:1",
   };
-  return fixed[kind];
+  return (
+    (Object.hasOwn(fixed, kind) ? fixed[kind] : undefined) ??
+    `--lob-scale:1.8;--lob-w:1;--lob-h:1;--lob-face:${direction}`
+  );
 }

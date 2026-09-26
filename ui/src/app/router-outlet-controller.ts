@@ -180,12 +180,20 @@ export class RouterOutletController<
     notify = true,
   ): void {
     this.selection = selection;
-    if (selection.status === "idle") {
+    if (selection.status === "idle" || selection.status === "notFound") {
       this.settled = undefined;
     } else {
       const rendered = selectRenderedRouteMatch(selection.active, selection.pending);
       if (rendered?.status === "success") {
         this.settled = rendered;
+      } else if (
+        rendered?.status === "error" ||
+        rendered?.status === "notFound" ||
+        rendered?.status === "redirected"
+      ) {
+        // Terminal destinations replace the previous page. A later retry must
+        // not recreate its disposed draft from a historical successful match.
+        this.settled = undefined;
       }
     }
     const pending = selection.pending;

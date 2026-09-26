@@ -26,7 +26,6 @@ import {
   createScenarioCommandEnvironment,
   drainSutUpdates,
   ownChild,
-  removeRunnerScratch,
   runCommand,
   sanitizeChildEnvironment,
   summarizeScenarioCommand,
@@ -179,13 +178,6 @@ test("scenario command evidence retains no argv or process output", () => {
     durationMs: 20,
   });
   assert.doesNotMatch(JSON.stringify(summary), new RegExp(credential, "u"));
-});
-
-test("successful probe cleanup removes private runner scratch without an output directory", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-runner-scratch-"));
-  fs.writeFileSync(path.join(root, "openclaw.json"), "private config");
-  removeRunnerScratch(root);
-  assert.equal(fs.existsSync(root), false);
 });
 
 test("termination joins credential-bearing children before lease release", async () => {
@@ -547,13 +539,6 @@ test("credential-bearing child processes receive no parent control secrets", () 
     TELEGRAM_USER_DRIVER_STATE_DIR: "/private/lease/user-driver",
   });
   assert.deepEqual(env, { PATH: "/safe/bin" });
-});
-
-test("leased child readiness preserves the recorder's resolved chat", async () => {
-  const ready = await currentTelegramRun().wait(
-    Promise.resolve({ schemaVersion: 1, startedAtUnixMs: 1234, chatId: -1002 }),
-  );
-  assert.equal(ready.chatId, -1002);
 });
 
 test("clears a leased bot webhook before polling updates", async () => {

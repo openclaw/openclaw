@@ -24,6 +24,7 @@ import {
 } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 import {
+  mergePluginConfigUninstallActions,
   removePluginInstallOwnerFromConfig,
   removePluginRuntimePolicyFromConfig,
 } from "./uninstall-package-config.js";
@@ -50,23 +51,12 @@ const UNINSTALL_ACTION_LABELS = {
   directory: "directory",
 } satisfies Record<keyof UninstallActions, string>;
 
-const UNINSTALL_ACTION_ORDER = [
-  "entry",
-  "install",
-  "allowlist",
-  "denylist",
-  "loadPath",
-  "memorySlot",
-  "contextEngineSlot",
-  "channelConfig",
-  "directory",
-] as const satisfies ReadonlyArray<keyof UninstallActions>;
-
 export function formatUninstallActionLabels(
   actions: UninstallActions,
   preview?: { channelConfigKeys: readonly string[] },
 ): string[] {
-  return UNINSTALL_ACTION_ORDER.flatMap((key) => {
+  // SAFETY: The label table is checked against every UninstallActions key.
+  return (Object.keys(UNINSTALL_ACTION_LABELS) as Array<keyof UninstallActions>).flatMap((key) => {
     if (!actions[key]) {
       return [];
     }
@@ -114,17 +104,13 @@ type PluginUninstallPlanResult =
     }
   | { ok: false; error: string };
 
-function resolveUninstallDirectoryTarget(params: {
+function resolveUninstallDirectoryRemoval(params: {
   pluginId: string;
   hasInstall: boolean;
   installRecord?: PluginInstallRecord;
   extensionsDir?: string;
-}): string | null {
-  if (!params.hasInstall) {
-    return null;
-  }
-
-  if (isLinkedPathInstallRecord(params.installRecord)) {
+}): PluginUninstallDirectoryRemoval | null {
+  if (!params.hasInstall || isLinkedPathInstallRecord(params.installRecord)) {
     return null;
   }
 
@@ -133,14 +119,18 @@ function resolveUninstallDirectoryTarget(params: {
     extensionsDir: params.extensionsDir,
   });
   if (npmManagedInstall) {
-    return npmManagedInstall.installPath;
+    const { installPath, ...cleanup } = npmManagedInstall;
+    return { target: installPath, cleanup: { kind: "npm", ...cleanup } };
   }
   const gitManagedInstall = resolveGitManagedInstall({
     installRecord: params.installRecord,
     extensionsDir: params.extensionsDir,
   });
   if (gitManagedInstall) {
-    return gitManagedInstall.installPath;
+    return {
+      target: gitManagedInstall.installPath,
+      cleanup: { kind: "git", parentDir: gitManagedInstall.parentDir },
+    };
   }
 
   let defaultPath: string;
@@ -152,15 +142,15 @@ function resolveUninstallDirectoryTarget(params: {
 
   const configuredPath = params.installRecord?.installPath;
   if (!configuredPath) {
-    return defaultPath;
+    return { target: defaultPath };
   }
 
   if (path.resolve(configuredPath) === path.resolve(defaultPath)) {
-    return configuredPath;
+    return { target: configuredPath };
   }
 
   if (params.extensionsDir && isUninstallPathInsideOrEqual(params.extensionsDir, configuredPath)) {
-    return configuredPath;
+    return { target: configuredPath };
   }
 
   const recordedManagedPath = resolveRecordedManagedInstallPath({
@@ -168,12 +158,12 @@ function resolveUninstallDirectoryTarget(params: {
     installPath: configuredPath,
   });
   if (recordedManagedPath) {
-    return recordedManagedPath;
+    return { target: recordedManagedPath };
   }
 
   // Never trust configured installPath blindly for recursive deletes outside
   // the managed extensions directory.
-  return defaultPath;
+  return { target: defaultPath };
 }
 
 function resolveNpmManagedInstall(params: {
@@ -372,35 +362,21 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
   const hasEntry = runtimePluginIds.some((entryId) => Object.hasOwn(entries, entryId));
   const hasInstall = Object.hasOwn(installs, pluginId);
   const installRecord = hasInstall ? installs[pluginId] : undefined;
-  const isLinked = isLinkedPathInstallRecord(installRecord);
 
   // Package lifecycle removes every child policy while the owner record/directory is handled once.
   let newConfig = config;
-  const configActions: PluginConfigUninstallActions = {
-    entry: false,
-    install: false,
-    allowlist: false,
-    denylist: false,
-    loadPath: false,
-    memorySlot: false,
-    contextEngineSlot: false,
-    channelConfig: false,
-  };
+  let configActions = mergePluginConfigUninstallActions();
   for (const configPluginId of new Set(runtimePluginIds)) {
     const removal = removePluginRuntimePolicyFromConfig(newConfig, configPluginId, {
       channelIds,
       loadPaths: packagePlan?.runtimeLoadPaths ? [...packagePlan.runtimeLoadPaths] : undefined,
     });
     newConfig = removal.config;
-    for (const key of Object.keys(configActions) as Array<keyof PluginConfigUninstallActions>) {
-      configActions[key] ||= removal.actions[key];
-    }
+    configActions = mergePluginConfigUninstallActions(configActions, removal.actions);
   }
   const ownerRemoval = removePluginInstallOwnerFromConfig(newConfig, pluginId);
   newConfig = ownerRemoval.config;
-  for (const key of Object.keys(configActions) as Array<keyof PluginConfigUninstallActions>) {
-    configActions[key] ||= ownerRemoval.actions[key];
-  }
+  configActions = mergePluginConfigUninstallActions(configActions, ownerRemoval.actions);
 
   if (hasInstall && runtimePluginIds.length > 0) {
     // Preserve explicit uninstall intent so remaining provider/model references do not
@@ -417,57 +393,18 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
     directory: false,
   };
 
-  const npmManagedInstall =
-    deleteFiles && !isLinked
-      ? resolveNpmManagedInstall({
-          installRecord,
-          extensionsDir,
-        })
-      : null;
-  const gitManagedInstall =
-    deleteFiles && !isLinked
-      ? resolveGitManagedInstall({
-          installRecord,
-          extensionsDir,
-        })
-      : null;
-
-  const deleteTarget =
-    deleteFiles && !isLinked
-      ? resolveUninstallDirectoryTarget({
-          pluginId,
-          hasInstall,
-          installRecord,
-          extensionsDir,
-        })
-      : null;
-
   return {
     ok: true,
     config: newConfig,
     pluginId,
     actions,
-    directoryRemoval: deleteTarget
-      ? {
-          target: deleteTarget,
-          ...(npmManagedInstall
-            ? {
-                cleanup: {
-                  kind: "npm",
-                  npmRoot: npmManagedInstall.npmRoot,
-                  packageName: npmManagedInstall.packageName,
-                  rootKind: npmManagedInstall.rootKind,
-                },
-              }
-            : gitManagedInstall && deleteTarget === gitManagedInstall.installPath
-              ? {
-                  cleanup: {
-                    kind: "git",
-                    parentDir: gitManagedInstall.parentDir,
-                  },
-                }
-              : {}),
-        }
+    directoryRemoval: deleteFiles
+      ? resolveUninstallDirectoryRemoval({
+          pluginId,
+          hasInstall,
+          installRecord,
+          extensionsDir,
+        })
       : null,
   };
 }

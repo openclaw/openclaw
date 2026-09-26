@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,10 +8,48 @@ import { inspectLocalAudioSelection } from "./local-audio.js";
 const tempDirs = createTempDirTracker();
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   tempDirs.cleanup();
 });
 
 describe("local audio selection", () => {
+  it.each([
+    { whisperCommand: null, existingOverride: false },
+    { whisperCommand: null, existingOverride: true },
+    { whisperCommand: "", existingOverride: false },
+    { whisperCommand: "", existingOverride: true },
+  ])("prepares Whisper model files only for a resolved command: %j", async (testCase) => {
+    const root = tempDirs.make("openclaw-local-audio-preparation-");
+    const modelPath = path.join(root, "whisper-model.bin");
+    if (testCase.existingOverride) {
+      await fs.writeFile(modelPath, "synthetic model");
+    }
+    for (const name of ["tokens.txt", "encoder.onnx", "decoder.onnx", "joiner.onnx"]) {
+      await fs.writeFile(path.join(root, name), "synthetic model");
+    }
+    const stat = vi.spyOn(fsSync, "statSync");
+    const listDirectory = vi.fn(async () => ["ggml-base.en.bin"]);
+    const selection = await inspectLocalAudioSelection({
+      env: { WHISPER_CPP_MODEL: modelPath, SHERPA_ONNX_MODEL_DIR: root },
+      resolveBinary: async (name) =>
+        name === "whisper-cli"
+          ? testCase.whisperCommand
+          : name === "sherpa-onnx-offline"
+            ? path.join(root, name)
+            : null,
+      listDirectory,
+    });
+    const resolved = testCase.whisperCommand !== null;
+    expect(selection.selected).toMatchObject({ id: "sherpa-onnx-offline", ready: true });
+    expect(selection.candidates.find((candidate) => candidate.id === "whisper-cli")?.ready).toBe(
+      resolved,
+    );
+    expect(
+      stat.mock.calls.filter(([file]) => String(file).endsWith("whisper-model.bin")),
+    ).toHaveLength(resolved ? 1 : 0);
+    expect(listDirectory).toHaveBeenCalledTimes(resolved && !testCase.existingOverride ? 1 : 0);
+  });
+
   it("expands home-directory shorthand in PATH entries", async () => {
     const tempDir = tempDirs.make("openclaw-local-audio-");
     const binDir = path.join(tempDir, "bin");

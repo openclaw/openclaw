@@ -73,11 +73,7 @@ export function resolveFirstBoundAccountId(params: {
     return undefined;
   }
   const normalizedAgentId = normalizeAgentId(params.agentId);
-  const normalizedPeerId = params.peerId?.trim() || undefined;
-  const exactPeerIds = buildExactPeerIdSet({
-    peerId: normalizedPeerId,
-    exactPeerIdAliases: params.exactPeerIdAliases,
-  });
+  const exactPeerIds = buildExactPeerIdSet(params);
   const hasPeerContext = exactPeerIds.size > 0;
   const normalizedPeerKind = normalizeChatType(params.peerKind) ?? undefined;
   let memberRoleIds: Set<string> | undefined;

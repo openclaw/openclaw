@@ -322,8 +322,8 @@ describe("devices inventory rendering", () => {
       const row = getSettingsRow(container, "Studio");
       expect(row.querySelector(".device-entry__desktop")).toBeNull();
       const chip = row.querySelector('[aria-disabled="true"]');
-      expect(chip?.getAttribute("title")).toContain("desktop.host.enabled: true");
-      expect(chip?.getAttribute("title")).toContain("gateway.nodes.commands.allow");
+      expect(chip?.getAttribute("title")).toContain("Desktop sharing");
+      expect(chip?.getAttribute("title")).toContain("pending desktop capability request");
       expect(row.querySelector(".device-entry__facts")?.textContent).toContain("desktop.stream");
     },
   );

@@ -1,4 +1,5 @@
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { isIncognitoTask, projectTaskContentForPersistence } from "./task-content.js";
 import { assertTaskOwner } from "./task-registry-common.js";
 import { buildTaskCreateMergePatch } from "./task-registry-create-rules.js";
 import {
@@ -34,7 +35,10 @@ type TaskCreateCommit =
   | { kind: "task"; result: TaskCreateResult };
 
 export type TaskCreateOperations = {
-  readSelection: (identity: ReturnType<typeof resolveTaskCreateIdentity>) => {
+  readSelection: (
+    identity: ReturnType<typeof resolveTaskCreateIdentity>,
+    params: CreateTaskRecordParams,
+  ) => {
     existing?: TaskRecord;
     deliveryState?: TaskDeliveryState;
   };
@@ -44,6 +48,7 @@ export type TaskCreateOperations = {
   upsertTask: (task: TaskRecord, deliveryState?: TaskDeliveryState) => void;
   /** Publish after the successful transaction, or immediately after a store-owned commit. */
   deferCommit: (publish: () => void) => void;
+  retainTaskCommit?: (taskId: string) => void;
   onCommitted: (commit: TaskCreateCommit) => void;
   assertCurrent?: (existing: TaskRecord | undefined) => void;
 };
@@ -53,10 +58,11 @@ export function runTaskCreateOperation(
   input: TaskCreateInput,
   operations: TaskCreateOperations,
 ): TaskCreateResult {
-  const { params } = input;
+  const params = projectTaskContentForPersistence(isIncognitoTask(input.params), input.params);
   const identity = resolveTaskCreateIdentity(params);
   assertTaskOwner(identity);
   const publishResult = (result: TaskCreateResult) => {
+    operations.retainTaskCommit?.(result.task.taskId);
     operations.deferCommit(() => operations.onCommitted({ kind: "task", result }));
     return result;
   };
@@ -78,7 +84,10 @@ export function runTaskCreateOperation(
     );
   };
   const initial = operations.write(() => {
-    const { existing, deliveryState: existingDeliveryState } = operations.readSelection(identity);
+    const { existing, deliveryState: existingDeliveryState } = operations.readSelection(
+      identity,
+      params,
+    );
     if (existing) {
       const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
       if (requesterOrigin && !existingDeliveryState?.requesterOrigin) {
@@ -89,6 +98,7 @@ export function runTaskCreateOperation(
         };
         operations.assertCurrent?.(existing);
         operations.upsertDelivery(nextDeliveryState);
+        operations.retainTaskCommit?.(existing.taskId);
         operations.deferCommit(() =>
           operations.onCommitted({
             kind: "delivery",
@@ -112,7 +122,7 @@ export function runTaskCreateOperation(
   }
   // Filling a missing origin is already committed even if this metadata stage fails.
   return operations.write(() => {
-    const { existing, deliveryState } = operations.readSelection(identity);
+    const { existing, deliveryState } = operations.readSelection(identity, params);
     if (!existing || existing.taskId !== initial.existingTaskId) {
       throw new Error("Task creation selection changed before metadata reuse.");
     }

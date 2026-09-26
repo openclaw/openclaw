@@ -11,19 +11,19 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { UpdatePreMutationError } from "./shared.js";
-import { resolveMutableUpdateFailure } from "./update-command-result.js";
+import { resolveMutableUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
-const boundary = vi.hoisted(() => ({ admission: vi.fn(), fail: vi.fn() }));
+const boundary = vi.hoisted(() => ({ admission: vi.fn(), prepareFailure: vi.fn() }));
 vi.mock("../../infra/update-run-recovery-admission.js", () => ({
   assertUpdateRecoveryAdmission: boundary.admission,
 }));
 vi.mock("./update-command-run.js", () => ({
   completeUpdateCommandRun: vi.fn(),
-  failUpdateCommandRun: boundary.fail,
 }));
 vi.mock("./update-command-terminal.js", () => ({
   hasDeferredUpdateCommandTerminalResult: () => false,
+  prepareUnexpectedUpdateCommandFailure: boundary.prepareFailure,
 }));
 afterEach(() => vi.clearAllMocks());
 
@@ -33,6 +33,13 @@ it.each(["forced", "uncertain"] as const)(
     const cleanup = createDeferredCore<"forced" | "uncertain">();
     const joining = createDeferredCore();
     const original = new Error("mutation cancelled");
+    const prepared = new UpdateCommandFailure(
+      { status: "error", mode: "unknown", reason: "update-failed", steps: [], durationMs: 0 },
+      1,
+      original.message,
+      { cause: original },
+    );
+    boundary.prepareFailure.mockResolvedValue(prepared);
     const restore = vi.fn(async () => {});
     const complete = vi.fn(async () => {});
     const work = withUpdateCommandRecoveryUnwind(
@@ -66,6 +73,7 @@ it.each(["forced", "uncertain"] as const)(
       expect(boundary.admission).not.toHaveBeenCalled();
       expect(restore).not.toHaveBeenCalled();
       expect(complete).not.toHaveBeenCalled();
+      expect(boundary.prepareFailure).not.toHaveBeenCalled();
     } finally {
       cleanup.resolve(cleanupResult);
       await work;
@@ -76,13 +84,20 @@ it.each(["forced", "uncertain"] as const)(
       expect(collectNestedErrorCandidates(error)).toContain(original);
       expect(boundary.admission).not.toHaveBeenCalled();
       expect(restore).not.toHaveBeenCalled();
-      expect(complete).not.toHaveBeenCalled();
-      expect(boundary.fail).not.toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledExactlyOnceWith(false, { preserveState: true });
+      expect(boundary.prepareFailure).not.toHaveBeenCalled();
     } else {
-      expect(error).toBe(original);
+      expect(error).toBe(prepared);
+      expect(collectNestedErrorCandidates(error)).toContain(original);
       expect(restore).toHaveBeenCalledOnce();
       expect(complete).toHaveBeenCalledOnce();
-      expect(boundary.fail).toHaveBeenCalledOnce();
+      expect(boundary.prepareFailure).toHaveBeenCalledExactlyOnceWith(
+        original,
+        expect.objectContaining({ run: expect.objectContaining({ runId: "synthetic" }) }),
+      );
+      expect(complete.mock.invocationCallOrder[0]).toBeLessThan(
+        boundary.prepareFailure.mock.invocationCallOrder[0]!,
+      );
     }
   },
 );

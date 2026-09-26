@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-snapshot-source.js";
-import * as sourceHandle from "../../infra/sqlite-source-handle.js";
 import * as identity from "../../infra/sqlite-worker-identity.js";
 import * as coordinator from "../../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -19,6 +18,7 @@ vi.mock("../../infra/sqlite-readonly-worker.js", async (importOriginal) => ({
 const rows: AuthProfileRowRead = {
   store: { status: "readable", raw: { version: 1, profiles: {} } },
   state: { status: "missing", reason: "row" },
+  cacheable: true,
 };
 const readers = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
 function prepare(env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture" }) {
@@ -45,11 +45,7 @@ beforeEach(() => {
       assertCurrent: () => {},
     },
   });
-  vi.spyOn(coordinator, "prepareStateDatabaseCanonicalMutation").mockReturnValue(undefined);
   vi.spyOn(coordinator, "prepareStateDatabaseSourceExclusion").mockReturnValue(undefined);
-  vi.spyOn(sourceHandle, "withSqliteSourceHandleAsync").mockImplementation(async (_, operation) =>
-    operation(),
-  );
   child.read.mockReset().mockResolvedValue(rows);
 });
 
@@ -60,6 +56,14 @@ afterEach(async () => {
 });
 
 describe("prepared auth profile row reads", () => {
+  it("retains revocable read authority even when persisted rows come from a cache", async () => {
+    const reader = prepare();
+    reader.assertCurrent();
+    expect(resources.hasOpenClawAgentDatabaseAsyncResources()).toBe(true);
+    await Promise.all(resources.revokeAgentDatabaseResources({ path: "/fixture/auth.sqlite" }));
+    expect(() => reader.assertCurrent()).toThrow("Auth profile read owner was revoked");
+    expect(child.read).not.toHaveBeenCalled();
+  });
   it.each([false, true])(
     "retains failed snapshot cleanup for disposal retry (read failure: %s)",
     async (failRead) => {
@@ -89,6 +93,10 @@ describe("prepared auth profile row reads", () => {
           () => undefined,
           (error: unknown) => error,
         );
+        expect(child.read).toHaveBeenCalledWith(
+          "/fixture/private/auth.sqlite",
+          expect.objectContaining({ source: "snapshot" }),
+        );
         const cleanupFailure = expect.objectContaining({
           message: "SQLite read-only worker snapshot cleanup failed: /fixture/private",
         });
@@ -109,12 +117,31 @@ describe("prepared auth profile row reads", () => {
         expect(unregisterRoot).not.toHaveBeenCalled();
 
         cleanup.mockResolvedValue(true);
-        await reader.dispose();
-        await reader.dispose();
-        expect(cleanup).toHaveBeenCalledTimes(3);
-        expect(resources.hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
-        expect(unregisterAgent).toHaveBeenCalledTimes(1);
-        expect(unregisterRoot).toHaveBeenCalledTimes(1);
+        // Disposal releases this reader without requiring unrelated readers to close.
+        const unrelated = {
+          agentId: "other",
+          path: "/fixture/unrelated.sqlite",
+          revoke: vi.fn(),
+          close: vi.fn(async () => {}),
+        };
+        const unregisterUnrelated = resources.registerOpenClawAgentDatabaseAsyncResource(unrelated);
+        try {
+          await reader.dispose();
+          await reader.dispose();
+          expect(cleanup).toHaveBeenCalledTimes(3);
+          expect(
+            resources.revokeAgentDatabaseResources({
+              path: "/fixture/auth.sqlite",
+              agentId: "main",
+            }),
+          ).toEqual([]);
+          expect(unregisterAgent).toHaveBeenCalledTimes(1);
+          expect(unregisterRoot).toHaveBeenCalledTimes(1);
+          expect(unrelated.revoke).not.toHaveBeenCalled();
+          expect(unrelated.close).not.toHaveBeenCalled();
+        } finally {
+          unregisterUnrelated();
+        }
       } finally {
         cleanup.mockResolvedValue(true);
         await reader.dispose();
@@ -162,6 +189,7 @@ describe("prepared auth profile row reads", () => {
         "/fixture/auth.sqlite",
         expect.objectContaining({
           mode: "auth-profile-rows",
+          source: "canonical",
           expectedIdentity: "file:original",
           env: { OPENCLAW_STATE_DIR: "/fixture/original" },
         }),

@@ -51,7 +51,6 @@ describe("provider-catalog-live-runtime", () => {
   it.each(["resolved-provider-key", "ollama-local", "OLLAMA_API_KEY", NON_ENV_SECRETREF_MARKER])(
     "fetches and dedupes live model ids with opaque resolved auth %s",
     async (discoveryApiKey) => {
-      vi.spyOn(Date, "now").mockReturnValue(1_000);
       const { fetchGuard, fetchGuardMock, release } = buildFetchGuard({
         data: [
           { id: "model-a", object: "model" },
@@ -79,9 +78,11 @@ describe("provider-catalog-live-runtime", () => {
       expect(request).toMatchObject({
         url: "https://provider.example.test/v1/models",
         auditContext: "provider-model-discovery",
-        timeoutMs: 1234,
         signal: controller.signal,
       });
+      expect(request?.timeoutMs).toBeGreaterThan(0);
+      expect(request?.timeoutMs).toBeLessThanOrEqual(1234);
+      expect(Number.isInteger(request?.timeoutMs)).toBe(true);
       const headers = request?.init?.headers;
       expect(headers).toBeInstanceOf(Headers);
       expect((headers as Headers).get("authorization")).toBe(`Bearer ${discoveryApiKey}`);
@@ -603,49 +604,53 @@ describe("provider-catalog-live-runtime", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("uses one timeout budget across paginated live catalog discovery", async () => {
-    vi.useFakeTimers();
-    try {
-      const release = vi.fn(async () => undefined);
-      const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
-        .fn()
-        .mockImplementationOnce(async () => {
-          await vi.advanceTimersByTimeAsync(800);
-          return {
-            response: new Response(
-              JSON.stringify({
-                data: [{ id: "model-a", object: "model" }],
-                has_more: true,
-                next_cursor: "cursor-2",
-              }),
-            ),
-            finalUrl: "https://provider.example.test/v1/models",
+  it.each([0, 2_000, -2_000])(
+    "uses one timeout budget after a %i ms wall-clock step",
+    async (wallClockStep) => {
+      vi.useFakeTimers();
+      try {
+        const release = vi.fn(async () => undefined);
+        const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+          .fn()
+          .mockImplementationOnce(async () => {
+            await vi.advanceTimersByTimeAsync(800);
+            vi.setSystemTime(Date.now() + wallClockStep);
+            return {
+              response: new Response(
+                JSON.stringify({
+                  data: [{ id: "model-a", object: "model" }],
+                  has_more: true,
+                  next_cursor: "cursor-2",
+                }),
+              ),
+              finalUrl: "https://provider.example.test/v1/models",
+              release,
+            };
+          })
+          .mockImplementationOnce(async () => ({
+            response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
+            finalUrl: "https://provider.example.test/v1/models?after=cursor-2",
             release,
-          };
-        })
-        .mockImplementationOnce(async () => ({
-          response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
-          finalUrl: "https://provider.example.test/v1/models?after=cursor-2",
-          release,
-        }));
+          }));
 
-      await expect(
-        fetchLiveProviderModelIds({
-          providerId: "provider",
-          endpoint: "https://provider.example.test/v1/models",
-          fetchGuard: fetchGuardMock,
-          timeoutMs: 1_000,
-        }),
-      ).resolves.toEqual(["model-a", "model-b"]);
+        await expect(
+          fetchLiveProviderModelIds({
+            providerId: "provider",
+            endpoint: "https://provider.example.test/v1/models",
+            fetchGuard: fetchGuardMock,
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toEqual(["model-a", "model-b"]);
 
-      expect(fetchGuardMock).toHaveBeenCalledTimes(2);
-      expect(fetchGuardMock.mock.calls[0]?.[0].timeoutMs).toBe(1_000);
-      expect(fetchGuardMock.mock.calls[1]?.[0].timeoutMs).toBe(200);
-      expect(release).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(fetchGuardMock).toHaveBeenCalledTimes(2);
+        expect(fetchGuardMock.mock.calls[0]?.[0].timeoutMs).toBe(1_000);
+        expect(fetchGuardMock.mock.calls[1]?.[0].timeoutMs).toBe(200);
+        expect(release).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("caches raw live model rows for provider-specific projection", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard({

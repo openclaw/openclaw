@@ -1,4 +1,3 @@
-// Discord plugin module implements ingress behavior.
 import { randomUUID } from "node:crypto";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
@@ -112,36 +111,19 @@ export async function resolveDiscordVoiceIngressContext(params: {
 }
 
 export async function runDiscordVoiceAgentTurn(params: {
-  readPolicy?: DiscordLivePolicyReader;
   entry: VoiceSessionEntry;
   accountId: string;
   userId: string;
   message: string;
-  cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
-  context?: DiscordVoiceIngressContext;
+  context: DiscordVoiceIngressContext;
   toolsAllow?: string[];
   voiceSelection?: RealtimeVoiceSelectionHandle;
   signal?: AbortSignal;
-  admissionAllowFrom?: string[];
-  fetchGuildName: (guildId: string) => Promise<string | undefined>;
-  speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<DiscordVoiceAgentTurnResult | null> {
-  const context =
-    params.context ??
-    (await resolveDiscordVoiceIngressContext({
-      readPolicy: params.readPolicy,
-      entry: params.entry,
-      userId: params.userId,
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      admissionAllowFrom: params.admissionAllowFrom,
-      fetchGuildName: params.fetchGuildName,
-      speakerContext: params.speakerContext,
-    }));
+  const { context } = params;
   if (
-    !context ||
     params.entry.captureOnly ||
     params.entry.sessionLifecycle.status !== "active" ||
     context.isCurrent?.() === false

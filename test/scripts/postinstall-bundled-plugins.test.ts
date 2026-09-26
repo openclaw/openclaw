@@ -20,6 +20,23 @@ import { createSourcePluginDependenciesFixture } from "./source-plugin-dependenc
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
+
+async function copyPostinstallFixture(packageRoot: string) {
+  for (const relativePath of [
+    "scripts/postinstall-bundled-plugins.mjs",
+    "scripts/lib/package-lifecycle-marker.mjs",
+    "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/windows-cmd-helpers.mjs",
+  ]) {
+    const destination = path.join(packageRoot, relativePath);
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.copyFile(
+      fileURLToPath(new URL(`../../${relativePath}`, import.meta.url)),
+      destination,
+    );
+  }
+}
+
 async function expectPathExists(filePath: string) {
   await fs.access(filePath);
 }
@@ -90,19 +107,11 @@ describe("bundled plugin postinstall", () => {
         path.join(configuredCacheRoot, "v26.4.0-x64-other-install", "keep.txt"),
       ];
 
-      await fs.mkdir(path.join(scriptRoot, "lib"), { recursive: true });
+      await copyPostinstallFixture(packageRoot);
       await fs.mkdir(path.join(packageRoot, "home"), { recursive: true });
       await fs.writeFile(
         path.join(packageRoot, "package.json"),
         '{"name":"openclaw","type":"module","version":"2026.7.2"}\n',
-      );
-      await fs.copyFile(
-        fileURLToPath(new URL("../../scripts/postinstall-bundled-plugins.mjs", import.meta.url)),
-        path.join(scriptRoot, "postinstall-bundled-plugins.mjs"),
-      );
-      await fs.copyFile(
-        fileURLToPath(new URL("../../scripts/lib/package-lifecycle-marker.mjs", import.meta.url)),
-        path.join(scriptRoot, "lib", "package-lifecycle-marker.mjs"),
       );
       for (const sentinel of sentinels) {
         await fs.mkdir(path.dirname(sentinel), { recursive: true });
@@ -163,15 +172,7 @@ describe("bundled plugin postinstall", () => {
       const packageRoot = await createTempDirAsync("openclaw-source-resolution-");
       const fixture = await createSourcePluginDependenciesFixture(packageRoot);
       const scriptPath = path.join(packageRoot, "scripts", "postinstall-bundled-plugins.mjs");
-      await fs.mkdir(path.join(packageRoot, "scripts", "lib"), { recursive: true });
-      await fs.copyFile(
-        fileURLToPath(new URL("../../scripts/postinstall-bundled-plugins.mjs", import.meta.url)),
-        scriptPath,
-      );
-      await fs.copyFile(
-        fileURLToPath(new URL("../../scripts/lib/package-lifecycle-marker.mjs", import.meta.url)),
-        path.join(packageRoot, "scripts", "lib", "package-lifecycle-marker.mjs"),
-      );
+      await copyPostinstallFixture(packageRoot);
       if (sourceKind === "git checkout") {
         await fs.writeFile(path.join(packageRoot, ".git"), "gitdir: /fixture/worktree\n");
         await fs.mkdir(path.join(packageRoot, "dist"));
@@ -248,18 +249,10 @@ describe("bundled plugin postinstall", () => {
         "shared",
         "plugin-registry-migration.js",
       );
-      await fs.mkdir(path.join(packageRoot, "scripts", "lib"), { recursive: true });
+      await copyPostinstallFixture(packageRoot);
       await fs.mkdir(path.dirname(migrationPath), { recursive: true });
       await fs.mkdir(path.dirname(databasePath), { recursive: true });
       await fs.writeFile(path.join(packageRoot, "package.json"), '{"type":"module"}\n');
-      await fs.copyFile(
-        fileURLToPath(new URL("../../scripts/postinstall-bundled-plugins.mjs", import.meta.url)),
-        scriptPath,
-      );
-      await fs.copyFile(
-        fileURLToPath(new URL("../../scripts/lib/package-lifecycle-marker.mjs", import.meta.url)),
-        path.join(packageRoot, "scripts", "lib", "package-lifecycle-marker.mjs"),
-      );
       const database = new DatabaseSync(databasePath);
       try {
         database.exec("PRAGMA user_version = 5; CREATE TABLE operator_state (value TEXT);");

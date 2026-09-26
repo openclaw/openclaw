@@ -1,4 +1,3 @@
-// Discord plugin module implements gateway behavior.
 import { EventEmitter } from "node:events";
 import {
   GatewayCloseCodes,
@@ -94,7 +93,7 @@ export class GatewayPlugin extends Plugin {
   private reconnectAttempts = 0;
   private consecutiveResumeFailures = 0;
   private shouldReconnect = false;
-  private isConnecting = false;
+  protected isConnecting = false;
   private readonly heartbeatTimers = new GatewayHeartbeatTimers();
   private readonly reconnectTimer = new GatewayReconnectTimer();
   private readonly voiceStateCache = new DiscordGatewayVoiceStateCache();

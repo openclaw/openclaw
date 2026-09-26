@@ -11,14 +11,6 @@ import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
 
-/** Reads a tool schema field in either app-server or OpenClaw naming. */
-function readCodexDiagnosticToolParameters(tool: {
-  inputSchema?: unknown;
-  parameters?: unknown;
-}): unknown {
-  return tool.inputSchema ?? tool.parameters;
-}
-
 /** Builds compact diagnostic tool definitions for trusted private telemetry. */
 function buildCodexDiagnosticToolDefinitions(
   tools: readonly {
@@ -31,7 +23,7 @@ function buildCodexDiagnosticToolDefinitions(
   return tools.map((tool) => ({
     name: tool.name,
     description: tool.description,
-    parameters: readCodexDiagnosticToolParameters(tool),
+    parameters: tool.inputSchema ?? tool.parameters,
   }));
 }
 

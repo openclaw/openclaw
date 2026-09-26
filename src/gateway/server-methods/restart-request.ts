@@ -107,19 +107,22 @@ export function parseTargetedGatewayRestartIntent(
   if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
     return null;
   }
-  const raw = (value ?? {}) as { force?: unknown; waitMs?: unknown };
+  const raw = (value ?? {}) as { force?: unknown; waitMs?: unknown; drainBudgetMs?: unknown };
   const force = raw.force === true;
+  // Older Gateways ignore this optional field instead of rejecting force + waitMs.
+  const budget = force ? raw.drainBudgetMs : raw.waitMs;
   const waitMs =
-    typeof raw.waitMs === "number" &&
-    Number.isSafeInteger(raw.waitMs) &&
-    raw.waitMs >= 0 &&
-    raw.waitMs <= MAX_TIMER_TIMEOUT_MS
-      ? raw.waitMs
+    typeof budget === "number" &&
+    Number.isSafeInteger(budget) &&
+    budget >= 0 &&
+    budget <= MAX_TIMER_TIMEOUT_MS
+      ? budget
       : undefined;
   if (
     (raw.force !== undefined && typeof raw.force !== "boolean") ||
-    (raw.waitMs !== undefined && waitMs === undefined) ||
-    (force && waitMs !== undefined)
+    (budget !== undefined && waitMs === undefined) ||
+    (force && raw.waitMs !== undefined) ||
+    (!force && raw.drainBudgetMs !== undefined)
   ) {
     return null;
   }

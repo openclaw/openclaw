@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -335,6 +336,108 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     },
   );
 
+  it("upgrades same-turn misalignment findings at exact UTF-8 limits without borrowing another turn's continuation", async () => {
+    const projector = await createProjector();
+    const error = {
+      message: "The provider paused this request.",
+      codexErrorInfo: "misalignmentPolicyViolation",
+    };
+    await projector.handleNotification(forCurrentTurn("error", { error, willRetry: false }));
+    const details = {
+      errorType: "future_category",
+      detailedExplanation: "🙂".repeat(16_384),
+      steer: { message: ` ${"🙂".repeat(255)}   ` },
+    };
+    await projector.handleNotification({
+      method: "error",
+      params: {
+        threadId: THREAD_ID,
+        turnId: "unrelated-turn",
+        error: { ...error, misalignment: details },
+        willRetry: false,
+      },
+    });
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).currentAttemptAssistant?.diagnostics?.[0]
+        ?.details,
+    ).not.toHaveProperty("review");
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          items: [],
+          error: { ...error, misalignment: details },
+        },
+      }),
+    );
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).currentAttemptAssistant?.diagnostics?.[0],
+    ).toMatchObject({
+      type: "provider_refusal",
+      details: {
+        provider: "openai",
+        category: "misalignment",
+        nativeThreadId: THREAD_ID,
+        nativeTurnId: TURN_ID,
+        review: {
+          explanation: details.detailedExplanation,
+          continuation: details.steer,
+          errorType: details.errorType,
+        },
+      },
+    });
+  });
+
+  it.each([
+    { label: "missing", explanation: undefined },
+    { label: "blank", explanation: " \n " },
+    { label: "too many UTF-8 bytes", explanation: "🙂".repeat(16_385) },
+  ])("does not offer review for $label native explanation", async ({ explanation }) => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("error", {
+        error: {
+          message: "The provider paused this request.",
+          codexErrorInfo: "misalignmentPolicyViolation",
+          misalignment: {
+            detailedExplanation: explanation,
+            steer: { message: "Continue only the requested task." },
+          },
+        },
+        willRetry: false,
+      }),
+    );
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).currentAttemptAssistant?.diagnostics?.[0]
+        ?.details?.review,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { label: "missing", steer: undefined },
+    { label: "blank", steer: { message: " \n " } },
+    { label: "wrong type", steer: { message: 42 } },
+    { label: "too many UTF-8 bytes", steer: { message: "🙂".repeat(257) } },
+  ])("keeps $label continuation findings non-continuable", async ({ steer }) => {
+    const projector = await createProjector();
+    const explanation = "Review the proposed action before proceeding.";
+    await projector.handleNotification(
+      forCurrentTurn("error", {
+        error: {
+          message: "The provider paused this request.",
+          codexErrorInfo: "misalignmentPolicyViolation",
+          misalignment: { detailedExplanation: explanation, ...(steer ? { steer } : {}) },
+        },
+        willRetry: false,
+      }),
+    );
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).currentAttemptAssistant?.diagnostics?.[0]
+        ?.details?.review,
+    ).toEqual({ explanation });
+  });
+
   it.each([
     { codexErrorInfo: "serverOverloaded", expected: true },
     { codexErrorInfo: "usageLimitExceeded", expected: false },
@@ -401,7 +504,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     });
     expect(projector.settledTurnFailureFinalizationAllowed).toBe(true);
     expect(projector.isCompacting()).toBe(false);
-    expect(result.itemLifecycle).toEqual({ startedCount: 0, completedCount: 0, activeCount: 0 });
+    expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 0, activeCount: 0 });
     expect(result.compactionCount).toBeUndefined();
     expect(onContextCompacted).not.toHaveBeenCalled();
     expect(
@@ -433,8 +536,124 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     ]);
   });
 
+  it.each(["interrupted", "failed", "completed", "local close"] as const)(
+    "closes visible unfinished compaction once after %s without forgetting native work",
+    async (ending) => {
+      const onAgentEvent = vi.fn();
+      const onContextCompacted = vi.fn();
+      const projector = await createProjector(
+        { ...(await createParams()), onAgentEvent },
+        { onContextCompacted },
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: { type: "contextCompaction", id: "compact-unfinished" },
+        }),
+      );
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: "compaction",
+        data: {
+          phase: "start",
+          backend: "codex-app-server",
+          threadId: THREAD_ID,
+          turnId: TURN_ID,
+          itemId: "compact-unfinished",
+        },
+      });
+
+      if (ending !== "local close") {
+        await projector.handleNotification(turnWithStatus(ending));
+      }
+      await projector.closeProjection();
+      await projector.closeProjection();
+
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(projector.isCompacting()).toBe(false);
+      expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 0, activeCount: 0 });
+      expect(result.compactionCount).toBeUndefined();
+      expect(onContextCompacted).not.toHaveBeenCalled();
+      expect(
+        onAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === "compaction"),
+      ).toEqual([
+        expect.objectContaining({
+          data: expect.objectContaining({ phase: "start", itemId: "compact-unfinished" }),
+        }),
+        {
+          stream: "compaction",
+          data: {
+            phase: "end",
+            completed: false,
+            backend: "codex-app-server",
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            itemId: "compact-unfinished",
+          },
+        },
+      ]);
+    },
+  );
+
+  it("preserves observed native completion when closing progress with a pending observer", async () => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const onAgentEvent = vi.fn();
+    const onContextCompacted = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const projector = await createProjector(
+      { ...(await createParams()), onAgentEvent },
+      { onContextCompacted },
+    );
+    const compaction = { item: { type: "contextCompaction", id: "compact-observer-pending" } };
+    await projector.handleNotification(forCurrentTurn("item/started", compaction));
+    const completion = projector.handleNotification(forCurrentTurn("item/completed", compaction));
+    const expectedEvents = [
+      expect.objectContaining({
+        data: expect.objectContaining({ phase: "start", itemId: "compact-observer-pending" }),
+      }),
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phase: "end",
+          itemId: "compact-observer-pending",
+          completed: true,
+        }),
+      }),
+    ];
+    try {
+      await entered.promise;
+      await projector.closeProjection();
+      await projector.closeProjection();
+      expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
+        compactionCount: 1,
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      });
+      expect(
+        onAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === "compaction"),
+      ).toEqual(expectedEvents);
+    } finally {
+      release.resolve();
+      await completion;
+    }
+    expect(onContextCompacted).toHaveBeenCalledOnce();
+    expect(
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "compaction"),
+    ).toEqual(expectedEvents);
+  });
+
   it("keeps other errors prompt-scoped after native compaction completes", async () => {
-    const projector = await createProjector();
+    const onAgentEvent = vi.fn();
+    const onContextCompacted = vi.fn();
+    const projector = await createProjector(
+      { ...(await createParams()), onAgentEvent },
+      { onContextCompacted },
+    );
     const compaction = { item: { type: "contextCompaction", id: "compact-completed" } };
 
     await projector.handleNotification(forCurrentTurn("item/started", compaction));
@@ -452,6 +671,20 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       promptErrorSource: "prompt",
     });
     expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
+    await projector.handleNotification(forCurrentTurn("item/completed", compaction));
+    await projector.handleNotification(turnWithStatus("interrupted"));
+    await projector.closeProjection();
+    expect(projector.buildResult(buildEmptyToolTelemetry()).compactionCount).toBe(1);
+    expect(onContextCompacted).toHaveBeenCalledOnce();
+    expect(
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "compaction" && event.data.phase === "end"),
+    ).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ itemId: "compact-completed", completed: true }),
+      }),
+    ]);
   });
 
   it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {

@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
@@ -10,10 +9,7 @@ import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
-import {
-  personActivityRouting,
-  type PersonActivityRouting,
-} from "../../components/person-activity-link.ts";
+import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
@@ -27,11 +23,9 @@ import {
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
-  canArchiveSessionRow,
   canDeleteSessionRows,
   isPinnableUiSessionRow,
   resolveUiConfiguredMainKey,
-  resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
 import {
   canCopySessionMarkdown,
@@ -81,11 +75,6 @@ import {
 registerBackgroundTasksEnglish();
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
-  /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
-  private personActivityRouting(): PersonActivityRouting {
-    return personActivityRouting(this.context);
-  }
-
   private resolveWorkspaceIcon(sessionKey: string | undefined) {
     if (!sessionKey) {
       return null;
@@ -296,6 +285,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       ? readSessionMethodAccess(this.context.gateway.snapshot, {
           method: "sessions.patch",
           params: { key: row.key, label: null },
+          sessionScope: true,
+          session: row,
         })
       : null;
     const renameDisabledReason =
@@ -308,7 +299,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
     });
-    const archiveAllowed = Boolean(row && canArchiveSessionRow(row, configuredMainKey));
+    const archiveAllowed = Boolean(row && this.canArchiveHeaderSession(row));
     const deleteAllowed = Boolean(row && canDeleteSessionRows([row], configuredMainKey));
     const pinnable = row != null && isPinnableUiSessionRow(row);
     const sessionActionDisabledReasons = row
@@ -491,7 +482,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       this.context.sessions?.state?.result?.sessions ?? [],
     );
     const showOwnerChip = (result?.owners?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
-    const personActivity = this.personActivityRouting();
+    const personActivity = personActivityRouting(this.context);
     const renderedOwnerIdentity = showOwnerChip ? row?.owner?.actor.identity : undefined;
     const viewers = catalog
       ? undefined
@@ -550,7 +541,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
-      title: (catalog ? this.catalogSession?.name?.trim() : undefined) || this.paneTitle,
+      title:
+        (catalog ? this.catalogSession?.name?.trim() : undefined) ||
+        this.resolveHeaderSessionTitle(row),
       session: row,
       showOwnerChip,
       ownerViewing,
@@ -614,23 +607,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       sessionMenuAction:
         row && this.state
           ? html`<openclaw-chat-header-session-menu
-              .session=${{
-                label:
-                  normalizeOptionalString(row.label) ??
-                  normalizeOptionalString(this.paneTitle) ??
-                  row.key,
-                sessionId: row.sessionId ?? null,
-                isChild: Boolean(resolveUiSessionNavigationParentKey(row)),
-                pinned: row.pinned === true,
-                pinnable,
-                unread: row.unread === true,
-                archived: row.archived === true,
-                archiving: this.context.sessions.archiveVisibility(row.key) === "pending",
-                category: normalizeOptionalString(row.category) ?? null,
-                icon: normalizeOptionalString(row.icon) ?? null,
-                color: normalizeOptionalString(row.color) ?? null,
-                categoryClearReturnsToGroups: false,
-              }}
+              .session=${this.headerSessionMenuData(row, pinnable)}
               .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
               .onboarding=${this.onboarding}
               .preferencesBrowserOnly=${
@@ -652,6 +629,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
               .forkFromLastCompleted=${row.hasActiveRun === true}
               .archiveAllowed=${archiveAllowed}
+              .archiveShortcut=${this.active && this.presented && !this.onboarding}
               .deleteAllowed=${deleteAllowed}
               .onOpen=${() => {
                 void this.loadHeaderMenuData(row, agentWorkspace, workspaceGit);

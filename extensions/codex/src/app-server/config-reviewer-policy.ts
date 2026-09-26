@@ -251,7 +251,7 @@ function readCodexAppServerConfigToml(
   params: Pick<
     CodexModelBackedReviewerContext,
     "agentDir" | "codexConfigToml" | "env" | "homeScope"
-  >,
+  > & { codexHome?: string },
 ): string | undefined | false {
   if (params.codexConfigToml !== undefined) {
     return params.codexConfigToml ?? undefined;
@@ -271,7 +271,7 @@ export function codexConfigEnablesNativeComputerUse(
   params: Pick<
     CodexModelBackedReviewerContext,
     "agentDir" | "codexConfigToml" | "env" | "homeScope"
-  > & { pluginNames: readonly string[] },
+  > & { codexHome?: string; pluginNames: readonly string[] },
 ): boolean {
   const configToml = readCodexAppServerConfigToml(params);
   if (configToml === false) {
@@ -315,8 +315,13 @@ export function codexConfigEnablesNativeComputerUse(
 }
 
 function resolveCodexAppServerConfigPath(
-  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "env" | "homeScope">,
+  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "env" | "homeScope"> & {
+    codexHome?: string;
+  },
 ): string | undefined {
+  if (params.codexHome) {
+    return path.join(params.codexHome, CODEX_CONFIG_TOML_FILENAME);
+  }
   if (params.homeScope === "user") {
     return path.join(resolveCodexAppServerUserHomeDir(params.env), CODEX_CONFIG_TOML_FILENAME);
   }

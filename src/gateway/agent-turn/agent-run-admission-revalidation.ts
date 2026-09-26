@@ -5,6 +5,10 @@ import { errorShapeFromError } from "../error-shape.js";
 import type { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { assertParentSubagentResumeCurrent } from "../session-subagent-resume.js";
 import { setAbortedAgentDedupeEntries } from "./agent-dedupe.js";
+import {
+  releasePreparedAgentRunUserTurn,
+  type PreparedAgentRunUserTurn,
+} from "./agent-run-user-turn.js";
 import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
 
 /** Revalidate the same prepared admission after each asynchronous preparation step. */
@@ -33,7 +37,7 @@ export function createAgentRunAdmissionRevalidator(options: {
     rejectPreaccept,
     cleanupPreaccept,
   } = options;
-  return (): true | Promise<undefined> => {
+  const revalidate = (): true | Promise<undefined> => {
     if (activeRunAbort.controller.signal.aborted) {
       setAbortedAgentDedupeEntries({
         dedupe: params.context.dedupe,
@@ -63,5 +67,11 @@ export function createAgentRunAdmissionRevalidator(options: {
       return true;
     }
     return cleanupPreaccept(true).then(() => undefined);
+  };
+  return (userTurn?: PreparedAgentRunUserTurn): true | Promise<undefined> => {
+    const result = revalidate();
+    return result === true || !userTurn
+      ? result
+      : result.finally(() => releasePreparedAgentRunUserTurn(userTurn, "interrupted"));
   };
 }

@@ -52,6 +52,7 @@ type OperationErrorCode =
   | "session-rebound"
   | "goal-rebound"
   | "capacity"
+  | "receipt-invalid"
   | "invalid";
 
 export class SessionGoalOperationError extends Error {
@@ -181,7 +182,7 @@ export function readSessionGoalOperationReceipt(
     (result.goal !== undefined && result.goal.id !== result.goalId)
   ) {
     throw new SessionGoalOperationError(
-      "invalid",
+      "receipt-invalid",
       "Stored Goal operation receipt is invalid; inspect the session before retrying.",
     );
   }

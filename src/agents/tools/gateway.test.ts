@@ -60,12 +60,12 @@ vi.mock("../../gateway/call.js", () => ({
 vi.mock("../../gateway/server-methods.js", () => ({
   handleGatewayRequest: mocks.handleGatewayRequest,
 }));
-vi.mock("../../infra/device-identity.js", () => ({
-  loadDeviceIdentityIfPresent: () =>
+vi.mock("../../infra/device-identity-async.js", () => ({
+  loadDeviceIdentityIfPresentAsync: async () =>
     mocks.persistedDeviceIdentity === undefined
       ? mocks.deviceIdentity
       : mocks.persistedDeviceIdentity,
-  loadOrCreateDeviceIdentity: () => {
+  loadOrCreateDeviceIdentityAsync: async () => {
     if (mocks.deviceIdentityError) {
       throw mocks.deviceIdentityError;
     }

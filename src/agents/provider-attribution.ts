@@ -249,6 +249,12 @@ function isLocalEndpointHost(host: string): boolean {
   );
 }
 
+/** Classify loopback and private-network endpoint names without loading plugin metadata. */
+export function isLocalProviderEndpoint(baseUrl: string | null | undefined): boolean {
+  const host = resolveUrlHostname(baseUrl);
+  return host !== undefined && isLocalEndpointHost(host);
+}
+
 export function resolveProviderEndpoint(
   baseUrl: string | null | undefined,
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,

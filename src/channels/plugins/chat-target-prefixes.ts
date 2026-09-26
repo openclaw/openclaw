@@ -175,34 +175,47 @@ export function resolveServicePrefixedChatTarget<TService extends string, TTarge
 export function parseChatTargetPrefixesOrThrow(
   params: ChatTargetPrefixesParams,
 ): ParsedChatTarget | null {
+  return parseChatTargetPrefixes(params, true);
+}
+
+function parseChatTargetPrefixes(
+  params: ChatTargetPrefixesParams,
+  throwOnInvalid: boolean,
+): ParsedChatTarget | null {
   for (const prefix of params.chatIdPrefixes) {
     if (params.lower.startsWith(prefix)) {
       const value = stripPrefix(params.trimmed, prefix);
       const chatId = parseStrictInteger(value);
-      if (chatId === undefined) {
+      if (chatId !== undefined) {
+        return { kind: "chat_id", chatId };
+      }
+      if (throwOnInvalid) {
         throw new Error(`Invalid chat_id: ${value}`);
       }
-      return { kind: "chat_id", chatId };
     }
   }
 
   for (const prefix of params.chatGuidPrefixes) {
     if (params.lower.startsWith(prefix)) {
       const value = stripPrefix(params.trimmed, prefix);
-      if (!value) {
+      if (value) {
+        return { kind: "chat_guid", chatGuid: value };
+      }
+      if (throwOnInvalid) {
         throw new Error("chat_guid is required");
       }
-      return { kind: "chat_guid", chatGuid: value };
     }
   }
 
   for (const prefix of params.chatIdentifierPrefixes) {
     if (params.lower.startsWith(prefix)) {
       const value = stripPrefix(params.trimmed, prefix);
-      if (!value) {
+      if (value) {
+        return { kind: "chat_identifier", chatIdentifier: value };
+      }
+      if (throwOnInvalid) {
         throw new Error("chat_identifier is required");
       }
-      return { kind: "chat_identifier", chatIdentifier: value };
     }
   }
 
@@ -296,33 +309,5 @@ export function createAllowedChatSenderMatcher(params: {
 export function parseChatAllowTargetPrefixes(
   params: ChatTargetPrefixesParams,
 ): ParsedChatTarget | null {
-  for (const prefix of params.chatIdPrefixes) {
-    if (params.lower.startsWith(prefix)) {
-      const value = stripPrefix(params.trimmed, prefix);
-      const chatId = parseStrictInteger(value);
-      if (chatId !== undefined) {
-        return { kind: "chat_id", chatId };
-      }
-    }
-  }
-
-  for (const prefix of params.chatGuidPrefixes) {
-    if (params.lower.startsWith(prefix)) {
-      const value = stripPrefix(params.trimmed, prefix);
-      if (value) {
-        return { kind: "chat_guid", chatGuid: value };
-      }
-    }
-  }
-
-  for (const prefix of params.chatIdentifierPrefixes) {
-    if (params.lower.startsWith(prefix)) {
-      const value = stripPrefix(params.trimmed, prefix);
-      if (value) {
-        return { kind: "chat_identifier", chatIdentifier: value };
-      }
-    }
-  }
-
-  return null;
+  return parseChatTargetPrefixes(params, false);
 }

@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusResult, ModelCatalogResult } from "../../api/types.ts";
@@ -11,15 +10,17 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   appendPage,
+  chatModelPickers,
   createAuthStatus,
   createEmptyModelProvidersRouteData,
   createHarness,
   displayedCatalog,
-  modelPickers,
+  drainPageUpdates,
+  modelPicker,
   openModelPicker,
   publishCatalog,
+  retryCatalog,
   waitForProviders,
-  type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.ts";
 
 afterEach(() => {
@@ -28,27 +29,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function retryCatalog(page: ModelProvidersPageTestElement): Promise<void> {
-  await page.updateComplete;
-  const retry = page.querySelector<HTMLButtonElement>(".model-providers__catalog-progress button");
-  expect(retry?.textContent?.trim()).toBe("Retry");
-  retry!.click();
-  await page.updateComplete;
-}
-
-async function drainPageUpdates(page: ModelProvidersPageTestElement): Promise<void> {
-  // Drain every promise continuation before checking that a retired result stayed absent.
-  await setImmediate();
-  await page.updateComplete;
-  await updatePickers(page);
-}
-
 const preparedCatalog: ModelCatalogResult = {
   models: [
     { id: "prepared-primary", name: "Prepared primary", provider: "openai", available: true },
     { id: "prepared-utility", name: "Prepared utility", provider: "openai", available: true },
     { id: "prepared-fallback", name: "Prepared fallback", provider: "openai", available: true },
   ],
+  decisionModels: [{ id: "jev-latest", name: "Jev", provider: "typesafe", pluginId: "typesafe" }],
 };
 
 const savedModelConfig = {
@@ -59,6 +46,7 @@ const savedModelConfig = {
         fallbacks: ["openai/prepared-fallback"],
       },
       utilityModel: "openai/prepared-utility",
+      decisionModel: "typesafe/jev-latest",
     },
   },
 };
@@ -235,8 +223,8 @@ describe("Models page catalog publication", () => {
       await waitForProviders(page, config);
       await drainPageUpdates(page);
 
-      const primary = modelPickers(page)[0]!;
-      const utility = modelPickers(page)[1]!;
+      const primary = modelPicker(page, "primary");
+      const utility = modelPicker(page, "utility");
       const primaryTrigger = primary.querySelector(".picker-select__trigger")!;
       const utilityTrigger = utility.querySelector(".picker-select__trigger")!;
       expect(primaryTrigger.textContent).toContain("Prepared primary");
@@ -254,7 +242,7 @@ describe("Models page catalog publication", () => {
       ).toContain(expected);
 
       const requestsBeforeOpen = request.mock.calls.length;
-      await openModelPicker(page, 1);
+      await openModelPicker(page, "utility");
       await drainPageUpdates(page);
       expect(request).toHaveBeenCalledTimes(requestsBeforeOpen);
       page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
@@ -538,24 +526,19 @@ describe("Models page catalog publication", () => {
     },
   );
 
-  it.each([
-    { picker: "primary", index: 0 },
-    { picker: "utility", index: 1 },
-    { picker: "fallback", index: 2 },
-  ])(
-    "Models page $picker picker opens without a request and preserves saved choices as publication completes",
-    async ({ index }) => {
+  it.each(["primary", "utility", "fallback", "decision"] as const)(
+    "Models page %s picker opens without a request and preserves saved choices as publication completes",
+    async (role) => {
       const { context, request, discover, readPublished, runtimeConfig, publishEvent } =
         createCatalogHarness();
       readPublished.mockReturnValue({ ...preparedCatalog, pendingProviders: ["openai"] });
       const page = appendPage(context);
       await waitForProviders(page, savedModelConfig);
       await page.updateComplete;
-      expect(modelPickers(page)).toHaveLength(3);
       const requestsAfterLoad = request.mock.calls.filter(([method]) => method === "models.list");
       expect(requestsAfterLoad).toHaveLength(1);
 
-      await openModelPicker(page, index);
+      await openModelPicker(page, role);
       await drainPageUpdates(page);
       expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual(
         requestsAfterLoad,
@@ -565,12 +548,13 @@ describe("Models page catalog publication", () => {
         page.querySelector('.model-providers__catalog-progress[role="status"]'),
       ).not.toBeNull();
       expect(
-        modelPickers(page).map(
+        chatModelPickers(page).map(
           (picker) => picker.querySelector<HTMLButtonElement>(".picker-select__trigger")?.disabled,
         ),
       ).toEqual([false, false, false]);
 
       const published: ModelCatalogResult = {
+        ...preparedCatalog,
         models: [
           ...preparedCatalog.models,
           { id: "discovered", name: "Discovered model", provider: "openai", available: true },
@@ -588,24 +572,33 @@ describe("Models page catalog publication", () => {
       await waitForFast(() => expect(displayedCatalog(page)?.models).toEqual(published.models));
       await drainPageUpdates(page);
       expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
-      for (const picker of modelPickers(page)) {
+      for (const picker of chatModelPickers(page)) {
         expect(
           picker.querySelector('[role="option"][data-value="openai/discovered"]'),
         ).not.toBeNull();
+        expect(
+          picker.querySelector('[role="option"][data-value="typesafe/jev-latest"]'),
+        ).toBeNull();
       }
+      const decision = modelPicker(page, "decision");
       expect(
-        modelPickers(page).map((picker) =>
+        decision.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+      ).toBe("typesafe/jev-latest");
+      expect(decision.querySelector('[role="option"][data-value="openai/discovered"]')).toBeNull();
+      expect(
+        chatModelPickers(page).map((picker) =>
           picker.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
         ),
       ).toEqual(["openai/prepared-primary", "openai/prepared-utility", "openai/prepared-fallback"]);
       const laterPublication: ModelCatalogResult = {
+        ...published,
         models: [
           ...published.models,
           { id: "published-later", name: "Published later", provider: "openai", available: true },
         ],
       };
       readPublished.mockReturnValue(laterPublication);
-      await openModelPicker(page, 1);
+      await openModelPicker(page, "utility");
       await drainPageUpdates(page);
       expect(displayedCatalog(page)?.models).toEqual(published.models);
       expect(readPublished).toHaveBeenCalledTimes(2);
@@ -617,7 +610,7 @@ describe("Models page catalog publication", () => {
       expect(
         page.querySelector('[role="option"][data-value="openai/published-later"]'),
       ).not.toBeNull();
-      const utility = modelPickers(page)[1]!;
+      const utility = modelPicker(page, "utility");
       const search = utility.querySelector<HTMLInputElement>('input[type="search"]');
       expect(search).not.toBeNull();
       search!.value = "Discovered";
@@ -660,10 +653,15 @@ describe("Models page catalog publication", () => {
       await openModelPicker(page);
       expect(displayedCatalog(page)?.models).toEqual(models);
       expect(
-        modelPickers(page).map((picker) =>
+        chatModelPickers(page).map((picker) =>
           picker.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
         ),
       ).toEqual(["openai/prepared-primary", "openai/prepared-utility", "openai/prepared-fallback"]);
+      expect(
+        modelPicker(page, "decision")
+          .querySelector('[role="option"][data-value="typesafe/jev-latest"]')
+          ?.getAttribute("aria-disabled"),
+      ).toBe("true");
       expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
       expect(discover).not.toHaveBeenCalled();
@@ -817,7 +815,7 @@ describe("Models page catalog publication", () => {
         });
         await drainPageUpdates(page);
         expect(
-          modelPickers(page)[0]?.querySelector<HTMLButtonElement>(".picker-select__trigger")
+          modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger")
             ?.disabled,
         ).toBe(false);
         await openModelPicker(page);
@@ -848,7 +846,7 @@ describe("Models page catalog publication", () => {
           page.querySelector("#model-providers-utility-model .picker-select__label")?.textContent,
         ).toBe(discoveryState === "completed" ? "Auto · Newer model" : "Auto · Prepared utility");
         expect(
-          modelPickers(page)[0]
+          modelPicker(page, "primary")
             ?.querySelector('[role="option"][aria-selected="true"]')
             ?.getAttribute("data-value"),
         ).toBe("openai/prepared-utility");
@@ -945,7 +943,7 @@ describe("Models page catalog publication", () => {
         catalogRequests,
       );
       readPublished.mockReturnValue(newer);
-      await openModelPicker(page, 1);
+      await openModelPicker(page, "utility");
       await drainPageUpdates(page);
       expect(discover).toHaveBeenCalledTimes(discoveries);
       expect(readPublished).toHaveBeenCalledTimes(publicationReads);
@@ -989,7 +987,7 @@ describe("Models page catalog publication", () => {
         page.querySelector('.model-providers__catalog-progress[role="status"]'),
       ).not.toBeNull();
       expect(page.querySelector('.model-providers__catalog-progress[role="alert"]')).toBeNull();
-      await openModelPicker(page, 2);
+      await openModelPicker(page, "fallback");
       expect(discover).toHaveBeenCalledTimes(2);
       current.resolve({
         models: [{ id: "current", name: "Current model", provider: "openai", available: true }],

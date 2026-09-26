@@ -150,6 +150,9 @@ describe("config backup rotation", () => {
           const externalRaw = "external file must stay unchanged\n";
           await fs.writeFile(includePath, '{"level":"info"}\n');
           await fs.writeFile(externalPath, externalRaw, { mode: 0o644 });
+          // Establish the fixture mode independently of the process umask.
+          await fs.chmod(externalPath, 0o644);
+          expectPosixMode((await fs.stat(externalPath)).mode, 0o644);
           const backupPath = `${includePath}.bak`;
           await (linkKind === "symlink" ? fs.symlink : fs.link)(externalPath, backupPath);
 

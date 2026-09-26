@@ -26,6 +26,8 @@ export type OpenClawStateDatabaseReadAdmission = {
   assertCurrent: () => void;
 };
 export type OpenClawStateDatabaseAsyncResource = {
+  /** Shared execution resources close only after accepted owners settle their remaining work. */
+  phase?: "after-resources";
   close: (identity?: DatabasePathIdentity) => Promise<void>;
 };
 
@@ -39,12 +41,14 @@ type CloseAttempt = {
   seal: ReadSeal;
   retained: Set<OpenClawStateDatabaseAsyncResource>;
   pending?: Promise<boolean>;
+  queue?: Set<OpenClawStateDatabaseAsyncResource>;
 };
 
 type MaintenanceResource = {
   phase:
     | "agent-resources"
     | "agent-handles"
+    | "shared-leases"
     | "shared-resources"
     | "shared-references"
     | "shared-handles";
@@ -54,9 +58,20 @@ type SchemaDelegateFactory = (
   params: Parameters<typeof tryCreateGatewaySchemaFenceDelegate>[0],
 ) => ReturnType<typeof tryCreateGatewaySchemaFenceDelegate>;
 
+type AgentSchemaMigration = {
+  agentId: string;
+  path: string;
+  foundVersion: number;
+  supportedVersion: number;
+};
+
 export type OpenClawDatabaseMaintenanceScope = {
   readonly ownsSchemaMaintenance: boolean;
-  assertAdmission(): void;
+  assertOwnerCurrent(this: void, access?: "read"): void;
+  assertAdmission(this: void): void;
+  assertReadAdmission(this: void): void;
+  addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
+  assertAgentSchemaMigration(migration: AgentSchemaMigration): void;
   run<T>(operation: () => T): T;
   track<T>(operation: Promise<T>): Promise<T>;
   own(
@@ -142,27 +157,69 @@ function commonMaintenanceAncestor(
 /** Associate lexical database work with exact resources, never all files beneath a root. */
 export function createOpenClawDatabaseMaintenanceScope(
   createSchemaFenceDelegate?: SchemaDelegateFactory,
+  assertOwnerCurrent?: () => void,
 ): OpenClawDatabaseMaintenanceScope {
   const parent = getOpenClawDatabaseMaintenanceScope();
   const schemaDelegateFactory =
     createSchemaFenceDelegate ??
     (parent?.ownsSchemaMaintenance ? parent.createSchemaFenceDelegate : undefined);
   const pending = new Set<Promise<unknown>>();
+  const schemaMigrationChecks = new Set<(migration: AgentSchemaMigration) => void>();
   const resources = new Map<object, MaintenanceResource>();
   let closed = false;
+  let checkingOwner = false;
   let closing: Promise<void> | undefined;
   const assertOpen = () => {
     if (closed) {
       throw new Error("Database maintenance resource scope is closed");
     }
   };
+  const assertAdmissionLifecycle = () => {
+    assertOpen();
+    const inherited = maintenanceResources.current.getStore();
+    if (closing && !(inherited?.scope === scope && inherited.active)) {
+      throw new Error("Database maintenance resource admission is closed");
+    }
+  };
   const scope: OpenClawDatabaseMaintenanceScope = {
     ownsSchemaMaintenance: schemaDelegateFactory !== undefined,
+    assertOwnerCurrent(access) {
+      if (checkingOwner) {
+        if (access === "read") {
+          return;
+        }
+        throw new Error("Database maintenance authority check cannot admit a nested effect");
+      }
+      checkingOwner = true;
+      try {
+        parent?.assertOwnerCurrent(access);
+        assertOwnerCurrent?.();
+      } finally {
+        checkingOwner = false;
+      }
+    },
     assertAdmission() {
       assertOpen();
-      const inherited = maintenanceResources.current.getStore();
-      if (closing && !(inherited?.scope === scope && inherited.active)) {
-        throw new Error("Database maintenance resource admission is closed");
+      scope.assertOwnerCurrent();
+      assertAdmissionLifecycle();
+    },
+    assertReadAdmission() {
+      assertAdmissionLifecycle();
+      // Current authority needs policy rows from this same store. Keep its resource
+      // custody, but do not recurse into a check already evaluating those rows.
+      scope.assertOwnerCurrent("read");
+      assertAdmissionLifecycle();
+    },
+    addAgentSchemaMigrationCheck(check) {
+      scope.assertAdmission();
+      schemaMigrationChecks.add(check);
+    },
+    assertAgentSchemaMigration(migration) {
+      assertOpen();
+      scope.assertOwnerCurrent();
+      parent?.assertAgentSchemaMigration(migration);
+      for (const check of schemaMigrationChecks) {
+        check(migration);
       }
     },
     run(operation) {
@@ -217,11 +274,16 @@ export function createOpenClawDatabaseMaintenanceScope(
             for (const phase of [
               "agent-resources",
               "agent-handles",
+              "shared-leases",
               "shared-resources",
               "shared-references",
               "shared-handles",
             ] as const) {
               while ([...resources.values()].some((resource) => resource.phase === phase)) {
+                // Earlier cleanup can start tracked work using resources in this batch.
+                while (pending.size) {
+                  await Promise.allSettled(pending);
+                }
                 const batch = [...resources].filter(([, resource]) => resource.phase === phase);
                 const results = await Promise.allSettled(
                   batch.map(async ([key, resource]) => {
@@ -246,6 +308,7 @@ export function createOpenClawDatabaseMaintenanceScope(
               }
             }
           }
+          schemaMigrationChecks.clear();
           closed = true;
         })
         .catch((error: unknown) => {
@@ -268,10 +331,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   const attempts = new Map<IdentityRecord | undefined, CloseAttempt>();
   let tail = Promise.resolve();
 
-  const known = (pathname: string) => {
-    const resolvedPath = path.resolve(pathname);
-    return [...records.values()].find((record) => record.paths.has(resolvedPath));
-  };
+  // Internal lookups reuse the path normalized at the lifecycle boundary.
+  const known = (resolvedPath: string) =>
+    [...records.values()].find((record) => record.paths.has(resolvedPath));
   const overlaps = (left: IdentityRecord, right: IdentityRecord) =>
     left.identity.key === right.identity.key ||
     [...left.paths].some((pathname) => right.paths.has(pathname));
@@ -284,8 +346,33 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       );
     }
   };
-  const resolve = (pathname: string, preparedIdentity?: DatabasePathIdentity): IdentityRecord => {
-    const resolvedPath = path.resolve(pathname);
+  const findPhysicalRecord = (identity: DatabasePathIdentity): IdentityRecord | undefined => {
+    const record = records.get(identity.key);
+    if (
+      !record ||
+      !identity.key.startsWith("file:") ||
+      record.paths.has(identity.canonicalPath) ||
+      isSealed(record)
+    ) {
+      return record;
+    }
+    // A closed, deleted database can leave an inode that a new path reuses.
+    // Only cold identity binding probes aliases; warmed captures stay unchanged.
+    if (
+      [...record.paths].some(
+        (pathname) => inspectDatabasePathIdentitySync(pathname)?.key === identity.key,
+      )
+    ) {
+      return record;
+    }
+    invalidate(record);
+    forget(record);
+    return undefined;
+  };
+  const resolve = (
+    resolvedPath: string,
+    preparedIdentity?: DatabasePathIdentity,
+  ): IdentityRecord => {
     const cached = known(resolvedPath);
     if (cached && (!preparedIdentity || cached.identity.key === preparedIdentity.key)) {
       // Resolve first creation without replacing an established file's admission.
@@ -294,7 +381,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         : cached;
     }
     const identity = preparedIdentity ?? readDatabasePathIdentitySync(resolvedPath);
-    let record = records.get(identity.key);
+    let record = findPhysicalRecord(identity);
     if (!record && identity.key.startsWith("file:")) {
       // A first creation can become visible through an alias before publication.
       // Reconcile unresolved creation facts here, never on warmed captures.
@@ -325,13 +412,13 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     record.paths.add(resolvedPath).add(identity.canonicalPath);
     return record;
   };
-  const resolveForNative = (pathname: string): IdentityRecord | undefined => {
-    const cached = known(pathname);
+  const resolveForNative = (resolvedPath: string): IdentityRecord | undefined => {
+    const cached = known(resolvedPath);
     if (cached) {
       return cached;
     }
-    const identity = inspectDatabasePathIdentitySync(pathname);
-    return identity ? resolve(pathname, identity) : undefined;
+    const identity = inspectDatabasePathIdentitySync(resolvedPath);
+    return identity ? resolve(resolvedPath, identity) : undefined;
   };
   const invalidate = (record?: IdentityRecord) => {
     for (const current of record ? [record] : records.values()) {
@@ -352,16 +439,16 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
 
   return {
     identity(pathname: string): DatabasePathIdentity | undefined {
-      return known(pathname)?.identity ?? inspectDatabasePathIdentitySync(pathname);
+      return known(path.resolve(pathname))?.identity ?? inspectDatabasePathIdentitySync(pathname);
     },
     knownIdentity(this: void, pathname: string): DatabasePathIdentity | undefined {
-      return known(pathname)?.identity;
+      return known(path.resolve(pathname))?.identity;
     },
     publish(pathname: string): DatabasePathIdentity {
       const resolvedPath = path.resolve(pathname);
       const identity = readDatabasePathIdentitySync(resolvedPath);
       const previous = known(resolvedPath);
-      let record = records.get(identity.key);
+      let record = findPhysicalRecord(identity);
       if (previous && previous.identity.key !== identity.key) {
         if (previous.identity.key.startsWith("path:") && !record) {
           // First canonical creation binds the same captured admission to its file.
@@ -384,7 +471,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       if (pathname === undefined) {
         invalidate();
       } else {
-        const record = known(pathname);
+        const record = known(path.resolve(pathname));
         if (record) {
           invalidate(record);
         }
@@ -392,6 +479,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     },
     register(resource: OpenClawStateDatabaseAsyncResource): () => void {
       resources.add(resource);
+      for (const attempt of attempts.values()) {
+        attempt.queue?.add(resource);
+      }
       return () => {
         resources.delete(resource);
       };
@@ -417,7 +507,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       };
     },
     holdExclusion(pathname: string): () => void {
-      const record = resolve(pathname);
+      const record = resolve(path.resolve(pathname));
       const held = seal(record);
       return () => {
         seals.delete(held);
@@ -433,7 +523,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       pathname: string | undefined,
       retireNative: (identity?: DatabasePathIdentity) => boolean,
     ): Promise<boolean> {
-      const record = pathname === undefined ? undefined : resolveForNative(pathname);
+      const record = pathname === undefined ? undefined : resolveForNative(path.resolve(pathname));
       if (pathname !== undefined && !record) {
         // No worker could enter a non-file target. Retire only the caller's exact
         // native path; undefined must not reach resource.close as a global drain.
@@ -448,55 +538,76 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         attempts.set(record, attempt);
       }
       const current = attempt;
-      const pending = tail.then(async () => {
-        const closing = new Set([...resources, ...current.retained]);
-        for (const entry of attempts.values()) {
-          for (const resource of entry.retained) {
-            closing.add(resource);
-          }
-        }
-        const errors: unknown[] = [];
-        await Promise.all(
-          [...closing].map(async (resource) => {
-            try {
-              await resource.close(record?.identity);
-              current.retained.delete(resource);
-            } catch (error) {
-              // Unregistration cannot abandon a resource whose close failed.
-              current.retained.add(resource);
-              errors.push(error);
-            }
-          }),
-        );
-        if (errors.length === 1) {
-          throw errors[0];
-        }
-        if (errors.length > 1) {
-          throw createSqliteLifecycleAggregateError(
-            errors,
-            "OpenClaw state resource drainage failed",
-            errors[0],
-          );
-        }
-        const retired = retireNative(record?.identity);
-        attempts.delete(record);
-        seals.delete(current.seal);
-        if (record === undefined) {
-          // A successful whole-cache retry also discharges prior failed path closes.
-          for (const [key, entry] of attempts) {
-            if (!entry.pending) {
-              attempts.delete(key);
-              seals.delete(entry.seal);
+      const pending = tail
+        .then(async () => {
+          const closing = new Set([...resources, ...current.retained]);
+          for (const entry of attempts.values()) {
+            for (const resource of entry.retained) {
+              closing.add(resource);
             }
           }
-          for (const entry of records.values()) {
-            forget(entry);
+          current.queue = closing;
+          const errors: unknown[] = [];
+          while (current.queue.size) {
+            const ordinary = [...current.queue].filter(
+              (resource) => resource.phase !== "after-resources",
+            );
+            // Failed owners retain the transports they may need during a canonical retry.
+            if (!ordinary.length && errors.length) {
+              for (const resource of current.queue) {
+                current.retained.add(resource);
+              }
+              break;
+            }
+            const batch = ordinary.length ? ordinary : [...current.queue];
+            for (const resource of batch) {
+              current.queue.delete(resource);
+            }
+            await Promise.all(
+              batch.map(async (resource) => {
+                try {
+                  await resource.close(record?.identity);
+                  current.retained.delete(resource);
+                } catch (error) {
+                  // Unregistration cannot abandon a resource whose close failed.
+                  current.retained.add(resource);
+                  errors.push(error);
+                }
+              }),
+            );
           }
-        } else {
-          forget(record);
-        }
-        return retired;
-      });
+          if (errors.length === 1) {
+            throw errors[0];
+          }
+          if (errors.length > 1) {
+            throw createSqliteLifecycleAggregateError(
+              errors,
+              "OpenClaw state resource drainage failed",
+              errors[0],
+            );
+          }
+          const retired = retireNative(record?.identity);
+          attempts.delete(record);
+          seals.delete(current.seal);
+          if (record === undefined) {
+            // A successful whole-cache retry also discharges prior failed path closes.
+            for (const [key, entry] of attempts) {
+              if (!entry.pending) {
+                attempts.delete(key);
+                seals.delete(entry.seal);
+              }
+            }
+            for (const entry of records.values()) {
+              forget(entry);
+            }
+          } else {
+            forget(record);
+          }
+          return retired;
+        })
+        .finally(() => {
+          current.queue = undefined;
+        });
       current.pending = pending;
       tail = pending.then(
         () => undefined,

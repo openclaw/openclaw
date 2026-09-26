@@ -104,7 +104,7 @@ describe("git-hooks/pre-commit (integration)", () => {
       });
 
       expect(readFormatterLog(logPath)).toEqual([
-        "oxfmt --write --no-error-on-unmatched-pattern changed.ts",
+        "oxfmt --write --threads=1 --no-error-on-unmatched-pattern changed.ts",
       ]);
       if (mode === "external") {
         writeFileSync(path.join(dir, "changed.ts"), literals[0]);
@@ -388,9 +388,9 @@ describe("staged content guard", () => {
     const formerRulePath = "scripts/pre-commit/blocked-literals.txt";
     stage(dir, formerRulePath, literals[0]);
     blocked(dir, [formerRulePath]);
-    // Long paths cross the byte budget before 64 entries; short paths cross the count budget.
+    // Long paths cross the byte budget first; short paths also cross the 256-entry count budget.
     const batchPaths = [];
-    for (let i = 0; i < 140; i++) {
+    for (let i = 0; i < 600; i++) {
       const suffix = i < 70 ? `/${"x".repeat(180)}/${"y".repeat(180)}` : "";
       const name = `batch-${String(i).padStart(3, "0")}${suffix}.txt`;
       mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });

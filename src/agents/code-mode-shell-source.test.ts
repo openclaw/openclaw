@@ -192,21 +192,8 @@ describe("isShellLikeCodeModeSource", () => {
     "// shell documentation: ls /workspace\nreturn 7;",
     "// shell documentation: ls /workspace\nconst answer = 7; return answer;",
     "/* typed module */ export interface Result { value: number }",
-  ])("preserves the JavaScript or TypeScript source %j", (source) => {
+  ])("does not misclassify source as a shell command %j", (source) => {
     expect(isShellLikeCodeModeSource(source)).toBe(false);
-  });
-
-  it.each([
-    {
-      source: "node -1; var node: number = 7;",
-      preparedSource: "node -1; var node = 7;",
-    },
-    {
-      source: "node --version; var node: number = 2, version = 1;",
-      preparedSource: "node--; version; var node = 2, version = 1;",
-    },
-  ])("preserves transpiled command-like TypeScript: $source", ({ source, preparedSource }) => {
-    expect(isShellLikeCodeModeSource(source, preparedSource)).toBe(false);
   });
 
   it.each([
@@ -226,7 +213,7 @@ describe("isShellLikeCodeModeSource", () => {
   });
 
   it("explains how to execute a real catalog tool without retrying shell source", () => {
-    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("JavaScript or TypeScript");
+    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("JavaScript");
     expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("not shell");
     expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("enabled async tool global");
     expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("catalog.search(query)");

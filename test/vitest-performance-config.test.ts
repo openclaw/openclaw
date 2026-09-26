@@ -173,6 +173,53 @@ ${source}
 `),
     );
 
+  it("preserves each project's optimized dependency identity when reusing shared transforms", () => {
+    const { root } = prepareCacheFixture("optimizer-identity");
+    const cacheOwner = new URL("./vitest/vitest.performance-config.ts", import.meta.url).href;
+    runCacheApi(
+      root,
+      `
+import { createVitestProjectCachePlugin } from ${JSON.stringify(cacheOwner)};
+fs.writeFileSync(path.join(root, "subject.js"), 'export const dependencyRoot = "__OPTIMIZER_ROOT__";');
+const transforms = [];
+const plugin = {
+  name: "fixture-optimized-dependency-import",
+  transform(code, id) {
+    if (!id.endsWith("/subject.js")) return;
+    const directory = this.environment.config.cacheDir;
+    transforms.push(directory);
+    return { code: code.replace('"__OPTIMIZER_ROOT__"', JSON.stringify(directory)), map: null };
+  },
+};
+const create = () => createVitest("test", {
+  root, config: false, watch: false, ...cacheConfig,
+  projects: ["A", "B"].map(name => ({
+    extends: false,
+    root,
+    plugins: [plugin, createVitestProjectCachePlugin()],
+    test: { name, ...cacheConfig },
+  })),
+});
+for (let pass = 0; pass < 2; pass++) {
+  const ctx = await create();
+  try {
+    const directories = [];
+    for (const name of ["A", "B"]) {
+      const project = ctx.getProjectByName(name);
+      const { dependencyRoot } = await project.import("./subject.js");
+      assert.equal(dependencyRoot, project.vite.config.cacheDir, name + " must keep its own dependency imports");
+      directories.push(dependencyRoot);
+    }
+    assert.notEqual(directories[0], directories[1]);
+  } finally {
+    await ctx.close();
+  }
+}
+assert.equal(transforms.length, 2, "both projects must reuse their own persisted transforms on the second run");
+`,
+    );
+  });
+
   it("preserves another checkout's cache when shared dependencies change", () => {
     const root = tempDirs.make("oc-vitest-cache-ownership-");
     const sharedModules = path.join(root, "shared", "node_modules");

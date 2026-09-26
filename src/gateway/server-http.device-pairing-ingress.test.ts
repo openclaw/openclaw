@@ -1,7 +1,7 @@
 // Device-join ingress tests prove the public exchange consumes the Gateway's
 // prepared attribution instead of rediscovering a loopback proxy socket.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { AUTH_NONE, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
 
 const mocks = vi.hoisted(() => ({
@@ -23,7 +23,7 @@ const PROXY_HEADERS = {
 const limiters: AuthRateLimiter[] = [];
 
 function createStrictLimiter(maxAttempts = 2): AuthRateLimiter {
-  const limiter = createAuthRateLimiter({
+  const limiter = createGatewayAuthRateLimiter({
     maxAttempts,
     windowMs: 60_000,
     lockoutMs: 60_000,

@@ -10,6 +10,10 @@ import {
 } from "./cli-shared.js";
 import { registerAnthropicPlugin } from "./register.runtime.js";
 
+vi.mock("./session-catalog-executable.js", () => ({
+  resolveClaudeTerminalExecutable: () => ({ executable: "claude" }),
+}));
+
 type ClaudePreparedExecutionWithSecret = {
   env?: Record<string, string>;
   clearEnv?: string[];

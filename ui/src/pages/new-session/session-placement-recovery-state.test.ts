@@ -13,6 +13,30 @@ describe("pending session placement recovery state", () => {
   beforeEach(() => sessionStorage.clear());
   afterEach(() => vi.unstubAllGlobals());
 
+  it("does not restore a creating draft owned by another mounted surface", () => {
+    const context = {};
+    const palette = new PendingSessionPlacementRecoveryState(() => context);
+    const page = new PendingSessionPlacementRecoveryState(() => context);
+    const request = palette.stageCreate({
+      agentId: "main",
+      target: { kind: "device", deviceId: "runner" },
+      message: "palette task",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: { agentId: "main", message: "", worktree: true, worktreeSource: "empty" },
+    });
+    expect(request).not.toBeNull();
+    expect(page.restore("ws://gateway.example", "principal-a")).toBeNull();
+    expect(palette.restore("ws://gateway.example", "principal-a")?.message).toBe("palette task");
+    palette.releaseClaim();
+    expect(page.restore("ws://gateway.example", "principal-a")?.message).toBe("palette task");
+    expect(
+      palette.hasOtherLiveOwner("ws://gateway.example", "principal-a", palette.sessionKey),
+    ).toBe(true);
+    expect(palette.owns("ws://gateway.example", "principal-a", palette.sessionKey)).toBe(false);
+    page.clear();
+  });
+
   it.each([
     {
       name: "a replacement Gateway",

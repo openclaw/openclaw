@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  defaultRuntime,
+  shortenHomePath,
+  theme,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveMemoryPluginConfig, withMemoryCommand } from "./cli-runtime-common.js";
-import { defaultRuntime, shortenHomePath, theme } from "./cli.host.runtime.js";
 import type { MemoryRemBackfillOptions, MemoryRemHarnessOptions } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
 import { seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
@@ -525,26 +529,8 @@ function parseGroundedRef(
 }
 function collectGroundedShortTermSeedItems(
   previews: Awaited<ReturnType<typeof previewGroundedRemMarkdown>>["files"],
-): Array<{
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  score: number;
-  query: string;
-  signalCount: number;
-  dayBucket?: string;
-}> {
-  const items: Array<{
-    path: string;
-    startLine: number;
-    endLine: number;
-    snippet: string;
-    score: number;
-    query: string;
-    signalCount: number;
-    dayBucket?: string;
-  }> = [];
+): Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] {
+  const items: Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] = [];
   const seen = new Set<string>();
   for (const file of previews) {
     const dayBucket = extractIsoDayFromPath(file.path) ?? undefined;

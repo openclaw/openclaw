@@ -149,6 +149,59 @@ describe("Codex command RPC helpers", () => {
     >[0];
   }
 
+  it.each(["before-write", "after-write"] as const)(
+    "checks owner before dispatch and preserves accepted settlement after revocation at %s",
+    async (revokeAt) => {
+      let ownerCurrent = true;
+      let writes = 0;
+      let settled = false;
+      requestCodexAppServerJsonMock.mockImplementationOnce(
+        async (request: { assertCurrent?: () => void }) => {
+          request.assertCurrent?.();
+          writes += 1;
+          ownerCurrent = false;
+          return resumeResponse;
+        },
+      );
+      const result = codexControlRequest(
+        {},
+        "thread/fork",
+        { threadId: "source-thread", excludeTurns: true },
+        {
+          startOptions: {
+            transport: "stdio",
+            homeScope: "user",
+            command: "codex",
+            args: ["app-server"],
+            headers: {},
+          },
+          authProfileId: null,
+          assertOwnerCurrent: () => {
+            if (!ownerCurrent) {
+              throw new Error("Command owner was revoked");
+            }
+          },
+          beforeRequest: async () => {
+            if (revokeAt === "before-write") {
+              ownerCurrent = false;
+            }
+          },
+          onResponse: async (_response, _client, authority) => {
+            authority.assertCurrent();
+            settled = true;
+          },
+        },
+      );
+      if (revokeAt === "before-write") {
+        await expect(result).rejects.toThrow("Command owner was revoked");
+        expect({ writes, settled }).toEqual({ writes: 0, settled: false });
+      } else {
+        await expect(result).resolves.toEqual(resumeResponse);
+        expect({ writes, settled }).toEqual({ writes: 1, settled: true });
+      }
+    },
+  );
+
   it("keeps plugin reads without an admitted session on the selected auth partition", async () => {
     const options = { config, authProfileId: "openai:selected" };
     const startOptions = { transport: "stdio" as const, command: "codex", args: [], headers: {} };
@@ -162,6 +215,73 @@ describe("Codex command RPC helpers", () => {
     expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
     expect(requestCodexAppServerJsonMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { scope: "user home", transport: "stdio" as const, homeScope: "user" as const },
+    {
+      scope: "remote supervision",
+      transport: "websocket" as const,
+      homeScope: "agent" as const,
+      url: "ws://codex.test",
+    },
+  ])("settles a detached $scope fork without acquiring session auth", async (connection) => {
+    const onResponse = vi.fn();
+    await codexControlRequest(
+      {},
+      "thread/fork",
+      { threadId: "source-thread", excludeTurns: true },
+      {
+        startOptions: {
+          transport: connection.transport,
+          homeScope: connection.homeScope,
+          ...("url" in connection ? { url: connection.url } : {}),
+          command: "codex",
+          args: ["app-server"],
+          headers: {},
+        },
+        authProfileId: null,
+        onResponse,
+      },
+    );
+    expect(acquiredOptions()).toMatchObject({ authProfileId: null });
+    expect(acquiredOptions().preparedAuth).toBeUndefined();
+    expect(onResponse).toHaveBeenCalledWith(resumeResponse, harness.client, {
+      authProfileId: undefined,
+      assertCurrent: expect.any(Function),
+    });
+  });
+
+  it.each([
+    { method: "thread/resume" as const, explicitConnection: true },
+    { method: "thread/fork" as const, explicitConnection: false },
+  ])(
+    "requires session authority for $method without its native fork selection",
+    async (testCase) => {
+      await expect(
+        codexControlRequest(
+          {},
+          testCase.method,
+          { threadId: "source-thread" },
+          {
+            ...(testCase.explicitConnection
+              ? {
+                  startOptions: {
+                    transport: "stdio" as const,
+                    homeScope: "user" as const,
+                    command: "codex",
+                    args: ["app-server"],
+                    headers: {},
+                  },
+                }
+              : {}),
+            authProfileId: null,
+            onResponse: vi.fn(),
+          },
+        ),
+      ).rejects.toThrow("requires admitted session authority");
+      expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("resumes with the prepared environment API key and publishes no legacy profile", async () => {
     vi.stubEnv("OPENAI_API_KEY", "control-platform-key");

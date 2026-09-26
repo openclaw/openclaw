@@ -4,7 +4,9 @@ import { exitCliAfterOutput } from "../../cli/one-shot-exit.js";
 import { withProgress } from "../../cli/progress.js";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { beginLifecycleWriteCustody } from "../../infra/lifecycle-write-custody.js";
 import type { MigrationApplyResult, MigrationProviderPlugin } from "../../plugins/types.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { backupCreateCommand } from "../backup.js";
 import { buildMigrationContext, buildMigrationReportDir } from "./context.js";
@@ -95,39 +97,50 @@ export async function runMigrationApply(params: {
     assertConflictFreePlan(selectedPlan, params.providerId);
     const stateDir = resolveStateDir();
     const reportDir = buildMigrationReportDir(params.providerId, stateDir);
-    if (!params.opts.noBackup) {
-      progress?.setLabel("Preparing migration backup…");
-    }
-    const backupPath = params.opts.noBackup
-      ? undefined
-      : await createPreMigrationBackup({ output: params.opts.backupOutput });
-    if (!params.opts.noBackup) {
+    const releaseCustody = beginLifecycleWriteCustody("migration");
+    let failure: unknown;
+    try {
+      if (!params.opts.noBackup) {
+        progress?.setLabel("Preparing migration backup…");
+      }
+      const backupPath = params.opts.noBackup
+        ? undefined
+        : await createPreMigrationBackup({ output: params.opts.backupOutput });
+      if (!params.opts.noBackup) {
+        tick();
+      }
+      await fs.mkdir(reportDir, { recursive: true });
+      const ctx = buildMigrationContext({
+        source: params.opts.source,
+        targetAgentId: params.opts.targetAgentId,
+        itemKinds: params.opts.itemKinds,
+        includeSecrets: params.opts.includeSecrets,
+        overwrite: params.opts.overwrite,
+        configOverride: params.opts.configOverride,
+        providerOptions: buildMigrationProviderOptions(params.opts, params.providerId),
+        runtime: params.runtime,
+        backupPath,
+        reportDir,
+        json: params.opts.json,
+      });
+      progress?.setLabel("Applying migration…");
+      const result = await withCommandProcessScope(async () => {
+        const applied = await params.provider.apply(ctx, selectedPlan);
+        params.onApplyCompleted?.();
+        return applied;
+      });
       tick();
+      return {
+        ...result,
+        backupPath: result.backupPath ?? backupPath,
+        reportDir: result.reportDir ?? reportDir,
+      };
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
+      releaseCustody(failure);
     }
-    await fs.mkdir(reportDir, { recursive: true });
-    const ctx = buildMigrationContext({
-      source: params.opts.source,
-      targetAgentId: params.opts.targetAgentId,
-      itemKinds: params.opts.itemKinds,
-      includeSecrets: params.opts.includeSecrets,
-      overwrite: params.opts.overwrite,
-      configOverride: params.opts.configOverride,
-      providerOptions: buildMigrationProviderOptions(params.opts, params.providerId),
-      runtime: params.runtime,
-      backupPath,
-      reportDir,
-      json: params.opts.json,
-    });
-    progress?.setLabel("Applying migration…");
-    const result = await params.provider.apply(ctx, selectedPlan);
-    params.onApplyCompleted?.();
-    tick();
-    const withBackup = {
-      ...result,
-      backupPath: result.backupPath ?? backupPath,
-      reportDir: result.reportDir ?? reportDir,
-    };
-    return withBackup;
   };
   const withBackup = params.opts.json
     ? await applyMigration()

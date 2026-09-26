@@ -18,10 +18,11 @@ import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
+  classifySessionKeyShape,
   isSubagentSessionKey,
   normalizeAgentId,
+  normalizeAgentIdStrict,
   parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import {
@@ -30,6 +31,7 @@ import {
   listAgentIds,
   resolveMutableAgentEntry,
   resolveAgentConfig,
+  resolveAgentModelConfigForRuntime,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   tryResolveLegacyDataOwnerAgentId,
@@ -46,6 +48,8 @@ export {
   toAgentEntriesRecord,
   resolveAgentConfig,
   resolveAgentContextLimits,
+  resolveAgentNativeModelPrimary,
+  resolveNativeModelPrimary,
   resolveAgentDir,
   resolveDefaultAgentDir,
   resolveAgentRunCwd,
@@ -303,8 +307,6 @@ export function clearAutoFallbackPrimaryProbeSelection(
   entry.updatedAt = now;
 }
 
-export { resolveAgentIdFromSessionKey };
-
 type SessionAgentResolutionParams = {
   sessionKey?: string;
   config?: OpenClawConfig;
@@ -318,13 +320,18 @@ const SESSION_AGENT_SELECTION_CONTEXT = {
 };
 
 function resolveSelectedSessionAgentId(params: SessionAgentResolutionParams): string | undefined {
-  const explicitAgentIdRaw = normalizeLowercaseStringOrEmpty(params.agentId);
-  const explicitAgentId = explicitAgentIdRaw ? normalizeAgentId(explicitAgentIdRaw) : null;
+  if (classifySessionKeyShape(params.sessionKey) === "malformed_agent") {
+    throw new Error("Malformed agent session key; refusing default-agent resolution.");
+  }
+  const explicit = params.agentId === undefined ? null : normalizeAgentIdStrict(params.agentId);
+  if (explicit && !explicit.ok) {
+    throw new Error("Invalid explicit agent id; refusing default-agent resolution.");
+  }
+  const explicitAgentId = explicit?.value;
   const fallbackAgentIdRaw = normalizeLowercaseStringOrEmpty(params.fallbackAgentId);
   const fallbackAgentId = fallbackAgentIdRaw ? normalizeAgentId(fallbackAgentIdRaw) : null;
   const sessionKey = params.sessionKey?.trim();
-  const normalizedSessionKey = sessionKey ? normalizeLowercaseStringOrEmpty(sessionKey) : undefined;
-  const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
+  const parsed = parseAgentSessionKey(sessionKey);
   const sessionKeyAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : null;
   const cfg = params.config ?? {};
   const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
@@ -488,7 +495,9 @@ export function resolveAgentModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
-  return resolveSelectedModelFallbacksOverride(resolveAgentConfig(cfg, agentId)?.model);
+  return resolveSelectedModelFallbacksOverride(
+    resolveAgentModelConfigForRuntime(resolveAgentConfig(cfg, agentId)),
+  );
 }
 
 function resolveSelectedModelFallbacksOverride(
@@ -529,11 +538,12 @@ export type SubagentModelConfigSelectionResult = {
 export function resolveSubagentModelConfigSelectionResult(params: {
   cfg: OpenClawConfig;
   agentId?: string;
-  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
+  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents" | "runtime">;
 }): SubagentModelConfigSelectionResult | undefined {
   const agentConfig =
     params.agentConfigOverride ??
     (params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined);
+  const agentModel = resolveAgentModelConfigForRuntime(agentConfig);
   // Keep cron and fallback routing aligned with native spawn: per-agent subagent,
   // then the global subagent default, then agent-primary inheritance.
   const candidates: SubagentModelConfigSelectionResult[] = [
@@ -548,7 +558,7 @@ export function resolveSubagentModelConfigSelectionResult(params: {
           },
         ]
       : []),
-    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
+    ...(agentModel ? [{ raw: agentModel, source: "agent" as const }] : []),
   ];
   return candidates.find((candidate) => resolvePrimaryStringValue(candidate.raw));
 }
@@ -564,7 +574,7 @@ export function resolveSubagentModelFallbacksOverride(
   }
   const selection = resolveSubagentModelConfigSelectionResult({ cfg, agentId });
   if (selection?.source === "agent") {
-    return resolveSelectedModelFallbacksOverride(agentConfig?.model);
+    return resolveSelectedModelFallbacksOverride(selection.raw);
   }
   if (selection?.source === "default-subagent") {
     return resolveSelectedModelFallbacksOverride(cfg.agents?.defaults?.subagents?.model);
@@ -580,7 +590,7 @@ export function resolveSubagentSpawnModelFallbacksOverride(
   return resolveFirstModelFallbacksOverride([
     agentConfig?.subagents?.model,
     cfg.agents?.defaults?.subagents?.model,
-    agentConfig?.model,
+    resolveAgentModelConfigForRuntime(agentConfig),
   ]);
 }
 

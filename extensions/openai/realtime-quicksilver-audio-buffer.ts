@@ -15,6 +15,17 @@ export const OPENAI_QUICKSILVER_RELAY_FRAME_BYTES = RELAY_FRAME_SAMPLES * 2;
 const OPENAI_QUICKSILVER_MAX_PENDING_AUDIO_BYTES =
   OPENAI_QUICKSILVER_RELAY_FRAME_BYTES * MAX_PENDING_RELAY_FRAMES;
 
+export function assertOpenAIQuicksilverPcmOutput(
+  format: RealtimeVoiceBridgeCreateRequest["audioFormat"],
+): void {
+  if (
+    format &&
+    (format.encoding !== "pcm16" || format.sampleRateHz !== 24_000 || format.channels !== 1)
+  ) {
+    throw new Error("GPT-Live direct audio output requires mono PCM16 at 24 kHz");
+  }
+}
+
 /** Keeps telephony resampling state and its delayed output tail with the audio adapter. */
 export class OpenAIQuicksilverAudioAdapter {
   private readonly telephony: boolean;

@@ -4,11 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as stateCoordinator from "../infra/state-database-coordinator.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { CronService } from "./service.js";
 import { writeCronStoreSnapshot } from "./service.test-harness.js";
 import { getSuspensionVisibleCronTaskRunCount } from "./service/active-run-cancellation.js";
+import * as scheduleMaintenance from "./service/schedule-maintenance.js";
+import { loadCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
@@ -131,19 +135,28 @@ describe("CronService read ops while job is running", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
+    const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
     try {
       await cron.start();
       sqliteTransactionLabels.length = 0;
-
-      await cron.status();
-      await cron.list({ includeDisabled: true });
-      await cron.listPage({ limit: 25 });
-      await cron.readJob(jobs[0]!.id);
-
-      expect(
-        sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned"),
-      ).toHaveLength(0);
+      maintenance.mockClear();
+      const coordinator = vi.spyOn(stateCoordinator, "acquireStateDatabaseCoordinator");
+      const worker = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
+      try {
+        await cron.status();
+        await cron.list({ includeDisabled: true });
+        await cron.listPage({ limit: 25 });
+        await cron.readJob(jobs[0]!.id);
+        expect(coordinator.mock.calls.length).toBe(0);
+        expect(worker.mock.calls.length).toBe(0);
+        expect(sqliteTransactionLabels).toEqual([]);
+      } finally {
+        coordinator.mockRestore();
+        worker.mockRestore();
+      }
+      expect(maintenance).not.toHaveBeenCalled();
     } finally {
+      maintenance.mockRestore();
       cron.stop();
       await store.cleanup();
     }
@@ -164,6 +177,7 @@ describe("CronService read ops while job is running", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
+    const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
     try {
       sqliteTransactionLabels.length = 0;
       await expect(cron.readJob(job.id)).resolves.toMatchObject({
@@ -171,8 +185,13 @@ describe("CronService read ops while job is running", () => {
       });
       expect(
         sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned"),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
+      expect(maintenance).toHaveBeenCalledOnce();
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state.nextRunAtMs).toBe(
+        nowMs + 60_000,
+      );
     } finally {
+      maintenance.mockRestore();
       cron.stop();
       await store.cleanup();
     }

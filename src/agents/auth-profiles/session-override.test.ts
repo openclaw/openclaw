@@ -383,6 +383,7 @@ describe("resolveSessionAuthProfileOverride", () => {
 
       await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
       await clearSessionAuthProfileOverride({
+        agentId: "main",
         sessionEntry: sessionEntry!,
         sessionStore,
         sessionKey,
@@ -398,7 +399,7 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("rotates auth state without restoring concurrent session management fields", async () => {
+  it("rotates unavailable auth state without restoring concurrent session management fields", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });
@@ -412,6 +413,9 @@ describe("resolveSessionAuthProfileOverride", () => {
           openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
         },
       });
+      authStoreMocks.isProfileInCooldown.mockImplementation(
+        (_store, profileId) => profileId === TEST_PRIMARY_PROFILE_ID,
+      );
 
       const sessionKey = "agent:main:main";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
@@ -444,6 +448,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(persisted?.label).toBe("renamed");
       expect(persisted?.pinnedAt).toBeUndefined();
       expect(persisted?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
+      expect(persisted?.authProfileOverrideCompactionCount).toBe(1);
       expect(sessionStore[sessionKey]?.label).toBe("renamed");
       expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
     });

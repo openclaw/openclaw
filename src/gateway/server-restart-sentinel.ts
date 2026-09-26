@@ -12,6 +12,11 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import {
+  captureDeliveryQueueStateContext,
+  resolveDeliveryQueueStateEnv,
+  type DeliveryQueueStateContext,
+} from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
@@ -19,7 +24,6 @@ import {
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   readRestartSentinel,
-  type RestartSentinelContinuation,
   type RestartSentinelPayload,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
@@ -38,8 +42,6 @@ import {
   SessionDeliveryDeadLetteredError,
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
-  type QueuedSessionDeliveryPayload,
-  type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.records.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -53,7 +55,6 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
 import {
@@ -64,9 +65,17 @@ import {
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
 import {
+  buildQueuedRestartContinuation,
+  RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
+} from "./server-restart-sentinel-continuation-intent.js";
+import {
   deliverRestartSentinelNotice,
   enqueueRestartSentinelNotice,
 } from "./server-restart-sentinel-notice.js";
+import {
+  readRestartSentinelStartupSnapshot,
+  type PendingUpdateSentinelIdentity,
+} from "./server-restart-sentinel-snapshot.js";
 import { finalizeRestartUpdateRun } from "./server-restart-update-run.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
@@ -77,7 +86,6 @@ import {
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS = process.env.VITEST ? 1 : 6_000;
-const RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS = 20;
 const CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS = process.env.VITEST ? 1 : 2_000;
 const CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS = 900;
 const RESTART_CONTINUATION_BUSY_RETRY_ERROR =
@@ -129,12 +137,6 @@ async function waitForRetry(delayMs: number) {
   });
 }
 
-const buildRestartContinuationMessageId = (params: {
-  sessionKey: string;
-  kind: RestartSentinelContinuation["kind"];
-  revision: number;
-}) => `restart-sentinel:${params.sessionKey}:${params.kind}:${params.revision}`;
-
 function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
   return (
     typeof payload.text === "string" && payload.text.trim() === REPLY_RUN_STILL_SHUTTING_DOWN_TEXT
@@ -176,7 +178,10 @@ export async function deliverQueuedSessionDelivery(params: {
   const queuedEntry = resolveCorrelatedSubagentDelivery(params.entry);
   const { cfg, agentId, entry, storePath, canonicalKey } = loadSessionEntry(
     queuedEntry.sessionKey,
-    queuedEntry.kind === "systemEvent" ? { agentId: queuedEntry.agentId } : undefined,
+    {
+      env: params.queueContext.environment,
+      ...(queuedEntry.kind === "systemEvent" ? { agentId: queuedEntry.agentId } : {}),
+    },
   );
   const deliveryContext = resolveQueuedSessionDeliveryContext(queuedEntry);
 
@@ -319,49 +324,6 @@ export async function deliverQueuedSessionDelivery(params: {
   }
 }
 
-function buildQueuedRestartContinuation(params: {
-  sessionKey: string;
-  agentId?: string;
-  continuation: RestartSentinelContinuation;
-  route?: SessionDeliveryRoute;
-  expectedSessionId?: string | undefined;
-  revision: number;
-  deliveryContext?: DeliveryContext;
-  idempotencyKey?: string;
-}): QueuedSessionDeliveryPayload {
-  const idempotencyKey =
-    params.idempotencyKey ??
-    buildRestartContinuationMessageId({
-      sessionKey: params.sessionKey,
-      kind: params.continuation.kind,
-      revision: params.revision,
-    });
-  if (params.continuation.kind === "systemEvent") {
-    return {
-      kind: "systemEvent",
-      sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      text: params.continuation.text,
-      ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
-      idempotencyKey,
-      maxRetries: RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
-      completionRetention: "permanent",
-    };
-  }
-  return {
-    kind: "agentTurn",
-    sessionKey: params.sessionKey,
-    message: params.continuation.message,
-    messageId: idempotencyKey,
-    ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-    maxRetries: RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
-    completionRetention: "permanent",
-    ...(params.route ? { route: params.route } : {}),
-    ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
-    idempotencyKey,
-  };
-}
-
 async function drainRestartContinuationQueue(params: {
   deps: CliDeps;
   entryId: string;
@@ -424,12 +386,23 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
 async function loadRestartSentinelStartupTask(params: {
   deps: CliDeps;
   attempt?: number;
+  context: DeliveryQueueStateContext;
+  shouldRun?: () => boolean;
+  pendingUpdate?: PendingUpdateSentinelIdentity;
+  trackImport?: (work: Promise<unknown>) => void;
 }): Promise<StartupTask | null> {
-  const queueContext = captureOpenClawStateWorkerContext();
-  const sentinel = await readRestartSentinel();
-  if (!sentinel) {
+  const noticeContext = params.context;
+  const queueContext = noticeContext.workerContext;
+  const env = queueContext.environment;
+  const snapshot = await readRestartSentinelStartupSnapshot({
+    ...params,
+    warn: (message) => log.warn(message),
+  });
+  if (!snapshot) {
     return null;
   }
+  const { sentinel, pendingUpdate, pendingSnapshotSuperseded } = snapshot;
+  let { updateRun } = snapshot;
   const payload = sentinel.payload;
   const sentinelRevision = sentinel.revision;
   if (payload.kind === "update") {
@@ -437,14 +410,17 @@ async function loadRestartSentinelStartupTask(params: {
   }
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
-  let updateRun = payload.kind === "update" ? await finalizeRestartUpdateRun(payload) : undefined;
   const updateRunId = updateRun?.runId;
   let noticeMessage =
     payload.kind === "update"
       ? renderUpdateRunReport(
           updateRun ?? updateRunReportInputFromSentinel(payload),
           updateRun?.status === "failed"
-            ? { currentHealth: await readUpdateRunReportHealth(updateRun.verification) }
+            ? {
+                currentHealth: await readUpdateRunReportHealth(updateRun.verification, {
+                  env: resolveDeliveryQueueStateEnv(undefined, noticeContext),
+                }),
+              }
             : {},
         ).markdown
       : message;
@@ -457,19 +433,23 @@ async function loadRestartSentinelStartupTask(params: {
   );
 
   const run = async () => {
+    if (params.shouldRun?.() === false) {
+      return { status: "skipped" as const, reason: "gateway-stopped" };
+    }
     let routedSessionKey = sessionKey;
     let wakeAgentId: string | undefined;
-    if (
-      isPendingControlPlaneUpdateRestartSentinel(payload) &&
-      (!updateRun || updateRun.status === "running")
-    ) {
+    if (isPendingControlPlaneUpdateRestartSentinel(payload) && !pendingSnapshotSuperseded) {
       const attempt = params.attempt ?? 0;
       if (attempt < CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS) {
         const timer = setTimeout(() => {
+          if (params.shouldRun?.() === false) {
+            return;
+          }
           void runWithGatewayIndependentRootWorkAdmission(async () => {
             await scheduleRestartSentinelWakeAttempt({
-              deps: params.deps,
+              ...params,
               attempt: attempt + 1,
+              ...(pendingUpdate ? { pendingUpdate } : {}),
             });
           }, "restart-sentinel:wake").catch((err: unknown) => {
             log.warn(`restart sentinel pending update retry failed: ${formatErrorMessage(err)}`);
@@ -485,12 +465,16 @@ async function loadRestartSentinelStartupTask(params: {
       if (updateRunId) {
         // Expiry bounds notice delivery, not CLI verification. Only Gateway-owned
         // runs finish here; first-terminal-wins preserves completed CLI results.
-        updateRun = await finalizeRestartUpdateRun(payload, true);
+        updateRun = await finalizeRestartUpdateRun(payload, true, noticeContext);
         if (updateRun) {
           noticeMessage = renderUpdateRunReport(
             updateRun,
             updateRun.status === "failed"
-              ? { currentHealth: await readUpdateRunReportHealth(updateRun.verification) }
+              ? {
+                  currentHealth: await readUpdateRunReportHealth(updateRun.verification, {
+                    env: resolveDeliveryQueueStateEnv(undefined, noticeContext),
+                  }),
+                }
               : {},
           ).markdown;
         }
@@ -509,8 +493,8 @@ async function loadRestartSentinelStartupTask(params: {
         !updateRun.origin.sessionKey &&
         !updateRun.origin.deliveryContext
       ) {
-        recordUpdateRunNoticeSkipped(updateRun.runId, "no delivery target");
-        await clearRestartSentinelIfRevision(sentinelRevision);
+        recordUpdateRunNoticeSkipped(updateRun.runId, "no delivery target", env);
+        await clearRestartSentinelIfRevision(sentinelRevision, env);
         return { status: "ran" as const };
       }
       const targetlessCliOutcome =
@@ -529,7 +513,7 @@ async function loadRestartSentinelStartupTask(params: {
       if (controlPlaneOnlyAcknowledgement) {
         // A targetless control-plane/CLI acknowledgement has no agent turn to
         // resume. An inferred wake can bootstrap an unrelated workspace on boot.
-        const consumed = await clearRestartSentinelIfRevision(sentinelRevision);
+        const consumed = await clearRestartSentinelIfRevision(sentinelRevision, env);
         if (!consumed) {
           log.info(`${summary}: newer restart sentinel preserved while consuming acknowledgement`);
         }
@@ -542,19 +526,20 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     const continuation = sessionKey ? payload.continuation : undefined;
-    const session = loadSessionEntry(routedSessionKey);
+    const session = loadSessionEntry(routedSessionKey, { env });
     const { cfg, entry, canonicalKey } = session;
-    const target = resolveUpdateRunNoticeTarget({
+    const target = await resolveUpdateRunNoticeTarget({
       cfg,
       sessionKey,
       session,
+      env,
       explicitDeliveryContext: sessionKey ? payload.deliveryContext : undefined,
       threadId: sessionKey ? payload.threadId : undefined,
     });
     if (target.kind === "none") {
-      recordUpdateRunNoticeSkipped(updateRunId, target.reason);
+      recordUpdateRunNoticeSkipped(updateRunId, target.reason, env);
       // A diagnostic wake would bypass the same owner-only notice decision.
-      await clearRestartSentinelIfRevision(sentinelRevision);
+      await clearRestartSentinelIfRevision(sentinelRevision, env);
       return { status: "ran" as const };
     }
     const route = target.kind === "route" ? target.route : undefined;
@@ -584,7 +569,7 @@ async function loadRestartSentinelStartupTask(params: {
       }).catch((error: unknown) => ({ ok: false as const, reason: formatErrorMessage(error) }));
       internalNoticeWritten = notice.ok;
       if (notice.ok && updateRunId) {
-        recordUpdateRunVerification(updateRunId, { noticeDelivered: true });
+        recordUpdateRunVerification(updateRunId, { noticeDelivered: true }, { env });
       }
       if (!notice.ok) {
         log.warn(
@@ -641,21 +626,24 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (route && !updateRun?.verification.noticeDelivered) {
-      const queuedNotice = await enqueueRestartSentinelNotice({
-        cfg,
-        ...route,
-        message: noticeMessage,
-        sessionKey: canonicalKey,
-        revision: sentinelRevision,
-        ...(updateRunId ? { deliveryIntentId: `update-run-finished:${updateRunId}` } : {}),
-      });
+      const queuedNotice = await enqueueRestartSentinelNotice(
+        {
+          cfg,
+          ...route,
+          message: noticeMessage,
+          sessionKey: canonicalKey,
+          revision: sentinelRevision,
+          ...(updateRunId ? { deliveryIntentId: `update-run-finished:${updateRunId}` } : {}),
+        },
+        noticeContext,
+      );
       noticeQueueId = queuedNotice.id;
       noticeQueueCreated = queuedNotice.created;
     }
 
     // Every downstream intent is durable before consuming the singleton. A
     // failed or stale compare-delete cannot lose work or remove a newer row.
-    const consumed = await clearRestartSentinelIfRevision(sentinelRevision);
+    const consumed = await clearRestartSentinelIfRevision(sentinelRevision, env);
     if (!consumed) {
       log.info(`${summary}: newer restart sentinel preserved while draining durable work`, {
         sessionKey: canonicalKey,
@@ -672,17 +660,20 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (route && noticeQueueId && noticeQueueCreated) {
-      const delivered = await deliverRestartSentinelNotice({
-        deps: params.deps,
-        cfg,
-        sessionKey: canonicalKey,
-        summary,
-        message: noticeMessage,
-        ...route,
-        queueId: noticeQueueId,
-      });
+      const delivered = await deliverRestartSentinelNotice(
+        {
+          deps: params.deps,
+          cfg,
+          sessionKey: canonicalKey,
+          summary,
+          message: noticeMessage,
+          ...route,
+          queueId: noticeQueueId,
+        },
+        noticeContext,
+      );
       if (delivered && updateRunId) {
-        recordUpdateRunVerification(updateRunId, { noticeDelivered: true });
+        recordUpdateRunVerification(updateRunId, { noticeDelivered: true }, { env });
       }
     } else if (noticeQueueId && !noticeQueueCreated) {
       log.info(`${summary}: durable restart notice already owned`, {
@@ -709,7 +700,17 @@ async function loadRestartSentinelStartupTask(params: {
   };
 }
 
-async function scheduleRestartSentinelWakeAttempt(params: { deps: CliDeps; attempt: number }) {
+async function scheduleRestartSentinelWakeAttempt(params: {
+  deps: CliDeps;
+  attempt: number;
+  context: DeliveryQueueStateContext;
+  shouldRun?: () => boolean;
+  pendingUpdate?: PendingUpdateSentinelIdentity;
+  trackImport?: (work: Promise<unknown>) => void;
+}) {
+  if (params.shouldRun?.() === false) {
+    return;
+  }
   const task = await loadRestartSentinelStartupTask(params);
   if (!task) {
     return;
@@ -717,12 +718,23 @@ async function scheduleRestartSentinelWakeAttempt(params: { deps: CliDeps; attem
   await runStartupTasks({ tasks: [task], log });
 }
 
-export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
-  await scheduleRestartSentinelWakeAttempt({ ...params, attempt: 0 });
+export async function scheduleRestartSentinelWake(params: {
+  deps: CliDeps;
+  context?: DeliveryQueueStateContext;
+  shouldRun?: () => boolean;
+  trackImport?: (work: Promise<unknown>) => void;
+}) {
+  await scheduleRestartSentinelWakeAttempt({
+    ...params,
+    context: params.context ?? captureDeliveryQueueStateContext(),
+    attempt: 0,
+  });
 }
 
-export async function refreshLatestUpdateRestartSentinel(): Promise<RestartSentinelPayload | null> {
-  const current = await readRestartSentinel();
+export async function refreshLatestUpdateRestartSentinel(
+  env: NodeJS.ProcessEnv = captureDeliveryQueueStateContext().workerContext.environment,
+): Promise<RestartSentinelPayload | null> {
+  const current = await readRestartSentinel(env);
   if (
     current?.payload.kind === "update" &&
     isPendingControlPlaneUpdateRestartSentinel(current.payload)
@@ -730,7 +742,7 @@ export async function refreshLatestUpdateRestartSentinel(): Promise<RestartSenti
     latestUpdateRestartSentinel = cloneRestartSentinelPayload(current.payload);
     return cloneRestartSentinelPayload(latestUpdateRestartSentinel);
   }
-  const finalized = await finalizeUpdateRestartSentinelRunningVersion();
+  const finalized = await finalizeUpdateRestartSentinelRunningVersion(undefined, env);
   const sentinel = finalized ?? current;
   if (sentinel?.payload.kind === "update") {
     latestUpdateRestartSentinel = cloneRestartSentinelPayload(sentinel.payload);

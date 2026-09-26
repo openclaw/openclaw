@@ -212,9 +212,10 @@ describe("tool-card outcomes", () => {
       expect(container.textContent).toContain(card.outputText);
       container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn")?.click();
       expect(onOpenSidebar).toHaveBeenCalledWith(
-        expect.objectContaining({ content: expect.stringContaining("### Tool output") }),
+        expect.objectContaining({ kind: "tool-output", card }),
       );
-      expect(onOpenSidebar.mock.calls[0]?.[0].content).not.toContain("### Tool error");
+      expect(onOpenSidebar.mock.calls[0]?.[0].card.completed).toBe(false);
+      expect(onOpenSidebar.mock.calls[0]?.[0].card.isError).toBeUndefined();
 
       card.completed = true;
       card.isError = false;

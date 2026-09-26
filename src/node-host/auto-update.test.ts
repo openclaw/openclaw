@@ -66,7 +66,7 @@ function hold<T>(value: T) {
 function start(busy = false) {
   const abort = new AbortController();
   const runtime = {
-    tryPauseForUpdate: vi.fn(() => !busy),
+    tryPauseForUpdate: vi.fn(async () => !busy),
     resumeAfterUpdate: vi.fn(),
   };
   const onRestartAccepted = vi.fn();
@@ -214,7 +214,7 @@ describe("node auto-update controller", () => {
       host.log.mock.calls.filter(([message]) => message.includes("waiting for active work")),
     ).toHaveLength(1);
 
-    host.runtime.tryPauseForUpdate.mockReturnValue(true);
+    host.runtime.tryPauseForUpdate.mockResolvedValue(true);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(mocks.restart).toHaveBeenCalledOnce();
     expect(host.onRestartAccepted).not.toHaveBeenCalled();
@@ -301,6 +301,22 @@ describe("node auto-update controller", () => {
       expect(host.runtime.resumeAfterUpdate).toHaveBeenCalledTimes(stage === "preflight" ? 1 : 0);
     },
   );
+
+  it("joins a pending idle check and resumes the node when stopped before admission", async () => {
+    const idle = hold(true);
+    const host = start();
+    host.runtime.tryPauseForUpdate.mockImplementationOnce(async () => await idle.promise);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(host.runtime.tryPauseForUpdate).toHaveBeenCalledOnce();
+    expect(mocks.compatible).not.toHaveBeenCalled();
+    expect(mocks.restart).not.toHaveBeenCalled();
+    const stopping = host.controller.stop();
+    idle.resolve(true);
+    await stopping;
+    expect(mocks.compatible).not.toHaveBeenCalled();
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(host.runtime.resumeAfterUpdate).toHaveBeenCalledOnce();
+  });
 
   it.each(["download", "preflight", "restart"] as const)(
     "keeps the running node available after a $stage failure and retries hourly",

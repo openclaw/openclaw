@@ -5,7 +5,10 @@ import {
   abortAndDrainEmbeddedAgentRun,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
+import {
+  installSessionPlacementAdmissionProvider,
+  resolveSessionPlacementRuntimeOverride,
+} from "../../agents/session-placement-admission.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
   resolveSessionPlacementTurnSettlementAssertion,
@@ -47,6 +50,40 @@ import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-targ
 describe("worker turn launcher local placement", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "uses only the matching %s placement as a runtime default",
+    (executionMode) => {
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments: unusedEnvironments(),
+        placements,
+      });
+      const uninstall = installSessionPlacementAdmissionProvider(provider);
+      const identity = { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" };
+      try {
+        expect(resolveSessionPlacementRuntimeOverride(identity)).toBeUndefined();
+        seedActivePlacement(executionMode);
+        expect(resolveSessionPlacementRuntimeOverride(identity)).toBe(
+          executionMode === "worker-turn" ? "openclaw" : undefined,
+        );
+        expect(resolveSessionPlacementRuntimeOverride({ sessionId: SESSION_ID })).toBe(
+          executionMode === "worker-turn" ? "openclaw" : undefined,
+        );
+        for (const mismatch of [
+          { sessionId: "other-session" },
+          { sessionKey: "agent:main:other" },
+          { agentId: "other-agent" },
+        ]) {
+          expect(
+            resolveSessionPlacementRuntimeOverride({ ...identity, ...mismatch }),
+          ).toBeUndefined();
+        }
+      } finally {
+        uninstall();
+      }
+      expect(resolveSessionPlacementRuntimeOverride(identity)).toBeUndefined();
+    },
+  );
 
   it("rejects a transcript target without a session incarnation", () => {
     expect(() =>

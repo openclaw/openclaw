@@ -6,6 +6,58 @@ import {
 } from "./conversation.ts";
 
 describe("realtime Talk conversation", () => {
+  it("carries the durable relay identity when a preview becomes final", () => {
+    let state = createRealtimeTalkConversationState();
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "Hello",
+      final: false,
+      textMode: "snapshot",
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "Hello there",
+      final: true,
+      transcriptId: "voice:call:1",
+    });
+    expect(state.entries).toHaveLength(1);
+    expect(state.entries[0]).toMatchObject({
+      text: "Hello there",
+      transcriptId: "voice:call:1",
+      isStreaming: false,
+    });
+  });
+  it("keeps a corrected snapshot before the answer without adding another user entry", () => {
+    let state = createRealtimeTalkConversationState();
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "How",
+      final: false,
+      textMode: "snapshot",
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "assistant",
+      text: "Earth is",
+      final: false,
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "What size is Earth?",
+      final: false,
+      textMode: "snapshot",
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "What size is Earth?",
+      final: true,
+      textMode: "snapshot",
+    });
+    expect(state.entries).toMatchObject([
+      { role: "user", text: "What size is Earth?", isStreaming: false },
+      { role: "assistant", text: "Earth is" },
+    ]);
+  });
+
   it("inserts spacing between adjacent transcript fragments", () => {
     let state = createRealtimeTalkConversationState();
 

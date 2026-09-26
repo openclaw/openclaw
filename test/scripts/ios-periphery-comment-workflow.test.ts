@@ -492,10 +492,10 @@ describe("iOS Periphery comment workflow", () => {
       readFileSync(SHARED_PRODUCER_WORKFLOW_PATH, "utf8"),
     ) as ProducerWorkflow;
 
-    expect(iosWorkflow.jobs?.scan?.["runs-on"]).toBe("macos-26");
-    expect(macosWorkflow.jobs?.scan?.["runs-on"]).toBe("macos-26");
-    expect(sharedWorkflow.jobs?.["scan-ios"]?.["runs-on"]).toBe("macos-26");
-    expect(sharedWorkflow.jobs?.["scan-macos"]?.["runs-on"]).toBe("macos-26");
+    expect(iosWorkflow.jobs?.scan?.["runs-on"]).toBe("xcode-27");
+    expect(macosWorkflow.jobs?.scan?.["runs-on"]).toBe("xcode-27");
+    expect(sharedWorkflow.jobs?.["scan-ios"]?.["runs-on"]).toBe("xcode-27");
+    expect(sharedWorkflow.jobs?.["scan-macos"]?.["runs-on"]).toBe("xcode-27");
   });
   it("accepts a valid small Periphery artifact", async () => {
     const archive = makeZip({

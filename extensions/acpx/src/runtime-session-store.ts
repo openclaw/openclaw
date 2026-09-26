@@ -1,7 +1,11 @@
 /** Generation-bound persistence and process-lease metadata for ACPX resets. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
-import type { AcpxRuntime as BaseAcpxRuntime, AcpRuntimeOptions } from "acpx/runtime";
+import type {
+  AcpxRuntime as BaseAcpxRuntime,
+  AcpSessionRecord,
+  AcpSessionStore,
+} from "acpx/runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -15,8 +19,6 @@ import {
 } from "./process-lease.js";
 import { isOpenClawLeaseAwareAcpxProcessCommand } from "./process-reaper.js";
 type OpenClawRuntimeHandle = Awaited<ReturnType<AcpRuntime["ensureSession"]>>;
-export type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
-export type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
 export type AcpLoadedSessionRecord = Awaited<ReturnType<AcpSessionStore["load"]>>;
 export type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
@@ -65,6 +67,7 @@ export type AcpxGeneration = {
   records: Map<string, NonNullable<AcpLoadedSessionRecord>>;
   closeCompleted: boolean;
   delegate?: BaseAcpxRuntime;
+  nativeTools?: boolean;
 };
 export function captureGenerationRecord(
   generation: AcpxGeneration,

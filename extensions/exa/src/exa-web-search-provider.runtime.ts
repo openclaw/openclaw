@@ -1,6 +1,6 @@
 // Exa provider module implements model/runtime integration.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { ProviderHttpError, readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
@@ -363,9 +363,11 @@ async function runExaSearch(params: {
     async (res) => {
       if (!res.ok) {
         const detail = await readExaErrorDetail(res);
-        throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
+        throw new ProviderHttpError(`Exa API error (${res.status}): ${detail || res.statusText}`, {
+          status: res.status,
+        });
       }
-      return readExaSearchResults(res);
+      return (await readExaSearchResults(res)).slice(0, params.count);
     },
   );
 }

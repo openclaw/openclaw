@@ -191,12 +191,6 @@ function createGatewayCallModuleMock() {
   };
 }
 
-function createInProcessGatewayModuleMock() {
-  return {
-    callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
-  };
-}
-
 function createConfigModuleMock() {
   return {
     getRuntimeConfig: () => mockConfig,
@@ -326,7 +320,10 @@ function createCommandsStatusRuntimeModuleMock() {
 
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("./tools/in-process-gateway.js", createInProcessGatewayModuleMock);
+vi.mock("./tools/in-process-gateway.js", () => ({
+  callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
+  hasGatewayToolRoutingContext: () => false,
+}));
 vi.mock("../config/config.js", createConfigModuleMock);
 vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({

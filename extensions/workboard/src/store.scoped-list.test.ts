@@ -1,4 +1,5 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { describe, expect, it, vi } from "vitest";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
@@ -40,6 +41,289 @@ function observeReads(onRows: (sql: string, rows: Record<string, unknown>[]) => 
     iterateSpy.mockRestore();
   };
 }
+
+function fixtureCard(id: string, overrides: Partial<WorkboardCard> = {}): WorkboardCard {
+  return {
+    id,
+    title: id,
+    status: "done",
+    priority: "normal",
+    labels: [],
+    notes: `Payload for ${id}`,
+    position: 1,
+    createdAt: 100,
+    updatedAt: 200,
+    metadata: { automation: { boardId: "ops", summary: `${id} result` } },
+    ...overrides,
+  };
+}
+
+describe("Workboard context and session-scoped reads", () => {
+  it("hydrates only the completed parents and recent assignee work included in context", async () => {
+    const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
+      createStores: createKernelStores,
+    });
+    const parents = Array.from({ length: 8 }, (_, index) =>
+      fixtureCard(`parent-${index}`, {
+        metadata: { automation: { boardId: "other", summary: `Parent result ${index}` } },
+      }),
+    );
+    const unfinished = fixtureCard("unfinished-parent", { status: "running" });
+    const links = [
+      parents[0]!.id,
+      "missing-parent",
+      parents[1]!.id,
+      unfinished.id,
+      ...parents.slice(2).map((card) => card.id),
+    ].map((targetCardId, index) => ({
+      id: `link-${index}`,
+      type: "parent" as const,
+      targetCardId,
+      createdAt: 1,
+    }));
+    const current = fixtureCard("current", {
+      status: "ready",
+      agentId: "agent-a",
+      metadata: { automation: { boardId: "ops" }, links },
+    });
+    const siblings = [
+      fixtureCard("sibling-z", { agentId: "agent-a" }),
+      fixtureCard("sibling-a", { agentId: "agent-a" }),
+      fixtureCard("sibling-earlier", { agentId: "agent-a", createdAt: 50 }),
+      fixtureCard("sibling-archived", {
+        agentId: "agent-a",
+        position: 0,
+        metadata: {
+          archivedAt: 1,
+          automation: { boardId: "ops", summary: "sibling-archived result" },
+        },
+      }),
+      fixtureCard("sibling-newest", { agentId: "agent-a", updatedAt: 300 }),
+      fixtureCard("sibling-too-old", { agentId: "agent-a", updatedAt: 190 }),
+      fixtureCard("other-agent", { agentId: "agent-b", updatedAt: 400 }),
+      fixtureCard("other-board", {
+        agentId: "agent-a",
+        updatedAt: 400,
+        metadata: { automation: { boardId: "other" } },
+      }),
+      fixtureCard("not-done", { agentId: "agent-a", status: "review", updatedAt: 400 }),
+    ];
+    for (const card of [...parents, unfinished, ...siblings, current]) {
+      await stores.cards.register(card.id, { version: 1, card });
+    }
+    const hydratedIds: unknown[] = [];
+    const raw = new DatabaseSync(dbPath);
+    let changedParent = false;
+    const restore = observeReads((_sql, rows) => {
+      hydratedIds.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
+      if (!changedParent && rows.some((row) => row.id === parents[7]!.id)) {
+        changedParent = true;
+        raw
+          .prepare("UPDATE workboard_cards SET status = 'review' WHERE id = ?")
+          .run(parents[7]!.id);
+      }
+    });
+    let context: string;
+    try {
+      context = await store.buildWorkerContext(current.id);
+    } finally {
+      restore();
+      raw.close();
+    }
+    const selectedParents = parents.slice(2);
+    const selectedSiblings = [
+      "sibling-newest",
+      "sibling-archived",
+      "sibling-earlier",
+      "sibling-a",
+      "sibling-z",
+    ];
+    expect(context).toContain(
+      [
+        "## Parent results",
+        ...selectedParents.map(
+          (parent, index) => `- ${parent.id} ${parent.title}: Parent result ${index + 2}`,
+        ),
+      ].join("\n"),
+    );
+    expect(context).toContain(
+      [
+        "## Recent done work by agent-a",
+        ...selectedSiblings.map((id) => `- ${id} ${id}: ${id} result`),
+      ].join("\n"),
+    );
+    expect(new Set(hydratedIds)).toEqual(
+      new Set([current.id, ...selectedParents.map((parent) => parent.id), ...selectedSiblings]),
+    );
+    expect(hydratedIds.length).toBeLessThanOrEqual(12);
+    expect(changedParent).toBe(true);
+    await expect(store.get(parents[7]!.id)).resolves.toMatchObject({ status: "review" });
+  });
+
+  it("isolates unrelated corruption while preserving selected context and capture failures through the worker", async () => {
+    const { store, stores, dbPath } = createWorkboardSqliteTestHarness();
+    const parent = fixtureCard("selected-parent");
+    const current = fixtureCard("selected", {
+      status: "ready",
+      sessionKey: "selected-session",
+      metadata: {
+        automation: { boardId: "ops" },
+        links: [{ id: "parent-link", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+      },
+    });
+    const unrelated = fixtureCard("unrelated");
+    for (const card of [parent, current, unrelated]) {
+      await stores.cards.register(card.id, { version: 1, card });
+    }
+    await store.addComment(parent.id, { body: "Valid parent comment" });
+    const raw = new DatabaseSync(dbPath);
+    try {
+      raw
+        .prepare("UPDATE workboard_cards SET automation_json = '{invalid' WHERE id = ?")
+        .run(unrelated.id);
+      await expect(store.buildWorkerContext(current.id)).resolves.toContain(
+        "selected-parent result",
+      );
+      await expect(
+        store.captureSession({
+          title: "Reuse",
+          sessionKey: "selected-session",
+          boardId: "elsewhere",
+        }),
+      ).resolves.toMatchObject({ id: current.id });
+      raw
+        .prepare("UPDATE workboard_cards SET automation_json = '{invalid' WHERE id = ?")
+        .run(current.id);
+      await expect(store.buildWorkerContext(current.id)).rejects.toThrow(SyntaxError);
+      await expect(
+        store.captureSession({ title: "Reuse", sessionKey: "selected-session" }),
+      ).rejects.toThrow(SyntaxError);
+      raw
+        .prepare("UPDATE workboard_cards SET automation_json = ? WHERE id = ?")
+        .run(JSON.stringify(current.metadata?.automation), current.id);
+      raw.prepare("UPDATE workboard_card_comments SET body = '' WHERE card_id = ?").run(parent.id);
+      await expect(store.buildWorkerContext(current.id)).rejects.toThrow("missing body");
+      await expect(
+        store.captureSession({ title: "Reuse", sessionKey: "selected-session" }),
+      ).resolves.toMatchObject({ id: current.id });
+    } finally {
+      raw.close();
+    }
+  });
+
+  it("scopes session capture while preserving existing IDs, match preference, and execution fallback", async () => {
+    const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
+      createStores: createKernelStores,
+    });
+    const cases: Array<{
+      name: string;
+      left: Partial<WorkboardCard>;
+      right: Partial<WorkboardCard>;
+    }> = [
+      {
+        name: "active",
+        left: { updatedAt: 1 },
+        right: { updatedAt: 999, metadata: { archivedAt: 1 } },
+      },
+      {
+        name: "status",
+        left: { status: "ready", position: 99 },
+        right: { status: "done", position: 0 },
+      },
+      { name: "position", left: { position: 0 }, right: { position: 1 } },
+      { name: "created", left: { createdAt: 1 }, right: { createdAt: 2 } },
+      { name: "id", left: {}, right: {} },
+    ];
+    for (const { name, left, right } of cases) {
+      const sessionKey = `session-${name}`;
+      const cards = [
+        fixtureCard(`arbitrary-${name}-z`, { sessionKey, ...right }),
+        fixtureCard(`arbitrary-${name}-a`, { sessionKey, ...left }),
+      ];
+      for (const card of cards) {
+        await stores.cards.register(card.id, { version: 1, card });
+      }
+    }
+    const execution = (sessionKey: string): NonNullable<WorkboardCard["execution"]> => ({
+      id: `execution-${sessionKey}`,
+      kind: "agent-session",
+      mode: "autonomous",
+      status: "idle",
+      sessionKey,
+      startedAt: 1,
+      updatedAt: 2,
+    });
+    const direct = fixtureCard("direct", {
+      sessionKey: "direct-session",
+      execution: execution("shadowed-session"),
+    });
+    const nullFallback = fixtureCard("null-fallback", { execution: execution("null-session") });
+    const emptyFallback = fixtureCard("empty-fallback", { execution: execution("empty-session") });
+    const absentExecution = fixtureCard("absent-execution", {
+      execution: execution("absent-session"),
+    });
+    for (const card of [direct, nullFallback, emptyFallback, absentExecution]) {
+      await stores.cards.register(card.id, { version: 1, card });
+    }
+    const raw = new DatabaseSync(dbPath);
+    try {
+      raw.prepare("UPDATE workboard_cards SET session_key = '' WHERE id = ?").run(emptyFallback.id);
+      raw
+        .prepare("UPDATE workboard_cards SET execution_id = NULL WHERE id = ?")
+        .run(absentExecution.id);
+      for (const { name } of cases) {
+        const hydratedIds: unknown[] = [];
+        const restore = observeReads((_sql, rows) => {
+          hydratedIds.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
+        });
+        try {
+          await expect(
+            store.captureSession({
+              title: "Reuse",
+              sessionKey: `session-${name}`,
+              boardId: "elsewhere",
+            }),
+          ).resolves.toMatchObject({ id: `arbitrary-${name}-a` });
+        } finally {
+          restore();
+        }
+        expect(hydratedIds.length).toBeGreaterThan(0);
+        expect(hydratedIds.length).toBeLessThanOrEqual(2);
+        expect(
+          hydratedIds.every((id) => id === `arbitrary-${name}-a` || id === `arbitrary-${name}-z`),
+        ).toBe(true);
+      }
+      for (const [sessionKey, id] of [
+        ["direct-session", direct.id],
+        ["null-session", nullFallback.id],
+        ["empty-session", emptyFallback.id],
+      ]) {
+        await expect(store.captureSession({ title: "Reuse", sessionKey })).resolves.toMatchObject({
+          id,
+        });
+      }
+      const shadowed = await store.captureSession({
+        title: "New shadowed",
+        sessionKey: "shadowed-session",
+      });
+      expect(shadowed.id).not.toBe(direct.id);
+      expect(shadowed.sessionKey).toBe("shadowed-session");
+      for (const executionId of [null, ""]) {
+        const sessionKey = `absent-session-${executionId === null ? "null" : "empty"}`;
+        raw
+          .prepare(
+            "UPDATE workboard_cards SET execution_id = ?, execution_session_key = ? WHERE id = ?",
+          )
+          .run(executionId, sessionKey, absentExecution.id);
+        const absent = await store.captureSession({ title: "New absent", sessionKey });
+        expect(absent.id).not.toBe(absentExecution.id);
+        expect(absent.sessionKey).toBe(sessionKey);
+      }
+    } finally {
+      raw.close();
+    }
+  });
+});
 
 describe("Workboard board-scoped SQLite hydration", () => {
   it("reads only the requested board while preserving complete cards and order", async () => {

@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -16,26 +15,34 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { SqliteSessionReclamationAdmissionDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { revokeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
+import {
+  observeSqliteMutationWorkerEnd,
+  terminateSqliteMutationWorker,
+  type SqliteMutationWorkerEnd,
+  type SqliteMutationWorkerTransport,
+} from "./session-accessor.sqlite-worker-transport.js";
 
 /** Register before the first await and drain through the parent's retained claim release. */
 export function withSqliteMutationWorkerLifetime<T>(
   options: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
-  run: (request: { assertCurrent: () => void; commitGate: SharedArrayBuffer }) => Promise<T>,
+  run: (request: {
+    assertCurrent: () => void;
+    commitGate: SharedArrayBuffer;
+    signal: AbortSignal;
+  }) => Promise<T>,
 ): Promise<T> {
   const completion = createDeferredCore();
   const state = captureOpenClawStateDatabaseReadAdmission(
     resolveOpenClawStateSqlitePath(options.env),
   );
   const commitGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-  let revoked = false;
+  const controller = new AbortController();
   const revoke = () => {
-    revoked = true;
     revokeSqliteReclamationCommit(commitGate);
+    controller.abort(new Error("SQLite mutation Worker request was revoked"));
   };
   const assertCurrent = () => {
-    if (revoked) {
-      throw new Error("SQLite mutation Worker request was revoked");
-    }
+    controller.signal.throwIfAborted();
     state.assertCurrent();
   };
   const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
@@ -61,9 +68,10 @@ export function withSqliteMutationWorkerLifetime<T>(
   return Promise.resolve()
     .then(() => {
       assertCurrent();
-      return run({ assertCurrent, commitGate });
+      return run({ assertCurrent, commitGate, signal: controller.signal });
     })
     .finally(() => {
+      revoke();
       completion.resolve();
       unregisterAgent();
       unregisterState();
@@ -93,7 +101,7 @@ export type SqliteMutationWorkerMessage<Result> =
 
 /** Share request authority, not connection lifetime: cold mutations join exit; sweeps join each result. */
 export function runSqliteMutationWorkerRequest<Result>(params: {
-  worker: Worker;
+  transport: SqliteMutationWorkerTransport;
   operationId: number;
   completion: "result" | "exit";
   onCommitRequest: () => void;
@@ -103,7 +111,8 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   getFailure?: () => Error | undefined;
   onExit?: (code: number) => void;
 }): Promise<Result> {
-  const { worker, operationId } = params;
+  const { transport, operationId } = params;
+  const worker = transport.channel;
   return new Promise((resolve, reject) => {
     // oxlint-disable-next-line no-warning-comments -- remove after the upstream Bun Worker fix ships.
     // TODO(bun): Rely on the Worker's native async resource once Bun ships
@@ -123,9 +132,18 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
     let admissionId = 0;
     let completed = false;
     const admissionTasks: Promise<void>[] = [];
+    const terminate = () => {
+      void terminateSqliteMutationWorker(transport).catch((failure: unknown) => {
+        workerError = new AggregateError(
+          [workerError ?? transportError, failure].filter((error) => error !== undefined),
+          "SQLite mutation Worker termination failed",
+          { cause: failure },
+        );
+      });
+    };
     const fail = (error: unknown) => {
       workerError ??= toStringifiedError(error);
-      void worker.terminate();
+      terminate();
     };
     const error = (failure: unknown) =>
       runInOperationContext(() => {
@@ -135,7 +153,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
     const messageError = (failure: unknown) =>
       runInOperationContext(() => {
         error(failure);
-        void worker.terminate();
+        terminate();
       });
     const finish = (code?: number) => {
       if (completed) {
@@ -147,7 +165,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         admission.released.resolve();
       }
       worker.off("message", receive);
-      worker.off("exit", exit);
+      stopObservingEnd();
       worker.off("error", error);
       worker.off("messageerror", messageError);
       void Promise.all(admissionTasks)
@@ -168,10 +186,17 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         })
         .catch(reject);
     };
-    const exit = (code: number) =>
+    const ended = (ending: SqliteMutationWorkerEnd) =>
       runInOperationContext(() => {
-        params.onExit?.(code);
-        finish(code);
+        if (ending.kind === "native-exit") {
+          params.onExit?.(ending.code);
+          finish(ending.code);
+        } else {
+          if (ending.kind === "task-failed") {
+            transportError ??= ending.error;
+          }
+          finish();
+        }
       });
     // Worker events inherit its first caller; each request must retain its own authority context.
     const receiveInOperationContext = (message: SqliteMutationWorkerMessage<Result>) => {
@@ -277,7 +302,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
     const receive = (message: SqliteMutationWorkerMessage<Result>) =>
       runInOperationContext(receiveInOperationContext, message);
     worker.on("message", receive);
-    worker.once("exit", exit);
+    const stopObservingEnd = observeSqliteMutationWorkerEnd(transport, ended);
     worker.once("error", error);
     worker.once("messageerror", messageError);
     try {

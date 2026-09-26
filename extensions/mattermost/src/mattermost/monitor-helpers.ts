@@ -3,9 +3,7 @@ import { formatInboundFromLabel as formatInboundFromLabelShared } from "openclaw
 import { resolveThreadSessionKeys as resolveThreadSessionKeysShared } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-
-export { rawDataToString };
+export { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 
 export const formatInboundFromLabel = formatInboundFromLabelShared;
 

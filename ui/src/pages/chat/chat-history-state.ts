@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionMessageSubscription } from "../../lib/sessions/index.ts";
@@ -43,6 +44,7 @@ type ChatHistoryLoadState =
       sessionKey: string;
       requestAgentId: string | undefined;
       sessionInfo: ChatHistoryResult["sessionInfo"];
+      sessionId?: string | null;
     }
   | ({ phase: "failed"; message: string; retryable: boolean } & ChatHistoryLoadRequest);
 
@@ -211,6 +213,27 @@ export function getAcceptedChatHistorySession(state: ChatState) {
     state.currentSessionId === accepted.sessionInfo.sessionId
     ? accepted.sessionInfo
     : undefined;
+}
+
+/** A successful scoped read can prove an ephemeral session is gone; roster absence cannot. */
+export function isExpiredIncognitoSession(
+  state: ChatState,
+  sessionKey = state.sessionKey,
+): boolean {
+  const accepted = chatHistoryRequests(state).acceptedHistory;
+  const creation = state.chatSubmissions?.creation;
+  return (
+    isIncognitoSessionKey(sessionKey) &&
+    accepted?.sessionId === null &&
+    state.connected &&
+    state.client === accepted.client &&
+    state.sessions === accepted.sessions &&
+    state.connectionEpoch === accepted.connectionEpoch &&
+    state.sessionKey === sessionKey &&
+    accepted.sessionKey === sessionKey &&
+    !(creation?.sessionKey === sessionKey && !creation.admitted) &&
+    !state.hasPendingInitialTurn?.(sessionKey)
+  );
 }
 
 /** Cached identity alone cannot authorize delivery before the first authoritative history result. */

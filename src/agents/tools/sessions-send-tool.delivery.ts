@@ -3,12 +3,14 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { resolveActiveEmbeddedRunSessionId } from "../embedded-agent-runner/active-run-projections.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
@@ -73,6 +75,7 @@ export async function startSessionsSendAgentRun(params: {
   allowActiveRunQueueDelivery?: boolean;
   allowActiveRunQueueFallback?: boolean;
   expectedSessionId?: string;
+  sourceOrigin?: DeliveryContext;
   mode?: "steer" | "followup";
 }): Promise<
   | {
@@ -161,20 +164,47 @@ export async function startSessionsSendAgentRun(params: {
         );
       }
     }
-    const response = await params.callGateway<{ runId: string }>({
+    // Preserve a self-send's source conversation without parsing its session key
+    // or consulting a route that another inbound turn can replace. A Cron parent
+    // fallback is a distinct session and keeps its own delivery context.
+    const sourceOrigin = fallbackSessionKey ? undefined : params.sourceOrigin;
+    const sendParams = sourceOrigin
+      ? {
+          ...params.sendParams,
+          channel: sourceOrigin.channel ?? params.sendParams.channel,
+          accountId: sourceOrigin.accountId,
+          to: sourceOrigin.to,
+          threadId: stringifyRouteThreadId(sourceOrigin.threadId),
+        }
+      : params.sendParams;
+    const response = await params.callGateway<{ runId: string; admissionPending?: boolean }>({
       method: "agent",
       params: fallbackSessionKey
         ? {
-            ...params.sendParams,
+            ...sendParams,
             sessionKey: fallbackSessionKey,
             idempotencyKey: crypto.randomUUID(),
           }
-        : params.sendParams,
+        : sendParams,
       timeoutMs: 10_000,
     });
+    const responseRunId =
+      typeof response?.runId === "string" && response.runId ? response.runId : params.runId;
+    if (response?.admissionPending === true) {
+      return {
+        ok: false,
+        result: jsonResult({
+          runId: responseRunId,
+          status: "error",
+          error: "Gateway admission is still pending; inspect this run before retrying.",
+          sentBeforeError: true,
+          sessionKey: fallbackSessionKey ?? params.sessionKey,
+        }),
+      };
+    }
     return {
       ok: true,
-      runId: typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+      runId: responseRunId,
       targetDisposition: "queued",
       ...(fallbackSessionKey ? { a2aSessionKey: fallbackSessionKey } : {}),
     };

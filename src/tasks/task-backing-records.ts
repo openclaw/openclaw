@@ -170,3 +170,46 @@ export function createManagedTaskBackingDetail(
         }
     : undefined;
 }
+
+/** The same canonical-instance decision serves native projections and admitted database reads. */
+export function hasAuthoritativeTaskBackingFromRecords(
+  task: TaskRecord,
+  readers: {
+    isManagedFlow: (flowId: string) => boolean;
+    resolveCurrentCanonicalBacking: (
+      scope: Omit<
+        Parameters<typeof selectCurrentCanonicalTaskBacking>[0],
+        "candidates" | "isTaskMirroredFlow"
+      >,
+    ) => ReturnType<typeof selectCurrentCanonicalTaskBacking>;
+  },
+): boolean {
+  if (task.runtime !== "acp" && task.runtime !== "subagent") {
+    return true;
+  }
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId || !readers.isManagedFlow(flowId)) {
+    return true;
+  }
+  const childSessionKey = task.childSessionKey?.trim();
+  if (!childSessionKey) {
+    return true;
+  }
+  const runId = task.runId?.trim();
+  const managed = readManagedTaskBacking(task.detail);
+  if (!runId || !managed) {
+    return false;
+  }
+  const current = readers.resolveCurrentCanonicalBacking({
+    runtime: task.runtime,
+    scopeKind: task.scopeKind,
+    ownerKey: task.ownerKey,
+    childSessionKey,
+    runId,
+  });
+  return Boolean(
+    current &&
+    current.task.taskId === managed.taskId &&
+    sameTaskBackingInstance(current.instance, managed.instance),
+  );
+}

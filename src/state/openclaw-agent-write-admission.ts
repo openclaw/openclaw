@@ -24,6 +24,7 @@ export function runOpenClawAgentWriteAdmission<T>(
   run: () => Promise<T> | T,
   reentrant = false,
   timing?: StoreWriterTiming,
+  signal?: AbortSignal,
 ): Promise<T> {
   const storePath = resolveOpenClawAgentSqlitePath(options);
   return runQueuedStoreWrite({
@@ -35,6 +36,7 @@ export function runOpenClawAgentWriteAdmission<T>(
     reentrant: reentrant && !admission.workers.has(storePath),
     fn: async () => await run(),
     timing,
+    signal,
   });
 }
 
@@ -43,6 +45,7 @@ export function runOpenClawAgentWorkerWrite<T>(
   options: OpenClawAgentDatabaseOptions,
   run: () => Promise<T>,
   timing?: StoreWriterTiming,
+  signal?: AbortSignal,
 ): Promise<T> {
   const storePath = resolveOpenClawAgentSqlitePath(options);
   return runOpenClawAgentWriteAdmission(
@@ -60,5 +63,6 @@ export function runOpenClawAgentWorkerWrite<T>(
     },
     true,
     timing,
+    signal,
   );
 }

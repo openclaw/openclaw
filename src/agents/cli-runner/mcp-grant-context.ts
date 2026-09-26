@@ -190,6 +190,7 @@ export function buildCliMcpGrantContext(params: {
     // Restricted runs get their allowlist stamped into the grant; the
     // loopback server enforces it on tools/list and tools/call.
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
+    ...(params.run.toolOverrides?.webSearch === false ? { webSearchDisabled: true as const } : {}),
     ...(params.run.skillWorkshopProposalRevision
       ? { skillWorkshop: { proposalRevision: params.run.skillWorkshopProposalRevision } }
       : {}),

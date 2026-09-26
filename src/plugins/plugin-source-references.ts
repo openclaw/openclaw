@@ -53,11 +53,43 @@ type RequireReferencePath = {
   scope: {
     getBinding(name: string): { constant: boolean; path: RequireReferencePath } | undefined;
   };
+  key: string | number | null;
+  parentPath: RequireReferencePath | null;
   get(key: "arguments"): RequireReferencePath[];
   get(key: string): RequireReferencePath;
   referencesImport(source: string, name: string): boolean;
   matchesPattern(pattern: string): boolean;
+  replaceWith(node: { type: "Identifier"; name: string }): void;
 };
+
+/** Whether this expression receives a value, directly or through a destructuring pattern. */
+function isAssignmentTarget(target: RequireReferencePath): boolean {
+  let child = target;
+  for (let parent = target.parentPath; parent?.node; parent = parent.parentPath) {
+    switch (parent.node.type) {
+      case "AssignmentExpression":
+      case "AssignmentPattern":
+      case "ForInStatement":
+      case "ForOfStatement":
+        return child.key === "left";
+      case "UpdateExpression":
+        return true;
+      case "ObjectProperty":
+        if (child.key !== "value") {
+          return false;
+        }
+        break;
+      case "ArrayPattern":
+      case "ObjectPattern":
+      case "RestElement":
+        break;
+      default:
+        return false;
+    }
+    child = parent;
+  }
+  return false;
+}
 
 function unwrapReferenceArgument(input: RequireReferencePath | undefined) {
   let argument = input;
@@ -333,6 +365,26 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
   return needsTransform(tree) ? undefined : tree;
 }
 
+function parseTransformedPluginSource(source: string, code: string): Program {
+  try {
+    return parse(code, {
+      ecmaVersion: "latest",
+      // Jiti can retain import.meta in its mixed ESM/CommonJS inspection output.
+      allowImportExportEverywhere: true,
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+    });
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) {
+      throw error;
+    }
+    // Name the blocking file; positions refer to the Jiti output, not the authored source.
+    throw new SyntaxError(`${source}: could not parse transformed source: ${error.message}`, {
+      cause: error,
+    });
+  }
+}
+
 /** Visit literal module and explicit asset inputs without evaluating plugin code. */
 export function visitPluginSourceReferences(
   source: string,
@@ -353,7 +405,8 @@ export function visitPluginSourceReferences(
   };
   const tree =
     parseNativePluginJavaScript(source, sourceText) ??
-    parse(
+    parseTransformedPluginSource(
+      source,
       resolver.transform({
         source: sourceText,
         filename: source,
@@ -364,10 +417,24 @@ export function visitPluginSourceReferences(
             {
               pre(file: {
                 path: {
-                  traverse(visitor: { CallExpression(call: RequireReferencePath): void }): void;
+                  traverse(visitor: {
+                    CallExpression(call: RequireReferencePath): void;
+                    MemberExpression(member: RequireReferencePath): void;
+                  }): void;
                 };
               }) {
                 file.path.traverse({
+                  MemberExpression(member) {
+                    // Jiti inlines import.meta.url, dirname and filename as strings, also
+                    // where valid code assigns to them. Inspection reads only references,
+                    // so a plain identifier keeps that target parseable.
+                    if (
+                      member.get("object").node?.type === "MetaProperty" &&
+                      isAssignmentTarget(member)
+                    ) {
+                      member.replaceWith({ type: "Identifier", name: "importMetaTarget" });
+                    }
+                  },
                   CallExpression(call) {
                     const args = call.get("arguments");
                     // Jiti replaces this anchor with a string; capture its meaning before rewriting.
@@ -404,11 +471,6 @@ export function visitPluginSourceReferences(
           ],
         },
       }),
-      {
-        ecmaVersion: "latest",
-        allowAwaitOutsideFunction: true,
-        allowReturnOutsideFunction: true,
-      },
     );
   const staticImports = new Set<string>();
   for (const statement of tree.body) {

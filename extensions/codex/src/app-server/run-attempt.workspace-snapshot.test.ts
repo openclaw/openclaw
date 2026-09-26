@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import {
   createCodexRuntimePlanFixture,
   createParams,
@@ -42,10 +42,8 @@ describe("Codex workspace instruction snapshots", () => {
       const updatedGuidance = "Later workspace changes wait for a new session.";
       await fs.mkdir(agentWorkspaceDir, { recursive: true });
       await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), initialGuidance);
-      dynamicToolBuildState.openClawCodingToolsFactory = () => [
-        createRuntimeDynamicTool("memory_get"),
-      ];
       const params = createParams(sessionFile, executionDir);
+      setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("memory_get")]);
       params.disableTools = false;
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.bootstrapWorkspaceDir = agentWorkspaceDir;
@@ -60,8 +58,10 @@ describe("Codex workspace instruction snapshots", () => {
       registration.registry.plugins.push(record);
       const api = registration.createApi(record, { config: params.config ?? {} });
       const memoryContribution = vi.fn((_context: unknown): string[] => []);
+      const memoryFailure = new Error("optional memory contribution unavailable");
+      const warn = vi.spyOn(agentHarnessRuntime.embeddedAgentLog, "warn");
       memoryContribution.mockImplementationOnce(() => {
-        throw new Error("optional memory contribution unavailable");
+        throw memoryFailure;
       });
       if (contributionKind === "async preparation") {
         api.registerMemoryPromptPreparation(async (context) => memoryContribution(context));
@@ -75,6 +75,9 @@ describe("Codex workspace instruction snapshots", () => {
           await Promise.race([run, harness.waitForMethod("turn/start")]);
           await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
           expect(readAttemptTerminal(await run).promptError).toBeNull();
+          expect(warn).toHaveBeenCalledWith("failed to prepare codex memory recall instructions", {
+            error: memoryFailure,
+          });
           expect(memoryContribution).toHaveBeenCalledWith(
             expect.objectContaining({ availableTools: new Set(["memory_get"]) }),
           );
@@ -117,7 +120,7 @@ describe("Codex workspace instruction snapshots", () => {
       const updatedGuidance = "Updated instructions require a new captured snapshot.";
       await fs.mkdir(agentWorkspaceDir, { recursive: true });
       await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), initialGuidance);
-      const bootstrap = vi.spyOn(agentHarnessRuntime, "resolveBootstrapFilesForRun");
+      const bootstrap = vi.spyOn(agentHarnessRuntime, "prepareAgentWorkspaceContext");
       if (failureAt === "initial") {
         bootstrap.mockRejectedValueOnce(new Error("workspace bootstrap unavailable"));
       }

@@ -49,20 +49,20 @@ describe("offline device abandonment with retained physical cleanup", () => {
         ...support.BUNDLE_ARTIFACT,
         ...build,
       });
-      function seedDevice(id: string, isolation: boolean | null = true) {
-        support.testState.store.createIntent({
+      async function seedDevice(id: string, isolation: boolean | null = true) {
+        await support.testState.store.createIntent({
           environmentId: id,
           providerId: "device",
           profileId: `device:${deviceId}`,
           profileSnapshot: { settings: { device: deviceId }, executionMode: "worker-turn" },
           provisionOperationId: `provision:${id}`,
         });
-        support.testState.store.transition({
+        await support.testState.store.transition({
           environmentId: id,
           from: "requested",
           to: "provisioning",
         });
-        support.testState.store.transition({
+        await support.testState.store.transition({
           environmentId: id,
           from: "provisioning",
           to: "ready",
@@ -74,8 +74,8 @@ describe("offline device abandonment with retained physical cleanup", () => {
           },
         });
       }
-      seedDevice(environmentId, sharedHost);
-      const attached = support.testState.store.transition({
+      await seedDevice(environmentId, sharedHost);
+      const attached = await support.testState.store.transition({
         environmentId,
         from: "ready",
         to: "attached",
@@ -86,7 +86,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
       if (active.state !== "active") {
         throw new Error("expected active placement");
       }
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...REQUEST,
         claimId: "abandoned-claim",
         runId: "abandoned-run",
@@ -94,7 +94,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
       });
       placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       const replacementId = "worker-replacement";
-      seedDevice(replacementId);
+      await seedDevice(replacementId);
       const attachReplacement = () =>
         support.testState.store.transition({
           environmentId: replacementId,
@@ -102,7 +102,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
           to: "attached",
           patch: support.attachedPatch(replacementId, active.sessionId),
         });
-      expect(attachReplacement).toThrow("already attached");
+      await expect(attachReplacement()).rejects.toThrow("already attached");
       const transport = nodeSupport.transport();
       const connectedNodes = await transport.listCurrentNodes();
       connectedNodes[0]!.nodeId = deviceId;
@@ -284,7 +284,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
         const replacement =
           cleanup === "failed" || cleanup === "retired-mixed" || cleanup === "authorization-closed"
             ? undefined
-            : attachReplacement();
+            : await attachReplacement();
         let replacementClaim;
         if (replacement) {
           expect(replacement.ownerEpoch).toBeGreaterThan(attached.ownerEpoch);
@@ -297,7 +297,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
             await restartDisconnectedService();
             listNodes.mockResolvedValue(connectedNodes);
           }
-          replacementClaim = placements.claimTurn({
+          replacementClaim = await placements.claimTurn({
             ...REQUEST,
             claimId: "replacement-claim",
             runId: "replacement-run",
@@ -309,7 +309,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
           });
           placements.authorizeWorkerTurnTools(replacementClaim, ["sessions_send"]);
           const grant = await service.acquireTurnCredential(replacementClaim);
-          expect(service.acknowledgeCredentialDelivery(grant)).toBe(true);
+          expect(await service.acknowledgeCredentialDelivery(grant)).toBe(true);
           await tunnels.start({
             environmentId: replacementId,
             ownerEpoch: replacement.ownerEpoch,

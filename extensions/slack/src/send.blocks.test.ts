@@ -212,26 +212,25 @@ describe("sendMessageSlack chunking", () => {
     expect(postedMessage(client).text).toBe(message);
   });
 
-  it("splits oversized fallback text through the normal Slack sender", async () => {
-    const client = createSlackSendTestClient();
-    const message = "a".repeat(8500);
+  it.each([false, true])(
+    "keeps emoji whole when plain text mode is %s",
+    async (textIsSlackPlainText) => {
+      const client = createSlackSendTestClient();
+      const prefix = "a".repeat(SLACK_TEXT_LIMIT - 2);
+      const family = "👨‍👩‍👧‍👦";
 
-    await sendMessageSlack("channel:C123", message, {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
+      await sendMessageSlack("channel:C123", `${prefix}${family}Z`, {
+        cfg: SLACK_TEST_CFG,
+        client,
+        textIsSlackPlainText,
+      });
 
-    const postedTexts = client.chat.postMessage.mock.calls.map((call) => call[0].text);
-
-    expect(postedTexts).toHaveLength(2);
-    expect(
-      postedTexts
-        .map((text, index) => ({ index, length: typeof text === "string" ? text.length : null }))
-        .filter((text) => text.length === null || text.length > 8000),
-    ).toStrictEqual([]);
-    expect(postedTexts.join("")).toBe(message);
-  });
+      expect(client.chat.postMessage.mock.calls.map((call) => call[0].text)).toEqual([
+        prefix,
+        `${family}Z`,
+      ]);
+    },
+  );
 
   it("keeps Slack mrkdwn code spans closed around protected tokens when chunking", async () => {
     const client = createSlackSendTestClient();

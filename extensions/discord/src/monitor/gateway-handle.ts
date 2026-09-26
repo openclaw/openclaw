@@ -1,4 +1,3 @@
-// Discord plugin module implements gateway handle behavior.
 import type { EventEmitter } from "node:events";
 import type { GatewayPlugin } from "../internal/gateway.js";
 

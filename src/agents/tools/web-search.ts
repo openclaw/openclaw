@@ -11,6 +11,7 @@ import {
   truncateSanitizedExternalContent,
   wrapWebContent,
 } from "../../security/external-content.js";
+import { WebSearchProviderError } from "../../web-search/runtime-error.js";
 import { runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult, textResult } from "./common.js";
@@ -129,6 +130,12 @@ export function createWebSearchTool(options?: {
         preferRuntimeProviders,
         args: toolArgs,
         signal,
+      }).catch((error: unknown) => {
+        signal?.throwIfAborted();
+        if (!(error instanceof WebSearchProviderError)) {
+          throw error;
+        }
+        return error.toResult();
       });
       const normalized = normalizeWebSearchOutput({
         result: result.result,

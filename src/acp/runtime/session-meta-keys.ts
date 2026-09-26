@@ -18,6 +18,11 @@ type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
 export type AcpSessionRow = Selectable<AcpSessionsTable>;
 export type AcpSessionEntryBinding = Pick<SessionEntry, "lifecycleRevision"> &
   Partial<Pick<SessionEntry, "sessionId" | "sessionStartedAt">>;
+export type AcpSessionReadInput = {
+  keys: readonly string[];
+  legacyKey?: string;
+  entry?: AcpSessionEntryBinding;
+};
 
 export function getAcpSessionKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AcpSessionMetaDatabase>(db);
@@ -196,14 +201,26 @@ export function selectAcpSessionRowForStoreEntry(
   cfg?: OpenClawConfig,
   entry?: AcpSessionEntryBinding,
 ): AcpSessionRow | undefined {
-  const databaseKey = buildAcpDatabaseSessionKey(storeSessionKey, agentId);
-  for (const key of [databaseKey, ...legacyAcpDatabaseSessionKeys(storeSessionKey, agentId, cfg)]) {
+  return selectAcpSessionRowForRead(db, {
+    keys: [
+      buildAcpDatabaseSessionKey(storeSessionKey, agentId),
+      ...legacyAcpDatabaseSessionKeys(storeSessionKey, agentId, cfg),
+    ],
+    legacyKey: resolveLegacyFreeAcpSessionKey(storeSessionKey),
+    entry,
+  });
+}
+
+export function selectAcpSessionRowForRead(
+  db: DatabaseSync,
+  { keys, legacyKey, entry }: AcpSessionReadInput,
+): AcpSessionRow | undefined {
+  for (const key of keys) {
     const row = selectAcpSessionRow(db, key);
     if (row && (!entry || acpSessionRowMatchesEntry(row, entry))) {
       return row;
     }
   }
-  const legacyKey = resolveLegacyFreeAcpSessionKey(storeSessionKey);
   return legacyKey
     ? selectLegacyFreeAcpSessionRows(db, [legacyKey])
         .get(legacyKey)

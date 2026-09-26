@@ -1,4 +1,4 @@
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -22,7 +22,7 @@ import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-
 function installStateRuntime(): VoiceCallStateRuntime["state"] {
   const state: VoiceCallStateRuntime["state"] = {
     resolveStateDir: () => "",
-    openKeyedStore: (options: OpenKeyedStoreOptions) =>
+    openKeyedStore: (options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests("voice-call", options),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by voice-call restore tests");

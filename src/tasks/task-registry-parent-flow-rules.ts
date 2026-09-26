@@ -9,7 +9,7 @@ type ParentFlowLinkErrorCode =
   | "cancel_requested"
   | "terminal";
 
-class ParentFlowLinkError extends Error {
+export class ParentFlowLinkError extends Error {
   constructor(
     public readonly code: ParentFlowLinkErrorCode,
     message: string,

@@ -41,7 +41,7 @@ private final class DashboardFixtureTrust: NSObject, WKNavigationDelegate {
 struct DashboardBrowserCookieBoundaryTests {
     @Test(arguments: [false, true])
     func `issuer cookies reach only their exact HTTPS and WebSocket authority`(_ protected: Bool) async throws {
-        let tls = try DashboardTLSFixture()
+        let tls = try await DashboardTLSFixture()
         let token = "synthetic-browser-cookie"
         var requests: [String: String] = [:]
         let other = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity, requestHandler: { request in

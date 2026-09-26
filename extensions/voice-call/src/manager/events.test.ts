@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Voice Call tests cover events plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
@@ -218,7 +218,7 @@ describe("processEvent (functional)", () => {
       const openStore = state.openKeyedStore.bind(state);
       const fault = vi
         .spyOn(state, "openKeyedStore")
-        .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
+        .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
           const store = openStore<T>(options);
           store.entries = async () => {
             throw new Error("synthetic call history read failure");

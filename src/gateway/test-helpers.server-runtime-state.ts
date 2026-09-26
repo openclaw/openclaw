@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { onTestFinished } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 
@@ -17,6 +18,7 @@ export async function createGatewayRuntimeStateForTest(
   overrides: Partial<GatewayRuntimeStateParams> = {},
 ) {
   const params = {
+    scheduler: createTestGatewayScheduler(),
     cfg: {},
     bindHost: "127.0.0.1",
     port: 0,
@@ -37,7 +39,10 @@ export async function createGatewayRuntimeStateForTest(
     ...overrides,
   };
   const connectionState = createGatewayConnectionState({ ...params, bootId: randomUUID() });
-  onTestFinished(() => connectionState.mentionInbox.dispose());
+  onTestFinished(async () => {
+    connectionState.mentionInbox.dispose();
+    await params.scheduler.stop();
+  });
   const httpTransport = await createGatewayHttpTransport({
     ...params,
     clients: connectionState.clients,

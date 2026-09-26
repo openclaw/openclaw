@@ -2,12 +2,7 @@
  * Canvas node CLI command registration and runtime dependency wiring.
  */
 import type { Command } from "commander";
-import {
-  callGatewayFromCli,
-  isGatewayClientRequestError,
-  resolveNodeFromNodeList,
-  type NodeMatchCandidate,
-} from "openclaw/plugin-sdk/gateway-runtime";
+import type { NodeMatchCandidate } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   buildNodeInvokeParams,
   getNodesTheme,
@@ -20,7 +15,7 @@ import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Runtime output surface used by Canvas CLI commands. */
@@ -144,6 +139,7 @@ export function createDefaultCanvasCliDependencies(): CanvasCliDependencies {
     params,
     callOpts,
   ) => {
+    const { callGatewayFromCli } = await import("openclaw/plugin-sdk/gateway-runtime");
     const timeout = String(callOpts?.transportTimeoutMs ?? opts.timeout ?? 10_000);
     return await callGatewayFromCli(method, { ...opts, timeout }, params, {
       progress: opts.json !== true,
@@ -156,6 +152,8 @@ export function createDefaultCanvasCliDependencies(): CanvasCliDependencies {
     getNodesTheme,
     parseTimeoutMs,
     resolveNodeId: async (opts, query) => {
+      const { isGatewayClientRequestError, resolveNodeFromNodeList } =
+        await import("openclaw/plugin-sdk/gateway-runtime");
       let raw: unknown;
       try {
         raw = await callGatewayCli("node.list", opts, {});

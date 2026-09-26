@@ -140,7 +140,7 @@ describe("agent database admission", () => {
         error: { code: "UNAVAILABLE", details: refusal },
       });
       expect(
-        listGatewayAgentsBasic(config).agents.find((agent) => agent.id === agentId),
+        (await listGatewayAgentsBasic(config)).agents.find((agent) => agent.id === agentId),
       ).toMatchObject({
         status: "degraded",
         admissionRefusal: refusal,

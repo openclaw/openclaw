@@ -102,15 +102,13 @@ defineDiscordVoiceTests(
       });
       await manager.join({ guildId: "g1", channelId: "1001" });
       const entry = getSessionEntry(manager);
-      const stream = new PassThrough({ objectMode: true });
-      connection.receiver.subscribe.mockReturnValueOnce(stream);
       await handleSpeakingStart(manager, entry, "u-speaker");
       expect(decodeOpusStreamChunksMock).not.toHaveBeenCalled();
       expect(transcribeAudioFileMock).not.toHaveBeenCalled();
       expect(loggerWarnMock).toHaveBeenCalledWith(
         expect.stringContaining("audio understanding is disabled"),
       );
-      expect(stream.destroyed).toBe(true);
+      expect(connection.receiver.subscribe).not.toHaveBeenCalled();
       expect(entry.capture.size).toBe(0);
       await manager.destroy();
     });

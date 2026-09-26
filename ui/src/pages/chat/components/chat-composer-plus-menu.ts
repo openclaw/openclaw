@@ -2,9 +2,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
-import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { icons } from "../../../components/icons.ts";
+import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { t } from "../../../i18n/index.ts";
+import { registerMcpEnglish } from "../../../i18n/locales/en-mcp.ts";
 import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
@@ -35,6 +36,8 @@ import {
   renderCapabilityToggleRow,
   menuDivider,
 } from "./chat-composer-menu-rows.ts";
+
+registerMcpEnglish();
 
 export type ChatComposerPlusMenuView =
   | "root"

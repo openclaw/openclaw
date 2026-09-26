@@ -1,4 +1,3 @@
-// Slack plugin module implements secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
   collectNestedChannelFieldAssignments,

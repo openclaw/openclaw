@@ -6,8 +6,9 @@ import {
   type CliBackendPreparedExecution,
   type CliBackendToolAvailability,
 } from "openclaw/plugin-sdk/cli-backend";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
   assertGeminiCliLiteralIsolatedPrompt,
   GEMINI_CLI_EXACT_TOOL_ENV_BARRIERS,
@@ -430,31 +431,13 @@ async function writeGeminiCliJson(filePath: string, value: unknown): Promise<voi
   await writeGeminiCliPrivateFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function createGeminiCliPrivateTempDir(prefix: string): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), prefix));
-  try {
-    await fs.chmod(directory, 0o700);
-    return directory;
-  } catch (error) {
-    // Preparation has no cleanup callback yet, so remove a partially secured
-    // directory here rather than leaking it when chmod fails.
-    await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
 async function writeGeminiCliPrivateFile(filePath: string, value: string): Promise<void> {
-  const tempPath = path.join(
-    path.dirname(filePath),
-    `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
-  );
-  await fs.writeFile(tempPath, value, {
-    encoding: "utf8",
-    mode: 0o600,
+  // Resolve directory aliases for fs-safe's directory permission check.
+  const directory = await fs.realpath(path.dirname(filePath));
+  await replaceFileAtomic({
+    filePath: path.join(directory, path.basename(filePath)),
+    content: value,
   });
-  await fs.chmod(tempPath, 0o600);
-  await fs.rename(tempPath, filePath);
-  await fs.chmod(filePath, 0o600);
 }
 
 async function stageGeminiCliIsolatedCwd(ctx: GeminiCliAuthHomeContext): Promise<void> {
@@ -486,14 +469,17 @@ async function prepareGeminiCliProfileHome(
   // validation failure cannot return the cleanup callback below.
   const persistentProfileHome =
     isolated || exactToolAvailability ? undefined : resolveGeminiCliProfileHome(ctx);
-  const systemSettingsDir = await createGeminiCliPrivateTempDir("openclaw-gemini-cli-");
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-gemini-cli-",
+  });
   const { home, geminiDir } = persistentProfileHome ?? {
-    home: path.join(systemSettingsDir, "home"),
-    geminiDir: path.join(systemSettingsDir, "home", ".gemini"),
+    home: path.join(workspace.dir, "home"),
+    geminiDir: path.join(workspace.dir, "home", ".gemini"),
   };
-  const systemSettingsPath = path.join(systemSettingsDir, "settings.json");
+  const systemSettingsPath = workspace.path("settings.json");
   const isolatedSystemPrompt = ctx.isolatedCompletionSystemPrompt;
-  const isolatedSystemPromptPath = isolated ? path.join(systemSettingsDir, "system.md") : undefined;
+  const isolatedSystemPromptPath = isolated ? workspace.path("system.md") : undefined;
   return {
     home,
     geminiDir,
@@ -513,9 +499,7 @@ async function prepareGeminiCliProfileHome(
           : []),
       ]);
     },
-    cleanup: async () => {
-      await fs.rm(systemSettingsDir, { recursive: true, force: true });
-    },
+    cleanup: workspace[Symbol.asyncDispose],
   };
 }
 
@@ -653,11 +637,14 @@ async function prepareGeminiCliRestrictedSystemSettings(
     ambientAuth.selectedType,
     ambientAuth.safeSettings,
   );
-  const systemSettingsDir = await createGeminiCliPrivateTempDir("openclaw-gemini-cli-policy-");
-  const systemSettingsPath = path.join(systemSettingsDir, "settings.json");
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-gemini-cli-policy-",
+  });
+  const systemSettingsPath = workspace.path("settings.json");
   const isolatedSystemPrompt = ctx.isolatedCompletionSystemPrompt;
-  const isolatedSystemPromptPath = isolated ? path.join(systemSettingsDir, "system.md") : undefined;
-  const restrictedHome = path.join(systemSettingsDir, "home");
+  const isolatedSystemPromptPath = isolated ? workspace.path("system.md") : undefined;
+  const restrictedHome = path.join(workspace.dir, "home");
   return {
     env: {
       GEMINI_CLI_SYSTEM_SETTINGS_PATH: systemSettingsPath,
@@ -686,9 +673,7 @@ async function prepareGeminiCliRestrictedSystemSettings(
           : []),
       ]);
     },
-    cleanup: async () => {
-      await fs.rm(systemSettingsDir, { recursive: true, force: true });
-    },
+    cleanup: workspace[Symbol.asyncDispose],
     toolAvailabilityEnforced: true,
     ...(isolatedCompletionEnforced ? { isolatedCompletionEnforced: true as const } : {}),
   };

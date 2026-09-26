@@ -88,8 +88,6 @@ describe("renderChatPullRequests", () => {
         pullRequests: [],
         branch: sessionBranch(),
         status: "ready",
-        expanded: false,
-        onToggle: () => {},
         onDismiss: () => {},
         publication: publication({ activity: "read", selection: null }),
       }),
@@ -106,8 +104,6 @@ describe("renderChatPullRequests", () => {
         renderChatPullRequests({
           pullRequests: [pullRequest({ state })],
           status: "unavailable",
-          expanded: false,
-          onToggle: () => {},
           onDismiss: () => {},
         }),
         container,
@@ -124,8 +120,6 @@ describe("renderChatPullRequests", () => {
       renderChatPullRequests({
         pullRequests: [],
         status: "ready",
-        expanded: false,
-        onToggle: () => {},
         onDismiss: () => {},
       }),
       container,
@@ -138,8 +132,6 @@ describe("renderChatPullRequests", () => {
       renderChatPullRequests({
         pullRequests: [pullRequest()],
         status: "ready",
-        expanded: false,
-        onToggle: () => {},
         onDismiss: () => {},
       }),
       container,
@@ -171,8 +163,6 @@ describe("renderChatPullRequests", () => {
           }),
         ],
         status: "ready",
-        expanded: false,
-        onToggle: () => {},
         onDismiss: () => {},
       }),
       container,
@@ -194,37 +184,23 @@ describe("renderChatPullRequests", () => {
     );
   });
 
-  it.each([
-    { count: 3, expanded: false, visible: ["#3", "#1", "#2"], label: undefined },
-    { count: 4, expanded: false, visible: ["#3", "#1"], label: "Show 2 more" },
-    { count: 4, expanded: true, visible: ["#3", "#1", "#2", "#4"], label: "Show less" },
-  ])(
-    "keeps live PRs first with $count requests and expanded=$expanded",
-    ({ count, expanded, visible, label }) => {
-      const pullRequests = [
-        pullRequest({ number: 1, state: "merged", checks: undefined }),
-        pullRequest({ number: 2, state: "merged", checks: undefined }),
-        pullRequest({ number: 3, state: "open" }),
-        pullRequest({ number: 4, state: "closed", checks: undefined }),
-      ];
-      render(
-        renderChatPullRequests({
-          pullRequests: pullRequests.slice(0, count),
-          status: "ready",
-          expanded,
-          onToggle: () => {},
-          onDismiss: () => {},
-        }),
-        container,
-      );
-      expect(
-        [...container.querySelectorAll(".chat-pr__number")].map((node) => node.textContent),
-      ).toEqual(visible);
-      const toggle = container.querySelector<HTMLButtonElement>(".chat-prs__more");
-      expect(toggle?.textContent?.trim()).toBe(label);
-      expect(toggle?.getAttribute("aria-expanded")).toBe(label ? String(expanded) : undefined);
-    },
-  );
+  it("keeps live PRs ahead of settled history", () => {
+    render(
+      renderChatPullRequests({
+        pullRequests: [
+          pullRequest({ number: 1, state: "merged", checks: undefined }),
+          pullRequest({ number: 2, state: "closed", checks: undefined }),
+          pullRequest({ number: 3, state: "open" }),
+        ],
+        status: "ready",
+        onDismiss: () => {},
+      }),
+      container,
+    );
+    expect(
+      [...container.querySelectorAll(".chat-pr__number")].map((node) => node.textContent),
+    ).toEqual(["#3", "#1", "#2"]);
+  });
 
   it.each([null, "read"] as const)(
     "renders merged PRs without a redundant card while publication activity is %s",
@@ -243,8 +219,6 @@ describe("renderChatPullRequests", () => {
             }),
           ],
           status: "rate-limited",
-          expanded: false,
-          onToggle: () => {},
           onDismiss,
           publication: publication({
             activity,
@@ -288,8 +262,6 @@ describe("renderChatPullRequests", () => {
           pullRequests: [pullRequest({ state: "merged" })],
           branch: sessionBranch({ branch }),
           status: "ready",
-          expanded: false,
-          onToggle: () => {},
           onDismiss: () => {},
           publication: publication(),
         }),
@@ -309,8 +281,6 @@ describe("renderChatPullRequests", () => {
       renderChatPullRequests({
         pullRequests: [pullRequest()],
         status: "ready",
-        expanded: false,
-        onToggle: () => {},
         onDismiss,
         publication: publication({
           result: {
@@ -343,8 +313,6 @@ describe("renderChatPullRequests", () => {
         renderChatPullRequests({
           pullRequests: [pullRequest()],
           status: "ready",
-          expanded: false,
-          onToggle: () => {},
           onDismiss: () => {},
           publication: publication({
             locked: !completed,
@@ -384,8 +352,6 @@ describe("renderChatPullRequests", () => {
       renderChatPullRequests({
         pullRequests: [pullRequest()],
         status: "rate-limited",
-        expanded: false,
-        onToggle: () => {},
         onDismiss: () => {},
       }),
       container,
@@ -399,8 +365,6 @@ describe("renderChatPullRequests", () => {
         pullRequests: [],
         branch: sessionBranch(),
         status: "ready",
-        expanded: false,
-        onToggle: () => {},
         onDismiss: () => {},
         publication: publication(),
       }),
@@ -433,8 +397,6 @@ describe("renderChatPullRequests", () => {
         pullRequests: [],
         branch: sessionBranch(),
         status: "ready",
-        expanded: false,
-        onToggle: () => {},
         onDismiss: () => {},
         onOpenSessionDiff,
       }),
@@ -455,8 +417,6 @@ describe("renderChatPullRequests", () => {
         // createUrl because GitHub's pull/new page would 404.
         branch: sessionBranch({ createUrl: undefined, additions: 12, deletions: 3 }),
         status: "ready",
-        expanded: false,
-        onToggle: () => {},
         onDismiss: () => {},
       }),
       container,
@@ -475,8 +435,6 @@ describe("renderChatPullRequests", () => {
       pullRequests: [],
       branch: sessionBranch(),
       status: "ready",
-      expanded: false,
-      onToggle: () => {},
       onDismiss: () => {},
       publication: publication({ onPublish }),
     };
@@ -564,8 +522,6 @@ describe("renderChatPullRequests", () => {
           pullRequests: [],
           branch: sessionBranch(),
           status: "ready",
-          expanded: false,
-          onToggle: () => {},
           onDismiss: () => {},
           publication: publication({
             options: { shared, personal: null, pendingPersonal: null, latestShared: null },
@@ -590,8 +546,6 @@ describe("renderChatPullRequests", () => {
         pullRequests: [],
         branch: sessionBranch(),
         status: "ready",
-        expanded: false,
-        onToggle: () => {},
         onDismiss: () => {},
         publication: publication({ personalReady: false }),
       }),
@@ -611,8 +565,6 @@ describe("renderChatPullRequests", () => {
         pullRequests: [],
         branch: sessionBranch(),
         status: "rate-limited",
-        expanded: false,
-        onToggle: () => {},
         onDismiss: () => {},
         publication: publication(),
       }),
@@ -630,8 +582,6 @@ describe("renderChatPullRequests", () => {
       renderChatPullRequests({
         pullRequests: [pullRequest()],
         status: "ready",
-        expanded: false,
-        onToggle: () => {},
         onDismiss,
       }),
       container,
@@ -778,8 +728,6 @@ describe("CI job details", () => {
       gateway,
       sessionKey: "agent:main:main",
       status: "ready" as const,
-      expanded: false,
-      onToggle() {},
       onDismiss() {},
     };
     render(renderChatPullRequests(props), container);
@@ -947,7 +895,14 @@ describe("CI job details", () => {
     expect(h.request).toHaveBeenCalledTimes(1);
   });
 
-  it("clears prior details when a refresh rejects session or credential authority", async () => {
+  it.each([
+    ["GitHub identity changed", "GitHub identity changed"],
+    [
+      "GitHub API rate limit exceeded (HTTP 403). Wait 2382 seconds and retry.",
+      "GitHub API rate limit exceeded (HTTP 403). Wait 2382 seconds and retry.",
+    ],
+    ["GitHub request failed: token=synthetic-secret", "GitHub request failed: token=[redacted]"],
+  ])("clears prior details and preserves the safe RPC error: %s", async (message, expected) => {
     const h = harness();
     h.request.mockResolvedValueOnce(
       details({
@@ -960,12 +915,19 @@ describe("CI job details", () => {
     h.disclosure.open = true;
     await settle(h.element);
     expect(container.textContent).toContain("Private build");
-    h.request.mockRejectedValue(new Error("GitHub identity changed"));
+    h.request.mockRejectedValue(new Error(message));
     await vi.advanceTimersByTimeAsync(30_000);
     await h.element.updateComplete;
     expect(container.querySelector(".chat-ci__job")).toBeNull();
     expect(container.textContent).not.toContain("Private build");
     expect(container.querySelector('.chat-ci__notice[data-state="unavailable"]')).not.toBeNull();
+    expect(container.textContent).toContain(expected);
+    expect(container.textContent).not.toContain("synthetic-secret");
+    h.request.mockResolvedValue(details());
+    container.querySelector<HTMLButtonElement>(".chat-ci__retry")?.click();
+    await settle(h.element);
+    expect(container.querySelector(".chat-ci__notice")).toBeNull();
+    expect(container.querySelector(".chat-ci__job")).not.toBeNull();
   });
 
   it("clears details when the connection retires", async () => {

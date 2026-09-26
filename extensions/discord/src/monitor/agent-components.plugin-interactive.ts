@@ -1,4 +1,3 @@
-// Discord plugin module implements agent components.plugin interactive behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
@@ -13,10 +12,10 @@ import type {
   AgentComponentInteraction,
   ComponentInteractionContext,
   DiscordChannelContext,
-} from "./agent-components-helpers.js";
+} from "./agent-components.types.js";
 
 const loadConversationRuntime = createLazyRuntimeModule(
-  () => import("./agent-components.runtime.js"),
+  () => import("openclaw/plugin-sdk/conversation-runtime"),
 );
 
 export async function dispatchPluginDiscordInteractiveEvent(params: {

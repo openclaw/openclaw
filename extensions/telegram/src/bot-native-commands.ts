@@ -1,4 +1,3 @@
-// Telegram plugin module implements native command registration behavior.
 import type { Bot, Context } from "grammy";
 import {
   findCommandByNativeName,

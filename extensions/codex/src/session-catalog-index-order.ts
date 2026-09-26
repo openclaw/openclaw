@@ -48,7 +48,9 @@ export class CodexCatalogOrdering {
   private ordered: CodexCatalogIndexRow[] | undefined;
 
   read(rows: ReadonlyMap<string, CodexCatalogIndexRow>): readonly CodexCatalogIndexRow[] {
-    return (this.ordered ??= [...rows.values()].toSorted(compareCodexCatalogRows));
+    return (this.ordered ??= [...rows.values()]
+      .filter((row) => !row.archived && row.page.sessions.length > 0)
+      .toSorted(compareCodexCatalogRows));
   }
 
   invalidate(): void {

@@ -12,6 +12,75 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("persistAgentSession", () => {
   const sessionKey = "agent:main:main";
 
+  it.each([false, true])(
+    "stamps required creation only when the authoritative row is new (existing=%s)",
+    async (existing) => {
+      const dir = tempDirs.make("openclaw-session-creation-");
+      const storePath = path.join(dir, "sessions.json");
+      const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
+      if (existing) {
+        await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, entry);
+      }
+      const sessionStore: Record<string, SessionEntry> = {};
+      const persisted = await persistAgentSession({
+        agentId: "main",
+        sessionStore,
+        sessionKey,
+        storePath,
+        initialEntry: entry,
+        entry,
+        shouldPersist: () => true,
+        creation: {
+          via: "run",
+          actor: { type: "human", source: "profile", id: "sandbox-creator" },
+          sandbox: "required",
+        },
+      });
+
+      const stored = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+      expect(stored).toEqual(persisted);
+      expect(sessionStore[sessionKey]).toEqual(stored);
+      if (existing) {
+        expect(stored?.sandbox).toBeUndefined();
+        expect(stored?.createdActor).toBeUndefined();
+      } else {
+        expect(stored).toMatchObject({
+          sandbox: "required",
+          createdVia: "run",
+          createdActor: { type: "human", source: "profile", id: "sandbox-creator" },
+        });
+      }
+    },
+  );
+
+  it("does not create a session after its authority is revoked during preparation", async () => {
+    const dir = tempDirs.make("openclaw-session-creation-authority-");
+    const storePath = path.join(dir, "sessions.json");
+    const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
+    let authorized = true;
+    await expect(
+      persistAgentSession({
+        agentId: "main",
+        sessionStore: {},
+        sessionKey,
+        storePath,
+        initialEntry: entry,
+        entry,
+        shouldPersist: () => {
+          authorized = false;
+          return true;
+        },
+        assertCommitAllowed: () => {
+          if (!authorized) {
+            throw new Error("operator authority revoked");
+          }
+        },
+        creation: { via: "run", sandbox: "required" },
+      }),
+    ).rejects.toThrow("operator authority revoked");
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+  });
+
   it("clears stale local entries when guarded persistence sees no persisted entry", async () => {
     const dir = tempDirs.make("openclaw-session-store-");
     try {
@@ -26,6 +95,7 @@ describe("persistAgentSession", () => {
       // A guarded write can decline persistence after rereading disk; local
       // memory must be cleared too so later turns do not reuse stale entries.
       const persisted = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -80,6 +150,7 @@ describe("persistAgentSession", () => {
       const sessionStore = { [sessionKey]: staleEntry };
 
       const persisted = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -126,6 +197,7 @@ describe("persistAgentSession", () => {
       const sessionStore = { [sessionKey]: initialEntry };
 
       const persisted = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -164,6 +236,7 @@ describe("persistAgentSession", () => {
       const sessionStore = { [sessionKey]: staleEntry };
 
       const persisted = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -195,6 +268,7 @@ describe("persistAgentSession", () => {
       const sessionStore = { [sessionKey]: staleEntry };
 
       const first = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -202,6 +276,7 @@ describe("persistAgentSession", () => {
         entry: staleEntry,
       });
       const second = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -234,6 +309,7 @@ describe("persistAgentSession", () => {
       };
 
       const persisted = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,

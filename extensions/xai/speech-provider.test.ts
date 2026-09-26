@@ -27,14 +27,7 @@ const {
 }));
 
 vi.mock("./tts.js", () => ({
-  XAI_BASE_URL: "https://api.x.ai/v1",
-  XAI_TTS_FALLBACK_VOICES: ["ara", "eve", "leo", "rex", "sal"],
-  isValidXaiTtsVoice: (voice: string) => voice.trim().length > 0,
   listXaiTtsVoices: listXaiTtsVoicesMock,
-  normalizeXaiLanguageCode: (value: unknown) =>
-    typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined,
-  normalizeXaiTtsBaseUrl: (baseUrl?: string) =>
-    baseUrl?.trim().replace(/\/+$/, "") || "https://api.x.ai/v1",
   xaiTTS: xaiTTSMock,
   xaiTTSStream: xaiTTSStreamMock,
 }));

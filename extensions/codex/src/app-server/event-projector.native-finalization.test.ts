@@ -543,7 +543,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     });
   });
 
-  it("caps oversized native command output before transcript, trajectory, and progress projection", async () => {
+  it("preserves oversized native transcripts while bounding trajectory and progress projection", async () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
@@ -591,13 +591,19 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     const toolResultMessage = result.messagesSnapshot.find(
       (message) => requireRecord(message, "message").role === "toolResult",
     );
+    expect(toolResultMessage).toMatchObject({
+      role: "toolResult",
+      toolCallId: "cmd-large",
+      toolName: "bash",
+      isError: false,
+    });
     const toolResultContent = requireArray(
       requireRecord(toolResultMessage, "tool result message").content,
       "tool result content",
     );
+    expect(toolResultContent).toEqual([{ type: "text", text: expect.any(String) }]);
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.content).toHaveLength(10_000);
-    expect(toolResultContentItem.content).toContain("OpenClaw truncated Codex native tool output");
+    expect(toolResultContentItem.text).toBe(largeOutput);
   });
 
   it("delivers completed assistant text when a native tool call finishes without a matching result", async () => {
@@ -654,8 +660,9 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     expect(toolResultMessage.toolName).toBe("bash");
     expect(toolResultMessage.isError).toBe(true);
     expect(toolResultMessage.details).toEqual({ reason: "missing_tool_result" });
-    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
-    expect(JSON.stringify(toolResultContent)).toContain("matching tool.result");
+    expect(toolResultMessage.content).toEqual([
+      { type: "text", text: expect.stringContaining("matching tool.result") },
+    ]);
     const finalAssistant = requireRecord(result.messagesSnapshot[3], "final assistant message");
     expect(finalAssistant.content).toEqual([
       {

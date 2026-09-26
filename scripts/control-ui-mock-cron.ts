@@ -5,6 +5,7 @@ import type {
   CronRunsResult,
   CronStatus,
 } from "../ui/src/api/types.ts";
+import { cronListResponseFixture } from "../ui/src/test-helpers/cron.ts";
 
 const CRON_LIST_SNAPSHOT_REVISION = "control-ui-mock-cron";
 
@@ -325,30 +326,28 @@ export function buildCronMocks(
 
   return {
     "cron.status": status,
-    "cron.list": {
+    "cron.list": cronListResponseFixture([
       // Cases mirror the concrete queries today's Cron UI issues. Unknown combinations fall back
       // to the full fixture list; dynamic evaluation is intentionally out of scope because the
       // scenario is JSON-serialized into the page rather than installed as a live responder.
-      cases: [
-        {
-          match: { enabled: "enabled", lastRunStatus: "error" },
-          response: listResult(failedJobs, { limit: failedJobs.length }),
-        },
-        { match: { enabled: "disabled" }, response: listResult([]) },
-        ...singleJobListCases(jobs, {
-          enabled: "enabled",
-          sortBy: "nextRunAtMs",
-          sortDir: "asc",
-          limit: 1,
-        }),
-        ...singleJobListCases(jobs, { includeDisabled: true, limit: 1 }),
-        ...sortedJobLists.map((entry) => ({
-          match: entry.match,
-          response: listResult(entry.jobs),
-        })),
-        { response: listResult(jobs) },
-      ],
-    },
+      {
+        match: { enabled: "enabled", lastRunStatus: "error" },
+        response: listResult(failedJobs, { limit: failedJobs.length }),
+      },
+      { match: { enabled: "disabled" }, response: listResult([]) },
+      ...singleJobListCases(jobs, {
+        enabled: "enabled",
+        sortBy: "nextRunAtMs",
+        sortDir: "asc",
+        limit: 1,
+      }),
+      ...singleJobListCases(jobs, { includeDisabled: true, limit: 1 }),
+      ...sortedJobLists.map((entry) => ({
+        match: entry.match,
+        response: listResult(entry.jobs),
+      })),
+      { response: listResult(jobs) },
+    ]),
     "cron.runs": {
       cases: [
         ...queuedRuns.map((run) => ({

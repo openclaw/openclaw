@@ -37,10 +37,7 @@ function normalizeOutputFormat(value: unknown): OutputFormat {
     return "mp3";
   }
   const lower = value.toLowerCase().trim();
-  if (VALID_OUTPUT_FORMATS.includes(lower as OutputFormat)) {
-    return lower as OutputFormat;
-  }
-  return "mp3";
+  return VALID_OUTPUT_FORMATS.find((format) => format === lower) ?? "mp3";
 }
 
 function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechProviderConfig {
@@ -83,6 +80,7 @@ function applyTemplate(str: string, ctx: Record<string, string | undefined>): st
 function parseCommand(cmdStr: string): { cmd: string; initialArgs: string[] } {
   const parts: string[] = [];
   let current = "";
+  let tokenStarted = false;
   let inQuote = false;
   let quoteChar = "";
 
@@ -94,38 +92,33 @@ function parseCommand(cmdStr: string): { cmd: string; initialArgs: string[] } {
         current += char;
       }
     } else if (char === '"' || char === "'") {
+      // Quotes can start an intentional empty argument, not just wrap text.
+      tokenStarted = true;
       inQuote = true;
       quoteChar = char;
     } else if (char === " " || char === "\t") {
-      if (current) {
+      if (tokenStarted) {
         parts.push(current);
         current = "";
+        tokenStarted = false;
       }
     } else {
+      tokenStarted = true;
       current += char;
     }
   }
-  if (current) {
+  if (tokenStarted) {
     parts.push(current);
   }
   return { cmd: parts[0] || "", initialArgs: parts.slice(1) };
 }
 
 function findAudioFile(dir: string, baseName: string): string | null {
-  const files = readdirSync(dir);
-  for (const file of files) {
-    const ext = path.extname(file).toLowerCase();
-    if (AUDIO_EXTENSIONS.has(ext) && (file.startsWith(baseName) || file.includes(baseName))) {
-      return path.join(dir, file);
-    }
-  }
-  for (const file of files) {
-    const ext = path.extname(file).toLowerCase();
-    if (AUDIO_EXTENSIONS.has(ext)) {
-      return path.join(dir, file);
-    }
-  }
-  return null;
+  const files = readdirSync(dir).filter((file) =>
+    AUDIO_EXTENSIONS.has(path.extname(file).toLowerCase()),
+  );
+  const file = files.find((candidate) => candidate.includes(baseName)) ?? files[0];
+  return file === undefined ? null : path.join(dir, file);
 }
 
 function detectFormatFromExtension(filePath: string): SourceFormat | null {
@@ -185,10 +178,6 @@ function detectAudioFormat(buffer: Buffer): SourceFormat | null {
   return prefix.startsWith("OggS") ? "ogg" : null;
 }
 
-function getFileExt(format: SourceFormat): string {
-  return `.${format}`;
-}
-
 async function readAudioFile(filePath: string): Promise<Buffer> {
   const { readRegularFileSync } = await import("openclaw/plugin-sdk/security-runtime");
   return readRegularFileSync({ filePath, maxBytes: MAX_AUDIO_OUTPUT_BYTES }).buffer;
@@ -205,10 +194,9 @@ async function runCli(params: {
     throw new Error("CLI TTS: text is empty after removing emojis");
   }
 
-  const outputExt = getFileExt(params.config.outputFormat);
   const ctx: Record<string, string | undefined> = {
     Text: cleanText,
-    OutputPath: path.join(params.outputDir, `${params.filePrefix}${outputExt}`),
+    OutputPath: path.join(params.outputDir, `${params.filePrefix}.${params.config.outputFormat}`),
     OutputDir: params.outputDir,
     OutputBase: params.filePrefix,
   };
@@ -306,7 +294,7 @@ async function convertAudio(
   outputDir: string,
   target: OutputFormat,
 ): Promise<Buffer> {
-  const outputFileName = `converted${getFileExt(target)}`;
+  const outputFileName = `converted.${target}`;
   const args = ["-y", "-i", inputPath];
   if (target === "opus") {
     args.push("-c:a", "libopus", "-b:a", "64k", "-f", "opus");
@@ -384,7 +372,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
           const format: OutputFormat = req.target === "voice-note" ? "opus" : config.outputFormat;
           let buffer = result.buffer;
           if (result.actualFormat !== format) {
-            const inputName = `input${getFileExt(result.actualFormat)}`;
+            const inputName = `input.${result.actualFormat}`;
             const inputFile = result.audioPath ?? path.join(tempDir, inputName);
             if (!result.audioPath) {
               await temp.write(inputName, result.buffer);
@@ -429,10 +417,10 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
             filePrefix: "telephony",
           });
 
-          const inputFile =
-            result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
+          const inputName = `input.${result.actualFormat}`;
+          const inputFile = result.audioPath ?? path.join(tempDir, inputName);
           if (!result.audioPath) {
-            await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
+            await temp.write(inputName, result.buffer);
           }
 
           // Convert to raw 16kHz mono PCM for telephony (no WAV headers)

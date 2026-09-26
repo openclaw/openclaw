@@ -1,4 +1,3 @@
-// Copilot plugin module implements event bridge behavior.
 import type { MessageOptions, SessionEvent, SessionEventType } from "@github/copilot-sdk";
 import {
   emitAgentEvent,
@@ -129,18 +128,15 @@ interface EventBridgeController {
   }): void;
 }
 
-type MessageAccumulator = { messageId: string; text: string };
+type MessageAccumulator = { text: string };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
 
 export function attachEventBridge(
   session: SessionLike,
   options: EventBridgeOptions,
 ): EventBridgeController {
-  const messageOrder: string[] = [];
   const messagesById = new Map<string, MessageAccumulator>();
-  const reasoningOrder: string[] = [];
   const reasoningById = new Map<string, string>();
-  const durableReasoningOrder: string[] = [];
   const durableReasoningById = new Map<string, string>();
   let lastAssistantEvent: Extract<SessionEvent, { type: "assistant.message" }> | undefined;
   let lastAssistantReasoningText: string | undefined;
@@ -243,7 +239,7 @@ export function attachEventBridge(
     if (!delta) {
       return;
     }
-    const entry = ensureMessageAccumulator(messagesById, messageOrder, messageId);
+    const entry = ensureMessageAccumulator(messagesById, messageId);
     entry.text += delta;
     const onAssistantDelta = options.onAssistantDelta;
     if (!onAssistantDelta) {
@@ -280,10 +276,6 @@ export function attachEventBridge(
     if (!delta) {
       return;
     }
-    if (!reasoningById.has(reasoningId)) {
-      reasoningById.set(reasoningId, "");
-      reasoningOrder.push(reasoningId);
-    }
     reasoningById.set(reasoningId, `${reasoningById.get(reasoningId) ?? ""}${delta}`);
   });
 
@@ -291,13 +283,7 @@ export function attachEventBridge(
     if (!isRootSessionEvent(event) || event.ephemeral === true) {
       return;
     }
-    if (!reasoningById.has(event.data.reasoningId)) {
-      reasoningOrder.push(event.data.reasoningId);
-    }
     reasoningById.set(event.data.reasoningId, event.data.content);
-    if (!durableReasoningById.has(event.data.reasoningId)) {
-      durableReasoningOrder.push(event.data.reasoningId);
-    }
     durableReasoningById.set(event.data.reasoningId, event.data.content);
     unconsumedDurableReasoning = true;
   });
@@ -487,20 +473,12 @@ export function attachEventBridge(
     });
   });
 
-  registerListener(session, unsubscribeFns, "subagent.started", (event) => {
-    forwardNativeSubagentEvent(event);
-  });
-
-  registerListener(session, unsubscribeFns, "subagent.completed", (event) => {
-    forwardNativeSubagentEvent(event);
-  });
-
-  registerListener(session, unsubscribeFns, "subagent.failed", (event) => {
-    forwardNativeSubagentEvent(event);
-  });
+  for (const eventType of ["subagent.started", "subagent.completed", "subagent.failed"] as const) {
+    registerListener(session, unsubscribeFns, eventType, forwardNativeSubagentEvent);
+  }
 
   registerListener(session, unsubscribeFns, "session.compaction_start", (event) => {
-    if (!isRootCompactionEvent(event)) {
+    if (!isRootSessionEvent(event)) {
       return;
     }
     observedCompaction = true;
@@ -523,7 +501,7 @@ export function attachEventBridge(
         // Context invalidation must not break generic compaction tracking.
       }
     }
-    if (!isRootCompactionEvent(event)) {
+    if (!isRootSessionEvent(event)) {
       return;
     }
     activeCompactionCount = Math.max(0, activeCompactionCount - 1);
@@ -542,7 +520,7 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "session.idle", (event) => {
-    if (!isRootCompactionEvent(event)) {
+    if (!isRootSessionEvent(event)) {
       return;
     }
     markUnconsumedReasoningIncomplete();
@@ -620,7 +598,7 @@ export function attachEventBridge(
     },
     snapshot() {
       return {
-        assistantTexts: finalizeAssistantTexts(messageOrder, messagesById, lastAssistantEvent),
+        assistantTexts: finalizeAssistantTexts(messagesById, lastAssistantEvent),
         completedCount,
         lastAssistantEvent,
         startedCount,
@@ -646,11 +624,11 @@ export function attachEventBridge(
             now: args.now,
             reasoningText: lastAssistantReasoningText,
             usage: resolveAssistantUsage(lastAssistantEvent, usage, usageByApiCallId),
-            assistantTexts: finalizeAssistantTexts(messageOrder, messagesById, lastAssistantEvent),
+            assistantTexts: finalizeAssistantTexts(messagesById, lastAssistantEvent),
           });
     },
     finalizeAssistantTexts() {
-      return finalizeAssistantTexts(messageOrder, messagesById, lastAssistantEvent);
+      return finalizeAssistantTexts(messagesById, lastAssistantEvent);
     },
     completeTool(tool) {
       const owner = toolCallsById.get(tool.parentToolCallId ?? tool.toolCallId);
@@ -695,18 +673,15 @@ export function attachEventBridge(
     for (const request of event.data.toolRequests ?? []) {
       projectedToolNamesByCallId.set(request.toolCallId, request.name);
     }
-    const entry = ensureMessageAccumulator(messagesById, messageOrder, event.data.messageId);
+    const entry = ensureMessageAccumulator(messagesById, event.data.messageId);
     if (typeof event.data.content === "string" && event.data.content.length >= entry.text.length) {
       entry.text = event.data.content;
     }
     lastAssistantReasoningText =
-      event.data.reasoningText ?? (joinReasoning(reasoningOrder, reasoningById) || undefined);
+      event.data.reasoningText ?? ([...reasoningById.values()].join("") || undefined);
     const transcriptReasoningText =
-      event.data.reasoningText ??
-      (joinReasoning(durableReasoningOrder, durableReasoningById) || undefined);
-    reasoningOrder.length = 0;
+      event.data.reasoningText ?? ([...durableReasoningById.values()].join("") || undefined);
     reasoningById.clear();
-    durableReasoningOrder.length = 0;
     durableReasoningById.clear();
     unconsumedDurableReasoning = false;
     const chunk: AssistantProjectionChunk = {
@@ -758,9 +733,7 @@ export function attachEventBridge(
     if (unconsumedDurableReasoning) {
       options.transcriptProjection?.journal.markReplayIncomplete();
     }
-    reasoningOrder.length = 0;
     reasoningById.clear();
-    durableReasoningOrder.length = 0;
     durableReasoningById.clear();
     unconsumedDurableReasoning = false;
   }
@@ -872,25 +845,22 @@ function createPromptError(code: string, message: string, cause?: unknown): Prom
 
 function ensureMessageAccumulator(
   messagesById: Map<string, MessageAccumulator>,
-  messageOrder: string[],
   messageId: string,
 ): MessageAccumulator {
   let entry = messagesById.get(messageId);
   if (!entry) {
-    entry = { messageId, text: "" };
+    entry = { text: "" };
     messagesById.set(messageId, entry);
-    messageOrder.push(messageId);
   }
   return entry;
 }
 
 function finalizeAssistantTexts(
-  messageOrder: string[],
   messagesById: Map<string, MessageAccumulator>,
   event?: Extract<SessionEvent, { type: "assistant.message" }>,
 ): string[] {
-  const texts = messageOrder
-    .map((messageId) => messagesById.get(messageId)?.text ?? "")
+  const texts = [...messagesById.values()]
+    .map((message) => message.text)
     .filter((text) => text.length > 0);
   if (texts.length > 0) {
     return texts;
@@ -909,16 +879,6 @@ function isAssistantMessageEvent(
 
 function isRootSessionEvent(event: { agentId?: string }): boolean {
   return event.agentId === undefined;
-}
-
-function isRootCompactionEvent(event: { agentId?: string }): boolean {
-  // SDK session events include subagent compaction; only root compaction
-  // affects the pooled root session's cleanup and reuse lifecycle.
-  return isRootSessionEvent(event);
-}
-
-function joinReasoning(order: string[], reasoningById: Map<string, string>): string {
-  return order.map((reasoningId) => reasoningById.get(reasoningId) ?? "").join("");
 }
 
 function splitPlanText(text: string | undefined): string[] {

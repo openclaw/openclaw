@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 import {
   buildChannelProgressDraftLine,
-  formatChannelProgressDraftText,
   mergeChannelProgressDraftLine,
   type ChannelProgressDraftLine,
 } from "./streaming.js";
@@ -102,30 +102,39 @@ function buildEmbeddedExecSequence(params: {
 
 describe("channel-streaming embedded command items", () => {
   it.each([
-    { status: "failed" as const, exitCode: 1, finalStatus: "exit 1", text: "🛠️ exit 1; run tests" },
-    { status: "completed" as const, exitCode: 0, finalStatus: "completed", text: "🛠️ run tests" },
+    { status: "failed" as const, exitCode: 1, finalStatus: "exit 1" },
+    { status: "completed" as const, exitCode: 0, finalStatus: "completed" },
   ])(
-    "keeps the shown command detail through the terminal command item ($status)",
-    ({ status, exitCode, finalStatus, text }) => {
-      let lines: ChannelProgressDraftLine[] = [];
-      for (const { step, line } of buildEmbeddedExecSequence({ status, exitCode })) {
-        lines = mergeChannelProgressDraftLine(lines, line, { maxLines: 4 });
-        expect(lines, step).toHaveLength(1);
-        expect(lines[0]?.detail, step).toBe("run tests");
-      }
-
-      expect(lines[0]).toMatchObject({
-        kind: "command-output",
-        detail: "run tests",
-        status: finalStatus,
-        text,
+    "keeps one command row through compositor preparation and terminal delivery ($status)",
+    async ({ status, exitCode, finalStatus }) => {
+      let rendered = "";
+      const progress = createChannelProgressDraftCompositor({
+        active: true,
+        mode: "progress",
+        seed: "command-correlation",
+        entry: { streaming: { progress: { label: false, toolProgress: true, maxLines: 4 } } },
+        update: (text) => {
+          rendered = text;
+          return true;
+        },
       });
-      expect(
-        formatChannelProgressDraftText({
-          lines,
-          entry: { streaming: { progress: { label: false } } },
-        }),
-      ).toBe(text);
+      try {
+        for (const { step, line } of buildEmbeddedExecSequence({ status, exitCode })) {
+          await progress.pushToolProgress(line);
+          const lines = progress.getSnapshot().lines;
+          expect(lines, step).toHaveLength(1);
+          expect(lines[0], step).toMatchObject({ detail: "run tests" });
+        }
+        await progress.start();
+        expect(progress.getSnapshot().lines[0]).toMatchObject({
+          kind: "command-output",
+          detail: "run tests",
+          status: finalStatus,
+        });
+        expect(rendered.match(/run tests/g)).toHaveLength(1);
+      } finally {
+        progress.cancel();
+      }
     },
   );
 

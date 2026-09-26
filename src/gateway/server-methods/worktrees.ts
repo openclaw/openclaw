@@ -9,6 +9,7 @@ import {
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { formatWorktreeGcResult } from "../../agents/worktrees/gc-result.js";
 import { createManagedWorktreeOwnerPolicy } from "../../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -154,14 +155,24 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
       }
       const cfg = context.getRuntimeConfig();
       const limits = resolveWorktreeCleanupLimits();
-      respond(
-        true,
-        await service.gc({
-          limits,
-          ...createManagedWorktreeOwnerPolicy(cfg),
-        }),
-        undefined,
-      );
+      const result = await service.gc({
+        limits,
+        ...createManagedWorktreeOwnerPolicy(cfg),
+      });
+      if (result.outcome !== "completed") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, formatWorktreeGcResult(result), {
+            details: result,
+            // A retry could repeat any deletion that already committed.
+            retryable: false,
+          }),
+        );
+        return;
+      }
+      const { removed, orphansDeleted, snapshotsPruned } = result;
+      respond(true, { removed, orphansDeleted, snapshotsPruned }, undefined);
     },
   };
 }

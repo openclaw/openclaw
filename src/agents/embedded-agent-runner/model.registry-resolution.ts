@@ -5,6 +5,7 @@ import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metad
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { loadAuthProfileStoreForRuntimeAsync, resolveAuthProfileOrder } from "../auth-profiles.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
+import { AuthProfileRuntimeReadStaleError } from "../auth-profiles/runtime-persisted-rows.js";
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
@@ -164,6 +165,7 @@ type DynamicModelAuthProfile = {
 };
 
 export async function resolveDynamicModelAuthProfile(params: {
+  abortSignal?: AbortSignal;
   provider: string;
   modelId: string;
   cfg?: OpenClawConfig;
@@ -172,6 +174,7 @@ export async function resolveDynamicModelAuthProfile(params: {
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
   preferredProfile?: string;
 }): Promise<DynamicModelAuthProfile> {
+  params.abortSignal?.throwIfAborted();
   const explicitProfileId = params.authProfileId?.trim() || undefined;
   // A prepared mode is authoritative; model discovery does not reselect its credentials.
   if (params.authProfileMode) {
@@ -180,7 +183,8 @@ export async function resolveDynamicModelAuthProfile(params: {
       authProfileMode: params.authProfileMode,
     };
   }
-  const store = await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
+  const agentDir = params.agentDir;
+  const readOptions = {
     readOnly: true,
     migrationProvider: params.provider,
     allowKeychainPrompt: false,
@@ -192,19 +196,34 @@ export async function resolveDynamicModelAuthProfile(params: {
       profileId: explicitProfileId,
       preferredProfile: params.preferredProfile,
     }),
+  };
+  const readStore = () => {
+    params.abortSignal?.throwIfAborted();
+    return loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
+  };
+  const providers = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider: params.provider,
+    config: params.cfg,
   });
+  const store = await readStore().catch(async (error: unknown) => {
+    if (!(error instanceof AuthProfileRuntimeReadStaleError)) {
+      throw error;
+    }
+    // OAuth publication can overlap selection. The rejected reader has joined its cleanup.
+    await error.waitForSettlement?.(params.abortSignal);
+    return readStore();
+  });
+  params.abortSignal?.throwIfAborted();
   const profileId =
     explicitProfileId ??
-    listOpenAIAuthProfileProvidersForAgentRuntime({
-      provider: params.provider,
-      config: params.cfg,
-    }).flatMap((provider) =>
+    providers.flatMap((provider) =>
       resolveAuthProfileOrder({
         cfg: params.cfg,
         store,
         provider,
         preferredProfile: params.preferredProfile,
         forModel: params.modelId,
+        includePendingOAuthRefresh: true,
       }),
     )[0];
   if (!profileId) {
@@ -374,6 +393,7 @@ export function normalizeProviderModelRef(params: {
 }
 
 type ResolveModelWithRegistryParams = {
+  abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   provider: string;
   modelId: string;

@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { strictlyValidateConfigSnapshotForCli } from "../cli/config-cli-validation.js";
+import { finishConfigValidationForCli } from "../cli/config-cli-validation.js";
 import {
   DeferredPluginMigrationConflictError,
   readDeferredPluginMigrations,
@@ -260,7 +260,10 @@ describe("config IO with deferred plugin migrations", () => {
     });
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.valid).toBe(true);
-    expect((await strictlyValidateConfigSnapshotForCli(snapshot)).valid).toBe(true);
+    const validation = await io.readConfigFileSnapshotWithPluginMetadata({
+      prepareValidation: "strict",
+    });
+    expect((await finishConfigValidationForCli(validation)).valid).toBe(true);
     expect(snapshot.config.gateway?.port).toBe(18789);
     expect(snapshot.config).not.toHaveProperty("legacySample");
     expect(snapshot.sourceConfig).toHaveProperty("legacySample.root", `${env.SESSION_ROOT}/legacy`);
@@ -277,21 +280,21 @@ describe("config IO with deferred plugin migrations", () => {
         skipPluginValidation: true,
         skipRuntimeSnapshotRefresh: true,
       }),
-    ).rejects.toThrow('Plugin "sample" state migration is pending');
+    ).rejects.toThrow('Plugin "sample" data/settings upgrade is unfinished');
     await expect(
       io.writeConfigFile(replacement, {
         auditOrigin: "config-rpc",
         skipPluginValidation: true,
         skipRuntimeSnapshotRefresh: true,
       }),
-    ).rejects.toThrow('Plugin "sample" state migration is pending');
+    ).rejects.toThrow('Plugin "sample" data/settings upgrade is unfinished');
     await expect(
       io.writeConfigFile(snapshot.sourceConfig, {
         unsetPaths: [["plugins", "entries", "sample", "config"]],
         skipPluginValidation: true,
         skipRuntimeSnapshotRefresh: true,
       }),
-    ).rejects.toThrow('Plugin "sample" state migration is pending');
+    ).rejects.toThrow('Plugin "sample" data/settings upgrade is unfinished');
     expect(fs.readFileSync(configPath, "utf8")).toBe(JSON.stringify(source));
 
     await io.writeConfigFile(

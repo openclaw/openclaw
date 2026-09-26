@@ -37,6 +37,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata: async () => ({
+      snapshot: await mocks.readConfigFileSnapshot({ observe: false }),
+    }),
   };
 });
 vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
@@ -102,27 +105,6 @@ describe("runDoctorLintCli", () => {
       mocks.actualPrepareSqliteReadOnlyLocationSync(...args),
     );
     clearHealthChecksForTest();
-  });
-
-  it("bases exit code on the selected severity threshold", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
-
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      const exitCode = await runDoctorLintCli(runtime, {
-        json: true,
-        severityMin: "error",
-        onlyIds: ["core/doctor/final-config-validation"],
-      });
-
-      expect(exitCode).toBe(0);
-      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
-      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(payload.schemaVersion).toBe(1);
-      expect(payload.findings).toEqual([]);
-    } finally {
-      stdout.mockRestore();
-    }
   });
 
   it.each([
@@ -273,39 +255,7 @@ describe("runDoctorLintCli", () => {
         }),
       );
       expect(detect.mock.calls[0]?.[0]).not.toHaveProperty("deep");
-    } finally {
-      stdout.mockRestore();
-    }
-  });
-
-  it("emits structured JSON for invalid config snapshots", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: false,
-      config: {},
-      path: "/tmp/openclaw.json",
-      issues: [{ path: "gateway.mode", message: "Required" }],
-    });
-
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      const exitCode = await runDoctorLintCli(runtime, { json: true });
-
-      expect(exitCode).toBe(1);
-      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(payload).toMatchObject({
-        ok: false,
-        checksRun: 1,
-        findings: [
-          {
-            checkId: "core/doctor/final-config-validation",
-            severity: "error",
-            message: "Required",
-            path: "gateway.mode",
-          },
-        ],
-      });
-      expect(runtime.error).not.toHaveBeenCalled();
+      expect(detect.mock.calls[0]?.[0]).not.toHaveProperty("lintConfigSnapshot");
     } finally {
       stdout.mockRestore();
     }

@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import { codexAppIdentityKey } from "./app-identity.js";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
+import { stringifyCodexPolicy } from "./config-policy-json.js";
 import {
   resolveCodexPluginsPolicy,
   type CodexPluginDestructiveApprovalMode,
@@ -113,7 +114,7 @@ type BuildCodexPluginThreadConfigParams = {
 
 // Admission changes must rebuild existing bindings too, or older bindings can
 // bypass updated app approval checks after the gateway has been upgraded.
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 13;
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 15;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -180,34 +181,8 @@ export async function buildCodexPluginThreadConfig(
     });
   }
 
-  let inventory =
-    policy.pluginPolicies.length > 0
-      ? await readCodexPluginInventory({
-          pluginConfig: params.pluginConfig,
-          policy,
-          request: threadRequest,
-          appCache,
-          appCacheKey: params.appCacheKey,
-          appInventoryCacheKey: threadAppCacheKey,
-          configCwd: params.configCwd,
-          metadataCache: params.metadataCache,
-          nowMs: params.nowMs,
-          suppressAppInventoryRefresh: true,
-        })
-      : emptyCodexPluginInventory(policy);
-  const appInventoryRefreshDeferredForActivation =
-    inventory.records.some((record) => record.activationRequired) &&
-    shouldRefreshMissingAppInventory(params, policy, inventory);
-  if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
-    await refreshCodexPluginAppInventory(params, appCache, {
-      // OpenClaw is missing its process-local snapshot, but Codex may already
-      // have a current inventory. Avoid rebuilding the entire remote catalog
-      // during thread startup; post-install and readiness repair still force.
-      forceRefetch: false,
-      reason: "initial_missing",
-      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
-    });
-    inventory = await readCodexPluginInventory({
+  const readInventory = (suppressAppInventoryRefresh?: true) =>
+    readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
       policy,
       request: threadRequest,
@@ -217,10 +192,34 @@ export async function buildCodexPluginThreadConfig(
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
+      suppressAppInventoryRefresh,
     });
+  let inventory =
+    policy.pluginPolicies.length > 0
+      ? await readInventory(true)
+      : emptyCodexPluginInventory(policy);
+  const refreshInventory = async (options: { forceRefetch: boolean; reason: string }) => {
+    await refreshCodexPluginAppInventory(params, appCache, {
+      ...options,
+      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
+    });
+    inventory = await readInventory();
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
       pluginConfig: params.pluginConfig,
       appCacheKey: params.appCacheKey,
+    });
+  };
+  const activationRequired = inventory.records.some((record) => record.activationRequired);
+  const appInventoryMissing = shouldRefreshMissingAppInventory(params, policy, inventory);
+  const appInventoryRefreshDeferredForActivation = activationRequired && appInventoryMissing;
+  // Install/enable first so the initial app snapshot observes newly activated plugin apps.
+  if (!activationRequired && appInventoryMissing) {
+    await refreshInventory({
+      // OpenClaw is missing its process-local snapshot, but Codex may already
+      // have a current inventory. Avoid rebuilding the entire remote catalog
+      // during thread startup; post-install and readiness repair still force.
+      forceRefetch: false,
+      reason: "initial_missing",
     });
   }
   const activationDiagnostics: CodexPluginThreadConfigDiagnostic[] = [];
@@ -259,47 +258,15 @@ export async function buildCodexPluginThreadConfig(
     !postInstallRefreshRequired &&
     shouldRefreshMissingAppInventory(params, policy, inventory);
   if (postInstallRefreshRequired || deferredMissingRefreshRequired) {
-    await refreshCodexPluginAppInventory(params, appCache, {
+    await refreshInventory({
       forceRefetch: true,
       reason: postInstallRefreshRequired ? "post_install" : "deferred_missing",
-      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
-    });
-    inventory = await readCodexPluginInventory({
-      pluginConfig: params.pluginConfig,
-      policy,
-      request: threadRequest,
-      appCache,
-      appCacheKey: params.appCacheKey,
-      appInventoryCacheKey: threadAppCacheKey,
-      configCwd: params.configCwd,
-      metadataCache: params.metadataCache,
-      nowMs: params.nowMs,
-    });
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
     });
   }
   if (shouldForceRefreshCodexNotReadyPluginApps(params, policy, inventory)) {
-    await refreshCodexPluginAppInventory(params, appCache, {
+    await refreshInventory({
       forceRefetch: true,
       reason: "not_ready_plugin_apps",
-      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
-    });
-    inventory = await readCodexPluginInventory({
-      pluginConfig: params.pluginConfig,
-      policy,
-      request: threadRequest,
-      appCache,
-      appCacheKey: params.appCacheKey,
-      appInventoryCacheKey: threadAppCacheKey,
-      configCwd: params.configCwd,
-      metadataCache: params.metadataCache,
-      nowMs: params.nowMs,
-    });
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
     });
   }
 
@@ -470,7 +437,7 @@ export function mergeCodexThreadConfigs(
     if (!config) {
       continue;
     }
-    merged = mergeJsonObjects(merged ?? {}, config);
+    merged = mergeJsonObjects(merged ?? {}, normalizeShellEnvironmentOverrides(config));
   }
   return merged && Object.keys(merged).length > 0 ? merged : undefined;
 }
@@ -560,8 +527,11 @@ function buildEnabledAppConfig(
     enabled: true,
     destructive_enabled: policy.allowDestructiveActions,
     open_world_enabled: policy.allowOpenWorld !== false,
-    default_tools_approval_mode: "auto",
-    ...(policy.destructiveApprovalMode === "ask" ? { approvals_reviewer: "user" } : {}),
+    // Native app/link/tool approval settings merge underneath this patch. Only
+    // explicit ask replaces them, so native prompt and approve modes survive replay.
+    ...(policy.destructiveApprovalMode === "ask"
+      ? { default_tools_approval_mode: "auto", approvals_reviewer: "user" }
+      : {}),
   };
 }
 
@@ -666,18 +636,6 @@ export function buildPluginAppPolicyContext(
   };
 }
 
-function shouldWaitForInitialAppInventory(
-  params: BuildCodexPluginThreadConfigParams,
-  policy: ResolvedCodexPluginsPolicy,
-  inventory: CodexPluginInventory,
-): boolean {
-  // Install/enable first so the initial app snapshot observes newly activated plugin apps.
-  if (inventory.records.some((record) => record.activationRequired)) {
-    return false;
-  }
-  return shouldRefreshMissingAppInventory(params, policy, inventory);
-}
-
 function shouldRefreshMissingAppInventory(
   params: BuildCodexPluginThreadConfigParams,
   policy: ResolvedCodexPluginsPolicy,
@@ -715,6 +673,25 @@ function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
   };
 }
 
+// Native request keys may be dotted. Normalize each policy patch before merging
+// layers so a retained dotted key cannot override the final managed environment.
+function normalizeShellEnvironmentOverrides(config: JsonObject): JsonObject {
+  let normalized = { ...config };
+  for (const [key, value] of Object.entries(config)) {
+    if (!key.startsWith("shell_environment_policy.")) {
+      continue;
+    }
+    delete normalized[key];
+    let patch: JsonValue = value;
+    for (const segment of key.split(".").toReversed()) {
+      patch = { [segment]: patch };
+    }
+    // SAFETY: the nonempty dotted key wraps the value in an object before merging.
+    normalized = mergeJsonObjects(normalized, patch as JsonObject);
+  }
+  return normalized;
+}
+
 function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {
   // Spreading creates own data properties, including literal native config keys
   // such as __proto__; assignment into an empty object would drop those overrides.
@@ -729,20 +706,5 @@ function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {
 }
 
 function fingerprintJson(value: JsonValue): string {
-  return crypto.createHash("sha256").update(stringifyCodexPluginPolicy(value)).digest("hex");
-}
-
-export function stringifyCodexPluginPolicy(value: unknown): string {
-  // Fingerprints must be process-stable across object insertion order so prompt
-  // cache and thread-binding comparisons do not churn between runs.
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stringifyCodexPluginPolicy(item)).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stringifyCodexPluginPolicy(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
+  return crypto.createHash("sha256").update(stringifyCodexPolicy(value)).digest("hex");
 }

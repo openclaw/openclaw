@@ -204,10 +204,24 @@ struct ChatMarkdownRenderSnapshot {
 
     init(text: String, isComplete: Bool, preparesReveal: Bool = false) {
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: text)
-        self.blocks = ChatMarkdownBlockSegmenter.segments(
+        let segments = ChatMarkdownBlockSegmenter.segments(
             markdown: processed.cleaned,
-            isComplete: isComplete).map {
-            Self.renderedBlock($0, isComplete: isComplete, preparesReveal: preparesReveal)
+            isComplete: isComplete)
+        let lastProseIndex: Int? = if preparesReveal, !isComplete {
+            segments.lastIndex {
+                if case .prose = $0 {
+                    return true
+                }
+                return false
+            }
+        } else {
+            nil
+        }
+        self.blocks = segments.enumerated().map { index, block in
+            Self.renderedBlock(
+                block,
+                isComplete: isComplete,
+                preparesReveal: preparesReveal && (isComplete || index == lastProseIndex))
         }
         self.images = processed.images
     }
@@ -300,6 +314,7 @@ private struct ChatMarkdownDisclosureView: View {
     let typography: ChatMarkdownRenderer.Typography
     let textColor: Color
 
+    // periphery:ignore - Read and written through $isExpanded; Xcode 27 omits the projected-binding reference.
     @State private var isExpanded: Bool
 
     init(

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements channel actions behavior.
 import {
   listWhatsAppAccountIds,
   resolveWhatsAppAccount,
@@ -8,40 +7,7 @@ import {
   resolveWhatsAppReactionLevel,
 } from "./channel-actions.runtime.js";
 
-function areWhatsAppAgentReactionsEnabled(params: { cfg: OpenClawConfig; accountId?: string }) {
-  if (!params.cfg.channels?.whatsapp) {
-    return false;
-  }
-  const gate = createActionGate(params.cfg.channels.whatsapp.actions);
-  if (!gate("reactions")) {
-    return false;
-  }
-  return resolveWhatsAppReactionLevel({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).agentReactionsEnabled;
-}
-
-function hasAnyWhatsAppAccountWithAgentReactionsEnabled(cfg: OpenClawConfig) {
-  if (!cfg.channels?.whatsapp) {
-    return false;
-  }
-  return listWhatsAppAccountIds(cfg).some((accountId) => {
-    const account = resolveWhatsAppAccount({ cfg, accountId });
-    if (!account.enabled) {
-      return false;
-    }
-    return areWhatsAppAgentReactionsEnabled({
-      cfg,
-      accountId,
-    });
-  });
-}
-
-export function resolveWhatsAppAgentReactionGuidance(params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-}) {
+function resolveEnabledWhatsAppAgentReactions(params: { cfg: OpenClawConfig; accountId?: string }) {
   if (!params.cfg.channels?.whatsapp) {
     return undefined;
   }
@@ -53,10 +19,32 @@ export function resolveWhatsAppAgentReactionGuidance(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  if (!resolved.agentReactionsEnabled) {
-    return undefined;
+  return resolved.agentReactionsEnabled ? resolved : undefined;
+}
+
+export function resolveWhatsAppAgentReactionGuidance(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}) {
+  return resolveEnabledWhatsAppAgentReactions(params)?.agentReactionGuidance;
+}
+
+function hasAnyWhatsAppAccountWithAgentReactionsEnabled(cfg: OpenClawConfig) {
+  if (!cfg.channels?.whatsapp) {
+    return false;
   }
-  return resolved.agentReactionGuidance;
+  return listWhatsAppAccountIds(cfg).some((accountId) => {
+    const account = resolveWhatsAppAccount({ cfg, accountId });
+    if (!account.enabled) {
+      return false;
+    }
+    return Boolean(
+      resolveEnabledWhatsAppAgentReactions({
+        cfg,
+        accountId,
+      }),
+    );
+  });
 }
 
 export function describeWhatsAppMessageActions(params: {
@@ -70,10 +58,12 @@ export function describeWhatsAppMessageActions(params: {
   const actions = new Set<ChannelMessageActionName>();
   const canReact =
     params.accountId != null
-      ? areWhatsAppAgentReactionsEnabled({
-          cfg: params.cfg,
-          accountId: params.accountId ?? undefined,
-        })
+      ? Boolean(
+          resolveEnabledWhatsAppAgentReactions({
+            cfg: params.cfg,
+            accountId: params.accountId,
+          }),
+        )
       : hasAnyWhatsAppAccountWithAgentReactionsEnabled(params.cfg);
   if (canReact) {
     actions.add("react");

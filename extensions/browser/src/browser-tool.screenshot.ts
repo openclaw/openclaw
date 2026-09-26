@@ -1,5 +1,6 @@
 /** Browser tool screenshot capture, private vision output, and explicit sharing hints. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
@@ -17,7 +18,6 @@ import {
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
-import { wrapExternalContent } from "./sdk-security-runtime.js";
 
 export type BrowserScreenshotOptions = {
   agentId?: string;

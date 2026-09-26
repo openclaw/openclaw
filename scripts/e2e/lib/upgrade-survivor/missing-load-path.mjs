@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 const runtimeRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
 const artifactRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
@@ -34,6 +34,7 @@ function memberBytes(key, value, indentation) {
 
 function seed() {
   const config = readJson(configPath);
+  const registrationToken = randomUUID();
   writeJson(path.join(pluginRoot, "package.json"), {
     name: "@openclaw-test/survivor-unavailable-path",
     version: "1.0.0",
@@ -51,7 +52,7 @@ function seed() {
 export default {
   id: ${JSON.stringify(pluginId)},
   register() {
-    fs.writeFileSync(${JSON.stringify(registrationPath)}, JSON.stringify({ source: import.meta.url }));
+    fs.writeFileSync(${JSON.stringify(registrationPath)}, JSON.stringify({ source: import.meta.url, registrationToken: ${JSON.stringify(registrationToken)} }));
   },
 };\n`,
   );
@@ -64,6 +65,7 @@ export default {
   writeJson(configPath, config);
   writeJson(fixturePath, {
     pluginRoot,
+    registrationToken,
     entryBytes: memberBytes(pluginId, config.plugins.entries[pluginId], 4),
     loadBytes: memberBytes("load", config.plugins.load, 2),
   });
@@ -86,9 +88,11 @@ const stage = process.argv[3];
 if (stage === "seed") {
   seed();
 } else if (stage === "unavailable") {
+  // Published loaders may compile the fixture; bind activation to its seeded bytes,
+  // not to the runtime module URL chosen by that loader.
   assert.equal(
-    readJson(registrationPath).source,
-    pathToFileURL(path.join(pluginRoot, "index.mjs")).href,
+    readJson(registrationPath).registrationToken,
+    readJson(fixturePath).registrationToken,
     "The published baseline did not load the configured fixture plugin",
   );
   fs.rmSync(pluginRoot, { recursive: true });

@@ -4,9 +4,10 @@ import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, drainStoreWriterQueuesForTest } from "../../test/helpers/promise.js";
 import {
   runQueuedStoreWrite,
+  clearStoreWriterQueuesForTest,
   type StoreWriterQueue,
   type StoreWriterTiming,
 } from "./store-writer-queue.js";
@@ -252,6 +253,48 @@ it("retains each queued writer's caller context through async and reentrant work
   expect(queues.size).toBe(0);
 });
 
+it("cancels only waiting writers while retaining active settlement and follower FIFO", async () => {
+  const queues = new Map<string, StoreWriterQueue>();
+  const release = createDeferred();
+  const activeController = new AbortController();
+  const waitingController = new AbortController();
+  const denied = new Error("writer revoked before admission");
+  const calls: string[] = [];
+  const write = (fn: () => Promise<string>, signal?: AbortSignal) =>
+    runQueuedStoreWrite({ queues, storePath: "cancelable", label: "cancelable", fn, signal });
+  const active = write(async () => {
+    calls.push("active");
+    await release.promise;
+    calls.push("settled");
+    return "committed";
+  }, activeController.signal);
+  const canceled = write(async () => {
+    calls.push("canceled");
+    return "forbidden";
+  }, waitingController.signal);
+  const outcome = canceled.catch((error: unknown) => error);
+  const followers = ["first", "second"].map((name) =>
+    write(async () => {
+      calls.push(name);
+      return name;
+    }),
+  );
+  try {
+    activeController.abort(denied);
+    waitingController.abort(denied);
+    expect(await Promise.race([outcome, nextTurn().then(() => "still queued")])).toBe(denied);
+    await expect(write(async () => "forbidden", waitingController.signal)).rejects.toBe(denied);
+    expect(calls).toEqual(["active"]);
+    release.resolve();
+    await expect(active).resolves.toBe("committed");
+    await expect(Promise.all(followers)).resolves.toEqual(["first", "second"]);
+    expect(calls).toEqual(["active", "settled", "first", "second"]);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([active, canceled, ...followers]);
+  }
+});
+
 it("queues ordinary nested writes behind the active writer", async () => {
   const queues = new Map<string, StoreWriterQueue>();
   const releaseOuter = createDeferred();
@@ -330,3 +373,41 @@ it("shares reentrant writer context across duplicate module instances", async ()
   expect(order).toEqual(["outer:start", "inner", "outer:end"]);
   expect(queues.size).toBe(0);
 });
+
+it.each(["clear", "drain"] as const)(
+  "never invokes rejected pending writers after %s cleanup settles",
+  async (mode) => {
+    const queues = new Map<string, StoreWriterQueue>();
+    const gate = createDeferred();
+    const active = runQueuedStoreWrite({
+      queues,
+      storePath: "cleanup",
+      label: "active",
+      fn: () => gate.promise,
+    });
+    const pendingWriter = vi.fn(async () => undefined);
+    const pending = runQueuedStoreWrite({
+      queues,
+      storePath: "cleanup",
+      label: "pending",
+      fn: pendingWriter,
+    });
+    const activeDrain = queues.get("cleanup")?.drainPromise;
+    const rejected = expect(pending).rejects.toThrow("test cleanup");
+    const cleanup =
+      mode === "clear"
+        ? Promise.resolve(clearStoreWriterQueuesForTest(queues, "test cleanup"))
+        : drainStoreWriterQueuesForTest(queues, "test cleanup");
+    try {
+      expect(activeDrain).toBeInstanceOf(Promise);
+      await rejected;
+      expect(pendingWriter).not.toHaveBeenCalled();
+      gate.resolve();
+      await Promise.all([active, activeDrain, cleanup]);
+      expect(pendingWriter).not.toHaveBeenCalled();
+    } finally {
+      gate.resolve();
+      await Promise.allSettled([active, pending, activeDrain, cleanup]);
+    }
+  },
+);
