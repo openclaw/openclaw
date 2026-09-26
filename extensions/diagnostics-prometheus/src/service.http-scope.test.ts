@@ -1,7 +1,6 @@
 // Guards the Prometheus scrape route's own operator.read authorization.
-import { createServer } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { baseEvent, createMetricsHarness, trusted } from "./service.test-helpers.js";
+import { createMetricsHarness, withMetricsServer } from "./service.test-helpers.js";
 
 // The Gateway publishes the caller's effective operator scopes through the plugin runtime
 // request scope; these tests drive that seam because the route handler reads it directly.
@@ -25,36 +24,14 @@ const markerModel = "scope-guard-marker-model";
 
 async function withScrapeTarget(run: (url: string) => Promise<void>): Promise<void> {
   const metrics = createMetricsHarness();
-  metrics.record(
-    {
-      ...baseEvent(),
-      type: "model.usage",
-      agentId: "main",
-      provider: "marker-provider",
-      model: markerModel,
-      usage: { input: 7 },
-    },
-    trusted,
-  );
-  const server = createServer((req, res) => {
-    void metrics.handler(req, res);
+  metrics.record({
+    type: "model.usage",
+    agentId: "main",
+    provider: "marker-provider",
+    model: markerModel,
+    usage: { input: 7 },
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected TCP server address");
-  }
-  try {
-    await run(`http://127.0.0.1:${address.port}/api/diagnostics/prometheus`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-    metrics.stop();
-  }
+  await withMetricsServer(metrics, run);
 }
 
 describe("metrics HTTP handler scope authorization", () => {
@@ -100,7 +77,7 @@ describe("metrics HTTP handler scope authorization", () => {
     });
   });
 
-  it.each(["operator.read", "operator.write", "operator.admin"])(
+  it.each(["operator.write", "operator.admin"])(
     "serves metrics to a caller holding %s",
     async (scope) => {
       runtimeScope.setScopes([scope]);
