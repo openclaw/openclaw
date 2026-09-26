@@ -29,11 +29,19 @@ Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
 
 ## Browser panel in the Control UI
 
-The Browser panel follows the current session's latest successful browser tab,
-including its profile and host or node. Opening a browser preview card selects
-that card's browser and tab. This does not change `browser.defaultProfile` or
-another session's selection. Without a session browser target, the panel uses
-the configured default routing.
+The Browser panel lists tabs opened for the current session, including tabs
+opened by the agent or directly in that panel. It follows the session's latest
+successful browser tab, including its profile and host or node. Opening a preview
+card selects that tab only while it still belongs to the session. Another chat
+using the same browser profile has its own tab list and selection. Without a
+session browser target, the panel uses the configured default routing, but it
+does not adopt other sessions' tabs.
+
+This scopes tabs, not website accounts: sessions using the same profile still
+share its cookies and storage. Existing browser permissions are unchanged.
+The unscoped administrator/CLI browser view remains available for manually opened
+or older tabs whose session ownership cannot be verified. Such tabs are not
+automatically assigned to whichever chat opens the panel first.
 
 The panel streams the active tab live as the page repaints. It falls back to
 screenshots for node-routed browsers, Chrome MCP existing-session profiles,

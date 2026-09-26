@@ -59,6 +59,14 @@ const browserClientMocks = vi.hoisted(() => ({
   ),
 }));
 vi.mock("./browser/client.js", () => browserClientMocks);
+// This suite isolates the client/tool boundary; registered-entry tests exercise real admission and storage.
+vi.mock("./browser/session-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/session-scope.js")>()),
+  prepareBrowserSessionScope: async (sessionKey: string) => ({
+    session: { sessionKey, sessionId: "tool-fixture-generation" },
+    assertCurrent: () => {},
+  }),
+}));
 
 const browserActionsMocks = vi.hoisted(() => ({
   browserAct: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),

@@ -85,6 +85,7 @@ export function renderBrowserTabPreviews(
       const revision = browserTabCardRevision(card);
       return [
         renderToolPreview(preview, "chat_tool", {
+          sessionKey: options.sessionKey,
           browserTabRevision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
           browserTabLatest: Boolean(
             revision &&

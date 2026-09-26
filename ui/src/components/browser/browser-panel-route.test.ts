@@ -87,13 +87,17 @@ function browserGateway() {
   });
 }
 
-async function mountPanel(client: Panel["client"], presented = true) {
+async function mountPanel(
+  client: Panel["client"],
+  presented = true,
+  sessionKey = "agent:main:first",
+) {
   const panel = document.createElement("openclaw-browser-panel");
   panel.embedded = true;
   panel.presented = presented;
   panel.available = true;
   panel.client = client;
-  panel.sessionKey = "agent:main:first";
+  panel.sessionKey = sessionKey;
   panel.preferredTab = { tab: hostTab, revision: "first" };
   document.body.append(panel);
   await panel.updateComplete;
@@ -118,6 +122,44 @@ function controllerFor(panel: Panel): BrowserPanelController {
 }
 
 describe("browser panel route handoff", () => {
+  it("keeps two chat panels on the same profile scoped to their own session tabs", async () => {
+    const firstKey = "agent:main:first";
+    const secondKey = "agent:main:second";
+    const firstTab = createBrowserPanelTestTab("t1", "https://first.example/", "First session");
+    const secondTab = createBrowserPanelTestTab("t2", "https://second.example/", "Second session");
+    const gateway = createBrowserClient(async (envelope) => {
+      const tabs =
+        envelope.sessionKey === firstKey
+          ? [firstTab]
+          : envelope.sessionKey === secondKey
+            ? [secondTab]
+            : [firstTab, secondTab];
+      if (envelope.path === "/tabs") {
+        return { running: true, tabs };
+      }
+      const tab = tabs[0]!;
+      if (envelope.path === "/screenshot") {
+        return { path: "/fresh.png", targetId: tab.targetId, url: tab.url };
+      }
+      if (envelope.path === "/act") {
+        return createBrowserPanelTestMetrics(tab.url, tab.title);
+      }
+      return { ok: true };
+    });
+    const first = await mountPanel(gateway.client, true, firstKey);
+    const second = await mountPanel(gateway.client, true, secondKey);
+    await waitForFast(() => expect(controllerFor(first).tabs.map((tab) => tab.id)).toEqual(["t1"]));
+    await waitForFast(() =>
+      expect(controllerFor(second).tabs.map((tab) => tab.id)).toEqual(["t2"]),
+    );
+    expect(
+      gateway.request.mock.calls.every(([, value]) => {
+        const request = value as BrowserRequestEnvelope;
+        return request.sessionKey === firstKey || request.sessionKey === secondKey;
+      }),
+    ).toBe(true);
+  });
+
   it("follows session results once on presentation, keeps card choices, and clears session/gateway ownership", async () => {
     const gateway = browserGateway();
     const focusCount = () =>

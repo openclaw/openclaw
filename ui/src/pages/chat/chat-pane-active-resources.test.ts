@@ -545,6 +545,7 @@ describe("session active resource discovery", () => {
       "environments.status",
     ]);
     expect(f.request).toHaveBeenCalledWith("browser.request", {
+      sessionKey: key,
       method: "GET",
       path: "/tabs",
       target: "node",

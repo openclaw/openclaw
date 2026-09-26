@@ -55,6 +55,21 @@ operator's scopes after checking that authority. It returns `undefined` for
 system/local calls without an operator capture. It does not grant permissions;
 the selected Gateway method still authorizes the request.
 
+For an already-authorized in-process resource operation,
+`api.runtime.gateway.captureSessionLifetime(sessionKey)` prepares the existing
+session projection
+and returns `{ target, assertCurrent, retain }`. `target` contains the canonical agent,
+session key, session ID, and optional lifecycle revision. The synchronous guard
+rejects a retired session or replaced projection without making another Gateway
+request. It supports the projection's exact incognito-session reads without
+adding them to the resident roster. This captures identity only: it grants no
+permission and does not retain an actor or run. `retain()` creates a cancellable
+operation borrow with `{ signal, assertCurrent, release }`; compose its signal
+into remote dispatch and always release it after settlement. A reset or retired
+identity aborts that operation without destroying the shared resource. Keep the
+operation's existing authorization checks; use `sessionAccessAuthority` when the
+method itself needs session-participation admission.
+
 ### Person access lifetimes
 
 `api.registerGatewayAccessPolicy({ authorize })` adds a plugin-owned access

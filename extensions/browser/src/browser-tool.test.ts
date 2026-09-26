@@ -10,6 +10,7 @@ import { resolveBrowserToolCapabilities } from "./browser-tool.schema.js";
 import type { BrowserActionPathResult } from "./browser/client-actions-types.js";
 import { resolveBrowserConfig } from "./browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
+import { getBrowserRequestScope } from "./browser/request-scope.js";
 
 const {
   browserClientMocks,
@@ -288,6 +289,23 @@ describe("browser tool output schema", () => {
   });
 });
 
+describe("browser tab compensation", () => {
+  it("preserves the association error when cleanup also fails", async () => {
+    const { compensateBrowserTabTrackingFailure } = await import("./browser-tool-session-tabs.js");
+    const trackingError = new Error("association unavailable");
+    const closeError = new Error("native close unavailable");
+    await expect(
+      compensateBrowserTabTrackingFailure(trackingError, async () => {
+        throw closeError;
+      }),
+    ).rejects.toMatchObject({
+      name: "BrowserTabTrackingCompensationError",
+      cause: closeError,
+      errors: [trackingError, closeError],
+    });
+  });
+});
+
 describe("browser tool description", () => {
   it("warns agents about existing-session act timeout limits", () => {
     const tool = createBrowserTool();
@@ -361,9 +379,7 @@ describe("browser tool download actions", () => {
     expect(result?.details).toMatchObject({
       download: { path: "/tmp/openclaw/downloads/report.pdf" },
     });
-    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: "agent:main:main", targetId: "tab-1" }),
-    );
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).not.toHaveBeenCalled();
   });
 
   it("waits for the next host download without requiring a path", async () => {
@@ -1009,149 +1025,21 @@ describe("browser tool snapshot maxChars", () => {
     });
   });
 
-  it("tracks tabs opened after automatic host fallback", async () => {
-    mockSingleBrowserProxyNode();
-    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
-      new Error("Browser control host is not reachable on 127.0.0.1:18791."),
-    );
-    toolCommonMocks.fetchBrowserJson.mockResolvedValueOnce({
-      targetId: "host-tab-opened",
-      tabId: "t7",
-      label: "docs",
-      suggestedTargetId: "docs",
-      resolvedProfile: "host-actual",
-      url: "https://example.com",
-      ownership: {
-        status: "durable",
-        nativeTargetId: "HOST-NATIVE-7",
-        profileFingerprint: "sha256:profile",
-        browserInstanceFingerprint: "sha256:browser",
-      },
-    });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
-
-    const result = await tool.execute?.("call-1", {
-      action: "open",
-      url: "https://example.com",
-    });
-
-    expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      targetId: "host-tab-opened",
-      route: { kind: "browser-control" },
-      profile: "host-actual",
-      profileAliases: ["openclaw"],
-      ownership: {
-        status: "durable",
-        nativeTargetId: "HOST-NATIVE-7",
-        profileFingerprint: "sha256:profile",
-        browserInstanceFingerprint: "sha256:browser",
-      },
-      aliases: ["host-tab-opened", "t7", "docs"],
-    });
-    expect(result?.details).not.toHaveProperty("ownership");
-    expect(result?.details).not.toHaveProperty("resolvedProfile");
-    expect(result?.details).toHaveProperty("browserTab", {
-      targetId: "host-tab-opened",
-      target: "host",
-      profile: "host-actual",
-      url: "https://example.com",
-    });
-  });
-
-  it("compensates durable tracking failure on the automatic host fallback", async () => {
-    const trackingError = new Error("sqlite unavailable");
-    const controller = new AbortController();
-    mockSingleBrowserProxyNode();
-    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
-      new Error("Browser control host is not reachable on 127.0.0.1:18791."),
-    );
-    toolCommonMocks.fetchBrowserJson.mockResolvedValueOnce({
-      targetId: "host-tab-compensate",
-      resolvedProfile: "work-actual",
-      url: "https://example.com",
-      ownership: {
-        status: "durable",
-        nativeTargetId: "HOST-NATIVE-COMPENSATE",
-        profileFingerprint: "sha256:profile",
-        browserInstanceFingerprint: "sha256:browser",
-      },
-    });
-    sessionTabRegistryMocks.trackSessionBrowserTab.mockImplementationOnce(() => {
-      controller.abort(new Error("agent turn cancelled"));
-      throw trackingError;
-    });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
-
-    await expect(
-      tool.execute?.(
-        "call-1",
-        {
-          action: "open",
-          profile: "work",
-          url: "https://example.com",
-        },
-        controller.signal,
-      ),
-    ).rejects.toBe(trackingError);
-    expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(
-      undefined,
-      "host-tab-compensate",
-      {
-        profile: "work-actual",
-        timeoutMs: 60_000,
-      },
-    );
-    expect(toolCommonMocks.fetchBrowserJson).toHaveBeenLastCalledWith("/tabs/open?profile=work", {
-      method: "POST",
-      body: JSON.stringify({ url: "https://example.com" }),
-      timeoutMs: 60_000,
-      signal: controller.signal,
-    });
-  });
-
-  it("touches tabs used after automatic host fallback", async () => {
-    mockSingleBrowserProxyNode();
-    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
-      new Error("Browser control host is not reachable on 127.0.0.1:18791."),
-    );
-    toolCommonMocks.fetchBrowserJson.mockResolvedValueOnce({
-      targetId: "host-tab-used",
-      url: "https://example.com/next",
-    });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
-
-    await tool.execute?.("call-1", {
-      action: "navigate",
-      url: "https://example.com/next",
-      targetId: "host-tab-used",
-    });
-
-    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      targetId: "host-tab-used",
-      route: { kind: "browser-control" },
-      profile: "openclaw",
-    });
-  });
-
-  it("untracks tabs closed after automatic host fallback", async () => {
-    mockSingleBrowserProxyNode();
-    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
-      new Error("Browser control host is not reachable on 127.0.0.1:18791."),
-    );
-    toolCommonMocks.fetchBrowserJson.mockResolvedValueOnce({ ok: true });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
-
-    await tool.execute?.("call-1", { action: "close", targetId: "host-tab-closed" });
-
-    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      targetId: "host-tab-closed",
-      route: { kind: "browser-control" },
-      profile: "openclaw",
-    });
-  });
+  it.each(["open", "navigate", "close"])(
+    "keeps session %s on its selected node",
+    async (action) => {
+      mockSingleBrowserProxyNode();
+      gatewayMocks.callGatewayTool.mockRejectedValueOnce(
+        new Error("Browser control host is not reachable on 127.0.0.1:18791."),
+      );
+      const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+      await expect(
+        tool.execute?.("call-1", { action, url: "https://example.com", targetId: "node-tab" }),
+      ).rejects.toThrow("Browser control host is not reachable");
+      expect(toolCommonMocks.fetchBrowserJson).not.toHaveBeenCalled();
+      expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["an explicit node target", { target: "node" }],
@@ -1508,15 +1396,17 @@ describe("browser tool snapshot maxChars", () => {
         browserActionsMocks.browserScreenshotAction.mockResolvedValueOnce(screenshot);
       }
       const persistScreenshot = vi.fn(async () => {
-        expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith({
-          sessionKey: "agent:main:main",
-          targetId: "tab-1",
-          profile: executedProfile,
-          route:
-            target === "node"
-              ? expect.objectContaining({ kind: "node-proxy", nodeId: "node-1" })
-              : { kind: "browser-control" },
-        });
+        if (target === "node") {
+          expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith({
+            sessionKey: "agent:main:main",
+            sessionId: "tool-fixture-generation",
+            targetId: "tab-1",
+            profile: executedProfile,
+            route: expect.objectContaining({ kind: "node-proxy", nodeId: "node-1" }),
+          });
+        } else {
+          expect(sessionTabRegistryMocks.touchSessionBrowserTab).not.toHaveBeenCalled();
+        }
         return "/workspace/.artifacts/cloud-worker-browser/shot.png";
       });
       const tool = createBrowserTool({
@@ -2223,202 +2113,24 @@ describe("browser tool url alias support", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("tracks opened tabs when session context is available", async () => {
-    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
-      targetId: "tab-123",
-      tabId: "t1",
-      label: "example",
-      suggestedTargetId: "example",
-      resolvedProfile: "hot-profile",
-      title: "Example",
-      url: "https://example.com",
-      ownership: {
-        status: "durable",
-        nativeTargetId: "NATIVE-123",
-        profileFingerprint: "sha256:profile",
-        browserInstanceFingerprint: "sha256:browser",
-      },
-    });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
-    await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
-
-    expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      targetId: "tab-123",
-      route: { kind: "browser-control" },
-      profile: "hot-profile",
-      profileAliases: ["openclaw"],
-      ownership: {
-        status: "durable",
-        nativeTargetId: "NATIVE-123",
-        profileFingerprint: "sha256:profile",
-        browserInstanceFingerprint: "sha256:browser",
-      },
-      aliases: ["tab-123", "t1", "example"],
-    });
-  });
-
-  it("keeps non-durable host opens on best-effort process tracking", async () => {
-    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
-      targetId: "tab-volatile",
-      title: "Example",
-      url: "https://example.com",
-      ownership: {
-        status: "non-durable",
-        reason: "browser-identity-lookup-failed",
-      },
-    });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
-
-    await expect(
-      tool.execute?.("call-1", { action: "open", url: "https://example.com" }),
-    ).resolves.toBeDefined();
-
-    expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it("carries the admitted session into local open without duplicating the profile owner registration", async () => {
+    browserClientMocks.browserOpenTab.mockImplementationOnce(async () => {
+      expect(getBrowserRequestScope()?.session).toEqual({
         sessionKey: "agent:main:main",
-        targetId: "tab-volatile",
-        profile: "openclaw",
-        ownership: {
-          status: "non-durable",
-          reason: "browser-identity-lookup-failed",
-        },
-      }),
-    );
-    expect(browserClientMocks.browserCloseTab).not.toHaveBeenCalled();
-  });
-
-  it("closes a newly opened non-durable tab when process tracking fails", async () => {
-    const trackingError = new Error("tracking unavailable");
-    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
-      targetId: "tab-volatile-compensate",
-      resolvedProfile: "work-actual",
-      title: "Example",
-      url: "https://example.com",
-      ownership: {
-        status: "non-durable",
-        reason: "browser-identity-lookup-failed",
-      },
-    });
-    sessionTabRegistryMocks.trackSessionBrowserTab.mockImplementationOnce(() => {
-      throw trackingError;
-    });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
-
-    await expect(
-      tool.execute?.("call-1", {
-        action: "open",
-        profile: "work",
-        url: "https://example.com",
-      }),
-    ).rejects.toBe(trackingError);
-    expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(
-      undefined,
-      "tab-volatile-compensate",
-      {
-        profile: "work-actual",
-        timeoutMs: undefined,
-      },
-    );
-  });
-
-  it("does not persist durable ownership from a legacy open result without resolved profile", async () => {
-    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
-      targetId: "legacy-tab",
-      title: "Legacy",
-      url: "https://example.com",
-      ownership: {
-        status: "durable",
-        nativeTargetId: "LEGACY-NATIVE",
-        profileFingerprint: "sha256:profile",
-        browserInstanceFingerprint: "sha256:browser",
-      },
-    });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
-
-    await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
-
-    expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith(
-      expect.objectContaining({
-        targetId: "legacy-tab",
-        profile: "openclaw",
-        ownership: undefined,
-      }),
-    );
-  });
-
-  it("closes a newly opened durable tab when synchronous tracking fails", async () => {
-    const trackingError = new Error("sqlite unavailable");
-    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
-      targetId: "tab-compensate",
-      resolvedProfile: "work-actual",
-      title: "Example",
-      url: "https://example.com",
-      ownership: {
-        status: "durable",
-        nativeTargetId: "NATIVE-COMPENSATE",
-        profileFingerprint: "sha256:profile",
-        browserInstanceFingerprint: "sha256:browser",
-      },
-    });
-    sessionTabRegistryMocks.trackSessionBrowserTab.mockImplementationOnce(() => {
-      throw trackingError;
-    });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
-
-    await expect(
-      tool.execute?.("call-1", {
-        action: "open",
-        profile: "work",
-        url: "https://example.com",
-      }),
-    ).rejects.toBe(trackingError);
-    expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(undefined, "tab-compensate", {
-      profile: "work-actual",
-      timeoutMs: undefined,
-    });
-  });
-
-  it("preserves tracking and compensation failures when durable rollback fails", async () => {
-    const trackingError = new Error("sqlite unavailable");
-    const closeError = new Error("close failed");
-    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
-      targetId: "tab-leaked",
-      resolvedProfile: "openclaw",
-      title: "Example",
-      url: "https://example.com",
-      ownership: {
-        status: "durable",
-        nativeTargetId: "NATIVE-LEAKED",
-        profileFingerprint: "sha256:profile",
-        browserInstanceFingerprint: "sha256:browser",
-      },
-    });
-    sessionTabRegistryMocks.trackSessionBrowserTab.mockImplementationOnce(() => {
-      throw trackingError;
-    });
-    browserClientMocks.browserCloseTab.mockRejectedValueOnce(closeError);
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
-
-    try {
-      const error = await tool
-        .execute?.("call-1", { action: "open", url: "https://example.com" })
-        .then(
-          () => new Error("open unexpectedly succeeded"),
-          (cause: unknown) => cause,
-        );
-
-      expect(error).toMatchObject({
-        name: "BrowserTabTrackingCompensationError",
-        message: "Failed to register browser tab cleanup and close the newly opened tab",
+        sessionId: "tool-fixture-generation",
       });
-      const errors = (error as Error & { errors: unknown[] }).errors;
-      expect(errors[0]).toBe(trackingError);
-      expect(errors[1]).toBe(closeError);
-      expect((error as Error & { cause?: unknown }).cause).toBe(closeError);
-    } finally {
-      browserClientMocks.browserCloseTab.mockReset().mockResolvedValue({});
-    }
+      return {
+        targetId: "tab-123",
+        title: "Example",
+        url: "https://example.com",
+        resolvedProfile: "openclaw",
+      };
+    });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
+    expect(sessionTabRegistryMocks.trackSessionBrowserTab).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ targetId: "tab-123" });
+    expect(result?.details).not.toHaveProperty("resolvedProfile");
   });
 
   it("keeps legacy sandbox opens process-local without inventing a host profile", async () => {
@@ -2682,12 +2394,7 @@ describe("browser tool url alias support", () => {
       targetId: "docs",
     });
 
-    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      targetId: "RAW-LIVE",
-      route: { kind: "browser-control" },
-      profile: "openclaw",
-    });
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).not.toHaveBeenCalled();
   });
 
   it("prefers the canonical console result target when touching an input alias", async () => {
@@ -2703,37 +2410,7 @@ describe("browser tool url alias support", () => {
       targetId: "docs",
     });
 
-    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      targetId: "RAW-CONSOLE",
-      route: { kind: "browser-control" },
-      profile: "openclaw",
-    });
-  });
-
-  it("touches the canonical dialog target after automatic host fallback", async () => {
-    mockSingleBrowserProxyNode();
-    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
-      new Error("Browser control host is not reachable on 127.0.0.1:18791."),
-    );
-    toolCommonMocks.fetchBrowserJson.mockResolvedValueOnce({
-      ok: true,
-      targetId: "RAW-DIALOG",
-    });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
-
-    await tool.execute?.("call-1", {
-      action: "dialog",
-      accept: true,
-      targetId: "docs",
-    });
-
-    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      targetId: "RAW-DIALOG",
-      route: { kind: "browser-control" },
-      profile: "openclaw",
-    });
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).not.toHaveBeenCalled();
   });
 
   it("accepts url alias for navigate", async () => {
@@ -3051,12 +2728,7 @@ describe("browser tool url alias support", () => {
     const opts = lastMockCallArg<{ profile?: string }>(browserClientMocks.browserCloseTab, 2);
     expect(targetId).toBe("docs");
     expect(opts.profile).toBeUndefined();
-    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      targetId: "RAW-DOCS",
-      route: { kind: "browser-control" },
-      profile: "openclaw",
-    });
+    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).not.toHaveBeenCalled();
     expect(result?.details).toEqual({
       ok: true,
       targetId: "RAW-DOCS",
@@ -3074,12 +2746,7 @@ describe("browser tool url alias support", () => {
 
     const result = await tool.execute?.("call-1", { action: "close" });
 
-    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      targetId: "selected-tab",
-      route: { kind: "browser-control" },
-      profile: "openclaw",
-    });
+    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).not.toHaveBeenCalled();
     expect(result?.details).toEqual({
       ok: true,
       targetId: "selected-tab",
@@ -3150,12 +2817,7 @@ describe("browser tool act compatibility", () => {
 
     await tool.execute?.("call-1", { action: "act", request });
 
-    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      targetId: "closed-tab",
-      route: { kind: "browser-control" },
-      profile: "openclaw",
-    });
+    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).not.toHaveBeenCalled();
     expect(sessionTabRegistryMocks.touchSessionBrowserTab).not.toHaveBeenCalled();
   });
 
@@ -3217,19 +2879,7 @@ describe("browser tool act compatibility", () => {
       1,
     );
     expect(snapshotOpts.targetId).toBe("tab-after-nav");
-    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      targetId: "tab-after-nav",
-      route: { kind: "browser-control" },
-      profile: "openclaw",
-    });
-    const ownershipCall =
-      sessionTabRegistryMocks.touchSessionBrowserTab.mock.invocationCallOrder[0];
-    const snapshotCall = browserClientMocks.browserSnapshot.mock.invocationCallOrder[0];
-    if (ownershipCall === undefined || snapshotCall === undefined) {
-      throw new Error("Expected ownership and snapshot callbacks to run");
-    }
-    expect(ownershipCall).toBeLessThan(snapshotCall);
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).not.toHaveBeenCalled();
     expect(result?.details).toMatchObject({ pageState: { ok: true, format: "ai" } });
   });
 
@@ -4057,12 +3707,7 @@ describe("browser tool act stale target recovery", () => {
     const secondOptions = mockCallArg<{ profile?: string }>(browserActionsMocks.browserAct, 1, 2);
     expect(secondOptions.profile).toBe("user");
     expect((result?.details as { ok?: unknown } | undefined)?.ok).toBe(true);
-    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledExactlyOnceWith({
-      sessionKey: "agent:main:main",
-      targetId: "only-tab",
-      route: { kind: "browser-control" },
-      profile: "user",
-    });
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).not.toHaveBeenCalled();
     expect(result?.details).toMatchObject({
       browserTab: { targetId: "only-tab", target: "host", profile: "user" },
     });

@@ -657,7 +657,7 @@ describe("browser server-context existing-session profile", () => {
       "chrome-live",
       tabA.targetId,
       expect.objectContaining({ driver: "existing-session" }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), assertTabCanClose: expect.any(Function) },
     );
     currentTabs = [tabB];
     await expect(live.ensureTabAvailable()).resolves.toEqual(
@@ -672,7 +672,7 @@ describe("browser server-context existing-session profile", () => {
       "chrome-live",
       tabB.targetId,
       expect.objectContaining({ driver: "existing-session" }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), assertTabCanClose: expect.any(Function) },
     );
     currentTabs = [tabA];
     await expect(live.ensureTabAvailable()).resolves.toEqual(

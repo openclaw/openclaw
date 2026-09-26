@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { Browser, BrowserContext, CDPSession, Page } from "playwright-core";
 import { PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS } from "./cdp-timeouts.js";
 
-type PageTargetInfo = { targetId: string; title: string };
+type PageTargetInfo = { targetId: string; title: string; openerId?: string };
 
 // A Page owns one bounded target-info read at a time so concurrent enumerations share its
 // temporary CDP session. Settled reads evict themselves so later calls observe fresh metadata.
@@ -64,6 +64,13 @@ async function readPageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
       return {
         targetId: namespace ? `connection:${namespace}:${targetId}` : targetId,
         title: targetInfo.title,
+        ...(targetInfo.openerId
+          ? {
+              openerId: namespace
+                ? `connection:${namespace}:${targetInfo.openerId}`
+                : targetInfo.openerId,
+            }
+          : {}),
       };
     } finally {
       detach();

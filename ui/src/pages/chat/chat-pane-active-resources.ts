@@ -545,7 +545,15 @@ export class ChatPaneActiveResources {
         return;
       }
       const snapshot = await this.afterReconciliation(current, () =>
-        listBrowserTabs(bindBrowserRequestClient(owner.client, selection.tab, current)),
+        listBrowserTabs(
+          bindBrowserRequestClient(
+            owner.client,
+            selection.tab,
+            current,
+            undefined,
+            owner.sessionKey,
+          ),
+        ),
       );
       await this.afterReconciliation(current, () => {
         if (

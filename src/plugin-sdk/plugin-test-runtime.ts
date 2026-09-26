@@ -1,6 +1,25 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+
+/** Build the real Gateway request adapter with complete kernel fixtures for plugin handler tests. */
+export async function createTestGatewayRequestContext(
+  options: {
+    nodeRegistry?: Partial<
+      Pick<GatewayRequestContext["nodeRegistry"], keyof GatewayRequestContext["nodeRegistry"]>
+    >;
+  } = {},
+): Promise<GatewayRequestContext> {
+  const [{ NodeRegistry }, { createGatewayRequestContext }, { makeContextParams }] =
+    await Promise.all([
+      import("../gateway/node-registry.js"),
+      import("../gateway/server-request-context.js"),
+      import("../gateway/server-request-context.test-support.js"),
+    ]);
+  const nodeRegistry = Object.assign(new NodeRegistry(), options.nodeRegistry);
+  return createGatewayRequestContext(makeContextParams({ nodeRegistry }));
+}
 
 type AgentHarnessHostTestAttempt = Omit<
   Parameters<

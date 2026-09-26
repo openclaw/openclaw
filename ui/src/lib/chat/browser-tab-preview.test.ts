@@ -39,12 +39,28 @@ function screenshotClient() {
     request,
     fetchMock,
     tab: { ...route, targetId: "tab-1" },
+    sessionKey: "agent:main:first",
     resourceBasePath: "/gateway",
     authToken: null,
   };
 }
 
 describe("browser tab previews", () => {
+  it("does not reuse a thumbnail across sessions on one connection", async () => {
+    const params = screenshotClient();
+    expect(await loadBrowserTabThumbnail({ ...params, revision: "same" })).toBeDefined();
+    params.request.mockRejectedValueOnce(new Error("Tab belongs to a different session"));
+    expect(
+      await loadBrowserTabThumbnail({
+        ...params,
+        sessionKey: "agent:main:second",
+        revision: "same",
+      }),
+    ).toBeUndefined();
+    expect(params.request).toHaveBeenCalledTimes(2);
+    expect(params.request.mock.calls[1]?.[1]).toMatchObject({ sessionKey: "agent:main:second" });
+  });
+
   it("keeps anonymous result revisions stable across reads but distinct across results", () => {
     const message = {
       role: "toolResult",
@@ -142,6 +158,7 @@ describe("browser tab previews", () => {
         {
           method: "POST",
           path: "/screenshot",
+          sessionKey: params.sessionKey,
           target: "host",
           query: { profile: "managed" },
           body: { targetId: "tab-1", type: "png" },
@@ -152,6 +169,7 @@ describe("browser tab previews", () => {
         {
           method: "POST",
           path: "/screenshot",
+          sessionKey: params.sessionKey,
           target: "host",
           query: { profile: "managed" },
           body: { targetId: "tab-1", type: "png" },
@@ -200,6 +218,7 @@ describe("browser tab previews", () => {
         {
           method: "POST",
           path: "/screenshot",
+          sessionKey: params.sessionKey,
           target: tab.target,
           ...("node" in tab ? { node: tab.node } : {}),
           query: { profile: tab.profile },

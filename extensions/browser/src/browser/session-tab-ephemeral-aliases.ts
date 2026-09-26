@@ -5,6 +5,8 @@ import { browserSessionTabRouteKey, type BrowserSessionTabRoute } from "./sessio
 
 type AliasIdentity = {
   sessionKey: string;
+  sessionId?: string;
+  lifecycleRevision?: string;
   targetId: string;
   route?: BrowserSessionTabRoute;
   profile?: string;
@@ -28,7 +30,7 @@ function interactionKey(identity: AliasIdentity): string {
   const route = identity.route
     ? browserSessionTabRouteKey(identity.route)
     : browserSessionTabRouteKey({ kind: "browser-control" });
-  return `${identity.sessionKey}\u0000${route}\u0000${identity.profile ?? ""}\u0000${identity.targetId}`;
+  return `${identity.sessionKey}\u0000${identity.sessionId ?? ""}\u0000${identity.lifecycleRevision ?? ""}\u0000${route}\u0000${identity.profile ?? ""}\u0000${identity.targetId}`;
 }
 
 function normalizedTargetIds(

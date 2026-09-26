@@ -103,6 +103,15 @@ async function performVolatileCleanup(
             targetId: tab.targetId,
             profile: tab.profile,
             ownership: tab.ownership,
+            ...(tab.sessionId
+              ? {
+                  session: {
+                    sessionKey: tab.sessionKey,
+                    sessionId: tab.sessionId,
+                    lifecycleRevision: tab.lifecycleRevision,
+                  },
+                }
+              : {}),
           });
           if (outcome.status === "cancelled" || outcome.status === "unavailable") {
             params.onWarn?.(

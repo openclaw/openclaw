@@ -38,7 +38,9 @@ import {
   type BrowserScreenshotOptions,
 } from "./browser-tool.screenshot.js";
 import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
+import type { BrowserTabOwnership } from "./browser/client.types.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
+import { getBrowserRequestScope } from "./browser/request-scope.js";
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
@@ -118,9 +120,18 @@ export async function executeBrowserTabAction(context: {
         timeoutMs: toolTimeoutMs,
         signal,
       });
-      const closeOpenedTab = async (targetId: string, openedProfile?: string) => {
+      const closeOpenedTab = async (
+        targetId: string,
+        openedProfile?: string,
+        ownership?: BrowserTabOwnership,
+      ) => {
         if (nodeRoute && !proxyRequest?.isHostFallbackActive()) {
-          await nodeRoute.closeTarget({ targetId, profile: openedProfile });
+          await nodeRoute.closeTarget({
+            targetId,
+            profile: openedProfile,
+            ownership,
+            session: getBrowserRequestScope()?.session,
+          });
           return;
         }
         await browserCloseTab(baseUrl, targetId, {

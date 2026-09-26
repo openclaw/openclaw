@@ -427,7 +427,7 @@ export async function fetchBrowserJson<T>(
     for (const [key, value] of parsed.searchParams.entries()) {
       query[key] = value;
     }
-    if (scope) {
+    if (scope?.managedOnly) {
       query.managedOnly = true;
     }
     let body = init?.body;

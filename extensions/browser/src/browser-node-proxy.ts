@@ -22,11 +22,17 @@ import {
   prepareBrowserProxyUploadRequest,
 } from "./browser-proxy-upload.js";
 import {
+  captureBrowserNodeOpenCleanup,
+  compensateBrowserTabTrackingFailure,
+} from "./browser-tool-session-tabs.js";
+import {
   callGatewayTool,
   fetchBrowserJson,
   persistBrowserProxyResultFiles,
 } from "./browser-tool.runtime.js";
 import { BrowserServiceError } from "./browser/client-fetch.js";
+import { withoutBrowserRequestScope, getBrowserRequestScope } from "./browser/request-scope.js";
+import { encodeBrowserSessionPath } from "./browser/session-scope.js";
 import {
   parseBrowserSessionTabCloseResult,
   type BrowserSessionTabRoute,
@@ -102,8 +108,17 @@ async function callBrowserProxy(params: {
     signal: params.signal,
   });
   const command = preparedUpload.upload ? BROWSER_PROXY_UPLOAD_COMMAND : BROWSER_PROXY_COMMAND;
+  const sessionScope = getBrowserRequestScope();
+  await sessionScope?.assertCurrent();
+  const borrow = sessionScope?.retainSession?.();
+  const signal =
+    borrow?.signal && params.signal
+      ? AbortSignal.any([borrow.signal, params.signal])
+      : (borrow?.signal ?? params.signal);
   let payload: { payload?: unknown; payloadJSON?: unknown } | null;
   try {
+    borrow?.assertCurrent();
+    signal?.throwIfAborted();
     payload = await callGatewayTool<{ payload?: unknown; payloadJSON?: unknown }>(
       "node.invoke",
       { timeoutMs: gatewayTimeoutMs },
@@ -115,7 +130,9 @@ async function callBrowserProxy(params: {
         timeoutMs: nodeInvokeTimeoutMs,
         params: {
           method: params.method,
-          path: params.path,
+          path: sessionScope?.session
+            ? encodeBrowserSessionPath(params.path, sessionScope.session)
+            : params.path,
           query: params.query,
           body: preparedUpload.body,
           upload: preparedUpload.upload,
@@ -127,7 +144,7 @@ async function callBrowserProxy(params: {
       },
       {
         scopes: ["operator.admin"],
-        ...(params.signal ? { signal: params.signal } : {}),
+        ...(signal ? { signal } : {}),
       },
     );
   } catch (error) {
@@ -135,6 +152,8 @@ async function callBrowserProxy(params: {
       throw new BrowserNodeSafeFallbackError("browser node control host unavailable", error);
     }
     throw error;
+  } finally {
+    borrow?.release();
   }
   const parsed = unwrapBrowserProxyPayload(payload);
   if (
@@ -185,6 +204,8 @@ export function createBrowserNodeProxyRequest(params: {
     if (target === "host") {
       return await callLocalBrowserControl(requestWithSignal);
     }
+    const scope = getBrowserRequestScope();
+    let rollback: ReturnType<typeof captureBrowserNodeOpenCleanup>;
     try {
       const proxy = await callBrowserProxy({
         nodeId: params.nodeTarget.nodeId,
@@ -206,9 +227,24 @@ export function createBrowserNodeProxyRequest(params: {
       if (!("result" in proxy)) {
         throw new Error("Browser proxy returned a failure without an error payload.");
       }
-      return await persistBrowserProxyResultFiles(proxy.result, proxy.files);
+      rollback = captureBrowserNodeOpenCleanup({
+        ...request,
+        result: proxy.result,
+        session: scope?.session,
+        profile: route?.status === "resolved" ? route.profile : request.profile,
+        route: createBrowserNodeSessionTabRoute(params.nodeTarget),
+      });
+      await scope?.assertCurrent();
+      requestWithSignal.signal?.throwIfAborted();
+      const result = await persistBrowserProxyResultFiles(proxy.result, proxy.files);
+      await scope?.assertCurrent();
+      requestWithSignal.signal?.throwIfAborted();
+      return result;
     } catch (error) {
-      if (target !== "auto" || !(error instanceof BrowserNodeSafeFallbackError)) {
+      if (rollback) {
+        await compensateBrowserTabTrackingFailure(error, rollback.cleanup);
+      }
+      if (scope?.session || target !== "auto" || !(error instanceof BrowserNodeSafeFallbackError)) {
         throw error;
       }
       // These failures are detected before route dispatch. Retrying any later
@@ -233,28 +269,34 @@ export function createBrowserNodeSessionTabRoute(
   return {
     kind: "node-proxy",
     nodeId: nodeTarget.nodeId,
-    closeTarget: async (tab) => {
-      const cleanupProxy = createBrowserNodeProxyRequest({
-        nodeTarget,
-        allowAutomaticHostFallback: false,
-      });
-      if (tab.ownership?.status === "durable") {
-        return parseBrowserSessionTabCloseResult(
-          await cleanupProxy({
-            method: "POST",
-            path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
-            body: { ownership: tab.ownership },
-            profile: tab.profile,
-          }),
-        );
-      }
-      await cleanupProxy({
-        method: "DELETE",
-        path: `/tabs/${encodeURIComponent(tab.targetId)}`,
-        query: { targetIdMode: "raw" },
-        profile: tab.profile,
-      });
-      return { status: "closed" };
-    },
+    closeTarget: async (tab) =>
+      withoutBrowserRequestScope(async () => {
+        const cleanupProxy = createBrowserNodeProxyRequest({
+          nodeTarget,
+          allowAutomaticHostFallback: false,
+        });
+        if (tab.ownership?.status === "durable") {
+          return parseBrowserSessionTabCloseResult(
+            await cleanupProxy({
+              method: "POST",
+              path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
+              body: {
+                ownership: tab.ownership,
+                ...(tab.session ? { session: tab.session, targetId: tab.targetId } : {}),
+              },
+              profile: tab.profile,
+            }),
+          );
+        }
+        await cleanupProxy({
+          method: "DELETE",
+          path: tab.session
+            ? encodeBrowserSessionPath(`/tabs/${encodeURIComponent(tab.targetId)}`, tab.session)
+            : `/tabs/${encodeURIComponent(tab.targetId)}`,
+          query: { targetIdMode: "raw" },
+          profile: tab.profile,
+        });
+        return { status: "closed" };
+      }),
   };
 }

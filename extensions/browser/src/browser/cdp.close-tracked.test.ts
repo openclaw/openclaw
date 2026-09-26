@@ -4,7 +4,11 @@ import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import "../test-support/browser-security.mock.js";
-import { closeTrackedCdpTarget, resolveCdpTabOwnership } from "./cdp.helpers.js";
+import {
+  closeTrackedCdpTarget,
+  resolveCdpTabOwnership,
+  readCdpSessionTabInventory,
+} from "./cdp.helpers.js";
 
 const servers: Array<{ close: (callback: () => void) => void }> = [];
 
@@ -23,7 +27,24 @@ function replyToCloseMessages(socket: WebSocket): void {
       socket.send(
         JSON.stringify({
           id: message.id,
-          result: { targetInfos: [{ targetId: "OWNED", type: "page" }] },
+          result: {
+            targetInfos: [
+              { targetId: "OWNED", type: "page" },
+              { targetId: "POPUP", type: "page", openerId: "OWNED" },
+              {
+                targetId: "UNRELATED",
+                type: "page",
+                title: "Same page",
+                url: "https://example.com",
+              },
+              { targetId: "WORKER", type: "service_worker", openerId: "OWNED" },
+              null,
+              "not a target",
+              [],
+              { targetId: 12, type: "page", openerId: "OWNED" },
+              { targetId: "INVALID-OPENER", type: "page", openerId: 12 },
+            ],
+          },
         }),
       );
     } else if (message.method === "Target.closeTarget") {
@@ -67,6 +88,14 @@ describe("closeTrackedCdpTarget", () => {
     if (ownership.status !== "durable") {
       throw new Error("expected durable ownership");
     }
+
+    const inventory = await readCdpSessionTabInventory({
+      profileName: "remote",
+      cdpUrl,
+      nativeTargetId: "OWNED",
+    });
+    expect(inventory.ownership).toEqual(ownership);
+    expect([...inventory.openers]).toEqual([["POPUP", "OWNED"]]);
 
     await expect(
       closeTrackedCdpTarget({

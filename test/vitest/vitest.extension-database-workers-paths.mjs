@@ -37,6 +37,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/beam/src/mirror-retry.test.ts",
   "extensions/browser/plugin-registration.dashboard-discovery.test.ts",
   "extensions/browser/src/browser-dashboard.test.ts",
+  "extensions/browser/src/gateway/browser-request.session-tabs.test.ts",
   "extensions/buzz/src/buzz-bus.socket.test.ts",
   "extensions/buzz/src/buzz-bus.lifecycle.test.ts",
   "extensions/buzz/src/gateway.cold-start-recovery.test.ts",

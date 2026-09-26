@@ -14,6 +14,7 @@ import {
   createBrowserNodeSessionTabRoute,
   type BrowserProxyRequest,
 } from "./browser-node-proxy.js";
+import { getOptionalBrowserStateRuntime } from "./browser-runtime-state.js";
 import { applyBrowserTabToolBinding } from "./browser-tool-binding.js";
 import { createBrowserToolDefinition } from "./browser-tool-description.js";
 import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
@@ -45,6 +46,10 @@ import {
 } from "./browser-tool.runtime.js";
 import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
 import { withBrowserRequestScope } from "./browser/request-scope.js";
+import {
+  prepareBrowserSessionScope,
+  prepareStandaloneBrowserSessionScope,
+} from "./browser/session-scope.js";
 
 type BrowserTabIdentity = { targetId: string; profile: string } & (
   | { target: "host" }
@@ -190,6 +195,8 @@ export function createBrowserTool(
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
     agentSessionKey?: string;
+    agentSessionId?: string;
+    assertInvocationCurrent?: () => void;
     agentId?: string;
     runToolBinding?: unknown;
     toolCapabilities?: BrowserToolCapabilities;
@@ -199,6 +206,11 @@ export function createBrowserTool(
   return {
     ...metadata,
     execute: async (_toolCallId, args, signal) => {
+      const assertInvocation = () => {
+        signal?.throwIfAborted();
+        opts?.assertInvocationCurrent?.();
+      };
+      assertInvocation();
       let params = binding
         ? applyBrowserTabToolBinding(args as Record<string, unknown>, binding)
         : (args as Record<string, unknown>);
@@ -430,7 +442,8 @@ export function createBrowserTool(
         !target &&
         !requestedNode &&
         !configuredNode &&
-        opts?.allowHostControl !== false,
+        opts?.allowHostControl !== false &&
+        !opts?.agentSessionKey,
       );
       const proxyRequest = nodeTarget
         ? createBrowserNodeProxyRequest({ nodeTarget, allowAutomaticHostFallback, signal })
@@ -471,24 +484,65 @@ export function createBrowserTool(
         isHostFallbackActive: proxyRequest?.isHostFallbackActive,
         registry: { touchSessionBrowserTab, trackSessionBrowserTab, untrackSessionBrowserTab },
       });
+      assertInvocation();
+      const gatewayAvailable =
+        !baseUrl && opts?.agentSessionKey
+          ? await getOptionalBrowserStateRuntime()?.gateway?.isAvailable()
+          : false;
+      assertInvocation();
+      const capturedSessionScope =
+        !browserDashboard && !binding && !baseUrl && opts?.agentSessionKey
+          ? !gatewayAvailable && opts.agentSessionId && opts.assertInvocationCurrent
+            ? await prepareStandaloneBrowserSessionScope({
+                sessionKey: opts.agentSessionKey,
+                sessionId: opts.agentSessionId,
+                agentId: opts.agentId,
+                sessionStore: runtimeConfig.session?.store,
+                assertCurrent: assertInvocation,
+              })
+            : await prepareBrowserSessionScope(opts.agentSessionKey)
+          : undefined;
+      assertInvocation();
+      if (
+        capturedSessionScope &&
+        opts?.agentSessionId &&
+        capturedSessionScope.session.sessionId !== opts.agentSessionId
+      ) {
+        throw new Error("Browser tool invocation belongs to a replaced session");
+      }
+      const sessionScope = capturedSessionScope
+        ? {
+            ...capturedSessionScope,
+            assertCurrent: () => {
+              assertInvocation();
+              capturedSessionScope.assertCurrent();
+            },
+          }
+        : undefined;
+      sessionScope?.assertCurrent();
       switch (action) {
         case "doctor":
         case "status":
         case "start":
         case "stop":
         case "profiles":
-        case "importprofile":
-          return await executeBrowserLifecycleAction({
-            action,
-            input: params,
-            baseUrl,
-            profile,
-            timeoutMs: toolTimeoutMs,
-            proxyRequest,
-            allowHostControl: opts?.allowHostControl,
-            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-            signal,
-          });
+        case "importprofile": {
+          const runLifecycle = () =>
+            executeBrowserLifecycleAction({
+              action,
+              input: params,
+              baseUrl,
+              profile,
+              timeoutMs: toolTimeoutMs,
+              proxyRequest,
+              allowHostControl: opts?.allowHostControl,
+              sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+              signal,
+            });
+          return await (sessionScope
+            ? withBrowserRequestScope(sessionScope, runLifecycle)
+            : runLifecycle());
+        }
         default:
           break;
       }
@@ -550,7 +604,9 @@ export function createBrowserTool(
             },
             dispatchTabAction,
           )
-        : await dispatchTabAction();
+        : sessionScope
+          ? await withBrowserRequestScope(sessionScope, dispatchTabAction)
+          : await dispatchTabAction();
       if (browserDashboard) {
         // Dashboard presentation owns this tab; ordinary preview metadata would steal its panel.
         return { ...result, details: { ...asNullableRecord(result.details), browserDashboard } };

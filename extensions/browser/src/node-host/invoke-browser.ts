@@ -30,6 +30,7 @@ import {
   hasBrowserProxyUploadWork,
   stageBrowserProxyUploadRequest,
 } from "../browser-proxy-upload.js";
+import { compensateBrowserTabTrackingFailure } from "../browser-tool-session-tabs.js";
 import { resolveCdpControlPolicy } from "../browser/cdp-reachability-policy.js";
 import { closeTrackedCdpTarget, redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
@@ -44,7 +45,10 @@ import {
   normalizeBrowserRequestPath,
   resolveRequestedBrowserProfile,
 } from "../browser/request-policy.js";
+import { withBrowserRequestScope } from "../browser/request-scope.js";
 import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
+import { browserSessionScopeSchema, decodeBrowserSessionPath } from "../browser/session-scope.js";
+import { prepareScopedSessionTabRegistry } from "../browser/session-tab-scoped.js";
 import {
   createBrowserControlContext,
   getBrowserControlState,
@@ -78,7 +82,15 @@ function readOwnedTabCloseRequest(value: unknown) {
   ) {
     throw new Error("INVALID_REQUEST: valid durable tab ownership required");
   }
+  const session =
+    record?.session === undefined ? undefined : browserSessionScopeSchema.parse(record.session);
+  const targetId = typeof record?.targetId === "string" ? record.targetId.trim() : undefined;
+  if (session && !targetId) {
+    throw new Error("INVALID_REQUEST: scoped cleanup requires the allocated targetId");
+  }
   return {
+    session,
+    targetId,
     ownership: {
       status: "durable" as const,
       nativeTargetId: ownership.nativeTargetId.trim(),
@@ -338,7 +350,8 @@ export async function runBrowserProxyCommand(
   }
   resolveBrowserProxyConfig();
   const method = typeof params.method === "string" ? params.method.trim().toUpperCase() : "GET";
-  const path = normalizeBrowserRequestPath(pathValue);
+  const scopedPath = decodeBrowserSessionPath(normalizeBrowserRequestPath(pathValue));
+  const path = normalizeBrowserRequestPath(scopedPath.path);
   if (method !== "GET" && method !== "POST" && method !== "DELETE") {
     throw new Error("INVALID_REQUEST: method must be GET, POST, or DELETE");
   }
@@ -419,23 +432,50 @@ export async function runBrowserProxyCommand(
     const liveResolved = getBrowserControlState()?.resolved ?? resolved;
     const profile = resolveProfile(liveResolved, effectiveProfile);
     assertCurrent(profile ?? undefined);
-    const result =
-      profile?.cdpUrl && effectiveProfile
-        ? await closeTrackedCdpTarget({
-            profileName: effectiveProfile,
-            cdpUrl: profile.cdpUrl,
-            nativeTargetId: request.ownership.nativeTargetId,
-            expectedProfileFingerprint: request.ownership.profileFingerprint,
-            expectedBrowserInstanceFingerprint: request.ownership.browserInstanceFingerprint,
-            timeoutMs: liveResolved.remoteCdpTimeoutMs,
-            ssrfPolicy: resolveCdpControlPolicy(profile, liveResolved.ssrfPolicy),
-            signal: invocationSignal,
-            shouldClose: () => {
-              assertCurrent(profile);
-              return true;
-            },
-          })
-        : { status: "ownership-mismatch" as const };
+    let result: Awaited<ReturnType<typeof closeTrackedCdpTarget>> = { status: "cancelled" };
+    const close = async (shouldClose?: () => Promise<boolean>) => {
+      result =
+        profile?.cdpUrl && effectiveProfile
+          ? await closeTrackedCdpTarget({
+              profileName: effectiveProfile,
+              cdpUrl: profile.cdpUrl,
+              nativeTargetId: request.ownership.nativeTargetId,
+              expectedProfileFingerprint: request.ownership.profileFingerprint,
+              expectedBrowserInstanceFingerprint: request.ownership.browserInstanceFingerprint,
+              timeoutMs: liveResolved.remoteCdpTimeoutMs,
+              ssrfPolicy: resolveCdpControlPolicy(profile, liveResolved.ssrfPolicy),
+              signal: invocationSignal,
+              shouldClose: shouldClose
+                ? async () => {
+                    assertCurrent(profile);
+                    const permitted = await shouldClose();
+                    assertCurrent(profile);
+                    return permitted;
+                  }
+                : () => {
+                    assertCurrent(profile);
+                    return true;
+                  },
+            })
+          : { status: "ownership-mismatch" };
+      return (
+        result.status === "closed" ||
+        result.status === "missing" ||
+        result.status === "ownership-mismatch"
+      );
+    };
+    if (request.session && request.targetId) {
+      const registry = await prepareScopedSessionTabRegistry({
+        session: request.session,
+        assertCurrent,
+      });
+      await registry.cleanupAllocated(
+        { targetId: request.targetId, profile: effectiveProfile, ownership: request.ownership },
+        close,
+      );
+    } else {
+      await close();
+    }
     return JSON.stringify({
       result,
       ...(includeRoute ? { route } : {}),
@@ -476,81 +516,110 @@ export async function runBrowserProxyCommand(
     await discardStagedBrowserProxyUpload(stagedUpload);
     throw new Error(formatBrowserProxyTimeoutMessage({ ...timeoutDetails, status: null }));
   }
-  let response;
-  try {
-    response = await withTimeout(
-      (timeoutSignal) =>
-        dispatcher.dispatch({
-          method,
-          path,
-          query,
-          body,
-          signal: combineBrowserProxySignals(timeoutSignal, invocationSignal),
-          assertCurrent: async (profile) => {
-            assertCurrent(profile);
-          },
-        }),
-      remainingTimeoutMs,
-      "browser proxy request",
-    );
-  } catch (err) {
-    if (!isBrowserProxyTimeoutError(err)) {
-      throw err;
+  const creations: Array<() => Promise<void>> = [];
+  const compensate = async () => {
+    for (const cleanup of creations) {
+      await cleanup();
     }
-    const profileForStatus = requestedProfile || resolved.defaultProfile;
-    const status = await readBrowserProxyStatus({
-      dispatcher,
-      profile: path === "/profiles" ? undefined : profileForStatus,
-    });
-    throw new Error(
-      formatBrowserProxyTimeoutMessage({
-        ...timeoutDetails,
-        profile: path === "/profiles" ? undefined : profileForStatus || undefined,
-        status,
-      }),
-      { cause: err },
-    );
-  }
-  if (response.status >= 400) {
-    await discardStagedBrowserProxyUpload(stagedUpload);
-    if (params.errorEnvelope === BROWSER_PROXY_ERROR_ENVELOPE) {
-      // New callers opt into the closed envelope; older Gateways retain the
-      // shipped status-prefixed node error during rolling upgrades.
-      return JSON.stringify(createBrowserProxyFailure(response.status, response.body, route));
-    }
-    const detail =
-      response.body && typeof response.body === "object" && "error" in response.body
-        ? String((response.body as { error?: unknown }).error).trim()
-        : "";
-    throw new Error(detail ? `${response.status}: ${detail}` : `HTTP ${response.status}`);
-  }
-
-  const result = response.body;
-  if (allowedProfiles.length > 0 && path === "/profiles") {
-    const obj =
-      typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {};
-    const profiles = Array.isArray(obj.profiles) ? obj.profiles : [];
-    obj.profiles = profiles.filter((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return false;
-      }
-      const name = (entry as Record<string, unknown>).name;
-      return typeof name === "string" && allowedProfiles.includes(name);
-    });
-  }
-
-  const paths = collectBrowserProxyPaths(result);
-  const files = paths.length > 0 ? await readBrowserProxyFiles(paths) : undefined;
-
-  const payload: BrowserProxyEnvelope = {
-    result,
-    ...(files ? { files } : {}),
-    ...(includeRoute ? { route } : {}),
   };
-  const serialized = JSON.stringify(payload);
-  // Node results carry this JSON as a string inside a second JSON frame.
-  if (countBrowserProxyEncodedPayloadBytes(serialized) > BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES) {
-    throw new Error("browser proxy payload exceeds 24 MiB encoded limit");
+  try {
+    let response;
+    try {
+      response = await withTimeout(
+        (timeoutSignal) => {
+          const signal = combineBrowserProxySignals(timeoutSignal, invocationSignal);
+          const assertScopedCurrent = (profile?: ResolvedBrowserProfile) => {
+            signal?.throwIfAborted();
+            assertCurrent(profile);
+          };
+          const dispatch = () =>
+            dispatcher.dispatch({
+              method,
+              path,
+              query,
+              body,
+              signal,
+              assertCurrent: assertScopedCurrent,
+            });
+          return scopedPath.session
+            ? withBrowserRequestScope(
+                {
+                  session: scopedPath.session,
+                  assertCurrent: assertScopedCurrent,
+                  retainCreation: (cleanup) => creations.push(cleanup),
+                },
+                dispatch,
+              )
+            : dispatch();
+        },
+        remainingTimeoutMs,
+        "browser proxy request",
+      );
+    } catch (err) {
+      if (!isBrowserProxyTimeoutError(err)) {
+        throw err;
+      }
+      const profileForStatus = requestedProfile || resolved.defaultProfile;
+      const status = await readBrowserProxyStatus({
+        dispatcher,
+        profile: path === "/profiles" ? undefined : profileForStatus,
+      });
+      throw new Error(
+        formatBrowserProxyTimeoutMessage({
+          ...timeoutDetails,
+          profile: path === "/profiles" ? undefined : profileForStatus || undefined,
+          status,
+        }),
+        { cause: err },
+      );
+    }
+    if (response.status >= 400) {
+      await compensate();
+      await discardStagedBrowserProxyUpload(stagedUpload);
+      if (params.errorEnvelope === BROWSER_PROXY_ERROR_ENVELOPE) {
+        // New callers opt into the closed envelope; older Gateways retain the
+        // shipped status-prefixed node error during rolling upgrades.
+        return JSON.stringify(createBrowserProxyFailure(response.status, response.body, route));
+      }
+      const detail =
+        response.body && typeof response.body === "object" && "error" in response.body
+          ? String((response.body as { error?: unknown }).error).trim()
+          : "";
+      throw new Error(detail ? `${response.status}: ${detail}` : `HTTP ${response.status}`);
+    }
+
+    const result = response.body;
+    if (allowedProfiles.length > 0 && path === "/profiles") {
+      const obj =
+        typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {};
+      const profiles = Array.isArray(obj.profiles) ? obj.profiles : [];
+      obj.profiles = profiles.filter((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return false;
+        }
+        const name = (entry as Record<string, unknown>).name;
+        return typeof name === "string" && allowedProfiles.includes(name);
+      });
+    }
+
+    const paths = collectBrowserProxyPaths(result);
+    const files = paths.length > 0 ? await readBrowserProxyFiles(paths) : undefined;
+
+    const payload: BrowserProxyEnvelope = {
+      result,
+      ...(files ? { files } : {}),
+      ...(includeRoute ? { route } : {}),
+    };
+    const serialized = JSON.stringify(payload);
+    // Node results carry this JSON as a string inside a second JSON frame.
+    if (
+      countBrowserProxyEncodedPayloadBytes(serialized) > BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES
+    ) {
+      throw new Error("browser proxy payload exceeds 24 MiB encoded limit");
+    }
+    assertCurrent();
+    return serialized;
+  } catch (error) {
+    return await compensateBrowserTabTrackingFailure(error, compensate);
   }
-  return serialized;
 }

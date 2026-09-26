@@ -25,7 +25,7 @@ import type {
   ProfileContext,
   ProfileRuntimeState,
 } from "./server-context.types.js";
-import { assertBrowserDashboardTabCanClose } from "./session-tab-store.js";
+import { assertSessionBrowserTabCanClose } from "./session-tab-scoped.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
 type SelectionDeps = {
@@ -34,6 +34,7 @@ type SelectionDeps = {
   getCdpControlPolicy: () => SsrFPolicy | undefined;
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (url: string, options?: BrowserOperationOptions) => Promise<BrowserTab>;
+  assertTabCanClose?: (targetId: string) => void | Promise<void>;
 };
 
 type SelectionOps = Pick<ProfileContext, "ensureTabAvailable" | "focusTab" | "closeTab">;
@@ -69,6 +70,7 @@ export function createProfileSelectionOps({
   getCdpControlPolicy,
   listTabs,
   openTab,
+  assertTabCanClose = (targetId) => assertSessionBrowserTabCanClose(targetId, profile.name),
 }: SelectionDeps): SelectionOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
@@ -284,36 +286,44 @@ export function createProfileSelectionOps({
 
   const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<string> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
-    assertBrowserDashboardTabCanClose(resolvedTargetId, profile.name);
+    await assertTabCanClose(resolvedTargetId);
 
     if (capabilities.usesChromeMcp) {
       assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
       const { closeChromeMcpTab } = await getChromeMcpModule();
       options?.signal?.throwIfAborted();
-      await closeChromeMcpTab(profile.name, resolvedTargetId, profile, options);
+      await assertTabCanClose(resolvedTargetId);
+      await closeChromeMcpTab(profile.name, resolvedTargetId, profile, {
+        ...options,
+        assertTabCanClose: () => assertTabCanClose(resolvedTargetId),
+      });
     } else {
       let closedViaPlaywright = false;
       // For remote profiles, use Playwright's persistent connection to close tabs.
-      if (capabilities.usesPersistentPlaywright) {
+      if (capabilities.usesPersistentPlaywright || options?.assertCurrent) {
         const mod = await getPwAiModule({ mode: "strict" });
         const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
           ?.closePageByTargetIdViaPlaywright;
         if (typeof closePageByTargetIdViaPlaywright === "function") {
           options?.signal?.throwIfAborted();
-          assertBrowserDashboardTabCanClose(resolvedTargetId, profile.name);
+          await assertTabCanClose(resolvedTargetId);
           await closePageByTargetIdViaPlaywright({
             cdpUrl: profile.cdpUrl,
             targetId: resolvedTargetId,
             ssrfPolicy: getCdpControlPolicy(),
             ...(options?.signal ? { signal: options.signal } : {}),
+            ...(options?.assertCurrent ? { assertCurrent: options.assertCurrent } : {}),
+            assertTabCanClose: () => assertTabCanClose(resolvedTargetId),
           });
           closedViaPlaywright = true;
+        } else if (options?.assertCurrent) {
+          throw new Error("Playwright close is unavailable for this owned browser tab");
         }
       }
 
       if (!closedViaPlaywright) {
         options?.signal?.throwIfAborted();
-        assertBrowserDashboardTabCanClose(resolvedTargetId, profile.name);
+        await assertTabCanClose(resolvedTargetId);
         await fetchOk(
           appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
           undefined,

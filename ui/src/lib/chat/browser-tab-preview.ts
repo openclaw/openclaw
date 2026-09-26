@@ -47,7 +47,7 @@ type ThumbnailEntry = {
   pending?: Promise<string | undefined>;
 };
 
-// Screenshots belong to a connection, never a bare target id shared by Gateways.
+// Screenshots belong to a connection and session, never a bare target id shared by chats.
 // Image eviction keeps attempt receipts: a long transcript must not recapture
 // every row on every render once it exceeds the image budget.
 const thumbnails = new WeakMap<
@@ -61,12 +61,13 @@ const MAX_THUMBNAIL_TABS = 32;
 
 export function loadBrowserTabThumbnail(params: {
   client: GatewayBrowserClient;
+  sessionKey: string;
   tab: BrowserTabTarget;
   revision: string;
   resourceBasePath: string;
   authToken: string | null;
 }): Promise<string | undefined> {
-  const key = browserTabKey(params.tab);
+  const key = JSON.stringify([params.sessionKey, browserTabKey(params.tab)]);
   let cache = thumbnails.get(params.client);
   if (!cache) {
     cache = { tabs: new Map(), images: new Map() };
@@ -87,7 +88,13 @@ export function loadBrowserTabThumbnail(params: {
   const pending = (entry.pending ?? Promise.resolve()).then(async () => {
     try {
       const capture = await captureBrowserScreenshot(
-        bindBrowserRequestClient(params.client, params.tab),
+        bindBrowserRequestClient(
+          params.client,
+          params.tab,
+          undefined,
+          undefined,
+          params.sessionKey,
+        ),
         params.tab.targetId,
       );
       const image = await fetchBrowserScreenshotDataUrl({

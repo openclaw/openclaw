@@ -38,6 +38,7 @@ import {
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
+import { getBrowserRequestScope } from "./request-scope.js";
 import {
   MANAGED_BROWSER_PAGE_TAB_LIMIT,
   OPEN_TAB_DISCOVERY_POLL_MS,
@@ -77,6 +78,7 @@ type CdpTarget = {
   title?: string;
   url?: string;
   webSocketDebuggerUrl?: string;
+  openerId?: string;
   type?: string;
 };
 
@@ -188,6 +190,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             url: p.url,
             type: p.type,
           };
+          if (p.openerId) {
+            tab.openerId = p.openerId;
+          }
           if (webExtensionTabId !== undefined) {
             tab.webExtensionTabId = webExtensionTabId;
           }
@@ -211,6 +216,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         url: t.url ?? "",
         wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, profile.cdpUrl),
         type: t.type,
+        ...(t.openerId ? { openerId: t.openerId } : {}),
       };
       if (!tab.targetId || !isSelectableCdpBrowserTarget(tab)) {
         continue;
@@ -237,7 +243,8 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     return assignTabAliases(
       runtime,
       tabs,
-      !capabilities.usesChromeMcp &&
+      !getBrowserRequestScope()?.session &&
+        !capabilities.usesChromeMcp &&
         resolveBrowserEngine(profile.engine).descriptor.sessionScope !== "connection",
     );
   };
@@ -246,7 +253,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     keepTargetId: string,
     options?: BrowserOperationOptions,
   ): Promise<void> => {
-    if (!capabilities.supportsManagedTabLimit || state().resolved.attachOnly || !runtime.running) {
+    if (
+      getBrowserRequestScope()?.session ||
+      !capabilities.supportsManagedTabLimit ||
+      state().resolved.attachOnly ||
+      !runtime.running
+    ) {
       return;
     }
 

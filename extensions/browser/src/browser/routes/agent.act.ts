@@ -18,7 +18,9 @@ import {
 import type { BrowserActRequest } from "../client-actions.types.js";
 import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import { getBrowserRequestScope } from "../request-scope.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { prepareScopedSessionTabRegistry } from "../session-tab-scoped.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import {
@@ -414,6 +416,15 @@ export function registerBrowserAgentActRoutes(
             }
             const downloads = result.downloads;
             if (action.kind === "close" || result.aborted?.reason === "closed") {
+              const scope = getBrowserRequestScope();
+              if (scope?.session) {
+                await (
+                  await prepareScopedSessionTabRegistry(scope)
+                ).untrack({
+                  targetId: result.targetId ?? tab.targetId,
+                  profile: profileCtx.profile.name,
+                });
+              }
               clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
             }
             switch (action.kind) {

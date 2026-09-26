@@ -40,6 +40,10 @@ const loadGatewayPluginRuntime = createLazyRuntimeModule(
 
 function createRuntimeGateway(): PluginRuntime["gateway"] {
   return {
+    captureSessionLifetime: async (sessionKey) => {
+      const runtime = await import("../../gateway/session-resource-lifetime.js");
+      return await runtime.captureGatewaySessionLifetime(sessionKey);
+    },
     isAvailable: async () => {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.hasInProcessGatewayContext();

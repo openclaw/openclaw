@@ -42,6 +42,7 @@ export class BrowserPanelOperationOwnership {
     gateway: GatewayBrowserClient;
     client: BrowserRequestClient;
     dashboardKey: string | undefined;
+    sessionKey: string;
   };
   private requestedMutation = 0;
   private requestedSnapshot = 0;
@@ -68,6 +69,7 @@ export class BrowserPanelOperationOwnership {
   captureClient(): BrowserRequestClient | null {
     const gateway = this.host.client;
     const dashboardKey = JSON.stringify(this.host.dashboardTarget);
+    const sessionKey = this.host.sessionKey;
     if (
       !(this.host.remoteAvailable ?? this.host.available) ||
       !gateway ||
@@ -76,20 +78,26 @@ export class BrowserPanelOperationOwnership {
     ) {
       return null;
     }
-    if (this.scope?.gateway !== gateway || this.scope.dashboardKey !== dashboardKey) {
+    if (
+      this.scope?.gateway !== gateway ||
+      this.scope.dashboardKey !== dashboardKey ||
+      this.scope.sessionKey !== sessionKey
+    ) {
       const client = bindBrowserRequestClient(
         gateway,
         this.route,
         () =>
           this.scope?.client === client &&
           this.scope.gateway === this.host.client &&
+          this.host.sessionKey === sessionKey &&
           JSON.stringify(this.host.dashboardTarget) === dashboardKey &&
           (this.host.remoteAvailable ?? this.host.available) &&
           this.host.isConnected &&
           this.host.browserPanelIsOpen(),
         this.host.dashboardTarget,
+        sessionKey,
       );
-      this.scope = { gateway, client, dashboardKey };
+      this.scope = { gateway, client, dashboardKey, sessionKey };
     }
     return this.scope.client;
   }
@@ -106,6 +114,7 @@ export class BrowserPanelOperationOwnership {
       this.host.available &&
       this.host.browserPanelIsOpen() &&
       this.lifecycleEpoch === epoch &&
+      (this.scope === undefined || this.scope.sessionKey === this.host.sessionKey) &&
       this.scope?.dashboardKey === JSON.stringify(this.host.dashboardTarget) &&
       (client === undefined ||
         (this.scope?.gateway === this.host.client && this.scope.client === client))

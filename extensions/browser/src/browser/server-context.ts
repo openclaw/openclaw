@@ -7,15 +7,18 @@ import {
   resolveCdpReachabilityPolicy,
 } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
-import { redactCdpUrl } from "./cdp.helpers.js";
+import { closeTrackedCdpTarget, redactCdpUrl } from "./cdp.helpers.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import {
   BrowserProfileNotFoundError,
+  BrowserTabNotFoundError,
+  BrowserValidationError,
   BrowserProfileUnavailableError,
   toBrowserErrorResponse,
 } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+import { withoutBrowserRequestScope } from "./request-scope.js";
 import { refreshResolvedBrowserConfigFromDisk } from "./resolved-config-refresh.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import {
@@ -35,6 +38,7 @@ import type {
   ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
+import { createSessionTabContext } from "./session-tab-context.js";
 
 export type {
   BrowserRouteContext,
@@ -112,12 +116,77 @@ function createProfileContext(
     configRevision,
   });
 
-  const rawSelection = createProfileSelectionOps({
+  const session = createSessionTabContext({
     profile,
     runtime: profileState,
+    state,
+    tabs: rawTabOps,
+    closeOwned: (targetId) => rawSelection.closeTab(targetId, { exactTargetId: true }),
+    closeOpened: async (tab, shouldClose) => {
+      state();
+      const ownership = tab.ownership;
+      if (ownership?.status === "durable") {
+        const outcome = await closeTrackedCdpTarget({
+          profileName: profile.name,
+          cdpUrl: profile.cdpUrl,
+          nativeTargetId: ownership.nativeTargetId,
+          expectedProfileFingerprint: ownership.profileFingerprint,
+          expectedBrowserInstanceFingerprint: ownership.browserInstanceFingerprint,
+          ssrfPolicy: resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy),
+          shouldClose: async () => {
+            state();
+            const permitted = await shouldClose();
+            state();
+            return permitted;
+          },
+        });
+        if (outcome.status === "cancelled") {
+          return false;
+        }
+        if (!["closed", "missing", "ownership-mismatch"].includes(outcome.status)) {
+          throw new Error("Could not compensate the allocated browser tab");
+        }
+        return undefined;
+      }
+      const superseded = new Error("Allocated browser tab was claimed by another owner");
+      const assertAllocationCurrent = async () => {
+        state();
+        if (!(await shouldClose())) {
+          throw superseded;
+        }
+        state();
+      };
+      const unscopedSelection = createProfileSelectionOps({
+        profile,
+        runtime: profileState,
+        getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy),
+        listTabs: rawTabOps.listTabs,
+        openTab: rawTabOps.openTab,
+        assertTabCanClose: assertAllocationCurrent,
+      });
+      try {
+        await withoutBrowserRequestScope(() =>
+          unscopedSelection.closeTab(tab.targetId, {
+            exactTargetId: true,
+            assertCurrent: assertAllocationCurrent,
+          }),
+        );
+      } catch (error) {
+        if (error === superseded) {
+          return false;
+        }
+        throw error;
+      }
+      return undefined;
+    },
+  });
+  const tabOps = session.tabs;
+  const rawSelection = createProfileSelectionOps({
+    profile,
+    runtime: session.runtime,
     getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy),
-    listTabs: rawTabOps.listTabs,
-    openTab: rawTabOps.openTab,
+    listTabs: tabOps.listTabs,
+    openTab: tabOps.openTab,
   });
 
   const rawReset = createProfileResetOps({
@@ -158,7 +227,22 @@ function createProfileContext(
             `Browser profile "${profile.name}" is not running. Start the browser or open a new tab, then select a current target.`,
           );
         }
-        return await rawSelection.ensureTabAvailable(targetId, { ...options, signal });
+        try {
+          const tab = await rawSelection.ensureTabAvailable(targetId, { ...options, signal });
+          await session.touch?.(tab.targetId);
+          return tab;
+        } catch (error) {
+          if (
+            session.scoped &&
+            targetId !== undefined &&
+            error instanceof BrowserTabNotFoundError
+          ) {
+            throw new BrowserValidationError(
+              "Tab is not associated with this session. List this session’s tabs or open a new tab.",
+            );
+          }
+          throw error;
+        }
       });
     },
     isHttpReachable: async (timeoutMs, callerSignal) =>
@@ -179,28 +263,31 @@ function createProfileContext(
     listTabs: async (options) =>
       await withLease(
         options?.signal,
-        async (signal) => await rawTabOps.listTabs({ ...options, signal }),
+        async (signal) => await tabOps.listTabs({ ...options, signal }),
       ),
     openTab: async (url, options) =>
       await withLease(
         options?.signal,
-        async (signal) => await rawTabOps.openTab(url, { ...options, signal }),
+        async (signal) => await tabOps.openTab(url, { ...options, signal }),
       ),
     labelTab: async (targetId, label) =>
       await withLease(
         undefined,
-        async (signal) => await rawTabOps.labelTab(targetId, label, { signal }),
+        async (signal) => await tabOps.labelTab(targetId, label, { signal }),
       ),
     focusTab: async (targetId, options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawSelection.focusTab(targetId, { ...options, signal }),
-      ),
+      await withLease(options?.signal, async (signal) => {
+        await rawSelection.focusTab(targetId, { ...options, signal });
+        if (session.runtime.lastTargetId) {
+          await session.touch?.(session.runtime.lastTargetId);
+        }
+      }),
     closeTab: async (targetId, options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawSelection.closeTab(targetId, { ...options, signal }),
-      ),
+      await withLease(options?.signal, async (signal) => {
+        const closed = await rawSelection.closeTab(targetId, { ...options, signal });
+        await session.untrack?.(closed);
+        return closed;
+      }),
     stopRunningBrowser,
     resetProfile: rawReset.resetProfile,
   };

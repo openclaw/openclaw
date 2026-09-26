@@ -701,6 +701,10 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveStorePath: resolveSessionStorePathCore,
     createSessionEntry,
     getSessionEntry,
+    getSessionEntryAsync: createLazyRuntimeMethod(
+      () => import("./runtime-agent-session-read.js"),
+      (runtime) => runtime.getSessionEntryAsync,
+    ),
     listSessionEntries,
     patchSessionEntry,
     upsertSessionEntry,

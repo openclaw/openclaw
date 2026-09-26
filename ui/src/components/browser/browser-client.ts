@@ -173,6 +173,7 @@ export function bindBrowserRequestClient(
   route?: BrowserRoute,
   current: () => boolean = () => true,
   dashboard?: BrowserDashboardTarget,
+  sessionKey?: string,
 ): BrowserRequestClient {
   return {
     async request<T>(
@@ -202,9 +203,10 @@ export function bindBrowserRequestClient(
           : await client.request<T>("browser.dashboard.request", scopedParams);
       }
       const routedParams =
-        route || dashboard
+        route || dashboard || sessionKey
           ? {
               ...envelope,
+              ...(!dashboard && sessionKey ? { sessionKey } : {}),
               ...(route
                 ? {
                     target: route.target,

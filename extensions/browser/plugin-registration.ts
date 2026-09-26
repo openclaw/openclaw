@@ -109,6 +109,10 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): BrowserToolOp
       ? { allowHostControl: ctx.browser.allowHostControl }
       : {}),
     ...(ctx.sessionKey ? { agentSessionKey: ctx.sessionKey } : {}),
+    ...(ctx.sessionId ? { agentSessionId: ctx.sessionId } : {}),
+    ...(ctx.assertInvocationCurrent
+      ? { assertInvocationCurrent: ctx.assertInvocationCurrent }
+      : {}),
     ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
     ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
     ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),

@@ -41,6 +41,8 @@ const browserSessionTabRecordSchema = z
   .looseObject({
     version: z.literal(1),
     sessionKey: z.string().min(1),
+    sessionId: z.string().min(1).optional(),
+    lifecycleRevision: z.string().min(1).optional(),
     nativeTargetId: z.string().min(1),
     profile: z.string().min(1),
     profileAliases: z.array(browserProfileAliasSchema).min(1).optional(),
@@ -150,6 +152,7 @@ export function deleteBrowserDashboardStopIntent(intent: BrowserDashboardStopInt
 type BrowserSessionTabStoreRuntime = {
   state: Pick<PluginRuntime["state"], "openSyncKeyedStore" | "openKeyedStore">;
   gateway?: PluginRuntime["gateway"];
+  agent?: PluginRuntime["agent"];
 };
 
 /** Opens and publishes Browser's canonical durable tab store during plugin registration. */
@@ -167,6 +170,9 @@ export function initializeBrowserSessionTabStore(runtime: BrowserSessionTabStore
     get gateway() {
       return runtime.gateway;
     },
+    get getSessionEntryAsync() {
+      return runtime.agent?.session.getSessionEntryAsync;
+    },
     dashboardOperations: new Map(),
   };
   setBrowserStateRuntime(state);
@@ -179,6 +185,8 @@ export function initializeBrowserSessionTabStore(runtime: BrowserSessionTabStore
     rememberDurableTabAliases(
       {
         sessionKey: record.sessionKey,
+        sessionId: record.sessionId,
+        lifecycleRevision: record.lifecycleRevision,
         targetId: record.nativeTargetId,
         profile: record.profile,
       },
@@ -301,6 +309,8 @@ export function sameBrowserSessionTabRecord(
   return (
     left.version === right.version &&
     left.sessionKey === right.sessionKey &&
+    left.sessionId === right.sessionId &&
+    left.lifecycleRevision === right.lifecycleRevision &&
     left.nativeTargetId === right.nativeTargetId &&
     left.profile === right.profile &&
     (left.profileAliases?.length ?? 0) === (right.profileAliases?.length ?? 0) &&

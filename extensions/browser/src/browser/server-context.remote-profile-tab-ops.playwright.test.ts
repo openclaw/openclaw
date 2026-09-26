@@ -97,6 +97,7 @@ describe("browser remote profile tab ops via Playwright", () => {
       cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       targetId: "T1",
       ssrfPolicy: permissiveRemoteCdpPolicy,
+      assertTabCanClose: expect.any(Function),
     });
     expect(fetchMock).toHaveBeenCalledOnce();
   });

@@ -59,6 +59,8 @@ import {
   BROWSER_REF_MARKER_ATTRIBUTE,
   readDocumentIdentitiesForPage,
 } from "./pw-session.page-cdp.js";
+import { getBrowserRequestScope } from "./request-scope.js";
+import { assertSessionBrowserTabCanClose } from "./session-tab-scoped.js";
 import {
   assertBrowserDashboardTabCanClose,
   readBrowserDashboardTabs,
@@ -413,6 +415,7 @@ async function readPagesViaPlaywright(
                 page: {
                   targetId: targetInfo.targetId,
                   title: targetInfo.title,
+                  ...(targetInfo.openerId ? { openerId: targetInfo.openerId } : {}),
                   url,
                   type: "page" as const,
                 },
@@ -467,7 +470,13 @@ async function readPagesViaPlaywright(
 type PlaywrightPageEnumeration =
   | {
       status: "available";
-      pages: Array<{ targetId: string; title: string; url: string; type: "page" }>;
+      pages: Array<{
+        targetId: string;
+        title: string;
+        url: string;
+        type: "page";
+        openerId?: string;
+      }>;
     }
   | { status: "unavailable"; reason: "target-identity-unresolved" };
 
@@ -659,6 +668,8 @@ export async function closePageByTargetIdViaPlaywright(opts: {
   targetId: string;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
+  assertCurrent?: () => void | Promise<void>;
+  assertTabCanClose?: () => void | Promise<void>;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   await closeResolvedPageViaPlaywright(page, opts);
@@ -671,21 +682,32 @@ export async function closeResolvedPageViaPlaywright(
     cdpUrl: string;
     signal?: AbortSignal;
     assertCurrent?: () => void | Promise<void>;
+    assertTabCanClose?: () => void | Promise<void>;
   },
 ): Promise<void> {
   opts.signal?.throwIfAborted();
-  if (readBrowserDashboardTabs().length > 0) {
-    const targetId = (await pageTargetInfo(page))?.targetId;
+  const scoped = getBrowserRequestScope()?.session;
+  let targetId: string | undefined;
+  if (!opts.assertTabCanClose && (scoped || readBrowserDashboardTabs().length > 0)) {
+    targetId = (await pageTargetInfo(page))?.targetId;
     opts.signal?.throwIfAborted();
     if (!targetId) {
       throw new Error("Cannot verify that this page is not retained by a dashboard");
     }
-    assertBrowserDashboardTabCanClose(targetId);
+    if (!scoped) {
+      assertBrowserDashboardTabCanClose(targetId);
+    }
   }
   const assertion = opts.assertCurrent?.();
   if (assertion) {
     await assertion;
   }
+  if (opts.assertTabCanClose) {
+    await opts.assertTabCanClose();
+  } else if (scoped && targetId) {
+    await assertSessionBrowserTabCanClose(targetId);
+  }
+  opts.signal?.throwIfAborted();
   if (isConnectionScopedPage(page)) {
     const browser = page.context().browser();
     if (browser) {

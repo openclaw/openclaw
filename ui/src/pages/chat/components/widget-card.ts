@@ -624,6 +624,7 @@ function renderWidgetCard(
   if (preview.kind === "browser-tab") {
     return surface === "chat_tool"
       ? html`<openclaw-browser-tab-card
+          .sessionKey=${options?.sessionKey}
           .preview=${preview}
           .revision=${options?.browserTabRevision}
           .latest=${options?.browserTabLatest ?? false}

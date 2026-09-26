@@ -1,6 +1,7 @@
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { BrowserTabOwnership } from "./client.types.js";
+import type { BrowserSessionScope } from "./session-scope.js";
 
 export type BrowserSessionTabRoute =
   | { kind: "browser-control"; baseUrl?: string }
@@ -11,6 +12,7 @@ export type BrowserSessionTabRoute =
         targetId: string;
         profile?: string;
         ownership?: BrowserTabOwnership;
+        session?: BrowserSessionScope;
       }) => Promise<CloseTrackedCdpTargetResult>;
     };
 

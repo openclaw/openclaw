@@ -63,6 +63,14 @@ node. Pass the profile in `query.profile`. Explicit routes do not fall back to
 another host. Omitting them keeps the configured automatic routing. These
 routing fields do not grant access or change browser policy.
 
+The chat Browser panel also supplies a top-level `sessionKey`. This restricts
+tab listing and tab operations to that session's current lifetime; it does not
+grant access to a browser or profile. Newly opened tabs are registered to that
+session, and another session's tab ID or alias is rejected on the scoped path.
+Omitting `sessionKey` retains the existing unscoped administrator/CLI behavior.
+Cookies and profile storage remain shared; this is not an isolated browser
+context.
+
 Browser previews require a result from the `browser` tool with a known route.
 Browser-shaped metadata from other tools does not trigger screenshots or change
 the panel's selection. Those results remain ordinary tool output.

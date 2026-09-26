@@ -34,10 +34,12 @@ import {
   browserProxyUploadUnavailableMessage,
 } from "../browser-node-commands.js";
 import { isBrowserControlHostUnavailableError } from "../browser-node-fallback.js";
+import { createBrowserNodeSessionTabRoute } from "../browser-node-proxy.js";
 import { resolveBrowserNodeTarget } from "../browser-node-routing.js";
 import {
   BROWSER_PROXY_ERROR_ENVELOPE,
   parseBrowserProxyFailure,
+  parseBrowserProxyRoute,
   type BrowserProxyEnvelope,
   type BrowserProxySuccess,
 } from "../browser-proxy-envelope.js";
@@ -47,6 +49,11 @@ import {
   prepareBrowserProxyUploadRequest,
 } from "../browser-proxy-upload.js";
 import { applyBrowserTabToolBinding } from "../browser-tool-binding.js";
+import {
+  captureBrowserNodeOpenCleanup,
+  compensateBrowserTabTrackingFailure,
+  trackOpenedBrowserTab,
+} from "../browser-tool-session-tabs.js";
 import { persistBrowserProxyResultFiles } from "../browser/proxy-files.js";
 import {
   isBrowserHostLocalRoute,
@@ -54,8 +61,15 @@ import {
   normalizeBrowserRequestPath,
   resolveRequestedBrowserProfile,
 } from "../browser/request-policy.js";
+import { withBrowserRequestScope } from "../browser/request-scope.js";
 import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
 import type { BrowserRequest } from "../browser/routes/types.js";
+import { prepareBrowserSessionScope, encodeBrowserSessionPath } from "../browser/session-scope.js";
+import {
+  trackSessionBrowserTab,
+  touchSessionBrowserTab,
+  untrackSessionBrowserTab,
+} from "../browser/session-tab-registry.js";
 import { startBrowserControlServiceFromConfig } from "../control-service.js";
 import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 import { withTimeout } from "../sdk-node-runtime.js";
@@ -69,6 +83,7 @@ const dashboardRequestSchema = z.object({
 });
 
 type BrowserRequestParams = {
+  sessionKey?: string;
   target?: "host" | "node";
   node?: string;
   method?: string;
@@ -191,6 +206,24 @@ export async function handleBrowserGatewayRequest({
     }
     return;
   }
+  let sessionScope: Awaited<ReturnType<typeof prepareBrowserSessionScope>> | undefined;
+  if (typed.sessionKey !== undefined && typed.dashboard === undefined) {
+    if (typeof typed.sessionKey !== "string" || !typed.sessionKey.trim()) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "sessionKey must be a nonempty string"),
+      );
+      return;
+    }
+    try {
+      sessionScope = await prepareBrowserSessionScope(typed.sessionKey);
+      assertRequesterCurrent();
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+      return;
+    }
+  }
   let assertDashboardCurrent: BrowserRequest["assertCurrent"];
   if (typed.dashboard !== undefined) {
     const scope = dashboardRequestSchema.safeParse(typed.dashboard);
@@ -309,7 +342,7 @@ export async function handleBrowserGatewayRequest({
       !nodeTarget.commands?.includes(BROWSER_PROXY_UPLOAD_COMMAND)
     ) {
       const message = browserProxyUploadUnavailableMessage(nodeTarget.declaredCommands);
-      if (explicitNode || configuredNode) {
+      if (explicitNode || configuredNode || sessionScope) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
         return;
       }
@@ -362,7 +395,7 @@ export async function handleBrowserGatewayRequest({
     const { proxyTimeoutMs, nodeInvokeTimeoutMs } = resolveBrowserProxyTimeouts(timeoutMs);
     const proxyParams = {
       method: methodRaw,
-      path,
+      path: sessionScope ? encodeBrowserSessionPath(path, sessionScope.session) : path,
       query,
       body: preparedUpload.body,
       upload: preparedUpload.upload,
@@ -371,24 +404,47 @@ export async function handleBrowserGatewayRequest({
       errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
     };
     let res;
+    let borrow: ReturnType<NonNullable<typeof sessionScope>["retainSession"]> | undefined;
     try {
+      borrow = sessionScope?.retainSession();
+      const nodeSignal =
+        borrow?.signal && requestSignal
+          ? AbortSignal.any([borrow.signal, requestSignal])
+          : (borrow?.signal ?? requestSignal);
+      borrow?.assertCurrent();
+      sessionScope?.assertCurrent();
       assertRequesterCurrent();
       res = await context.nodeRegistry.invoke({
         nodeId: nodeTarget.nodeId,
         command: proxyCommand,
         params: proxyParams,
         timeoutMs: nodeInvokeTimeoutMs,
-        signal: requestSignal,
-        isDispatchAuthorized: isRequesterCurrent,
+        signal: nodeSignal,
+        isDispatchAuthorized: () => {
+          if (!isRequesterCurrent()) {
+            return false;
+          }
+          try {
+            borrow?.assertCurrent();
+            sessionScope?.assertCurrent();
+            return true;
+          } catch {
+            return false;
+          }
+        },
         idempotencyKey: crypto.randomUUID(),
       });
-      assertRequesterCurrent();
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       return;
+    } finally {
+      borrow?.release();
     }
     const allowAutomaticHostFallback =
-      !explicitNode && !configuredNode && isBrowserControlHostUnavailableError(res.error);
+      !sessionScope &&
+      !explicitNode &&
+      !configuredNode &&
+      isBrowserControlHostUnavailableError(res.error);
     if (allowAutomaticHostFallback && !res.ok) {
       // This node-host error is raised before route dispatch. Other failures
       // stay on the node path because retrying could duplicate an action.
@@ -414,15 +470,91 @@ export async function handleBrowserGatewayRequest({
         return;
       }
       const success = proxy as BrowserProxySuccess;
+      const route = createBrowserNodeSessionTabRoute(nodeTarget);
+      const proxyRoute = parseBrowserProxyRoute(success);
+      const profile = proxyRoute?.status === "resolved" ? proxyRoute.profile : undefined;
+      const rollback = captureBrowserNodeOpenCleanup({
+        method: methodRaw,
+        path,
+        body,
+        result: success.result,
+        session: sessionScope?.session,
+        profile,
+        route,
+      });
       try {
+        sessionScope?.assertCurrent();
+        assertRequesterCurrent();
         const result = await persistBrowserProxyResultFiles(success.result, success.files);
+        sessionScope?.assertCurrent();
+        assertRequesterCurrent();
+        if (sessionScope) {
+          const record = asNullableRecord(result);
+          const opened =
+            path === "/tabs/open"
+              ? result
+              : path === "/tabs/action" && asNullableRecord(body)?.action === "new"
+                ? record?.tab
+                : undefined;
+          await withBrowserRequestScope(
+            { ...sessionScope, assertCurrent: sessionScope.assertCurrent },
+            async () => {
+              if (opened) {
+                await trackOpenedBrowserTab({
+                  result: opened,
+                  sessionKey: sessionScope.session.sessionKey,
+                  fallbackProfile: profile,
+                  route,
+                  track: trackSessionBrowserTab,
+                  closeTab: async (targetId, openedProfile) => {
+                    if (rollback) {
+                      return await rollback.cleanup();
+                    }
+                    const outcome = await route.closeTarget({ targetId, profile: openedProfile });
+                    if (outcome.status !== "closed" && outcome.status !== "missing") {
+                      throw new Error("Could not compensate untracked node tab");
+                    }
+                  },
+                });
+                rollback?.rememberAssociation();
+              } else if (typeof record?.targetId === "string") {
+                const identity = {
+                  ...sessionScope.session,
+                  targetId: record.targetId,
+                  profile,
+                  route,
+                };
+                if (
+                  methodRaw === "DELETE" ||
+                  (path === "/tabs/action" && asNullableRecord(body)?.action === "close")
+                ) {
+                  untrackSessionBrowserTab(identity);
+                } else {
+                  touchSessionBrowserTab(identity);
+                }
+              }
+            },
+          );
+        }
+        sessionScope?.assertCurrent();
         assertRequesterCurrent();
         respond(true, result);
-      } catch {
+      } catch (error) {
+        let compensationFailure = error;
+        if (rollback) {
+          try {
+            await compensateBrowserTabTrackingFailure(error, rollback.cleanup);
+          } catch (compensated) {
+            compensationFailure = compensated;
+          }
+        }
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "browser proxy file transfer failed"),
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            sessionScope ? String(compensationFailure) : "browser proxy file transfer failed",
+          ),
         );
       }
       return;
@@ -465,10 +597,17 @@ export async function handleBrowserGatewayRequest({
       : undefined;
   const assertCurrent: NonNullable<BrowserRequest["assertCurrent"]> = async (profile) => {
     assertRequesterCurrent();
+    sessionScope?.assertCurrent();
     await assertDashboardCurrent?.(profile);
     assertRequesterCurrent();
   };
-  const dispatch = (timeoutSignal?: AbortSignal) =>
+  const admittedSession = sessionScope;
+  const assertSessionCurrent = () => {
+    assertRequesterCurrent();
+    admittedSession?.assertCurrent();
+  };
+  const streamSignal = requesterSignal ?? new AbortController().signal;
+  const dispatchRequest = (timeoutSignal?: AbortSignal) =>
     dispatcher.dispatch({
       method: methodRaw,
       path,
@@ -479,8 +618,37 @@ export async function handleBrowserGatewayRequest({
           ? AbortSignal.any([timeoutSignal, requestSignal])
           : (timeoutSignal ?? requestSignal),
       ...(requester ? { requester } : {}),
+      ...(admittedSession
+        ? {
+            screencastAuthority: {
+              signal: streamSignal,
+              assertCurrent: admittedSession.assertCurrent,
+              retainRequester: () => {
+                const borrow = admittedSession.retainSession();
+                return {
+                  signal: AbortSignal.any([streamSignal, borrow.signal]),
+                  isCurrent: () => {
+                    try {
+                      borrow.assertCurrent();
+                      return requester?.isCurrent() ?? true;
+                    } catch {
+                      return false;
+                    }
+                  },
+                  release: borrow.release,
+                };
+              },
+            },
+          }
+        : {}),
       assertCurrent,
     });
+  const dispatch = (timeoutSignal?: AbortSignal) =>
+    sessionScope
+      ? withBrowserRequestScope({ ...sessionScope, assertCurrent: assertSessionCurrent }, () =>
+          dispatchRequest(timeoutSignal),
+        )
+      : dispatchRequest(timeoutSignal);
   let result;
   try {
     await assertCurrent();
@@ -502,7 +670,13 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  respond(true, result.body);
+  try {
+    await assertCurrent();
+    assertSessionCurrent();
+    respond(true, result.body);
+  } catch (error) {
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+  }
 }
 
 /** Gateway request handler map contributed by the Browser plugin. */

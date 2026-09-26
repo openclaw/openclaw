@@ -14,6 +14,7 @@ import {
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeadersWithAuth, stripCdpUrlCredentials } from "./cdp-auth.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS } from "./cdp-timeouts.js";
@@ -357,6 +358,47 @@ export async function resolveCdpTabOwnership(
   return (await resolveCdpTabOwnershipContext(params)).ownership;
 }
 
+/** Read opener identities and the browser fingerprint on one pinned browser connection. */
+export async function readCdpSessionTabInventory(params: CdpTabOwnershipParams): Promise<{
+  ownership: BrowserTabOwnership;
+  openers: Map<string, string>;
+}> {
+  const resolved = await resolveCdpTabOwnershipContext(params);
+  const openers = new Map<string, string>();
+  if (resolved.ownership.status !== "durable" || !resolved.browserWebSocketUrl) {
+    return { ownership: resolved.ownership, openers };
+  }
+  await withCdpSocket(
+    resolved.browserWebSocketUrl,
+    async (send) => {
+      params.signal?.throwIfAborted();
+      const response = await send("Target.getTargets");
+      params.signal?.throwIfAborted();
+      const infos = asNullableRecord(response)?.targetInfos;
+      if (!Array.isArray(infos)) {
+        throw new Error("Browser target enumeration was unavailable");
+      }
+      for (const value of infos) {
+        const target = asNullableRecord(value);
+        if (
+          target?.type === "page" &&
+          typeof target.targetId === "string" &&
+          typeof target.openerId === "string"
+        ) {
+          openers.set(target.targetId, target.openerId);
+        }
+      }
+    },
+    {
+      lookup: resolved.browserWebSocketLookup,
+      signal: params.signal,
+      handshakeTimeoutMs: params.timeoutMs,
+      commandTimeoutMs: params.timeoutMs,
+    },
+  );
+  return { ownership: resolved.ownership, openers };
+}
+
 export type CloseTrackedCdpTargetResult =
   | { status: "cancelled" | "closed" | "missing" | "ownership-mismatch" }
   | {
@@ -371,7 +413,7 @@ export async function closeTrackedCdpTarget(
   params: CdpTabOwnershipParams & {
     expectedProfileFingerprint: string;
     expectedBrowserInstanceFingerprint: string;
-    shouldClose?: () => boolean;
+    shouldClose?: () => boolean | Promise<boolean>;
   },
 ): Promise<CloseTrackedCdpTargetResult> {
   const resolved = await resolveCdpTabOwnershipContext(params);
@@ -417,8 +459,11 @@ export async function closeTrackedCdpTarget(
         // The SQLite cleanup generation can be revoked while browser identity
         // is being resolved. Recheck on this same socket immediately before
         // the irreversible close so fresh activity cancels an idle sweep.
-        if (params.shouldClose && !params.shouldClose()) {
-          return { status: "cancelled" } as const;
+        if (params.shouldClose) {
+          const permitted = params.shouldClose();
+          if (!(typeof permitted === "boolean" ? permitted : await permitted)) {
+            return { status: "cancelled" } as const;
+          }
         }
         try {
           params.signal?.throwIfAborted();

@@ -135,6 +135,8 @@ export type RuntimeGatewayRequestOptions = {
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
   gateway: {
+    /** Capture an existing session lifetime; callers retain their own authorization. */
+    captureSessionLifetime?: typeof import("../../gateway/session-resource-lifetime.js").captureGatewaySessionLifetime;
     /** Whether this process owns an active Gateway request context. */
     isAvailable: () => Promise<boolean>;
     /** Dispatch a Gateway method as the current trusted plugin. */

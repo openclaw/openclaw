@@ -97,6 +97,7 @@ async function card(
       { kind: "browser-tab", ...tab, url: "https://example.com/page" },
       "chat_tool",
       {
+        sessionKey: "agent:main:first",
         browserTabRevision: "one",
         browserTabLatest: latest,
       },
@@ -263,6 +264,7 @@ describe("browser tab card", () => {
     const element = await card(gateway.context, true, tab);
     await vi.waitFor(() => expect(element.shadowRoot?.querySelector("img")).not.toBeNull());
     expect(gateway.request).toHaveBeenCalledWith("browser.request", {
+      sessionKey: "agent:main:first",
       method: "POST",
       path: "/screenshot",
       target: tab.target,
@@ -331,6 +333,7 @@ describe("browser tab card", () => {
         };
         render(
           renderActivityGroup([group], {
+            sessionKey: "agent:main:first",
             showReasoning: false,
             latestBrowserTabs: latestBrowserTabCards(messages, []),
             isToolMessageExpanded: () => expanded,

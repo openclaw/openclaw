@@ -130,6 +130,8 @@ export type BrowserTab = {
   label?: string;
   title: string;
   url: string;
+  /** Native opener identity, never inferred from a page URL or title. */
+  openerId?: string;
   /** Listing-time observation; unavailable URLs stay redacted, not implicitly trusted. */
   urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
   wsUrl?: string;

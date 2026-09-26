@@ -183,6 +183,33 @@ describe("runBrowserProxyCommand", () => {
     ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
   });
 
+  it("decodes versioned session paths before node policy and dispatch, without global fallback", async () => {
+    const { getBrowserRequestScope } = await import("../browser/request-scope.js");
+    const { encodeBrowserSessionPath } = await import("../browser/session-scope.js");
+    const session = { sessionKey: "agent:main:node-a", sessionId: "node-generation-a" };
+    dispatcherMocks.dispatch.mockImplementation(async (request) => {
+      expect(request.path).toBe("/tabs");
+      expect(getBrowserRequestScope()?.session).toEqual(session);
+      return { status: 200, body: { running: true, tabs: [] } };
+    });
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({ method: "GET", path: encodeBrowserSessionPath("/tabs", session) }),
+      ),
+    ).resolves.toBe(JSON.stringify({ result: { running: true, tabs: [] } }));
+    dispatcherMocks.dispatch.mockClear();
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: encodeBrowserSessionPath("/reset-profile", session),
+        }),
+      ),
+    ).rejects.toThrow("cannot mutate persistent browser profiles");
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+    expect(getBrowserRequestScope()).toBeUndefined();
+  });
+
   it.each(["rejected", "disabled"] as const)("retries a %s browser startup", async (outcome) => {
     const message = outcome === "rejected" ? "browser startup failed" : "browser control disabled";
     if (outcome === "rejected") {

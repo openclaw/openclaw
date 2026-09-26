@@ -731,6 +731,12 @@ describe("browser server-context tab selection state", () => {
   });
 
   it("returns a raw-created target without adoption when its committed URL is unavailable", async () => {
+    // fetchJson is spied at its importer below, not inside its own ownership helper.
+    // Keep this fixture independent of a real browser listening on the configured test port.
+    vi.spyOn(cdpHelpersModule, "resolveCdpTabOwnership").mockResolvedValue({
+      status: "non-durable",
+      reason: "browser-identity-lookup-failed",
+    });
     vi.spyOn(cdpModule, "createTargetViaCdp").mockRejectedValue(new Error("cdp unavailable"));
     vi.spyOn(cdpModule, "waitForCdpCommittedNavigationUrl").mockResolvedValue(undefined);
     vi.spyOn(cdpHelpersModule, "fetchJson").mockResolvedValue({

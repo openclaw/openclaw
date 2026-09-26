@@ -49,7 +49,10 @@ export async function closeChromeMcpTab(
   profileName: string,
   targetId: string,
   profileOptions?: string | ChromeMcpProfileOptions,
-  options: ChromeMcpOperationOptions = {},
+  options: ChromeMcpOperationOptions & {
+    assertCurrent?: () => void | Promise<void>;
+    assertTabCanClose?: () => void | Promise<void>;
+  } = {},
 ): Promise<void> {
   const profile = typeof profileOptions === "string" ? undefined : profileOptions;
   const userDataDir = typeof profileOptions === "string" ? profileOptions : undefined;
@@ -62,6 +65,15 @@ export async function closeChromeMcpTab(
       ...options,
     },
     async (target) => {
+      const current = options.assertCurrent?.();
+      if (current) {
+        await current;
+      }
+      const closeAllowed = options.assertTabCanClose?.();
+      if (closeAllowed) {
+        await closeAllowed;
+      }
+      options.signal?.throwIfAborted();
       await callTool(
         profileName,
         target.profileOptions,

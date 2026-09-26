@@ -7,6 +7,28 @@ import {
 import { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
 
 describe("BrowserPanelOperationOwnership", () => {
+  it("retires captured clients immediately when the session changes before rendering", async () => {
+    const { client, request } = createBrowserClient(async () => ({}));
+    const host = new TestBrowserPanelHost(client);
+    host.sessionKey = "agent:main:first";
+    const ownership = new BrowserPanelOperationOwnership(host);
+    const first = ownership.captureClient()!;
+    const pending = ownership.beginSnapshot(first);
+    host.sessionKey = "agent:main:second";
+    expect(pending.isCurrent()).toBe(false);
+    await expect(
+      first.request("browser.request", { method: "POST", path: "/tabs/open" }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(request).not.toHaveBeenCalled();
+    const second = ownership.captureClient()!;
+    await second.request("browser.request", { method: "GET", path: "/tabs" });
+    expect(request).toHaveBeenCalledExactlyOnceWith("browser.request", {
+      method: "GET",
+      path: "/tabs",
+      sessionKey: "agent:main:second",
+    });
+  });
+
   it("releases navigation commits when tabs reconcile, close, or leave an accepted snapshot", () => {
     const { client } = createBrowserClient(async () => ({}));
     const ownership = new BrowserPanelOperationOwnership(new TestBrowserPanelHost(client));

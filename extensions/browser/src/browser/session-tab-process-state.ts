@@ -4,6 +4,8 @@ import { browserSessionTabRouteKey, type BrowserSessionTabRoute } from "./sessio
 
 export type SessionTabInteractionIdentity = {
   sessionKey: string;
+  sessionId?: string;
+  lifecycleRevision?: string;
   targetId: string;
   route: BrowserSessionTabRoute;
   profile?: string;
@@ -31,6 +33,8 @@ export function sameVolatileSessionTab(
   return (
     volatileSessionTabTargetKey(left) === volatileSessionTabTargetKey(right) &&
     left.sessionKey === right.sessionKey &&
+    left.sessionId === right.sessionId &&
+    left.lifecycleRevision === right.lifecycleRevision &&
     left.trackedAt === right.trackedAt &&
     left.lastUsedAt === right.lastUsedAt
   );

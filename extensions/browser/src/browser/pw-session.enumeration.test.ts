@@ -757,6 +757,44 @@ describe("pw-session page enumeration", () => {
     expect(fixture.browserClose).not.toHaveBeenCalled();
   });
 
+  it("rechecks the tab owner after Playwright resolves the native target", async () => {
+    const entered = createDeferred<void>();
+    const proceed = createDeferred<void>();
+    let claimed = false;
+    const fixture = makePageEnumerationBrowser([
+      {
+        targetId: "T1",
+        title: "Tab 1",
+        url: "https://example.com",
+        readTargetInfo: async () => {
+          entered.resolve();
+          await proceed.promise;
+          return { targetInfo: { targetId: "T1", title: "Tab 1" } };
+        },
+      },
+    ]);
+    const close = vi.fn(async () => {});
+    Object.assign(fixture.pages[0]!, { close });
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    const closing = closePageByTargetIdViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "T1",
+      assertTabCanClose: async () => {
+        if (claimed) {
+          throw new Error("Tab ownership changed");
+        }
+      },
+    });
+    const denied = expect(closing).rejects.toThrow("Tab ownership changed");
+    await entered.promise;
+    claimed = true;
+    proceed.resolve();
+    await denied;
+    expect(close).not.toHaveBeenCalled();
+    expect(fixture.browserClose).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["focus", focusPageByTargetIdViaPlaywright, "bringToFront"],
     ["close", closePageByTargetIdViaPlaywright, "close"],

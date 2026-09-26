@@ -26,6 +26,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
   context?: ApplicationContext;
   @property({ attribute: false }) preview?: Extract<ToolPreview, { kind: "browser-tab" }>;
   @property({ attribute: false }) revision?: string;
+  @property({ attribute: false }) sessionKey?: string;
   @property({ type: Boolean }) latest = false;
 
   @state() private thumbnailSrc?: string;
@@ -248,6 +249,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     const snapshot = context?.gateway.snapshot;
     const client = snapshot?.client;
     const revision = this.revision;
+    const sessionKey = this.sessionKey;
     if (
       !preview ||
       !context ||
@@ -255,9 +257,10 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       !client ||
       !isBrowserPanelAvailable(snapshot) ||
       !this.latest ||
-      !revision
+      !revision ||
+      !sessionKey
     ) {
-      if (!this.latest || !snapshot || !isBrowserPanelAvailable(snapshot)) {
+      if (!this.latest || !sessionKey || !snapshot || !isBrowserPanelAvailable(snapshot)) {
         // Dropping the request marker keeps a pending capture from landing and
         // lets a later availability recovery re-request the thumbnail.
         this.requestIdentity = undefined;
@@ -265,7 +268,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       }
       return;
     }
-    const key = JSON.stringify([browserTabKey(preview), revision]);
+    const key = JSON.stringify([sessionKey, browserTabKey(preview), revision]);
     if (this.requestIdentity?.key === key && this.requestIdentity.client === client) {
       return;
     }
@@ -274,6 +277,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     this.thumbnailSrc = undefined;
     void loadBrowserTabThumbnail({
       client,
+      sessionKey,
       tab: preview,
       revision,
       resourceBasePath: context.resourceBasePath,
@@ -283,7 +287,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         password: context.gateway.connection.password,
       }),
     }).then((src) => {
-      if (this.requestIdentity === identity) {
+      if (this.isConnected && this.sessionKey === sessionKey && this.requestIdentity === identity) {
         this.thumbnailSrc = src;
       }
     });
@@ -322,7 +326,8 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     }
     const currentImage =
       this.requestIdentity?.client === this.context?.gateway.snapshot.client &&
-      this.requestIdentity?.key === JSON.stringify([browserTabKey(preview), this.revision])
+      this.requestIdentity?.key ===
+        JSON.stringify([this.sessionKey, browserTabKey(preview), this.revision])
         ? this.thumbnailSrc
         : undefined;
     const page =

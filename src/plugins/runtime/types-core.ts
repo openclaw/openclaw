@@ -394,6 +394,10 @@ export type PluginRuntimeCore = {
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
+      /** Read one public entry asynchronously under the caller's live invocation guard. */
+      getSessionEntryAsync?: (
+        params: RuntimeSessionStoreReadParams & { assertCurrent: () => void },
+      ) => Promise<RuntimeSessionEntry | undefined>;
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];

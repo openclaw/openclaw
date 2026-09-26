@@ -22,8 +22,9 @@ export type BrowserDashboardOperation = {
 
 type BrowserStateRuntime = {
   sessionTabs: PluginStateSyncKeyedStore<unknown>;
-  sessionTabDiscovery: Pick<PluginStateKeyedStore<unknown>, "entries">;
+  sessionTabDiscovery: PluginStateKeyedStore<unknown>;
   gateway?: PluginRuntime["gateway"];
+  getSessionEntryAsync?: NonNullable<PluginRuntime["agent"]["session"]["getSessionEntryAsync"]>;
   dashboardOperations: Map<string, BrowserDashboardOperation>;
   dashboardEvents?: OpenClawPluginGatewayEvents;
   sessionDashboards?: Map<string, SessionBrowserDashboard>;

@@ -45,6 +45,8 @@ import { selectSessionTabToUntrack } from "./session-tab-untrack-selection.js";
 
 type SessionTabParams = {
   sessionKey?: string;
+  sessionId?: string;
+  lifecycleRevision?: string;
   targetId?: string;
   nativeTargetId?: string;
   route?: BrowserSessionTabRoute;
@@ -81,6 +83,9 @@ function resolveInteractionIdentity(params: SessionTabParams): InteractionIdenti
   const profile = normalizeOptionalLowercaseString(params.profile);
   return {
     sessionKey: normalizeOptionalLowercaseString(sessionKey) ?? "",
+    ...(params.sessionId
+      ? { sessionId: params.sessionId, lifecycleRevision: params.lifecycleRevision }
+      : {}),
     targetId,
     route: params.route ?? { kind: "browser-control" },
     ...(profile ? { profile } : {}),
@@ -161,7 +166,12 @@ export function resolveVolatile(identity: InteractionIdentity):
   const tabs = state.get(identity.sessionKey);
   const exactKey = volatileSessionTabTargetKey(identity);
   const exact = tabs?.get(exactKey);
-  if (exact) {
+  if (
+    exact &&
+    (!identity.sessionId ||
+      (exact.sessionId === identity.sessionId &&
+        exact.lifecycleRevision === identity.lifecycleRevision))
+  ) {
     return { tab: exact, tabKey: exactKey, isExact: true };
   }
   const exactTarget = resolveVolatileTabExact(identity);
@@ -180,6 +190,13 @@ export function resolveVolatile(identity: InteractionIdentity):
     return undefined;
   }
   const tab = tabs?.get(target.tabKey);
+  if (
+    tab &&
+    identity.sessionId &&
+    (tab.sessionId !== identity.sessionId || tab.lifecycleRevision !== identity.lifecycleRevision)
+  ) {
+    return undefined;
+  }
   if (!tab) {
     forgetVolatileTabAlias(identity);
     return undefined;
@@ -187,7 +204,7 @@ export function resolveVolatile(identity: InteractionIdentity):
   return { tab, tabKey: target.tabKey, isExact: Boolean(exactTarget) };
 }
 
-function upsertVolatile(
+export function upsertVolatile(
   identity: InteractionIdentity,
   aliases: Array<string | undefined>,
   profileAliases: Array<string | undefined>,
@@ -272,6 +289,9 @@ export function trackSessionBrowserTab(params: SessionTabParams & { now?: number
     return {
       version: 1,
       sessionKey: identity.sessionKey,
+      ...(identity.sessionId
+        ? { sessionId: identity.sessionId, lifecycleRevision: identity.lifecycleRevision }
+        : {}),
       nativeTargetId: ownership.nativeTargetId,
       profile,
       ...(persistedProfileAliases.length > 0 ? { profileAliases: persistedProfileAliases } : {}),
@@ -303,7 +323,12 @@ function canonicalCandidate(
       const mappedRecord = parseBrowserSessionTabRecord(
         getBrowserSessionTabStore().lookup(mappedKey),
       );
-      if (mappedRecord) {
+      if (
+        mappedRecord &&
+        (!identity.sessionId ||
+          (mappedRecord.sessionId === identity.sessionId &&
+            mappedRecord.lifecycleRevision === identity.lifecycleRevision))
+      ) {
         return { ...mappedRecord, kind: "durable", storageKey: mappedKey };
       }
     }
@@ -319,7 +344,12 @@ function canonicalCandidate(
     browserInstanceFingerprint: ownership.browserInstanceFingerprint,
   });
   const record = parseBrowserSessionTabRecord(getBrowserSessionTabStore().lookup(key));
-  return record ? { ...record, kind: "durable", storageKey: key } : undefined;
+  return record &&
+    (!identity.sessionId ||
+      (record.sessionId === identity.sessionId &&
+        record.lifecycleRevision === identity.lifecycleRevision))
+    ? { ...record, kind: "durable", storageKey: key }
+    : undefined;
 }
 
 /** Updates last-used time for an existing tracked browser tab. */
@@ -356,7 +386,7 @@ export function touchSessionBrowserTab(params: SessionTabParams & { now?: number
     });
     return;
   }
-  if (identity.profile) {
+  if (identity.profile && !identity.sessionId) {
     const nativeTargetId = params.nativeTargetId?.trim() || identity.targetId;
     const coldIdentity = browserSessionTabNativeIdentity({
       sessionKey: identity.sessionKey,

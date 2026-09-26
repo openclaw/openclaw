@@ -12,6 +12,7 @@ import type { BrowserPanelView } from "./browser-panel-surface.ts";
 const BROWSER_PANEL_TEST_PAGE_TITLE = "Page";
 
 export type BrowserRequestEnvelope = {
+  sessionKey?: string;
   method: string;
   path: string;
   target?: "host" | "node";

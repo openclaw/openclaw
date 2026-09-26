@@ -58,6 +58,17 @@ callback preserves existing behavior. Set `allowProfileFallback: false` when
 the selected profile represents an account boundary that must not rotate to a
 different configured profile.
 
+## Asynchronous session entry reads
+
+Use `await api.runtime.agent.session.getSessionEntryAsync({ agentId, sessionKey, storePath, assertCurrent })`
+for a single session entry.
+The store path is optional. The reader uses the existing readonly worker and
+preserves the public entry shape, including `sessionId` and `lifecycleRevision`.
+The required synchronous `assertCurrent` callback fences the caller before and
+after asynchronous work; it does not grant session access. Inputs and storage
+location are captured before waiting. Incognito reads retain their process-local
+existing-only owner.
+
 ## Session transcript hydration
 
 Use `await SessionManager.openAsync(target, cwd?, contextLimits?, signal?)` from

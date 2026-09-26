@@ -186,7 +186,7 @@ export function makeGatewayClient(params: {
       scopes: params.scopes ?? [],
       caps: params.caps ?? [],
     },
-    socket: { close: vi.fn(), readyState: 1 },
+    socket: { close: vi.fn<(code?: number, reason?: string) => void>(), readyState: 1 },
     ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
     ...(params.invalidated ? { invalidated: true } : {}),
   };
