@@ -13,6 +13,7 @@ import {
   normalizeTextForComparison,
   resolveCurrentSourceMessagingToolPartial,
 } from "../embedded-agent-helpers/messaging-dedupe.js";
+import { resolveEmbeddedMessageDeliveryRoute } from "./message-delivery-route.js";
 import type { AttemptDeliveryState } from "./run/attempt-delivery-state.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./run/internal-params.js";
 
@@ -27,12 +28,13 @@ export function createInheritedDeliveryCallbacks(
   callbacks: DeliveryCallbacks,
   delivery: AttemptDeliveryState,
 ): DeliveryCallbacks {
+  const messageRoute = resolveEmbeddedMessageDeliveryRoute(params);
   const route = {
     config: params.config,
-    messageProvider: params.messageChannel ?? params.messageProvider,
-    originatingTo: params.messageTo ?? params.currentMessagingTarget ?? params.currentChannelId,
-    originatingThreadId: params.messageThreadId ?? params.currentThreadTs,
-    accountId: params.agentAccountId,
+    messageProvider: messageRoute.channel,
+    originatingTo: messageRoute.to,
+    originatingThreadId: messageRoute.threadId,
+    accountId: messageRoute.accountId,
     messagingToolSentTargets: delivery.messagingToolSentTargets,
   };
   const decision = resolveMessagingToolPayloadDedupe(route);
