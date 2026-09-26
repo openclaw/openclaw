@@ -194,10 +194,10 @@ export function createWorkerSessionPlacementStore(
         }
         return requested;
       };
-      const byRequestedSet = (sessionIds: ReadonlySet<string>) =>
+      const byRequestedSet = (normalizedSessionIds: ReadonlySet<string>) =>
         new Set(
           [...requestedIds].flatMap(([original, normalized]) =>
-            sessionIds.has(normalized) ? [original] : [],
+            normalizedSessionIds.has(normalized) ? [original] : [],
           ),
         );
       return {
@@ -322,9 +322,9 @@ export function createWorkerSessionPlacementStore(
 
     startDispatch(
       input: WorkerSessionPlacementDispatchIdentity,
-      options: { assertCurrent?: () => void } = {},
+      dispatchOptions: { assertCurrent?: () => void } = {},
     ): Promise<WorkerSessionPlacementRecord> {
-      return startWorkerPlacementDispatch(path, input, now(), options.assertCurrent);
+      return startWorkerPlacementDispatch(path, input, now(), dispatchOptions.assertCurrent);
     },
 
     transition(input: {
