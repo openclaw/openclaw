@@ -11,11 +11,7 @@ import {
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
-import {
-  agentSessionKeysMatchByRequestKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
 import {
   formatTuiLevelCommandUsage,
@@ -35,6 +31,7 @@ import type { TuiBackend } from "./tui-backend.js";
 import { runTuiBrowserSetup } from "./tui-browser-setup.js";
 import type { CommandHandlerContext } from "./tui-command-context.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
+import { matchesTuiSessionSelection } from "./tui-session-events.js";
 import { buildSessionChoices, loadRecentSessions } from "./tui-session-picker.js";
 import {
   readTuiSessionProjectionScope,
@@ -215,8 +212,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   });
 
   const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }) =>
-    state.currentAgentId === selection.agentId &&
-    agentSessionKeysMatchByRequestKey(state.currentSessionKey, selection.sessionKey);
+    matchesTuiSessionSelection(state, selection);
 
   const captureSessionIncarnation = () => {
     const selection = captureSessionSelection();

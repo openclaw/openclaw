@@ -194,7 +194,7 @@ describe("resolveTuiSessionKey", () => {
     ).toBe("agent:ops:incident");
   });
 
-  it("unwraps an agent-qualified global key after agent selection", () => {
+  it("preserves an agent-qualified global key until history resolves its stored identity", () => {
     expect(
       resolveTuiSessionKey({
         raw: "AGENT:Work:GLOBAL",
@@ -202,7 +202,7 @@ describe("resolveTuiSessionKey", () => {
         currentAgentId: "work",
         sessionMainKey: "main",
       }),
-    ).toBe("global");
+    ).toBe("agent:work:global");
   });
 
   it.each([
@@ -416,7 +416,7 @@ describe("resolveTuiSessionSelection", () => {
     ).toEqual({ key: "incident-42", agentId: "ops" });
   });
 
-  it("carries an explicit owner while unwrapping global storage", () => {
+  it("carries an explicit owner without reinterpreting the qualified global selector", () => {
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", list: [{ id: "ops" }, { id: "research" }] },
     };
@@ -428,7 +428,7 @@ describe("resolveTuiSessionSelection", () => {
         currentAgentId: "research",
         sessionMainKey: "main",
       }),
-    ).toEqual({ key: "global", agentId: "ops" });
+    ).toEqual({ key: "agent:ops:global", agentId: "ops" });
   });
 });
 
