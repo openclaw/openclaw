@@ -360,6 +360,7 @@ export function createSessionCapabilityFixture(
     isConnectionScopeCurrent: () => false,
     deletionState: () => undefined,
     think: () => undefined,
+    settingsPreview: () => undefined,
     archiveVisibility: archiveState.visibility,
     beginArchive: archiveState.beginPending,
     ...overrides,
