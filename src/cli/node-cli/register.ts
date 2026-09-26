@@ -2,6 +2,7 @@
 import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { formatConsoleDiagnosticLine } from "../../logging/json-console-line.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { runNodeHost } from "../../node-host/runner.js";
 import { runNodeHostWorker } from "../../node-host/worker.js";
@@ -65,7 +66,11 @@ export function registerNodeCli(program: Command) {
       try {
         pair = opts.pair ? resolveNodePairGatewayOptions(opts.pair) : undefined;
         const existing = await loadNodeHostConfig();
-        gatewayOptions = resolveNodeGatewayOptions(opts, existing, pair);
+        gatewayOptions = resolveNodeGatewayOptions(opts, existing, pair, undefined, {
+          warn: (message) => {
+            process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
+          },
+        });
       } catch (error) {
         defaultRuntime.error(error instanceof Error ? error.message : String(error));
         defaultRuntime.exit(1);

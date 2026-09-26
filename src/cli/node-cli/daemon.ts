@@ -122,7 +122,15 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const config = await loadNodeHostConfig();
   let gatewayOptions;
   try {
-    gatewayOptions = resolveNodeGatewayOptions(opts, config);
+    gatewayOptions = resolveNodeGatewayOptions(opts, config, undefined, undefined, {
+      warn: (message) => {
+        if (json) {
+          warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
+      },
+    });
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     return;

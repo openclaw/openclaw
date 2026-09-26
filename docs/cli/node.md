@@ -103,11 +103,11 @@ Options:
 - `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
 - `--no-share-installed-apps`: Disable installed application sharing
 
-An explicitly empty or whitespace-only `--context-path` value is rejected
-instead of silently dropping the path and connecting to the Gateway root. Omit
-the option to keep the default (root) or paired/configured context path, and
-pass `--context-path /` to explicitly select the root path when a saved context
-path exists.
+An explicitly empty or whitespace-only `--context-path` value keeps the
+released behavior of connecting to the Gateway root and prints a visible
+warning instead of failing. Omit the option to keep the default (root) or
+paired/configured context path, and pass `--context-path /` to explicitly
+select the root path when a saved context path exists.
 
 ## Gateway auth for node host
 
@@ -183,9 +183,9 @@ Options:
 - `--force`: Reinstall/overwrite if already installed
 
 As with `node run`, an explicitly empty or whitespace-only `--context-path`
-value is rejected instead of silently dropping the path and connecting to the
-Gateway root. Omit the option to keep the default (root) or paired/configured
-context path.
+value keeps the released behavior of connecting to the Gateway root and prints
+a visible warning instead of failing. Omit the option to keep the default
+(root) or paired/configured context path.
 
 Set `OPENCLAW_WRAPPER` to an executable wrapper file to use it instead of the
 selected runtime and CLI entrypoint. The wrapper receives `node run` and the

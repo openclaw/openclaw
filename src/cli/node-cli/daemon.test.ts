@@ -280,7 +280,6 @@ describe("runNodeDaemonInstall", () => {
 
   it.each([
     ["an invalid explicit port", { port: "abc" }, "Invalid --port"],
-    ["a blank context path", { contextPath: "" }, "--context-path must not be blank"],
     ["an unsupported runtime", { runtime: "deno" }, 'Invalid --runtime (use "node" or "bun"'],
   ])("rejects %s before building an install plan", async (_name, opts, error) => {
     await runNodeDaemonInstall(opts);
@@ -288,6 +287,17 @@ describe("runNodeDaemonInstall", () => {
     expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
     expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
     expect(mocks.service.install).not.toHaveBeenCalled();
+  });
+
+  it("keeps the root context path and warns for an explicit blank node context path", async () => {
+    await runNodeDaemonInstall({ force: true, contextPath: "" });
+
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("--context-path is blank"),
+    );
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ contextPath: undefined }),
+    );
   });
 
   it("forwards Bun as the explicit node-service runtime", async () => {

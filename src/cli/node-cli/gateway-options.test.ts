@@ -73,16 +73,51 @@ describe("node gateway options", () => {
     );
   });
 
-  it("rejects explicitly blank --context-path values instead of dropping the path", () => {
-    expect(() => resolveNodeGatewayOptions({ contextPath: "" }, null)).toThrow(
-      "--context-path must not be blank",
-    );
-    expect(() => resolveNodeGatewayOptions({ contextPath: "   " }, null)).toThrow(
-      "--context-path must not be blank",
-    );
-    expect(() => resolveNodeGatewayOptions({ contextPath: "\t" }, null)).toThrow(
-      "--context-path must not be blank",
-    );
+  it("warns and keeps root selection for explicitly blank --context-path values", () => {
+    const warnings: string[] = [];
+    const warn = (message: string) => {
+      warnings.push(message);
+    };
+    const sink = { warn };
+    // Released behavior: an explicit blank flag selects the Gateway root rather
+    // than the saved/paired path, now surfaced with a visible warning instead of
+    // a hard rejection.
+    expect(
+      resolveNodeGatewayOptions({ contextPath: "" }, null, undefined, process.env, sink),
+    ).toMatchObject({ contextPath: undefined });
+    expect(
+      resolveNodeGatewayOptions({ contextPath: "   " }, null, undefined, process.env, sink),
+    ).toMatchObject({ contextPath: undefined });
+    expect(
+      resolveNodeGatewayOptions({ contextPath: "\t" }, null, undefined, process.env, sink),
+    ).toMatchObject({ contextPath: undefined });
+    expect(warnings).toHaveLength(3);
+    for (const message of warnings) {
+      expect(message).toContain("--context-path is blank");
+    }
+  });
+
+  it("drops the saved path for a blank flag but warns, while omitting the flag keeps it", () => {
+    const warnings: string[] = [];
+    const sink = { warn: (message: string) => warnings.push(message) };
+    const config: NodeHostConfig = {
+      version: 1,
+      nodeId: "test-node",
+      gateway: { host: "gw.example", port: 18789, contextPath: "/openclaw-gw" },
+    };
+    expect(
+      resolveNodeGatewayOptions({ contextPath: "" }, config, undefined, process.env, sink),
+    ).toMatchObject({ contextPath: undefined });
+    expect(warnings).toHaveLength(1);
+    expect(resolveNodeGatewayOptions({}, config).contextPath).toBe("/openclaw-gw");
+  });
+
+  it("does not warn when --context-path is omitted or non-blank", () => {
+    const warnings: string[] = [];
+    const sink = { warn: (message: string) => warnings.push(message) };
+    resolveNodeGatewayOptions({}, null, undefined, process.env, sink);
+    resolveNodeGatewayOptions({ contextPath: "/custom" }, null, undefined, process.env, sink);
+    expect(warnings).toHaveLength(0);
   });
 
   it("falls back to a paired or configured context path only when --context-path is omitted", () => {

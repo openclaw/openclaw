@@ -190,16 +190,17 @@ describe("registerNodeCli", () => {
     );
   });
 
-  it("rejects an explicit blank node run context path instead of dropping it", async () => {
+  it("warns and keeps the root context path for an explicit blank node run context path", async () => {
     const program = createProgram();
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     await program.parseAsync(["node", "run", "--context-path", ""], { from: "user" });
 
-    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
-    expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("--context-path must not be blank"),
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewayContextPath: undefined }),
     );
-    expect(daemonMocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining("--context-path is blank"));
+    stderrWrite.mockRestore();
   });
 
   it("hosts worker turns process-locally for an ephemeral node run", async () => {

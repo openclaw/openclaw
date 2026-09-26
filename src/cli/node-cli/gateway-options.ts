@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { requireTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
+import { formatConsoleDiagnosticLine } from "../../logging/json-console-line.js";
 import type { NodeHostConfig, NodeHostGatewayConfig } from "../../node-host/config.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,
@@ -24,6 +25,11 @@ type NodePairGatewayOptions = {
   tlsFingerprint?: string;
   bootstrapToken: string;
   candidates: NodeHostGatewayConfig[];
+};
+
+type NodeGatewayOptionsWarnSink = {
+  /** Emit a non-fatal operator warning; defaults to a stderr diagnostic line. */
+  warn?: (message: string) => void;
 };
 
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
@@ -68,7 +74,13 @@ export function resolveNodeGatewayOptions(
   config: NodeHostConfig | null,
   pair?: NodePairGatewayOptions,
   env: NodeJS.ProcessEnv = process.env,
+  sink: NodeGatewayOptionsWarnSink = {},
 ) {
+  const warn =
+    sink.warn ??
+    ((message: string) => {
+      process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
+    });
   const baselineHost = pair?.host ?? config?.gateway?.host ?? "127.0.0.1";
   const baselinePort = pair?.port ?? config?.gateway?.port ?? 18789;
   const host = normalizeOptionalString(options.host) || baselineHost;
@@ -91,11 +103,14 @@ export function resolveNodeGatewayOptions(
     typeof options.tls === "boolean"
       ? options.tls
       : Boolean(tlsFingerprint) || (endpointChanged ? undefined : baselineTls);
-  // An explicitly empty or whitespace-only --context-path is operator error, not
-  // "no context path": it would otherwise silently drop a paired/configured path
-  // and connect to the Gateway root. Omit the option to select the default.
+  // Released versions accepted an explicit empty --context-path as a root
+  // selection, silently dropping the saved or paired context path. Keep that
+  // behavior so caller-managed wrappers keep working, but warn so the operator
+  // notices the root connection and knows to omit the flag instead.
   if (options.contextPath !== undefined && !normalizeOptionalString(options.contextPath)) {
-    throw new Error("--context-path must not be blank");
+    warn(
+      "--context-path is blank; connecting to the Gateway root. Omit --context-path to keep the saved or paired context path.",
+    );
   }
   const contextPath =
     normalizeOptionalString(options.contextPath) ??
