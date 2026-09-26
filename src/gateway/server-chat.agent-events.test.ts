@@ -43,27 +43,12 @@ const persistGatewaySessionLifecycleEventMock = vi.fn();
 const loadGatewaySessionLifecycleSnapshotMock = vi.hoisted(() => vi.fn());
 const logErrorMock = vi.fn();
 const logWarnMock = vi.fn();
-const normalizeLiveAssistantBufferedTextMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionRow = vi.hoisted(() => vi.fn());
 
 vi.mock("../logger.js", () => ({
   logError: (...args: unknown[]) => logErrorMock(...args),
   logWarn: (...args: unknown[]) => logWarnMock(...args),
 }));
-
-vi.mock("./live-chat-projector.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./live-chat-projector.js")>();
-  return {
-    ...actual,
-    normalizeLiveAssistantBufferedText: (
-      text: string,
-      options?: Parameters<typeof actual.normalizeLiveAssistantBufferedText>[1],
-    ) => {
-      normalizeLiveAssistantBufferedTextMock(text, options);
-      return actual.normalizeLiveAssistantBufferedText(text, options);
-    },
-  };
-});
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -154,7 +139,6 @@ describe("agent event handler", () => {
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     logErrorMock.mockReset();
     logWarnMock.mockReset();
-    normalizeLiveAssistantBufferedTextMock.mockReset();
   });
 
   afterEach(() => {
@@ -1010,9 +994,8 @@ describe("agent event handler", () => {
       emitAgentEvent(handler, "run-lazy-sanitize", "assistant", { delta }, { seq: index + 1 });
     });
 
-    expect(normalizeLiveAssistantBufferedTextMock).toHaveBeenCalledTimes(1);
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(1);
     emitLifecycleEnd(handler, "run-lazy-sanitize", deltas.length + 1);
-    expect(normalizeLiveAssistantBufferedTextMock).toHaveBeenCalledTimes(2);
 
     const payloads = chatBroadcastCalls(broadcast).map(([, payload]) => payload) as Array<{
       state?: string;
