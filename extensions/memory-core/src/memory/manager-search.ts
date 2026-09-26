@@ -454,9 +454,9 @@ export async function searchPathKeyword(params: {
   type ExactPathRow = MemorySearchRow & {
     exact_path_specificity: ExactPathSpecificity;
   };
-  // ASCII identifiers use the path FTS plan before suffix filtering; Unicode
-  // forms keep the LIKE fallback. Exclude empty files before LIMIT, then order
-  // their first chunks only for the retained paths in the same read snapshot.
+  // ASCII identifiers use FTS before suffix filtering; Unicode keeps LIKE.
+  // Exclude empty files before LIMIT and keep one read snapshot. Both first-chunk
+  // joins pin loop order and indexes so stale one-row statistics cannot cause scans.
   const loadExactRows = (useLexicalCandidates: boolean): ExactPathRow[] => {
     const qualifiedPatternClause = exactCandidatePatterns
       .map(() => `${pathColumn} LIKE ? ESCAPE '\\'`)
@@ -501,8 +501,8 @@ export async function searchPathKeyword(params: {
           `SELECT c.id, exact_paths.path, exact_paths.source,\n` +
           `       c.start_line, c.end_line, ${snippet.sql} AS text, exact_paths.exact_path_specificity\n` +
           `  FROM exact_paths\n` +
-          `  JOIN memory_index_chunks c ON c.id = (\n` +
-          `    SELECT candidate.id FROM memory_index_chunks candidate\n` +
+          `  CROSS JOIN memory_index_chunks c INDEXED BY sqlite_autoindex_memory_index_chunks_1 ON c.id = (\n` +
+          `    SELECT candidate.id FROM memory_index_chunks candidate INDEXED BY idx_memory_index_chunks_path_source\n` +
           `     WHERE candidate.path = exact_paths.path\n` +
           `       AND candidate.source = exact_paths.source\n` +
           `     ORDER BY candidate.start_line, candidate.end_line, candidate.id\n` +
@@ -574,8 +574,8 @@ export async function searchPathKeyword(params: {
           `SELECT c.id, retained_paths.path, retained_paths.source,\n` +
           `       c.start_line, c.end_line, ${snippet.sql} AS text, retained_paths.rank\n` +
           `  FROM retained_paths\n` +
-          `  JOIN memory_index_chunks c ON c.id = (\n` +
-          `    SELECT candidate.id FROM memory_index_chunks candidate\n` +
+          `  CROSS JOIN memory_index_chunks c INDEXED BY sqlite_autoindex_memory_index_chunks_1 ON c.id = (\n` +
+          `    SELECT candidate.id FROM memory_index_chunks candidate INDEXED BY idx_memory_index_chunks_path_source\n` +
           `     WHERE candidate.path = retained_paths.path\n` +
           `       AND candidate.source = retained_paths.source\n` +
           `     ORDER BY candidate.start_line, candidate.end_line, candidate.id\n` +
