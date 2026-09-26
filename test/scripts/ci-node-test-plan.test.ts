@@ -3925,7 +3925,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         const isolated = /^agentic-gateway-server-isolated(?:-hosted-\d+)?$/u.test(
           sibling.shard_name,
         );
-        expect(sibling.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe(isolated ? "8" : undefined);
+        const methods = /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(sibling.shard_name);
+        expect(sibling.env?.OPENCLAW_VITEST_MAX_WORKERS, sibling.shard_name).toBe(
+          isolated ? "8" : methods ? "4" : undefined,
+        );
+        if (isolated || methods) {
+          expect(sibling.minTotalMemoryBytes).toBe(28 * 1024 ** 3);
+          expect(startupHealthJob.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
+        }
       }
     }
     const largeJobs = compact.filter(
