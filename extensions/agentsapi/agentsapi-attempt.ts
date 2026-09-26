@@ -20,7 +20,6 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   resolveAgentDir,
-  prepareAgentWorkspaceContext,
   runAgentEndSideEffects,
   runAgentHarnessLlmOutputHook,
   sanitizeToolArgs,
@@ -38,6 +37,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { collectOutputs, prepareInputs, uploadInputs } from "./agentsapi-files.js";
 import { createAgentsApiMessageProjection } from "./agentsapi-messages.js";
+import { buildAgentsApiInstructions, buildAgentsApiTurnContext } from "./agentsapi-prompt.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
@@ -234,32 +234,16 @@ export async function runAgentsApiAttempt(
     const creatingSession = !remoteSessionId;
     if (!remoteSessionId) {
       // The remote session owns this snapshot; continuation never reloads it.
-      const workspaceInstructions = await loadAgentsApiWorkspaceInstructions(params);
+      const instructions = await buildAgentsApiInstructions(params, surface.declarations);
       assertCurrent();
-      remoteSessionId = await client.create(
-        controller.signal,
-        [
-          "You are the OpenClaw assistant. Use your hosted Linux workspace for commands and files.",
-          "OpenClaw functions run in the Gateway and use its workspace; your hosted VM owns shell commands and VM files.",
-          "Uploaded attachments are mapped to hosted VM paths in each user message. Files you finish writing under /workspace/outputs are transferred and attached to your final reply after your turn completes.",
-          "Gateway messaging functions cannot open VM paths. Complete your assistant turn to deliver VM output attachments. Image generation is unavailable.",
-          workspaceInstructions,
-          params.extraSystemPrompt,
-        ]
-          .filter(Boolean)
-          .join("\n\n"),
-        params.model.id,
-        {
-          functions: surface.declarations,
-          files: inputs.files,
-          reasoning: {
-            effort: reasoningEffort,
-            ...(params.reasoningLevel && params.reasoningLevel !== "off"
-              ? { summary: "auto" }
-              : {}),
-          },
+      remoteSessionId = await client.create(controller.signal, instructions, params.model.id, {
+        functions: surface.declarations,
+        files: inputs.files,
+        reasoning: {
+          effort: reasoningEffort,
+          ...(params.reasoningLevel && params.reasoningLevel !== "off" ? { summary: "auto" } : {}),
         },
-      );
+      });
       assertCurrent();
       await bind({ sessionId: remoteSessionId, authFingerprint: fingerprint });
     } else {
@@ -357,6 +341,7 @@ export async function runAgentsApiAttempt(
     lifecycle.emitLifecycleStart({ provider: "openai", model: params.model.id });
     const result = await native.run(
       [
+        buildAgentsApiTurnContext(params, surface.declarations),
         buildCurrentInboundPrompt({ context: params.currentInboundContext, prompt: params.prompt }),
         inputs.mappingText,
       ]
@@ -643,25 +628,4 @@ function resolveAgentsApiReasoningEffort(
     default:
       throw new Error(`Agents API does not support reasoning effort ${effort}`);
   }
-}
-
-async function loadAgentsApiWorkspaceInstructions(
-  params: AgentHarnessAttemptParamsV2,
-): Promise<string | undefined> {
-  // Failed preparation must remain retryable instead of binding an empty snapshot.
-  const prepared = await prepareAgentWorkspaceContext({
-    scope: "instructions-only",
-    workspaceDir: params.bootstrapWorkspaceDir ?? params.workspaceDir,
-    config: params.config,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    chatType: params.chatType,
-    contextMode: params.bootstrapContextMode,
-    runKind: params.bootstrapContextRunKind,
-    warn: (message) => embeddedAgentLog.warn(message),
-  });
-  // Persona, other workspace context, and memory guidance remain unimplemented
-  // until the client has a per-turn developer instruction carrier.
-  return prepared.instructionSnapshot.instructions || undefined;
 }

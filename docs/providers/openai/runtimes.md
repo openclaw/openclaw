@@ -126,23 +126,35 @@ and `/reset` start a fresh session on the next message. Reset and local session
 deletion retire the binding; the Agents API retains the remote history and
 workspace, which can be managed through its API.
 
-When creating a session, OpenClaw reads only `AGENTS.md` from the configured
-agent workspace on the Gateway through shared instructions-only preparation
-and includes its bounded bootstrap snapshot in
-the agent instructions, alongside any extra system instructions. The execution
-workspace does not need a copy. Follow-up turns and resumed sessions retain the
-saved instructions without rereading the file or appending it to user input.
-Missing or blank files add no workspace instructions. Use `/new` or `/reset`
-to pick up later edits or to adopt this behavior in an existing session.
-If bootstrap preparation fails, the attempt fails before creating a remote
-session so the next attempt can retry the capture.
+When creating a session, OpenClaw uses the same workspace preparation as Codex
+to supply bounded `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, shared `USER.md`, and
+the selected person's `users/<profile-id>/USER.md` overlay. Eligible
+`BOOTSTRAP.md`, `MEMORY.md`, and bootstrap-hook files are included as supporting
+context. Existing bootstrap budgets, session privacy rules, and lightweight
+mode still apply. When enabled memory tools target the configured workspace,
+OpenClaw supplies memory references and the active memory plugin's recall
+guidance instead of embedding root `MEMORY.md` contents.
+
+These are instruction snapshots from the Gateway, not files copied into the
+hosted VM. Follow-up turns retain them. Use `/new` or `/reset` to pick up edits,
+changed personal-user selection, or this behavior in an existing session.
+Preparation failure occurs before remote session creation and binding so the
+next attempt can retry.
+
+The harness reuses OpenClaw's tool-aware delegation, Skill Workshop, UI,
+credential, Git coauthor, and extra system guidance where applicable. Each turn
+also receives current date/timezone, active-computer, visible-reply, permission
+notice, and watched-session context through the existing input carrier.
+Lightweight cron input stays unchanged.
 
 The MVP client has no per-turn developer instruction carrier or instruction
-refresh operation. Persona, personal-user overlays, other workspace context,
-and memory prompt guidance remain unimplemented in the Agents API adapter.
-They are not captured as permanent session instructions. Native fork
-preparation and Gateway-to-hosted-workspace path projection are also
-unimplemented; hosted files remain separate from the Gateway workspace.
+refresh operation. Workspace/persona refresh, Gateway skill-file access and
+skill catalog delivery, plugin command prompt registration for this harness,
+prompt-building hooks and context-engine assembly, and native fork preparation
+remain unimplemented. Native Codex project discovery, collaboration, and
+deferred-tool-search instructions are not applicable to the hosted harness.
+Hosted files remain separate from the Gateway workspace; attachment upload and
+output transfer are supported independently.
 
 If the event stream closes, the harness subscribes again and reconciles saved
 turns, saved items, and input receipts before accepting completion. It does not

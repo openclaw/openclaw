@@ -5,14 +5,28 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
+import type { AgentsApiToolSurface } from "./agentsapi-tools.js";
 
-const { fetchWithSsrFGuardMock, prepareAgentWorkspaceContextMock } = vi.hoisted(() => ({
+const {
+  fetchWithSsrFGuardMock,
+  prepareAgentWorkspaceContextMock,
+  watchedSessionsContextMock,
+  promptFixture,
+} = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
     vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
   prepareAgentWorkspaceContextMock:
     vi.fn<
       typeof import("openclaw/plugin-sdk/agent-harness-runtime").prepareAgentWorkspaceContext
     >(),
+  watchedSessionsContextMock:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/agent-harness-runtime").buildWatchedSessionsHarnessContext
+    >(),
+  promptFixture: {
+    declarations: [] as AgentsApiToolSurface["declarations"],
+    turnInputs: [] as string[],
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -26,8 +40,11 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
     typeof import("openclaw/plugin-sdk/agent-harness-runtime")
   >("openclaw/plugin-sdk/agent-harness-runtime");
   prepareAgentWorkspaceContextMock.mockImplementation(bootstrap.prepareAgentWorkspaceContext);
+  watchedSessionsContextMock.mockImplementation(bootstrap.buildWatchedSessionsHarnessContext);
   return {
+    ...bootstrap,
     prepareAgentWorkspaceContext: prepareAgentWorkspaceContextMock,
+    buildWatchedSessionsHarnessContext: watchedSessionsContextMock,
     embeddedAgentLog: { warn: vi.fn(), debug: vi.fn() },
     formatErrorMessage: String,
     setActiveEmbeddedRun: vi.fn(),
@@ -45,7 +62,21 @@ vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
 }));
 
 vi.mock("./agentsapi-tools.js", () => ({
-  buildAgentsApiToolSurface: () => ({ declarations: [], toolMetas: [] }),
+  buildAgentsApiToolSurface: (): AgentsApiToolSurface => ({
+    declarations: promptFixture.declarations,
+    execute: vi.fn<AgentsApiToolSurface["execute"]>(),
+    delivery: {
+      didSendViaMessagingTool: false,
+      messagingToolSentTexts: [],
+      messagingToolSentMediaUrls: [],
+      messagingToolSentTargets: [],
+      messagingToolSourceReplyPayloads: [],
+      toolMediaUrls: [],
+    },
+    runtimeFacts: { acceptedSessionSpawns: [] },
+    toolMetas: [],
+    lastToolError: undefined,
+  }),
 }));
 
 vi.mock("./agentsapi-files.js", async () => {
@@ -69,7 +100,10 @@ vi.mock("./agentsapi-messages.js", () => ({
 
 vi.mock("./agentsapi-session.js", () => ({
   createAgentsApiSession: () => ({
-    run: async () => ({ turn: { id: "turn-fixture" }, cancelled: false }),
+    run: async (input: string) => {
+      promptFixture.turnInputs.push(input);
+      return { turn: { id: "turn-fixture" }, cancelled: false };
+    },
     readUsageTurns: async () => [],
     close: async () => {},
     wasSubmitted: () => true,
@@ -79,17 +113,29 @@ vi.mock("./agentsapi-session.js", () => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => fetchWithSsrFGuardMock.mockReset());
 afterEach(() => prepareAgentWorkspaceContextMock.mockClear());
+afterEach(() => watchedSessionsContextMock.mockClear());
+afterEach(() => {
+  promptFixture.declarations = [];
+  promptFixture.turnInputs = [];
+  vi.restoreAllMocks();
+});
 
 describe("Agents API agent workspace instructions", () => {
-  it("sends Gateway-only AGENTS.md once, preserves it on resume, and refreshes it for a new session", async () => {
+  it("sends the Gateway workspace snapshot once, preserves it on resume, and refreshes it for a new session", async () => {
     const fixture = await createFixture();
     const instructionsPath = path.join(fixture.workspace, "AGENTS.md");
     const original = "Follow the Gateway fixture operating rules.\n";
     await fs.writeFile(instructionsPath, original);
-    await fs.writeFile(
-      path.join(fixture.workspace, "SOUL.md"),
-      "Persona fixture, not operating rules.",
-    );
+    const contextFiles = {
+      "SOUL.md": "Use the fixture's calm, direct voice.",
+      "IDENTITY.md": "Your fixture name is Orchard.",
+      "USER.md": "The fixture human prefers concise replies.",
+      "BOOTSTRAP.md": "Complete the fixture workspace introduction.",
+      "MEMORY.md": "The fixture's durable project is Cedar.",
+    };
+    for (const [name, content] of Object.entries(contextFiles)) {
+      await fs.writeFile(path.join(fixture.workspace, name), content);
+    }
     expect(await fs.readdir(fixture.executionWorkspace)).toEqual([]);
 
     const binding = await fixture.run();
@@ -99,9 +145,12 @@ describe("Agents API agent workspace instructions", () => {
     expect(firstInstructions?.match(/Follow the Gateway fixture operating rules\./g)).toHaveLength(
       1,
     );
-    expect(firstInstructions).not.toContain("Persona fixture");
+    for (const content of Object.values(contextFiles)) {
+      expect(firstInstructions).toContain(content);
+    }
 
     await fs.writeFile(instructionsPath, "Follow the updated Gateway fixture rules.\n");
+    await fs.writeFile(path.join(fixture.workspace, "SOUL.md"), "Use the updated fixture voice.");
     // A resumed attempt needs only its binding, with no local instruction cache.
     const resumedBinding = structuredClone(binding);
     await fixture.run(resumedBinding);
@@ -113,6 +162,120 @@ describe("Agents API agent workspace instructions", () => {
       "Follow the updated Gateway fixture rules.",
     );
     expect(fixture.requests[2]?.agent.instructions).not.toContain(original.trim());
+    expect(fixture.requests[2]?.agent.instructions).toContain("Use the updated fixture voice.");
+  });
+
+  it("forwards the selected personal profile and serializes its prepared persona", async () => {
+    const fixture = await createFixture({ bootstrapUserProfileId: "alice" });
+    // The shared owner tests authenticated selection and precedence. This seam
+    // protects the adapter's profile forwarding and native instruction carrier.
+    prepareAgentWorkspaceContextMock.mockResolvedValueOnce({
+      ...emptyWorkspaceContext(),
+      personaInstructions: "Prepared shared and personal fixture preferences.",
+    });
+    await fixture.run();
+    expect(prepareAgentWorkspaceContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "full",
+        workspaceDir: fixture.workspace,
+        bootstrapUserProfileId: "alice",
+      }),
+    );
+    expect(fixture.requests[0]?.agent.instructions).toContain(
+      "Prepared shared and personal fixture preferences.",
+    );
+  });
+
+  it("preserves channel memory privacy when preparing the full initial snapshot", async () => {
+    const fixture = await createFixture({ chatType: "channel" });
+    await fs.writeFile(path.join(fixture.workspace, "SOUL.md"), "Channel fixture persona.");
+    await fs.writeFile(path.join(fixture.workspace, "MEMORY.md"), "Private fixture memory.");
+    await fixture.run();
+    expect(fixture.requests[0]?.agent.instructions).toContain("Channel fixture persona.");
+    expect(fixture.requests[0]?.agent.instructions).not.toContain("Private fixture memory.");
+  });
+
+  it("routes workspace memory through callable Gateway memory tools and plugin guidance", async () => {
+    const fixture = await createFixture();
+    promptFixture.declarations = toolDeclarations("memory_search", "memory_get");
+    const memoryPath = path.join(fixture.workspace, "MEMORY.md");
+    prepareAgentWorkspaceContextMock.mockResolvedValueOnce({
+      ...emptyWorkspaceContext(),
+      memoryReferenceFiles: [
+        { path: memoryPath, content: "Private fixture memory remains tool-routed." },
+      ],
+      memoryRecallInstructions:
+        "Fixture memory plugin guidance: search durable memories when relevant.",
+    });
+    await fixture.run(undefined, {
+      config: { agents: { defaults: { workspace: fixture.workspace } } },
+    });
+    const instructions = fixture.requests[0]?.agent.instructions;
+    expect(prepareAgentWorkspaceContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memoryToolRouted: true,
+        memoryTools: expect.objectContaining({ toolNames: ["memory_search", "memory_get"] }),
+      }),
+    );
+    expect(instructions).toContain(memoryPath);
+    expect(instructions).toContain("memory_search");
+    expect(instructions).toContain("Fixture memory plugin guidance");
+    expect(instructions).not.toContain("Private fixture memory remains tool-routed.");
+  });
+
+  it("includes shared policies for the admitted Gateway tools in the initial instructions", async () => {
+    const fixture = await createFixture({
+      sessionKey: "agent:main:main",
+      gitCoauthorPrompt: "Fixture Git co-authors: Example <example@example.test>.",
+    });
+    promptFixture.declarations = toolDeclarations(
+      "screen",
+      "skill_workshop",
+      "sessions_spawn",
+      "sessions_send",
+      "subagents",
+      "gateway",
+    );
+    await fixture.run();
+    const instructions = fixture.requests[0]?.agent.instructions;
+    expect(instructions).toContain("## UI Presentation");
+    expect(instructions).toContain("## Skill Workshop");
+    expect(instructions).toContain("## Delegation");
+    expect(instructions).toContain("Use or store credentials the user supplies as requested");
+    expect(instructions).toContain("Fixture Git co-authors: Example <example@example.test>.");
+    expect(instructions).toContain("Extra fixture instructions");
+  });
+
+  it("refreshes temporal, delivery, and watched-session context on resumed turns", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-25T12:00:00-07:00"));
+    const fixture = await createFixture({
+      sessionKey: "agent:main:main",
+      config: { agents: { defaults: { userTimezone: "America/Los_Angeles" } } },
+    });
+    promptFixture.declarations = toolDeclarations("message", "sessions_history");
+    watchedSessionsContextMock.mockReturnValueOnce("Watched fixture session: fixture-one");
+    const binding = await fixture.run();
+    expect(promptFixture.turnInputs[0]).toContain("Current date: 2026-09-25");
+    expect(promptFixture.turnInputs[0]).toContain("Time zone: America/Los_Angeles");
+    expect(promptFixture.turnInputs[0]).toContain(
+      "OpenClaw delivers your final response automatically.",
+    );
+    expect(promptFixture.turnInputs[0]).toContain("Watched fixture session: fixture-one");
+    expect(promptFixture.turnInputs[0]).toContain("Fixture prompt");
+
+    now.mockReturnValue(Date.parse("2026-09-26T12:00:00-07:00"));
+    watchedSessionsContextMock.mockReturnValueOnce("Watched fixture session: fixture-two");
+    await fixture.run(binding, { sourceReplyDeliveryMode: "message_tool_only" });
+    expect(promptFixture.turnInputs[1]).toContain("Current date: 2026-09-26");
+    expect(promptFixture.turnInputs[1]).toContain("Use `message(action=send)`");
+    expect(promptFixture.turnInputs[1]).toContain("Watched fixture session: fixture-two");
+    expect(watchedSessionsContextMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        toolNames: new Set(["message", "sessions_history"]),
+      }),
+    );
+    expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
   });
 
   it.each([undefined, " \n\t"])(
@@ -150,10 +313,8 @@ describe("Agents API agent workspace instructions", () => {
     const instructions = fixture.requests[0]?.agent.instructions;
     expect(instructions).toContain("Bounded fixture rules.");
     expect(instructions).toContain("truncated");
-    const snapshot = instructions
-      ?.split(`### ${path.join(fixture.workspace, "AGENTS.md")}\n\n`)[1]
-      ?.split("\n\nExtra fixture instructions")[0];
-    expect(snapshot?.length).toBeLessThanOrEqual(budget);
+    const retainedRules = instructions?.match(/Bounded fixture rules\./g) ?? [];
+    expect(retainedRules.length * "Bounded fixture rules.".length).toBeLessThanOrEqual(budget);
   });
 
   it("keeps lightweight cron bootstrap context empty", async () => {
@@ -165,6 +326,7 @@ describe("Agents API agent workspace instructions", () => {
     await fixture.run();
     expect(fixture.requests[0]?.agent.instructions).not.toContain("Full bootstrap fixture rules.");
     expect(fixture.requests[0]?.agent.instructions).toContain("Extra fixture instructions");
+    expect(promptFixture.turnInputs).toEqual(["Fixture prompt"]);
   });
 
   it("retries a failed first capture before creating or binding a native session", async () => {
@@ -210,7 +372,7 @@ async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {
   const target = {
     agentId: "main",
     sessionId: "local-fixture",
-    sessionKey: `agent:main:${root}`,
+    sessionKey: overrides.sessionKey ?? `agent:main:${root}`,
     storePath: path.join(root, "agent.sqlite"),
   };
   const params: AgentHarnessAttemptParamsV2 = {
@@ -259,10 +421,13 @@ async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {
     workspace,
     executionWorkspace,
     requests,
-    async run(binding?: AgentsApiBinding) {
+    async run(
+      binding?: AgentsApiBinding,
+      turnOverrides: Partial<AgentHarnessAttemptParamsV2> = {},
+    ) {
       let saved = binding;
       const result = await runAgentsApiAttempt(
-        params,
+        { ...params, ...turnOverrides },
         binding,
         async (next) => {
           saved = next;
@@ -280,5 +445,26 @@ async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {
       }
       return saved;
     },
+  };
+}
+
+function toolDeclarations(...names: string[]): AgentsApiToolSurface["declarations"] {
+  return names.map((name) => ({
+    type: "function",
+    name,
+    description: `Fixture ${name} tool`,
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  }));
+}
+
+function emptyWorkspaceContext(): Awaited<ReturnType<typeof prepareAgentWorkspaceContextMock>> {
+  return {
+    bootstrapFiles: [],
+    contextFiles: [],
+    instructionSnapshot: { files: [], instructions: "" },
+    personaFiles: [],
+    promptContextFiles: [],
+    memoryReferenceFiles: [],
+    memoryToolRoutedBootstrapFiles: [],
   };
 }
