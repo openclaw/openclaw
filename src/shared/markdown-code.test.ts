@@ -19,6 +19,29 @@ describe("formatInlineCodeSpan", () => {
   it("pads multi-line content", () => {
     expect(formatInlineCodeSpan("a\nb")).toBe("` a\nb `");
   });
+
+  it("guards edge spaces against CommonMark one-space stripping", () => {
+    expect(formatInlineCodeSpan(" 1 ")).toBe("`  1  `");
+    expect(formatInlineCodeSpan(" `code` ")).toBe("``  `code`  ``");
+  });
+
+  it("guards edge spaces held apart by a tab or a non-ASCII space", () => {
+    // The renderer's all-spaces exception is U+0020 only, so a tab or a
+    // no-break space inside makes both edge spaces strippable.
+    expect(formatInlineCodeSpan(" \t ")).toBe("`  \t  `");
+    expect(formatInlineCodeSpan(" a\tb ")).toBe("`  a\tb  `");
+    expect(formatInlineCodeSpan(" \u00a0 ")).toBe("`  \u00a0  `");
+  });
+
+  it("does not pad content whose spaces are safe", () => {
+    expect(formatInlineCodeSpan(" leading")).toBe("` leading`");
+    expect(formatInlineCodeSpan("trailing ")).toBe("`trailing `");
+    expect(formatInlineCodeSpan("   ")).toBe("`   `");
+  });
+
+  it("keeps edge-backtick padding correct when the far edge has a space", () => {
+    expect(formatInlineCodeSpan("`x ")).toBe("`` `x  ``");
+  });
 });
 
 describe("formatFencedCodeBlock", () => {
