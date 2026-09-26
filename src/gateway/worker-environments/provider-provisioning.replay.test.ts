@@ -10,7 +10,7 @@ import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
-import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
+import { WorkerProviderError, type WorkerProviderV1 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
@@ -28,7 +28,7 @@ describe("worker environment service provision replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it("retains an indeterminate node lease when runtime preflight fails after restart", async () => {
-    const provision = vi.fn<WorkerProvider["provision"]>(async () => {
+    const provision = vi.fn<WorkerProviderV1["provision"]>(async () => {
       throw new Error("node allocation response was lost");
     });
     const destroy = vi.fn(async () => {});

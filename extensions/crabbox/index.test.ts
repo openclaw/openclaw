@@ -62,7 +62,7 @@ function inspectResult(leaseId: string): SpawnResult {
 }
 
 function registerCrabboxGeneration() {
-  const providers: WorkerProvider[] = [];
+  const providers: WorkerProvider<0 | 1>[] = [];
   const services: OpenClawPluginService[] = [];
   plugin.register(
     createTestPluginApi({

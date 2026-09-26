@@ -270,8 +270,67 @@ export class WorkerProviderError extends Error {
   }
 }
 
-/** Cloud-worker lifecycle capability shared by plugin and internal providers. */
-export type WorkerProvider = {
+/** Legacy provisioning options retained for existing external implementations. */
+type WorkerProvisionOptions = {
+  /** Configured profile id for display; settings and operation id own allocation identity. */
+  profileId?: string;
+  /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
+  signal?: AbortSignal;
+  /** Modern hosts supply authority; legacy optionality is source compatibility only. */
+  assertCurrent?: () => void;
+  executionMode?: WorkerExecutionMode;
+  machineClass?: string;
+  os?: string;
+  nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity;
+  prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
+  beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
+  project?: {
+    key: string;
+    baseCommit: string;
+    label?: string;
+    /** Gateway-local checkout root for display and explicit rebuild requests. */
+    root?: string;
+    preparation?: {
+      key: string;
+      cacheKey: string;
+      purpose: "session" | "reserve";
+      demandAtMs: number;
+    };
+    signal: AbortSignal;
+    assertCurrent: () => void;
+    /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
+    inspectPreparedWorkspace?: (transport: {
+      runScript: (script: string, signal: AbortSignal) => Promise<string>;
+    }) => Promise<void>;
+    /** Bound to this provision attempt; retained callbacks reject after it closes. */
+    prepare: (transport: {
+      runScript: (script: string, signal: AbortSignal) => Promise<string>;
+      /** Render using this provider command's remaining budget before repository code runs. */
+      runScriptWithBudget?: (
+        createScript: (timeoutMs: number) => string,
+        signal: AbortSignal,
+      ) => Promise<string>;
+      upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
+    }) => Promise<{
+      seedKey: string;
+      cacheHit: boolean;
+      /** New completed setup must enter the reusable image before enrollment. */
+      captureRequired?: true;
+      preparedWorkspace?: {
+        preparationKey: string;
+        cacheKey: string;
+        workspaceDir: string;
+        homeDir: string;
+        sourceManifestRef: string;
+        preparedManifestRef: string;
+      };
+    }>;
+  };
+};
+
+/** Legacy cloud-worker lifecycle contract; options remain source-compatible. */
+type LegacyWorkerProvider = {
+  liveAuthorityVersion?: undefined;
   id: string;
   /**
    * Nonsecret backend display ID, never a routing or allocation identity.
@@ -331,62 +390,7 @@ export type WorkerProvider = {
   provision: (
     profile: WorkerProfile,
     operationId: string,
-    options?: {
-      /** Configured profile id for display; settings and operation id own allocation identity. */
-      profileId?: string;
-      /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
-      signal?: AbortSignal;
-      /** Modern hosts supply authority; legacy optionality is source compatibility only. */
-      assertCurrent?: () => void;
-      executionMode?: WorkerExecutionMode;
-      machineClass?: string;
-      os?: string;
-      nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity;
-      prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
-      beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
-      project?: {
-        key: string;
-        baseCommit: string;
-        label?: string;
-        /** Gateway-local checkout root for display and explicit rebuild requests. */
-        root?: string;
-        preparation?: {
-          key: string;
-          cacheKey: string;
-          purpose: "session" | "reserve";
-          demandAtMs: number;
-        };
-        signal: AbortSignal;
-        assertCurrent: () => void;
-        /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
-        inspectPreparedWorkspace?: (transport: {
-          runScript: (script: string, signal: AbortSignal) => Promise<string>;
-        }) => Promise<void>;
-        /** Bound to this provision attempt; retained callbacks reject after it closes. */
-        prepare: (transport: {
-          runScript: (script: string, signal: AbortSignal) => Promise<string>;
-          /** Render using this provider command's remaining budget before repository code runs. */
-          runScriptWithBudget?: (
-            createScript: (timeoutMs: number) => string,
-            signal: AbortSignal,
-          ) => Promise<string>;
-          upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
-        }) => Promise<{
-          seedKey: string;
-          cacheHit: boolean;
-          /** New completed setup must enter the reusable image before enrollment. */
-          captureRequired?: true;
-          preparedWorkspace?: {
-            preparationKey: string;
-            cacheKey: string;
-            workspaceDir: string;
-            homeDir: string;
-            sourceManifestRef: string;
-            preparedManifestRef: string;
-          };
-        }>;
-      };
-    },
+    options?: WorkerProvisionOptions,
   ) => Promise<WorkerLease>;
   /**
    * Prepare without allocating, renewing, enrolling, or changing a provider resource. The
@@ -394,7 +398,7 @@ export type WorkerProvider = {
    * Replay preparation cannot attest that an earlier operation allocated nothing.
    */
   prepareProvision?: (
-    ...args: Parameters<WorkerProvider["provision"]>
+    ...args: Parameters<LegacyWorkerProvider["provision"]>
   ) => Promise<() => Promise<WorkerLease>>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
   resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
@@ -425,6 +429,34 @@ export type WorkerProvider = {
   /** Maximum core wait for teardown, including provider-owned checkpointing and cleanup. */
   resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };
+
+/** Existing plugins retain the legacy default; version 1 requires live host authority. */
+export type WorkerProvider<Version extends 0 | 1 = 0> = Version extends 1
+  ? WorkerProviderV1
+  : LegacyWorkerProvider;
+
+/** Required authority for provider-owned identity effects in one host invocation. */
+export type WorkerSshIdentityRequestV1 = WorkerSshIdentityRequest & { assertCurrent: () => void };
+
+/** Opt-in to required closure-bound guards without withdrawing legacy lifecycle support. */
+export type WorkerProviderV1 = Omit<
+  LegacyWorkerProvider,
+  "liveAuthorityVersion" | "provision" | "prepareProvision" | "resolveSshIdentity"
+> & {
+  liveAuthorityVersion: 1;
+  provision: (
+    profile: WorkerProfile,
+    operationId: string,
+    options: WorkerProvisionOptions & { assertCurrent: () => void },
+  ) => Promise<WorkerLease>;
+  prepareProvision?: (
+    ...args: Parameters<WorkerProviderV1["provision"]>
+  ) => Promise<() => Promise<WorkerLease>>;
+  resolveSshIdentity?: (request: WorkerSshIdentityRequestV1) => Promise<WorkerSshIdentity>;
+};
+
+/** Core supplies live invocation authority to both registered contracts. */
+export type RegisteredWorkerProvider = WorkerProvider | WorkerProviderV1;
 
 /** Speech capability registered by a plugin. */
 export type SpeechProviderPlugin = {

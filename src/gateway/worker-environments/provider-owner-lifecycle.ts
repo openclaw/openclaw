@@ -65,14 +65,20 @@ export function createWorkerProviderOwnerLifecycle(
     profile: requireWorkerProfile(record.profileSnapshot.settings),
   });
 
-  const requireCurrentOwner = (record: WorkerEnvironmentRecord): WorkerEnvironmentRecord => {
+  const requireCurrentOwner = (
+    record: WorkerEnvironmentRecord,
+    phase: "lease" | "provision" = "lease",
+  ): WorkerEnvironmentRecord => {
     const current = store.get(record.environmentId);
     if (
       !current ||
       current.ownerEpoch !== record.ownerEpoch ||
+      current.provisionOperationId !== record.provisionOperationId ||
       current.state !== record.state ||
       current.leaseId !== record.leaseId ||
-      current.nodeDeviceId !== record.nodeDeviceId ||
+      // The same provisioning operation binds its node before returning the lease.
+      (current.nodeDeviceId !== record.nodeDeviceId &&
+        (phase === "lease" || record.nodeDeviceId !== null)) ||
       current.sharedHost !== record.sharedHost ||
       !isDeepStrictEqual(current.attachedSessionIds, record.attachedSessionIds)
     ) {

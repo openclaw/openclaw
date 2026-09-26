@@ -30,7 +30,7 @@ import {
   type CommandCall,
 } from "./crabbox-worker-warm-image.test-support.js";
 
-type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
+type ProvisionOptions = Parameters<WorkerProvider<1>["provision"]>[2];
 
 function notSubmittedReceipt(leaseId: string) {
   return {
@@ -699,6 +699,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
         current = false;
         expect(controller.signal.aborted).toBe(false);
         if (outcome === "reject") {
+          controller.abort(closed);
           throw closed;
         }
         return {
@@ -759,7 +760,10 @@ exec "$CRABBOX_TEST_NODE" "$@"
         if (failure === "aborted") {
           controller.abort();
         }
-        expect(call.options.signal).toBe(controller.signal);
+        // The command combines caller cancellation and the project grant; identity may differ.
+        expect(call.options.signal).toBeDefined();
+        expect(call.options.signal?.aborted).toBe(controller.signal.aborted);
+        expect(call.options.signal?.reason).toBe(controller.signal.reason);
         return commandResult({
           code: 7,
           stderr: "capture failed",

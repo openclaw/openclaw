@@ -100,6 +100,7 @@ export type * from "./types.mcp-connection.js";
 
 export { WorkerProviderError } from "./capability-provider.types.js";
 export type * from "./capability-provider.types.js";
+export type { RegisteredWorkerProvider as WorkerProvider } from "./capability-provider.types.js";
 export type * from "./migration-provider.types.js";
 export type * from "./plugin-api.types.js";
 export { AGENT_PROMPT_SURFACE_KINDS } from "./plugin-command.types.js";

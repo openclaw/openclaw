@@ -21,6 +21,23 @@ External-plugin compatibility work follows this order:
 6. Remove only after the announced migration window, usually in a major
    release.
 
+### Worker-provider invocation guards
+
+`WorkerProvider` from `openclaw/plugin-sdk/plugin-entry` remains the legacy
+source-compatible default: provisioning options and their `assertCurrent`
+callback stay optional in that type. This repair preserves legacy lifecycle and
+placement support; it schedules no cutoff or removal date. Changing that
+compatibility window requires a separate SDK and security owner decision.
+
+Migrate implementations to `WorkerProvider<1>` and declare
+`liveAuthorityVersion: 1`. Provisioning, preparation, and provider-owned SSH
+identity resolution then require their host-supplied invocation guards. Core
+supplies genuine guards to legacy implementations too; optional typing is not
+a capability-free execution path. Core cannot prevent a legacy implementation's
+internal effects if it ignores the callback. All bundled worker providers use
+version 1. Removing the legacy type requires the approved SDK-breaking boundary
+and a published-plugin reader sweep, not this migration alone.
+
 ### Retained helper contracts
 
 Discord and llama.cpp retain their declared OpenClaw 2026.9.2 host support.

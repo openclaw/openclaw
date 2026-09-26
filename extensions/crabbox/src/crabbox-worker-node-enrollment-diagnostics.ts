@@ -15,10 +15,12 @@ export async function collectCrabboxNodeEnrollmentEvidence(params: {
   target?: CrabboxOperatingSystem;
   runCommand: CrabboxCommandRunner;
   signal?: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<string> {
   let label = "box evidence";
   let detail: string;
   try {
+    params.assertCurrent();
     const result = await runCrabboxCommand({
       action: "enrollment diagnostics",
       args: params.args,
@@ -68,6 +70,7 @@ process.stdout.write("node-runtime=" + runtime + " node-pid=" + (alive ? "alive"
     label = "box evidence unavailable";
     detail = error instanceof Error ? error.message : "diagnostic command failed";
   }
+  params.assertCurrent();
   const prefix = `${label}: `;
   const safeDetail = redactToolPayloadText(detail).replace(/\s+/gu, " ").trim();
   return `${prefix}${truncateUtf8Prefix(safeDetail, MAX_NODE_ENROLLMENT_EVIDENCE_BYTES - prefix.length)}`;
