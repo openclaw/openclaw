@@ -8,7 +8,10 @@ import * as workerAdmission from "../infra/sqlite-worker-broker-admission.js";
 import type { Job } from "../infra/sqlite-worker-broker.types.js";
 import type { SqliteWorkerNativeSettlementOwner } from "../infra/sqlite-worker-operation-settlement.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
@@ -62,6 +65,74 @@ function taskMembership(task: TaskRecord) {
 }
 
 describe("task maintenance retention", () => {
+  it("keeps an overflow candidate when a newer peer leaves its partition before the native write", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        await runTaskRegistryMaintenance();
+        const now = Date.now();
+        const store = getTaskRegistryStore();
+        const records = Array.from({ length: CRON_HISTORY_KEEP_PER_JOB + 1 }, (_, index) => ({
+          ...createStoredTask(),
+          taskId: `cron-peer-race-${index}`,
+          runtime: "cron" as const,
+          sourceId: "peer-race-job",
+          status: "succeeded" as const,
+          createdAt: now + index,
+          endedAt: now + index,
+          lastEventAt: now + index,
+          cleanupAfter: now + 86_400_000,
+          notifyPolicy: "silent" as const,
+          detail: { kind: "cron-run", storeKey: "peer-race-store" },
+        }));
+        runOpenClawStateWriteTransaction(() => {
+          for (const task of records) {
+            store.upsertTaskWithDeliveryState({ task });
+          }
+        });
+        const context = captureOpenClawStateWorkerContext();
+        await reloadTaskRegistryFromStoreAsync(context);
+        const candidate = expectDefined(records[0], "overflow candidate");
+        const peer = expectDefined(records.at(-1), "newer cron peer");
+        const prepare = store.prepareRetentionSourceAsync.bind(store);
+        let moved = false;
+        const preparation = vi
+          .spyOn(store, "prepareRetentionSourceAsync")
+          .mockImplementation(async (...args) => {
+            const source = await prepare(...args);
+            if (!moved && args[1] === candidate.taskId) {
+              moved = true;
+              const replacement = { ...peer, sourceId: "another-job" };
+              store.upsertTaskWithDeliveryState({ task: replacement });
+              publishTaskRecordAfterAtomicStore(replacement);
+            }
+            return source;
+          });
+        const summary = await runTaskRegistryMaintenance();
+        preparation.mockRestore();
+
+        expect(moved).toBe(true);
+        expect(summary.pruned).toBe(0);
+        expect(tasks.has(candidate.taskId)).toBe(true);
+        expect(
+          (await store.loadMutationSnapshotAsync(context, { taskId: candidate.taskId })).tasks.get(
+            candidate.taskId,
+          ),
+        ).toMatchObject(candidate);
+
+        store.upsertTaskWithDeliveryState({ task: peer });
+        publishTaskRecordAfterAtomicStore(peer);
+        expect((await runTaskRegistryMaintenance()).pruned).toBe(1);
+        expect(tasks.has(candidate.taskId)).toBe(false);
+        expect(
+          (await store.loadMutationSnapshotAsync(context, { taskId: candidate.taskId })).tasks.has(
+            candidate.taskId,
+          ),
+        ).toBe(false);
+      },
+      { durableStore: true },
+    );
+  });
+
   it("preserves cron overflow rows whose partition or rank changed after the maintenance snapshot", async () => {
     await withTaskRegistryTempDir(async () => {
       await runTaskRegistryMaintenance();

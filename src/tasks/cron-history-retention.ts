@@ -23,6 +23,17 @@ export function hasCronRunHistory(task: Pick<TaskRecord, "detail">): boolean {
   return isRecord(task.detail) && task.detail.kind === "cron-run";
 }
 
+export function compareCronHistoryRetentionOrder(
+  left: Pick<TaskRecord, "taskId" | "createdAt" | "endedAt" | "lastEventAt">,
+  right: Pick<TaskRecord, "taskId" | "createdAt" | "endedAt" | "lastEventAt">,
+): number {
+  return (
+    resolveCronRunRecordTimestamp(right) - resolveCronRunRecordTimestamp(left) ||
+    right.createdAt - left.createdAt ||
+    right.taskId.localeCompare(left.taskId)
+  );
+}
+
 export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]): Set<string> {
   // Cron job ids are unique only within a configured store. Retention must
   // use the same storeKey/sourceId partition as history reads.
@@ -50,13 +61,7 @@ export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]):
   for (const bySource of byStore.values()) {
     for (const partition of bySource.values()) {
       for (const rows of [partition.history, partition.quiet]) {
-        rows.sort((left, right) => {
-          return (
-            resolveCronRunRecordTimestamp(right) - resolveCronRunRecordTimestamp(left) ||
-            right.createdAt - left.createdAt ||
-            right.taskId.localeCompare(left.taskId)
-          );
-        });
+        rows.sort(compareCronHistoryRetentionOrder);
         for (const task of rows.slice(CRON_HISTORY_KEEP_PER_JOB)) {
           overflow.add(task.taskId);
         }

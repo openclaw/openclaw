@@ -178,7 +178,9 @@ Task retention also runs in the shared-state worker. Maintenance keeps its exist
 task selection, sweep time, and cron-history limits, then rechecks each selected
 task inside the admitted transaction. Cron overflow selections retain their original
 partition and ranking facts across asynchronous preparation; changed rows wait for
-the next sweep. The read worker prepares the exact row and a
+the next sweep. Before deleting overflow, the worker checks its current partition
+rank inside the write transaction, since a changed peer can bring an unchanged row
+back within the history limit. The read worker prepares the exact row and a
 fingerprint; the write worker verifies that source before mutation and rechecks
 live authority before commit. A compact native commit receipt preserves the known
 outcome if result delivery fails, without replaying the write or carrying task
