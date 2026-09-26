@@ -93,13 +93,17 @@ afterAll(async () => {
  * Create a mock session JSONL file with various entry types
  */
 function createMockSessionContent(
-  entries: Array<{ role: string; content: string } | ({ type: string } & Record<string, unknown>)>,
+  entries: Array<
+    | { role: string; content: string; timestamp?: string | number }
+    | ({ type: string } & Record<string, unknown>)
+  >,
 ): string {
   return entries
     .map((entry) => {
       if ("role" in entry) {
         return JSON.stringify({
           type: "message",
+          ...(entry.timestamp === undefined ? {} : { timestamp: entry.timestamp }),
           message: {
             role: entry.role,
             content: entry.content,
@@ -206,6 +210,7 @@ async function runNewWithPreviousSession(params: {
   sessionContent: string;
   cfg?: (tempDir: string) => OpenClawConfig;
   action?: "new" | "reset";
+  timestamp?: Date;
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await createCaseWorkspace("workspace");
   const sessionsDir = path.join(tempDir, "sessions");
@@ -227,6 +232,7 @@ async function runNewWithPreviousSession(params: {
     tempDir,
     cfg,
     action: params.action,
+    timestamp: params.timestamp,
     previousSessionEntry: {
       sessionId: "test-123",
       sessionFile,
@@ -678,6 +684,33 @@ describe("session-memory hook", () => {
 
       expect(files).toEqual(["2026-01-02-0130.md"]);
       expect(memoryContent).toMatch(/^# Session: 2026-01-02 01:30:15 Asia\/Jakarta/);
+    });
+  });
+
+  it("dates artifacts from the latest captured content timestamp across midnight resets", async () => {
+    await withEnvAsync({ TZ: "UTC" }, async () => {
+      const sessionContent = createMockSessionContent([
+        {
+          role: "user",
+          content: "Evening notes",
+          timestamp: "2026-09-21T14:59:00.000Z",
+        },
+        {
+          role: "assistant",
+          content: "Saved for tomorrow",
+          timestamp: "2026-09-21T15:38:00.000Z",
+        },
+      ]);
+      const { files, memoryContent } = await runNewWithPreviousSession({
+        sessionContent,
+        action: "reset",
+        timestamp: new Date("2026-09-22T08:56:00.000Z"),
+      });
+
+      expect(files).toEqual(["2026-09-21-1538.md"]);
+      expect(memoryContent).toMatch(/^# Session: 2026-09-21 15:38:00 UTC/);
+      expect(memoryContent).toContain(sessionMemoryRecord("user", "Evening notes"));
+      expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Saved for tomorrow"));
     });
   });
 

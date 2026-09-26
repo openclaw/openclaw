@@ -1,4 +1,5 @@
 // Session memory transcript helpers persist compact session transcript excerpts.
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { classifySessionMessageOrigin } from "../../../../packages/memory-host-sdk/src/host/session-provenance.js";
 import type { MemoryOriginClass } from "../../../../packages/memory-host-sdk/src/host/types.js";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
@@ -129,7 +130,24 @@ function renderSessionMemoryMessage(
 type SessionMemoryRecord = {
   line: string;
   originClass: MemoryOriginClass;
+  timestampMs?: number;
 };
+
+function readTranscriptEventTimestampMs(entry: unknown): number | undefined {
+  if (!entry || typeof entry !== "object") {
+    return undefined;
+  }
+  const record = entry as {
+    timestamp?: unknown;
+    message?: {
+      timestamp?: unknown;
+    };
+  };
+  return (
+    parseDateFirstTimestampMs(record.timestamp) ??
+    parseDateFirstTimestampMs(record.message?.timestamp)
+  );
+}
 
 function renderSessionMemoryRecords(events: readonly unknown[]): SessionMemoryRecord[] {
   const allMessages: SessionMemoryRecord[] = [];
@@ -156,9 +174,11 @@ function renderSessionMemoryRecords(events: readonly unknown[]): SessionMemoryRe
     if (rendered.isDeliveryMirror && rendered.text === lastAssistantText) {
       continue;
     }
+    const timestampMs = readTranscriptEventTimestampMs(event);
     allMessages.push({
       line: `${rendered.role}: ${quoteSessionMemoryText(rendered.text)}`,
       originClass: rendered.originClass,
+      ...(timestampMs === undefined ? {} : { timestampMs }),
     });
     if (rendered.role === "assistant") {
       lastAssistantText = rendered.text;
@@ -175,6 +195,7 @@ export function countSessionMemoryMessages(events: readonly unknown[]): number {
 export type SessionMemoryProjection = {
   content: string;
   originClass: "agent" | "untrusted";
+  lastContentTimestampMs?: number;
 };
 
 export function getRecentSessionProjectionFromEvents(
@@ -189,6 +210,9 @@ export function getRecentSessionProjectionFromEvents(
   if (records.length === 0) {
     return null;
   }
+  const lastContentTimestampMs = [...records]
+    .toReversed()
+    .find((record) => record.timestampMs !== undefined)?.timestampMs;
   return {
     content: records.map((record) => record.line).join("\n"),
     originClass: records.some(
@@ -196,5 +220,6 @@ export function getRecentSessionProjectionFromEvents(
     )
       ? "untrusted"
       : "agent",
+    ...(lastContentTimestampMs === undefined ? {} : { lastContentTimestampMs }),
   };
 }

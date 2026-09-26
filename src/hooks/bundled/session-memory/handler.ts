@@ -151,9 +151,16 @@ async function saveSessionMemoryNow(
     await fs.mkdir(memoryDir, { recursive: true });
 
     // Session-memory artifacts share the same configured user-day boundary as daily memory files.
-    const now = new Date(event.timestamp);
+    // Prefer the latest captured conversation timestamp so cross-midnight or
+    // long-idle resets keep the artifact dated with the content day.
+    const eventNow = new Date(event.timestamp);
+    const contentTimestampMs =
+      transcript.status === "available" && typeof transcript.lastContentTimestampMs === "number"
+        ? transcript.lastContentTimestampMs
+        : undefined;
+    const artifactNow = new Date(contentTimestampMs ?? event.timestamp);
     const userTimezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone ?? process.env.TZ);
-    const localTimestamp = formatLocalSessionTimestamp(now, userTimezone);
+    const localTimestamp = formatLocalSessionTimestamp(artifactNow, userTimezone);
     const dateStr = localTimestamp.date;
 
     // Manual commands carry the prior entry separately; automatic rollover
@@ -251,7 +258,7 @@ async function saveSessionMemoryNow(
         transcript.status === "available" ? transcript.originClass : "agent",
       sessionId: currentSessionId,
       sessionKey: event.sessionKey,
-      now: () => now.getTime(),
+      now: () => eventNow.getTime(),
     });
     const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });
     await provenanceObserver.write({
