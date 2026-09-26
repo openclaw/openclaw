@@ -706,19 +706,19 @@ it.each(["completed-drain", "active-drain", "terminal-owner", "registry-close"])
                 close: () => drain.promise,
               })
             : undefined;
-        const dispatch = vi
-          .spyOn(WorkerTaskPool.prototype, "run")
-          .mockImplementationOnce(
-            function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-              dispatch.mockRestore();
-              expect(input).toMatchObject({ kind: "sqlite-target" });
-              return this.run(input, options).then(async (reply) => {
-                received.resolve();
-                await release.promise;
-                return reply;
-              });
-            },
-          );
+        const dispatch = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+          this: WorkerTaskPool<unknown, unknown>,
+          input,
+          options,
+        ) {
+          dispatch.mockRestore();
+          expect(input).toMatchObject({ kind: "sqlite-target" });
+          return this.run(input, options).then(async (reply) => {
+            received.resolve();
+            await release.promise;
+            return reply;
+          });
+        });
         const pending = SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 10 });
         const expected =
           transition === "completed-drain"
@@ -818,19 +818,19 @@ it.each(["canonical", "custom"])(
                 return request;
               }, options);
             })
-          : vi
-              .spyOn(WorkerTaskPool.prototype, "run")
-              .mockImplementationOnce(
-                function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-                  dispatch.mockRestore();
-                  return this.run(async () => {
-                    entered.resolve();
-                    await release.promise;
-                    transferred = typeof input === "function" ? await input() : input;
-                    return transferred;
-                  }, options);
-                },
-              );
+          : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+              this: WorkerTaskPool<unknown, unknown>,
+              input,
+              options,
+            ) {
+              dispatch.mockRestore();
+              return this.run(async () => {
+                entered.resolve();
+                await release.promise;
+                transferred = typeof input === "function" ? await input() : input;
+                return transferred;
+              }, options);
+            });
       const inputTarget = { ...target, env };
       const pending = SessionManager.openAsync(inputTarget);
       const result = expect(pending).resolves.toBeInstanceOf(SessionManager);
