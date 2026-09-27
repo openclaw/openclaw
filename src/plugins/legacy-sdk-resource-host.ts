@@ -200,6 +200,7 @@ export function getBoundLegacyPluginSdkResourceHost(): LegacyPluginSdkResourceHo
   }
   const host = hostContext.getStore();
   // Process-retained SDK results are not a command or Gateway scheduling owner.
+  // SAFETY: The singleton slot is read as unknown and compared only by identity.
   const standaloneHost = (globalThis as Record<PropertyKey, unknown>)[STANDALONE_HOST_KEY];
   return host === standaloneHost ? undefined : host;
 }
