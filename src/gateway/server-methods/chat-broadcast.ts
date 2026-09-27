@@ -61,7 +61,7 @@ function resolveChatSessionKeys(params: {
   agentId?: string;
 }): string[] {
   return resolveGlobalAwareNodeChatDeliveryKeys({
-    cfg: params.context.getRuntimeConfig?.() ?? {},
+    cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });

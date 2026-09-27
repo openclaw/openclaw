@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   ErrorCodes,
   errorShape,
+  type ModelsProbeParams,
   type ModelsProbeResult,
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -136,7 +137,7 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateModelsProbeParams, "models.probe", respond)) {
       return;
     }
-    const request = params;
+    const request = params as ModelsProbeParams;
     const provider = normalizeProviderId(request.provider);
     const profileId = request.profileId?.trim();
     if (!provider || (request.profileId !== undefined && !profileId)) {

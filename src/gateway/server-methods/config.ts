@@ -556,7 +556,7 @@ function validateSubmittedConfigOrRespond(params: {
     respondInvalid(validated.issues);
     return null;
   }
-  return { validationCandidate, config: validated.config };
+  return { validationCandidate: validationCandidate as OpenClawConfig, config: validated.config };
 }
 
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
@@ -922,7 +922,7 @@ export const configHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const path = params.path;
+    const path = (params as { path: string }).path;
     const schema = loadSchemaWithPlugins();
     const result = lookupConfigSchema(schema, path, resolveConfigReloadMetadata);
     if (!result) {

@@ -141,7 +141,6 @@ export type WorkerEnvironmentServiceContract = {
   readPreparedPoolSummary(): { maxTotal: number; reservedEnvironmentIds: string[] };
   readReadyWorkerTarget(profileId: string): number;
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
-  hasInferenceForSession(sessionId: string, runId?: string): boolean;
   inventoryVersion(): number;
   readMachineShape(
     environmentId: string,

@@ -246,7 +246,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const requestId = params.requestId.trim();
+    const requestId = (params as { requestId: string }).requestId.trim();
     const authz = resolveDeviceSessionAuthz(client);
     if (!authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
@@ -348,7 +348,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateDevicePairRejectParams, "device.pair.reject", respond)) {
       return;
     }
-    const requestId = params.requestId.trim();
+    const requestId = (params as { requestId: string }).requestId.trim();
     const authz = resolveDeviceSessionAuthz(client);
     if (authz.callerDeviceId && !authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
@@ -407,7 +407,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateDevicePairRemoveParams, "device.pair.remove", respond)) {
       return;
     }
-    const { deviceId } = params;
+    const { deviceId } = params as { deviceId: string };
     await runDevicePairingMutation({
       operation: "remove",
       client,
@@ -583,7 +583,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const { deviceId, role } = params;
+    const { deviceId, role } = params as { deviceId: string; role: string };
     const authz = resolveDeviceManagementAuthz(client, deviceId);
     const denial = deniesCrossDeviceManagement(authz)
       ? "device-ownership-mismatch"

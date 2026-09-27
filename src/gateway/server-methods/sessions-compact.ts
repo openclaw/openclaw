@@ -36,6 +36,7 @@ import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
+import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -209,7 +210,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           }
           blockedByActiveRun =
             isCompetingSessionWorkAdmissionActive(storePath, lifecycleIdentities) ||
-            (context.workerEnvironmentService?.hasInferenceForSession(sessionId) ?? false) ||
+            (asWorkerInferenceControl(context.workerEnvironmentService)?.hasInferenceForSession(
+              sessionId,
+            ) ??
+              false) ||
             resolveVisibleActiveSessionRunState({
               context,
               requestedKey: key,

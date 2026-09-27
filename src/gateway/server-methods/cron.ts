@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  type CronListParams,
   ErrorCodes,
   errorShape,
   validateCronAddParams,
@@ -275,7 +276,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       if (!assertValidParams(params, validateCronListParams, "cron.list", respond)) {
         return;
       }
-      const p = params;
+      const p = params as CronListParams;
       const admittedScope = readCronCallerScope(client);
       const callerScope = admittedScope?.manageAll ? undefined : admittedScope;
       const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
@@ -678,7 +679,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.update", "patch did not normalize");
       return;
     }
-    const p = candidate;
+    const p = candidate as {
+      id?: string;
+      jobId?: string;
+      patch: Record<string, unknown>;
+      expectedConfigRevision?: string;
+    };
     const callerScope = readCronCallerScope(client);
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
     try {

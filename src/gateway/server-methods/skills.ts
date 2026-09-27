@@ -275,8 +275,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     try {
       const results = await searchSkillsFromClawHub({
-        query: params.query,
-        limit: params.limit,
+        query: (params as { query?: string }).query,
+        limit: (params as { limit?: number }).limit,
       });
       registerClawHubCatalogIconUrls(results.map((result) => result.icon ?? undefined));
       respond(true, { results }, undefined);
@@ -291,7 +291,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     try {
       // Same reference grammar as skills.install, so a client cannot review one publisher's
       // card and then install another's.
-      const requested = parseRequestedClawHubSkillRef(params.slug);
+      const requested = parseRequestedClawHubSkillRef((params as { slug: string }).slug);
       if (requested.requestedReference) {
         // ClawHub has no source-qualified read endpoint, so reading this by bare slug would
         // show a same-slug registry skill while install resolves the external artifact.
