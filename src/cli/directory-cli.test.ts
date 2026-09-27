@@ -294,6 +294,35 @@ describe("registerDirectoryCli", () => {
         expect.objectContaining({ groupId: "group-1", limit: 5 }),
       );
     });
+
+    it("shows member roles in text output and preserves them in JSON", async () => {
+      const members = [
+        { kind: "user" as const, id: "admin@example", raw: { admin: "admin" } },
+        { kind: "user" as const, id: "member@example", raw: { admin: "member" } },
+      ];
+      listGroupMembers.mockResolvedValue(members);
+      const args = [
+        "directory",
+        "groups",
+        "members",
+        "--channel",
+        "slack",
+        "--group-id",
+        "group-1",
+      ];
+
+      await createProgram().parseAsync(args, { from: "user" });
+
+      const textOutput = runtimeState.runtimeLogs.join("\n");
+      expect(textOutput).toContain("Role");
+      expect(textOutput).toContain("admin");
+      expect(textOutput).toContain("member");
+
+      runtimeState.defaultRuntime.writeJson.mockClear();
+      await createProgram().parseAsync([...args, "--json"], { from: "user" });
+
+      expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith(members);
+    });
   });
 
   it.each([

@@ -79,7 +79,13 @@ type GroupFetchSocket = {
   groupFetchAllParticipating(): Promise<
     Record<string, { id: string; subject?: string } | undefined>
   >;
+  groupMetadata(groupId: string): Promise<{
+    participants: Array<{ id: string; admin?: string | null }>;
+  }>;
 };
+
+type DirectoryConnectionParams = Pick<DirectoryConfigParams, "cfg" | "accountId">;
+type LiveDirectoryLookup<T> = (sock: GroupFetchSocket) => Promise<T>;
 
 async function fetchLiveGroups(
   sock: GroupFetchSocket,
@@ -100,6 +106,24 @@ async function fetchLiveGroups(
       }
       return entry.id.toLowerCase().includes(query) || entry.name?.toLowerCase().includes(query);
     })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  return limit ? entries.slice(0, limit) : entries;
+}
+
+type DirectoryGroupMembersParams = Omit<DirectoryConfigParams, "query"> & { groupId: string };
+
+async function fetchLiveGroupMembers(
+  sock: GroupFetchSocket,
+  params: DirectoryGroupMembersParams,
+): Promise<ChannelDirectoryEntry[]> {
+  const metadata = await sock.groupMetadata(params.groupId);
+  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
+  const entries = metadata.participants
+    .map((participant) => ({
+      kind: "user" as const,
+      id: participant.id,
+      raw: { admin: participant.admin ?? "member" },
+    }))
     .toSorted((left, right) => left.id.localeCompare(right.id));
   return limit ? entries.slice(0, limit) : entries;
 }
@@ -224,9 +248,10 @@ async function finishPriorStandaloneCleanup(authDir: string): Promise<void> {
   }
 }
 
-async function listGroupsThroughStandaloneOwner(
-  params: DirectoryConfigParams,
-): Promise<ChannelDirectoryEntry[]> {
+async function listGroupsThroughStandaloneOwner<T>(
+  params: DirectoryConnectionParams,
+  lookup: LiveDirectoryLookup<T>,
+): Promise<T> {
   const account = resolveMergedWhatsAppAccountConfig(params);
   const authDir = resolveWhatsAppAuthDir({
     cfg: params.cfg,
@@ -259,7 +284,7 @@ async function listGroupsThroughStandaloneOwner(
     sock: null,
     socketClosed: true,
   };
-  let groups: ChannelDirectoryEntry[];
+  let result: T;
   try {
     let authState: Awaited<ReturnType<typeof readWebAuthExistsForDecision>>;
     try {
@@ -297,7 +322,7 @@ async function listGroupsThroughStandaloneOwner(
     }
 
     try {
-      groups = await fetchLiveGroups(cleanup.sock, params);
+      result = await lookup(cleanup.sock);
     } catch (error) {
       throw unavailable("lookup_failed", "WhatsApp live group lookup failed.", error);
     }
@@ -306,16 +331,17 @@ async function listGroupsThroughStandaloneOwner(
     throw error;
   }
   await finishStandaloneCleanupOrThrow(cleanup);
-  return groups;
+  return result;
 }
 
-export async function listWhatsAppDirectoryGroupsLive(
-  params: DirectoryConfigParams,
-): Promise<ChannelDirectoryEntry[]> {
+async function listLiveDirectoryEntries<T>(
+  params: DirectoryConnectionParams,
+  lookup: LiveDirectoryLookup<T>,
+): Promise<T> {
   const accountId = resolveWebAccountId({ cfg: params.cfg, accountId: params.accountId });
   const controller = getWhatsAppConnectionController(accountId);
   if (!controller && !hasPendingWhatsAppConnectionOwner(accountId)) {
-    return await listGroupsThroughStandaloneOwner(params);
+    return await listGroupsThroughStandaloneOwner(params, lookup);
   }
 
   const sock = controller?.getCurrentSock();
@@ -326,8 +352,26 @@ export async function listWhatsAppDirectoryGroupsLive(
     );
   }
   try {
-    return await fetchLiveGroups(sock, params);
+    return await lookup(sock);
   } catch (error) {
     throw unavailable("lookup_failed", "WhatsApp live group lookup failed.", error);
   }
+}
+
+export async function listWhatsAppDirectoryGroupsLive(
+  params: DirectoryConfigParams,
+): Promise<ChannelDirectoryEntry[]> {
+  return await listLiveDirectoryEntries(params, (sock) => fetchLiveGroups(sock, params));
+}
+
+export async function listWhatsAppDirectoryGroupMembers(
+  params: DirectoryGroupMembersParams,
+): Promise<ChannelDirectoryEntry[]> {
+  const groupId = normalizeWhatsAppTarget(params.groupId);
+  if (!groupId || !isWhatsAppGroupJid(groupId)) {
+    throw new Error("WhatsApp group member lookup requires a group JID.");
+  }
+  return await listLiveDirectoryEntries(params, (sock) =>
+    fetchLiveGroupMembers(sock, { ...params, groupId }),
+  );
 }
