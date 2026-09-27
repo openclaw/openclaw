@@ -1905,37 +1905,12 @@ describe("installPluginFromClawHub", () => {
   });
 
   it("returns a typed install failure when fallback archive verification cannot read the zip", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-archive-"));
-    tempDirs.push(dir);
-    const archivePath = path.join(dir, "archive.zip");
+    const { archivePath } = await mockClawHubFallbackArchive({
+      entries: { "openclaw.plugin.json": '{"id":"demo"}' },
+    });
     await fs.writeFile(archivePath, "not-a-zip", "utf8");
-    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
-      version: {
-        version: "2026.3.22",
-        createdAt: 0,
-        changelog: "",
-        files: [
-          {
-            path: "openclaw.plugin.json",
-            size: 13,
-            sha256: sha256Hex('{"id":"demo"}'),
-          },
-        ],
-        compatibility: {
-          pluginApiRange: ">=2026.3.22",
-          minGatewayVersion: "2026.3.0",
-        },
-      },
-    });
-    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath,
-      integrity: "sha256-not-used-in-fallback",
-      cleanup: archiveCleanupMock,
-    });
 
-    const result = await installPluginFromClawHub({
-      spec: "clawhub:demo",
-    });
+    const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
 
     expectInstallFailureFields(
       result,
@@ -2051,37 +2026,59 @@ describe("installPluginFromClawHub", () => {
   it.each([
     {
       kind: "symlink",
+      names: ["extra.txt"],
       mode: 0o120777,
-      error: "ClawHub archive fallback verification failed while reading the downloaded archive.",
+      error:
+        "ClawHub archive fallback verification rejected the downloaded archive: zip entry is a link: extra.txt",
     },
     {
       kind: "other",
+      names: ["extra.txt"],
       mode: 0o160644,
       error:
         'ClawHub archive contents do not match files[] metadata for "demo@2026.3.22": unexpected file "extra.txt".',
     },
-  ])("rejects named ZIP $kind records before install work", async ({ mode, error }) => {
-    const archive = await mockClawHubFallbackArchive({
-      entries: { "openclaw.plugin.json": '{"id":"demo"}', "extra.txt": "unsupported" },
-      files: [clawHubArchiveFile("openclaw.plugin.json", '{"id":"demo"}')],
-    });
-    await setClawHubArchiveEntryMode(archive.archivePath, "extra.txt", mode);
-    const { configureFsSafeNative, getFsSafeNativeConfig } =
-      await import("@openclaw/fs-safe/config");
-    const previous = getFsSafeNativeConfig();
-    configureFsSafeNative({ mode: "off" });
-    try {
-      const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
-      expectInstallFailureFields(
-        result,
-        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-        error,
-      );
-      expect(installExtractedArchiveMock).not.toHaveBeenCalled();
-    } finally {
-      configureFsSafeNative(previous);
-    }
-  });
+    ...[
+      { kind: "case collision", names: ["README.md", "readme.md"] },
+      { kind: "Unicode normalization collision", names: ["caf\u00e9.md", "cafe\u0301.md"] },
+    ].map((collision) => ({
+      ...collision,
+      mode: undefined,
+      error: expect.stringContaining(
+        "ClawHub archive fallback verification rejected the downloaded archive: archive entries collide at output path",
+      ),
+    })),
+  ])(
+    "explains portable ZIP $kind rejection before install work",
+    async ({ names, mode, error }) => {
+      const archive = await mockClawHubFallbackArchive({
+        entries: {
+          "openclaw.plugin.json": '{"id":"demo"}',
+          ...Object.fromEntries(names.map((name) => [name, "unsupported"])),
+        },
+        files: [clawHubArchiveFile("openclaw.plugin.json", '{"id":"demo"}')],
+      });
+      if (mode !== undefined) {
+        await setClawHubArchiveEntryMode(archive.archivePath, "extra.txt", mode);
+      }
+      const { configureFsSafeNative, getFsSafeNativeConfig } =
+        await import("@openclaw/fs-safe/config");
+      const previous = getFsSafeNativeConfig();
+      configureFsSafeNative({ mode: "off" });
+      try {
+        const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
+        expect(result).toMatchObject({
+          ok: false,
+          code: CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+          error,
+        });
+        expect(installExtractedArchiveMock).not.toHaveBeenCalled();
+        expect(archiveCleanupMock).toHaveBeenCalledOnce();
+      } finally {
+        configureFsSafeNative(previous);
+      }
+    },
+  );
 
   it("accepts root-level files[] paths and allows _meta.json as an unvalidated generated file", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-archive-"));
@@ -2418,11 +2415,13 @@ describe("installPluginFromClawHub", () => {
         files: [clawHubArchiveFile("openclaw.plugin.json", '{"id":"demo"}')],
       });
       const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
-      expectInstallFailureFields(
-        result,
-        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-        "ClawHub archive fallback verification failed while reading the downloaded archive.",
-      );
+      expect(result).toMatchObject({
+        ok: false,
+        code: CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+        error: expect.stringMatching(
+          /^ClawHub archive fallback verification rejected the downloaded archive: archive entry /,
+        ),
+      });
       expect(installExtractedArchiveMock).not.toHaveBeenCalled();
     },
   );
