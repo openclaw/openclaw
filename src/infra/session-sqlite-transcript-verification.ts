@@ -1,8 +1,8 @@
 /** Shared read-only proof that retained transcript events exist in canonical SQLite. */
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { normalizeLegacyOpenAICodexTranscriptMetadata } from "../config/sessions/legacy-transcript-repair.js";
+import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -66,7 +66,8 @@ export function verifyTranscriptEvents(
           .where("session_id", "=", source.sessionId)
           .orderBy("seq", "asc"),
       )) {
-        const eventKey = mode === "ordered" ? event.event_json : reconciliationEventKey(event.event_json);
+        const eventKey =
+          mode === "ordered" ? event.event_json : reconciliationEventKey(event.event_json);
         if (mode !== "ordered") {
           stage.addSeen(eventKey);
           const entry: unknown = JSON.parse(event.event_json);
@@ -75,7 +76,9 @@ export function verifyTranscriptEvents(
           }
         }
         const expectedKey =
-          mode === "ordered" ? expected.value.eventJson : reconciliationEventKey(expected.value.eventJson);
+          mode === "ordered"
+            ? expected.value.eventJson
+            : reconciliationEventKey(expected.value.eventJson);
         if (!expected.done && eventKey === expectedKey) {
           expected = sourceRows.next();
           if (expected.done) {

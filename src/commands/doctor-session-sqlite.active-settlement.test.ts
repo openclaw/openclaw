@@ -122,7 +122,7 @@ async function seedImportedHistory(
           role: "assistant",
           provider: "codex",
           api: "openai-codex-responses",
-          content: [{ type: "text", text: "Original response" }],
+          content: [{ type: "text", text: "Lorem ipsum" }],
         },
       };
     }
@@ -375,7 +375,7 @@ it.each(["import", "recover"] as const)(
         message: expect.objectContaining({
           provider: "openai",
           api: "openai-chatgpt-responses",
-          content: [{ type: "text", text: "Original response" }],
+          content: [{ type: "text", text: "Lorem ipsum" }],
         }),
       });
     });
@@ -385,92 +385,113 @@ it.each(["import", "recover"] as const)(
 it.each(["import", "recover"] as const)(
   "%s keeps a legacy Codex transcript when content changes alongside normalizable metadata",
   async (mode) => {
-    await withOpenClawTestState({ label: `active-june-legacy-codex-conflict-${mode}` }, async (state) => {
-      const {
-        cfg,
-        sessions: [session],
-      } = await seedImportedHistory(state, { main: "legacy-codex-metadata" }, false);
-      const conflictingEvents = session!.sourceEvents.map((event) =>
-        event.id === `${session!.sessionId}-assistant`
-          ? {
-              ...event,
-              message: {
-                role: "assistant",
-                provider: "codex",
-                api: "openai-codex-responses",
-                content: [{ type: "text", text: "Changed content must remain a conflict" }],
-              },
-            }
-          : event,
-      );
-      const conflictingBytes = Buffer.from(conflictingEvents.map((event) => JSON.stringify(event)).join("\n") + "\n");
-      fs.writeFileSync(session!.sourcePath, conflictingBytes);
+    await withOpenClawTestState(
+      { label: `active-june-legacy-codex-conflict-${mode}` },
+      async (state) => {
+        const {
+          cfg,
+          sessions: [session],
+        } = await seedImportedHistory(state, { main: "legacy-codex-metadata" }, false);
+        const conflictingEvents = session!.sourceEvents.map((event) => {
+          if (event.id !== `${session!.sessionId}-assistant`) {
+            return event;
+          }
+          return Object.assign({}, event, {
+            message: {
+              role: "assistant",
+              provider: "codex",
+              api: "openai-codex-responses",
+              content: [{ type: "text", text: "Lorem ipsum altered" }],
+            },
+          });
+        });
+        const conflictingBytes = Buffer.from(
+          conflictingEvents.map((event) => JSON.stringify(event)).join("\n") + "\n",
+        );
+        fs.writeFileSync(session!.sourcePath, conflictingBytes);
 
-      const report = await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode });
+        const report = await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode });
 
-      expect(report.totals.importedTranscriptEvents).toBe(0);
-      expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
-        expect.objectContaining({ message: expect.stringContaining("conflicts with the SQLite event of the same identity") }),
-      );
-      expect(fs.readFileSync(session!.sourcePath)).toEqual(conflictingBytes);
-      expect(completedTranscriptMoves(state, session!.sourcePath)).toEqual([]);
-    });
+        expect(report.totals.importedTranscriptEvents).toBe(0);
+        expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
+          expect.objectContaining({
+            message: expect.stringContaining(
+              "conflicts with the SQLite event of the same identity",
+            ),
+          }),
+        );
+        expect(fs.readFileSync(session!.sourcePath)).toEqual(conflictingBytes);
+        expect(completedTranscriptMoves(state, session!.sourcePath)).toEqual([]);
+      },
+    );
   },
 );
 
-it.each(["import", "recover"] as const)(
-  "%s rejects an array-order change",
-  async (mode) => {
-    await withOpenClawTestState({ label: `active-june-semantic-array-${mode}` }, async (state) => {
-      const {
-        cfg,
-        sessions: [session],
-      } = await seedImportedHistory(state, { main: "array-order-conflict" });
-      await withDoctorSqliteMaintenanceLock({
-        env: state.env,
-        operation: "reject semantic array-order conflict",
-        run: async () => {
-          const report = await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode });
-          expect(report.totals.importedTranscriptEvents).toBe(0);
-          expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
-            expect.objectContaining({ code: "active_sqlite_transcript_verification_failed" }),
-          );
-          expect(loadTranscriptEventsSync(session!)).toEqual(session!.canonical);
-          expect(fs.readFileSync(session!.sourcePath)).toEqual(session!.bytes);
-          expect(completedTranscriptMoves(state, session!.sourcePath)).toEqual([]);
-        },
-      });
+it.each(["import", "recover"] as const)("%s rejects an array-order change", async (mode) => {
+  await withOpenClawTestState({ label: `active-june-semantic-array-${mode}` }, async (state) => {
+    const {
+      cfg,
+      sessions: [session],
+    } = await seedImportedHistory(state, { main: "array-order-conflict" });
+    await withDoctorSqliteMaintenanceLock({
+      env: state.env,
+      operation: "reject semantic array-order conflict",
+      run: async () => {
+        const report = await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode });
+        expect(report.totals.importedTranscriptEvents).toBe(0);
+        expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
+          expect.objectContaining({ code: "active_sqlite_transcript_verification_failed" }),
+        );
+        expect(loadTranscriptEventsSync(session!)).toEqual(session!.canonical);
+        expect(fs.readFileSync(session!.sourcePath)).toEqual(session!.bytes);
+        expect(completedTranscriptMoves(state, session!.sourcePath)).toEqual([]);
+      },
     });
-  },
-);
+  });
+});
 
 it.each(["import", "recover"] as const)(
   "%s rejects a same-ID event with changed parent and nested payload",
   async (mode) => {
     await withOpenClawTestState({ label: `active-june-semantic-id-${mode}` }, async (state) => {
-      const { cfg, sessions: [session] } = await seedImportedHistory(state, { main: "equal" });
+      const {
+        cfg,
+        sessions: [session],
+      } = await seedImportedHistory(state, { main: "equal" });
       const conflictingEvents = session!.sourceEvents.map((event) =>
         event.id === `${session!.sessionId}-assistant`
           ? {
               type: "message",
               id: event.id,
               parentId: `${session!.sessionId}-different-parent`,
-              message: { role: "assistant", content: [{ type: "text", text: "Changed nested payload" }] },
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "Changed nested payload" }],
+              },
             }
           : event,
       );
-      const conflictingBytes = Buffer.from(conflictingEvents.map((event) => JSON.stringify(event)).join("\n") + "\n");
+      const conflictingBytes = Buffer.from(
+        conflictingEvents.map((event) => JSON.stringify(event)).join("\n") + "\n",
+      );
       fs.writeFileSync(session!.sourcePath, conflictingBytes);
       await withDoctorSqliteMaintenanceLock({
         env: state.env,
         operation: "reject semantic same-ID conflict",
         run: async () => {
-          const report = await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode });
+          const report = await runDoctorSessionSqlite({
+            cfg,
+            env: state.env,
+            allAgents: true,
+            mode,
+          });
           expect(report.totals.importedTranscriptEvents).toBe(0);
           expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
             expect.objectContaining({
               code: "active_sqlite_transcript_verification_failed",
-              message: expect.stringContaining("conflicts with the SQLite event of the same identity"),
+              message: expect.stringContaining(
+                "conflicts with the SQLite event of the same identity",
+              ),
             }),
           );
           expect(loadTranscriptEventsSync(session!)).toEqual(session!.canonical);
