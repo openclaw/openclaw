@@ -107,7 +107,7 @@ describe("desktop panel audio wiring", () => {
       expect(tooltip()?.hasAttribute("open-on-click")).toBe(true);
       expect(panel.renderRoot.querySelector("[role='alert']")).toBeNull();
       button.focus();
-      expect(panel.renderRoot.activeElement).toBe(button);
+      expect(panel.shadowRoot?.activeElement).toBe(button);
       button.click();
       panel.presented = false;
       await panel.updateComplete;
