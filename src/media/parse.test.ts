@@ -175,7 +175,7 @@ describe("splitMediaFromOutput", () => {
       ["/tmp/first image.png", "/tmp/second image.png"],
     ],
     [
-      'MEDIA:"/tmp/project /first image.png" /tmp/second.png',
+      'MEDIA:"/tmp/project /first image.png" "/tmp/second.png"',
       ["/tmp/project /first image.png", "/tmp/second.png"],
     ],
     ["MEDIA:media/a.png media/b.png", ["media/a.png", "media/b.png"]],
@@ -302,6 +302,17 @@ describe("splitMediaFromOutput", () => {
     [
       "MEDIA:/tmp/album 'best/photos' final.png /tmp/second.png",
       ["/tmp/album 'best/photos' final.png", "/tmp/second.png"],
+    ],
+    // The fragment can also end on the slash, which makes the quote pair run into the sibling instead of
+    // closing on whitespace. The sibling is still an explicitly quoted reference of its own, so it must
+    // stay separate rather than being swallowed into the path before it.
+    [
+      "MEDIA:/tmp/album 'best'/final.png '/tmp/second.png'",
+      ["/tmp/album 'best'/final.png", "/tmp/second.png"],
+    ],
+    [
+      "MEDIA:/tmp/album 'best' photos/image.png '/tmp/second.png'",
+      ["/tmp/album 'best' photos/image.png", "/tmp/second.png"],
     ],
   ] as const)("keeps a quoted fragment inside one unquoted reference: %s", (input, mediaUrls) => {
     expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });

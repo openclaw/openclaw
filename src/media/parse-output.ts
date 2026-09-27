@@ -250,9 +250,9 @@ function isQuotedChunk(token: string): boolean {
 
 type MediaDirectiveToken = { token: string; index: number };
 
-// One tokenizer owns the reference boundaries, so splitting and list detection agree on them. Reading a
-// quoted value with its own tokenizer let a value that contains the enclosing quote look like two
-// references to one caller and one reference to the other.
+// One tokenizer owns the reference boundaries, so split detection and list detection agree on them.
+// Reading a quoted value with its own tokenizer let a value that contains the enclosing quote look like
+// two references to one caller and one reference to the other.
 function tokenizeMediaDirectiveParts(payload: string): MediaDirectiveToken[] {
   return Array.from(payload.matchAll(MEDIA_DIRECTIVE_PART_RE), (match) => ({
     token: match[0],
@@ -267,45 +267,40 @@ function tokenizeMediaDirectiveParts(payload: string): MediaDirectiveToken[] {
 // one value whose name holds that quote, so the stray tail must not pass for a second reference. With
 // no list present the payload keeps `main`'s reading: a single quoted value unwraps as a whole,
 // including one whose own text ends with that quote (`MEDIA:"https://example.com/video.mp4?token=ends""`).
-// This one answer also gates the reconstruction in `splitMediaDirectiveParts`: a listed payload needs no
-// reconstruction, and everything else is read the way `main` reads it.
+// This one answer also decides the split below, so a payload that is not a list is never tokenized in any
+// other way than the way `main` tokenizes it.
 function listsSeparateQuotedReferences(payload: string): boolean {
   const tokens = tokenizeMediaDirectiveParts(payload);
   return tokens.length >= 2 && tokens.every((entry) => isQuotedChunk(entry.token));
 }
 
 function splitMediaDirectiveParts(payload: string): string[] {
+  if (listsSeparateQuotedReferences(payload)) {
+    // Each quote pair states where its own reference starts and ends, so the listed references are the
+    // tokens themselves and there is nothing to reconstruct.
+    return tokenizeMediaDirectiveParts(payload).map((entry) => entry.token);
+  }
   const parts: string[] = [];
-  const tokens = tokenizeMediaDirectiveParts(payload);
-  // A payload that lists references quotes every one of them, so its tokens already state their own
-  // boundaries and nothing is left to reconstruct. Every other payload is read exactly as `main` reads
-  // it: whitespace splits it, and the join below restores a filename that really contains a space.
-  // Deciding this once, for the whole payload, keeps the reconstruction quote-blind — a quote that is
-  // not a reference boundary is text inside one path (`/tmp/album 'best' photos/image.png`), and even a
-  // fragment that validates on its own (`'best/photos'` in `/tmp/album 'best/photos' final.png`) is
-  // still only that: `main` joins it, so this joins it too.
-  const listsReferences = listsSeparateQuotedReferences(payload);
-  for (let position = 0; position < tokens.length; position += 1) {
-    const token = expectDefined(tokens[position], "media directive part");
-    const previousToken = tokens[position - 1];
-    const candidate = normalizeMediaSource(cleanCandidate(token.token));
+  let previousEnd = 0;
+  for (const match of payload.matchAll(/\S+/g)) {
+    const candidate = normalizeMediaSource(cleanCandidate(match[0]));
     const previous = parts.at(-1);
     const previousCandidate = previous ? normalizeMediaSource(cleanCandidate(previous)) : "";
     if (
-      !listsReferences &&
       MEDIA_SOURCE_ROOT_RE.test(previousCandidate) &&
       !beginsIndependentMediaSource(candidate) &&
       (!HAS_FILE_EXT.test(previousCandidate) || !isValidMedia(candidate))
     ) {
-      // Preserve real filename whitespace while keeping independently valid attachments separate.
-      const previousEnd = previousToken
-        ? previousToken.index + previousToken.token.length
-        : token.index;
-      parts[parts.length - 1] =
-        `${previous}${payload.slice(previousEnd, token.index)}${token.token}`;
+      // Preserve real filename whitespace while keeping independently valid attachments separate. This
+      // is `main`'s own reconstruction, and it stays quote-blind on purpose: a payload that is not a
+      // list gives a quote pair no authority, so a quote that is text inside one path (`/tmp/album
+      // 'best' photos/image.png`) cannot block the join, and neither can a fragment that would be
+      // accepted as a reference on its own (`'best/photos'` in `/tmp/album 'best/photos' final.png`).
+      parts[parts.length - 1] = `${previous}${payload.slice(previousEnd, match.index)}${match[0]}`;
     } else {
-      parts.push(token.token);
+      parts.push(match[0]);
     }
+    previousEnd = match.index + match[0].length;
   }
   return parts;
 }
