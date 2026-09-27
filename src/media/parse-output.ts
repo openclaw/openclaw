@@ -229,10 +229,17 @@ function beginsIndependentMediaSource(raw: string): boolean {
   return MEDIA_SOURCE_ROOT_RE.test(candidate) || SCHEME_RE.test(candidate);
 }
 
+// A quoted chunk is its own token only when its closing quote really ends the reference: whitespace or
+// the end of the payload must follow it. `"/tmp/album/photo.png copy.png"` closes on whitespace and so
+// stays one reference with its inner space, while `MEDIA:'…?token=it's' /tmp/second.png` has an inner
+// quote that is followed by more value, so the quote does not end a token and the whole reference is
+// taken from the fallback below. Ending a token at that inner quote would cut the value short.
+const MEDIA_DIRECTIVE_PART_RE = /"[^"]*"(?=\s|$)|'[^']*'(?=\s|$)|`[^`]*`(?=\s|$)|\S+/g;
+
 function splitMediaDirectiveParts(payload: string): string[] {
   const parts: string[] = [];
   let previousEnd = 0;
-  for (const match of payload.matchAll(/"[^"]*"|'[^']*'|`[^`]*`|\S+/g)) {
+  for (const match of payload.matchAll(MEDIA_DIRECTIVE_PART_RE)) {
     const candidate = normalizeMediaSource(cleanCandidate(match[0]));
     const previous = parts.at(-1);
     const previousCandidate = previous ? normalizeMediaSource(cleanCandidate(previous)) : "";

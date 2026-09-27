@@ -203,6 +203,32 @@ describe("splitMediaFromOutput", () => {
     );
   });
 
+  it("keeps a quoted reference whole when its own value contains that quote", () => {
+    // A quoted reference is one whitespace-delimited token, so a quote inside its value never ends the
+    // token. Tokenizing on the quote itself cuts the signed URL short and leaks the rest into the
+    // visible reply text, which is the same shortening this branch set out to remove — here for a
+    // payload that also lists a second reference.
+    for (const [input, expected] of [
+      [
+        "MEDIA:'https://example.com/video.mp4?token=it's' /tmp/second.png",
+        ["https://example.com/video.mp4?token=it's", "/tmp/second.png"],
+      ],
+      [
+        'MEDIA:"https://example.com/video.mp4?token=it\'s" /tmp/second.png',
+        ["https://example.com/video.mp4?token=it's", "/tmp/second.png"],
+      ],
+      [
+        "MEDIA:'https://example.com/video.mp4?token=it'\\''s' /tmp/second.png",
+        ["https://example.com/video.mp4?token=it'\\''s", "/tmp/second.png"],
+      ],
+    ] as const) {
+      expectParsedMediaOutputCase(input, { mediaUrls: [...expected] });
+      expect(splitMediaFromOutput(input).segments).toEqual(
+        expected.map((url) => ({ type: "media", url })),
+      );
+    }
+  });
+
   it("separates quoted references without truncating a quoted signed URL", () => {
     // Both payloads start and end with the same quote: the first one lists two references, the second
     // is a single reference whose own value ends with that quote, which a signed URL can do.
