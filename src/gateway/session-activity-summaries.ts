@@ -48,6 +48,7 @@ import {
   setSessionActivitySummaryState,
   type ActivitySummaryTarget,
 } from "./session-activity-summary-state.js";
+import { readSessionListSelectionFacts } from "./session-list-target.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -188,7 +189,7 @@ export function createSessionActivitySummaries(deps: {
       entry.initializationPending ||
       entry.incognito ||
       entry.heartbeatIsolatedBaseSessionKey ||
-      entry.spawnedBy
+      readSessionListSelectionFacts(target.key, entry).isSubagent
     ) {
       return undefined;
     }

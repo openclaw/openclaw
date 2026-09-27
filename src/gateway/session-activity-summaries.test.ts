@@ -726,8 +726,54 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
-  it("enqueues through the registered RPC handler and rejects an invalid batch before model work", async () => {
-    await messages(1);
+  it("enqueues visible conversations through the registered RPC handler and rejects an invalid batch before model work", async () => {
+    const conversations = [
+      { target, scope, entry: {} },
+      {
+        target: { key: "agent:main:dashboard:spawned", agentId: "main" },
+        scope: {
+          sessionKey: "agent:main:dashboard:spawned",
+          agentId: "main",
+          sessionId: "spawned-dashboard",
+        },
+        entry: { spawnedBy: "agent:main:main" },
+      },
+      {
+        target: { key: "agent:main:grouped-child", agentId: "main" },
+        scope: {
+          sessionKey: "agent:main:grouped-child",
+          agentId: "main",
+          sessionId: "spawned-grouped",
+        },
+        entry: { spawnedBy: "agent:main:main", category: "Work" },
+      },
+    ];
+    for (const conversation of conversations) {
+      await upsertSessionEntryCore(conversation.scope, {
+        sessionId: conversation.scope.sessionId,
+        updatedAt: 1,
+        ...conversation.entry,
+      });
+      await persistSessionTranscriptTurn(conversation.scope, {
+        messages: [{ eventId: "request", message: { role: "user", content: "Check the build." } }],
+        touchSessionEntry: false,
+      });
+    }
+    const published = createDeferred();
+    changed.mockImplementation(() => {
+      if (
+        conversations.every(
+          (conversation) =>
+            projectSessionActivitySummary({
+              ...conversation.target,
+              cfg,
+              entry: loadSessionEntryReadOnly(conversation.scope),
+            })?.state === "current",
+        )
+      ) {
+        published.resolve();
+      }
+    });
     cfg.gateway = { controlUi: { sessionObserver: false } };
     const context = createDirectChatContext({
       getRuntimeConfig: () => cfg,
@@ -744,19 +790,30 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         respond,
         isWebchatConnect: () => false,
       });
-    await invoke({ sessions: [target, { key: "agent:main:missing", agentId: "main" }] });
+    await invoke({
+      sessions: [conversations[1]!.target, { key: "agent:main:missing", agentId: "main" }],
+    });
     expect(respond).toHaveBeenLastCalledWith(
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
     expect(prepare).not.toHaveBeenCalled();
-    await invoke({ sessions: [target] });
+    await invoke({ sessions: conversations.map((conversation) => conversation.target) });
     expect(respond).toHaveBeenLastCalledWith(true, {
-      sessions: [{ ...target, activitySummary: { state: "updating", canEnsure: true } }],
+      sessions: conversations.map((conversation) => ({
+        ...conversation.target,
+        activitySummary: { state: "updating", canEnsure: true },
+      })),
     });
-    await vi.waitFor(() => expect(view()?.state).toBe("current"));
-    expect(complete).toHaveBeenCalledTimes(1);
+    await published.promise;
+    for (const conversation of conversations) {
+      expect(loadSessionEntryReadOnly(conversation.scope)).toMatchObject({
+        ...conversation.entry,
+        activitySummary: { text: "Completed the requested work.", coveredMessages: 1 },
+      });
+    }
+    expect(complete).toHaveBeenCalledTimes(conversations.length);
   });
 
   it("backfills a cold archived transcript through its restoration owner", async () => {
@@ -948,23 +1005,30 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     );
   });
 
-  it("honors disabled utility routing and excludes child and incognito sessions", async () => {
+  it("honors disabled utility routing and excludes hidden child and incognito sessions", async () => {
     await messages(1);
     cfg = { agents: { defaults: { utilityModel: "" } } };
     expect(service.ensure(target).state).toBe("unavailable");
     cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
-    for (const key of ["agent:main:subagent:child", "agent:main:incognito:private"]) {
-      const childScope = { agentId: "main", sessionKey: key, sessionId: key };
-      await upsertSessionEntryCore(childScope, { sessionId: key, updatedAt: 1 });
+    for (const { key, ...entry } of [
+      { key: "agent:main:subagent:child", category: "Work" },
+      { key: "agent:main:legacy-child", spawnedBy: "agent:main:main" },
+      { key: "agent:main:dashboard:incognito-private" },
+    ]) {
+      const childScope = { agentId: "main", sessionKey: key, sessionId: key.replaceAll(":", "-") };
+      await upsertSessionEntryCore(childScope, {
+        sessionId: childScope.sessionId,
+        updatedAt: 1,
+        ...entry,
+      });
       await persistSessionTranscriptTurn(childScope, {
         messages: [
           { eventId: `event-${key}`, message: { role: "user", content: "Private child work" } },
         ],
         touchSessionEntry: false,
       });
+      expect(service.ensure({ key, agentId: "main" }).state).toBe("unavailable");
     }
-    service.ensure({ key: "agent:main:subagent:child", agentId: "main" });
-    service.ensure({ key: "agent:main:incognito:private", agentId: "main" });
     expect(prepare).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
   });
