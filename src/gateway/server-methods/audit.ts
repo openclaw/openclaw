@@ -54,8 +54,8 @@ function isOwnerDecisionCursor(value: string): boolean {
 
 /** Preserve the shipped audit.list result shape for run/tool-only clients. */
 function mapLegacyAuditEvent(event: AuditEventRecord): AuditEvent {
-  if (event.kind === "message") {
-    throw new Error("legacy audit.list cannot project message records");
+  if (event.kind === "message" || event.kind === "skill_selection") {
+    throw new Error("legacy audit.list cannot project message or skill-selection records");
   }
   const { schemaVersion: _schemaVersion, actorType, actorId, ...legacyEvent } = event;
   return {

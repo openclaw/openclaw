@@ -29,7 +29,6 @@ import {
   hasGlobPattern,
   normalizeWorkspacePatternPath,
   resolveGlobWalkRoot,
-  resolveWorkspaceBootstrapPath,
   type WorkspaceBootstrapFile,
   type WorkspaceBootstrapFileName,
 } from "./workspace-bootstrap-policy.js";
