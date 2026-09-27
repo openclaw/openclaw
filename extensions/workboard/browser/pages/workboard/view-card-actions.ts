@@ -1,5 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { html, nothing, type TemplateResult } from "lit";
+import { live as liveValue } from "lit/directives/live.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -81,7 +82,7 @@ export function renderCardMoveControl(
         class="workboard-card__move-select"
         aria-keyshortcuts="ArrowLeft ArrowRight"
         aria-label=${`${t("workboard.fieldStatus")}: ${card.title}`}
-        .value=${card.status}
+        .value=${liveValue(card.status)}
         ?disabled=${busy || !props.connected || !props.client}
         @change=${(event: Event) => {
           void moveCardToStatus(
