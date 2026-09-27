@@ -287,12 +287,21 @@ describe("splitMediaFromOutput", () => {
     // A quote pair inside one unquoted path is text in the filename, not a reference: `'/tmp/album
     // 'best' photos/image.png'` is a single path step to `main`. Treating that pair as a boundary split
     // the path in two and leaked the fragment into the visible reply text, which loses an attachment
-    // that used to prepare. Only a quote pair that is itself an accepted reference bounds a reference.
+    // that used to prepare. Only a payload that quotes every one of its references is a list.
     ["MEDIA:/tmp/album 'best' photos/image.png", ["/tmp/album 'best' photos/image.png"]],
     ['MEDIA:/tmp/album "best" photos/image.png', ['/tmp/album "best" photos/image.png']],
     [
       "MEDIA:/tmp/album 'best' photos/image.png /tmp/second.png",
       ["/tmp/album 'best' photos/image.png", "/tmp/second.png"],
+    ],
+    // The same fragment split one path again as soon as it validated as media on its own, which a slash
+    // inside it is enough to do (`'best/photos'`). Whether a fragment would be accepted says nothing
+    // about whether the payload lists references, so it must not steer the join either.
+    ["MEDIA:/tmp/album 'best/photos' final.png", ["/tmp/album 'best/photos' final.png"]],
+    ['MEDIA:/tmp/album "best/photos" final.png', ['/tmp/album "best/photos" final.png']],
+    [
+      "MEDIA:/tmp/album 'best/photos' final.png /tmp/second.png",
+      ["/tmp/album 'best/photos' final.png", "/tmp/second.png"],
     ],
   ] as const)("keeps a quoted fragment inside one unquoted reference: %s", (input, mediaUrls) => {
     expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });

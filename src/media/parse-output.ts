@@ -248,18 +248,6 @@ function isQuotedChunk(token: string): boolean {
   return token.length > 1 && QUOTE_CHARS.has(quote) && token.endsWith(quote);
 }
 
-// A quoted chunk that is itself an accepted media reference bounds a reference. One that is not is only
-// text inside a longer path — the `'best'` in `/tmp/album 'best' photos/image.png` — so the join below
-// may still reach across it. The split keeps a quoted part exactly when this accepts it, so the guard
-// and the parts it protects agree on what counts as a reference.
-function isQuotedMediaReference(token: string): boolean {
-  if (!isQuotedChunk(token)) {
-    return false;
-  }
-  const value = unwrapQuoted(token);
-  return value !== undefined && isValidMedia(value, { allowSpaces: true });
-}
-
 type MediaDirectiveToken = { token: string; index: number };
 
 // One tokenizer owns the reference boundaries, so splitting and list detection agree on them. Reading a
@@ -279,6 +267,8 @@ function tokenizeMediaDirectiveParts(payload: string): MediaDirectiveToken[] {
 // one value whose name holds that quote, so the stray tail must not pass for a second reference. With
 // no list present the payload keeps `main`'s reading: a single quoted value unwraps as a whole,
 // including one whose own text ends with that quote (`MEDIA:"https://example.com/video.mp4?token=ends""`).
+// This one answer also gates the reconstruction in `splitMediaDirectiveParts`: a listed payload needs no
+// reconstruction, and everything else is read the way `main` reads it.
 function listsSeparateQuotedReferences(payload: string): boolean {
   const tokens = tokenizeMediaDirectiveParts(payload);
   return tokens.length >= 2 && tokens.every((entry) => isQuotedChunk(entry.token));
@@ -287,6 +277,14 @@ function listsSeparateQuotedReferences(payload: string): boolean {
 function splitMediaDirectiveParts(payload: string): string[] {
   const parts: string[] = [];
   const tokens = tokenizeMediaDirectiveParts(payload);
+  // A payload that lists references quotes every one of them, so its tokens already state their own
+  // boundaries and nothing is left to reconstruct. Every other payload is read exactly as `main` reads
+  // it: whitespace splits it, and the join below restores a filename that really contains a space.
+  // Deciding this once, for the whole payload, keeps the reconstruction quote-blind — a quote that is
+  // not a reference boundary is text inside one path (`/tmp/album 'best' photos/image.png`), and even a
+  // fragment that validates on its own (`'best/photos'` in `/tmp/album 'best/photos' final.png`) is
+  // still only that: `main` joins it, so this joins it too.
+  const listsReferences = listsSeparateQuotedReferences(payload);
   for (let position = 0; position < tokens.length; position += 1) {
     const token = expectDefined(tokens[position], "media directive part");
     const previousToken = tokens[position - 1];
@@ -294,16 +292,12 @@ function splitMediaDirectiveParts(payload: string): string[] {
     const previous = parts.at(-1);
     const previousCandidate = previous ? normalizeMediaSource(cleanCandidate(previous)) : "";
     if (
-      !isQuotedMediaReference(token.token) &&
-      !(previousToken !== undefined && isQuotedMediaReference(previousToken.token)) &&
+      !listsReferences &&
       MEDIA_SOURCE_ROOT_RE.test(previousCandidate) &&
       !beginsIndependentMediaSource(candidate) &&
       (!HAS_FILE_EXT.test(previousCandidate) || !isValidMedia(candidate))
     ) {
-      // Preserve real filename whitespace while keeping independently valid attachments separate. This
-      // reconstruction only serves unquoted paths: a quote pair that is itself an accepted reference
-      // already ends its reference, so reaching across one would fuse two references the author
-      // delimited. A quote pair that is not one is text inside a longer path and must not block the join.
+      // Preserve real filename whitespace while keeping independently valid attachments separate.
       const previousEnd = previousToken
         ? previousToken.index + previousToken.token.length
         : token.index;
