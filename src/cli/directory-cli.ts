@@ -34,19 +34,32 @@ const DIRECTORY_LIST_LABELS = {
   listGroupMembers: ["Group Members", "No group members found", "group members listing"],
 } as const;
 
+function getDirectoryEntryRole(raw: unknown): string | undefined {
+  if (raw === null || typeof raw !== "object" || !("admin" in raw)) {
+    return undefined;
+  }
+  return normalizeOptionalString(raw.admin);
+}
+
 function formatDirectoryTable(
-  entries: Array<{ id: string; name?: string | undefined }>,
+  entries: Array<{ id: string; name?: string | undefined; raw?: unknown }>,
   width: number,
 ) {
+  const includeRole = entries.some((entry) => getDirectoryEntryRole(entry.raw));
+  const columns = [
+    { key: "ID", header: "ID", minWidth: 16, flex: true },
+    { key: "Name", header: "Name", minWidth: 18, flex: true },
+  ];
+  if (includeRole) {
+    columns.push({ key: "Role", header: "Role", minWidth: 8, flex: false });
+  }
   return renderTerminalSafeTable({
     width,
-    columns: [
-      { key: "ID", header: "ID", minWidth: 16, flex: true },
-      { key: "Name", header: "Name", minWidth: 18, flex: true },
-    ],
+    columns,
     rows: entries.map((entry) => ({
       ID: entry.id,
       Name: normalizeOptionalString(entry.name) ?? "",
+      Role: getDirectoryEntryRole(entry.raw) ?? "",
     })),
   }).trimEnd();
 }
