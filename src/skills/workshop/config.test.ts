@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { OpenClawSchema } from "../../config/zod-schema.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 
 describe("resolveSkillWorkshopConfig", () => {
@@ -63,5 +64,44 @@ describe("resolveSkillWorkshopConfig", () => {
         },
       } as never).autonomous,
     ).toEqual({ mode: "auto", overflowPolicy: "skip" });
+  });
+
+  it("validates review context limits against schema bounds", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        skills: {
+          workshop: {
+            autonomous: {
+              maxReviewContextTokens: 2_000_000,
+              maxReviewContextBytes: 256 * 1024 * 1024,
+            },
+          },
+        },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      OpenClawSchema.safeParse({
+        skills: {
+          workshop: {
+            autonomous: {
+              maxReviewContextTokens: 2_000_001,
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      OpenClawSchema.safeParse({
+        skills: {
+          workshop: {
+            autonomous: {
+              maxReviewContextBytes: 256 * 1024 * 1024 + 1,
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
   });
 });

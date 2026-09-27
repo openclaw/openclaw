@@ -560,9 +560,14 @@ export const OpenClawSchemaShape = {
               /** Capture policy for durable conversation signals and substantial completed work. */
               mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
               /** Maximum model context tokens admitted to background experience review. */
-              maxReviewContextTokens: z.number().int().min(1024).optional(),
+              maxReviewContextTokens: z.number().int().min(1024).max(2_000_000).optional(),
               /** Maximum raw model context bytes admitted to background experience review. */
-              maxReviewContextBytes: z.number().int().min(1024).optional(),
+              maxReviewContextBytes: z
+                .number()
+                .int()
+                .min(1024)
+                .max(256 * 1024 * 1024)
+                .optional(),
               /** Action when assembled experience review prompt exceeds the effective review budget. */
               overflowPolicy: z.union([z.literal("skip"), z.literal("fail")]).optional(),
             })
