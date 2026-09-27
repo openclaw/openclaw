@@ -247,35 +247,39 @@ describe("startSshPortForward", () => {
     expect(mocks.ensurePortAvailable).toHaveBeenCalledWith(43210, "127.0.0.1");
   });
 
-  it("falls back to an ephemeral port when the preferred port is in use", async () => {
-    // ensurePortAvailable raises the domain PortInUseError (no errno `code`),
-    // which the catch must treat as "busy" and allocate another port.
-    // Reserve a real port so the ephemeral listener cannot hand the same
-    // number back and make the assertion flaky.
-    const occupied = await listenOnPort();
-    const addr = occupied.address();
-    if (!addr || typeof addr === "string") {
-      throw new Error("failed to reserve preferred port");
-    }
-    const preferredPort = addr.port;
+  it.each(["PortInUseError", "EADDRINUSE", "EACCES", "EPERM"])(
+    "falls back to an ephemeral port when the preferred port fails with %s",
+    async (code) => {
+      // Reserve the preferred port so the OS cannot reissue it during fallback.
+      const occupied = await listenOnPort();
+      const addr = occupied.address();
+      if (!addr || typeof addr === "string") {
+        throw new Error("failed to reserve preferred port");
+      }
+      const preferredPort = addr.port;
 
-    mocks.ensurePortAvailable.mockRejectedValueOnce(new PortInUseError(preferredPort));
-    spawnFakeSsh();
+      mocks.ensurePortAvailable.mockRejectedValueOnce(
+        code === "PortInUseError"
+          ? new PortInUseError(preferredPort)
+          : Object.assign(new Error(`preferred port unavailable: ${code}`), { code }),
+      );
+      spawnFakeSsh();
 
-    const tunnel = await startTunnel({
-      localPortPreferred: preferredPort,
-    });
+      const tunnel = await startTunnel({
+        localPortPreferred: preferredPort,
+      });
 
-    expect(tunnel.localPort).not.toBe(preferredPort);
-    expect(tunnel.localPort).toBeGreaterThan(0);
-    expect(mocks.spawn).toHaveBeenCalledWith(
-      "/usr/bin/ssh",
-      expect.arrayContaining(["-L", `127.0.0.1:${tunnel.localPort}:127.0.0.1:18789`]),
-      expect.anything(),
-    );
+      expect(tunnel.localPort).not.toBe(preferredPort);
+      expect(tunnel.localPort).toBeGreaterThan(0);
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        "/usr/bin/ssh",
+        expect.arrayContaining(["-L", `127.0.0.1:${tunnel.localPort}:127.0.0.1:18789`]),
+        expect.anything(),
+      );
 
-    await tunnel.stop();
-  });
+      await tunnel.stop();
+    },
+  );
 
   it.each([
     { ownership: "foreign", listeners: [{ pid: 4343 }] },

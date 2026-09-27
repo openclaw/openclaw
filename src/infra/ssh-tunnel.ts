@@ -150,7 +150,10 @@ export async function startSshPortForward(opts: {
   try {
     await ensurePortAvailable(localPort, "127.0.0.1");
   } catch (err) {
-    if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
+    if (
+      err instanceof PortInUseError ||
+      (isErrno(err) && (err.code === "EADDRINUSE" || err.code === "EACCES" || err.code === "EPERM"))
+    ) {
       localPort = await tryListenOnPort({ port: 0, host: "127.0.0.1" });
     } else {
       throw err;
