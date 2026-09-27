@@ -119,5 +119,40 @@ describe("anthropic live model discovery auth", () => {
     expect(ids.has("claude-mythos-5")).toBe(true);
     // Unknown id whose advertised capabilities disagree with our contracts stays gated out.
     expect(ids.has("claude-brand-new-9")).toBe(false);
+    // The live response lists what this credential can call, so restored rows are
+    // reported as unlisted for it instead of being offered as runnable.
+    const ready = result?.outcomes?.filter((outcome) => outcome.status === "ready");
+    expect(ready).toHaveLength(1);
+    expect(ready?.[0]?.unlistedModelIds).toContain("claude-mythos-5");
+    expect(ready?.[0]?.unlistedModelIds).not.toContain("claude-opus-5");
+  });
+
+  it("treats a dated snapshot in the live response as listing its dateless model", async () => {
+    // Only the snapshot id is published; its capability tree matches the Sonnet 5
+    // contract, so the gate admits it as a model the manifest never named.
+    discoveryRows.value = [
+      {
+        id: "claude-sonnet-5-20260115",
+        type: "model",
+        max_input_tokens: 1_000_000,
+        max_tokens: 128_000,
+        capabilities: {
+          thinking: { types: { adaptive: { supported: true } } },
+          effort: { xhigh: { supported: true }, max: { supported: true } },
+        },
+      },
+    ];
+    const provider = buildAnthropicProvider();
+    const result = await provider.catalog?.run?.(buildCatalogContext("sk-ant-api03-test-key"));
+    const ids = new Set(
+      result && "provider" in result ? (result.provider.models ?? []).map((model) => model.id) : [],
+    );
+    expect(ids.has("claude-sonnet-5-20260115")).toBe(true);
+    expect(ids.has("claude-sonnet-5")).toBe(true);
+    const ready = result?.outcomes?.find((outcome) => outcome.status === "ready");
+    expect(ready?.unlistedModelIds).toBeDefined();
+    // The dateless manifest row is restored and stays runnable through its snapshot.
+    expect(ready?.unlistedModelIds).not.toContain("claude-sonnet-5");
+    expect(ready?.unlistedModelIds).toContain("claude-mythos-5");
   });
 });

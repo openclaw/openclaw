@@ -51,6 +51,8 @@ const ModelUnavailableReasonSchema = Type.Union([
   Type.Literal("missing-auth"),
   Type.Literal("auth-failed"),
   Type.Literal("cooldown"),
+  /** The provider's live catalog omitted this published model for the selected credential. */
+  Type.Literal("not-provisioned"),
 ]);
 
 const ModelRuntimeProperties = {

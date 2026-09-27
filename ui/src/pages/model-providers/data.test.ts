@@ -619,6 +619,20 @@ describe("model provider configuration data", () => {
     const models = [
       catalogEntry({ provider: "openai", id: "gpt-ready", available: true }),
       catalogEntry({ provider: "openai", id: "gpt-disabled", available: false }),
+      // Credential accepted but not licensed for this model: listed, but disabled.
+      catalogEntry({
+        provider: "anthropic",
+        id: "claude-unlisted",
+        available: false,
+        unavailableReason: "not-provisioned",
+      }),
+      // No working credential: stays out of the global defaults entirely.
+      catalogEntry({
+        provider: "anthropic",
+        id: "claude-signed-out",
+        available: false,
+        unavailableReason: "missing-auth",
+      }),
     ];
     const selectable = defaultModelChoices(models, {
       primary: "openai/gpt-saved",
@@ -628,8 +642,10 @@ describe("model provider configuration data", () => {
     expect(selectable.map((model) => `${model.provider}/${model.id}`)).toEqual([
       "openai/gpt-ready",
       "openai/gpt-disabled",
+      "anthropic/claude-unlisted",
       "openai/gpt-saved",
     ]);
+    expect(selectable[2]).toMatchObject({ available: false, unavailableReason: "not-provisioned" });
   });
 
   it.each(["openai/gpt-saved", "saved-model"])(

@@ -6,6 +6,28 @@ export type GatewayModelCatalogEntry = {
   pending?: Promise<TuiModelChoice[]>;
 };
 
+/** Short picker hint for a model the Gateway reports as unavailable. */
+export function describeTuiModelUnavailableReason(
+  reason: TuiModelChoice["unavailableReason"],
+): string {
+  return reason === "not-provisioned"
+    ? "not available for this account"
+    : (reason ?? "unavailable");
+}
+
+/** Recovery hint for a model the Gateway reports as unavailable in the TUI picker. */
+export function resolveTuiModelUnavailableGuidance(
+  reason: TuiModelChoice["unavailableReason"],
+): string {
+  if (reason === "cooldown") {
+    return "Wait and retry, or choose another model.";
+  }
+  if (reason === "not-provisioned") {
+    return "This account cannot use it. Choose another model.";
+  }
+  return "Run openclaw models auth login or choose another model.";
+}
+
 export function refreshTuiGatewayModelCatalog(params: {
   catalogs: Map<string | undefined, GatewayModelCatalogEntry>;
   client: Pick<GatewayClient, "request">;

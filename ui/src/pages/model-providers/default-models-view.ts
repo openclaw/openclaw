@@ -15,6 +15,7 @@ import {
   renderSettingsSegmented,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import {
   canonicalModelAuthProviderId,
@@ -57,6 +58,8 @@ export type DefaultModelsViewProps = {
 
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
 const UTILITY_MODEL_PICKER_ID = "model-providers-utility-model";
+registerModelControlsEnglish();
+
 const UTILITY_MODEL_HELP_ID = "model-providers-utility-help";
 const THINKING_HELP_ID = "model-providers-thinking-help";
 const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
@@ -95,10 +98,16 @@ function modelOption(
         projection: "available-credentials",
       })
     : undefined;
+  const detail =
+    model.unavailableReason === "not-provisioned"
+      ? t("chat.modelControls.notProvisioned")
+      : auth
+        ? [auth.label, auth.detail].filter(Boolean).join(" · ")
+        : undefined;
   return {
     value: ref,
     label: model.name || ref,
-    ...(auth ? { detail: [auth.label, auth.detail].filter(Boolean).join(" · ") } : {}),
+    ...(detail ? { detail } : {}),
     ...(model.available === false ? { disabled: true } : {}),
     ...(model.provider ? { provider: model.provider } : {}),
   };

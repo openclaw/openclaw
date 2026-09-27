@@ -85,6 +85,7 @@ export function copyProviderCatalogOutcomes(
     const profileId = readRecordValue(entry, "profileId");
     const rejectionScope = readRecordValue(entry, "rejectionScope");
     const status = readRecordValue(entry, "status");
+    const unlistedModelIds = readRecordValue(entry, "unlistedModelIds");
     if (
       typeof provider !== "string" ||
       provider.trim().length === 0 ||
@@ -96,12 +97,25 @@ export function copyProviderCatalogOutcomes(
     ) {
       return [];
     }
+    // Only a successful live read can prove which published rows the credential
+    // lacks. A malformed list is ignored rather than discarding the ready signal.
+    const unlisted =
+      status === "ready" && Array.isArray(unlistedModelIds)
+        ? [
+            ...new Set(
+              unlistedModelIds.flatMap((id) =>
+                typeof id === "string" && id.trim().length > 0 ? [id.trim()] : [],
+              ),
+            ),
+          ]
+        : [];
     return [
       {
         provider: provider.trim(),
         ...(typeof profileId === "string" ? { profileId: profileId.trim() } : {}),
         ...(rejectionScope === "catalog" ? { rejectionScope } : {}),
         status: status as ProviderCatalogOutcome["status"],
+        ...(unlisted.length > 0 ? { unlistedModelIds: unlisted } : {}),
       },
     ];
   });

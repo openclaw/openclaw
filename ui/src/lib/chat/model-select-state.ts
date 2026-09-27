@@ -220,6 +220,11 @@ export function resolveChatModelUnavailableReason(
   if (matches.some((entry) => entry.unavailableReason === "cooldown")) {
     return "cooldown";
   }
+  // A credential the provider accepts but does not license for this model is
+  // not a sign-in problem; only report it when no route needs authentication.
+  if (matches.every((entry) => entry.unavailableReason === "not-provisioned")) {
+    return "not-provisioned";
+  }
   return matches.some((entry) => entry.unavailableReason === "auth-failed")
     ? "auth-failed"
     : "missing-auth";
@@ -249,6 +254,9 @@ export function chatModelUnavailableMessage(
   }
   if (reason === "unsupported-runtime") {
     return t("chat.modelControls.runtimeUnavailable");
+  }
+  if (reason === "not-provisioned") {
+    return t("chat.modelControls.notProvisioned");
   }
   return reason === "auth-failed"
     ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`

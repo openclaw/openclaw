@@ -118,6 +118,11 @@ function buildAnthropicDiscoveryAuthHeaders(key: string | undefined): Record<str
  * Anthropic does not publish every model it serves, so replacement alone would
  * hide shipped entries that have no live row. Re-add the manifest models the
  * live response omitted; discovered rows still win on shared ids.
+ *
+ * `/v1/models` lists only the models the tested credential can call, so a
+ * restored row is not runnable with that credential. Report those ids on the
+ * successful discovery outcome; the catalog owner marks them unavailable for
+ * the same credential instead of offering a model the provider will reject.
  */
 function restoreUnpublishedAnthropicModels(result: ProviderCatalogResult): ProviderCatalogResult {
   if (!result || !("provider" in result)) {
@@ -134,6 +139,16 @@ function restoreUnpublishedAnthropicModels(result: ProviderCatalogResult): Provi
   if (unpublished.length === 0) {
     return result;
   }
+  // The live listing may name a model only by a dated snapshot or a registered
+  // alias. A restored dateless row whose identity the listing does cover is
+  // runnable; only rows with no live identity at all are unlisted.
+  const discoveredIdentities = new Set(
+    discovered.map((model) => resolveAnthropicPublishedIdentity(model.id)),
+  );
+  const unlistedModelIds = unpublished
+    .filter((model) => !discoveredIdentities.has(resolveAnthropicPublishedIdentity(model.id)))
+    .map((model) => model.id)
+    .toSorted();
   // Discovered rows arrive id-sorted; keep the appended tail sorted too so the
   // catalog stays byte-stable for prompt caching.
   return {
@@ -142,14 +157,27 @@ function restoreUnpublishedAnthropicModels(result: ProviderCatalogResult): Provi
       ...result.provider,
       models: [...discovered, ...unpublished.toSorted((a, b) => a.id.localeCompare(b.id))],
     },
+    outcomes:
+      unlistedModelIds.length > 0
+        ? result.outcomes?.map((outcome) =>
+            outcome.status === "ready" && outcome.provider === PROVIDER_ID
+              ? { ...outcome, unlistedModelIds }
+              : outcome,
+          )
+        : result.outcomes,
   };
+}
+
+/** Maps a dated snapshot or registered alias onto the manifest id it is published under. */
+function resolveAnthropicPublishedIdentity(modelId: string): string {
+  const normalized = resolveClaudeModelIdentity({ id: modelId }).replace(/-\d{8}$/, "");
+  return CLAUDE_MODEL_ID_ALIASES.get(normalized) ?? normalized;
 }
 
 function resolveAnthropicModelCost(modelId: string) {
   // Snapshots share their dateless model's price; unlisted deployments retain
   // their discovered cost instead of inheriting a different version's pricing.
-  const normalized = resolveClaudeModelIdentity({ id: modelId }).replace(/-\d{8}$/, "");
-  const id = CLAUDE_MODEL_ID_ALIASES.get(normalized) ?? normalized;
+  const id = resolveAnthropicPublishedIdentity(modelId);
   return manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost;
 }
 

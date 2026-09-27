@@ -1,6 +1,7 @@
 // Selector components adapt Pi TUI list controls for OpenClaw settings.
 import { type SettingItem, SettingsList } from "@earendil-works/pi-tui";
 import { modelKey } from "../../agents/model-ref-shared.js";
+import { describeTuiModelUnavailableReason } from "../gateway-chat-models.js";
 import {
   filterableSelectListTheme,
   searchableSelectListTheme,
@@ -23,7 +24,7 @@ export function modelSelectItems(models: readonly TuiModelChoice[]): SearchableS
       label: ref,
       description: [
         model.name !== model.id ? model.name : "",
-        model.available === false ? (model.unavailableReason ?? "unavailable") : "",
+        model.available === false ? describeTuiModelUnavailableReason(model.unavailableReason) : "",
       ]
         .filter(Boolean)
         .join(" · "),

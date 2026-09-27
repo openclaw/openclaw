@@ -31,6 +31,7 @@ import {
   createSettingsList,
   modelSelectItems,
 } from "./components/selectors.js";
+import { resolveTuiModelUnavailableGuidance } from "./gateway-chat-models.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { runTuiBrowserSetup } from "./tui-browser-setup.js";
 import type { CommandHandlerContext } from "./tui-command-context.js";
@@ -325,10 +326,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           return;
         }
         if (model.available === false) {
-          const guidance =
-            model.unavailableReason === "cooldown"
-              ? "Wait and retry, or choose another model."
-              : "Run openclaw models auth login or choose another model.";
+          const guidance = resolveTuiModelUnavailableGuidance(model.unavailableReason);
           chatLog.addSystem(
             `model unavailable: ${model.unavailableReason ?? "unavailable"}. ${guidance}`,
           );

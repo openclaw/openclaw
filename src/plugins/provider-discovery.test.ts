@@ -189,6 +189,52 @@ describe("runProviderCatalog", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "keeps unlisted model ids on a ready outcome",
+      status: "ready" as const,
+      unlistedModelIds: [" claude-mythos-5 ", "claude-mythos-5", "", 42],
+      expected: { unlistedModelIds: ["claude-mythos-5"] },
+    },
+    {
+      name: "drops unlisted model ids from a failed outcome",
+      status: "unavailable" as const,
+      unlistedModelIds: ["claude-mythos-5"],
+      expected: {},
+    },
+  ])("$name", async ({ status, unlistedModelIds, expected }) => {
+    const outcomes: unknown[] = [];
+    const provider: ProviderPlugin = {
+      id: "anthropic",
+      label: "Anthropic",
+      auth: [],
+      catalog: {
+        run: async () => ({
+          providers: {},
+          outcomes: [
+            { provider: "anthropic", status, unlistedModelIds } as unknown as {
+              provider: string;
+              status: typeof status;
+            },
+          ],
+        }),
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([{ provider: "anthropic", status, ...expected }]);
+  });
+
   it("preserves provider-owned profile outcomes after multiple auth probes", async () => {
     const outcomes: Array<{ profileId?: string; status: string }> = [];
     const provider: ProviderPlugin = {
