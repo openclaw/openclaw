@@ -124,9 +124,12 @@ flow:
               - assert:
                   expr: "isValidSecretRef(updatedKey) && fileProvider?.source === 'file' && typeof fileProvider.path === 'string' && ['json', 'singleValue', undefined].includes(fileProvider.mode) && (fileProvider.mode !== 'singleValue' || updatedKey.id === 'value')"
                   message: The embeddings key references an invalid file provider.
+              - assert:
+                  expr: "path.isAbsolute(fileProvider.path)"
+                  message: The embeddings key file provider path is not absolute.
               - set: providerPath
                 value:
-                  expr: "fileProvider.path.startsWith('~/') ? path.join(env.gateway.runtimeEnv.HOME, fileProvider.path.slice(2)) : path.resolve(fileProvider.path)"
+                  expr: "fileProvider.path"
               - call: fs.lstat
                 saveAs: providerStat
                 args:

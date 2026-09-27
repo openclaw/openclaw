@@ -17,6 +17,7 @@ type ReplySequence =
   | "json5-config"
   | "config-write-migrations"
   | "unexpected-migration-marker"
+  | "tilde-file-ref"
   | "drops-embeddings-destination"
   | "drops-unrelated-config"
   | "invalid-single-value-ref"
@@ -111,6 +112,7 @@ async function runCredentialHandoffScenario(replySequence: ReplySequence) {
           replySequence === "invalid-single-value-ref" ||
           replySequence === "invalid-provider-alias" ||
           replySequence === "invalid-json-pointer-ref" ||
+          replySequence === "tilde-file-ref" ||
           replySequence === "symlink-file-ref" ||
           replySequence === "sibling-file-ref" ||
           replySequence === "escaped-file-ref"
@@ -149,7 +151,8 @@ async function runCredentialHandoffScenario(replySequence: ReplySequence) {
               providers: {
                 [providerAlias]: {
                   source: "file",
-                  path: providerPath,
+                  path:
+                    replySequence === "tilde-file-ref" ? "~/state/secrets/key.txt" : providerPath,
                   mode: jsonProvider ? "json" : "singleValue",
                 },
               },
@@ -304,14 +307,11 @@ describe("operator key handoff scenario assertions", () => {
     "drops-embeddings-destination",
     "drops-unrelated-config",
     "unexpected-migration-marker",
-  ] as const)(
-    "rejects an update that %s",
-    async (replySequence) => {
-      await expect(runCredentialHandoffScenario(replySequence)).rejects.toThrow(
-        "The assistant changed unrelated OpenClaw configuration while rotating the key.",
-      );
-    },
-  );
+  ] as const)("rejects an update that %s", async (replySequence) => {
+    await expect(runCredentialHandoffScenario(replySequence)).rejects.toThrow(
+      "The assistant changed unrelated OpenClaw configuration while rotating the key.",
+    );
+  });
 
   it("refuses a key file resolving outside the isolated Gateway", async () => {
     await expect(runCredentialHandoffScenario("escaped-file-ref")).rejects.toThrow(
@@ -322,6 +322,12 @@ describe("operator key handoff scenario assertions", () => {
   it("rejects a sibling key file inside the QA temp root but outside the state directory", async () => {
     await expect(runCredentialHandoffScenario("sibling-file-ref")).rejects.toThrow(
       "The embeddings key file is outside the isolated QA Gateway state directory.",
+    );
+  });
+
+  it("rejects a tilde key path even when it resolves inside the isolated state directory", async () => {
+    await expect(runCredentialHandoffScenario("tilde-file-ref")).rejects.toThrow(
+      "The embeddings key file provider path is not absolute.",
     );
   });
 
