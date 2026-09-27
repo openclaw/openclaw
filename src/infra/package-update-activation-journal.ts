@@ -52,11 +52,7 @@ export type {
   PackageActivationRecord,
 } from "./package-update-activation-schema.js";
 export { encodePackageActivationLauncher } from "./package-update-activation-launcher.js";
-export {
-  assertPackageActivationOperation,
-  readPackageActivationRecordStatus,
-  type PackageActivationStatus,
-} from "./package-update-activation-status.js";
+export { assertPackageActivationOperation } from "./package-update-activation-status.js";
 
 const PACKAGE_ACTIVATION_JOURNAL = "operation.sqlite";
 const MAX_PACKAGE_ACTIVATION_DESCRIPTOR_BYTES = 1024 * 1024;
