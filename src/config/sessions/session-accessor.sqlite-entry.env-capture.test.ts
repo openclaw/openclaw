@@ -72,7 +72,6 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 }));
 vi.mock("./session-accessor.sqlite-normalize.js", () => ({}));
 vi.mock("./session-accessor.sqlite-scope.js", () => ({
-  cloneSessionEntry: (entry: InternalSessionEntry) => structuredClone(entry),
   resolveSqliteScope: (scope: ResolvedSqliteScope) => scope,
   resolveSqliteTranscriptArchiveDirectory: () => "/synthetic/archive",
   runExclusiveSqliteSessionWrite: boundary.queue,

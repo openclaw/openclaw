@@ -1,5 +1,7 @@
 import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type { SessionColdMutationPlan } from "./session-cold-storage-worker.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export type {
   DeletedAgentSessionEntryPurgeParams,
@@ -32,20 +34,7 @@ export type CanonicalSessionValidationResult = {
 
 /** Worker operation facts; no Worker object or plan payload is retained. */
 export type SqliteSessionReclamationDiagnostics = {
-  kind?:
-    | "archive-publish-prepare"
-    | "archive-publish-record"
-    | "entry"
-    | "lifecycle-artifacts"
-    | "history-eviction"
-    | "historical-generation"
-    | "maintenance-plan"
-    | "maintenance-finalize"
-    | "maintenance-statistics"
-    | "maintenance-pages"
-    | "cold-batch"
-    | "cold-maintain"
-    | "cold-restore";
+  kind?: SqliteSessionReclamationPlan["kind"] | SessionColdMutationPlan["kind"];
   workerThreadId?: number;
 };
 

@@ -33,7 +33,6 @@ import {
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import {
-  cloneSessionEntry,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -86,7 +85,7 @@ export async function appendExpectedSessionTranscriptTurn(
   },
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
   const initialEntry = options.initialSessionEntry
-    ? cloneSessionEntry(options.initialSessionEntry)
+    ? structuredClone(options.initialSessionEntry)
     : undefined;
   if (
     initialEntry &&
@@ -383,7 +382,7 @@ export async function appendExpectedSessionTranscriptTurn(
           result = {
             sessionTurnMutationResult,
             appendedMessages,
-            sessionEntry: cloneSessionEntry(next),
+            sessionEntry: structuredClone(next),
             sessionFile: options.sessionFile,
           };
           return publishIdentity;

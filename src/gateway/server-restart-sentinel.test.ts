@@ -319,9 +319,14 @@ vi.mock("../config/sessions/main-session.js", async (importOriginal) => ({
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: vi.fn(() => ({})) }));
 
-vi.mock("../config/sessions/thread-info.js", () => ({
-  parseSessionThreadInfoFast: mocks.parseSessionThreadInfo,
-  parseSessionThreadInfo: mocks.parseSessionThreadInfo,
+vi.mock("../channels/plugins/session-conversation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/session-conversation.js")>()),
+  resolveSessionThreadInfo: mocks.parseSessionThreadInfo,
+}));
+
+vi.mock("../channels/plugins/session-thread-info-loaded.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/session-thread-info-loaded.js")>()),
+  resolveLoadedSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
 
 vi.mock("./session-utils.js", async (importOriginal) => ({

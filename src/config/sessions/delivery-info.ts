@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import {
   resolveSessionStoreIdentity,
   resolveSessionStoreKey,
@@ -23,7 +24,6 @@ import {
   normalizeStoreSessionKey,
 } from "./store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
-import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
 /** Reads only the current session; missing delivery must not widen into alias discovery. */
@@ -91,7 +91,7 @@ export function extractDeliveryInfoBatch(
 ): DeliveryInfo[] {
   const parsed = sessionKeys.map((sessionKey) => ({
     sessionKey,
-    ...parseSessionThreadInfo(sessionKey),
+    ...resolveSessionThreadInfo(sessionKey),
   }));
   const results: DeliveryInfo[] = parsed.map(({ threadId }) => ({
     deliveryContext: undefined,

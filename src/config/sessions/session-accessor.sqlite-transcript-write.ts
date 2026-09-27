@@ -31,7 +31,6 @@ import {
   type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
 import {
-  cloneSessionEntry,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -314,7 +313,7 @@ export async function trimTranscriptForManualCompact(
           const identityKeys = collectSessionEntryLookupKeys(writeDatabase, resolved.sessionKey);
           const previousIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
           replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, retainedEvents);
-          const nextEntry = cloneSessionEntry(freshEntry);
+          const nextEntry = structuredClone(freshEntry);
           delete nextEntry.contextBudgetStatus;
           Object.assign(nextEntry, COMPACTION_RUN_USAGE_CLEAR_PATCH);
           delete nextEntry.totalTokens;
