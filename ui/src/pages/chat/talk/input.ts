@@ -249,7 +249,7 @@ async function openRealtimeTalkInput(
     if (inputDeviceId?.trim() && errorName === "OverconstrainedError") {
       throw new RealtimeTalkSelectedMicrophoneError();
     }
-    throw new Error(describeRealtimeTalkInputError(error));
+    throw new Error(describeRealtimeTalkInputError(error), { cause: error });
   }
   if (options.signal?.aborted) {
     audio.getTracks().forEach((track) => track.stop());
@@ -361,6 +361,7 @@ export async function openRealtimeTalkCamera(
       deviceId && errorName === "OverconstrainedError"
         ? t("chat.composer.selectedCameraUnavailable")
         : realtimeTalkDeviceIssueMessage(deviceIssueFromError(error), "videoinput"),
+      { cause: error },
     );
   }
 }

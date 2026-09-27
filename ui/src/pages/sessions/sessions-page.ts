@@ -699,7 +699,7 @@ class SessionsPage extends OpenClawLightDomElement {
             })
           : await request();
       if (!this.isRequestScopeCurrent(scope) || !result) {
-        return;
+        return undefined;
       }
       if (result.preservedWorktrees.length > 0) {
         window.alert(formatPreservedWorktreesNotice(result.preservedWorktrees));
