@@ -4,6 +4,7 @@ import type { IncomingHttpHeaders } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import {
@@ -70,6 +71,19 @@ export async function createManagedOutgoingImageBlocks(params: ManagedOutgoingIm
       );
     }),
   });
+}
+
+export async function createManagedOutgoingImageBlocksWithoutHostSql(
+  params: ManagedOutgoingImageTestParams,
+) {
+  const queries = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: params.stateDir });
+  try {
+    const blocks = await createManagedOutgoingImageBlocks(params);
+    expect(queries.queries).toEqual([]);
+    return blocks;
+  } finally {
+    queries.restore();
+  }
 }
 
 export async function replaceTestSessionEntry(
@@ -217,7 +231,7 @@ export async function createFixture(
   await fs.mkdir(path.dirname(originalPath), { recursive: true });
   const body = options?.body ?? Buffer.from("original-image");
   await fs.writeFile(originalPath, body);
-  insertManagedImageRecord(
+  await insertManagedImageRecord(
     {
       attachmentId,
       sessionKey,

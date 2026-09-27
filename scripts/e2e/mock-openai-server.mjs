@@ -329,15 +329,14 @@ function splitResponseText(text) {
   return [text.slice(0, splitAt), text.slice(splitAt)];
 }
 
-function responseEvents(text, deltas = [text]) {
-  const itemId = "msg_e2e_1";
+function messageEvents(item, text, deltas) {
   return [
     {
       type: "response.output_item.added",
       output_index: 0,
       item: {
         type: "message",
-        id: itemId,
+        id: item.id,
         role: "assistant",
         content: [],
         status: "in_progress",
@@ -345,52 +344,48 @@ function responseEvents(text, deltas = [text]) {
     },
     ...deltas.map((delta) => ({
       type: "response.output_text.delta",
-      item_id: itemId,
+      item_id: item.id,
       output_index: 0,
       content_index: 0,
       delta,
     })),
     {
       type: "response.output_text.done",
-      item_id: itemId,
+      item_id: item.id,
       output_index: 0,
       content_index: 0,
       text,
     },
-    {
-      type: "response.output_item.done",
-      output_index: 0,
-      item: {
-        type: "message",
-        id: itemId,
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
-      },
-    },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_e2e",
-        status: "completed",
-        output: [
-          {
-            type: "message",
-            id: itemId,
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text, annotations: [] }],
-          },
-        ],
-        usage: {
-          input_tokens: 11,
-          output_tokens: 7,
-          total_tokens: 18,
-          input_tokens_details: { cached_tokens: 0 },
-        },
-      },
-    },
+    { type: "response.output_item.done", output_index: 0, item },
   ];
+}
+
+function completedResponseEvent(id, output, inputTokens, outputTokens) {
+  return {
+    type: "response.completed",
+    response: {
+      id,
+      status: "completed",
+      output,
+      usage: {
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        total_tokens: inputTokens + outputTokens,
+        input_tokens_details: { cached_tokens: 0 },
+      },
+    },
+  };
+}
+
+function responseEvents(text, deltas = [text]) {
+  const item = {
+    type: "message",
+    id: "msg_e2e_1",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
+  return [...messageEvents(item, text, deltas), completedResponseEvent("resp_e2e", [item], 11, 7)];
 }
 
 async function writeDefaultResponseEvents(res, text, chunkDelayMs) {
@@ -443,6 +438,17 @@ function buildMockFunctionCall(name, args) {
   };
 }
 
+function functionCallEvents(call) {
+  return [
+    {
+      type: "response.output_item.added",
+      item: { ...call.item, arguments: "" },
+    },
+    { type: "response.function_call_arguments.delta", delta: call.serialized },
+    { type: "response.output_item.done", item: call.item },
+  ];
+}
+
 // Progress-draft proof: assistant text emitted BEFORE a tool call is tagged as
 // commentary, which channels render as the draft's status headline. Streaming
 // text and then a call in one response is the only way to exercise
@@ -451,82 +457,19 @@ function buildMockFunctionCall(name, args) {
 // transport reads it straight off the item, so an untagged item produces no
 // preamble at all and the scenario silently proves nothing.
 function preambleThenToolCallEvents(preamble, name, args) {
-  const messageItemId = "msg_e2e_preamble";
+  const item = {
+    type: "message",
+    id: "msg_e2e_preamble",
+    role: "assistant",
+    status: "completed",
+    phase: "commentary",
+    content: [{ type: "output_text", text: preamble, annotations: [] }],
+  };
   const call = buildMockFunctionCall(name, args);
   return [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: {
-        type: "message",
-        id: messageItemId,
-        role: "assistant",
-        content: [],
-        status: "in_progress",
-      },
-    },
-    ...splitResponseText(preamble).map((delta) => ({
-      type: "response.output_text.delta",
-      item_id: messageItemId,
-      output_index: 0,
-      content_index: 0,
-      delta,
-    })),
-    {
-      type: "response.output_text.done",
-      item_id: messageItemId,
-      output_index: 0,
-      content_index: 0,
-      text: preamble,
-    },
-    {
-      type: "response.output_item.done",
-      output_index: 0,
-      item: {
-        type: "message",
-        id: messageItemId,
-        role: "assistant",
-        status: "completed",
-        phase: "commentary",
-        content: [{ type: "output_text", text: preamble, annotations: [] }],
-      },
-    },
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "function_call",
-        id: call.itemId,
-        call_id: call.item.call_id,
-        name,
-        arguments: "",
-      },
-    },
-    { type: "response.function_call_arguments.delta", delta: call.serialized },
-    { type: "response.output_item.done", item: call.item },
-    {
-      type: "response.completed",
-      response: {
-        id: call.responseId,
-        status: "completed",
-        output: [
-          {
-            type: "message",
-            id: messageItemId,
-            role: "assistant",
-            status: "completed",
-            phase: "commentary",
-            content: [{ type: "output_text", text: preamble, annotations: [] }],
-          },
-          call.item,
-        ],
-        usage: {
-          input_tokens: 64,
-          output_tokens: 24,
-          total_tokens: 88,
-          input_tokens_details: { cached_tokens: 0 },
-        },
-      },
-    },
+    ...messageEvents(item, preamble, splitResponseText(preamble)),
+    ...functionCallEvents(call),
+    completedResponseEvent(call.responseId, [item, call.item], 64, 24),
   ];
 }
 
@@ -563,32 +506,8 @@ function progressDraftEvents(body, bodyText) {
 function toolCallEvents(name, args) {
   const call = buildMockFunctionCall(name, args);
   return [
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "function_call",
-        id: call.itemId,
-        call_id: call.item.call_id,
-        name,
-        arguments: "",
-      },
-    },
-    { type: "response.function_call_arguments.delta", delta: call.serialized },
-    { type: "response.output_item.done", item: call.item },
-    {
-      type: "response.completed",
-      response: {
-        id: call.responseId,
-        status: "completed",
-        output: [call.item],
-        usage: {
-          input_tokens: 64,
-          output_tokens: 16,
-          total_tokens: 80,
-          input_tokens_details: { cached_tokens: 0 },
-        },
-      },
-    },
+    ...functionCallEvents(call),
+    completedResponseEvent(call.responseId, [call.item], 64, 16),
   ];
 }
 

@@ -1,6 +1,7 @@
 // Session binding service multiplexes channel adapters and the generic current
 // conversation store behind one bind/list/resolve/touch/unbind API.
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { resolveSpawnThreadBindingPlacement } from "../../channels/conversation-resolution.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "../../plugins/runtime-channel-state.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
@@ -232,6 +233,23 @@ function assertAdapterSelectionCurrent(
   }
 }
 
+/**
+ * Workers spawned before child-only placement could bind the conversation a user was
+ * talking in. Those persisted bindings stay invisible, so the conversation routes to its
+ * normal agent; untouched, they expire through their owner's idle/max-age lifecycle.
+ */
+function routableBinding(record: SessionBindingRecord | null): SessionBindingRecord | null {
+  if (record?.metadata?.boundBy !== "system") {
+    return record;
+  }
+  const adapter = resolveAdapterForChannelAccount(record.conversation);
+  // The generic current-conversation store never offers child placement.
+  const placements = adapter ? resolveAdapterCapabilities(adapter).placements : [];
+  return resolveSpawnThreadBindingPlacement(record.conversation.channel, placements) === "child"
+    ? record
+    : null;
+}
+
 function captureConversationRef(ref: ConversationRef): ConversationRef {
   return normalizeConversationRef({
     channel: ref.channel,
@@ -315,7 +333,7 @@ export async function listSessionBindingsBySessionAsync(
     results.push(...entries);
   }
   results.push(...generic);
-  return dedupeBindings(results);
+  return dedupeBindings(results).filter((record) => routableBinding(record));
 }
 
 export function inspectSessionBindingByConversation(
@@ -350,7 +368,7 @@ function availableBindingInspection(
   binding: SessionBindingRecord | null,
 ) {
   return withSessionBindingInspectionConversation(
-    { status: "available" as const, binding },
+    { status: "available" as const, binding: routableBinding(binding) },
     conversation,
   );
 }
@@ -432,7 +450,7 @@ export async function readSessionBindingSelectionCurrent(
   if (records.length !== conversations.length) {
     throw new Error("Session binding owner returned an incomplete conversation selection");
   }
-  return records;
+  return records.map(routableBinding);
 }
 
 function createDefaultSessionBindingService(): AsyncSessionBindingService {
@@ -526,7 +544,7 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
         }
       }
       results.push(...listGenericCurrentConversationBindingsBySession(key));
-      return dedupeBindings(results);
+      return dedupeBindings(results).filter((record) => routableBinding(record));
     },
     resolveByConversation: (ref) => {
       const normalized = normalizeConversationRef(ref);
@@ -534,10 +552,11 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
         return null;
       }
       const adapter = resolveAdapterForChannelAccount(normalized);
-      if (!adapter) {
-        return resolveGenericCurrentConversationBinding(normalized);
-      }
-      return adapter.resolveByConversation(normalized);
+      return routableBinding(
+        adapter
+          ? adapter.resolveByConversation(normalized)
+          : resolveGenericCurrentConversationBinding(normalized),
+      );
     },
     resolveByConversationAsync: async (ref) => {
       const normalized = captureConversationRef(ref);
@@ -554,7 +573,7 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
             assertCurrent: () => assertAdapterSelectionCurrent(normalized, null),
           });
       assertAdapterSelectionCurrent(normalized, adapter);
-      return binding;
+      return routableBinding(binding);
     },
     touch: (bindingId, at, scope) => {
       const normalizedBindingId = bindingId.trim();

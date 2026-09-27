@@ -4,6 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -247,7 +248,11 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
           (event): event is Extract<ChatEvent, { state: "delta" }> =>
             event.runId === started.runId && event.state === "delta",
         );
-        expect(messageText(deltas.at(-1)?.message)).toBe(prefix);
+        const liveMessage = deltas.reduce<unknown>(
+          (previous, event) => mergeChatStreamMessage(previous, event),
+          undefined,
+        );
+        expect(messageText(liveMessage)).toBe(prefix);
       } else {
         expect(completed.status).toBe("ok");
         expect(completed.terminalReply?.text).toBe(answer);

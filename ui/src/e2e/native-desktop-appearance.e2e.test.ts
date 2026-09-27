@@ -102,14 +102,16 @@ async function installNative(page: Page) {
                   enabled: true,
                   accelerator: params?.accelerator ?? "Ctrl+Space",
                 };
-              case "quickchat_send":
-                return {
+              case "quickchat_send": {
+                const target = {
                   sessionKey: `agent:${selectedAgent.id}:quickchat`,
                   agentId: selectedAgent.id,
                   gatewayGeneration: 1,
                   runId: "reply-1",
-                  status: "started",
                 };
+                emit("quickchat:send-prepared", target);
+                return { ...target, status: "started" };
+              }
               case "quickchat_activate":
               case "quickchat_hide":
                 return true;
@@ -446,6 +448,10 @@ suite.define(() => {
             ...reply,
             state: "delta",
             deltaText: "The project is ready.",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "The project is ready." }],
+            },
           });
           await page.getByText("The project is ready.", { exact: true }).waitFor();
           await native.releaseIdentity();
@@ -535,6 +541,7 @@ suite.define(() => {
             ...reply,
             state: "delta",
             deltaText: "Ready.",
+            message: { role: "assistant", content: [{ type: "text", text: "Ready." }] },
           });
           await page.getByText("Ready.", { exact: true }).waitFor();
           await expect.poll(() => message.getAttribute("readonly")).toBeNull();

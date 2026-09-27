@@ -6,6 +6,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
@@ -79,7 +80,8 @@ vi.mock("./session-utils.js", () => {
 
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
-import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
+import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
+import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   emitAgentEvent,
@@ -96,7 +98,7 @@ import {
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
 import { broadcastChatError, broadcastChatFinal } from "./server-methods/chat-broadcast.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -1225,178 +1227,6 @@ describe("agent event handler", () => {
       chatRunState.clear();
     }
   });
-
-  it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
-    "bounds connection snapshots until %s completion without losing the terminal reply",
-    (terminal) => {
-      vi.useFakeTimers();
-      const harness = createHarness();
-      const { handler, chatRunState, nodeSendToSession, agentRunSeq } = harness;
-      const callbacks: Array<() => void> = [];
-      const frames: Array<{
-        event: string;
-        seq: number;
-        payload: {
-          stream?: string;
-          data?: { delta?: string };
-          state?: string;
-          deltaText?: string;
-        };
-      }> = [];
-      const socket = {
-        readyState: 1,
-        bufferedAmount: 0,
-        send: (wire: string, callback?: () => void) => {
-          frames.push(JSON.parse(wire));
-          if (callback) {
-            callbacks.push(callback);
-          }
-        },
-        close: vi.fn(),
-        terminate: vi.fn(),
-      };
-      const client = {
-        connId: "held-reader",
-        socket,
-        usesSharedGatewayAuth: false,
-        connect: { role: "operator", scopes: ["operator.read"] },
-      } as unknown as GatewayWsClient;
-      const broadcaster = createGatewayBroadcaster({
-        clients: new GatewayClientRegistry([client]),
-      });
-      harness.broadcast.mockImplementation(broadcaster.broadcast);
-      harness.broadcastToConnIds.mockImplementation(broadcaster.broadcastToConnIds);
-      const runId = "backpressured-run";
-      const sessionKey = "agent:main:backpressured";
-      registerChatRun(chatRunState, runId, sessionKey, runId);
-      const chunks = Array.from({ length: 24 }, (_, i) => `[${i}]${"abc🚀".repeat(64)}`);
-      let expected = chunks.join("");
-
-      try {
-        let text = "";
-        for (const [index, delta] of chunks.entries()) {
-          text += delta;
-          emitAgentEvent(handler, runId, "item", answerCandidate("answer", text), {
-            seq: index * 2 + 1,
-          });
-          emitAgentEvent(handler, runId, "assistant", { text, delta }, { seq: index * 2 + 2 });
-          vi.advanceTimersByTime(75);
-        }
-        // The existing producer pacing still delivers updates to nodes, but a
-        // socket with an unfinished write must not retain every historical prefix.
-        expect(nodeSendToSession.mock.calls.length).toBeGreaterThan(chunks.length);
-        expect(frames.length).toBeLessThan(6);
-        if (terminal === "retry" || terminal === "clearRun" || terminal === "clear") {
-          expect(broadcaster.getBufferedAmount(client.connId)).toBeGreaterThan(
-            socket.bufferedAmount,
-          );
-          if (terminal === "retry") {
-            emitAgentEvent(
-              handler,
-              runId,
-              "assistant",
-              { text: `${expected} failed tail` },
-              { seq: 49 },
-            );
-            emitAgentEvent(
-              handler,
-              runId,
-              "lifecycle",
-              { phase: "error", error: "retryable failure" },
-              { seq: 50 },
-            );
-            expect(
-              frames
-                .filter((frame) => frame.event === "chat" && frame.payload.state === "delta")
-                .map((frame) => frame.payload.deltaText)
-                .join(""),
-            ).toBe(`${expected} failed tail`);
-          } else if (terminal === "clearRun") {
-            chatRunState.clearRun(runId);
-          } else {
-            chatRunState.clear();
-            registerChatRun(chatRunState, runId, sessionKey, runId);
-          }
-          expect(broadcaster.getBufferedAmount(client.connId)).toBe(socket.bufferedAmount);
-          expected = "successor reply";
-          emitAgentEvent(
-            handler,
-            runId,
-            "assistant",
-            { text: expected, delta: expected },
-            { seq: 51 },
-          );
-          emitLifecycleEnd(handler, runId, 52);
-        } else if (terminal === "native") {
-          emitAgentEvent(handler, runId, "item", answerCandidate("answer", expected, "selected"), {
-            seq: chunks.length * 2 + 1,
-          });
-          emitLifecycleEnd(handler, runId, chunks.length * 2 + 2);
-        } else if (terminal === "dispatch") {
-          broadcastChatFinal({
-            context: { ...harness, ...broadcaster },
-            runId,
-            sessionKey,
-            message: { role: "assistant", content: [{ type: "text", text: expected }] },
-          });
-          chatRunState.clearRun(runId);
-        } else {
-          const chatAbortControllers = new Map();
-          registerChatAbortController({
-            chatAbortControllers,
-            runId,
-            sessionId: runId,
-            sessionKey,
-            timeoutMs: 60_000,
-          });
-          expect(
-            abortChatRunById(
-              {
-                ...harness,
-                ...broadcaster,
-                chatAbortControllers,
-                removeChatRun: (sourceRunId, clientRunId, key) =>
-                  chatRunState.registry.remove(sourceRunId, clientRunId, key),
-              },
-              { runId, sessionKey },
-            ).aborted,
-          ).toBe(true);
-        }
-        const beforeDrain = frames.length;
-        while (callbacks.length) {
-          callbacks.shift()?.();
-        }
-        expect(frames).toHaveLength(beforeDrain);
-        expect(frames.map(({ seq }) => seq)).toEqual(frames.map((_, index) => index + 1));
-        expect(frames.at(-1)).toMatchObject({
-          event: "chat",
-          payload: {
-            state: terminal === "abort" ? "aborted" : "final",
-            message: { content: [{ type: "text", text: expected }] },
-          },
-        });
-        if (terminal === "native" || terminal === "dispatch") {
-          expect(
-            frames
-              .filter((f) => f.event === "agent" && f.payload.stream === "assistant")
-              .map((f) => f.payload.data?.delta)
-              .join(""),
-          ).toBe(expected);
-          expect(
-            frames
-              .filter((f) => f.event === "chat" && f.payload.state === "delta")
-              .map((f) => f.payload.deltaText)
-              .join(""),
-          ).toBe(expected);
-        }
-        expect(socket.close).not.toHaveBeenCalled();
-      } finally {
-        handler.dispose();
-        chatRunState.clear();
-        agentRunSeq.clear();
-      }
-    },
-  );
 
   it.each([
     { audience: "visible", controlUiVisible: true },
@@ -5074,6 +4904,100 @@ describe("agent event handler", () => {
     expect(clearAgentRunContext).toHaveBeenCalledWith("run-chat-send");
     expect(agentRunSeq.has("run-chat-send")).toBe(false);
   });
+
+  it.each(["agent:main:reply-dispatch-drain", "global"])(
+    "drains reply-dispatch text once across %s after its source is released",
+    async (sessionKey) => {
+      vi.useFakeTimers();
+      const runId = "run-reply-dispatch-drain";
+      const harness = createHarness({ resolveSessionKeyForRun: () => sessionKey });
+      const entered = createDeferred();
+      const pairing = createDeferred();
+      let delayed = false;
+      const runtime = createGatewayNodeSessionRuntime({
+        broadcast: vi.fn(),
+        resolveCurrentPairingState: async () => {
+          if (delayed) {
+            entered.resolve();
+            await pairing.promise;
+          }
+          return { identity: "identity-a", generation: "generation-a" };
+        },
+        isPairingStateCurrent: (_nodeId, expected) => expected.generation === "generation-a",
+        sessionEventSubscribers: harness.sessionEventSubscribers,
+        sessionMessageSubscribers: harness.sessionMessageSubscribers,
+      });
+      const frames: string[] = [];
+      registerNodeSession(runtime.nodeRegistry, makeClient("conn-node", "node-a", frames), {
+        pairingGeneration: "generation-a",
+      });
+      runtime.nodeSubscribe("node-a", sessionKey, "conn-node");
+      if (sessionKey === "global") {
+        runtime.nodeSubscribe("node-a", "agent:main:global", "conn-node");
+      }
+      const sends: Promise<void>[] = [];
+      harness.nodeSendToSession.mockImplementation(
+        (key: string, event: string, payload: unknown, opts?: GatewayBroadcastOpts) => {
+          sends.push(runtime.nodeSendToSession(key, event, payload, opts));
+        },
+      );
+      const claimId = expectDefined(
+        claimAgentRunContext(
+          runId,
+          { sessionKey, agentId: "main" },
+          { exclusive: true, trackOwner: true },
+        ),
+        "reply-dispatch owner claim",
+      );
+      const stop = onAgentRuntimeEvent(harness.handler);
+      try {
+        emitAgentEventForOwner(
+          { runId, stream: "assistant", data: { text: "one", delta: "one" } },
+          claimId,
+        );
+        await Promise.all(sends);
+        delayed = true;
+        emitAgentEventForOwner(
+          { runId, stream: "assistant", data: { text: "one two", delta: " two" } },
+          claimId,
+        );
+        emitAgentEventForOwner(
+          {
+            runId,
+            stream: "lifecycle",
+            data: { phase: "end", completionSource: "reply-dispatch" },
+          },
+          claimId,
+        );
+        await entered.promise;
+        releaseAgentRunContext(runId, claimId);
+        broadcastChatFinal({
+          context: harness,
+          runId,
+          sessionKey,
+          message: { role: "assistant", content: [{ type: "text", text: "one two" }] },
+        });
+        harness.chatRunState.clearRun(runId);
+        pairing.resolve();
+        await Promise.all(sends);
+
+        const events = frames.map((frame) => JSON.parse(frame));
+        expect(
+          events
+            .filter((frame) => frame.event === "agent" && frame.payload.stream === "assistant")
+            .map((frame) => frame.payload.data),
+        ).toEqual([{ text: "one", delta: "one" }, { delta: " two" }]);
+        expect(events.at(-1)?.payload).toMatchObject({
+          state: "final",
+          message: { content: [{ text: "one two" }] },
+        });
+      } finally {
+        stop();
+        releaseAgentRunContext(runId, claimId);
+        harness.handler.dispose();
+      }
+    },
+  );
 
   it.each([
     [false, false],

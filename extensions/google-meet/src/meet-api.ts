@@ -87,7 +87,7 @@ type GoogleMeetRecording = {
   driveDestination?: Record<string, unknown>;
 };
 
-type GoogleMeetTranscript = {
+type GoogleMeetDocumentArtifact = {
   name: string;
   startTime?: string;
   endTime?: string;
@@ -111,22 +111,13 @@ type GoogleMeetTranscriptEntries = {
   entriesError?: string;
 };
 
-type GoogleMeetSmartNote = {
-  name: string;
-  startTime?: string;
-  endTime?: string;
-  docsDestination?: Record<string, unknown>;
-  documentText?: string;
-  documentTextError?: string;
-};
-
 type GoogleMeetArtifactsEntry = {
   conferenceRecord: GoogleMeetConferenceRecord;
   participants: GoogleMeetParticipant[];
   recordings: GoogleMeetRecording[];
-  transcripts: GoogleMeetTranscript[];
+  transcripts: GoogleMeetDocumentArtifact[];
   transcriptEntries: GoogleMeetTranscriptEntries[];
-  smartNotes: GoogleMeetSmartNote[];
+  smartNotes: GoogleMeetDocumentArtifact[];
   smartNotesError?: string;
 };
 
@@ -169,7 +160,7 @@ export type GoogleMeetAttendanceResult = {
 };
 
 export type GoogleMeetSmartNotesListResult = {
-  smartNotes: GoogleMeetSmartNote[];
+  smartNotes: GoogleMeetDocumentArtifact[];
   smartNotesError?: string;
 };
 
@@ -473,8 +464,8 @@ export async function fetchLatestGoogleMeetConferenceRecord(params: {
 type GoogleMeetConferenceResources = {
   participants: GoogleMeetParticipant;
   recordings: GoogleMeetRecording;
-  transcripts: GoogleMeetTranscript;
-  smartNotes: GoogleMeetSmartNote;
+  transcripts: GoogleMeetDocumentArtifact;
+  smartNotes: GoogleMeetDocumentArtifact;
 };
 
 export function listGoogleMeetConferenceResources<K extends keyof GoogleMeetConferenceResources>(

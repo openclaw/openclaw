@@ -30,19 +30,21 @@ Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
 rechecks its config owner after the read before using the selected agent. Each
 policy read obtains current rows; it does not retain migration exclusions across
-later operations. The updater and plugin source-cleanup synchronous effect guards
-retain their existing fresh-read contracts in their CLI or child-process owners.
+later operations. The updater's synchronous effect guards retain their existing
+fresh-read contract in their CLI or child-process owners.
 
 Plugin requirement batches prepare their final installed index through the existing
 metadata worker after installation and compensation settle. Preparation seals
 collection, reads an uncached row from the captured database, and retains the
 original lifecycle lease until the read settles. It rechecks lease ownership and
 batch closure before publishing runtime targets. After runtime handoff, source
-cleanup reacquires the plugin lease and prepares a fresh index through that worker.
-The index stays scoped to the cleanup lease, which excludes its canonical writers
-until deletion settles. Config policy, source identity, and durable lease checks
-remain fresh at each existing effect guard; the captured index is not a retained
-permission to delete. Stored formats and update behavior are unchanged.
+cleanup reacquires the plugin lease and prepares a fresh index and deferred
+migration rows through their existing worker operations. Those rows stay scoped to the
+cleanup lease, which excludes their canonical writers until deletion settles.
+Each effect guard still rereads config files, includes, and environment substitutions,
+using the protected migration rows for validation. Source identity and durable
+lease checks remain live; prepared rows are not retained permission to delete.
+Stored formats and update behavior are unchanged.
 
 Registry refresh, Doctor repair, and legacy index import hold that same plugin
 lease before reading or deriving replacement rows. Startup acquires plugin
@@ -115,6 +117,15 @@ its commit receipt is unavailable; committed topology publication retains the
 original shared-state generation.
 
 ## Carry facts, publish after commit
+
+Session branch summaries retain compact counts and headlines in the transcript
+read worker, keyed by physical database identity and the transcript rewrite/append
+watermark. After a complete scan verifies unique indexed identities and backward
+ancestry, ordinary message appends extend the active summary using only the new
+sequence range. Rewrites, navigation changes, and legacy or irregular graphs use
+the complete scanner. First reads still scale with transcript length; cached
+append refreshes scale with new messages and branch count. No schema, stored
+transcript, retention, or configuration changes are required.
 
 Proxy capture sessions, events, payload compression, queries, and purge operations
 execute through the shared-state worker. Bundled HTTP and WebSocket capture
@@ -525,8 +536,12 @@ restore or delete its environment while a write is pending. Registered synchrono
 V1 runtimes retain their captured adapter. Command redaction, task data, schemas,
 retention, and update behavior are unchanged.
 
-Worktree run-lease cleanup deletes the exact token and reads the Git unlock target
-through the shared-state worker. Failed deletions yield between bounded retries,
+Worktree run-lease admission and cleanup use the shared-state worker. Admission
+rechecks removal, exclusivity, and process liveness inside the insertion transaction,
+retaining the requesting process's PID and start time. Cleanup deletes the exact
+token and reads the Git unlock target. A failed result delivery permits compensation
+only after native settlement; unknown outcomes retain the original database custody
+for stale-process recovery. Failed deletions yield between bounded retries,
 retaining the original database admission and Git guard until deletion settles.
 Process exit retains its best-effort synchronous deletion because it cannot await
 a worker. Git-guard admission reads its registry target through the same retained
@@ -538,7 +553,7 @@ timer ends before terminal persistence. Cold worker startup belongs to admission
 normal idle retirement and memory-pressure eviction remain in effect. Detached
 worker opening evaluates live admission guards in their captured caller context,
 then releases that capture after native opening settles.
-Worktree run admission writes, task creation and progress, and the remaining native
+Task creation and progress and the remaining native
 cron transitions still need migration. This
 cutover preserves schemas, stored bytes, retention, configuration, and update behavior.
 

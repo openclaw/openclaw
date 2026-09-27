@@ -354,7 +354,7 @@ async function finalizeChatSendAgentReplyPayloads(
     if (!attachParams.messageId) {
       return;
     }
-    attachManagedOutgoingMediaToMessage({
+    await attachManagedOutgoingMediaToMessage({
       messageId: attachParams.messageId,
       blocks: attachParams.request.state.persistedContent,
     });
@@ -380,16 +380,16 @@ async function finalizeChatSendAgentReplyPayloads(
       scope: sourceReplyScope,
     });
     if (rewritten.length > 0) {
-      await publishAssistantTranscriptRewrite({
-        scope: sourceReplyScope,
-        rewritten,
-      });
       for (const target of rewritten) {
         await attachSourceReplyManagedImages({
           messageId: target.messageId,
           request: target.request,
         });
       }
+      await publishAssistantTranscriptRewrite({
+        scope: sourceReplyScope,
+        rewritten,
+      });
     }
   }
   const sourceReplyContent = sourceReplyContentStates

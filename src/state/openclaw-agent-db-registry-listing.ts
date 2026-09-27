@@ -241,19 +241,12 @@ export function listOpenClawRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions = {},
 ): OpenClawRegisteredAgentDatabase[] {
   const memo = activateRegisteredAgentDatabasesMemo(options);
-  if (memo.entries) {
-    const entries = cloneRegisteredAgentDatabases(memo.entries);
-    return options.includeIncompatibleSchemaVersions
-      ? entries
-      : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
-  }
   // Discovery runs per row in list hot paths, so the legacy-schema gate and the
   // query share one process-held state handle instead of opening two connections.
-  const entries = readRegisteredAgentDatabases(
+  const entries = (memo.entries ??= readRegisteredAgentDatabases(
     { ...options, includeIncompatibleSchemaVersions: true },
     false,
-  );
-  memo.entries = entries;
+  ));
   const cloned = cloneRegisteredAgentDatabases(entries);
   return options.includeIncompatibleSchemaVersions
     ? cloned

@@ -431,7 +431,7 @@ describe("session roster refresh", () => {
         expect(researchSettled).toHaveBeenCalledOnce();
         expect(weakSettled).toHaveBeenCalledOnce();
         expect(sessions.state.agentId).toBe("research");
-        expect(sessions.state.result).toBe(researchResult);
+        expect(sessions.state.result).toStrictEqual(researchResult);
         expect(sessions.state.error).toBeNull();
       } finally {
         workList.resolve(workResult);
@@ -517,7 +517,7 @@ describe("session roster refresh", () => {
         researchList.resolve(researchResult);
         await Promise.all([active, weak, research]);
         expect(sessions.state.agentId).toBe("research");
-        expect(sessions.state.result).toBe(researchResult);
+        expect(sessions.state.result).toStrictEqual(researchResult);
       } finally {
         activeList.resolve(sessionsResult([], 1));
         researchList.resolve(researchResult);
@@ -574,7 +574,7 @@ describe("session roster refresh", () => {
       expect(writerOutcome).toBeUndefined();
       expect(replacementOutcome).toBeUndefined();
       expect(sessions.state.agentId).toBe(normalizedAgentId);
-      expect(sessions.state.result).toBe(replacementResult);
+      expect(sessions.state.result).toStrictEqual(replacementResult);
       expect(request.mock.calls.map(([, params]) => params?.agentId)).toEqual([
         "initial",
         normalizedAgentId,
@@ -657,8 +657,10 @@ describe("session roster refresh", () => {
     const { sessions } = createSessionCapabilityHarness(request);
     try {
       await sessions.refresh({ agentId: "main", search: "draft", force: true });
+      const admitted = sessions.state.result;
+      expect(admitted).toStrictEqual(previous);
       await expect(sessions.refreshReplacement()).resolves.toBeNull();
-      expect(sessions.state.result).toBe(previous);
+      expect(sessions.state.result).toBe(admitted);
       expect(sessions.state.error).toBe("Roster unavailable");
     } finally {
       sessions.dispose();

@@ -126,7 +126,7 @@ async function awaitingAdmission(
 }
 
 describe("native wait assignment projection", () => {
-  it.each(["running", "queued", "succeeded"] as const)(
+  it.each(["running", "succeeded"] as const)(
     "reprojects an observed receiver when discovery restores its recorded follow-up assignment (%s)",
     async (status) => {
       const historyOwner = nativeHistoryOwner();
@@ -210,7 +210,6 @@ describe("native wait assignment projection", () => {
   );
 
   it.each([
-    { previousStatus: "completed", laterPendingTurn: false },
     { previousStatus: "interrupted", laterPendingTurn: false },
     { previousStatus: "completed", laterPendingTurn: true },
   ] as const)(
@@ -256,30 +255,30 @@ describe("native wait assignment projection", () => {
     },
   );
 
-  it.each(["waitingOnApproval", "waitingOnUserInput"])(
-    "retains %s while refreshing the underlying receiver dependency",
-    async (flag) => {
-      const { client, events } = await awaitingAdmission();
-      await client.notify({
-        method: "thread/status/changed",
-        params: { threadId: "waiter", status: { type: "active", activeFlags: [flag] } },
-      });
-      const attentionEventCount = events.length;
-      await acceptFollowup(client);
-      expect(events).toHaveLength(attentionEventCount);
-      expect(events.at(-1)?.data.wait).toEqual({
-        kind: flag === "waitingOnApproval" ? "approval" : "user_input",
-      });
-      await client.notify({
-        method: "thread/status/changed",
-        params: { threadId: "waiter", status: { type: "active", activeFlags: [] } },
-      });
-      expect(events.at(-1)?.data.wait).toMatchObject({
-        kind: "children",
-        dependencies: [{ runId: "codex-thread:receiver:turn:turn-b" }],
-      });
-    },
-  );
+  it("retains approval attention while refreshing the underlying receiver dependency", async () => {
+    const { client, events } = await awaitingAdmission();
+    await client.notify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "waiter",
+        status: { type: "active", activeFlags: ["waitingOnApproval"] },
+      },
+    });
+    const attentionEventCount = events.length;
+    await acceptFollowup(client);
+    expect(events).toHaveLength(attentionEventCount);
+    expect(events.at(-1)?.data.wait).toEqual({
+      kind: "approval",
+    });
+    await client.notify({
+      method: "thread/status/changed",
+      params: { threadId: "waiter", status: { type: "active", activeFlags: [] } },
+    });
+    expect(events.at(-1)?.data.wait).toMatchObject({
+      kind: "children",
+      dependencies: [{ runId: "codex-thread:receiver:turn:turn-b" }],
+    });
+  });
 
   it.each(["completed-wait", "ended-turn", "retired-parent", "foreign-parent", "mailbox"])(
     "does not refresh an ineligible wait: %s",

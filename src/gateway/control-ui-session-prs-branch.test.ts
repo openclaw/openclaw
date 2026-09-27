@@ -279,7 +279,7 @@ describe("session branch diff stats", () => {
             type: "pull-request.branch-facts",
             input: { root, branch: "feature", defaultBranch: "main", mergedHeads: [] },
           },
-          { refresh: true },
+          { refresh: layout === "symlink" },
         );
       await expect(read()).resolves.toEqual({
         creatable: true,
@@ -699,6 +699,43 @@ describe("session branch diff stats", () => {
       }
     },
   );
+
+  it("refreshes staged edits immediately and unstaged edits on activity or the slow fallback", async () => {
+    await initializeFeatureBranch();
+    await trackRemote("feature");
+    const operation = {
+      type: "pull-request.branch-facts" as const,
+      input: { root, branch: "feature", defaultBranch: "main", mergedHeads: [] },
+    };
+    const reads = vi.spyOn(worktreeGit, "runGitBytes");
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      expect(await runGitReadOperation(operation)).toBeUndefined();
+      reads.mockClear();
+      now += 120_000;
+      expect(await runGitReadOperation(operation)).toBeUndefined();
+      expect(reads.mock.calls.length).toBe(0);
+      await appendFile("a.txt", "pending\n");
+      expect(await runGitReadOperation(operation, { refresh: true })).toMatchObject({
+        stats: { additions: 1, changedFiles: 1 },
+      });
+      expect(reads.mock.calls.length).toBe(2);
+      await writeFile("new.txt", "untracked\n");
+      now += 300_000;
+      expect(await runGitReadOperation(operation)).toMatchObject({
+        stats: { additions: 2, changedFiles: 2 },
+      });
+      await appendFile("a.txt", "staged\n");
+      await git("add", "a.txt");
+      expect(await runGitReadOperation(operation)).toMatchObject({
+        stats: { additions: 3, changedFiles: 2 },
+      });
+    } finally {
+      reads.mockRestore();
+      clock.mockRestore();
+    }
+  });
 
   it("reports local changes without createUrl until the branch exists on origin", async () => {
     await initializeFeatureBranch();

@@ -278,9 +278,6 @@ function inspectLoadedRuntime(args) {
     fail("Fixture unit is not already loaded.");
   }
   const unit = parseUnit(fs.readFileSync(loadedPath, "utf8"));
-  if (!unit) {
-    fail();
-  }
   if (matches(["call", paths.owner, root, `${manager}.Manager`, "GetUnit", "s", unitName])) {
     writeProperties([["o", [object]]]);
     return true;
@@ -562,23 +559,17 @@ function run() {
     "s",
     unitName,
   ]);
-  const unitQuery = matches([
-    ...prefix,
-    "get-property",
-    manager,
-    object,
-    `${manager}.Unit`,
-    ...commandPropertyNames("Unit"),
-  ]);
-  const serviceQuery = matches([
-    ...prefix,
-    "get-property",
-    manager,
-    object,
-    `${manager}.Service`,
-    ...commandPropertyNames("Service"),
-  ]);
-  if (!load && !unitQuery && !serviceQuery) {
+  const commandScope = ["Unit", "Service"].find((scope) =>
+    matches([
+      ...prefix,
+      "get-property",
+      manager,
+      object,
+      `${manager}.${scope}`,
+      ...commandPropertyNames(scope),
+    ]),
+  );
+  if (!load && !commandScope) {
     fail();
   }
   const unit = readUnit(false, requireLoaded);
@@ -591,7 +582,7 @@ function run() {
   if (load) {
     writeProperties([["o", [object]]]);
   } else {
-    writeCommandProperties(unit, unitQuery ? "Unit" : "Service");
+    writeCommandProperties(unit, commandScope);
   }
 }
 

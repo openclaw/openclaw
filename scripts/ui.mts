@@ -9,7 +9,7 @@ import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
-import { resolvePnpmRunner } from "./pnpm-runner.mts";
+import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -91,17 +91,7 @@ export function resolveUiBuildEnvironment(
   };
 }
 
-type UiSpawnCall = {
-  args: string[];
-  command: string;
-  options: {
-    cwd: string;
-    env: NodeJS.ProcessEnv;
-    shell: boolean;
-    stdio: "inherit";
-    windowsVerbatimArguments?: boolean;
-  };
-};
+type UiSpawnCall = ReturnType<typeof createPnpmRunnerSpawnSpec>;
 
 type UiSpawnParams = {
   comSpec?: string;
@@ -130,6 +120,8 @@ function resolveSpawnCall(
     stdio: "inherit",
     env: envOverride ?? process.env,
     shell: false,
+    detached: undefined,
+    windowsVerbatimArguments: undefined,
   };
 
   return {
@@ -139,37 +131,18 @@ function resolveSpawnCall(
   };
 }
 
-/**
- * Builds the pnpm-backed spawn call for UI package scripts.
- */
 export function resolvePnpmSpawnCall(
   pnpmArgs: string[],
   envOverride?: NodeJS.ProcessEnv,
   params: UiSpawnParams = {},
 ): UiSpawnCall {
-  const env = envOverride ?? process.env;
-  const platform = params.platform ?? process.platform;
-  const cwd = params.cwd ?? uiDir;
-  const runner = resolvePnpmRunner({
-    cwd,
-    env,
+  return createPnpmRunnerSpawnSpec({
+    ...params,
+    cwd: params.cwd ?? uiDir,
+    env: envOverride ?? process.env,
     pnpmArgs,
-    nodeExecPath: params.nodeExecPath ?? process.execPath,
-    npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec,
-    platform,
+    stdio: "inherit",
   });
-  return {
-    command: runner.command,
-    args: runner.args,
-    options: {
-      cwd,
-      stdio: "inherit",
-      env,
-      shell: runner.shell,
-      windowsVerbatimArguments: runner.windowsVerbatimArguments,
-    },
-  };
 }
 
 function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {

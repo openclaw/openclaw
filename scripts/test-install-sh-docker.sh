@@ -58,16 +58,6 @@ resolve_default_smoke_platform() {
     return
   fi
   host_arch="$(uname -m)"
-  if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
-    case "$host_arch" in
-      arm64 | aarch64)
-        printf "linux/arm64"
-        return
-        ;;
-    esac
-    printf "linux/amd64"
-    return
-  fi
   case "$host_arch" in
     arm64 | aarch64)
       printf "linux/arm64"
