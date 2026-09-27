@@ -28,7 +28,7 @@ let runtime: SessionMcpRuntime;
 // The shared harness skips session adaptation and bundled tools by default.
 // Restore those owners; only the MCP transport is replaced by a held response.
 beforeAll(async () => {
-  vi.doUnmock("../tool-split.js");
+  vi.doUnmock("../../agent-tool-definition-adapter.js");
   vi.doUnmock("../../agent-tools.js");
   vi.doUnmock("../../tool-fs-policy.js");
   vi.doUnmock("../../model-auth.js");

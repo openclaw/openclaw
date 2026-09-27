@@ -22,6 +22,12 @@ accepted source revision and whether it came from a Gateway write or a file edit
 Later hot-reloadable writes do not erase a committed restart requirement while
 its application is pending.
 
+If a busy state store temporarily refuses the reload's lifecycle lease, the
+Gateway keeps the change pending and retries automatically with a capped backoff.
+No additional config edit is needed. The previous runtime stays active until the
+change applies, and shutdown cancels pending retries. Other reload failures remain
+visible in the Gateway log.
+
 Direct file edits are treated as untrusted until they validate. The source's file adapter waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
 invalid external edits without rewriting `openclaw.json`. OpenClaw-owned config

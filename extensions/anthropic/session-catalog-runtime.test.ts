@@ -1,9 +1,52 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it } from "vitest";
+import type { SessionCatalogEntrySnapshot } from "openclaw/plugin-sdk/session-catalog";
+import { describe, expect, it, vi } from "vitest";
 import { adoptedSourceKey } from "./session-catalog-adoption.js";
 import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
 
 describe("Claude bound session resolution", () => {
+  it("reuses revision-bound projections and reads unversioned entries every time", () => {
+    const config = {};
+    const api = { id: "anthropic", config, runtime: {} } as OpenClawPluginApi;
+    const entries = [
+      {
+        agentId: "main",
+        sessionKey: "agent:main:bound",
+        entry: {
+          sessionId: "local",
+          updatedAt: 1,
+          cliSessionBindings: { "claude-cli": { sessionId: "before" } },
+        },
+      },
+    ];
+    const snapshot: SessionCatalogEntrySnapshot = {
+      revision: {},
+      entriesForAgent: () => entries,
+      entriesForCatalog: vi.fn(() => entries),
+    };
+    const before = listBoundClaudeSessions(api, "main", snapshot);
+    expect(before.get(adoptedSourceKey("gateway:local", "before"))?.sessionKey).toBe(
+      "agent:main:bound",
+    );
+    expect(listBoundClaudeSessions(api, "main", snapshot)).toEqual(before);
+    expect(snapshot.entriesForCatalog).toHaveBeenCalledTimes(1);
+    entries[0]!.entry.cliSessionBindings["claude-cli"].sessionId = "after";
+    snapshot.revision = {};
+    const after = listBoundClaudeSessions(api, "main", snapshot);
+    expect(after.has(adoptedSourceKey("gateway:local", "before"))).toBe(false);
+    expect(after.has(adoptedSourceKey("gateway:local", "after"))).toBe(true);
+    expect(snapshot.entriesForCatalog).toHaveBeenCalledTimes(2);
+    delete snapshot.revision;
+    listBoundClaudeSessions(api, "main", snapshot);
+    entries[0]!.entry.cliSessionBindings["claude-cli"].sessionId = "unversioned";
+    expect(
+      listBoundClaudeSessions(api, "main", snapshot).has(
+        adoptedSourceKey("gateway:local", "unversioned"),
+      ),
+    ).toBe(true);
+    expect(snapshot.entriesForCatalog).toHaveBeenCalledTimes(4);
+  });
+
   it.each([
     {
       label: "catalog marker",

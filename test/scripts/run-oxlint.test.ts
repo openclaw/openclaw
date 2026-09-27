@@ -359,6 +359,47 @@ describe("run-oxlint", () => {
     expect(resolveSplitCoreConcurrency({ CI: "true" })).toBe(4);
   });
 
+  it.each([
+    { extraArgs: [], bounded: true },
+    { extraArgs: ["scripts/unmeasured.mts"], bounded: false },
+  ])("passes batch admission to every child (bounded=$bounded)", ({ extraArgs, bounded }) => {
+    const cwd = createTempDir("openclaw-oxlint-batch-budget-");
+    for (const directory of ["src/a", "src/b", "scripts"]) {
+      mkdirSync(join(cwd, directory), { recursive: true });
+    }
+    writeModule(join(cwd, "scripts/run-oxlint.mts"), [
+      "import { writeFileSync } from 'node:fs';",
+      "const target = process.argv.find((arg) => arg === 'src/a' || arg === 'src/b');",
+      "writeFileSync(target + '/budget.json', JSON.stringify({ concurrency: process.env.OPENCLAW_OXLINT_BATCH_CONCURRENCY, bounded: process.env.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS === JSON.stringify(process.argv.slice(2)) }));",
+    ]);
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { main } from ${JSON.stringify(RUN_OXLINT_SHARDS_URL)}; await main(['--only=core:src:a', '--only=core:src:b', '--split-core', ...${JSON.stringify(extraArgs)}]);`,
+      ],
+      {
+        cwd,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_OXLINT_SHARDS_SERIAL: "0",
+          OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2",
+          OPENCLAW_OXLINT_BATCH_CONCURRENCY: "1",
+          OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS: "inherited-unbounded-command",
+        },
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    for (const target of ["a", "b"]) {
+      expect(JSON.parse(readFileSync(join(cwd, "src", target, "budget.json"), "utf8"))).toEqual({
+        concurrency: "2",
+        bounded,
+      });
+    }
+  });
+
   it("keeps split-core shard runs serial on constrained hosts", () => {
     expect(resolveSplitCoreConcurrency({ CI: "true" }, CONSTRAINED_HOST)).toBe(1);
   });

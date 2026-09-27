@@ -1,9 +1,10 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { isSlackPluginAccountConfigured } from "./account-configured.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import { SLACK_CHANNEL_META, type ChannelPlugin } from "./channel-api.js";
+import { SLACK_CHANNEL_META } from "./channel-meta.js";
 import { slackSetupPlugin } from "./channel.setup.js";
 import { slackBaseConfigAdapter } from "./config-adapter.js";
 import { slackDoctor } from "./doctor.js";

@@ -188,7 +188,7 @@ function renderPeopleControl(
             aria-label=${t("activityFeed.clearPersonFilter")}
             @click=${() => props.onFiltersChange({ ...props.filters, personId: null })}
           >
-            ×
+            ${icons.x}
           </button>`
         : nothing
     }

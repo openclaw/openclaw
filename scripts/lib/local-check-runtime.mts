@@ -37,6 +37,9 @@ type Env = NodeJS.ProcessEnv;
 type Resources = {
   logicalCpuCount: number;
   totalMemoryBytes: number;
+  memoryCapacityBytes?: number | null;
+  memoryLimitBytes?: number | null;
+  platform?: NodeJS.Platform;
 };
 
 type LocalCheckMode = "auto" | "full" | "throttled";
@@ -272,7 +275,40 @@ export function applyLocalOxlintPolicy(args: string[], env: Env, hostResources: 
     insertBeforeSeparator(nextArgs, "--format", "stylish");
   }
 
-  if (
+  const options = nextArgs.slice(0, nextArgs.includes("--") ? nextArgs.indexOf("--") : undefined);
+  const option = (name: string) => {
+    const index = options.findIndex((arg) => arg === name || arg.startsWith(`${name}=`));
+    return index < 0 ? undefined : (options[index]!.split("=")[1] ?? options[index + 1]);
+  };
+  const threads = option("--threads");
+  const extensionShard = option("--tsconfig") === "extensions/tsconfig.json";
+  const balancedCiShard =
+    isCiLikeEnv(nextEnv) &&
+    !isLocalCheckEnabled(nextEnv) &&
+    isConstrainedCiCheckHost(hostResources) &&
+    nextEnv.OPENCLAW_OXLINT_BATCH_CONCURRENCY === "1" &&
+    nextEnv.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS === JSON.stringify(args) &&
+    hostResources.platform === "linux" &&
+    hostResources.logicalCpuCount >= 4 &&
+    Math.min(hostResources.totalMemoryBytes, hostResources.memoryCapacityBytes ?? 0) >= 15 * GIB &&
+    (hostResources.memoryLimitBytes ?? 0) >= (extensionShard ? 10 : 14) * GIB &&
+    ["config/tsconfig/oxlint.core.json", "extensions/tsconfig.json"].includes(
+      option("--tsconfig") ?? "",
+    ) &&
+    ((!hasFlag(nextArgs, "--threads") && threads === undefined) ||
+      threads === "1" ||
+      threads === "2");
+  if (balancedCiShard) {
+    // The batch owner admits only bounded targets and one checker child.
+    // A 3-GiB Go target repeatedly collects a larger live graph; keep one child
+    // and give its compiler four CPUs instead of duplicating it in parallel.
+    if (!hasFlag(nextArgs, "--threads")) {
+      insertBeforeSeparator(nextArgs, "--threads=2");
+    }
+    nextEnv.GOMAXPROCS ||= "4";
+    nextEnv.GOGC ||= "100";
+    nextEnv.GOMEMLIMIT ||= "8GiB";
+  } else if (
     shouldThrottleLocalChecks(nextEnv, hostResources) ||
     (isCiLikeEnv(nextEnv) && isConstrainedCiCheckHost(hostResources))
   ) {

@@ -91,32 +91,43 @@ export function addSessionMember(
   const options = toDatabaseOptions(resolveSqliteScope(scope));
   const { agentId, sessionKey } = resolveSqliteScope(scope);
   const addedAt = params.addedAt ?? Date.now();
-  const inserted = runOpenClawAgentWriteTransaction((database) => {
-    const sessionId = assertAuthorizedSessionInstance(
-      database,
-      sessionKey,
-      params.expectedSessionId,
-      params.expectedEntry,
-    );
-    const db = getSessionMemberKysely(database);
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .insertInto("session_members")
-        .values({
-          session_key: sessionKey,
-          identity_id: identityId,
-          added_by: addedBy,
-          added_at: addedAt,
-        })
-        .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
-    );
-    const changed = (result.numAffectedRows ?? 0n) > 0n;
-    if (changed) {
-      publishCommittedSessionMembership(database, agentId, sessionKey, sessionId, identityId, true);
-    }
-    return changed;
-  }, options);
+  const inserted = runOpenClawAgentWriteTransaction(
+    (database) => {
+      const sessionId = assertAuthorizedSessionInstance(
+        database,
+        sessionKey,
+        params.expectedSessionId,
+        params.expectedEntry,
+      );
+      const db = getSessionMemberKysely(database);
+      const result = executeSqliteQuerySync(
+        database.db,
+        db
+          .insertInto("session_members")
+          .values({
+            session_key: sessionKey,
+            identity_id: identityId,
+            added_by: addedBy,
+            added_at: addedAt,
+          })
+          .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
+      );
+      const changed = (result.numAffectedRows ?? 0n) > 0n;
+      if (changed) {
+        publishCommittedSessionMembership(
+          database,
+          agentId,
+          sessionKey,
+          sessionId,
+          identityId,
+          true,
+        );
+      }
+      return changed;
+    },
+    options,
+    { operationLabel: "session.sharing.add-member" },
+  );
   return { member: { identityId, addedBy, addedAt }, inserted };
 }
 
@@ -133,43 +144,47 @@ export function removeSessionMember(
   }
   const options = toDatabaseOptions(resolveSqliteScope(scope));
   const { agentId, sessionKey } = resolveSqliteScope(scope);
-  return runOpenClawAgentWriteTransaction((database) => {
-    const sessionId = assertAuthorizedSessionInstance(
-      database,
-      sessionKey,
-      expectedSessionId,
-      expectedEntry,
-    );
-    const db = getSessionMemberKysely(database);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("session_members")
-        .select(["identity_id", "added_by", "added_at"])
-        .where("session_key", "=", sessionKey)
-        .where("identity_id", "=", normalizedIdentityId),
-    );
-    if (
-      !row ||
-      (expected && (row.added_by !== expected.addedBy || row.added_at !== expected.addedAt))
-    ) {
-      return null;
-    }
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .deleteFrom("session_members")
-        .where("session_key", "=", sessionKey)
-        .where("identity_id", "=", normalizedIdentityId),
-    );
-    publishCommittedSessionMembership(
-      database,
-      agentId,
-      sessionKey,
-      sessionId,
-      normalizedIdentityId,
-      false,
-    );
-    return { identityId: row.identity_id, addedBy: row.added_by, addedAt: row.added_at };
-  }, options);
+  return runOpenClawAgentWriteTransaction(
+    (database) => {
+      const sessionId = assertAuthorizedSessionInstance(
+        database,
+        sessionKey,
+        expectedSessionId,
+        expectedEntry,
+      );
+      const db = getSessionMemberKysely(database);
+      const row = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_members")
+          .select(["identity_id", "added_by", "added_at"])
+          .where("session_key", "=", sessionKey)
+          .where("identity_id", "=", normalizedIdentityId),
+      );
+      if (
+        !row ||
+        (expected && (row.added_by !== expected.addedBy || row.added_at !== expected.addedAt))
+      ) {
+        return null;
+      }
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("session_members")
+          .where("session_key", "=", sessionKey)
+          .where("identity_id", "=", normalizedIdentityId),
+      );
+      publishCommittedSessionMembership(
+        database,
+        agentId,
+        sessionKey,
+        sessionId,
+        normalizedIdentityId,
+        false,
+      );
+      return { identityId: row.identity_id, addedBy: row.added_by, addedAt: row.added_at };
+    },
+    options,
+    { operationLabel: "session.sharing.remove-member" },
+  );
 }

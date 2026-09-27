@@ -56,9 +56,7 @@ const collectDiscordSecurityFindings = createConditionalWarningCollector.finding
   title: "Discord security warning",
 });
 
-const loadDiscordSecurityAuditModule = createLazyRuntimeModule(
-  () => import("./security-audit.runtime.js"),
-);
+const loadDiscordSecurityAuditModule = createLazyRuntimeModule(() => import("./security-audit.js"));
 
 export const discordSecurityAdapter = {
   resolveDmPolicy: resolveDiscordDmPolicy,

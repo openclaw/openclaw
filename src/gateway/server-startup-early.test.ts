@@ -1,7 +1,7 @@
 /**
  * Early gateway startup helper tests.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import { runGatewayCloseSteps } from "./server-shutdown.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
@@ -78,6 +78,7 @@ function earlyRuntimeInput(
     healthVersion: 0,
     presenceVersion: 0,
   });
+  onTestFinished(() => maintenanceState.scheduler.stop());
   return {
     minimalTestGateway: true,
     isClosing: () => false,

@@ -71,7 +71,14 @@
   inset: 0 var(--chat-thread-gutter) auto;
   height: 24px;
   pointer-events: none;
-  background: linear-gradient(to bottom, var(--chat-surface), transparent);
+  background: linear-gradient(
+    to bottom,
+    var(--chat-surface) 2px,
+    color-mix(in srgb, var(--chat-surface) 88%, transparent) 25%,
+    color-mix(in srgb, var(--chat-surface) 50%, transparent) 50%,
+    color-mix(in srgb, var(--chat-surface) 12%, transparent) 75%,
+    transparent
+  );
 }
 
 @media (max-width: 560px) {
@@ -994,12 +1001,14 @@ openclaw-session-discussion {
 
 .sidebar-attachment-preview__loading,
 .chat-video-skeleton,
-.chat-assistant-attachment-card--video[aria-busy="true"] .chat-assistant-attachment-card__header {
+.chat-assistant-attachment-card--video.chat-assistant-attachment-card--loading
+  .chat-assistant-attachment-card__header {
   opacity: 0;
   animation: fade-in 0s 150ms forwards;
 }
 
-.chat-assistant-attachment-card--video[aria-busy="true"] {
+/* Keep loading paint local: aria-busy on large lists must not restyle every SVG. */
+.chat-assistant-attachment-card--video.chat-assistant-attachment-card--loading {
   video {
     opacity: 0;
   }

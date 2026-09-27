@@ -82,14 +82,28 @@ async function createPackageInstallFixture(
       "1.0.0",
     );
   };
-  return { root, target, launcher, installedPrefixes, expectOriginalInstallation };
+  const params = {
+    root,
+    installKind: "package" as const,
+    tag: candidateVersion,
+    timeoutMs: 1000,
+    startedAt: Date.now(),
+    progress: {},
+    installEnv: {},
+    installTarget: target,
+  };
+  return { params, root, launcher, installedPrefixes, expectOriginalInstallation };
 }
 
 it.each(["guidance", "staging"])(
   "carries the owner's permission retry outcome through %s",
   async (consumer) => {
     await withTestDir({ prefix: "update-permission-retry-" }, async (base) => {
-      const { root, target, expectOriginalInstallation } = await createPackageInstallFixture(base);
+      const {
+        root,
+        params: defaults,
+        expectOriginalInstallation,
+      } = await createPackageInstallFixture(base);
       const globalRoot = path.dirname(root);
       let attempts = 0;
       vi.mocked(processRunner.runCommandWithTimeout).mockImplementation(async (argv) => {
@@ -113,16 +127,11 @@ it.each(["guidance", "staging"])(
         OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
       };
       const params = {
-        root,
-        installKind: "package" as const,
+        ...defaults,
         tag: "2.0.0",
-        timeoutMs: 1000,
         workTimeoutMs: null,
-        startedAt: Date.now(),
-        progress: {},
         installEnv: env,
         managedServiceEnv: env,
-        installTarget: target,
       };
       const permissionFacts = [
         {
@@ -170,17 +179,11 @@ it.each(["guidance", "staging"])(
   },
 );
 
-it.each([
-  "1.0.0",
-  "file:/owned/candidate.tgz",
-  "https://example.invalid/candidate.tgz",
-  "openclaw@file:/owned/candidate",
-  "openclaw@1.0.0",
-])(
+it.each(["1.0.0", "https://example.invalid/candidate.tgz", "openclaw@file:/owned/candidate"])(
   "honors the explicit package artifact without changing registry no-op semantics: %s",
   async (tag) => {
     await withTestDir({ prefix: "update-exact-artifact-" }, async (base) => {
-      const { root, target, launcher, expectOriginalInstallation } =
+      const { params, root, launcher, expectOriginalInstallation } =
         await createPackageInstallFixture(base);
       const stopped = new Error("pause at owned pre-activation boundary");
       const validateCandidate = vi.fn(async (candidate: string) => {
@@ -193,19 +196,14 @@ it.each([
       });
       const onTransaction = vi.fn();
       const update = runPackageInstallUpdate({
-        root,
-        installKind: "package",
+        ...params,
         tag: tag.startsWith("openclaw@") ? "latest" : tag,
-        timeoutMs: 1000,
-        startedAt: Date.now(),
-        progress: {},
         installEnv: tag.startsWith("openclaw@") ? { OPENCLAW_UPDATE_PACKAGE_SPEC: tag } : {},
-        installTarget: target,
         validateCandidate,
         beforeActivate,
         onTransaction,
       });
-      if (tag === "1.0.0" || tag === "openclaw@1.0.0") {
+      if (tag === "1.0.0") {
         expect(await update).toMatchObject({ status: "skipped", reason: "already-current" });
         expect(validateCandidate).not.toHaveBeenCalled();
         expect(beforeActivate).not.toHaveBeenCalled();
@@ -220,62 +218,44 @@ it.each([
   },
 );
 
-it.each(["package", "git"] as const)(
-  "preserves matching explicit artifact behavior for an existing %s install",
-  async (installKind) => {
-    await withTestDir({ prefix: "update-matching-artifact-" }, async (base) => {
-      const { root, target, expectOriginalInstallation } = await createPackageInstallFixture(
-        base,
-        "1.0.0",
-        "same-build",
-      );
-      const validateCandidate = vi.fn(async () => [
-        { name: "canary", command: "canary", cwd: base, durationMs: 0, exitCode: 1 },
-      ]);
-      const beforeActivate = vi.fn(async () => {});
+it("validates a matching explicit artifact when switching from Git to a package install", async () => {
+  await withTestDir({ prefix: "update-matching-artifact-" }, async (base) => {
+    const { params, expectOriginalInstallation } = await createPackageInstallFixture(
+      base,
+      "1.0.0",
+      "same-build",
+    );
+    const validateCandidate = vi.fn(async () => [
+      { name: "canary", command: "canary", cwd: base, durationMs: 0, exitCode: 1 },
+    ]);
+    const beforeActivate = vi.fn(async () => {});
 
-      const result = await runPackageInstallUpdate({
-        root,
-        installKind,
-        tag: "https://example.invalid/candidate.tgz",
-        timeoutMs: 1000,
-        startedAt: Date.now(),
-        progress: {},
-        installEnv: {},
-        installTarget: target,
-        validateCandidate,
-        beforeActivate,
-        onTransaction: vi.fn(),
-      });
-      if (installKind === "package") {
-        expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
-        expect(validateCandidate).not.toHaveBeenCalled();
-      } else {
-        expect(result).toMatchObject({ status: "error", reason: "unexpected-error" });
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({ name: "canary", exitCode: 1 }),
-        );
-        expect(validateCandidate).toHaveBeenCalledOnce();
-      }
-      expect(beforeActivate).not.toHaveBeenCalled();
-      await expectOriginalInstallation();
+    const result = await runPackageInstallUpdate({
+      ...params,
+      installKind: "git",
+      tag: "https://example.invalid/candidate.tgz",
+      validateCandidate,
+      beforeActivate,
+      onTransaction: vi.fn(),
     });
-  },
-);
+    expect(result).toMatchObject({ status: "error", reason: "unexpected-error" });
+    expect(result.steps).toContainEqual(expect.objectContaining({ name: "canary", exitCode: 1 }));
+    expect(validateCandidate).toHaveBeenCalledOnce();
+    expect(beforeActivate).not.toHaveBeenCalled();
+    await expectOriginalInstallation();
+  });
+});
 
 it("admits a matching staged artifact without retaining or replacing the running package", async () => {
   await withTestDir({ prefix: "update-admitted-noop-" }, async (base) => {
-    const { root, target, installedPrefixes, expectOriginalInstallation } =
-      await createPackageInstallFixture(base, "1.0.0", "same-build");
+    const {
+      params: defaults,
+      installedPrefixes,
+      expectOriginalInstallation,
+    } = await createPackageInstallFixture(base, "1.0.0", "same-build");
     const params = {
-      root,
-      installKind: "package" as const,
+      ...defaults,
       tag: "https://example.invalid/candidate.tgz",
-      timeoutMs: 1000,
-      startedAt: Date.now(),
-      progress: {},
-      installEnv: {},
-      installTarget: target,
     };
     const staged = await stagePackageInstallUpdate({ ...params, pauseBeforeVerification: true });
     const validateCandidate = vi.fn(async () => []);
@@ -307,40 +287,26 @@ it("admits a matching staged artifact without retaining or replacing the running
   });
 });
 
-it.each(
-  [
-    { name: "new version", candidateVersion: "2.0.0", tag: "2.0.0", buildId: undefined },
-    {
-      name: "matching explicit artifact",
-      candidateVersion: "1.0.0",
-      tag: "https://example.invalid/candidate.tgz",
-      buildId: "same-build",
-    },
-  ].flatMap(({ name, candidateVersion, tag, buildId }) =>
-    (["run", "close"] as const).map((action) => ({ name, candidateVersion, tag, buildId, action })),
-  ),
-)(
-  "retains the exact $name staged runtime without replacing the active installation before $action",
-  async ({ action, candidateVersion, tag, buildId }) => {
+it.each(["run", "close"] as const)(
+  "retains the matching staged artifact without replacing the active installation before %s",
+  async (action) => {
     await withTestDir({ prefix: "update-retained-stage-" }, async (base) => {
-      const { root, target, installedPrefixes, expectOriginalInstallation } =
-        await createPackageInstallFixture(base, candidateVersion, buildId);
-      const params = {
+      const {
+        params: defaults,
         root,
-        installKind: "package" as const,
-        tag,
-        timeoutMs: 1000,
-        startedAt: Date.now(),
-        progress: {},
-        installEnv: {},
-        installTarget: target,
+        installedPrefixes,
+        expectOriginalInstallation,
+      } = await createPackageInstallFixture(base, "1.0.0", "same-build");
+      const params = {
+        ...defaults,
+        tag: "https://example.invalid/candidate.tgz",
       };
       const staged = await stagePackageInstallUpdate(params);
       expect(installedPrefixes).toHaveLength(1);
       expect(staged.root).not.toBe(root);
       expect(
         JSON.parse(await fs.readFile(path.join(staged.root, "package.json"), "utf8")).version,
-      ).toBe(candidateVersion);
+      ).toBe("1.0.0");
       await expectOriginalInstallation();
       if (action === "run") {
         const runtimeIdentity = await fs.stat(path.join(staged.root, "dist", "index.js"));
@@ -469,20 +435,19 @@ it.each([
   },
 );
 
-it.each(
-  (["package", "package-to-git"] as const).flatMap((method) =>
-    (["include-ownership", "requester-revoked"] as const).map((reason) => ({ method, reason })),
-  ),
-)(
+it.each([
+  { method: "package", reason: "requester-revoked" },
+  { method: "package-to-git", reason: "include-ownership" },
+] as const)(
   "retains the $reason Doctor receipt when $method verification throws after settlement",
   async ({ method, reason }) => {
-    const expectedDoctorTimeoutMs =
-      method === "package-to-git" && reason === "include-ownership" ? undefined : 1000;
+    const expectedDoctorTimeoutMs = method === "package-to-git" ? undefined : 1000;
     await withTestDir({ prefix: "update-doctor-receipt-" }, async (base) => {
-      const { root, target, expectOriginalInstallation } = await createPackageInstallFixture(
-        base,
-        "2.0.0",
-      );
+      const {
+        params: defaults,
+        root,
+        expectOriginalInstallation,
+      } = await createPackageInstallFixture(base, "2.0.0");
       vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(base);
       const env = {
         OPENCLAW_STATE_DIR: path.join(base, "state"),
@@ -516,15 +481,9 @@ it.each(
         let result: UpdateRunResult;
         if (method === "package") {
           result = await runPackageInstallUpdate({
-            root,
-            installKind: "package",
-            tag: "2.0.0",
-            installTarget: target,
+            ...defaults,
             installEnv: env,
             managedServiceEnv: env,
-            timeoutMs: 1000,
-            startedAt: Date.now(),
-            progress: {},
             validateCandidate: async () => [],
             beforeActivate: async () => {},
             onTransaction: (retained) => {

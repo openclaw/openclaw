@@ -164,12 +164,7 @@ function readNonNegativeCount(value: unknown): number | null {
   return asSafeIntegerInRange(value, { min: 0 }) ?? null;
 }
 
-type QaSuiteOutcomeCounts = {
-  total: number;
-  passed: number;
-  failed: number;
-  skipped: number;
-};
+type QaSuiteOutcomeCounts = QaSuiteSummaryJson["counts"];
 
 function countQaSuiteScenarioStatuses(statuses: readonly unknown[]): QaSuiteOutcomeCounts {
   let passed = 0;
@@ -192,13 +187,7 @@ function isQaSuiteScenarioOutcomeStatus(status: unknown): boolean {
 }
 
 function isQaSuiteEvidenceOutcomeStatus(status: unknown): boolean {
-  return (
-    status === "pass" ||
-    status === "fail" ||
-    status === "blocked" ||
-    status === "skip" ||
-    status === "skipped"
-  );
+  return status === "blocked" || isQaSuiteScenarioOutcomeStatus(status);
 }
 
 function findQaSuiteScenarioCountMismatch(

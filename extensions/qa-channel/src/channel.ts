@@ -142,7 +142,7 @@ const qaChannelMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-const qaChannelPluginBase = createQaChannelPluginBase(qaChannelRuntimeMeta);
+const qaChannelPluginBase = createQaChannelPluginBase();
 
 function matchesQaToolContextTarget(target: string, toolContext: ChannelThreadingToolContext) {
   // Native source identity wins when To describes a different conversation.

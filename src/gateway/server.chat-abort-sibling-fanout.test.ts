@@ -43,7 +43,6 @@ import {
   onceMessage,
   rpcReq,
   testState,
-  writeSessionStore,
 } from "./test-helpers.js";
 
 let gateway: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
@@ -104,8 +103,12 @@ for (const { name, fault, replaceParent } of [
     const replacementCanary = "The replacement conversation must survive the earlier Stop.";
     let replacementBefore: Awaited<ReturnType<typeof loadTranscriptEvents>> | undefined;
     testState.sessionStorePath = storePath;
-    await writeSessionStore({
-      entries: { [parentKey]: { sessionId: parentSessionId, updatedAt: Date.now() } },
+    // Prior cases still have Gateway-owned monitors; seed this case without deleting their rows.
+    await writeSubagentSessionEntry({
+      stateDir,
+      agentId: "main",
+      sessionKey: parentKey,
+      defaultSessionId: parentSessionId,
     });
 
     const socket = await gateway.openWs();

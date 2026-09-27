@@ -20,6 +20,11 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { getActivePluginRegistryWorkspaceDirFromState } from "../../plugins/runtime-state.js";
 import { listProfilesForProvider } from "../auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { isAuthModeAllowedForModel } from "../model-auth-policy.js";
+import {
+  profileTypeToAuthMode,
+  resolveProviderEntryApiKeyProfileReference,
+} from "../model-auth-provider-config.js";
 
 /** Manifest contract keys that represent provider-backed tool capabilities. */
 type CapabilityContractKey =
@@ -34,6 +39,17 @@ type CapabilityProviderMetadataKey =
   | "musicGenerationProviderMetadata";
 
 type CapabilityMetadataSnapshot = Pick<PluginMetadataSnapshot, "index" | "plugins">;
+
+const GENERATION_AUTH_CAPABILITIES = {
+  imageGenerationProviders: "image-generation",
+  videoGenerationProviders: "video-generation",
+  musicGenerationProviders: "music-generation",
+} as const;
+
+export function capabilityAuthOperation(key: CapabilityContractKey): string | undefined {
+  // Media understanding has separate image-input and transcription operations.
+  return key === "mediaUnderstandingProviders" ? undefined : GENERATION_AUTH_CAPABILITIES[key];
+}
 
 function metadataKeyForCapabilityContract(
   key: CapabilityContractKey,
@@ -132,15 +148,53 @@ function hasConfiguredCapabilityProviderSignal(params: {
     ) {
       continue;
     }
-    // A provider is available when either profile auth or a declared env candidate exists.
-    if (params.authStore && listProfilesForProvider(params.authStore, signal.provider).length > 0) {
+    const capability = capabilityAuthOperation(params.key);
+    const binding =
+      capability && params.authStore
+        ? resolveProviderEntryApiKeyProfileReference({
+            cfg: params.config,
+            provider: signal.provider,
+            store: params.authStore,
+          })
+        : undefined;
+    // Explicit bindings own execution; another account cannot make a rejected
+    // selection available just because it supports the same capability.
+    if (binding?.kind === "profile-incompatible") {
+      continue;
+    }
+    const profileIds =
+      binding?.kind === "profile"
+        ? [binding.profileId]
+        : params.authStore
+          ? listProfilesForProvider(params.authStore, signal.provider)
+          : [];
+    if (
+      profileIds.some((profileId) => {
+        const credential = params.authStore?.profiles[profileId];
+        return (
+          credential &&
+          (!capability ||
+            isAuthModeAllowedForModel({
+              provider: signal.provider,
+              capability,
+              mode: profileTypeToAuthMode(credential.type),
+              authFlow: credential.type === "oauth" ? credential.authFlow : undefined,
+            }))
+        );
+      })
+    ) {
       return true;
+    }
+    if (binding?.kind === "profile") {
+      continue;
     }
     if (
       hasNonEmptyManifestEnvCandidate(
         process.env,
         manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
-      )
+      ) &&
+      (!capability ||
+        isAuthModeAllowedForModel({ provider: signal.provider, capability, mode: "api-key" }))
     ) {
       return true;
     }

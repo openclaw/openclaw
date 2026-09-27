@@ -496,6 +496,25 @@ function assertConfigSurvived() {
     );
   }
 
+  // Frozen recipes without coverage receipts predate this migration specimen.
+  if (coverage && acceptsIntent(coverage, "tool-search")) {
+    const toolSearch = config.tools?.toolSearch;
+    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    assert(
+      toolSearch?.mode === (baseline ? "code" : "tools"),
+      "Tool Search mode was not preserved or migrated",
+    );
+    assert(toolSearch.enabled !== false, "Tool Search was disabled during migration");
+    if (baseline) {
+      assert(toolSearch.codeTimeoutMs === 5000, "Tool Search legacy timeout specimen changed");
+    } else {
+      assert(
+        !Object.hasOwn(toolSearch, "codeTimeoutMs"),
+        "Tool Search legacy timeout was not removed",
+      );
+    }
+  }
+
   if (acceptsIntent(coverage, "agents")) {
     const legacyAgents = config.agents?.list ?? [];
     const mainAgent =

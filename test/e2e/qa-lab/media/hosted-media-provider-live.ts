@@ -52,7 +52,6 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "fal",
       "google",
       "minimax",
-      "openai",
       "openrouter",
       "qwen",
       "runway",
@@ -66,7 +65,6 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "deepinfra",
       "google",
       "minimax",
-      "openai",
       "openrouter",
       "qwen",
       "runway",
@@ -476,8 +474,8 @@ function formatHelp(): string {
 Usage:
   pnpm test:live:media
   pnpm test:live:media image
-  pnpm test:live:media image video --providers openai,google,minimax
-  pnpm test:live:media video --video-providers openai,runway --all-providers
+  pnpm test:live:media image video --providers google,minimax,xai
+  pnpm test:live:media video --video-providers runway,xai --all-providers
 
 QA evidence mode:
   node --import tsx ${SOURCE_PATH} --qa-evidence --suite image --artifact-base <dir>

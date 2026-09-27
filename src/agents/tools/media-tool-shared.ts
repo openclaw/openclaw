@@ -44,6 +44,7 @@ import {
 } from "./common.js";
 import type { decodeDataUrl } from "./image-tool.helpers.js";
 import {
+  capabilityAuthOperation,
   getCurrentCapabilityMetadataSnapshot,
   hasSnapshotCapabilityAvailability,
 } from "./manifest-capability-availability.js";
@@ -350,6 +351,7 @@ export function hasGenerationToolAvailability(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
+      capability: capabilityAuthOperation(params.providerKey),
     }),
   );
 }
