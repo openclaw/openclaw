@@ -13,12 +13,7 @@ import type {
 } from "../../api/types.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import type { ClawHubSearchResult } from "./clawhub-search.ts";
-import {
-  normalizeSkillApiKeyReplacement,
-  runSkillConfigMutation,
-  skillConfigMutationSuccess,
-  type SkillConfigMutationOwner,
-} from "./config-mutations.ts";
+import { runSkillConfigMutation, type SkillConfigMutationOwner } from "./config-mutations.ts";
 import { loadSkillStatusReport } from "./status-report.ts";
 
 export type ClawHubSkillDetail = SkillsDetailResult;
@@ -125,16 +120,11 @@ function isValidClawHubLink(
   return Boolean(link && link.status === "linked" && link.valid);
 }
 
-function reportHasLinkedClawHubSkills(report: SkillStatusReport): boolean {
-  return report.skills.some((skill) => isValidClawHubLink(skill.clawhub));
-}
-
 function skillCardCacheKey(skill: SkillStatusEntry): string | undefined {
   if (!skill.skillCard?.present) {
     return undefined;
   }
-  const installedVersion =
-    skill.clawhub?.status === "linked" && skill.clawhub.valid ? skill.clawhub.installedVersion : "";
+  const installedVersion = isValidClawHubLink(skill.clawhub) ? skill.clawhub.installedVersion : "";
   return `${skill.skillCard.path}\0${skill.skillCard.sizeBytes}\0${installedVersion}`;
 }
 
@@ -372,7 +362,11 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
 export async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
   const agentScope = captureSkillsAgentScope(state);
-  if (!client || !state.connected || !reportHasLinkedClawHubSkills(report)) {
+  if (
+    !client ||
+    !state.connected ||
+    !report.skills.some((skill) => isValidClawHubLink(skill.clawhub))
+  ) {
     state.clawhubVerdicts = {};
     state.clawhubVerdictsLoading = false;
     state.clawhubVerdictsError = null;
@@ -429,6 +423,8 @@ async function runSkillMutation(
     return;
   }
   const agentScope = captureSkillsAgentScope(state);
+  const isCurrent = () =>
+    ownsSkillOperation(state, client, operation) && isSkillsAgentScopeCurrent(state, agentScope);
   // All writes share one owner: overlapping refreshes can otherwise publish
   // a stale snapshot after both Gateway mutations have already succeeded.
   state.skillOperation = operation;
@@ -439,17 +435,11 @@ async function runSkillMutation(
   }
   try {
     const message = await run(client);
-    if (!ownsSkillOperation(state, client, operation)) {
-      return;
-    }
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (!isCurrent()) {
       return;
     }
     await loadSkills(state, { operation });
-    if (
-      !ownsSkillOperation(state, client, operation) ||
-      !isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
+    if (!isCurrent()) {
       return;
     }
     if (operation.kind === "skill") {
@@ -458,10 +448,7 @@ async function runSkillMutation(
       state.clawhubInstallMessage = { kind: message.kind, text: message.message };
     }
   } catch (err) {
-    if (
-      !ownsSkillOperation(state, client, operation) ||
-      !isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
+    if (!isCurrent()) {
       return;
     }
     const message = formatUiError(err);
@@ -508,17 +495,15 @@ async function runSkillConfigUpdate(
   message: string,
   canDispatch: () => boolean,
 ) {
-  await runSkillMutation(state, { kind: "skill", skillKey }, async (client) =>
-    skillConfigMutationSuccess(
-      message,
-      await runSkillConfigMutation(
-        state.runtimeConfig,
-        client,
-        { skillKey, ...patch },
-        canDispatch,
-      ),
-    ),
-  );
+  await runSkillMutation(state, { kind: "skill", skillKey }, async (client) => {
+    const refreshError = await runSkillConfigMutation(
+      state.runtimeConfig,
+      client,
+      { skillKey, ...patch },
+      canDispatch,
+    );
+    return { kind: "success", message: refreshError ? `${message}\n${refreshError}` : message };
+  });
 }
 
 export async function saveSkillApiKey(
@@ -526,7 +511,8 @@ export async function saveSkillApiKey(
   skillKey: string,
   canDispatch: () => boolean = () => true,
 ) {
-  const apiKey = normalizeSkillApiKeyReplacement(state.skillEdits[skillKey]);
+  // Blank skills.update API keys clear credentials; this UI only replaces them.
+  const apiKey = state.skillEdits[skillKey]?.trim();
   if (!apiKey) {
     return;
   }

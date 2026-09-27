@@ -172,7 +172,6 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         kind: request.kind,
         params: {
           target: capturedTarget,
-          run: request.params.run ? { ...request.params.run } : undefined,
         },
       };
     }
@@ -387,7 +386,6 @@ export async function readSessionHistoryPageInWorker(
         stateDatabase: {
           path: stateContext.admission.databasePath,
           environment: stateContext.environment,
-          coordinatorRuntime: stateContext.coordinatorRuntime,
         },
         ...(sourceReads.request
           ? { sourceDiscovery: sourceReads.request }

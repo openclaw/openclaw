@@ -78,10 +78,7 @@ class ConfigFormStructuredDraft extends OpenClawLightDomElement {
       return false;
     }
     const relativePath = path.slice(rootPath.length);
-    const patched =
-      relativePath.length === 0
-        ? { ok: true as const, value }
-        : copyWithPathPatch(current, relativePath, value);
+    const patched = copyWithPathPatch(current, relativePath, value);
     if (!patched.ok) {
       return false;
     }

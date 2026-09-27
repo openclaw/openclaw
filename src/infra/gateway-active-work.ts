@@ -1,7 +1,9 @@
-// Collects process activity shared by restart and host-suspension decisions.
 import type { GatewayWriteCustody } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
+// Collects process activity shared by restart and host-suspension decisions.
+import { getActiveAcpTurnCount } from "../acp/control-plane/active-turns.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/active-run-projections.js";
+import { getActiveMediaGenerationRunCount } from "../agents/media-generation-activity.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
@@ -14,12 +16,7 @@ import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
-import { isBackgroundExecTask } from "../tasks/background-exec-task-contract.js";
-import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
-import {
-  type ActiveTaskRestartBlocker,
-  formatActiveTaskRestartBlocker,
-} from "../tasks/task-restart-blocker.js";
+import { getActiveAgentRunContextCount } from "./agent-run-registry.js";
 import { readLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 type GatewayActiveWorkCounts = {
@@ -28,7 +25,9 @@ type GatewayActiveWorkCounts = {
   embeddedRuns: number;
   backgroundExecSessions: number;
   cronRuns: number;
-  activeTasks: number;
+  agentRuns: number;
+  acpRuns: number;
+  mediaRuns: number;
   rootRequests: number;
   sessionAdmissions: number;
   sessionMutations: number;
@@ -48,7 +47,9 @@ export type GatewayActiveWorkBlocker = {
     | "embedded-run"
     | "background-exec"
     | "cron-run"
-    | "task"
+    | "agent-run"
+    | "acp-run"
+    | "media-generation"
     | "root-request"
     | "session-admission"
     | "session-mutation"
@@ -58,7 +59,6 @@ export type GatewayActiveWorkBlocker = {
     | "terminal-session";
   count: number;
   message: string;
-  task?: Omit<ActiveTaskRestartBlocker, "taskKind">;
 };
 
 export type GatewayActiveWorkSnapshot = {
@@ -79,8 +79,9 @@ export type GatewayActiveWorkInspectors = {
   getEmbeddedRuns: () => number;
   getBackgroundExecSessions: () => number;
   getCronRuns: () => number;
-  getActiveTasks: () => number;
-  getTaskBlockers: () => ActiveTaskRestartBlocker[];
+  getAgentRuns: () => number;
+  getAcpRuns: () => number;
+  getMediaRuns: () => number;
   getRootRequests: () => number;
   getRootRequestHolders?: () => string[];
   getSessionAdmissions: () => number;
@@ -97,8 +98,9 @@ const defaultInspectors: GatewayActiveWorkInspectors = {
   getEmbeddedRuns: getActiveEmbeddedRunCount,
   getBackgroundExecSessions: getActiveBackgroundExecSessionCount,
   getCronRuns: () => Math.max(getActiveCronJobCount(), getSuspensionVisibleCronTaskRunCount()),
-  getActiveTasks: () => getInspectableActiveTaskRestartBlockers().length,
-  getTaskBlockers: getInspectableActiveTaskRestartBlockers,
+  getAgentRuns: getActiveAgentRunContextCount,
+  getAcpRuns: getActiveAcpTurnCount,
+  getMediaRuns: getActiveMediaGenerationRunCount,
   getRootRequests: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }),
   getRootRequestHolders: () => getActiveGatewayRootWorkHolders({ excludeCurrent: true }),
   getSessionAdmissions: getActiveSessionWorkAdmissionCount,
@@ -146,7 +148,9 @@ export function createGatewayActiveWorkSnapshot(
     pendingReplies: normalizeCount(resolved.getPendingReplies()),
     embeddedRuns: normalizeCount(resolved.getEmbeddedRuns()),
     backgroundExecSessions: normalizeCount(resolved.getBackgroundExecSessions()),
-    activeTasks: normalizeCount(resolved.getActiveTasks()),
+    agentRuns: normalizeCount(resolved.getAgentRuns()),
+    acpRuns: normalizeCount(resolved.getAcpRuns()),
+    mediaRuns: normalizeCount(resolved.getMediaRuns()),
     sessionAdmissions: normalizeCount(resolved.getSessionAdmissions()),
     chatRuns: normalizeCount(resolved.getChatRuns()),
     queuedTurns: normalizeCount(resolved.getQueuedTurns()),
@@ -169,6 +173,9 @@ export function createGatewayActiveWorkSnapshot(
   add(counts.embeddedRuns, "embedded-run", "active embedded run(s)");
   add(counts.backgroundExecSessions, "background-exec", "active background exec session(s)");
   add(counts.cronRuns, "cron-run", "active cron run(s)");
+  add(counts.agentRuns, "agent-run", "admitted agent run(s)");
+  add(counts.acpRuns, "acp-run", "active ACP turn(s)");
+  add(counts.mediaRuns, "media-generation", "active media generation(s)");
   const rootRequestHolders =
     inspectors.getRootRequests && !inspectors.getRootRequestHolders
       ? []
@@ -191,37 +198,6 @@ export function createGatewayActiveWorkSnapshot(
   add(counts.terminalPersistence, "terminal-persistence", "pending terminal session write(s)");
   if (!options.ignoreTerminalSessions) {
     add(counts.terminalSessions, "terminal-session", "open terminal session(s)");
-  }
-
-  if (counts.activeTasks > 0) {
-    const taskBlockers = resolved.getTaskBlockers();
-    if (taskBlockers.length === 0) {
-      blockers.push({
-        kind: "task",
-        count: counts.activeTasks,
-        message: `${counts.activeTasks} active background task run(s)`,
-      });
-    } else {
-      const shownTaskBlockers = taskBlockers.slice(0, 8);
-      for (const { taskKind, ...task } of shownTaskBlockers) {
-        blockers.push({
-          kind: isBackgroundExecTask({ runtime: task.runtime, taskKind })
-            ? "background-exec"
-            : "task",
-          count: 1,
-          message: formatActiveTaskRestartBlocker(task),
-          task,
-        });
-      }
-      const omitted = counts.activeTasks - shownTaskBlockers.length;
-      if (omitted > 0) {
-        blockers.push({
-          kind: "task",
-          count: omitted,
-          message: `${omitted} additional active background task run(s)`,
-        });
-      }
-    }
   }
 
   return {

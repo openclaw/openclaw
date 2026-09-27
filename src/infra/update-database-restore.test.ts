@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
+import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
@@ -17,12 +18,10 @@ import {
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import * as durability from "./directory-durability.js";
-import {
-  acquireGatewayLifecycleCoordinator,
-  acquireStateDatabaseHandleLease,
-} from "./state-database-coordinator.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
 import { createUpdateDatabaseBackupInProcess } from "./update-database-backup.js";
+import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import { restoreUpdateDatabaseBackup } from "./update-database-restore.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
 
@@ -202,6 +201,64 @@ it("verifies every snapshot before moving either live database", async () => {
   });
 });
 
+it.each([false, true])(
+  "restores settled WAL databases only while their captured generation is current (foreignWrite=%s)",
+  async (foreignWrite) => {
+    await withFixture(async (fixture) => {
+      for (const owner of [fixture.shared, fixture.agent]) {
+        expect(owner.db.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+      }
+      await fixture.close();
+      const paths = [
+        ...fixture.backup.databases.map((entry) => entry.path),
+        ...fixture.backup.missingPaths,
+      ];
+      const expectedGenerations = readUpdateDatabaseGenerations(paths);
+      for (const { path: pathname } of fixture.backup.databases) {
+        await expect(fs.lstat(`${pathname}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      if (foreignWrite) {
+        const foreign = new DatabaseSync(fixture.agent.path);
+        try {
+          foreign.exec("UPDATE restore_witness SET value = 'foreign'");
+        } finally {
+          foreign.close();
+        }
+      }
+      const assertUnchanged = await unchangedFiles(fixture);
+      const displaced = await restoreUpdateDatabaseBackup({
+        backup: fixture.backup,
+        runId: fixture.run.runId,
+        env: fixture.state.env,
+        assertCurrent: () => undefined,
+        expectedGenerations,
+      });
+      if (foreignWrite) {
+        expect(displaced).toBeNull();
+        await assertUnchanged();
+      } else {
+        expect(displaced).not.toBeNull();
+      }
+      for (const { path: pathname } of fixture.backup.databases) {
+        const restored = new DatabaseSync(pathname, { readOnly: true });
+        try {
+          expect(restored.prepare("SELECT value FROM restore_witness").all()).toEqual([
+            {
+              value: foreignWrite
+                ? pathname === fixture.agent.path
+                  ? "foreign"
+                  : "candidate"
+                : "baseline",
+            },
+          ]);
+        } finally {
+          restored.close();
+        }
+      }
+    });
+  },
+);
+
 it("rechecks authority after awaited snapshot verification before moving files", async () => {
   await withFixture(async (fixture) => {
     await fixture.close();
@@ -230,45 +287,41 @@ it("rechecks authority after awaited snapshot verification before moving files",
   });
 });
 
-it("refuses replacement while a competing native database handle owns exclusion", async () => {
+it("refuses replacement while a competing native SQLite reader owns exclusion", async () => {
   await withFixture(async (fixture) => {
     await fixture.close();
     const assertUnchanged = await unchangedFiles(fixture);
-    const handle = acquireStateDatabaseHandleLease({
-      databasePath: fixture.agent.path,
-      busyTimeoutMs: 0,
-    });
     const native = new DatabaseSync(fixture.agent.path, { readOnly: true });
     try {
-      await expect(fixture.restore()).rejects.toThrow("state-handles");
+      native.exec("BEGIN");
+      native.prepare("SELECT value FROM restore_witness").all();
+      await expect(fixture.restore()).rejects.toThrow("another SQLite connection is active");
       await assertUnchanged();
       expect(native.prepare("SELECT value FROM restore_witness").all()).toEqual([
         { value: "candidate" },
       ]);
     } finally {
       native.close();
-      handle.release();
     }
   });
 });
 
-it("refuses replacement while a foreign Gateway owns the lifecycle coordinator", async () => {
+it("refuses replacement while a foreign process owns state maintenance", async () => {
   await withFixture(async (fixture) => {
     await fixture.close();
     const assertUnchanged = await unchangedFiles(fixture);
-    const initialized = acquireGatewayLifecycleCoordinator({ databasePath: fixture.shared.path });
-    const coordinatorPath = initialized.path;
-    initialized.release();
+    const ownerUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.gatewayStateOwner);
     const child = spawn(
       process.execPath,
       [
+        ...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1),
         "--input-type=module",
         "--eval",
-        `import { DatabaseSync } from 'node:sqlite';
-       const db = new DatabaseSync(${JSON.stringify(coordinatorPath)});
-       db.exec('PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE');
+        `import { acquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
+       const owner = acquireGatewayStateOwner({ databasePath: process.argv[1] });
        process.send({ ready: true });
-       process.on('message', () => { db.exec('ROLLBACK'); db.close(); process.disconnect(); });`,
+       process.on('message', () => { owner.release(); process.disconnect(); });`,
+        fixture.shared.path,
       ],
       { stdio: ["ignore", "ignore", "pipe", "ipc"] },
     );
@@ -276,7 +329,7 @@ it("refuses replacement while a foreign Gateway owns the lifecycle coordinator",
       expect((await once(child, "message", { signal: AbortSignal.timeout(5_000) }))[0]).toEqual({
         ready: true,
       });
-      await expect(fixture.restore()).rejects.toThrow("gateway-lifecycle");
+      await expect(fixture.restore()).rejects.toThrow("failed to acquire gateway state ownership");
       await assertUnchanged();
       const closed = once(child, "close", { signal: AbortSignal.timeout(5_000) });
       child.send({ release: true });

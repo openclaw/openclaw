@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import {
   canRepairLegacyAuditEventsSchema,
@@ -329,7 +330,7 @@ export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: stri
         pathname,
       );
     }
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${pathname} has a noncanonical agent database registry schema that cannot be repaired automatically; restore the canonical agent_databases shape before retrying.`,
     );
   }
@@ -337,7 +338,7 @@ export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: stri
     if (canRepairLegacyAuditEventsSchema(db)) {
       throw new OpenClawStateDatabaseSchemaMigrationRequiredError("audit-events-v2", pathname);
     }
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${pathname} has a noncanonical audit event schema that cannot be repaired automatically; restore the canonical audit_events shape before retrying.`,
     );
   }

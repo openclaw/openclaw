@@ -58,11 +58,13 @@ extension OpenClawChatViewModel {
             }
         }
         do {
-            let catalog = try await self.transport.listAgents()
-            guard generation == self.agentCatalogGeneration,
-                  !self.isTransportDetached, !Task.isCancelled
-            else { return }
-            self.agentCatalog = catalog
+            try await self.transport.loadAgents { [weak self] catalog in
+                guard let self, generation == self.agentCatalogGeneration,
+                      !self.isTransportDetached, !Task.isCancelled
+                else { return }
+                self.agentCatalog = catalog
+                self.isLoadingAgents = false
+            }
         } catch {
             guard generation == self.agentCatalogGeneration,
                   !self.isTransportDetached, !Task.isCancelled

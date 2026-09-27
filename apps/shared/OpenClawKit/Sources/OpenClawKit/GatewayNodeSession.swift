@@ -470,14 +470,11 @@ public actor GatewayNodeSession {
         return barrier
     }
 
-    private func clearLifecycleCallbackBarrier(_ id: UUID) {
-        guard self.lifecycleCallbackBarrier?.id == id else { return }
-        self.lifecycleCallbackBarrier = nil
-    }
-
     private func finishLifecycleCallback(_ id: UUID) {
         self.executingLifecycleCallbackIDs.remove(id)
-        self.clearLifecycleCallbackBarrier(id)
+        if self.lifecycleCallbackBarrier?.id == id {
+            self.lifecycleCallbackBarrier = nil
+        }
     }
 
     private func isExecutingLifecycleCallback() -> Bool {

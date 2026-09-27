@@ -14,8 +14,6 @@ import { loadSessionEntryReadOnly } from "../../../config/sessions/session-acces
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getAgentRunContext, listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../../state/openclaw-state-db-readonly.js";
-import { getTaskRegistryProcessState } from "../../../tasks/task-registry.process-state.js";
-import { hasTaskSessionOwnerInDatabase } from "../../../tasks/task-registry.store.kernel.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
 import {
@@ -238,26 +236,10 @@ export function hasSubagentSessionRecoveryOwner(params: {
       return true;
     }
   }
-  const tasks = getTaskRegistryProcessState();
-  if (tasks.projection.pending.size > 0) {
-    return true;
-  }
-  for (const owner of tasks.runOwners.values()) {
-    if (owner.task.childSessionKey === key || owner.task.ownerKey === key) {
-      return true;
-    }
-  }
-  for (const task of tasks.tasks.values()) {
-    if (task.childSessionKey === key || task.requesterSessionKey === key || task.ownerKey === key) {
-      return true;
-    }
-  }
   // Failed or incompatible reads propagate: unknown ownership never authorizes mutation.
   return (
     withExistingOpenClawStateDatabaseCurrentReadOnly(
-      (database) =>
-        hasSubagentSessionOwnerInDatabase(database, key) ||
-        hasTaskSessionOwnerInDatabase(database.db, key),
+      (database) => hasSubagentSessionOwnerInDatabase(database, key),
       { env: params.env },
     ) ?? false
   );

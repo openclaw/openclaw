@@ -47,7 +47,7 @@ function fixture(inTransaction = false) {
       touch() {},
     },
   );
-  const scope = createOpenClawDatabaseMaintenanceScope(() => undefined);
+  const scope = createOpenClawDatabaseMaintenanceScope();
   scope.own(database.db, "shared-handles", () => database.db.close());
   return { database, borrowers, retire, retainer, scope };
 }

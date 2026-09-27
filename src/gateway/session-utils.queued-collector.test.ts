@@ -643,62 +643,59 @@ describe("queued collector session projection", () => {
     );
     let authorizationObserved = false;
     let accessRevoked = false;
-    const replacementWork: { completion?: Promise<void> } = {};
+    const authorization = createDeferred();
+    // Preserve the post-authorization microtask race, but join queued registration's durable setup.
+    const mutation = authorization.promise.then(async () => {
+      if (!authorizationObserved) {
+        return;
+      }
+      if (failure === "parent replaced") {
+        context.chatAbortControllers.set("parent-turn", { ...parent });
+      }
+      if (failure === "parent closed") {
+        parent.controller.abort();
+      }
+      if (failure === "parent settled") {
+        parent.isAbortable = () => false;
+      }
+      if (failure === "parent lifecycle retired") {
+        parent.lifecycleGeneration = "retired";
+      }
+      if (failure === "session access revoked") {
+        accessRevoked = true;
+      }
+      if (failure === "reservation withdrawn") {
+        removeQueuedSwarmRun(entry.runId);
+      }
+      if (failure === "registry replaced") {
+        await registerSubagentRun(registration);
+      }
+    });
     const assertCurrent = () => {
       if (!authorizationObserved) {
         authorizationObserved = true;
-        queueMicrotask(() => {
-          if (failure === "parent replaced") {
-            context.chatAbortControllers.set("parent-turn", { ...parent });
-          }
-          if (failure === "parent closed") {
-            parent.controller.abort();
-          }
-          if (failure === "parent settled") {
-            parent.isAbortable = () => false;
-          }
-          if (failure === "parent lifecycle retired") {
-            parent.lifecycleGeneration = "retired";
-          }
-          if (failure === "session access revoked") {
-            accessRevoked = true;
-          }
-          if (failure === "reservation withdrawn") {
-            removeQueuedSwarmRun(entry.runId);
-          }
-          if (failure === "registry replaced") {
-            const completion = registerSubagentRun(registration);
-            if (completion) {
-              replacementWork.completion = completion;
-            }
-          }
-        });
+        authorization.resolve();
       }
       if (accessRevoked) {
         throw new Error("Session mutation authorization changed");
       }
     };
     const respond = vi.fn();
-    try {
-      await expectDefined(
-        sessionAbortHandlers["sessions.abort"],
-        "sessions.abort handler",
-      )({
-        req: { type: "req", id: "forbidden-queued-stop", method: "sessions.abort" },
-        params: { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
-        client: operatorClient(
-          failure === "foreign requester" ? "other-requester" : "parent-requester",
-        ),
-        isWebchatConnect: () => false,
-        context,
-        respond,
-        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
-      });
-    } finally {
-      if (replacementWork.completion) {
-        await replacementWork.completion;
-      }
-    }
+    const abort = expectDefined(
+      sessionAbortHandlers["sessions.abort"],
+      "sessions.abort handler",
+    )({
+      req: { type: "req", id: "forbidden-queued-stop", method: "sessions.abort" },
+      params: { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
+      client: operatorClient(
+        failure === "foreign requester" ? "other-requester" : "parent-requester",
+      ),
+      isWebchatConnect: () => false,
+      context,
+      respond,
+      sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
+    });
+    await Promise.all([Promise.resolve(abort).finally(() => authorization.resolve()), mutation]);
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,

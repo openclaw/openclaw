@@ -56,7 +56,6 @@ type DescriptorBinding = LineageScope & {
 };
 
 type LineageRequest = {
-  identity: ReturnType<typeof resolveUiConversationIdentity>;
   sourceRevision: number;
   publishingSelected: boolean;
   promise: Promise<void>;
@@ -432,7 +431,6 @@ export class SessionLineageController {
         : null);
     const childScope = this.childScope();
     const request: LineageRequest = {
-      identity,
       sourceRevision: sessions.canonicalListRevision,
       publishingSelected: false,
       promise: Promise.resolve(),

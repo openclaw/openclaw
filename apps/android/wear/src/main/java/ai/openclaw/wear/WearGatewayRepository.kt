@@ -31,21 +31,6 @@ internal data class WearProxyStatus(
   val failure: WearConversationFailure? = null,
 )
 
-internal enum class WearAgentPulseTaskState {
-  Ready,
-  Unavailable,
-}
-
-internal data class WearAgentPulseTasks(
-  val state: WearAgentPulseTaskState,
-  val queued: Int? = null,
-  val running: Int? = null,
-  val completed: Int? = null,
-  val failed: Int? = null,
-  val activeAtLimit: Boolean? = null,
-  val recentAtLimit: Boolean? = null,
-)
-
 internal enum class WearAgentPulseSwarmState {
   Active,
   Idle,
@@ -82,7 +67,6 @@ internal data class WearAgentPulseApprovals(
 )
 
 internal data class WearAgentPulseSnapshot(
-  val tasks: WearAgentPulseTasks,
   val swarm: WearAgentPulseSwarm,
   val approvals: WearAgentPulseApprovals,
   val eventSequence: Long?,
@@ -325,7 +309,6 @@ internal class WearGatewayRepository(
       )
     val result = response.payload.asObject("agent.pulse")
     return WearAgentPulseSnapshot(
-      tasks = parseAgentPulseTasks(result["tasks"]),
       swarm = parseAgentPulseSwarm(result["swarm"]),
       approvals = parseAgentPulseApprovals(result["approvals"]),
       eventStreamId = response.eventStreamId,
@@ -666,32 +649,6 @@ internal fun parseWearChatEvent(payload: JsonElement?): WearChatEvent? {
   )
 }
 
-private fun parseAgentPulseTasks(element: JsonElement?): WearAgentPulseTasks {
-  val source = element as? JsonObject ?: invalidAgentPulse()
-  return when (source.string("state")) {
-    "ready" -> {
-      if (source.string("scope") != "bounded") invalidAgentPulse()
-      WearAgentPulseTasks(
-        state = WearAgentPulseTaskState.Ready,
-        queued = source.nonNegativeInt("queued"),
-        running = source.nonNegativeInt("running"),
-        completed = source.nonNegativeInt("completed"),
-        failed = source.nonNegativeInt("failed"),
-        activeAtLimit = source.requiredBoolean("activeAtLimit"),
-        recentAtLimit = source.requiredBoolean("recentAtLimit"),
-      )
-    }
-
-    "unavailable" -> {
-      WearAgentPulseTasks(state = WearAgentPulseTaskState.Unavailable)
-    }
-
-    else -> {
-      invalidAgentPulse()
-    }
-  }
-}
-
 private fun parseAgentPulseSwarm(element: JsonElement?): WearAgentPulseSwarm {
   val source = element as? JsonObject ?: invalidAgentPulse()
   return when (source.string("state")) {
@@ -853,9 +810,9 @@ private fun contentText(element: JsonElement?): String =
 
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyException("invalid_response", "$method returned invalid data")
 
-private fun JsonObject.string(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+internal fun JsonObject?.string(name: String): String? = (this?.get(name) as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
-private fun JsonObject.boolean(name: String): Boolean? = (this[name] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
+internal fun JsonObject?.boolean(name: String): Boolean? = (this?.get(name) as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
 
 private fun JsonObject.long(name: String): Long? = (this[name] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
 

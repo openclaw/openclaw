@@ -24,7 +24,7 @@ import type {
   ProfileContext,
   ProfileRuntimeState,
 } from "./server-context.types.js";
-import { assertBrowserDashboardTabCanClose } from "./session-tab-store.js";
+import { dispatchBrowserTabClose } from "./session-tab-store.js";
 import { resolveBrowserTabOrThrow, resolveTargetIdFromTabs } from "./target-id.js";
 
 type SelectionDeps = {
@@ -240,13 +240,14 @@ export function createProfileSelectionOps({
 
   const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<string> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
-    assertBrowserDashboardTabCanClose(resolvedTargetId, profile.name);
-
     if (capabilities.usesChromeMcp) {
       assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
       const { closeChromeMcpTab } = await getChromeMcpModule();
       options?.signal?.throwIfAborted();
-      await closeChromeMcpTab(profile.name, resolvedTargetId, profile, options);
+      await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {
+        options?.signal?.throwIfAborted();
+        return closeChromeMcpTab(profile.name, resolvedTargetId, profile, options);
+      });
     } else {
       let closedViaPlaywright = false;
       // For remote profiles, use Playwright's persistent connection to close tabs.
@@ -254,12 +255,14 @@ export function createProfileSelectionOps({
         const mod = await getPwAiModule({ mode: "strict" });
         if (mod) {
           options?.signal?.throwIfAborted();
-          assertBrowserDashboardTabCanClose(resolvedTargetId, profile.name);
-          await mod.closePageByTargetIdViaPlaywright({
-            cdpUrl: profile.cdpUrl,
-            targetId: resolvedTargetId,
-            ssrfPolicy: getCdpControlPolicy(),
-            ...(options?.signal ? { signal: options.signal } : {}),
+          await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {
+            options?.signal?.throwIfAborted();
+            return mod.closePageByTargetIdViaPlaywright({
+              cdpUrl: profile.cdpUrl,
+              targetId: resolvedTargetId,
+              ssrfPolicy: getCdpControlPolicy(),
+              ...(options?.signal ? { signal: options.signal } : {}),
+            });
           });
           closedViaPlaywright = true;
         }
@@ -267,13 +270,15 @@ export function createProfileSelectionOps({
 
       if (!closedViaPlaywright) {
         options?.signal?.throwIfAborted();
-        assertBrowserDashboardTabCanClose(resolvedTargetId, profile.name);
-        await fetchOk(
-          appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
-          undefined,
-          options?.signal ? { signal: options.signal } : undefined,
-          getCdpControlPolicy(),
-        );
+        await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {
+          options?.signal?.throwIfAborted();
+          return fetchOk(
+            appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
+            undefined,
+            options?.signal ? { signal: options.signal } : undefined,
+            getCdpControlPolicy(),
+          );
+        });
       }
     }
 

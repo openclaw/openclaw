@@ -84,14 +84,13 @@ function documentUrl(value: string, base: string): URL | null {
   if (!value.trim()) {
     return null;
   }
-  try {
-    const url = new URL(value, base);
-    return ["https:", "http:", "mailto:"].includes(url.protocol) && !url.username && !url.password
-      ? url
-      : null;
-  } catch {
-    return null;
-  }
+  const url = URL.parse(value, base);
+  return url &&
+    ["https:", "http:", "mailto:"].includes(url.protocol) &&
+    !url.username &&
+    !url.password
+    ? url
+    : null;
 }
 
 function externalAnchor(url: string, label: string): HTMLAnchorElement {

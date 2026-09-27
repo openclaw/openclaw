@@ -238,25 +238,20 @@ function pickGrowthPressure(params: {
   }
   const windowMs = minimum.ts - growth.baseline.ts;
   const rssGrowthBytes = minimum.memory.rssBytes - growth.baseline.memory.rssBytes;
-  if (rssGrowthBytes >= thresholds.rssGrowthCriticalBytes) {
-    return {
-      level: "critical",
-      reason: "rss_growth",
-      memory: current.memory,
-      thresholdBytes: thresholds.rssGrowthCriticalBytes,
-      rssGrowthBytes,
-      windowMs,
-    };
-  }
-  if (rssGrowthBytes >= thresholds.rssGrowthWarningBytes) {
-    return {
-      level: "warning",
-      reason: "rss_growth",
-      memory: current.memory,
-      thresholdBytes: thresholds.rssGrowthWarningBytes,
-      rssGrowthBytes,
-      windowMs,
-    };
+  for (const [level, thresholdBytes] of [
+    ["critical", thresholds.rssGrowthCriticalBytes],
+    ["warning", thresholds.rssGrowthWarningBytes],
+  ] as const) {
+    if (rssGrowthBytes >= thresholdBytes) {
+      return {
+        level,
+        reason: "rss_growth",
+        memory: current.memory,
+        thresholdBytes,
+        rssGrowthBytes,
+        windowMs,
+      };
+    }
   }
   return null;
 }

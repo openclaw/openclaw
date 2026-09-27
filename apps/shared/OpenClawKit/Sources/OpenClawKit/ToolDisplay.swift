@@ -173,9 +173,7 @@ public enum ToolDisplayRegistry {
     }
 
     private static func normalizeVerb(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
-        return trimmed.replacingOccurrences(of: "_", with: " ")
+        value?.trimmedNonEmpty?.replacingOccurrences(of: "_", with: " ")
     }
 
     private static func readDetail(_ args: AnyCodable?) -> String? {

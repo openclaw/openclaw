@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -51,7 +52,6 @@ import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { handleChatStartupRequest } from "./chat-startup-handler.js";
 import { prepareChatStartupRequester } from "./chat-startup-requester.js";
-import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -72,7 +72,6 @@ export async function handleChatHistoryRequest({
   method: ChatHistoryMethod;
   retainedTranscript?: {
     sessionId: string;
-    run?: { id: string; maxBytes: number };
     requireCurrentSession?: boolean;
     verifyRetainedState?: () => Promise<boolean>;
   };
@@ -110,7 +109,7 @@ export async function handleChatHistoryRequest({
     await prepareOptionalSubagentSessionListReadCache();
   }
   signal?.throwIfAborted();
-  const agentIdOverride = normalizeOptionalText(params.agentId);
+  const agentIdOverride = normalizeOptionalString(params.agentId);
   const selection = await prepareChatHistorySessionRead({
     context,
     sessionMutationAuthorization,
@@ -138,7 +137,6 @@ export async function handleChatHistoryRequest({
           kind: "transcript-binding",
           params: {
             target: { agentId: sessionAgentId, sessionId: requestedSessionId, storePath },
-            run: retainedTranscript?.run,
           },
         },
         signal,
@@ -153,7 +151,11 @@ export async function handleChatHistoryRequest({
     };
     if (!(await readTranscriptOwner())) {
       if (retainedTranscript) {
-        respondChatHistoryUnavailable(method, respond, "task transcript is no longer available");
+        respondChatHistoryUnavailable(
+          method,
+          respond,
+          "retained transcript is no longer available",
+        );
       } else {
         respond(
           false,

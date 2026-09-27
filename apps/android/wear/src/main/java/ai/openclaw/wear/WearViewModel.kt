@@ -18,9 +18,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
 import java.util.UUID
 
 internal data class WearPendingReply(
@@ -1154,7 +1151,7 @@ internal class WearViewModel(
           ) {
             return@launch
           }
-          val loadResult = historyLoadTracker.finish(loadToken)
+          val liveStream = historyLoadTracker.finish(loadToken)
           val retiredSend = sendAttemptTracker.reconcileTerminalHistory(transcript)
           val loadedSession =
             currentSession.copy(
@@ -1199,10 +1196,10 @@ internal class WearViewModel(
                     mergeObservedMessageIntoSnapshot(transcript.messages, message)
                   } ?: transcript.messages,
                 streamText =
-                  loadResult.liveStream?.let { live ->
+                  liveStream?.let { live ->
                     reconcileWearStreamSnapshot(transcript.activeText, live.text, live.complete) ?: live.text
                   } ?: transcript.activeText,
-                activeRunId = loadResult.liveStream?.runId ?: transcript.activeRunId,
+                activeRunId = liveStream?.runId ?: transcript.activeRunId,
               ).reconcileReplyHistory(transcript)
           }
           pendingEvents.forEach(::handleEvent)
@@ -2124,10 +2121,6 @@ internal fun reconcileWearStreamSnapshot(
 
 private fun String.hasCodePointBoundary(index: Int): Boolean = index <= 0 || index >= length || !(this[index - 1].isHighSurrogate() && this[index].isLowSurrogate())
 
-internal data class WearHistoryLoadResult(
-  val liveStream: WearLiveStreamSnapshot?,
-)
-
 internal class WearHistoryLoadTracker {
   private var generation = 0L
   private var sessionKey: String? = null
@@ -2161,9 +2154,9 @@ internal class WearHistoryLoadTracker {
 
   fun finish(
     token: Long,
-  ): WearHistoryLoadResult {
-    if (!isCurrent(token)) return WearHistoryLoadResult(liveStream = null)
-    val result = WearHistoryLoadResult(liveStream)
+  ): WearLiveStreamSnapshot? {
+    if (!isCurrent(token)) return null
+    val result = liveStream
     sessionKey = null
     liveStream = null
     return result
@@ -2202,10 +2195,6 @@ internal fun wearConversationFailureForConnection(payload: JsonObject?): WearCon
 }
 
 private fun Throwable.isConnectivityFailure(): Boolean = this is WearProxyException && code in setOf("phone_unavailable", "unavailable", "timeout")
-
-private fun JsonObject?.string(name: String): String? = (this?.get(name) as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-
-private fun JsonObject?.boolean(name: String): Boolean? = (this?.get(name) as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
 
 private const val MAX_TRANSCRIPT_MESSAGES = 20
 private const val MAX_STREAM_CODE_POINTS = 2_000

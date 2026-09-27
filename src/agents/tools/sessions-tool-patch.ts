@@ -10,7 +10,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
-import { readToolStringParam, ToolInputError } from "./common.js";
+import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { recordSessionToolActionFact } from "./sessions-access.js";
 
@@ -58,10 +58,12 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
       patch[field] = value;
     }
   }
-  for (const field of ["model", "thinkingLevel"] as const) {
-    if (params[field] !== undefined) {
-      patch[field] = readToolStringParam(params, field, { required: true });
-    }
+  if (params.model !== undefined) {
+    patch.model =
+      normalizeToolModelOverride(readToolStringParam(params, "model", { required: true })) ?? null;
+  }
+  if (params.thinkingLevel !== undefined) {
+    patch.thinkingLevel = readToolStringParam(params, "thinkingLevel", { required: true });
   }
   if (Object.keys(patch).length === 0) {
     throw new ToolInputError("Patch setting required");

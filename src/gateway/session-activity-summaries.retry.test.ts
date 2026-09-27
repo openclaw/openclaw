@@ -23,7 +23,7 @@ import {
   projectSessionActivitySummary,
   type ActivitySummaryTarget,
 } from "./session-activity-summary-state.js";
-import type { defaultCompleteModel } from "./session-observer-model.js";
+import type { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 
 const result = {
   text: "Verified the change.",
@@ -42,6 +42,16 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
   let service: SessionActivitySummaryService;
   let cfg: OpenClawConfig;
   const complete = vi.fn<typeof defaultCompleteModel>();
+  const prepareModel: typeof defaultPrepareModel = async ({ agentId, modelRef }) => ({
+    config: cfg,
+    agentId,
+    provider: "test",
+    model: modelRef?.split("/")[1] ?? "utility",
+    authProfileId: undefined,
+    agentDir: "/tmp/unused",
+    outputTextPolicy: "strict-visible",
+  });
+  const prepare = vi.fn<typeof defaultPrepareModel>();
   const changed = vi.fn();
   const view = (target: ActivitySummaryTarget) =>
     projectSessionActivitySummary({
@@ -81,15 +91,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     createSessionActivitySummaries({
       getConfig: () => cfg,
       onChanged: changed,
-      prepareModel: async ({ agentId, modelRef }) => ({
-        config: cfg,
-        agentId,
-        provider: "test",
-        model: modelRef?.split("/")[1] ?? "utility",
-        authProfileId: undefined,
-        agentDir: "/tmp/unused",
-        outputTextPolicy: "strict-visible",
-      }),
+      prepareModel: prepare,
       completeModel: complete,
     });
 
@@ -97,6 +99,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     testState = await createOpenClawTestState({ scenario: "minimal" });
     cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
     complete.mockReset().mockResolvedValue(result);
+    prepare.mockReset().mockImplementation(prepareModel);
     changed.mockReset();
     service = createService();
   });
@@ -105,6 +108,41 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     await testState.cleanup();
+  });
+
+  it("does not call the model after a grouped child becomes hidden during preparation", async () => {
+    const target = await addSession(1);
+    await patchSessionEntryCore(scope(target), () => ({
+      spawnedBy: "agent:main:main",
+      category: "Work",
+    }));
+    const started = createDeferred();
+    const preparation = createDeferred();
+    prepare.mockImplementationOnce(async (params) => {
+      started.resolve();
+      await preparation.promise;
+      return prepareModel(params);
+    });
+    const settled = createDeferred<ReturnType<typeof view>>();
+    changed.mockImplementation(() => {
+      const summary = view(target);
+      if (summary?.state !== "updating") {
+        settled.resolve(summary);
+      }
+    });
+    service.ensure(target);
+    try {
+      await started.promise;
+      await patchSessionEntryCore(scope(target), () => ({ category: undefined }), {
+        preserveActivity: true,
+      });
+      preparation.resolve();
+      expect(await settled.promise).toMatchObject({ state: "stale" });
+      expect(complete).not.toHaveBeenCalled();
+      expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toBeUndefined();
+    } finally {
+      preparation.resolve();
+    }
   });
 
   it.each([false, true])(

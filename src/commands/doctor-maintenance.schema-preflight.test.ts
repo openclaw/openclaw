@@ -89,7 +89,9 @@ it("admits a supported legacy registry without weakening runtime target validati
   try {
     expect(maintenance).toBeDefined();
     expect(fs.readFileSync(fixture.databasePath)).toEqual(before);
-    expect(resolveRuntimeTargets).toThrow("legacy agent database registry schema");
+    expect(() => maintenance?.run(resolveRuntimeTargets)).toThrow(
+      "legacy agent database registry schema",
+    );
   } finally {
     await maintenance?.release();
   }

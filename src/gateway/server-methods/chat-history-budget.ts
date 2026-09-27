@@ -202,7 +202,7 @@ export function trimChatHistoryActivity(params: {
   });
 }
 
-export function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
+function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   return {
     role: "assistant",
     timestamp: Date.now(),

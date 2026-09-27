@@ -12,7 +12,9 @@ export type ChannelSetupPlugin = {
   meta: ChannelMeta;
   capabilities: ChannelCapabilities;
   config: ChannelConfigAdapter<unknown>;
+  /** Channel-owned typed setup contract. Preferred over the legacy shared input adapter. */
   setupContract?: ChannelOwnedSetupContract;
+  /** @deprecated Use setupContract for new plugins. */
   setup?: ChannelSetupAdapter;
   setupWizard?: ChannelSetupWizard | ChannelSetupWizardAdapter;
 };
@@ -34,16 +36,12 @@ export type ChannelSetupWizardStatus = {
     accountId?: string;
     configured: boolean;
   }) => string[] | Promise<string[]>;
-  resolveSelectionHint?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string;
-    configured: boolean;
-  }) => string | undefined | Promise<string | undefined>;
-  resolveQuickstartScore?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string;
-    configured: boolean;
-  }) => number | undefined | Promise<number | undefined>;
+  resolveSelectionHint?: (
+    params: Parameters<NonNullable<ChannelSetupWizardStatus["resolveStatusLines"]>>[0],
+  ) => string | undefined | Promise<string | undefined>;
+  resolveQuickstartScore?: (
+    params: Parameters<NonNullable<ChannelSetupWizardStatus["resolveStatusLines"]>>[0],
+  ) => number | undefined | Promise<number | undefined>;
 };
 
 /** Snapshot of one credential before prompting or reusing existing config. */
@@ -100,9 +98,7 @@ export type ChannelSetupWizardCredential = {
       state: ChannelSetupWizardCredentialState;
     },
   ) => boolean | Promise<boolean>;
-  applyUseEnv?: (
-    params: ChannelSetupWizardAccountContext,
-  ) => OpenClawConfig | Promise<OpenClawConfig>;
+  applyUseEnv?: ChannelSetupWizardEnvShortcut["apply"];
   applySet?: (
     params: ChannelSetupWizardStepContext & {
       value: unknown;
@@ -128,9 +124,7 @@ export type ChannelSetupWizardTextInput = {
   currentValue?: (
     params: ChannelSetupWizardStepContext,
   ) => string | undefined | Promise<string | undefined>;
-  initialValue?: (
-    params: ChannelSetupWizardStepContext,
-  ) => string | undefined | Promise<string | undefined>;
+  initialValue?: NonNullable<ChannelSetupWizardTextInput["currentValue"]>;
   shouldPrompt?: (
     params: ChannelSetupWizardStepContext & {
       currentValue?: string;
@@ -320,21 +314,16 @@ export type ChannelSetupStatusContext = {
 };
 
 /** Shared context for applying setup changes for a selected channel. */
-type ChannelSetupConfigureContext = {
-  cfg: OpenClawConfig;
+type ChannelSetupConfigureContext = ChannelSetupStatusContext & {
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
-  options?: SetupChannelsOptions;
-  accountOverrides: Partial<Record<ChannelId, string>>;
   shouldPromptAccountIds: boolean;
   forceAllowFrom: boolean;
 };
 
 /** Context passed after setup has written config to disk. */
-type ChannelOnboardingPostWriteContext = {
+type ChannelOnboardingPostWriteContext = ChannelSetupWizardAccountContext & {
   previousCfg: OpenClawConfig;
-  cfg: OpenClawConfig;
-  accountId: string;
   runtime: RuntimeEnv;
 };
 
@@ -392,9 +381,7 @@ export type ChannelSetupWizardAdapter = {
   configureInteractive?: (
     ctx: ChannelSetupInteractiveContext,
   ) => Promise<ChannelSetupConfiguredResult>;
-  configureWhenConfigured?: (
-    ctx: ChannelSetupInteractiveContext,
-  ) => Promise<ChannelSetupConfiguredResult>;
+  configureWhenConfigured?: NonNullable<ChannelSetupWizardAdapter["configureInteractive"]>;
   afterConfigWritten?: (ctx: ChannelOnboardingPostWriteContext) => Promise<void> | void;
   dmPolicy?: ChannelSetupDmPolicy;
   onAccountRecorded?: (accountId: string, options?: SetupChannelsOptions) => void;

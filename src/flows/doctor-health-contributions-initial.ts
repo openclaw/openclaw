@@ -116,7 +116,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:auth-profiles",
       label: "Auth profiles",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthChecks: {
         description: "Auth profile cooldown, expiry, missing credential, and legacy override state",
         defaultEnabled: false,
@@ -162,7 +162,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:structured-health-repairs",
       label: "Plugin health inspection and repair",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       run: params.runStructuredHealthRepairs,
     }),
     createDoctorHealthContribution({

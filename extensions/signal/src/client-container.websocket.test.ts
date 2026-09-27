@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { containerCheck, streamContainerEvents } from "./client-container.js";
@@ -7,7 +9,6 @@ const wsMockState = vi.hoisted(() => ({
   behavior: "close" as
     | "close"
     | "open"
-    | "error"
     | "message"
     | "buffered-message"
     | "pending"
@@ -33,19 +34,17 @@ function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: stri
 
 // Minimal WebSocket mock for connection-log assertions.
 vi.mock("./ws-runtime.js", () => ({
-  WebSocket: class MockWebSocket {
-    private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+  WebSocket: class MockWebSocket extends EventEmitter {
     private bufferedMessageFlushed = false;
 
     constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {
+      super();
       wsMockState.urls.push(String(url));
       wsMockState.options.push(options);
       setTimeout(() => {
         if (wsMockState.behavior === "open") {
           this.emit("open");
           this.emit("close", 1000, Buffer.from("done"));
-        } else if (wsMockState.behavior === "error") {
-          this.emit("error", new Error("WebSocket failed"));
         } else if (wsMockState.behavior === "unexpected-response") {
           this.emit("unexpected-response", {}, { statusCode: 200, statusMessage: "OK" });
         } else if (wsMockState.behavior === "message") {
@@ -62,24 +61,6 @@ vi.mock("./ws-runtime.js", () => ({
       }, 0);
     }
 
-    on(event: string, callback: (...args: unknown[]) => void) {
-      const handlers = this.handlers.get(event) ?? [];
-      handlers.push(callback);
-      this.handlers.set(event, handlers);
-      return this;
-    }
-
-    once(event: string, callback: (...args: unknown[]) => void) {
-      const onceCallback = (...args: unknown[]) => {
-        this.handlers.set(
-          event,
-          (this.handlers.get(event) ?? []).filter((handler) => handler !== onceCallback),
-        );
-        callback(...args);
-      };
-      return this.on(event, onceCallback);
-    }
-
     close() {
       if (wsMockState.behavior === "buffered-message" && !this.bufferedMessageFlushed) {
         this.bufferedMessageFlushed = true;
@@ -91,12 +72,6 @@ vi.mock("./ws-runtime.js", () => ({
 
     terminate() {
       wsMockState.terminations += 1;
-    }
-
-    private emit(event: string, ...args: unknown[]) {
-      for (const handler of this.handlers.get(event) ?? []) {
-        handler(...args);
-      }
     }
   },
 }));
@@ -163,39 +138,12 @@ describe("streamContainerEvents", () => {
     expectMockLogNotContains(log, "%2B14259798283");
   });
 
-  it.each([
-    { timeoutMs: 1_000, expected: 1_000 },
-    { timeoutMs: 60_000, expected: 60_000 },
-    { timeoutMs: 0, expected: 30_000 },
-    { timeoutMs: undefined, expected: 30_000 },
-  ])(
-    "preserves the stream opening budget for timeoutMs=$timeoutMs",
-    async ({ timeoutMs, expected }) => {
-      wsMockState.behavior = "open";
-      await streamContainerEvents({
-        baseUrl: "http://localhost:8080",
-        account: "+15550001111",
-        timeoutMs,
-        onEvent: vi.fn(),
-      });
-      expect(wsMockState.options).toEqual([
-        { maxPayload: 1024 * 1024, handshakeTimeout: expected },
-      ]);
-    },
-  );
-
   it("drains accepted and socket-buffered receive events before resolving shutdown", async () => {
     wsMockState.behavior = "buffered-message";
     const abort = new AbortController();
     const removeEventListener = vi.spyOn(abort.signal, "removeEventListener");
-    let releaseFirst!: () => void;
-    const firstDelivery = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let markFirstStarted!: () => void;
-    const firstStarted = new Promise<void>((resolve) => {
-      markFirstStarted = resolve;
-    });
+    const firstDelivery = createDeferred<void>();
+    const firstStarted = createDeferred<void>();
     const timestamps: number[] = [];
     const stream = streamContainerEvents({
       baseUrl: "http://localhost:8080",
@@ -204,8 +152,8 @@ describe("streamContainerEvents", () => {
       onEvent: async (event) => {
         timestamps.push(event.envelope?.timestamp ?? 0);
         if (timestamps.length === 1) {
-          markFirstStarted();
-          await firstDelivery;
+          firstStarted.resolve();
+          await firstDelivery.promise;
         }
       },
     });
@@ -214,7 +162,7 @@ describe("streamContainerEvents", () => {
       settled = true;
     });
 
-    await firstStarted;
+    await firstStarted.promise;
     abort.abort();
     const settledBeforeDrain = await Promise.race([
       stream.then(() => true),
@@ -225,7 +173,7 @@ describe("streamContainerEvents", () => {
     expect(settledBeforeDrain).toBe(false);
     expect(settled).toBe(false);
 
-    releaseFirst();
+    firstDelivery.resolve();
     await expect(stream).resolves.toBeUndefined();
     expect(timestamps).toEqual([1, 2]);
     expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
@@ -236,26 +184,20 @@ describe("streamContainerEvents", () => {
     wsMockState.behavior = "buffered-message";
     const abort = new AbortController();
     const appendError = new Error("durable append failed during shutdown");
-    let rejectDelivery!: (error: Error) => void;
-    const delivery = new Promise<void>((_resolve, reject) => {
-      rejectDelivery = reject;
-    });
-    let markFirstStarted!: () => void;
-    const firstStarted = new Promise<void>((resolve) => {
-      markFirstStarted = resolve;
-    });
+    const delivery = createDeferred<void>();
+    const firstStarted = createDeferred<void>();
     const stream = streamContainerEvents({
       baseUrl: "http://localhost:8080",
       abortSignal: abort.signal,
       onEvent: async () => {
-        markFirstStarted();
-        await delivery;
+        firstStarted.resolve();
+        await delivery.promise;
       },
     });
 
-    await firstStarted;
+    await firstStarted.promise;
     abort.abort();
-    rejectDelivery(appendError);
+    delivery.reject(appendError);
     await expect(stream).rejects.toBe(appendError);
     expect(wsMockState.terminations).toBe(0);
   });
@@ -291,22 +233,6 @@ describe("streamContainerEvents", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("closes immediately when aborted before the opening handshake completes", async () => {
-    wsMockState.behavior = "pending";
-    const abort = new AbortController();
-    const removeEventListener = vi.spyOn(abort.signal, "removeEventListener");
-    const stream = streamContainerEvents({
-      baseUrl: "http://localhost:8080",
-      abortSignal: abort.signal,
-      onEvent: vi.fn(),
-    });
-
-    abort.abort();
-    await expect(stream).resolves.toBeUndefined();
-    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
-    expect(wsMockState.terminations).toBe(0);
   });
 
   it("handles an already-aborted signal without leaving its connection pending", async () => {

@@ -477,7 +477,6 @@ suite.define(() => {
       KEYBOARD_SHORTCUT_COMBOS.reviewPanel,
       KEYBOARD_SHORTCUT_COMBOS.workspaceFiles,
       KEYBOARD_SHORTCUT_COMBOS.sideChat,
-      KEYBOARD_SHORTCUT_COMBOS.tasksPanel,
     ];
     await expect
       .poll(() => panelShortcuts.allTextContents())
