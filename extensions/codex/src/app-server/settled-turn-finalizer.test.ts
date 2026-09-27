@@ -280,8 +280,30 @@ describe("runCodexSettledTurnFinalization", () => {
     });
   });
 
+  it("uses configured transport for remote settled finalization", async () => {
+    const attempt = createAttempt();
+    const settledAttempt = createSettledAttempt({
+      model: "gpt-5.6-luna",
+      modelProvider: "openai",
+      authProfileId: "openai:captured",
+    });
+    const options = {
+      pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:19400" } },
+    };
+
+    await runCodexSettledTurnFinalization({ attempt, settledAttempt }, options);
+
+    expect(mocks.runBounded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isolation: "configured-transport",
+        requireNoExternalCapabilities: true,
+        options,
+      }),
+    );
+  });
+
   it.each(["agent", "user"])(
-    "uses the selected scoped subscription for a private side turn (ordinary home: %s)",
+    "uses the selected scoped subscription for a bounded side turn (ordinary home: %s)",
     async (homeScope) => {
       const attempt = createAttempt("subscription");
       const token = [
@@ -331,7 +353,7 @@ describe("runCodexSettledTurnFinalization", () => {
       );
       expect(mocks.runBounded).toHaveBeenCalledWith(
         expect.objectContaining({
-          isolation: "private-stdio",
+          isolation: ordinaryNativeHome ? "configured-transport" : "private-stdio",
           options,
           authRequirement: "subscription",
           preparedAuth: {
