@@ -66,6 +66,10 @@ Hover the row or focus it with the keyboard for a tooltip explaining the exact
 status. Reduced motion keeps the claw still. Tasks without a display title keep
 the generic **Subagent** label. Select a row to open its details.
 
+The **running tasks** indicator previews only active background tasks (running or
+queued). Its tooltip shows up to five tasks, with an overflow count for additional
+active tasks. Select the indicator to open the full task list, including finished tasks.
+
 Select a session's title in the chat header to rename it. Enter saves the name;
 Escape cancels the edit. While an input method is composing text, Enter and
 Escape stay with composition. Finish composing before saving or canceling.
