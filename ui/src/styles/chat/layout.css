@@ -23,7 +23,7 @@ openclaw-pending-session-create {
   max-width: min(36rem, calc(100% - 32px));
   margin: 12px 16px 4px;
   padding: 10px 14px;
-  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+  border: 0;
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--danger) 9%, var(--bg-elevated));
   box-shadow: var(--shadow-lg);
@@ -124,20 +124,31 @@ openclaw-pending-session-create {
 /* Preserve the received diagnostic as text beyond the bounded summary. */
 .chat-error__diagnostic {
   max-height: min(16rem, 35dvh);
-  margin: 10px 0;
+  margin: 12px 0 0;
   overflow: auto;
   overscroll-behavior: contain;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
+  color: var(--text);
+  line-height: 1.6;
   user-select: text;
 }
 
 .chat-error__summary:focus-visible,
 .chat-error__diagnostic:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.chat-error__summary:focus-visible .chat-error__details-label {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+.chat-error__diagnostic:focus-visible {
+  background: var(--bg-hover);
 }
 
 .chat-error__dismiss {
@@ -411,6 +422,12 @@ openclaw-pending-session-create {
 
 .chat-composer-neighbor-card--danger :is(.chat-composer-neighbor-card__icon, strong) {
   color: color-mix(in srgb, var(--danger) 80%, var(--text));
+}
+
+.chat-composer-neighbor-card.chat-error {
+  gap: 12px;
+  padding: 12px 16px;
+  border: 0;
 }
 
 .chat-composer-neighbor-card.chat-error,

@@ -1143,7 +1143,7 @@ describe("projectChatDisplayMessages", () => {
   const safeFailureContent = [
     { type: "text", text: "The agent run failed before producing a reply." },
   ];
-  const networkFailureText = "LLM request failed: network connection error.";
+  const networkFailureText = "OpenClaw couldn't reach the AI service.";
   const networkFailureContent = (reply?: string, type = "text") => [
     { type, text: [networkFailureText, reply].filter(Boolean).join("\n\n") },
   ];

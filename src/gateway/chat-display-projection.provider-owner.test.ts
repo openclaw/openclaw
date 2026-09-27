@@ -112,7 +112,7 @@ it.each([
   {
     errorCode: "ECONNRESET",
     errorMessage: "PRIVATE_CANARY",
-    expected: "LLM request failed: network connection was interrupted.",
+    expected: "The connection to the AI service was interrupted.",
   },
   {
     errorMessage: "Worker inference result exceeds the transcript message limit.",

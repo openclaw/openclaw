@@ -1,7 +1,7 @@
 // Error payload tests ensure embedded runs convert provider/tool failures into
 // concise user-facing replies without leaking raw provider bodies or secrets.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 // Classification fixtures here exercise message/status tables. Provider-attributed
 // structured signals otherwise cross the plugin-consult gate and cold-materialize
 // the full bundled provider runtime, timing the unit test out under CI load
@@ -166,6 +166,20 @@ describe("buildEmbeddedRunPayloads", () => {
     }
     expect(payloads[0]?.isError).toBe(expected.isError);
   }
+
+  it("delivers only the transport error summary and preserves terminal-error metadata", () => {
+    const payloads = buildPayloads({
+      sessionKey: "agent:main:main",
+      lastAssistant: makeAssistant({
+        errorMessage: "fetch failed\nconnect ECONNREFUSED 127.0.0.1:443",
+        content: [],
+      }),
+    });
+
+    expect(payloads).toEqual([{ text: "OpenClaw couldn't reach the AI service.", isError: true }]);
+    assert(payloads[0]);
+    expect(getReplyPayloadMetadata(payloads[0])).toMatchObject({ terminalProviderError: true });
+  });
 
   it("suppresses raw API error JSON when the assistant errored", () => {
     const payloads = buildPayloads({
@@ -574,7 +588,7 @@ describe("buildEmbeddedRunPayloads", () => {
     {
       label: "connection failures",
       rawError: "connect ECONNREFUSED 127.0.0.1:443",
-      visibleError: "connection refused",
+      visibleError: "OpenClaw couldn't reach the AI service.",
     },
     {
       label: "authentication refresh timeouts",

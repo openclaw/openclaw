@@ -202,7 +202,7 @@ describe("sanitizeUserFacingText", () => {
       renderUserFacingText("Error: connect ECONNREFUSED 127.0.0.1:443", {
         errorContext: true,
       }),
-    ).toBe("LLM request failed: connection refused by the provider endpoint.");
+    ).toBe("OpenClaw couldn't reach the AI service.");
   });
 
   it("preserves the production Git inventory timeout and its hint instead of provider copy", () => {
@@ -216,7 +216,7 @@ describe("sanitizeUserFacingText", () => {
   });
 
   it.each([
-    ["Error: fetch failed", "LLM request failed: network connection error."],
+    ["Error: fetch failed", "OpenClaw couldn't reach the AI service."],
     ["Error: request timed out", "LLM request timed out."],
   ])("keeps provider presentation for unmarked errors: %s", (text, expected) => {
     expect(renderUserFacingText(text, { errorContext: true })).toBe(expected);

@@ -56,7 +56,7 @@ describe("prepared provider errors after settled tools", () => {
       expect(request.payloadsWithToolMedia).toEqual([
         expect.objectContaining({
           isError: true,
-          text: expect.stringContaining("connection refused"),
+          text: "OpenClaw couldn't reach the AI service.",
         }),
       ]);
       expect(resolveSettledTurnFinalizationRequest(request)).toContain(
@@ -198,7 +198,9 @@ describe("prepared provider errors after settled tools", () => {
         expect.objectContaining({
           isError: true,
           text: expect.stringContaining(
-            failure === "provider refusal" ? "refused this request" : "connection refused",
+            failure === "provider refusal"
+              ? "refused this request"
+              : "couldn't reach the AI service",
           ),
         }),
       ]);

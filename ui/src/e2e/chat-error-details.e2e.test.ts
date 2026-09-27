@@ -18,6 +18,84 @@ async function captureDiagnosticProof(page: Page, name: string) {
 }
 
 suite.define(() => {
+  it.each(["light", "dark"] as const)(
+    "keeps auth details concise and complete diagnostics copyable in %s mode",
+    async (colorScheme) => {
+      await suite.withPage(
+        {
+          viewport: { height: 900, width: 1280 },
+          colorScheme,
+          permissions: ["clipboard-read", "clipboard-write"],
+        },
+        async ({ page }) => {
+          const sessionKey = "agent:main:main";
+          const message =
+            "Your refresh token has already been used to generate a new access token. Please try signing in again.";
+          const gateway = await installMockGateway(page, { sessionKey });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await page.locator(".agent-chat__input textarea").fill("Review the project changes");
+          await page.getByRole("button", { name: "Send message" }).click();
+          const send = await gateway.waitForRequest("chat.send");
+          assert(isRecord(send.params) && typeof send.params.idempotencyKey === "string");
+          await gateway.emitGatewayEvent("chat", {
+            sessionKey,
+            runId: send.params.idempotencyKey,
+            state: "error",
+            errorMessage: `⚠️ ${message}`,
+            errorDetail: {
+              provider: "openai",
+              httpStatus: 401,
+              failoverReason: "refresh_token_reused",
+              providerRuntimeFailureKind: "auth_refresh",
+              providerErrorType: "invalid_request_error",
+            },
+          });
+          const alert = page.locator(".chat-error");
+          await alert.waitFor();
+          await captureDiagnosticProof(page, `auth-${colorScheme}-collapsed`);
+          const summary = alert.locator("summary");
+          await summary.focus();
+          await summary.press("Enter");
+          expect(await alert.evaluate((node) => getComputedStyle(node).borderTopWidth)).toBe("0px");
+          expect(await summary.evaluate((node) => getComputedStyle(node).boxShadow)).toBe("none");
+          expect(
+            await alert
+              .locator(".chat-error__details-label")
+              .evaluate((node) => getComputedStyle(node).textDecorationLine),
+          ).toBe("underline");
+          const details = alert.getByLabel("Error details", { exact: true });
+          await expect.poll(() => details.isVisible()).toBe(true);
+          await captureDiagnosticProof(page, `auth-${colorScheme}-expanded`);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await alert.screenshot({
+              path: path.join(suite.artifactDir, `auth-${colorScheme}-detail.png`),
+              animations: "disabled",
+            });
+          }
+          expect(await alert.locator("strong").textContent()).toBe(
+            "Your refresh token was already used. Sign in again.",
+          );
+          expect(await details.textContent()).toBe(
+            "It was used to create a new access token.\nProvider: openai  ·  HTTP 401  ·  Reason: refresh_token_reused  ·  Type: invalid_request_error",
+          );
+          await alert.getByRole("button", { name: "Copy error", exact: true }).click();
+          await expect
+            .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+            .toBe(
+              `⚠️ ${message}\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: invalid_request_error`,
+            );
+          expect(await details.isVisible()).toBe(true);
+          await page.setViewportSize({ width: 393, height: 852 });
+          await expect
+            .poll(() => alert.evaluate((node) => node.scrollWidth <= node.clientWidth))
+            .toBe(true);
+          await captureDiagnosticProof(page, `auth-${colorScheme}-mobile`);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+        },
+      );
+    },
+  );
+
   it.each(["failed", "timeout"] as const)(
     "shows a %s diagnostic when only the terminal session update arrives",
     async (status) => {
@@ -114,12 +192,12 @@ suite.define(() => {
         const alert = page.locator(".chat-error");
         await alert.waitFor();
         await captureDiagnosticProof(page, "session-change-collapsed");
-        expect(await alert.locator("summary strong").textContent()).toBe(`Error: ${recovery}`);
+        expect(await alert.locator("summary strong").textContent()).toBe(recovery);
         expect(await page.locator(".chat-thread").textContent()).toContain(prompt);
         await alert.locator("summary").click();
         const details = alert.getByLabel("Error details", { exact: true });
         await expect.poll(() => details.isVisible()).toBe(true);
-        expect(await details.textContent()).toBe(`Error: ${errorMessage}`);
+        expect(await details.textContent()).toBe(diagnostic);
         await alert.getByRole("button", { name: "Copy error", exact: true }).click();
         await expect
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
