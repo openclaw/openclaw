@@ -308,7 +308,10 @@ function relayChildStream(stream: Readable, label: string) {
   const decoder = new StringDecoder("utf8");
   let pending = "";
   const writeLine = (line: string) => {
-    if (!process.stdout.write(`[shard:${label}] ${line}\n`)) {
+    // Actions only parses workflow commands at the start of a line.
+    const workflowCommand = /^::(?:error|warning|notice|group|endgroup)(?: .*?)?::/u.test(line);
+    const output = workflowCommand ? line : `[shard:${label}] ${line}`;
+    if (!process.stdout.write(`${output}\n`)) {
       stream.pause();
       process.stdout.once("drain", () => stream.resume());
     }
