@@ -18,8 +18,12 @@ import {
   OTHER_PROFILE,
   SUMMARY,
   withNativeFixture,
-  type Cleanup,
-  type NativeFixture,
+  closeNativeClient,
+  writeNativeConfig,
+  createRunParams,
+  usePreparedApiKey,
+  transcriptTarget,
+  trackSharedClient,
 } from "../test-support/settled-turn-finalizer.native.js";
 import * as authBridge from "./auth-bridge.js";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
@@ -34,79 +38,24 @@ import { assertCodexThreadStartResponse } from "./protocol-validators.js";
 import { isJsonObject } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
-  createCodexRuntimePlanFixture,
-  createNativeRunParams,
+  createRuntimeDynamicTool,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
+  setCodexTestModelSupportsTools,
   tempDir,
 } from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
-  registerCodexTestSessionIdentity,
   seedCodexTestBinding,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 import * as settledContext from "./settled-turn-context.js";
 import { runCodexSettledTurnFinalization } from "./settled-turn-finalizer.js";
 import * as sharedClients from "./shared-client.js";
-import type { CodexAppServerClientFactory } from "./shared-client.js";
 import { runCodexAppServerSideQuestion } from "./side-question.js";
-import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 setupRunAttemptTestHooks();
-
-type NativeRunParams = ReturnType<typeof createNativeRunParams>;
-
-async function closeNativeClient(client: CodexAppServerClient): Promise<void> {
-  expect(await client.closeAndWait()).toMatchObject({ exited: true });
-}
-
-async function writeNativeConfig(
-  fixture: NativeFixture,
-  codexHome: string,
-  provider: "openai" | "settled-fixture",
-  nativeFileAuth = false,
-) {
-  await fs.mkdir(codexHome, { recursive: true });
-  await fs.writeFile(
-    path.join(codexHome, "config.toml"),
-    [
-      `model=${JSON.stringify(NATIVE_MODEL)}`,
-      `model_provider=${JSON.stringify(provider)}`,
-      `cli_auth_credentials_store=${JSON.stringify(nativeFileAuth ? "file" : "ephemeral")}`,
-      'web_search="disabled"',
-      'approval_policy="never"',
-      'sandbox_mode="workspace-write"',
-      "allow_login_shell=false",
-      "[features]",
-      "shell_snapshot=false",
-      "[analytics]",
-      "enabled=false",
-      "[feedback]",
-      "enabled=false",
-      ...(provider === "settled-fixture"
-        ? [
-            "[model_providers.settled-fixture]",
-            'name="Synthetic settled-turn provider"',
-            `base_url=${JSON.stringify(fixture.baseUrl)}`,
-            'wire_api="responses"',
-            "requires_openai_auth=false",
-            `experimental_bearer_token=${JSON.stringify(NATIVE_KEY)}`,
-            "supports_websockets=false",
-            "request_max_retries=0",
-            "stream_max_retries=0",
-          ]
-        : []),
-    ].join("\n"),
-  );
-  if (nativeFileAuth) {
-    await fs.writeFile(
-      path.join(codexHome, "auth.json"),
-      JSON.stringify({ OPENAI_API_KEY: NATIVE_KEY }),
-    );
-  }
-}
 
 async function runNativePrompt(client: CodexAppServerClient, threadId: string, prompt: string) {
   const completed = createDeferred<{ id: string; status: string }>();
@@ -146,87 +95,6 @@ async function runNativePrompt(client: CodexAppServerClient, threadId: string, p
   }
 }
 
-async function createRunParams(fixture: NativeFixture) {
-  const params = createNativeRunParams(
-    path.join(fixture.root, "session.jsonl"),
-    fixture.native.cwd,
-  );
-  await attachSqliteSessionTarget(
-    params,
-    path.join(fixture.root, "transcript.sqlite"),
-    "settled-native",
-  );
-  params.agentDir = fixture.agentDir;
-  params.prompt = "Record the completed action once.";
-  params.provider = "openai";
-  params.modelId = NATIVE_MODEL;
-  params.model = { ...params.model, id: NATIVE_MODEL, provider: "openai", api: "openai-responses" };
-  params.authProfileId = HOST_PROFILE;
-  params.authProfileStore = fixture.authProfileStore;
-  params.resolvedApiKey = HOST_KEY;
-  params.disableTools = false;
-  params.permissionMode = "full";
-  params.timeoutMs = 20_000;
-  params.config = { tools: { web: { search: { enabled: false } } } };
-  setCodexTestToolFactory(params, () => []);
-  registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
-  return params;
-}
-
-function usePreparedApiKey(params: NativeRunParams, baseUrl: string) {
-  const runtimePlan = createCodexRuntimePlanFixture();
-  params.runtimePlan = {
-    ...runtimePlan,
-    auth: {
-      ...runtimePlan.auth,
-      providerForAuth: "openai",
-      authProfileProviderForAuth: "openai",
-      selectedAuthMode: "api-key",
-      modelRoute: {
-        provider: "openai",
-        modelId: params.modelId,
-        api: "openai-responses",
-        baseUrl,
-        authRequirement: "api-key",
-        requestTransportOverrides: "none",
-      },
-    },
-  };
-}
-
-function transcriptTarget(params: NativeRunParams) {
-  return {
-    agentId: "main",
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey!,
-    storePath: params.sessionTarget!.storePath,
-  };
-}
-
-function trackSharedClient(cleanups: Cleanup[]) {
-  let current: CodexAppServerClient | undefined;
-  const factory: CodexAppServerClientFactory = async (options) => {
-    const client = await sharedClients.getLeasedSharedCodexAppServerClient(options);
-    if (client !== current) {
-      cleanups.push(async () => {
-        await sharedClients.clearSharedCodexAppServerClientIfCurrentAndWait(client);
-        await closeNativeClient(client);
-      });
-      current = client;
-    }
-    return client;
-  };
-  return {
-    factory,
-    client() {
-      if (!current) {
-        throw new Error("The native attempt did not acquire its shared client");
-      }
-      return current;
-    },
-  };
-}
-
 // Admission and binding seeding are fixtures, not Gateway/catalog or live OAuth
 // proof. Native execution, host auth, settlement, and transcript writes are real;
 // Model responses are scripted unless the explicit live fault-injection case is selected.
@@ -234,6 +102,155 @@ function trackSharedClient(cleanups: Cleanup[]) {
 describe.skipIf(process.platform === "win32")(
   "stock Codex settled-turn finalization ownership",
   () => {
+    it.each([true, false])(
+      "keeps real native history coverage after message (final=%s)",
+      { timeout: 60_000 },
+      async (final) => {
+        await withNativeFixture(tempDir, async (fixture, cleanups) => {
+          // Only the provider stream and delivery receipt are synthetic. The pinned
+          // native process, dynamic-tool RPC, host settlement and binding are real.
+          const pluginConfig = {
+            ...fixture.pluginConfig,
+            appServer: {
+              ...fixture.pluginConfig.appServer,
+              homeScope: "agent",
+            },
+          };
+          await writeNativeConfig(
+            fixture,
+            authBridge.resolveCodexAppServerHomeDir(fixture.agentDir),
+            "openai",
+          );
+          const params = await createRunParams(fixture);
+          usePreparedApiKey(params, fixture.baseUrl);
+          params.sourceReplyDeliveryMode = "message_tool_only";
+          setCodexTestModelSupportsTools(params, true);
+          const messageTool = createRuntimeDynamicTool("message");
+          messageTool.parameters = {
+            type: "object",
+            properties: {
+              action: { type: "string" },
+              message: { type: "string" },
+              final: { type: "boolean" },
+            },
+            additionalProperties: false,
+          };
+          messageTool.execute = vi.fn(async () => ({
+            content: [{ type: "text" as const, text: "Sent." }],
+            details: { messageId: "synthetic-local-receipt" },
+          }));
+          setCodexTestToolFactory(params, () => [messageTool]);
+          const shared = trackSharedClient(cleanups);
+          const runOptions = {
+            pluginConfig,
+            clientFactory: shared.factory,
+            nativeHookRelay: { enabled: false },
+          };
+          let closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+          cleanups.push(async () => closeHost());
+          const initialized = await runCodexAppServerAttempt(
+            { ...params, prompt: "Initialize the source." },
+            runOptions,
+          );
+          expect(initialized.terminal).toEqual({ kind: "ok" });
+          const originalBinding = await readCodexAppServerBinding(params.sessionFile);
+          if (!originalBinding) {
+            throw new Error("Native initialization did not persist its binding");
+          }
+          const client = shared.client();
+          expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
+          const nativeRequests = vi.spyOn(client, "request");
+          const capture = vi.spyOn(settledContext, "captureCodexSettledTurnFinalizationContext");
+          closeHost();
+          vi.useFakeTimers({ toFake: ["Date"] });
+          vi.setSystemTime(Date.now() + 1_000);
+          await expect(
+            appendSessionTranscriptMessageByIdentity({
+              ...transcriptTarget(params),
+              message: {
+                role: "user",
+                content: "The old inventory contains cobalt widgets.",
+                timestamp: Date.now(),
+              },
+            }),
+          ).resolves.toMatchObject({ appended: true });
+          vi.setSystemTime(Date.now() + 1_000);
+          fixture.setMessageDelivery(final);
+          params.runId = "run-native-message";
+          params.prompt = "Send the inventory summary.";
+          closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+          const result = await runCodexAppServerAttempt(params, runOptions);
+          expect(result.terminal).toEqual({ kind: "ok" });
+          expect(result.promptTimeoutOutcome).toBeUndefined();
+          expect(result.codexAppServerFailure).toBeUndefined();
+          expect(messageTool.execute).toHaveBeenCalledOnce();
+          expect(vi.mocked(messageTool.execute).mock.calls[0]?.slice(0, 2)).toEqual([
+            "native-source-reply",
+            expect.objectContaining({ action: "send", message: "Visible inventory reply.", final }),
+          ]);
+          expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+          const messageStart = nativeRequests.mock.calls.findLast(
+            ([method]) => method === "turn/start",
+          );
+          expect(JSON.stringify(messageStart?.[1])).toContain(
+            "The old inventory contains cobalt widgets.",
+          );
+          if (final) {
+            expect(result.settledTurnFinalizationContext).toBeUndefined();
+            expect(capture).not.toHaveBeenCalled();
+            expect(nativeRequests.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(
+              true,
+            );
+          } else {
+            expect(result.settledTurnFinalizationContext).toBeInstanceOf(
+              settledContext.CodexSettledTurnContext,
+            );
+            expect(capture).toHaveBeenCalledOnce();
+          }
+          const binding = await readCodexAppServerBinding(params.sessionFile);
+          expect(binding?.threadId).toBe(originalBinding.threadId);
+          expect(Date.parse(binding?.historyCoveredThrough ?? "")).toBeGreaterThan(
+            Date.parse(originalBinding.historyCoveredThrough!),
+          );
+          closeHost();
+          vi.setSystemTime(Date.now() + 1_000);
+          await expect(
+            appendSessionTranscriptMessageByIdentity({
+              ...transcriptTarget(params),
+              message: {
+                role: "user",
+                content: "Correction: the new inventory contains amber widgets.",
+                timestamp: Date.now(),
+              },
+            }),
+          ).resolves.toMatchObject({ appended: true });
+          vi.setSystemTime(Date.now() + 1_000);
+          fixture.setPhase("health");
+          params.runId = "run-native-resume";
+          params.prompt = "Use the corrected inventory.";
+          closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+          const resumed = await runCodexAppServerAttempt(params, runOptions);
+          expect(resumed.terminal).toEqual({ kind: "ok" });
+          const resumedStart = nativeRequests.mock.calls.findLast(
+            ([method]) => method === "turn/start",
+          );
+          expect(resumedStart?.[1]).toMatchObject({ threadId: originalBinding.threadId });
+          const resumedInput = JSON.stringify(resumedStart?.[1]);
+          expect(resumedInput).toContain("Correction: the new inventory contains amber widgets.");
+          expect(resumedInput).toContain("Use the corrected inventory.");
+          expect(resumedInput).not.toContain("The old inventory contains cobalt widgets.");
+          expect(messageTool.execute).toHaveBeenCalledOnce();
+          expect(
+            nativeRequests.mock.calls.filter(([method]) => method === "thread/start"),
+          ).toHaveLength(0);
+          expect(await readCodexAppServerBinding(params.sessionFile)).toMatchObject({
+            threadId: originalBinding.threadId,
+          });
+          expect(client.getCloseError()).toBeUndefined();
+          vi.useRealTimers();
+        });
+      },
+    );
     it.each(["before completion", "after completion"] as const)(
       "settles a bounded turn when the native process closes %s",
       { timeout: 60_000 },

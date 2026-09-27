@@ -282,8 +282,6 @@ export async function finalizeCodexAttempt(
         // output, so an empty/reasoning-only classification is stale at this point.
         result.agentHarnessResultClassification = undefined;
       }
-      const attemptSucceeded =
-        turnSucceeded && result.agentHarnessResultClassification === undefined;
       result.terminal = attemptTerminal.normalize({
         settlementWarning: state.settlementWarning,
         timedOut: effectiveTimedOut,
@@ -321,7 +319,7 @@ export async function finalizeCodexAttempt(
         promptTimeoutOutcome,
         finalAborted,
         turnSucceeded,
-        attemptSucceeded,
+        attemptSucceeded: turnSucceeded && result.agentHarnessResultClassification === undefined,
         completedTurnStatus,
       };
     };
@@ -466,6 +464,9 @@ export async function finalizeCodexAttempt(
     const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
       mirrorOutcome;
     const shouldCaptureSettledTurnFinalizationContext =
+      !toolBridge.telemetry.messagingToolSentTargets.some(
+        (target) => target.sourceReplyFinal === true,
+      ) &&
       result.assistantTexts.every((text) => !text.trim()) &&
       result.messagesSnapshot.some((message) => message.role === "toolResult") &&
       (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
