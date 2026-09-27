@@ -36,8 +36,7 @@ describe("SQLite integrity child", () => {
         table: `records_${index}`,
         check: index === 0 ? "quick_check" : "integrity_check",
       }));
-      let damagedCellOffset: number | undefined;
-      let pageSize = 0;
+      let fragmentCountOffset: number | undefined;
       try {
         for (const { table } of tables) {
           database.exec(`CREATE TABLE ${table}(value INTEGER); INSERT INTO ${table} VALUES(1)`);
@@ -48,16 +47,16 @@ describe("SQLite integrity child", () => {
             database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = ?").get(table)
               ?.rootpage,
           );
-          pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
-          damagedCellOffset = (root - 1) * pageSize + 8;
+          const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
+          fragmentCountOffset = (root - 1) * pageSize + 7;
         }
       } finally {
         database.close();
       }
-      if (damagedCellOffset !== undefined) {
-        // Point the first leaf cell outside its valid content range: both pragmas report non-ok rows.
+      if (fragmentCountOffset !== undefined) {
+        // Misreport free-byte fragmentation without making the records themselves unreadable.
         const bytes = fs.readFileSync(source);
-        bytes.writeUInt16BE(pageSize - 1, damagedCellOffset);
+        bytes.writeUInt8(1, fragmentCountOffset);
         fs.writeFileSync(source, bytes);
       }
       const timing: SqliteIntegrityCheckTiming = {};
@@ -89,7 +88,9 @@ describe("SQLite integrity child", () => {
       } else {
         await expect(check).rejects.toMatchObject({
           name: "SqliteIntegrityError",
-          message: expect.stringMatching(new RegExp(`${damage} failed[\\s\\S]*out of range`)),
+          message: expect.stringMatching(
+            new RegExp(`${damage} failed[\\s\\S]*Fragmentation of 0 bytes reported as 1`),
+          ),
         });
       }
       expect(fork).toHaveBeenCalledTimes(4);
