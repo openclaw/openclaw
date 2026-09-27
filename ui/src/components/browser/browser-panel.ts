@@ -25,7 +25,7 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import type { BrowserDashboardTarget } from "./browser-client.ts";
+import { browserRequestReferencedTabs, type BrowserDashboardTarget } from "./browser-client.ts";
 import {
   BrowserPanelController,
   type BrowserPanelControllerHost,
@@ -68,6 +68,7 @@ class OpenClawBrowserPanel
   @property({ type: Boolean }) refreshOnPresentation = true;
 
   @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) sessionTabs: BrowserTabTarget[] = [];
   @property({ attribute: false }) preferredTab?: BrowserTabSelection;
   /** A dashboard presents only its owned remote tab; its owner controls removal and restart. */
   @property({ attribute: false }) fixedTab?: BrowserTabTarget;
@@ -75,6 +76,7 @@ class OpenClawBrowserPanel
 
   private activeSessionKey = "";
   private activeDashboardKey: string | undefined;
+  private activeSessionTabsKey: string | undefined;
   private consumedPreferredRevision?: string;
   private lastHostedTabsChangeKey?: string;
   private readonly browserPanelController = new BrowserPanelController(this);
@@ -135,6 +137,12 @@ class OpenClawBrowserPanel
     const presentationChanged =
       this.embedded && (changed.has("embedded") || changed.has("presented"));
     const contextChanged = this.synchronizeBrowserContext();
+    const sessionTabsKey =
+      !this.dashboardTarget && this.sessionKey.trim()
+        ? JSON.stringify(browserRequestReferencedTabs(this.sessionTabs).map(browserTabKey))
+        : undefined;
+    const sessionTabsChanged = this.activeSessionTabsKey !== sessionTabsKey;
+    this.activeSessionTabsKey = sessionTabsKey;
     // Keep preferred metadata for the explicit handler to consume, but let the
     // pending toggle choose its route before any automatic follow or refresh.
     const followedPreferred = this.refreshOnPresentation && this.followPreferredTab();
@@ -148,6 +156,8 @@ class OpenClawBrowserPanel
         !followedPreferred &&
         (contextChanged || presentationChanged || gatewayAvailabilityChanged)
       ) {
+        void this.browserPanelController.refreshAll();
+      } else if (this.refreshOnPresentation && !followedPreferred && sessionTabsChanged) {
         void this.browserPanelController.refreshAll();
       }
     } else if (gatewayAvailabilityChanged) {

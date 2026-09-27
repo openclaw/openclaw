@@ -76,7 +76,7 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "diagnostics.heapProfile accepts only positive integer durationMs and samplingIntervalBytes",
+          "diagnostics.heapProfile accepts only positive integer durationMs and samplingIntervalBytes, and boolean includeObjectsCollectedByMajorGC and includeObjectsCollectedByMinorGC",
         ),
       );
       return;

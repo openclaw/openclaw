@@ -566,7 +566,7 @@ describe("native app i18n inventory", () => {
         "Don't show this again",
         "Use Manual Gateway",
         "Session target",
-        'OpenClaw needs ${labels.joinToString(", ")} permissions to continue.',
+        'OpenClaw uses ${labels.joinToString(", ")} permissions for features that need this access.',
         "Some channel status checks did not complete.",
         "Use the credential for this destination. Leave both fields empty only if this route already has device pairing or does not require a shared credential. Changing the destination clears this form's saved credentials.",
         "Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway's shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client.",

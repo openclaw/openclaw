@@ -21,6 +21,7 @@ The official Android app is available on [Google Play](https://play.google.com/s
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 - Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability.
 - The sidebar marks sessions waiting for an answer or approval, including inactive sessions and collapsed groups. Tap the attention icon, hover over it, or focus it with a keyboard to read the oldest pending request and the count of additional requests of the same kind. The indicator clears when requests resolve, are canceled, or expire. Question previews never include answer drafts.
+- The sidebar and recent Threads view keep cron sessions and system-created probes out of ordinary chat lists, without changing saved pins. The selected conversation stays reachable; named work and human-created background conversations remain visible. Open **Threads → Automations** to find and reopen automation and system conversations, including previously pinned chats. This is a view filter, not a saved setting. **Settings → Automations** still shows scheduled jobs and their recent run summaries. Other sessions without creation metadata remain visible rather than being classified from their titles.
 - **Settings → OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 
 Its reply field switches to masked input for secret prompts. Tap it again if a prompt change closes the keyboard. Android sends sensitive replies without trimming them and clears unsent drafts when you leave this page or background the app.
@@ -432,15 +433,15 @@ The draft has its own full-width row above the attachment and voice/send control
 so larger text and narrow screens do not squeeze it between buttons. The empty
 hint stays on one line; drafts show up to six lines and scroll when space is limited.
 The composer has narrower side gutters than the transcript. **+**, model, and
-reasoning stay together on the left; the context ring, microphone, and Talk/send
+reasoning stay together on the left; the microphone and Talk/send
 stay on the right in one row. Controls remain 48dp tall; very short views use
 narrower icon buttons to make room for **Details** while retaining an editable line.
 The placeholder and typed text share the same alignment.
 
 Open **+** for a compact icon list with Camera, Gallery, Files, Location, and
-Permissions. The Permissions row shows the current access mode. The
-context ring remains directly accessible on narrow screens and opens context
-usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
+Permissions. The Permissions row shows the current access mode. Open the top-right
+**Chat actions** (⋮) menu to see the live Context usage ring. Choose **Context** to
+open context usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
 permission to change session settings. A reported model-call total remains visible
 when no cost breakdown is available. Missing usage is shown as unknown.
 Tap the model name to open a compact menu above the composer, search by model name,

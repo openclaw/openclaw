@@ -15,7 +15,13 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import {
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { agentWaitHandler } from "../../server-methods/agent-wait.js";
 import { createLazyCoreHandlers } from "../../server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandler, RespondFn } from "../../server-methods/types.js";
 import {
@@ -492,5 +498,35 @@ describe("authenticated Gateway RPC diagnostics", () => {
     await waitForDiagnosticEventsDrained();
     expect(new Set(events.map((event) => event.method))).toEqual(new Set(["unknown", "other"]));
     expect(JSON.stringify(events)).not.toContain("private-");
+  });
+});
+
+describe("Gateway observation response ordering", () => {
+  afterEach(() => resetGatewayWorkAdmission());
+  it("does not send a second response when shutdown follows a completed observation", async () => {
+    const fixture = createDispatchTestHarness({
+      extraHandlers: { "agent.wait": agentWaitHandler },
+      buildRequestContext: () => ({
+        dedupe: new Map(),
+        chatAbortControllers: new Map(),
+        chatQueuedTurns: new Map(),
+        getRuntimeConfig: () => ({}),
+      }),
+    });
+    const shutdown = fixture.awaitResponseFrame("completed").then(() => {
+      markGatewayRestartDraining("stop (SIGTERM)");
+    });
+    await fixture.dispatcher.dispatch(
+      {
+        type: "req",
+        id: "completed",
+        method: "agent.wait",
+        params: { runId: "missing-completed", timeoutMs: 0 },
+      },
+      createOperatorWsClient(),
+    );
+    await shutdown;
+    expect(fixture.send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ok: true }));
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 });

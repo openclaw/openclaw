@@ -285,6 +285,8 @@ If an isolated automation run returns only the silent token (`NO_REPLY` or `no_r
 
 Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`. Genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
 
+Successful executions with an unconfirmed delivery outcome show `delivery unknown`, including webhook requests that time out before receiving response headers. This label applies to both required and best-effort delivery; it does not claim delivery failed. JSON execution status remains `ok`.
+
 ### Structured denials
 
 Isolated automation runs use structured execution-denial metadata from the embedded run (fatal exec-tool errors coded `SYSTEM_RUN_DENIED` or `INVALID_REQUEST`) as the authoritative denial signal. They also honor node-host `UNAVAILABLE` wrappers around a nested structured error carrying one of those codes.

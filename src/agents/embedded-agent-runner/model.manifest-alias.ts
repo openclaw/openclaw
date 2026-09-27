@@ -102,23 +102,6 @@ export type ManifestModelCatalogProviderAliasMetadata = {
   readonly transport?: ManifestModelCatalogProviderTransport;
 };
 
-type ManifestModelCatalogProviderAliasClaim = {
-  readonly incompleteTransport: boolean;
-  readonly targetProvider: string;
-  readonly retainsTransportAlias: boolean;
-  readonly transport: ManifestModelCatalogProviderTransport;
-};
-
-type ManifestModelCatalogProviderAliasResolution =
-  | { readonly kind: "none" }
-  | { readonly kind: "conflict" }
-  | { readonly kind: "incomplete-transport" }
-  | { readonly kind: "canonical"; readonly provider: string }
-  | {
-      readonly kind: "transport";
-      readonly transport: ManifestModelCatalogProviderTransport;
-    };
-
 function listEligibleManifestModelCatalogAliasPlugins(params: {
   cfg?: OpenClawConfig;
   plugins: readonly ManifestModelCatalogAliasPlugin[];
@@ -171,12 +154,12 @@ function resolveManifestModelCatalogProviderAlias(params: {
   modelId?: string;
   cfg?: OpenClawConfig;
   plugins: readonly ManifestModelCatalogAliasPlugin[];
-}): ManifestModelCatalogProviderAliasResolution {
+}): ManifestModelCatalogProviderAliasMetadata {
   const provider = normalizeProviderId(params.provider);
   if (!provider) {
-    return { kind: "none" };
+    return { provider: params.provider };
   }
-  const claims: ManifestModelCatalogProviderAliasClaim[] = [];
+  const claims: ManifestModelCatalogProviderAliasMetadata[] = [];
   const plugins = listEligibleManifestModelCatalogAliasPlugins({
     cfg: params.cfg,
     plugins: params.plugins,
@@ -220,46 +203,26 @@ function resolveManifestModelCatalogProviderAlias(params: {
           modelId: params.modelId,
         });
       const hasTransportOverride = Boolean(alias.api?.trim() || alias.baseUrl?.trim());
-      const retainsTransportAlias =
-        hasTransportOverride &&
-        hasEndpointSurface &&
-        Boolean(transportApi) &&
-        !hasApplicableSuppression;
-      const baseUrl = alias.baseUrl?.trim();
-      claims.push({
+      if (hasTransportOverride && hasEndpointSurface && !hasApplicableSuppression) {
         // A retained endpoint needs an explicit wire adapter. Otherwise the generic
         // model fallback would silently choose OpenAI Responses for another provider.
-        incompleteTransport:
-          hasTransportOverride && hasEndpointSurface && !transportApi && !hasApplicableSuppression,
-        targetProvider: normalizedTarget,
-        retainsTransportAlias,
-        transport: {
-          ...(transportApi ? { api: transportApi } : {}),
-          ...(baseUrl ? { baseUrl } : {}),
-        },
-      });
+        const baseUrl = alias.baseUrl?.trim();
+        claims.push(
+          transportApi
+            ? {
+                provider: params.provider,
+                transport: { api: transportApi, ...(baseUrl ? { baseUrl } : {}) },
+              }
+            : { provider: params.provider, ambiguous: true },
+        );
+      } else {
+        claims.push({ provider: normalizedTarget });
+      }
     }
   }
-  const claim = claims[0];
-  if (!claim) {
-    return { kind: "none" };
-  }
-  if (claims.length > 1) {
-    return { kind: "conflict" };
-  }
-  if (claim.incompleteTransport) {
-    return { kind: "incomplete-transport" };
-  }
-  if (claim.retainsTransportAlias) {
-    return {
-      kind: "transport",
-      transport: claim.transport,
-    };
-  }
-  return {
-    kind: "canonical",
-    provider: claim.targetProvider,
-  };
+  return claims.length > 1
+    ? { provider: params.provider, ambiguous: true }
+    : (claims[0] ?? { provider: params.provider });
 }
 
 export function resolveManifestModelCatalogProviderAliasMetadata(params: {
@@ -292,25 +255,10 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
       workspaceDir: params.workspaceDir,
       env,
     }).plugins;
-  const resolved = resolveManifestModelCatalogProviderAlias({
-    provider,
+  return resolveManifestModelCatalogProviderAlias({
+    provider: params.provider,
     modelId: params.modelId,
     cfg: params.cfg,
     plugins,
   });
-  switch (resolved.kind) {
-    case "canonical":
-      return { provider: resolved.provider };
-    case "transport":
-      return { provider: params.provider, transport: resolved.transport };
-    case "conflict":
-    case "incomplete-transport":
-      return { provider: params.provider, ambiguous: true };
-    case "none":
-      return { provider: params.provider };
-    default: {
-      const exhaustive: never = resolved;
-      return exhaustive;
-    }
-  }
 }

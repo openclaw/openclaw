@@ -38,10 +38,9 @@ struct GatewayLaunchAgentManagerTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let executable = root.appendingPathComponent("node_modules/.bin/openclaw")
         try makeExecutableForTests(at: executable)
-        let command = await CommandResolver.openclawCommand(
+        let command = await CommandResolver.localOpenclawCommand(
             subcommand: "gateway",
             extraArgs: ["status", "--json"],
-            configRoot: ["gateway": ["mode": "local"]],
             projectRoot: root,
             profile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]))
 

@@ -6637,6 +6637,7 @@ class ChatController internal constructor(
       if (obj["label"] is JsonNull) add("label")
       if (obj["autoLabel"] is JsonNull) add("autoLabel")
       if (obj["displayName"] is JsonNull) add("displayName")
+      if (obj["subject"] is JsonNull) add("subject")
       if (obj["category"] is JsonNull) add("category")
     }
 
@@ -7578,6 +7579,9 @@ class ChatController internal constructor(
       sessionId = obj.nonBlankString("sessionId"),
       updatedAtMs = obj["updatedAt"].asLongOrNull(),
       ownerAgentId = obj.nonBlankString("agentId"),
+      createdActorType = obj["createdActor"].asObjectOrNull()?.nonBlankString("type"),
+      createdVia = obj.nonBlankString("createdVia"),
+      subject = obj["subject"].asStringOrNull()?.trim(),
       classification = obj.nonBlankString("classification"),
       accountId = obj.nonBlankString("accountId"),
       peerKind = obj.nonBlankString("peerKind"),
@@ -7939,6 +7943,7 @@ class ChatController internal constructor(
           label = if ("label" in clearedFields) null else applied.label,
           autoLabel = if ("autoLabel" in clearedFields) null else applied.autoLabel,
           displayName = if ("displayName" in clearedFields) null else applied.displayName,
+          subject = if ("subject" in clearedFields) null else applied.subject,
           category = if ("category" in clearedFields) null else applied.category,
         )
     }
@@ -8916,6 +8921,9 @@ internal fun mergeChatSessionEntry(
     sessionId = next.sessionId ?: existing.sessionId,
     updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
     ownerAgentId = next.ownerAgentId ?: existing.ownerAgentId,
+    createdActorType = next.createdActorType ?: existing.createdActorType,
+    createdVia = next.createdVia ?: existing.createdVia,
+    subject = next.subject ?: existing.subject,
     classification = if (next.hasClassificationMetadata) next.classification else existing.classification,
     accountId = if (next.hasClassificationMetadata) next.accountId else existing.accountId,
     peerKind = if (next.hasClassificationMetadata) next.peerKind else existing.peerKind,

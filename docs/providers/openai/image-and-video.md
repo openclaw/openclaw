@@ -1,11 +1,10 @@
 ---
-summary: "Generate and edit images with gpt-image, and generate video with Sora"
+summary: "Generate and edit images with OpenAI gpt-image"
 read_when:
   - You are generating or editing images through the openai provider
   - You need transparent-background image output
-  - You are generating video with the video_generate tool
-title: "OpenAI image and video generation"
-sidebarTitle: "Image and video"
+title: "OpenAI image generation"
+sidebarTitle: "Image generation"
 ---
 
 ## Image generation
@@ -152,42 +151,4 @@ Edit:
 /tool image_generate model=openai/gpt-image-2 prompt="Preserve the object shape, change the material to translucent glass" image=/path/to/reference.png size=1024x1536
 ```
 
-## Video generation
-
-The bundled `openai` plugin registers video generation through the
-`video_generate` tool.
-
-| Capability       | Value                                                                              |
-| ---------------- | ---------------------------------------------------------------------------------- |
-| Default model    | `openai/sora-2`                                                                    |
-| Modes            | Text-to-video, image-to-video, single-video edit                                   |
-| Reference inputs | 1 image or 1 video                                                                 |
-| Size overrides   | Supported for text-to-video and image-to-video                                     |
-| Aspect ratio     | Converted to the closest supported size, not forwarded raw                         |
-| Other overrides  | `resolution`, `audio`, `watermark` are unsupported and dropped with a tool warning |
-
-OpenAI image-to-video requests use `POST /v1/videos` with an image
-`input_reference`. Single-video edits use `POST /v1/videos/edits` with the
-uploaded video in the `video` field.
-
-```json5
-{
-  agents: {
-    defaults: {
-      mediaModels: { video: { primary: "openai/sora-2" } },
-    },
-  },
-}
-```
-
-<Note>
-See [Video Generation](/tools/video-generation) for shared tool parameters,
-provider selection, and failover behavior.
-
-The OpenAI provider declares `supportsSize` but not `supportsAspectRatio` or
-`supportsResolution`. OpenClaw's shared normalization layer converts a
-requested `aspectRatio` into the closest matching OpenAI `size` before the
-request reaches the provider, so aspect-ratio requests generally still work.
-`resolution` has no size fallback and is dropped, surfaced to the caller as
-`Ignored unsupported overrides for openai/<model>: resolution=<value>`.
-</Note>
+OpenAI retired its Sora video API on 2026-09-24; see [Video generation](/tools/video-generation) for supported providers.
