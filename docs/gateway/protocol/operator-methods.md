@@ -52,6 +52,8 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
     `source="channel"`, or `source="mcp"`.
 - `tools.invoke` (`operator.write`) invokes one available tool through the
   same gateway policy path as `/tools/invoke`.
+  - Configured MCP tools require an already-warm, current catalog for the
+    target session. This method does not discover MCP servers on demand.
   - `name` is required. `args`, `sessionKey`, `agentId`, `confirm`, and
     `idempotencyKey` are optional.
   - If both `sessionKey` and `agentId` are present, the resolved session agent

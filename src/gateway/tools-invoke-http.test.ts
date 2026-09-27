@@ -12,6 +12,7 @@ import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
@@ -37,6 +38,12 @@ const hookMocks = vi.hoisted(() => ({
 }));
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+const mcpMocks = vi.hoisted(() => ({
+  peekSessionMcpRuntime: vi.fn(),
+  resolveSessionMcpConfigSummary: vi.fn(),
+  buildBundleMcpToolsFromCatalog: vi.fn(),
+  materializeBundleMcpToolsForRun: vi.fn(),
+}));
 
 let cfg: Record<string, unknown> = {};
 let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
@@ -93,6 +100,11 @@ vi.mock("./auth.js", () => ({
 
 vi.mock("../logger.js", () => ({
   logWarn: () => {},
+}));
+
+vi.mock("../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-bundle-mcp-tools.js")>()),
+  ...mcpMocks,
 }));
 
 vi.mock("../plugins/config-state.js", async (importOriginal) => {
@@ -277,6 +289,10 @@ beforeEach(() => {
   server.resetContext();
   lastCreateOpenClawToolsContext = undefined;
   sessionEntries.clear();
+  mcpMocks.peekSessionMcpRuntime.mockReset();
+  mcpMocks.resolveSessionMcpConfigSummary.mockReset();
+  mcpMocks.buildBundleMcpToolsFromCatalog.mockReset();
+  mcpMocks.materializeBundleMcpToolsForRun.mockReset();
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
@@ -470,6 +486,104 @@ const setMainAllowedTools = (params: {
 };
 
 describe("POST /tools/invoke", () => {
+  it("invokes a warm managed MCP tool through Gateway policy and hooks", async () => {
+    const name = "icecouncil__icecouncil_status";
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "contained" }],
+    }));
+    const dispose = vi.fn(async () => {});
+    const mcpTool = {
+      name,
+      label: name,
+      description: "Read containment status",
+      parameters: Type.Object({}),
+      execute,
+    };
+    setPluginToolMeta(mcpTool, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "icecouncil",
+        safeServerName: "icecouncil",
+        toolName: "icecouncil_status",
+        operation: "tool",
+      },
+    });
+    setMainAllowedTools({ allow: [name] });
+    sessionEntries.set("agent:main:main", { sessionId: "warm-session" });
+    mcpMocks.peekSessionMcpRuntime.mockReturnValue({
+      configFingerprint: "current",
+      workspaceDir: "/tmp/workspace",
+      peekCatalog: () => ({ tools: [], servers: {} }),
+    });
+    mcpMocks.resolveSessionMcpConfigSummary.mockReturnValue({ fingerprint: "current" });
+    mcpMocks.buildBundleMcpToolsFromCatalog.mockReturnValue([mcpTool]);
+    mcpMocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [mcpTool], dispose });
+
+    const res = await invokeToolAuthed({ tool: name, sessionKey: "main" });
+
+    expect(res.status).toBe(200);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(firstHookCallArg().toolName).toBe(name);
+  });
+
+  it("keeps stale and policy-denied managed MCP tools unavailable", async () => {
+    const name = "icecouncil__icecouncil_status";
+    const mcpTool = {
+      name,
+      label: name,
+      description: "Read containment status",
+      parameters: Type.Object({}),
+      execute: vi.fn(async () => ({ content: [{ type: "text" as const, text: "contained" }] })),
+    };
+    setPluginToolMeta(mcpTool, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "icecouncil",
+        safeServerName: "icecouncil",
+        toolName: "icecouncil_status",
+        operation: "tool",
+      },
+    });
+    sessionEntries.set("agent:main:main", { sessionId: "warm-session" });
+    mcpMocks.peekSessionMcpRuntime.mockReturnValue({
+      configFingerprint: "old",
+      workspaceDir: "/tmp/workspace",
+      peekCatalog: () => ({ tools: [], servers: {} }),
+    });
+    mcpMocks.resolveSessionMcpConfigSummary.mockReturnValue({ fingerprint: "current" });
+    mcpMocks.buildBundleMcpToolsFromCatalog.mockReturnValue([mcpTool]);
+    mcpMocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [mcpTool],
+      dispose: vi.fn(async () => {}),
+    });
+    setMainAllowedTools({ allow: [name] });
+    expect((await invokeToolAuthed({ tool: name, sessionKey: "main" })).status).toBe(404);
+    expect(mcpMocks.materializeBundleMcpToolsForRun).not.toHaveBeenCalled();
+
+    mcpMocks.peekSessionMcpRuntime.mockReturnValue({
+      configFingerprint: "current",
+      workspaceDir: "/tmp/workspace",
+      peekCatalog: () => ({ tools: [], servers: {} }),
+    });
+    setMainAllowedTools({ allow: [name], gatewayDeny: [name] });
+    expect((await invokeToolAuthed({ tool: name, sessionKey: "main" })).status).toBe(404);
+    expect(mcpTool.execute).not.toHaveBeenCalled();
+    expect(mcpMocks.materializeBundleMcpToolsForRun).not.toHaveBeenCalled();
+
+    setMainAllowedTools({ allow: [name] });
+    mcpMocks.peekSessionMcpRuntime.mockReturnValue({
+      configFingerprint: "current",
+      workspaceDir: "/tmp/workspace",
+      peekCatalog: () => ({ tools: [], servers: {} }),
+      isRequesterScopedServer: () => true,
+    });
+    expect((await invokeToolAuthed({ tool: name, sessionKey: "main" })).status).toBe(404);
+    expect(mcpMocks.materializeBundleMcpToolsForRun).not.toHaveBeenCalled();
+  });
+
   it("blocks an operator-triggered session spawn targeting an agent outside the role", async () => {
     await withOpenClawTestState({ label: "tools-invoke-operator-role" }, async () => {
       const profile = ensureProfileForEmail("operator@example.test");

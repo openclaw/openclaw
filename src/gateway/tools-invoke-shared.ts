@@ -4,6 +4,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildBundleMcpToolsFromCatalog,
+  materializeBundleMcpToolsForRun,
+  peekSessionMcpRuntime,
+  resolveSessionMcpConfigSummary,
+} from "../agents/agent-bundle-mcp-tools.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
@@ -318,7 +324,7 @@ async function invokeGatewayToolWithSignal(
   ) {
     return failure(400, "invalid_request", AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
   }
-  const resolveTools = (disablePluginTools: boolean) =>
+  const resolveTools = (disablePluginTools: boolean, additionalTools?: readonly AnyAgentTool[]) =>
     resolveGatewayScopedTools({
       cfg: params.cfg,
       sessionKey,
@@ -337,11 +343,12 @@ async function invokeGatewayToolWithSignal(
       assertInvocationCurrent,
       disablePluginTools,
       gatewayRequestedTools,
+      additionalTools,
     });
 
-  let { agentId, tools, workspaceDir } = resolveTools(knownCoreTool);
+  let { agentId, tools, workspaceDir, mcpConfigToolDenylist } = resolveTools(knownCoreTool);
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
-    ({ agentId, tools, workspaceDir } = resolveTools(false));
+    ({ agentId, tools, workspaceDir, mcpConfigToolDenylist } = resolveTools(false));
   }
   const requestedAgentId = normalizeOptionalString(params.input.agentId);
   if (requestedAgentId && agentId && requestedAgentId !== agentId) {
@@ -351,12 +358,62 @@ async function invokeGatewayToolWithSignal(
       `agent id "${requestedAgentId}" does not match session agent "${agentId}"`,
     );
   }
-  const tool = tools.find((candidate) => candidate.name === toolName);
-  if (!tool) {
-    return failure(404, "not_found", `Tool not available: ${toolName}`);
-  }
-
+  let tool = tools.find((candidate) => candidate.name === toolName);
+  let mcpTools: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
   try {
+    if (!tool && sessionEntry?.sessionId) {
+      // A standalone caller may invoke an already-discovered session tool,
+      // but guessing a name must never open a new MCP transport or borrow a
+      // requester-scoped credential without an authenticated sender identity.
+      const runtime = peekSessionMcpRuntime({ sessionId: sessionEntry.sessionId, sessionKey });
+      const catalog = runtime?.peekCatalog();
+      if (runtime && catalog) {
+        const summary = resolveSessionMcpConfigSummary({
+          cfg: params.cfg,
+          workspaceDir: runtime.workspaceDir,
+          toolOverrides: sessionEntry.toolOverrides,
+          toolDenylist: mcpConfigToolDenylist,
+        });
+        if (runtime.configFingerprint === summary.fingerprint) {
+          const reservedToolNames = tools.map((candidate) => candidate.name);
+          const candidate = buildBundleMcpToolsFromCatalog({
+            catalog,
+            reservedToolNames,
+          }).find((entry) => entry.name === toolName);
+          const mcp = candidate && getPluginToolMeta(candidate)?.mcp;
+          const serverName = mcp?.operation === "tool" ? mcp.serverName : undefined;
+          if (
+            candidate &&
+            mcp &&
+            serverName &&
+            runtime.isRequesterScopedServer?.(serverName) !== true &&
+            resolveTools(false, [candidate]).tools.some((entry) => entry.name === toolName)
+          ) {
+            mcpTools = await materializeBundleMcpToolsForRun({
+              runtime,
+              agentId,
+              reservedToolNames,
+            });
+            ({ agentId, tools, workspaceDir, mcpConfigToolDenylist } = resolveTools(
+              false,
+              mcpTools.tools,
+            ));
+            tool = tools.find((entry) => entry.name === toolName);
+            const selectedMcp = tool && getPluginToolMeta(tool)?.mcp;
+            if (
+              selectedMcp?.operation !== "tool" ||
+              selectedMcp.serverName !== mcp.serverName ||
+              selectedMcp.toolName !== mcp.toolName
+            ) {
+              tool = undefined;
+            }
+          }
+        }
+      }
+    }
+    if (!tool) {
+      return failure(404, "not_found", `Tool not available: ${toolName}`);
+    }
     const idempotencyKey = normalizeOptionalString(params.input.idempotencyKey);
     const toolCallId = idempotencyKey
       ? `${params.toolCallIdPrefix}-${conversationReadOrigin}-${idempotencyKey}`
@@ -418,6 +475,12 @@ async function invokeGatewayToolWithSignal(
       logWarn(`tools-invoke: tool execution failed: ${String(err)}`);
     }
     return failure(500, "tool_error", "tool execution failed");
+  } finally {
+    try {
+      await mcpTools?.dispose();
+    } catch {
+      logWarn("tools-invoke: MCP cleanup failed");
+    }
   }
 }
 
