@@ -59,22 +59,15 @@ describe("Skill Workshop review outcome", () => {
     }
   });
 
-  it("routes a provider-level context overflow through the bounded-context skip type", () => {
-    try {
+  it("keeps a provider-level context overflow a failed review instead of a skip", () => {
+    expect(() =>
       assertSkillReviewRunSucceeded({
         meta: {
           durationMs: 1,
           error: { kind: "context_overflow", message: "provider rejected oversized prompt" },
         },
-      });
-      throw new Error("expected bounded-context review error");
-    } catch (error) {
-      expect(error).toBeInstanceOf(SkillReviewOversizedContextError);
-      expect(error).not.toBeInstanceOf(SkillReviewOversizedRequestError);
-      expect((error as SkillReviewOversizedContextError).limitReason).toBe(
-        "provider rejected oversized prompt",
-      );
-    }
+      }),
+    ).toThrow("provider rejected oversized prompt");
   });
 
   it("carries bounded-context extraction overflows with a distinct type", () => {

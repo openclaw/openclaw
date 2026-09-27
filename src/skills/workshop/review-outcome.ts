@@ -40,9 +40,8 @@ export function assertSkillReviewRunSucceeded(
   if (parsedOverflow) {
     throw new SkillReviewOversizedRequestError(parsedOverflow);
   }
-  if (terminalError?.kind === "context_overflow") {
-    throw new SkillReviewOversizedContextError(terminalError.message);
-  }
+  // A provider context overflow after dispatch means the review ran and its
+  // tools may have settled; it stays a failed review, never a pre-dispatch skip.
   const message =
     result.meta.error?.message.trim() ||
     result.meta.failureSignal?.message.trim() ||

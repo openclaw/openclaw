@@ -9,6 +9,7 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -70,6 +71,59 @@ describe("skill curator usage tracking", () => {
       review,
     ]);
     expect(readSkillCuratorReviewStatus().experienceReviews).toEqual({});
+  });
+
+  it("preserves pre-fix curator outcomes when recording a skipped review", async () => {
+    const store = { env: testState.env };
+    writeConfigMachineState(
+      "skills.curatorState",
+      {
+        lastAttemptAtMs: 10_000,
+        lastSuccessAtMs: 10_000,
+        lastError: null,
+        lastResult: {
+          collectionReviews: {},
+          experienceReviews: {
+            "legacy-completed": { attemptedAtMs: 9_000, outcome: "completed" },
+            "legacy-proposed": {
+              attemptedAtMs: 9_500,
+              outcome: "proposed",
+              proposalId: "prop-42",
+            },
+          },
+        },
+      },
+      store,
+    );
+
+    expect(readSkillCuratorReviewStatus(store).experienceReviews).toMatchObject({
+      "legacy-completed": { attemptedAtMs: 9_000, outcome: "completed" },
+      "legacy-proposed": {
+        attemptedAtMs: 9_500,
+        outcome: "proposed",
+        proposalId: "prop-42",
+      },
+    });
+
+    await recordSkillExperienceReviewOutcome(
+      "main",
+      testState.path("workspace-oversized"),
+      {
+        attemptedAtMs: 11_000,
+        outcome: "skipped",
+        error: "oversized-request: budget exceeded",
+      },
+      store,
+    );
+
+    const reviews = readSkillCuratorReviewStatus(store).experienceReviews;
+    expect(reviews["legacy-completed"]).toMatchObject({ outcome: "completed" });
+    expect(reviews["legacy-proposed"]).toMatchObject({ outcome: "proposed" });
+    expect(Object.values(reviews)).toContainEqual({
+      attemptedAtMs: 11_000,
+      outcome: "skipped",
+      error: "oversized-request: budget exceeded",
+    });
   });
 
   it("settles accepted trusted usage and reads live status without caller SQL", async () => {

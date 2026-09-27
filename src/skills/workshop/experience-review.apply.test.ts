@@ -849,7 +849,7 @@ describe("experience review maintenance", () => {
         limits: {
           maxBytes: 16 * 1024 * 1024,
           maxEvents: 10_000,
-          toolResultOverflow: "omit",
+          overflow: "reject",
         },
       }),
     );
@@ -893,6 +893,36 @@ describe("experience review maintenance", () => {
     expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
       outcome: "failed",
       error: "oversized-request: estimatedPromptTokens=85000 promptBudgetBeforeReserve=32000",
+    });
+  });
+
+  it("records a provider context overflow after dispatch as a failed review", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-overflow-dispatched-");
+    const config = {
+      skills: {
+        workshop: {
+          autonomous: {
+            mode: "auto" as const,
+            overflowPolicy: "skip" as const,
+          },
+        },
+      },
+    };
+    runEmbeddedAgent.mockResolvedValue({
+      meta: {
+        durationMs: 5,
+        error: { kind: "context_overflow", message: "provider rejected oversized prompt" },
+      },
+    });
+
+    await expect(
+      runSkillExperienceReview(
+        reviewFixture(workspaceDir, config, { sessionKey: "agent:main:overflow-dispatched" }),
+      ),
+    ).rejects.toThrow("provider rejected oversized prompt");
+    expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
+      outcome: "failed",
+      error: expect.stringContaining("provider rejected oversized prompt"),
     });
   });
 

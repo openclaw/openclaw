@@ -170,7 +170,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     const contextLimits: SessionModelContextLimits = {
       maxBytes: workshopCfg.autonomous.maxReviewContextBytes ?? 32 * 1024 * 1024,
       maxEvents: 10_000,
-      toolResultOverflow: "omit",
+      overflow: "reject",
     };
     let sessionManager: Awaited<ReturnType<typeof SessionManager.openModelContextAsync>>;
     try {

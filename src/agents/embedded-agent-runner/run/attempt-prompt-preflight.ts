@@ -25,7 +25,7 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 
 /** Review-owned precheck overflow. Carries the measured numbers so the curator
  * record can name the cause instead of a generic provider failure. */
-export function reviewPreflightOverflowError(snapshot: PreflightRecoveryBudgetSnapshot): Error {
+function reviewPreflightOverflowError(snapshot: PreflightRecoveryBudgetSnapshot): Error {
   return new Error(
     formatReviewPreflightOverflowMessage({
       estimatedPromptTokens: snapshot.estimatedPromptTokens,

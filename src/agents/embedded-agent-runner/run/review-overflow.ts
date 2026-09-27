@@ -6,7 +6,7 @@
  * formatting and parsing must live in one module and cannot drift apart.
  */
 
-export const OVERSIZED_REVIEW_PROMPT_RE =
+const OVERSIZED_REVIEW_PROMPT_RE =
   /^Skill experience review prompt exceeds effective budget: estimatedPromptTokens=(\d+) promptBudgetBeforeReserve=(\d+)$/;
 
 export type ReviewPreflightOverflow = {
