@@ -16,7 +16,11 @@ import {
   type StoredComposerSession,
 } from "./outbox-store-codec.ts";
 import { observeDraftRevision, rememberDraftRevision } from "./outbox-store-draft-state.ts";
-import { storedChatOutboxScopeKey, UNRESOLVED_GLOBAL_AGENT_SCOPE } from "./outbox-store-scope.ts";
+import {
+  storedChatOutboxScopeKey,
+  UNRESOLVED_GLOBAL_AGENT_SCOPE,
+  type StoredChatOutboxScope,
+} from "./outbox-store-scope.ts";
 
 export { storedChatOutboxScopeKey } from "./outbox-store-scope.ts";
 
@@ -44,11 +48,6 @@ type ComposerStorageTarget = {
   blobKey: string;
   gatewayOwner: string;
   legacyOwnerIsUnambiguous: boolean;
-};
-
-export type StoredChatOutboxScope = {
-  sessionKey: string;
-  agentId?: string;
 };
 
 export type StoredComposerState = {

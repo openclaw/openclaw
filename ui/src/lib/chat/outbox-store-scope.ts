@@ -3,7 +3,11 @@ import {
   DEFAULT_MAIN_KEY,
   parseAgentSessionKey,
 } from "../sessions/session-key.ts";
-import type { StoredChatOutboxScope } from "./outbox-store.ts";
+
+export type StoredChatOutboxScope = {
+  sessionKey: string;
+  agentId?: string;
+};
 
 export const UNRESOLVED_GLOBAL_AGENT_SCOPE = "@unresolved";
 

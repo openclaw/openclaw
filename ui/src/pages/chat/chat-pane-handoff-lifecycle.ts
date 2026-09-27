@@ -1,6 +1,22 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import type {
+  ChatAttachment,
+  ChatComposerMemoryFallback,
+  ChatGoalDraftMode,
+  ChatReplyTarget,
+  HumanMention,
+} from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import type { PaneSessionHandoff } from "./chat-pane-shared.ts";
+
+export type PaneSessionHandoff = {
+  goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
+  attachments: ChatAttachment[];
+  composerFallbacks?: Record<string, ChatComposerMemoryFallback>;
+  draft: string;
+  mentions?: readonly HumanMention[];
+  send?: boolean;
+};
 
 export type PendingPaneSessionHandoff = {
   value: PaneSessionHandoff;

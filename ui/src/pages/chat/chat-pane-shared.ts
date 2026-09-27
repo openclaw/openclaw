@@ -5,31 +5,17 @@ import { capturePlacementStartupConnection } from "../../app/session-placement-s
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
-import type {
-  ChatAttachment,
-  ChatGoalDraftMode,
-  ChatReplyTarget,
-  HumanMention,
-} from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
   PANE_SESSION_HANDOFF_TTL_MS,
   paneSessionHandoffs,
   removePaneSessionHandoffs,
+  type PaneSessionHandoff,
   type PendingPaneSessionHandoff,
 } from "./chat-pane-handoff-lifecycle.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type PaneSessionChangeOptions = { replace?: boolean };
-export type PaneSessionHandoff = {
-  goalMode?: ChatGoalDraftMode;
-  replyTarget?: ChatReplyTarget;
-  attachments: ChatAttachment[];
-  composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
-  draft: string;
-  mentions?: readonly HumanMention[];
-  send?: boolean;
-};
 const PANE_SESSION_HANDOFF_LIMIT = 4;
 
 function paneHandoffs(
