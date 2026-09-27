@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMessageReceiptFromOutboundResults } from "../src/channels/message/receipt.js";
+import type { ChannelPlugin } from "../src/channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { buildForwardedSystemAgentPendingPayload } from "../src/infra/exec-approval-forwarder.messages.js";
 import { deliverOutboundPayloadsCore } from "../src/infra/outbound/deliver-core.js";
@@ -12,6 +13,7 @@ import {
   rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "../src/plugins/runtime.js";
+import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 
 beforeEach(() => vi.resetModules());
@@ -51,7 +53,10 @@ describe("Signal forwarded system-agent approvals", () => {
           }),
         },
       });
-      const { signalPlugin } = await import("../extensions/signal/channel-plugin-api.js");
+      const { signalPlugin } = await loadBundledPluginFacade<{ signalPlugin: ChannelPlugin }>({
+        pluginId: "signal",
+        artifactBasename: "channel-plugin-api.js",
+      });
       const { setSignalRuntime } = await import("../extensions/signal/runtime-api.js");
       setSignalRuntime(runtime);
       stageActivePluginRegistry(
