@@ -1,5 +1,6 @@
 .content:has(openclaw-logs-page) {
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .content:has(openclaw-logs-page) > openclaw-router-outlet {
@@ -19,9 +20,15 @@ openclaw-logs-page {
   flex: 0 0 auto;
 }
 
+/* Let controls and a readable stream overflow the Logs viewport together. */
+openclaw-logs-page .settings-workspace--fill-height,
+openclaw-logs-page .settings-workspace--fill-height > .settings-workspace__body {
+  min-height: min-content;
+}
+
 .settings-workspace--fill-height .logs-card {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: min-content;
   display: flex;
   flex-direction: column;
 }
@@ -123,7 +130,7 @@ openclaw-logs-page {
 }
 
 .settings-workspace--fill-height .log-stream {
-  flex: 1 1 auto;
-  min-height: 0;
+  /* Bound the intrinsic contribution independently of the number of log rows. */
+  flex: 1 1 200px;
   max-height: none;
 }
