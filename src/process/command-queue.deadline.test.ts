@@ -7,7 +7,11 @@ import type { CommandQueueTaskDeadline } from "./command-queue.types.js";
 const lane = "runtime-deadline-test";
 const finishers: Array<() => void> = [];
 
-function enqueueOwnedTask(initialDeadline: CommandQueueTaskDeadline, initiallyAborted = false) {
+function enqueueOwnedTask(
+  initialDeadline: CommandQueueTaskDeadline,
+  initiallyAborted = false,
+  abortGraceMs = 5,
+) {
   const finish = createDeferred();
   finishers.push(finish.resolve);
   const abort = new AbortController();
@@ -24,7 +28,7 @@ function enqueueOwnedTask(initialDeadline: CommandQueueTaskDeadline, initiallyAb
     taskTimeoutMs: 25,
     taskTimeoutProgressAtMs: () => progressAtMs,
     taskTimeoutAbortSignal: abort.signal,
-    taskTimeoutAbortGraceMs: 5,
+    taskTimeoutAbortGraceMs: abortGraceMs,
     taskTimeoutReleaseSignal: release.signal,
     taskTimeoutSubscribe: (onDeadline) => {
       publish = onDeadline;
@@ -133,6 +137,27 @@ describe("command lane owner deadlines", () => {
       },
     });
   });
+
+  it.each([false, true])(
+    "rejects a zero abort grace immediately instead of waiting out the task budget, initially aborted=%s",
+    async (initiallyAborted) => {
+      const owner = enqueueOwnedTask({ kind: "unlimited" }, initiallyAborted, 0);
+      if (!initiallyAborted) {
+        owner.abort.abort();
+      }
+      // A zero grace must fail the task now (armTimer treats delayMs <= 0 as
+      // immediate), not after the full 25ms task budget.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getCommandLaneSnapshot(lane).activeCount).toBe(0);
+      await expect(owner.outcome).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          name: "CommandLaneTaskTimeoutError",
+          message: expect.stringContaining("abort grace 0ms"),
+        },
+      });
+    },
+  );
 
   it.each([false, true])(
     "honors immediate release when initially aborted=%s",
