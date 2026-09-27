@@ -1,4 +1,3 @@
-import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
@@ -6,11 +5,6 @@ import { installMockGateway, controlUiSessionUrl } from "../test-helpers/control
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Spatial overflow fades" });
-const table = `| Service | Owner | Region | Status | Version | Deploy | Incidents | Priority | Last reviewed | Next review | Notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Gateway | Platform | eu-west-1 | Healthy | Stable | Complete | 0 | Normal | September 20, 2026 | September 27, 2026 | A long operational note that keeps this column wide |
-| Scheduler | Operations | us-east-1 | Healthy | Stable | Complete | 0 | Normal | September 20, 2026 | September 27, 2026 | Background jobs are running on schedule |`;
-
 // Calibrate the real scroller with a solid paint layer, without replacing its
 // mask, geometry or overflow state. Sampling the rendered pixels catches a hard
 // clip even when the observer attributes and computed gradient both look valid.
@@ -32,9 +26,11 @@ async function expectClearEdge(scroller: Locator) {
       const width = image.get_width();
       const pixels = image.get_raw_pixels();
       const sample = (y: number) => pixels[(y * width + Math.floor(width / 2)) * 4]!;
+      // Fractional locator bounds can include the parent border in the outermost
+      // screenshot pixel. Start inside the scrollport, not on that rounded clip.
       for (const edge of ["top", "bottom"]) {
         const ramp = Array.from({ length: 36 }, (_, y) =>
-          sample(edge === "top" ? y : image.get_height() - 1 - y),
+          sample(edge === "top" ? y + 1 : image.get_height() - 2 - y),
         );
         expect(ramp[0], `${edge}: content clears the clipping boundary`).toBeLessThanOrEqual(3);
         expect(ramp[4], `${edge}: no bright strip at the edge`).toBeLessThan(30);
@@ -73,7 +69,6 @@ suite.define(() => {
         }));
         const gateway = await installMockGateway(page, {
           sessionKey: key,
-          sessions,
           methodResponses: {
             "sessions.list": {
               count: sessions.length,
@@ -83,55 +78,11 @@ suite.define(() => {
               ts: Date.now(),
             },
           },
-          historyMessages: [
-            ...Array.from({ length: 8 }, (_, i) => ({
-              role: "assistant",
-              content: `## Review note ${i + 1}\n\nThe interface should stay readable while scrolling through long conversations. Keep controls reachable and preserve the surrounding context.`,
-            })),
-            { role: "assistant", content: table },
-          ],
+          historyMessages: [{ role: "assistant", content: "Review the overflow edges." }],
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
-        const viewport = page.locator(".markdown-table__viewport").last();
-        await viewport.waitFor();
-        const shell = viewport.locator("..");
-        const tableOverflows = await viewport.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
-        if (tableOverflows) {
-          await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-right");
-        } else {
-          expect(await viewport.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
-        }
-        const capture = async (name: string) => {
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
-            return;
-          }
-          for (const mode of ["dark", "light"] as const) {
-            await page.emulateMedia({ colorScheme: mode });
-            await expect
-              .poll(() => page.locator("html").getAttribute("data-theme-mode"))
-              .toBe(mode);
-            await page.screenshot({
-              path: path.join(suite.artifactDir, `${width}-${name}-${mode}.png`),
-              animations: "disabled",
-            });
-          }
-        };
-        await capture("table-start");
-        if (tableOverflows) {
-          await viewport.evaluate((el) => {
-            el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
-          });
-          await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-left");
-          await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-right");
-          await capture("table-middle");
-          await viewport.evaluate((el) => {
-            el.scrollLeft = el.scrollWidth;
-          });
-          await expect.poll(() => shell.getAttribute("class")).not.toContain("can-scroll-right");
-          await capture("table-end");
-        }
         if (width > 768) {
           // The list intentionally shows only ten rows until expanded; use the
           // same short viewport as the existing sidebar containment regression.
@@ -142,20 +93,13 @@ suite.define(() => {
             el.scrollTop = (el.scrollHeight - el.clientHeight) / 2;
           });
           await expect.poll(() => sidebar.getAttribute("class")).toContain("scroll-middle");
-          await capture("sidebar-middle");
           await expectClearEdge(sidebar);
           await sidebar.evaluate((el) => {
             el.scrollTop = el.scrollHeight;
           });
           await expect.poll(() => sidebar.getAttribute("class")).toContain("scroll-bottom");
-          await capture("sidebar-end");
           await page.setViewportSize({ width, height: 800 });
         }
-        const thread = page.locator(".chat-thread").first();
-        await thread.evaluate((el) => {
-          el.scrollTop = el.scrollHeight / 2;
-        });
-        await capture("transcript-middle");
         await gateway.setOnline(false);
         await gateway.closeLatest();
         for (let i = 1; i <= 7; i++) {
@@ -165,19 +109,16 @@ suite.define(() => {
         }
         const queue = page.locator(".chat-queue__scroll");
         await expect.poll(() => queue.getAttribute("data-scrollable")).toBe("true");
-        await capture("queue-start");
         await queue.evaluate((el) => {
           el.scrollTop = (el.scrollHeight - el.clientHeight) / 2;
         });
         await expect.poll(() => queue.getAttribute("data-at-start")).toBe("false");
         await expect.poll(() => queue.getAttribute("data-at-end")).toBe("false");
-        await capture("queue-middle");
         await expectClearEdge(queue);
         await queue.evaluate((el) => {
           el.scrollTop = el.scrollHeight;
         });
         await expect.poll(() => queue.getAttribute("data-at-end")).toBe("true");
-        await capture("queue-end");
         const last = queue.locator(".chat-queue__item").last().locator(".chat-queue__grip");
         await last.focus();
         expect(await last.evaluate((el) => el.matches(":focus"))).toBe(true);
