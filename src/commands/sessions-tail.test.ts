@@ -298,6 +298,19 @@ describe("sessionsTailCommand", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
+  it.each(["", "   "])("rejects a blank explicit session key %j", async (sessionKey) => {
+    const runtime = createTestRuntime();
+    await writeSessionEntry();
+
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--session-key must not be empty. Omit it to tail active sessions.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("reports an empty default selection without failing or following", async () => {
     const runtime = createTestRuntime();
 
