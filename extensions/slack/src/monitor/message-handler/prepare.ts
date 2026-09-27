@@ -899,6 +899,7 @@ export async function prepareSlackMessage(params: {
       thread: routing,
       wasMentioned,
       teamId: opts.eventScope?.teamId,
+      workspaceTeamId: ctx.teamId,
       getThreadStarter,
     });
   opts.abortSignal?.throwIfAborted();

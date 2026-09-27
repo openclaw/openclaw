@@ -94,6 +94,70 @@ export async function hasSlackThreadParticipationWithPersistence(params: {
   );
 }
 
+/**
+ * Team id used when recording participation from an inbound turn.
+ * Enterprise events keep their event-scope workspace; other inbound paths
+ * use the monitor workspace so the key matches `send.ts` `delivery.teamId`.
+ */
+export function resolveSlackParticipationTeamId(params: {
+  eventTeamId?: string;
+  workspaceTeamId?: string;
+}): string | undefined {
+  return params.eventTeamId || params.workspaceTeamId || undefined;
+}
+
+function resolveInboundParticipationTeamIds(params: {
+  eventTeamId?: string;
+  workspaceTeamId?: string;
+}): Array<string | undefined> {
+  const eventTeamId = params.eventTeamId || undefined;
+  if (eventTeamId) {
+    return [eventTeamId];
+  }
+  const workspaceTeamId = params.workspaceTeamId || undefined;
+  return workspaceTeamId ? [undefined, workspaceTeamId] : [undefined];
+}
+
+/**
+ * Inbound mention gating looks up the same thread the bot already joined.
+ * A named enterprise event scope stays exclusive. When that scope is absent
+ * (relay / non-enterprise), also accept the monitor workspace id because
+ * outbound send records `delivery.teamId` even without an inbound event scope.
+ */
+export function hasInboundSlackThreadParticipation(params: {
+  accountId: string;
+  channelId: string;
+  threadTs: string;
+  eventTeamId?: string;
+  workspaceTeamId?: string;
+}): boolean {
+  return resolveInboundParticipationTeamIds(params).some((teamId) =>
+    hasSlackThreadParticipation(params.accountId, params.channelId, params.threadTs, teamId),
+  );
+}
+
+export async function hasInboundSlackThreadParticipationWithPersistence(params: {
+  accountId: string;
+  channelId: string;
+  threadTs: string;
+  eventTeamId?: string;
+  workspaceTeamId?: string;
+}): Promise<boolean> {
+  for (const teamId of resolveInboundParticipationTeamIds(params)) {
+    if (
+      await hasSlackThreadParticipationWithPersistence({
+        accountId: params.accountId,
+        channelId: params.channelId,
+        threadTs: params.threadTs,
+        teamId,
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 type SlackFailureNotice = {
   accountId: string;
   channelId: string;

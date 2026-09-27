@@ -735,9 +735,12 @@ vi.mock("../../limits.js", () => ({
 
 vi.mock("../../sent-thread-cache.js", () => ({
   clearSlackThreadFailureNotice: () => {},
+  hasInboundSlackThreadParticipation: () => false,
   hasSlackThreadParticipation: () => false,
   recordSlackThreadFailureNotice: () => true,
   recordSlackThreadParticipation: recordSlackThreadParticipationMock,
+  resolveSlackParticipationTeamId: (params: { eventTeamId?: string; workspaceTeamId?: string }) =>
+    params.eventTeamId || params.workspaceTeamId || undefined,
 }));
 
 vi.mock("../../stream-mode.js", () => ({

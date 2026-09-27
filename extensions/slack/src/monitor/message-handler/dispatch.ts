@@ -27,9 +27,10 @@ import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
 import {
   clearSlackThreadFailureNotice,
   hasSlackThreadFailureNotice,
-  hasSlackThreadParticipation,
+  hasInboundSlackThreadParticipation,
   recordSlackThreadFailureNotice,
   recordSlackThreadParticipation,
+  resolveSlackParticipationTeamId,
 } from "../../sent-thread-cache.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
 import { registerSlackSessionRun } from "../session-run-targets.js";
@@ -126,7 +127,10 @@ async function dispatchSlackMessageWithSetup(
     previewLifecycle.previewFinalized ||
     Boolean(draftStream?.messageId());
   const failureNoticeThreadTs = message.thread_ts;
-  const failureNoticeTeamId = prepared.eventScope?.teamId;
+  const failureNoticeTeamId = resolveSlackParticipationTeamId({
+    eventTeamId: prepared.eventScope?.teamId,
+    workspaceTeamId: ctx.teamId,
+  });
   let sawTerminalFailurePayload = false;
   let pendingFailureNotice:
     | {
@@ -174,12 +178,13 @@ async function dispatchSlackMessageWithSetup(
       failureNoticeThreadTs &&
       !explicitlyAddressed &&
       prepared.ctxPayload.MentionSource !== "implicit_thread" &&
-      !hasSlackThreadParticipation(
-        notice.accountId,
-        notice.channelId,
-        failureNoticeThreadTs,
-        failureNoticeTeamId,
-      )
+      !hasInboundSlackThreadParticipation({
+        accountId: notice.accountId,
+        channelId: notice.channelId,
+        threadTs: failureNoticeThreadTs,
+        eventTeamId: prepared.eventScope?.teamId,
+        workspaceTeamId: ctx.teamId,
+      })
     ) {
       logVerbose("slack: suppressed passive failure before thread participation");
       return null;
@@ -616,7 +621,10 @@ async function dispatchSlackMessageWithSetup(
   if (anyReplyDelivered && participationThreadTs) {
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {
       agentId: route.agentId,
-      teamId: prepared.eventScope?.teamId,
+      teamId: resolveSlackParticipationTeamId({
+        eventTeamId: prepared.eventScope?.teamId,
+        workspaceTeamId: ctx.teamId,
+      }),
     });
   }
   if (dispatchError) {
