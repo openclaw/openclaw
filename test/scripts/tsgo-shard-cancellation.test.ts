@@ -7,6 +7,7 @@ import { afterEach, expect, it } from "vitest";
 import { withDistArtifactOwnership } from "../../scripts/lib/dist-artifact-ownership.mts";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.mts";
+import { createDeferredCore } from "../../src/shared/deferred.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
@@ -47,7 +48,7 @@ console.log(JSON.stringify({ pid: process.pid }));
 Date.now = () => start + (now() - start) * 10;
 `,
       );
-      const ready = Promise.withResolvers<{ pid: number }>();
+      const ready = createDeferredCore<{ pid: number }>();
       let child: ChildProcess | undefined;
       let output = "";
       let compilerPid: number | undefined;
