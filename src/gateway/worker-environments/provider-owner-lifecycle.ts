@@ -5,6 +5,7 @@ import {
   type WorkerProvider,
 } from "../../plugins/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { hasForcedWorkerEnvironmentAbandonment } from "./environment-errors.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import type {
   WorkerEnvironmentAbandonment,
@@ -401,7 +402,7 @@ export function createWorkerProviderOwnerLifecycle(
           ? { lastError: FORCED_WORKER_ABANDONMENT_ERROR }
           : {}),
       });
-      if (destroyOptions.forceAbandon && record.lastError !== FORCED_WORKER_ABANDONMENT_ERROR) {
+      if (destroyOptions.forceAbandon && !hasForcedWorkerEnvironmentAbandonment(record)) {
         record = await store.recordError({
           environmentId,
           state: record.state,

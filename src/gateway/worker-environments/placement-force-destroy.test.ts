@@ -9,6 +9,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { summarizeWorkerEnvironment } from "./environment-summary.js";
 import {
   type PlacementStore,
   REQUEST,
@@ -175,6 +176,105 @@ describe("forced worker environment destruction", () => {
 
 describe("forced destruction across Gateway restart", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("retains forced intent and the latest dedicated-provider teardown failure after restart", async () => {
+    const environmentId = "worker-forced-provider-failure";
+    await support.seedReadyNodeDesktop(environmentId);
+    const attached = await support.testState.store.transition({
+      environmentId,
+      from: "ready",
+      to: "attached",
+      patch: { ...support.attachedPatch(environmentId, REQUEST.sessionId), sharedHost: false },
+    });
+    let placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    const active = await seedActivePlacement(placements, {
+      environmentId,
+      ownerEpoch: attached.ownerEpoch,
+    });
+    const destroy = vi
+      .fn(async () => {})
+      .mockRejectedValueOnce(
+        new Error(`provider deletion refused: ${"detail ".repeat(300)}quota blocked`),
+      )
+      .mockRejectedValueOnce(new Error("provider deletion still blocked"));
+    const createService = () =>
+      support.createService(
+        support.createProvider({
+          supportedExecutionModes: ["worker-turn"],
+          inspect: async () => ({ status: "active", sharedHost: false }),
+          destroy,
+        }),
+        {
+          placementStore: createWorkerSessionPlacementGate(placements, {
+            rejectExistingWorkerClaims: true,
+          }),
+        },
+      );
+    const harness = createHarness(support.testState.stateDb, placements, {
+      environmentService: createService(),
+      workspacePath: support.testState.root,
+    });
+
+    await expect(harness.service.forceDestroyEnvironment(environmentId)).rejects.toThrow(
+      "provider deletion refused",
+    );
+    expect(placements.get(REQUEST.sessionId)).toMatchObject({
+      state: "failed",
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+      turnClaim: null,
+    });
+
+    await support.reopenWorkerEnvironmentStore();
+    placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    const service = createService();
+    const pending = service.get(environmentId);
+    if (!pending) {
+      throw new Error("forced teardown lost its dedicated environment");
+    }
+    expect(pending).toMatchObject({
+      state: "attached",
+      sharedHost: false,
+      nodeDeviceId: attached.nodeDeviceId,
+      destroyRequestedAtMs: support.testState.nowMs,
+      lastError: expect.stringContaining(FORCED_WORKER_ABANDONMENT_ERROR),
+      error: expect.stringContaining("provider deletion refused"),
+    });
+    expect(pending?.lastError).toContain("quota blocked");
+    expect(pending?.lastError?.length).toBeLessThanOrEqual(1_024);
+    expect(summarizeWorkerEnvironment(pending, support.testState.nowMs)).toMatchObject({
+      status: "error",
+      worker: {
+        error: expect.stringContaining("provider deletion refused"),
+      },
+    });
+    const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
+    const tunnel = vi.spyOn(service, "startTunnel");
+    const restarted = createHarness(support.testState.stateDb, placements, {
+      environmentService: service,
+      workspacePath: support.testState.root,
+    });
+    await restarted.service.reconcile("startup");
+    // Failed-placement cleanup belongs to the tracked post-start sweep.
+    await restarted.service.reconcileActive(environmentId);
+    expect(destroy).toHaveBeenCalledTimes(2);
+    expect(service.get(environmentId)).toMatchObject({
+      state: "attached",
+      lastError: `${FORCED_WORKER_ABANDONMENT_ERROR}; provider deletion still blocked`,
+      error: expect.stringContaining("provider deletion still blocked"),
+    });
+    await restarted.service.reconcileActive(environmentId);
+    expect(destroy).toHaveBeenCalledTimes(3);
+    expect(service.get(environmentId)?.state).toBe("destroyed");
+    expect(claimStop).not.toHaveBeenCalled();
+    expect(tunnel).not.toHaveBeenCalled();
+    expect(restarted.log).not.toContain("workspace");
+    expect(placements.get(REQUEST.sessionId)).toMatchObject({
+      state: "failed",
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+      workspaceBaseManifestRef: active.workspaceBaseManifestRef,
+      turnClaim: null,
+    });
+  });
 
   it.each([false, true])(
     "resumes forced abandonment after a crash between draining and placement failure (destroy already requested: %s)",
