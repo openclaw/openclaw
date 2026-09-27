@@ -123,10 +123,7 @@ beforeEach(() => {
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
   mocks.prepareInputs.mockReset().mockResolvedValue({ files: [], mappingText: "" });
   mocks.uploadInputs.mockReset().mockResolvedValue(undefined);
-  mocks.collectOutputs.mockReset().mockResolvedValue({
-    toolMediaUrls: [],
-    hostOwnedToolMediaUrls: [],
-  });
+  mocks.collectOutputs.mockReset().mockResolvedValue([]);
   mocks.fetch.mockImplementation(async ({ url }) => {
     const pathname = new URL(url).pathname;
     const response = pathname.endsWith("/items")
@@ -272,11 +269,7 @@ describe("Agents API attempt environment selection", () => {
     const mappingText = "Input attachment: /workspace/inputs/input.txt";
     const outputUrl = "/fixture/outbound/report.txt";
     mocks.prepareInputs.mockResolvedValueOnce({ files: [file], mappingText });
-    mocks.collectOutputs.mockResolvedValueOnce({
-      toolMediaUrls: [outputUrl],
-      hostOwnedToolMediaUrls: [outputUrl],
-      toolTrustedLocalMedia: true,
-    });
+    mocks.collectOutputs.mockResolvedValueOnce([outputUrl]);
 
     const { result } = await attempt("openai_hosted", undefined, undefined, media);
 
