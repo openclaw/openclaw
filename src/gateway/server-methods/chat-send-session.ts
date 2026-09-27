@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -43,7 +44,6 @@ import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
-import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
@@ -99,7 +99,7 @@ function loadChatSendSessionContext(params: {
   if (!rawSessionKey.trim()) {
     return { ok: false as const, error: "sessionKey must not be blank" };
   }
-  const agentIdOverride = normalizeOptionalChatText(p.agentId);
+  const agentIdOverride = normalizeOptionalString(p.agentId);
   const clientRunId = p.idempotencyKey;
   const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
   const runtimeConfig = context.getRuntimeConfig();
@@ -135,11 +135,9 @@ function loadChatSendSessionContext(params: {
   );
   const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
   const { cfg, agentId, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
-  const expectedSessionRoutingContract = normalizeOptionalChatText(
-    p.expectedSessionRoutingContract,
-  );
+  const expectedSessionRoutingContract = normalizeOptionalString(p.expectedSessionRoutingContract);
   const expectedLeafEntryId =
-    p.expectedLeafEntryId === null ? null : normalizeOptionalChatText(p.expectedLeafEntryId);
+    p.expectedLeafEntryId === null ? null : normalizeOptionalString(p.expectedLeafEntryId);
   const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
     expectedSessionRoutingContract !== undefined &&
     expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);
@@ -206,7 +204,7 @@ export function prepareChatSendSession(params: {
     };
   }
 
-  const requestedSessionId = normalizeOptionalChatText(p.sessionId);
+  const requestedSessionId = normalizeOptionalString(p.sessionId);
   const backingSessionId = entry?.sessionId ?? requestedSessionId;
   if (!entry) {
     const creationError = authorizeGatewaySessionCreation({

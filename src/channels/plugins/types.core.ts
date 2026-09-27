@@ -689,7 +689,7 @@ export type ChannelAgentPromptAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[] | undefined;
-  /** Per-account formatting contract for agent turns whose delivery target is this channel. */
+  /** Per-account formatting contract for agent turns whose visible text reaches this channel. */
   inboundFormattingHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
         text_markup: string;

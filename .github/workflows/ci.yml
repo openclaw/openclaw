@@ -4401,6 +4401,12 @@ jobs:
           vitest-worker-cache: ${{ needs.preflight.outputs.frozen_target != 'true' && matrix.pretest_build_mode == null && (matrix.node_version == null || matrix.node_version == '24.x') && 'true' || 'false' }}
           node-compile-cache: "true"
 
+      - name: Apply frozen Node test compatibility
+        if: needs.preflight.outputs.checkout_revision == 'f773aa06a1a93b36b050f1a3f4b57d3d91311541'
+        uses: ./.ci-harness/.github/actions/frozen-node-test-compat
+        with:
+          target-sha: ${{ needs.preflight.outputs.checkout_revision }}
+
       - name: Setup pinned Bun test runtime
         if: matrix.requires_bun == true
         uses: ./.ci-harness/.github/actions/setup-test-bun

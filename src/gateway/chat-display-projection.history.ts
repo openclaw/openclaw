@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
@@ -132,14 +133,8 @@ function readTtsSupplementMarker(
   if (!marker) {
     return undefined;
   }
-  const textSha256 =
-    typeof marker.textSha256 === "string" && marker.textSha256.trim()
-      ? marker.textSha256.trim()
-      : undefined;
-  const spokenText =
-    typeof marker.spokenText === "string" && marker.spokenText.trim()
-      ? marker.spokenText.trim()
-      : undefined;
+  const textSha256 = normalizeOptionalString(marker.textSha256);
+  const spokenText = normalizeOptionalString(marker.spokenText);
   return textSha256 || spokenText ? { textSha256, spokenText } : undefined;
 }
 
@@ -261,7 +256,10 @@ export function mergeTtsSupplementMessages(
   return changed ? merged : messages;
 }
 
-function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unknown>): boolean {
+function isSubagentAnnounceInterSessionUserMessage(
+  message: Record<string, unknown>,
+  readText?: (message: Record<string, unknown>) => string | undefined,
+): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
   if (
     provenance?.kind === "inter_session" &&
@@ -269,30 +267,7 @@ function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unkno
   ) {
     return true;
   }
-  const text = extractProjectedText(message.content ?? message.text);
-  return (
-    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) && text.includes("sourceTool=subagent_announce")
-  );
-}
-
-function readChatHistoryRecordTimestampMs(message: unknown): number | undefined {
-  const meta = readRecord(readRecord(message)?.["__openclaw"]);
-  return asFiniteNumber(meta?.recordTimestampMs) ?? asFiniteNumber(readRecord(message)?.timestamp);
-}
-
-function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown): boolean {
-  const record = readRecord(message);
-  if (!record || record.role !== "user") {
-    return false;
-  }
-  const provenance = normalizeInputProvenance(record.provenance);
-  if (
-    provenance?.kind === "inter_session" &&
-    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
-  ) {
-    return true;
-  }
-  const text = extractChatHistoryBlockText(record);
+  const text = readText ? readText(message) : extractProjectedText(message.content ?? message.text);
   return (
     typeof text === "string" &&
     text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) &&
@@ -300,8 +275,9 @@ function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown):
   );
 }
 
-function isChatHistoryAssistantMessage(message: unknown): boolean {
-  return readRecord(message)?.role === "assistant";
+function readChatHistoryRecordTimestampMs(message: unknown): number | undefined {
+  const meta = readRecord(readRecord(message)?.["__openclaw"]);
+  return asFiniteNumber(meta?.recordTimestampMs) ?? asFiniteNumber(readRecord(message)?.timestamp);
 }
 
 export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number | undefined) {
@@ -315,15 +291,20 @@ export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number
     for (const current of messages) {
       if (precedingAnnounce) {
         precedingAnnounce = false;
-        const ts = isChatHistoryAssistantMessage(current)
-          ? readChatHistoryRecordTimestampMs(current)
-          : undefined;
+        const ts =
+          readRecord(current)?.role === "assistant"
+            ? readChatHistoryRecordTimestampMs(current)
+            : undefined;
         if (typeof ts === "number" && ts < sessionStartedAt) {
           changed = true;
           continue;
         }
       }
-      if (isSubagentAnnounceInterSessionUserChatHistoryMessage(current)) {
+      const record = readRecord(current);
+      if (
+        record?.role === "user" &&
+        isSubagentAnnounceInterSessionUserMessage(record, extractChatHistoryBlockText)
+      ) {
         const ts = readChatHistoryRecordTimestampMs(current);
         if (typeof ts === "number" && ts < sessionStartedAt) {
           // The adjacent assistant may arrive in the next appended chunk.

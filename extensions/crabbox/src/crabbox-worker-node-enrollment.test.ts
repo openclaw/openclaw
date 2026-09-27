@@ -375,7 +375,6 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       warn: (message) => {
         throw new Error(message);
       },
-      runArgs: ({ id }) => ["run", "--id", id, "--script-stdin"],
       runCommand: async (argv, options) => {
         if (argv[1] === "warmup") {
           homeFor(argv[argv.indexOf("--lease-id") + 1]!);

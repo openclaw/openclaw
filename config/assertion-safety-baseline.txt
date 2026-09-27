@@ -49,7 +49,7 @@ extensions/browser/src/browser/bridge-server.ts	2
 extensions/browser/src/browser/cdp-page-session.ts	3
 extensions/browser/src/browser/cdp-proxy-bypass.ts	1
 extensions/browser/src/browser/cdp-websocket.ts	2
-extensions/browser/src/browser/cdp.helpers.ts	4
+extensions/browser/src/browser/cdp.helpers.ts	3
 extensions/browser/src/browser/cdp.ts	3
 extensions/browser/src/browser/chrome-mcp-routing.ts	1
 extensions/browser/src/browser/chrome-mcp-tabs.ts	1
@@ -63,7 +63,7 @@ extensions/browser/src/browser/errors.ts	4
 extensions/browser/src/browser/extension-install-layout.ts	4
 extensions/browser/src/browser/extension-relay/auth-v2.ts	4
 extensions/browser/src/browser/extension-relay/relay-bridge.ts	8
-extensions/browser/src/browser/extension-relay/relay-protocol.ts	3
+extensions/browser/src/browser/extension-relay/relay-protocol.ts	2
 extensions/browser/src/browser/output-files.ts	1
 extensions/browser/src/browser/paths.ts	1
 extensions/browser/src/browser/playwright-core.runtime.ts	2
@@ -252,7 +252,7 @@ extensions/discord/src/account-inspect.ts	1
 extensions/discord/src/accounts.ts	2
 extensions/discord/src/actions/handle-action.ts	4
 extensions/discord/src/actions/runtime.guild.ts	1
-extensions/discord/src/actions/runtime.messaging.send.ts	6
+extensions/discord/src/actions/runtime.messaging.send.ts	3
 extensions/discord/src/actions/runtime.messaging.shared.ts	6
 extensions/discord/src/actions/runtime.presence.ts	1
 extensions/discord/src/actions/runtime.shared.ts	1
@@ -268,8 +268,8 @@ extensions/discord/src/channel.ts	3
 extensions/discord/src/component-custom-id.ts	1
 extensions/discord/src/components-registry-state.ts	2
 extensions/discord/src/components-registry.ts	3
-extensions/discord/src/components.builders.ts	4
-extensions/discord/src/components.parse.ts	13
+extensions/discord/src/components.builders.ts	1
+extensions/discord/src/components.parse.ts	12
 extensions/discord/src/doctor-contract.ts	4
 extensions/discord/src/internal/api.commands.ts	1
 extensions/discord/src/internal/api.guild.ts	9
@@ -288,7 +288,7 @@ extensions/discord/src/internal/gateway-dispatch.ts	7
 extensions/discord/src/internal/gateway-payload.ts	1
 extensions/discord/src/internal/gateway-voice-state-cache.ts	4
 extensions/discord/src/internal/gateway.ts	8
-extensions/discord/src/internal/interaction-dispatch.ts	9
+extensions/discord/src/internal/interaction-dispatch.ts	6
 extensions/discord/src/internal/interaction-options.ts	2
 extensions/discord/src/internal/interaction-response.ts	2
 extensions/discord/src/internal/interactions.ts	2
@@ -326,7 +326,6 @@ extensions/discord/src/monitor/provider.deploy-errors.ts	11
 extensions/discord/src/monitor/provider.deploy.ts	4
 extensions/discord/src/monitor/provider.lifecycle.ts	2
 extensions/discord/src/monitor/provider.startup-log.ts	1
-extensions/discord/src/monitor/provider.startup.ts	1
 extensions/discord/src/monitor/reply-context.ts	1
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
@@ -357,7 +356,7 @@ extensions/discord/src/voice/access.ts	1
 extensions/discord/src/voice/audio.ts	1
 extensions/discord/src/voice/ingress.ts	1
 extensions/discord/src/voice/realtime-turns.ts	3
-extensions/discord/src/voice/receive-recovery.ts	5
+extensions/discord/src/voice/receive-recovery.ts	1
 extensions/discord/src/voice/sdk-runtime.ts	1
 extensions/discord/src/voice/segment.ts	1
 extensions/duckduckgo/src/config.ts	1
@@ -651,7 +650,7 @@ extensions/memory-core/src/short-term-promotion-record.ts	1
 extensions/memory-core/src/short-term-promotion-rehydrate.ts	1
 extensions/memory-core/src/short-term-promotion-utils.ts	4
 extensions/memory-core/src/short-term-promotion.ts	1
-extensions/memory-core/src/standing-intents-tool.ts	5
+extensions/memory-core/src/standing-intents-tool.ts	1
 extensions/memory-core/src/standing-intents.ts	2
 extensions/memory-core/src/tools.ts	2
 extensions/memory-lancedb/config.ts	4
@@ -960,7 +959,6 @@ extensions/slack/src/doctor.ts	1
 extensions/slack/src/group-policy.ts	1
 extensions/slack/src/http/plugin-routes.ts	1
 extensions/slack/src/http/registry.ts	2
-extensions/slack/src/message-actions.ts	1
 extensions/slack/src/modal-metadata.ts	1
 extensions/slack/src/monitor/block-text.ts	1
 extensions/slack/src/monitor/context.ts	2
@@ -1124,7 +1122,6 @@ extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/providers/shared/response-body.ts	1
 extensions/voice-call/src/providers/twilio/api.ts	3
-extensions/voice-call/src/realtime-agent-context.ts	1
 extensions/voice-call/src/response-generator.ts	3
 extensions/voice-call/src/runtime.ts	1
 extensions/voice-call/src/tts-provider-voice.ts	1
@@ -2083,7 +2080,7 @@ src/commands/doctor-config-analysis.ts	3
 src/commands/doctor-config-flow.ts	2
 src/commands/doctor-config-preflight.cron.ts	4
 src/commands/doctor-gateway-services.ts	1
-src/commands/doctor-heartbeat-scratch-migration.ts	5
+src/commands/doctor-heartbeat-scratch-migration.ts	4
 src/commands/doctor-main-session-recovery.ts	1
 src/commands/doctor-model-catalog-credentials.ts	1
 src/commands/doctor-plugin-registry.ts	1
@@ -2324,7 +2321,7 @@ src/flows/channel-setup.prompts.ts	2
 src/flows/channel-setup.status.ts	2
 src/flows/channel-setup.ts	3
 src/flows/doctor-core-checks.runtime.ts	2
-src/flows/doctor-core-checks.ts	3
+src/flows/doctor-core-checks.ts	1
 src/flows/doctor-health-contributions-final.ts	1
 src/flows/doctor-health-contributions.ts	1
 src/flows/doctor-removed-workspaces-state-check.ts	2
@@ -2365,15 +2362,13 @@ src/gateway/mcp-app-operations.ts	1
 src/gateway/mcp-app-reconstruction.ts	1
 src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.schema.ts	3
-src/gateway/method-scopes.ts	10
 src/gateway/node-browser-proxy-policy.ts	1
 src/gateway/node-command-policy.ts	2
 src/gateway/node-pairing-ssh-verify.ts	1
-src/gateway/node-registry.ts	2
+src/gateway/node-registry.ts	1
 src/gateway/openai-agent-run-usage.ts	1
 src/gateway/openai-http.ts	1
 src/gateway/operator-approval-snapshot.ts	4
-src/gateway/operator-scopes.ts	1
 src/gateway/plugin-activation-runtime-config.ts	2
 src/gateway/probe.ts	2
 src/gateway/restart-trace.ts	3
@@ -2385,7 +2380,7 @@ src/gateway/server-chat.ts	5
 src/gateway/server-close.ts	1
 src/gateway/server-core-runtime.ts	1
 src/gateway/server-cron-reconciled.ts	1
-src/gateway/server-cron.ts	3
+src/gateway/server-cron.ts	1
 src/gateway/server-http-upgrades.ts	2
 src/gateway/server-in-process-dispatch.ts	3
 src/gateway/server-instance-runtime.ts	3
@@ -2400,7 +2395,6 @@ src/gateway/server-methods/approval-shared.ts	1
 src/gateway/server-methods/approval.ts	2
 src/gateway/server-methods/attachment-normalize.ts	1
 src/gateway/server-methods/base-hash.ts	1
-src/gateway/server-methods/channel-pairing.ts	3
 src/gateway/server-methods/channels.ts	12
 src/gateway/server-methods/chat-abort-authorization.ts	3
 src/gateway/server-methods/chat-assistant-content.ts	1
@@ -2434,7 +2428,6 @@ src/gateway/server-methods/open-path.ts	1
 src/gateway/server-methods/plugin-approval.ts	2
 src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/restart-request.ts	8
-src/gateway/server-methods/session-catalog-terminal-start.ts	1
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1
 src/gateway/server-methods/sessions-abort.ts	3
@@ -2448,7 +2441,6 @@ src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
 src/gateway/server-methods/task-suggestions.ts	5
 src/gateway/server-methods/web.ts	1
-src/gateway/server-methods/wizard.ts	1
 src/gateway/server-node-events.ts	2
 src/gateway/server-plugin-in-process-dispatch.ts	3
 src/gateway/server-plugin-subagent-runtime.ts	1
@@ -2487,7 +2479,6 @@ src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
 src/gateway/system-ca-warmup.ts	1
 src/gateway/talk/handlers/index.ts	3
-src/gateway/talk/relay/forced-consults.ts	1
 src/gateway/talk/relay/session-create.ts	1
 src/gateway/talk/session-config.ts	5
 src/gateway/terminal/node-relay.ts	1
@@ -2496,7 +2487,7 @@ src/gateway/test-temp-config.ts	1
 src/gateway/tools-invoke-http.ts	1
 src/gateway/tools-invoke-shared.ts	3
 src/gateway/watch-node-http.ts	3
-src/gateway/worker-environments/bundle.ts	6
+src/gateway/worker-environments/bundle.ts	5
 src/gateway/worker-environments/inference-control.ts	1
 src/gateway/worker-environments/inference-runtime.ts	2
 src/gateway/worker-environments/live-event-projection.ts	1
@@ -2632,7 +2623,7 @@ src/infra/restart-coordinator.ts	1
 src/infra/restart-handoff.ts	1
 src/infra/restart-sentinel-store.ts	10
 src/infra/restart-sentinel.ts	1
-src/infra/restart-stale-pids.ts	3
+src/infra/restart-stale-pids.ts	2
 src/infra/retry-policy.ts	3
 src/infra/session-cost-usage-cache.sqlite.ts	1
 src/infra/session-cost-usage-collection.ts	3
@@ -3280,7 +3271,6 @@ ui/src/lib/chat/outbox-store-codec.ts	1
 ui/src/lib/chat/outbox-store.ts	1
 ui/src/lib/chat/tool-call-patch.ts	1
 ui/src/lib/chat/tool-cards.ts	2
-ui/src/lib/chat/tool-display.ts	1
 ui/src/lib/config-form-utils.ts	7
 ui/src/lib/config/config-draft-model.ts	3
 ui/src/lib/cron/index.ts	2

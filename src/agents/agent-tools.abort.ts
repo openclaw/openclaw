@@ -100,7 +100,9 @@ export function wrapToolWithAbortSignal(
           );
     },
   };
-  copyAgentToolMetadata(tool, wrappedTool);
+  copyAgentToolMetadata(tool, wrappedTool, (source) =>
+    wrapToolWithAbortSignal(source, abortSignal),
+  );
   const sourcePreparer = getInternalToolExecutionPreparer(tool);
   if (sourcePreparer) {
     attachInternalToolExecutionPreparer(wrappedTool, async (params) => {

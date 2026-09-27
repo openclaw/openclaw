@@ -26,6 +26,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -185,53 +186,29 @@ class DeviceHandler internal constructor(
     val uptimeSeconds = SystemClock.elapsedRealtime() / 1_000.0
 
     return buildJsonObject {
-      put(
-        "battery",
-        buildJsonObject {
-          // `level` is a normalized 0.0–1.0 fraction of full charge (the shared
-          // OpenClawBatteryStatusPayload contract; matches iOS). It is NOT a percentage:
-          // 1.0 == fully charged. `levelPercent` mirrors it as an integer 0–100.
-          battery.levelFraction?.let {
-            put("level", JsonPrimitive(it))
-            put("levelPercent", JsonPrimitive((it * 100.0).roundToInt()))
-          }
-          put("state", JsonPrimitive(mapBatteryState(battery.status)))
-          put("lowPowerModeEnabled", JsonPrimitive(powerManager?.isPowerSaveMode == true))
-        },
-      )
-      put(
-        "thermal",
-        buildJsonObject {
-          put("state", JsonPrimitive(mapThermalState(powerManager)))
-        },
-      )
-      put(
-        "storage",
-        buildJsonObject {
-          put("totalBytes", JsonPrimitive(totalBytes))
-          put("freeBytes", JsonPrimitive(freeBytes))
-          put("usedBytes", JsonPrimitive(usedBytes))
-        },
-      )
-      put(
-        "network",
-        buildJsonObject {
-          put("status", JsonPrimitive(mapNetworkStatus(caps)))
-          put(
-            "isExpensive",
-            JsonPrimitive(
-              caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)?.not() ?: false,
-            ),
-          )
-          put(
-            "isConstrained",
-            JsonPrimitive(
-              caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)?.not() ?: false,
-            ),
-          )
-          put("interfaces", networkInterfacesJson(caps))
-        },
-      )
+      putJsonObject("battery") {
+        // The shared battery contract uses a 0.0–1.0 fraction; levelPercent mirrors it as 0–100.
+        battery.levelFraction?.let {
+          put("level", it)
+          put("levelPercent", (it * 100.0).roundToInt())
+        }
+        put("state", mapBatteryState(battery.status))
+        put("lowPowerModeEnabled", powerManager?.isPowerSaveMode == true)
+      }
+      putJsonObject("thermal") {
+        put("state", mapThermalState(powerManager))
+      }
+      putJsonObject("storage") {
+        put("totalBytes", totalBytes)
+        put("freeBytes", freeBytes)
+        put("usedBytes", usedBytes)
+      }
+      putJsonObject("network") {
+        put("status", mapNetworkStatus(caps))
+        put("isExpensive", caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)?.not() ?: false)
+        put("isConstrained", caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)?.not() ?: false)
+        put("interfaces", networkInterfacesJson(caps))
+      }
       put("uptimeSeconds", JsonPrimitive(uptimeSeconds))
     }.toString()
   }
@@ -267,37 +244,28 @@ class DeviceHandler internal constructor(
     val canSendSms = appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
     val smsAvailable = smsEnabled && canSendSms
     return buildJsonObject {
-      put(
-        "permissions",
-        buildJsonObject {
-          putPermission("camera", snapshot.camera)
-          putPermission("microphone", snapshot.microphone)
-          putPermission("location", snapshot.location)
-          put(
-            "sms",
-            buildJsonObject {
-              // A partial grant is usable, but the other SMS permission can still be requested.
-              val granted = smsAvailable && (snapshot.smsSend || snapshot.smsRead)
-              put("status", if (granted) "granted" else "denied")
-              put("promptable", smsAvailable && (!snapshot.smsSend || !snapshot.smsRead))
-              put(
-                "capabilities",
-                buildJsonObject {
-                  putPermission("send", snapshot.smsSend, smsAvailable)
-                  putPermission("read", snapshot.smsRead, smsAvailable)
-                },
-              )
-            },
-          )
-          putPermission("notificationListener", snapshot.notificationListener)
-          putPermission("notifications", snapshot.notifications)
-          putPermission("photos", snapshot.photos, photosEnabled)
-          putPermission("contacts", snapshot.contactsRead && snapshot.contactsWrite)
-          putPermission("calendar", snapshot.calendarRead && snapshot.calendarWrite)
-          putPermission("callLog", snapshot.callLog, callLogEnabled)
-          putPermission("motion", snapshot.motion)
-        },
-      )
+      putJsonObject("permissions") {
+        putPermission("camera", snapshot.camera)
+        putPermission("microphone", snapshot.microphone)
+        putPermission("location", snapshot.location)
+        putJsonObject("sms") {
+          // A partial grant is usable, but the other SMS permission can still be requested.
+          val granted = smsAvailable && (snapshot.smsSend || snapshot.smsRead)
+          put("status", if (granted) "granted" else "denied")
+          put("promptable", smsAvailable && (!snapshot.smsSend || !snapshot.smsRead))
+          putJsonObject("capabilities") {
+            putPermission("send", snapshot.smsSend, smsAvailable)
+            putPermission("read", snapshot.smsRead, smsAvailable)
+          }
+        }
+        putPermission("notificationListener", snapshot.notificationListener)
+        putPermission("notifications", snapshot.notifications)
+        putPermission("photos", snapshot.photos, photosEnabled)
+        putPermission("contacts", snapshot.contactsRead && snapshot.contactsWrite)
+        putPermission("calendar", snapshot.calendarRead && snapshot.calendarWrite)
+        putPermission("callLog", snapshot.callLog, callLogEnabled)
+        putPermission("motion", snapshot.motion)
+      }
     }.toString()
   }
 
@@ -324,42 +292,30 @@ class DeviceHandler internal constructor(
     val memoryPressure = mapMemoryPressure(totalRamBytes, availableRamBytes, lowMemory)
 
     return buildJsonObject {
-      put(
-        "memory",
-        buildJsonObject {
-          put("pressure", JsonPrimitive(memoryPressure))
-          put("totalRamBytes", JsonPrimitive(totalRamBytes))
-          put("availableRamBytes", JsonPrimitive(availableRamBytes))
-          put("usedRamBytes", JsonPrimitive(usedRamBytes))
-          put("thresholdBytes", JsonPrimitive(memoryInfo.threshold.coerceAtLeast(0L)))
-          put("lowMemory", JsonPrimitive(lowMemory))
-        },
-      )
-      put(
-        "battery",
-        buildJsonObject {
-          put("state", JsonPrimitive(mapBatteryState(battery.status)))
-          put("chargingType", JsonPrimitive(mapChargingType(battery.plugged)))
-          battery.temperatureC?.let { put("temperatureC", JsonPrimitive(it)) }
-          currentNowMa?.let { put("currentMa", JsonPrimitive(it)) }
-        },
-      )
-      put(
-        "power",
-        buildJsonObject {
-          put("dozeModeEnabled", JsonPrimitive(powerManager?.isDeviceIdleMode == true))
-          put("lowPowerModeEnabled", JsonPrimitive(powerManager?.isPowerSaveMode == true))
-        },
-      )
-      put(
-        "system",
-        buildJsonObject {
-          Build.VERSION.SECURITY_PATCH
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?.let { put("securityPatchLevel", JsonPrimitive(it)) }
-        },
-      )
+      putJsonObject("memory") {
+        put("pressure", memoryPressure)
+        put("totalRamBytes", totalRamBytes)
+        put("availableRamBytes", availableRamBytes)
+        put("usedRamBytes", usedRamBytes)
+        put("thresholdBytes", memoryInfo.threshold.coerceAtLeast(0L))
+        put("lowMemory", lowMemory)
+      }
+      putJsonObject("battery") {
+        put("state", mapBatteryState(battery.status))
+        put("chargingType", mapChargingType(battery.plugged))
+        battery.temperatureC?.let { put("temperatureC", it) }
+        currentNowMa?.let { put("currentMa", it) }
+      }
+      putJsonObject("power") {
+        put("dozeModeEnabled", powerManager?.isDeviceIdleMode == true)
+        put("lowPowerModeEnabled", powerManager?.isPowerSaveMode == true)
+      }
+      putJsonObject("system") {
+        Build.VERSION.SECURITY_PATCH
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+          ?.let { put("securityPatchLevel", it) }
+      }
     }.toString()
   }
 
@@ -461,13 +417,10 @@ class DeviceHandler internal constructor(
     granted: Boolean,
     promptableWhenDenied: Boolean = true,
   ) {
-    put(
-      key,
-      buildJsonObject {
-        put("status", if (granted) "granted" else "denied")
-        put("promptable", !granted && promptableWhenDenied)
-      },
-    )
+    putJsonObject(key) {
+      put("status", if (granted) "granted" else "denied")
+      put("promptable", !granted && promptableWhenDenied)
+    }
   }
 
   private fun mapMemoryPressure(

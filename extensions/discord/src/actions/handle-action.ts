@@ -124,6 +124,18 @@ async function dispatchDiscordMessageAction(
     ...(ctx.progressSnapshot ? { progressSnapshot: ctx.progressSnapshot } : {}),
     ...readPolicyOptions,
   } as const;
+  const runAction = ({
+    action: runtimeAction,
+    ...payload
+  }: {
+    action: string;
+    [key: string]: unknown;
+  }) =>
+    handleDiscordAction(
+      { action: runtimeAction, accountId: accountId ?? undefined, ...payload },
+      cfg,
+      actionOptions,
+    );
   const notifyVisibleOutbound = (
     result: AgentToolResult<unknown>,
     to: string,
@@ -205,7 +217,6 @@ async function dispatchDiscordMessageAction(
   if (action === "send") {
     const to = readSendTarget();
     const asVoice = readBooleanParam(params, "asVoice") === true;
-    // Support media, path, and filePath for media URL
     const mediaUrl =
       readStringParam(params, "media", { trim: false }) ??
       readStringParam(params, "path", { trim: false }) ??
@@ -258,27 +269,22 @@ async function dispatchDiscordMessageAction(
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
     const threadName = readStringParam(params, "threadName");
-    const result = await handleDiscordAction(
-      {
-        action: "sendMessage",
-        accountId: accountId ?? undefined,
-        to,
-        content: deliveryContent,
-        ...(threadName ? { threadName } : {}),
-        mediaUrl: mediaUrl ?? undefined,
-        filename: filename ?? undefined,
-        replyTo: replyTo ?? undefined,
-        components,
-        embeds,
-        asVoice,
-        silent,
-        ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
-        __sessionKey: sessionKey ?? undefined,
-        __agentId: agentId ?? undefined,
-      },
-      cfg,
-      actionOptions,
-    );
+    const result = await runAction({
+      action: "sendMessage",
+      to,
+      content: deliveryContent,
+      ...(threadName ? { threadName } : {}),
+      mediaUrl: mediaUrl ?? undefined,
+      filename: filename ?? undefined,
+      replyTo: replyTo ?? undefined,
+      components,
+      embeds,
+      asVoice,
+      silent,
+      ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
+      __sessionKey: sessionKey ?? undefined,
+      __agentId: agentId ?? undefined,
+    });
     notifyVisibleOutbound(result, to, sessionKey);
     return withAdoptedThreadReplyRoute(result, to, sessionKey);
   }
@@ -311,23 +317,18 @@ async function dispatchDiscordMessageAction(
     const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
-    const result = await handleDiscordAction(
-      {
-        action: "sendMessage",
-        accountId: accountId ?? undefined,
-        to,
-        content: content ?? "",
-        mediaUrl,
-        filename: filename ?? undefined,
-        replyTo: replyTo ?? undefined,
-        silent,
-        ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
-        __sessionKey: sessionKey ?? undefined,
-        __agentId: agentId ?? undefined,
-      },
-      cfg,
-      actionOptions,
-    );
+    const result = await runAction({
+      action: "sendMessage",
+      to,
+      content: content ?? "",
+      mediaUrl,
+      filename: filename ?? undefined,
+      replyTo: replyTo ?? undefined,
+      silent,
+      ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
+      __sessionKey: sessionKey ?? undefined,
+      __agentId: agentId ?? undefined,
+    });
     notifyVisibleOutbound(result, to, sessionKey);
     return withAdoptedThreadReplyRoute(result, to, sessionKey);
   }
@@ -342,52 +343,37 @@ async function dispatchDiscordMessageAction(
     }
     const emoji = readStringParam(params, "emoji", { allowEmpty: true });
     const remove = readBooleanParam(params, "remove");
-    return await handleDiscordAction(
-      {
-        action: "react",
-        accountId: accountId ?? undefined,
-        channelId: readTarget(),
-        messageId,
-        emoji,
-        remove,
-      },
-      cfg,
-      actionOptions,
-    );
+    return await runAction({
+      action: "react",
+      channelId: readTarget(),
+      messageId,
+      emoji,
+      remove,
+    });
   }
 
   if (action === "reactions") {
     const messageId = readStringParam(params, "messageId", { required: true });
     const limit = readPositiveIntegerParam(params, "limit");
-    return await handleDiscordAction(
-      {
-        action: "reactions",
-        accountId: accountId ?? undefined,
-        channelId: readTarget(),
-        messageId,
-        limit,
-      },
-      cfg,
-      actionOptions,
-    );
+    return await runAction({
+      action: "reactions",
+      channelId: readTarget(),
+      messageId,
+      limit,
+    });
   }
 
   if (action === "read") {
     const limit = readPositiveIntegerParam(params, "limit");
-    return await handleDiscordAction(
-      {
-        action: "readMessages",
-        accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
-        limit,
-        before: readStringParam(params, "before"),
-        after: readStringParam(params, "after"),
-        around: readStringParam(params, "around"),
-        messageId: readStringParam(params, "messageId"),
-      },
-      cfg,
-      actionOptions,
-    );
+    return await runAction({
+      action: "readMessages",
+      channelId: resolveChannelId(),
+      limit,
+      before: readStringParam(params, "before"),
+      after: readStringParam(params, "after"),
+      around: readStringParam(params, "around"),
+      messageId: readStringParam(params, "messageId"),
+    });
   }
 
   if (action === "edit" || action === "delete") {
@@ -401,44 +387,29 @@ async function dispatchDiscordMessageAction(
       matchesDiscordToolContextTarget({ target, toolContext: ctx.toolContext })
         ? readCurrentDiscordTarget(ctx.toolContext)
         : undefined;
-    return await handleDiscordAction(
-      {
-        action: action === "edit" ? "editMessage" : "deleteMessage",
-        accountId: accountId ?? undefined,
-        channelId: resolveDiscordChannelId(currentDmChannel ?? target),
-        messageId,
-        ...(action === "edit" ? { content: params.message } : {}),
-      },
-      cfg,
-      actionOptions,
-    );
+    return await runAction({
+      action: action === "edit" ? "editMessage" : "deleteMessage",
+      channelId: resolveDiscordChannelId(currentDmChannel ?? target),
+      messageId,
+      ...(action === "edit" ? { content: params.message } : {}),
+    });
   }
 
   if (action === "pin" || action === "unpin" || action === "list-pins") {
     const messageId =
       action === "list-pins" ? undefined : readStringParam(params, "messageId", { required: true });
-    return await handleDiscordAction(
-      {
-        action: action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
-        accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
-        messageId,
-      },
-      cfg,
-      actionOptions,
-    );
+    return await runAction({
+      action: action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
+      channelId: resolveChannelId(),
+      messageId,
+    });
   }
 
   if (action === "permissions") {
-    return await handleDiscordAction(
-      {
-        action: "permissions",
-        accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
-      },
-      cfg,
-      actionOptions,
-    );
+    return await runAction({
+      action: "permissions",
+      channelId: resolveChannelId(),
+    });
   }
 
   if (action === "thread-create") {
@@ -447,20 +418,15 @@ async function dispatchDiscordMessageAction(
     const content = readStringParam(params, "message", { trim: false });
     const autoArchiveMinutes = readDiscordAutoArchiveDurationParam(params, "autoArchiveMin");
     const appliedTags = readStringArrayParam(params, "appliedTags");
-    const result = await handleDiscordAction(
-      {
-        action: "threadCreate",
-        accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
-        name,
-        messageId,
-        content,
-        autoArchiveMinutes,
-        appliedTags: appliedTags ?? undefined,
-      },
-      cfg,
-      actionOptions,
-    );
+    const result = await runAction({
+      action: "threadCreate",
+      channelId: resolveChannelId(),
+      name,
+      messageId,
+      content,
+      autoArchiveMinutes,
+      appliedTags: appliedTags ?? undefined,
+    });
     const details =
       result.details && typeof result.details === "object" && !Array.isArray(result.details)
         ? (result.details as { ok?: unknown; thread?: { id?: unknown } })
@@ -486,36 +452,26 @@ async function dispatchDiscordMessageAction(
         required: true,
         label: "sticker-id",
       }) ?? [];
-    const result = await handleDiscordAction(
-      {
-        action: "sticker",
-        accountId: accountId ?? undefined,
-        to,
-        stickerIds,
-        content: readStringParam(params, "message", { trim: false }),
-        ...(readBooleanParam(params, "silent") === true ? { silent: true } : {}),
-      },
-      cfg,
-      actionOptions,
-    );
+    const result = await runAction({
+      action: "sticker",
+      to,
+      stickerIds,
+      content: readStringParam(params, "message", { trim: false }),
+      ...(readBooleanParam(params, "silent") === true ? { silent: true } : {}),
+    });
     notifyVisibleOutbound(result, to);
     return result;
   }
 
   if (action === "set-presence") {
-    return await handleDiscordAction(
-      {
-        action: "setPresence",
-        accountId: accountId ?? undefined,
-        status: readStringParam(params, "status"),
-        activityType: readStringParam(params, "activityType"),
-        activityName: readStringParam(params, "activityName"),
-        activityUrl: readStringParam(params, "activityUrl"),
-        activityState: readStringParam(params, "activityState"),
-      },
-      cfg,
-      actionOptions,
-    );
+    return await runAction({
+      action: "setPresence",
+      status: readStringParam(params, "status"),
+      activityType: readStringParam(params, "activityType"),
+      activityName: readStringParam(params, "activityName"),
+      activityUrl: readStringParam(params, "activityUrl"),
+      activityState: readStringParam(params, "activityState"),
+    });
   }
 
   const adminResult = await tryHandleDiscordMessageActionGuildAdmin({

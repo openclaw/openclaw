@@ -181,8 +181,7 @@ private fun BackgroundTaskList(
   onRefresh: () -> Unit,
   onSelect: (BackgroundTask) -> Unit,
 ) {
-  val running = tasks.filter(BackgroundTask::isActive)
-  val finished = tasks.filterNot(BackgroundTask::isActive)
+  val (running, finished) = tasks.partition(BackgroundTask::isActive)
   LazyColumn(
     modifier = Modifier.fillMaxWidth().heightIn(max = 620.dp),
     contentPadding = PaddingValues(bottom = 28.dp),

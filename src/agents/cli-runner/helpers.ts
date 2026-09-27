@@ -95,6 +95,7 @@ export function resolveCliRunQueueKey(params: {
 }
 
 export function buildCliAgentSystemPrompt(params: {
+  requesterProfileId?: string;
   workspaceDir: string;
   cwd?: string;
   config?: OpenClawConfig;
@@ -134,6 +135,7 @@ export function buildCliAgentSystemPrompt(params: {
     workspaceDir: runtimeCwd,
     cwd: runtimeCwd,
     preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt,
+    requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,

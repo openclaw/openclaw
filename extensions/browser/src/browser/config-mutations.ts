@@ -74,11 +74,10 @@ export async function persistBrowserControlCredential(
   });
 }
 
-/** Create and persist a browser profile config with allocated color and CDP port. */
+/** Create and persist a browser profile config with an allocated CDP port. */
 export async function createBrowserProfileConfig(params: {
   name: string;
   resolved: ResolvedBrowserConfig;
-  color?: string;
   parsedCdpUrl?: string;
   userDataDir?: string;
   driver?: "openclaw" | "existing-session";

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
+import { resolveRealtimeVoiceAgentContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import type { RealtimeVoiceSelectionHandle } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -190,28 +190,16 @@ export async function runDiscordVoiceAgentTurn(params: {
   };
 }
 
-export async function resolveDiscordVoiceRealtimeBootstrapContext(params: {
+export async function resolveDiscordVoiceRealtimeAgentContext(params: {
   entry: VoiceSessionEntry;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
-}): Promise<string | undefined> {
-  const realtimeConfig = params.discordConfig.voice?.realtime;
-  const files = realtimeConfig?.bootstrapContextFiles;
-  if (files?.length === 0) {
-    return undefined;
-  }
-  try {
-    return await resolveRealtimeBootstrapContextInstructions({
-      config: params.cfg,
-      agentId: params.entry.route.agentId,
-      sessionKey: params.entry.route.sessionKey,
-      files,
-      warn: (message) => logger.warn(`discord voice: realtime bootstrap context: ${message}`),
-    });
-  } catch (error) {
-    logger.warn(
-      `discord voice: realtime bootstrap context unavailable: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return undefined;
-  }
+}): Promise<string> {
+  return await resolveRealtimeVoiceAgentContextInstructions({
+    config: params.cfg,
+    agentId: params.entry.route.agentId,
+    sessionKey: params.entry.route.sessionKey,
+    files: params.discordConfig.voice?.realtime?.bootstrapContextFiles,
+    warn: (message) => logger.warn(`discord voice: realtime agent context: ${message}`),
+  });
 }

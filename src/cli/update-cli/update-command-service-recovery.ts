@@ -47,11 +47,6 @@ const QUIET_SERVICE_STDOUT = new Writable({
   },
 });
 
-type PostUpdateGatewayHealthRecoveryDeps = {
-  recoverLaunchAgent?: typeof recoverInstalledLaunchAgentAfterUpdate;
-  waitForHealthy?: typeof waitForGatewayHealthyRestart;
-};
-
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   onGatewayStartAttempted?: () => void;
   updateRun?: UpdateCommandOptions["run"];
@@ -65,7 +60,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   expectedBuildId?: string;
   requirePluginHealth?: boolean;
   env?: NodeJS.ProcessEnv;
-  deps?: PostUpdateGatewayHealthRecoveryDeps;
 }): Promise<{
   health: GatewayRestartSnapshot;
   launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
@@ -80,8 +74,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     return { health: params.health, launchAgentRecovery: null };
   }
 
-  const recoverLaunchAgent =
-    params.deps?.recoverLaunchAgent ?? recoverInstalledLaunchAgentAfterUpdate;
   const startedAtMs = Date.now();
   const launchAgentRecovery = await withGatewayServiceOperationLock(
     params.env ?? process.env,
@@ -91,7 +83,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
         assertNative();
       };
       assertRecovery();
-      const recovery = await recoverLaunchAgent({
+      const recovery = await recoverInstalledLaunchAgentAfterUpdate({
         onGatewayStartAttempted: params.onGatewayStartAttempted,
         service: params.service,
         env: params.env,
@@ -125,8 +117,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     return { health: params.health, launchAgentRecovery };
   }
 
-  const waitForHealthy = params.deps?.waitForHealthy ?? waitForGatewayHealthyRestart;
-  const health = await waitForHealthy({
+  const health = await waitForGatewayHealthyRestart({
     service: params.service,
     port: params.port,
     timeoutMs: params.timeoutMs,
@@ -301,7 +292,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
         {
           onGatewayStartAttempted: params.onGatewayStartAttempted,
           result: { root: original?.root ?? verdict.root },
-          opts: { json: params.jsonMode, run },
+          opts: { run },
           invocationEnv: serviceEnv,
           serviceEnv: current.env,
           nodeRunner: original?.nodeRunner ?? params.nodeRunner,

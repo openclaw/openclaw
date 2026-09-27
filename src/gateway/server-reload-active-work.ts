@@ -42,49 +42,29 @@ export function createGatewayActiveWorkTracker(options: {
     return channels.map((channel) => ({ channel, publicationPending }));
   };
   const getActiveCounts = () => {
-    const queueSize = getTotalQueueSize();
-    const pendingReplies = getTotalPendingReplies();
-    const embeddedRuns = getActiveEmbeddedRunCount();
-    const backgroundExecSessions = getActiveBackgroundExecSessionCount();
-    const rootRequests = getActiveGatewayRootWorkCount({ excludeCurrent: true });
-    const activeTasks = getInspectableActiveTaskRestartBlockers().length;
+    const counts = {
+      queueSize: getTotalQueueSize(),
+      pendingReplies: getTotalPendingReplies(),
+      embeddedRuns: getActiveEmbeddedRunCount(),
+      backgroundExecSessions: getActiveBackgroundExecSessionCount(),
+      rootRequests: getActiveGatewayRootWorkCount({ excludeCurrent: true }),
+      activeTasks: getInspectableActiveTaskRestartBlockers().length,
+    };
     return {
-      queueSize,
-      pendingReplies,
-      embeddedRuns,
-      backgroundExecSessions,
-      rootRequests,
-      activeTasks,
-      totalActive:
-        queueSize +
-        pendingReplies +
-        embeddedRuns +
-        backgroundExecSessions +
-        rootRequests +
-        activeTasks,
+      ...counts,
+      totalActive: Object.values(counts).reduce((total, count) => total + count, 0),
     };
   };
   const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
-    const details = [];
-    if (counts.queueSize > 0) {
-      details.push(`${counts.queueSize} operation(s)`);
-    }
-    if (counts.pendingReplies > 0) {
-      details.push(`${counts.pendingReplies} reply(ies)`);
-    }
-    if (counts.embeddedRuns > 0) {
-      details.push(`${counts.embeddedRuns} embedded run(s)`);
-    }
-    if (counts.backgroundExecSessions > 0) {
-      details.push(`${counts.backgroundExecSessions} background exec session(s)`);
-    }
-    if (counts.rootRequests > 0) {
-      details.push(`${counts.rootRequests} gateway request(s)`);
-    }
-    if (counts.activeTasks > 0) {
-      details.push(`${counts.activeTasks} background task run(s)`);
-    }
-    return details;
+    const details = [
+      [counts.queueSize, "operation(s)"],
+      [counts.pendingReplies, "reply(ies)"],
+      [counts.embeddedRuns, "embedded run(s)"],
+      [counts.backgroundExecSessions, "background exec session(s)"],
+      [counts.rootRequests, "gateway request(s)"],
+      [counts.activeTasks, "background task run(s)"],
+    ] as const;
+    return details.filter(([count]) => count > 0).map(([count, label]) => `${count} ${label}`);
   };
   const formatTaskBlockers = () => {
     const blockers = getInspectableActiveTaskRestartBlockers();

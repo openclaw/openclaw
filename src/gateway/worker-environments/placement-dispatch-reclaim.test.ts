@@ -41,6 +41,53 @@ describe("worker placement dispatch reclaim", () => {
     tempDirs.cleanup();
   });
 
+  it("admits an unrelated provider provision after Stop while another provision never settles", async () => {
+    const harness = createHarness(database, placementStore, {
+      workspacePath: root,
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    const coordinated = coordinateWorkerPlacementDispatch(harness.service, (_request, run) =>
+      run(),
+    );
+    await coordinated.dispatch(REQUEST);
+    const provisionEntered = createDeferredCore();
+    const nextProvisionEntered = createDeferredCore();
+    const provision = createDeferredCore<typeof harness.ready>();
+    const create = vi.mocked(harness.environments.createWithRequest);
+    create
+      .mockClear()
+      .mockImplementationOnce(async () => {
+        provisionEntered.resolve();
+        return await provision.promise;
+      })
+      .mockImplementation(async () => {
+        nextProvisionEntered.resolve();
+        return await provision.promise;
+      });
+    void coordinated
+      .dispatch({
+        ...REQUEST,
+        sessionId: "pending-session",
+        sessionKey: "agent:main:pending-session",
+      })
+      .catch(provisionEntered.reject);
+    await provisionEntered.promise;
+    await expect(coordinated.reclaim(REQUEST)).resolves.toMatchObject({ state: "reclaimed" });
+
+    void coordinated
+      .dispatch({
+        ...REQUEST,
+        sessionId: "new-session",
+        sessionKey: "agent:main:new-session",
+      })
+      .catch(nextProvisionEntered.reject);
+    await nextProvisionEntered.promise;
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(placementStore.get("new-session")).toMatchObject({ state: "provisioning" });
+    expect(placementStore.get("pending-session")).toMatchObject({ state: "provisioning" });
+  });
+
   it("releases a failed reclaim before an older provisioning recovery without losing accepted work", async () => {
     const harness = createHarness(database, placementStore, {
       workspacePath: root,
