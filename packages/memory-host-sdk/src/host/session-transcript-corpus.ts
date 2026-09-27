@@ -23,7 +23,6 @@ import {
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
   type SessionEntry,
-  type SessionTranscriptInstance,
 } from "./openclaw-runtime-session.js";
 import type { MemorySessionKind } from "./types.js";
 
@@ -219,24 +218,20 @@ function collectCronGeneratedSessionKeys(
   return cronGeneratedKeys;
 }
 
-function toSessionStoreCorpusEntry(
-  agentId: string,
-  storePath: string,
-  summary: SessionEntrySummary,
+function toSqliteCorpusEntry(
+  identity: Pick<
+    SessionTranscriptCorpusEntry,
+    "agentId" | "artifactKind" | "sessionId" | "updatedAtMs"
+  > & { sessionKey: string; storePath: string },
+  entry: SessionEntry,
   cronGeneratedSessionKeys: ReadonlySet<string>,
   includeContentRevision: boolean,
   env: NodeJS.ProcessEnv,
-): SessionTranscriptCorpusEntry | null {
-  const sessionId = summary.entry.sessionId?.trim();
-  if (!sessionId) {
-    return null;
-  }
-  const sessionKey = summary.sessionKey.trim();
-  const classification = classifySessionEntry(
-    summary.sessionKey,
-    summary.entry,
-    cronGeneratedSessionKeys,
-  );
+  classificationKey = identity.sessionKey,
+): SessionTranscriptCorpusEntry {
+  const { sessionKey, ...persistedIdentity } = identity;
+  const { agentId, sessionId, storePath } = persistedIdentity;
+  const classification = classifySessionEntry(classificationKey, entry, cronGeneratedSessionKeys);
   const contentRevision = includeContentRevision
     ? sqliteContentRevision({
         agentId,
@@ -247,59 +242,10 @@ function toSessionStoreCorpusEntry(
       })
     : undefined;
   return {
-    agentId,
-    artifactKind: "active-session",
+    ...persistedIdentity,
     sessionFile: sessionKey,
-    sessionId,
     ...(contentRevision ? { contentRevision } : {}),
     transcriptSource: "sqlite",
-    storePath,
-    ...(Number.isFinite(summary.entry.updatedAt) ? { updatedAtMs: summary.entry.updatedAt } : {}),
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
-    ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),
-    sessionKind: classification.sessionKind,
-  };
-}
-
-function toRetainedSessionCorpusEntry(
-  agentId: string,
-  instance: SessionTranscriptInstance,
-  sessionKey: string,
-  storePath: string,
-  cronGeneratedSessionKeys: ReadonlySet<string>,
-  includeContentRevision: boolean,
-  env: NodeJS.ProcessEnv,
-): SessionTranscriptCorpusEntry | null {
-  // Retained rows predate the current logical session entry. Only rows whose
-  // exclusion-sensitive ownership was captured may enter historical ingestion.
-  if (
-    !instance.provenanceKnown ||
-    instance.acpOwned ||
-    instance.entry.pluginOwnerId ||
-    instance.entry.hookExternalContentSource
-  ) {
-    return null;
-  }
-  const classification = classifySessionEntry(sessionKey, instance.entry, cronGeneratedSessionKeys);
-  const contentRevision = includeContentRevision
-    ? sqliteContentRevision({
-        agentId,
-        env,
-        sessionId: instance.sessionId,
-        ...(sessionKey ? { sessionKey } : {}),
-        storePath,
-      })
-    : undefined;
-  return {
-    agentId,
-    artifactKind: "retained-session",
-    sessionFile: sessionKey,
-    sessionId: instance.sessionId,
-    ...(contentRevision ? { contentRevision } : {}),
-    storePath,
-    transcriptSource: "sqlite",
-    updatedAtMs: instance.updatedAtMs,
     ...(sessionKey ? { sessionKey } : {}),
     ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
     ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),
@@ -438,17 +384,27 @@ function projectSessionTranscriptCorpusEntries(
       sessionKey,
       ...(isSharedFixedStore ? {} : { fallbackAgentId: normalizedAgentId }),
     });
-    const entry = toSessionStoreCorpusEntry(
-      ownerAgentId,
-      storePath,
-      summary,
+    const sessionId = summary.entry.sessionId?.trim();
+    if (!sessionId) {
+      continue;
+    }
+    const entry = toSqliteCorpusEntry(
+      {
+        agentId: ownerAgentId,
+        artifactKind: "active-session",
+        sessionId,
+        sessionKey: summary.sessionKey.trim(),
+        storePath,
+        ...(Number.isFinite(summary.entry.updatedAt)
+          ? { updatedAtMs: summary.entry.updatedAt }
+          : {}),
+      },
+      summary.entry,
       cronGeneratedSessionKeys,
       includeContentRevision,
       env,
+      summary.sessionKey,
     );
-    if (!entry) {
-      continue;
-    }
     entryOwnersBySessionId.set(entry.sessionId, ownerAgentId);
     if (ownerAgentId === normalizedAgentId) {
       activeEntriesBySessionId.set(entry.sessionId, entry);
@@ -476,18 +432,32 @@ function projectSessionTranscriptCorpusEntries(
       if (ownerAgentId !== normalizedAgentId) {
         continue;
       }
-      const entry = toRetainedSessionCorpusEntry(
-        ownerAgentId,
-        instance,
-        sessionKey,
-        storePath,
-        cronGeneratedSessionKeys,
-        includeContentRevision,
-        env,
-      );
-      if (entry?.transcriptSource === "sqlite") {
-        corpusEntries.push(entry);
+      // Retained rows predate the current logical session entry. Only rows whose
+      // exclusion-sensitive ownership was captured may enter historical ingestion.
+      if (
+        !instance.provenanceKnown ||
+        instance.acpOwned ||
+        instance.entry.pluginOwnerId ||
+        instance.entry.hookExternalContentSource
+      ) {
+        continue;
       }
+      corpusEntries.push(
+        toSqliteCorpusEntry(
+          {
+            agentId: ownerAgentId,
+            artifactKind: "retained-session",
+            sessionId: instance.sessionId,
+            sessionKey,
+            storePath,
+            updatedAtMs: instance.updatedAtMs,
+          },
+          instance.entry,
+          cronGeneratedSessionKeys,
+          includeContentRevision,
+          env,
+        ),
+      );
     }
   }
   for (const { path: artifactPath, contentRevision } of artifacts) {

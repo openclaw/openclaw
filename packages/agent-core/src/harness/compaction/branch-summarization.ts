@@ -3,11 +3,7 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
-import {
-  type AgentCoreCompletionRuntimeDeps,
-  consumeAgentCoreStream,
-  resolveAgentCoreCompleteFn,
-} from "../../runtime-deps.js";
+import { type AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import { projectSessionEntryMessage } from "../session/session.js";
@@ -19,12 +15,12 @@ import {
   ok,
   type Result,
 } from "../types.js";
+import { completeSummaryPrompt } from "./summarization-completion.js";
 import { SUMMARIZATION_SYSTEM_PROMPT } from "./summarization-prompts.js";
 import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
-  extractSummaryText,
   type FileOperations,
   formatFileOperations,
   mergeSummaryFileOperations,
@@ -249,47 +245,21 @@ export async function generateBranchSummary(
     }
     return ok({ summary: "No content to summarize", readFiles: [], modifiedFiles: [] });
   }
-  const promptText = `${promptPrefix}${conversationText}${promptSuffix}`;
-
-  const summarizationMessages = [
-    {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: promptText }],
-      timestamp: Date.now(),
-    },
-  ];
-  const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
-  const streamOptions = { apiKey, headers, signal, maxTokens: maxSummaryOutputTokens };
-  const response = options.streamFn
-    ? await consumeAgentCoreStream(options.streamFn(model, context, streamOptions), options.runtime)
-    : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);
-  // Usage belongs to the completed provider request even when its summary is invalid.
-  options.runtime?.internalUsageSink?.(response.usage);
-  if (response.stopReason === "aborted") {
-    return err(
-      new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"),
-    );
-  }
-  if (response.stopReason === "error") {
+  const result = await completeSummaryPrompt(
+    `${promptPrefix}${conversationText}${promptSuffix}`,
+    { apiKey, headers, signal, maxTokens: maxSummaryOutputTokens },
+    { model, streamFn: options.streamFn, runtime: options.runtime, errorLabel: "Branch summary" },
+  );
+  if (!result.ok) {
     return err(
       new BranchSummaryError(
-        "summarization_failed",
-        `Branch summary failed: ${response.errorMessage || "Unknown error"}`,
+        result.error.code === "aborted" ? "aborted" : "summarization_failed",
+        result.error.message,
       ),
     );
   }
 
-  const summaryText = extractSummaryText(response);
-  if (summaryText === undefined) {
-    return err(
-      new BranchSummaryError(
-        "summarization_failed",
-        "Branch summary failed: model returned no summary text",
-      ),
-    );
-  }
-
-  let summary = BRANCH_SUMMARY_PREAMBLE + summaryText;
+  let summary = BRANCH_SUMMARY_PREAMBLE + result.value;
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);
   summary += formatFileOperations(readFiles, modifiedFiles);
 

@@ -64,6 +64,26 @@ export async function runSummarizationCompletion(
   if (params.customInstructions) {
     promptText += `\n\nAdditional focus: ${params.customInstructions}`;
   }
+  return completeSummaryPrompt(
+    promptText,
+    createSummarizationOptions(
+      params.model,
+      params.maxTokens,
+      params.apiKey,
+      params.headers,
+      params.signal,
+      params.thinkingLevel,
+    ),
+    params,
+  );
+}
+
+/** Complete prepared summary text through the same stream, usage, and output owner. */
+export async function completeSummaryPrompt(
+  promptText: string,
+  options: SimpleStreamOptions,
+  params: Pick<SummarizationCompletionParams, "model" | "streamFn" | "runtime" | "errorLabel">,
+): Promise<Result<string, CompactionError>> {
   const context = {
     systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
     messages: [
@@ -74,14 +94,6 @@ export async function runSummarizationCompletion(
       },
     ],
   };
-  const options = createSummarizationOptions(
-    params.model,
-    params.maxTokens,
-    params.apiKey,
-    params.headers,
-    params.signal,
-    params.thinkingLevel,
-  );
   const response = params.streamFn
     ? await consumeAgentCoreStream(params.streamFn(params.model, context, options), params.runtime)
     : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);

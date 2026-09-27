@@ -1,44 +1,17 @@
-import { evaluateSchemaWalk, type SchemaWalk } from "./schema-walk.js";
-
-// This helper accepts draft-07 through 2020-12 schemas. Keep the union of
-// schema-bearing keys aligned with the package's dialect-specific walkers.
-const SCHEMA_MAP_KEYS = new Set([
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  // Draft-07 dependencies mix schemas with property-name arrays. Stripping
-  // leaves the string entries in those arrays unchanged.
-  "dependencies",
-  "patternProperties",
-  "properties",
-]);
-
-/** Containers whose value is a single nested schema. */
-const SCHEMA_OBJECT_KEYS = new Set([
-  "additionalItems",
-  "additionalProperties",
-  "contains",
-  "contentSchema",
-  "else",
-  "if",
-  "items",
-  "not",
-  "propertyNames",
-  "then",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-]);
-
-/** Containers whose value is a list of nested schemas. */
-const SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "items", "oneOf", "prefixItems"]);
+import {
+  evaluateSchemaWalk,
+  SCHEMA_ARRAY_KEYS,
+  SCHEMA_MAP_KEYS,
+  SCHEMA_OBJECT_KEYS,
+  type SchemaWalk,
+} from "./schema-walk.js";
 
 function* stripSchemaArray(
   schemas: unknown[],
   unsupportedKeywords: ReadonlySet<string>,
   ancestors: Set<object>,
-  result: unknown[],
 ): SchemaWalk {
-  result.length = schemas.length;
+  const result = new Array<unknown>(schemas.length);
   for (let index = 0; index < result.length; index += 1) {
     if (index in schemas) {
       result[index] = yield stripSchemaKeywords(schemas[index], unsupportedKeywords, ancestors);
@@ -61,9 +34,7 @@ function* stripSchemaKeywords(
   ancestors.add(schema);
   try {
     if (Array.isArray(schema)) {
-      const result: unknown[] = [];
-      yield stripSchemaArray(schema, unsupportedKeywords, ancestors, result);
-      return result;
+      return yield stripSchemaArray(schema, unsupportedKeywords, ancestors);
     }
     const obj = schema as Record<string, unknown>;
     const cleaned: Record<string, unknown> = {};
@@ -78,9 +49,7 @@ function* stripSchemaKeywords(
         }
         cleaned[key] = Object.fromEntries(entries);
       } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-        const result: unknown[] = [];
-        yield stripSchemaArray(value, unsupportedKeywords, ancestors, result);
-        cleaned[key] = result;
+        cleaned[key] = yield stripSchemaArray(value, unsupportedKeywords, ancestors);
       } else if (SCHEMA_OBJECT_KEYS.has(key) && value && typeof value === "object") {
         cleaned[key] = yield stripSchemaKeywords(value, unsupportedKeywords, ancestors);
       } else {

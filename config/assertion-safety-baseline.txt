@@ -1206,7 +1206,7 @@ packages/acp-core/src/types.ts	2
 packages/agent-core/src/agent-loop.ts	3
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
-packages/agent-core/src/harness/session/tool-result-pairing.ts	14
+packages/agent-core/src/harness/session/tool-result-pairing.ts	3
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
 packages/agent-core/src/turn-interruption.ts	1
@@ -1301,7 +1301,6 @@ packages/llm-core/src/utils/event-stream.ts	1
 packages/llm-core/src/validation.ts	1
 packages/markdown-core/src/assistant-transcript.ts	1
 packages/markdown-core/src/format-capabilities.ts	1
-packages/markdown-core/src/frontmatter.ts	1
 packages/markdown-core/src/ir.ts	5
 packages/markdown-core/src/reasoning-tag-parser.ts	1
 packages/media-core/src/read-byte-stream-with-limit.ts	1
@@ -1316,7 +1315,7 @@ packages/memory-host-sdk/src/host/memory-schema-migration.ts	1
 packages/memory-host-sdk/src/host/memory-schema-recall.ts	1
 packages/memory-host-sdk/src/host/memory-schema.ts	7
 packages/memory-host-sdk/src/host/multimodal.ts	1
-packages/memory-host-sdk/src/host/read-retry.ts	4
+packages/memory-host-sdk/src/host/read-retry.ts	1
 packages/memory-host-sdk/src/host/session-files.ts	8
 packages/memory-host-sdk/src/host/session-reset-recall.ts	3
 packages/memory-host-sdk/src/host/sqlite-vec.ts	3
