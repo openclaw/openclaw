@@ -55,7 +55,7 @@ describe("queue health collector", () => {
       .mockResolvedValue(failed);
     const countPressure = vi
       .spyOn(ingressHealth, "countChannelIngressQueuePressure")
-      .mockReturnValue([]);
+      .mockResolvedValue([]);
     try {
       const pending = collectHealth();
       expect(capture).toHaveBeenCalledTimes(1);

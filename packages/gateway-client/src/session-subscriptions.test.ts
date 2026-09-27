@@ -92,21 +92,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", { key: "main" });
   });
 
-  it("uses the Gateway canonical key when releasing a requested alias", async () => {
-    const { client, request } = createClient(async (method) =>
-      method === "sessions.messages.subscribe" ? { key: "agent:main:main" } : {},
-    );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-
-    const subscription = await coordinator.acquire("main");
-    expect(subscription).toEqual({ key: "agent:main:main", agentId: null });
-
-    await coordinator.release(subscription);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      key: "agent:main:main",
-    });
-  });
-
   it("retains the requested alias after the Gateway returns a canonical key", async () => {
     const { client, request } = createClient(async (method) =>
       method === "sessions.messages.subscribe" ? { key: "agent:main:main" } : {},
@@ -252,6 +237,14 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     expect(research).toEqual({ key: "global", agentId: "research" });
     expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
+      key: "global",
+      agentId: "main",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      key: "global",
+      agentId: "research",
+    });
     acknowledgement.resolve({ key: "global" });
     await expect(main).resolves.toEqual({ key: "global", agentId: "main" });
   });
@@ -637,27 +630,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
-  it("isolates the same global key by canonical agent", async () => {
-    const { client, request } = createClient();
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-
-    const [main, research] = await Promise.all([
-      coordinator.acquire("global", { agentId: "main" }),
-      coordinator.acquire("global", { agentId: "research" }),
-    ]);
-
-    expect(main).toEqual({ key: "global", agentId: "main" });
-    expect(research).toEqual({ key: "global", agentId: "research" });
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
-      key: "global",
-      agentId: "main",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
-      key: "global",
-      agentId: "research",
-    });
-  });
-
   it("retries an initial subscribe without retaining a failed observer", async () => {
     let calls = 0;
     const { client, request } = createClient(async (_method, params) => {
@@ -703,22 +675,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     await expect(pending).rejects.toThrow("replaced Gateway connection");
     expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("shares canonical lease ownership across clients of the same connection", async () => {
-    const { client, request } = createClient();
-    const firstCoordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
-    const secondCoordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
-
-    expect(firstCoordinator).toBe(secondCoordinator);
-    const first = await firstCoordinator.acquire("main");
-    const second = await secondCoordinator.acquire("main");
-    expect(request).toHaveBeenCalledOnce();
-
-    await releaseGatewaySessionMessageSubscription(first);
-    expect(request).toHaveBeenCalledOnce();
-    await releaseGatewaySessionMessageSubscription(second);
-    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("configures a cached coordinator before sharing UI session aliases", async () => {

@@ -26,7 +26,8 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   controller: AbortController;
   sessionBinding: Readonly<
     Pick<ChatAbortControllerEntry, "sessionKey" | "sessionId" | "agentId" | "lifecycleGeneration">
-  >;
+  > &
+    Pick<ChatAbortControllerEntry, "abortDiagnosticReason">;
   sessionKey: string;
   agentId?: string;
   ownerConnId?: string;
@@ -122,7 +123,10 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         ownerConnId: normalizeOptionalChatText(params.ownerConnId),
         ownerDeviceId: normalizeOptionalChatText(params.ownerDeviceId),
         // Queue cancellation supersedes the source run's earlier custody acknowledgement.
-        onAborted: () => recordQueuedTerminal("aborted"),
+        onAborted: (reason) => {
+          params.sessionBinding.abortDiagnosticReason = reason;
+          recordQueuedTerminal("aborted");
+        },
       });
       if (enqueued && !releaseWorkAdmission) {
         // Retain the session fence until this detached queued ownership ends.

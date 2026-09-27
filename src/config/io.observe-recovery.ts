@@ -3,7 +3,11 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { root } from "../infra/fs-safe.js";
-import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
+import {
+  appendConfigAuditRecord,
+  appendConfigAuditRecordSync,
+  createConfigObserveAuditRecord,
+} from "./io.audit.js";
 import {
   persistBoundedClobberedConfigSnapshot,
   persistBoundedClobberedConfigSnapshotSync,
@@ -23,7 +27,6 @@ import {
 } from "./io.observe-recovery-effects.js";
 import {
   createConfigHealthFingerprint,
-  createConfigObserveAuditAppendParams,
   extractRestoreErrorDetails,
   readConfigFingerprintForPath,
   readConfigFingerprintForPathSync,
@@ -458,19 +461,23 @@ function* planSuspiciousConfigRead(
           ? `; ${restoreErrorDetails.message}`
           : "";
       deps.logger.warn(`Config ${result}: ${configPath} (${suspicious.join(", ")}${detail})`);
-      const audit = createConfigObserveAuditAppendParams(deps, {
-        configPath,
-        valid: restoredFromBackup,
-        current,
-        suspicious,
-        lastKnownGood: entry.lastKnownGood,
-        backup,
-        clobberedPath,
-        restoredFromBackup,
-        restoredBackupPath: backupPath,
-        restoreErrorCode: restoreErrorDetails.code,
-        restoreErrorMessage: restoreErrorDetails.message,
-      });
+      const audit = {
+        env: deps.env,
+        homedir: deps.homedir,
+        record: createConfigObserveAuditRecord({
+          configPath,
+          valid: restoredFromBackup,
+          current,
+          suspicious,
+          lastKnownGood: entry.lastKnownGood,
+          backup,
+          clobberedPath,
+          restoredFromBackup,
+          restoredBackupPath: backupPath,
+          restoreErrorCode: restoreErrorDetails.code,
+          restoreErrorMessage: restoreErrorDetails.message,
+        }),
+      };
       yield {
         sync: () => appendConfigAuditRecordSync(audit),
         async: () => appendConfigAuditRecord(audit, params.assertCurrent),
@@ -673,8 +680,10 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
   deps.logger.warn(
     `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
   );
-  await appendConfigAuditRecord(
-    createConfigObserveAuditAppendParams(deps, {
+  await appendConfigAuditRecord({
+    env: deps.env,
+    homedir: deps.homedir,
+    record: createConfigObserveAuditRecord({
       configPath: snapshot.path,
       valid: snapshot.valid,
       current,
@@ -685,7 +694,7 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
       restoredFromBackup: true,
       restoredBackupPath: lastGoodPath,
     }),
-  );
+  });
   await health.updateAfterFileCommit(
     {
       lastKnownGood: promoted,

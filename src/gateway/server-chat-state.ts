@@ -2,10 +2,11 @@ import type { AgentPlanStep } from "../channels/streaming.js";
 // Gateway chat run state registries.
 // Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
+import { mergeAssistantText, type AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import {
-  normalizeLiveAssistantBufferedText,
+  capLiveAssistantText,
+  createLiveAssistantTextProjection,
   projectLiveAssistantBufferedText,
 } from "./live-chat-projector.js";
 import type { ChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
@@ -93,6 +94,15 @@ type PendingLiveTextFlush = {
   flush: () => void;
 };
 
+type LiveDisplayState = {
+  projector: ReturnType<typeof createLiveAssistantTextProjection>;
+  current: ReturnType<ReturnType<typeof createLiveAssistantTextProjection>["replace"]>;
+  pendingRawDelta?: string | null;
+  reset?: boolean;
+  unsentDelta: string | null;
+  sentText?: string;
+};
+
 type ChatRunRecord = {
   lastActivityAt: number;
   registrations?: ChatRunEntry[];
@@ -101,15 +111,13 @@ type ChatRunRecord = {
   bufferIsCurrent?: () => boolean;
   /** Retire queued connection snapshots when this buffering generation is cleared. */
   liveTextGroup?: AbortController;
-  /** Projection stays valid only while source and managed-media facts match the run state. */
-  bufferProjection?: { source: string; suppress: boolean };
+  display?: LiveDisplayState;
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
   canvasBlocks?: ChatCanvasBlock[];
   deltaSentAt?: number;
   assistantScope?: AssistantTextSnapshot["scope"];
   managedMediaUrls?: Set<string>;
-  deltaLastBroadcastText?: string;
   agentText?: Partial<
     Record<"assistant" | "thinking" | "preamble" | "answer_candidate", ChatRunAgentTextState>
   >;
@@ -211,6 +219,11 @@ export type ChatRunState = {
     runId: string,
     options?: { final?: boolean },
   ) => { text: string; suppress: boolean };
+  updateBuffer: (runId: string, input: Parameters<typeof mergeAssistantText>[1]) => string;
+  takeBufferDelta: (
+    runId: string,
+    text: string,
+  ) => { deltaText: string; replace?: true } | undefined;
   flushPendingText: (runId: string) => void;
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
@@ -250,14 +263,13 @@ export function createChatRunState(): ChatRunState {
     delete record.bufferIsCurrent;
     record.liveTextGroup?.abort();
     delete record.liveTextGroup;
-    delete record.bufferProjection;
+    delete record.display;
     delete record.planSnapshot;
     delete record.progressSnapshot;
     delete record.canvasBlocks;
     delete record.deltaSentAt;
     delete record.assistantScope;
     delete record.managedMediaUrls;
-    delete record.deltaLastBroadcastText;
     clearPendingLiveTextFlushes(record);
     delete record.agentText;
     store.releaseIfEmpty(runId);
@@ -271,6 +283,35 @@ export function createChatRunState(): ChatRunState {
     store.runs.clear();
   };
 
+  const updateBuffer = (runId: string, input: Parameters<typeof mergeAssistantText>[1]) => {
+    const record = store.getOrCreate(runId);
+    const display = record.display;
+    if (input.managedMediaUrls?.length) {
+      const urls = (record.managedMediaUrls ??= new Set<string>());
+      const previousSize = urls.size;
+      input.managedMediaUrls.forEach((url) => urls.add(url));
+      if (display && urls.size !== previousSize) {
+        display.reset = true;
+      }
+    }
+    const snapshot = mergeAssistantText(
+      { text: record.rawBuffer ?? "", scope: record.assistantScope },
+      input,
+      "live",
+    );
+    record.assistantScope = snapshot.scope;
+    const text = capLiveAssistantText(snapshot);
+    record.rawBuffer = text;
+    if (display) {
+      display.reset ||= text.length !== snapshot.text.length || input.replace === true;
+      display.pendingRawDelta =
+        snapshot.appendedText !== undefined && display.pendingRawDelta !== null
+          ? (display.pendingRawDelta ?? "") + snapshot.appendedText
+          : null;
+    }
+    return text;
+  };
+
   const resolveBuffer = (runId: string, options?: { final?: boolean }) => {
     const record = store.runs.get(runId);
     if (!record || record.bufferIsCurrent?.() === false) {
@@ -280,30 +321,77 @@ export function createChatRunState(): ChatRunState {
     if (rawText === undefined) {
       return projectLiveAssistantBufferedText(record.buffer ?? "");
     }
-    if (
-      !options?.final &&
-      record.bufferProjection?.source === rawText &&
-      record.buffer !== undefined
-    ) {
-      return {
-        text: record.buffer,
-        suppress: record.bufferProjection.suppress,
+    const createProjector = () =>
+      createLiveAssistantTextProjection({
+        ...options,
+        managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
+      });
+    // Finalization releases ambiguous tails without changing the live projection.
+    if (options?.final) {
+      return createProjector().replace(rawText);
+    }
+    let display = record.display;
+    if (!display) {
+      const projector = createProjector();
+      display = record.display = {
+        projector,
+        current: projector.replace(rawText),
+        unsentDelta: null,
       };
+    } else if (display.reset || display.pendingRawDelta !== undefined) {
+      const { projector, pendingRawDelta, reset } = display;
+      if (reset) {
+        display.projector = createProjector();
+      }
+      // Delta-only producers prove appends. Cumulative snapshots retain their
+      // correction contract and need one prefix check before entering the chain.
+      const delta = reset
+        ? null
+        : pendingRawDelta === null
+          ? rawText.startsWith(projector.source)
+            ? rawText.slice(projector.source.length)
+            : null
+          : pendingRawDelta;
+      display.current =
+        delta == null
+          ? display.projector.replace(rawText)
+          : display.projector.append(delta, rawText);
+      display.unsentDelta =
+        display.unsentDelta !== null && display.current.delta !== null
+          ? display.unsentDelta + display.current.delta
+          : null;
+      delete display.pendingRawDelta;
+      delete display.reset;
     }
-    // Protected blocks and directive tags can span delta frames, so the
-    // projection cache belongs to the complete merged raw buffer.
-    const normalizedText = normalizeLiveAssistantBufferedText(rawText, {
-      ...options,
-      managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
+    record.buffer = display.current.text;
+    return display.current;
+  };
+
+  const takeBufferDelta = (runId: string, text: string) => {
+    const projected = resolveBuffer(runId);
+    const record = store.getOrCreate(runId);
+    const display = (record.display ??= {
+      projector: createLiveAssistantTextProjection(),
+      current: { ...projectLiveAssistantBufferedText(record.buffer ?? ""), delta: null },
+      unsentDelta: null,
     });
-    const projected = projectLiveAssistantBufferedText(normalizedText);
-    // A terminal read releases ambiguous directive prefixes as ordinary text;
-    // caching it would expose that prefix again if a late live reader races cleanup.
-    if (!options?.final) {
-      record.buffer = projected.text;
-      record.bufferProjection = { source: rawText, suppress: projected.suppress };
-    }
-    return projected;
+    const visible = projected.suppress ? "" : projected.text;
+    const previous = display.sentText;
+    const append =
+      text === visible && previous !== undefined && display.unsentDelta !== null
+        ? display.unsentDelta
+        : previous === undefined
+          ? text
+          : text.startsWith(previous)
+            ? text.slice(previous.length)
+            : null;
+    display.sentText = text;
+    display.unsentDelta = text === visible ? "" : null;
+    return append === null
+      ? { deltaText: text, replace: true as const }
+      : append
+        ? { deltaText: append }
+        : undefined;
   };
 
   return {
@@ -312,6 +400,8 @@ export function createChatRunState(): ChatRunState {
     toolEventRecipients,
     getOrCreate: store.getOrCreate,
     resolveBuffer,
+    updateBuffer,
+    takeBufferDelta,
     flushPendingText: (runId) => {
       const record = store.runs.get(runId);
       if (!record) {
@@ -378,6 +468,7 @@ const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 /** Create the broad sessions.changed subscriber registry. */
 export function createSessionEventSubscriberRegistry(
   isConnectionActive?: (connId: string) => boolean,
+  onSubscriptionChange?: (connId: string) => void,
 ): SessionEventSubscriberRegistry {
   const connIds = new Set<string>();
   const empty = new Set<string>();
@@ -388,6 +479,7 @@ export function createSessionEventSubscriberRegistry(
       if (!normalized || isConnectionActive?.(normalized) === false) {
         return;
       }
+      onSubscriptionChange?.(normalized);
       connIds.add(normalized);
     },
     unsubscribe: (connId: string) => {
@@ -395,6 +487,7 @@ export function createSessionEventSubscriberRegistry(
       if (!normalized) {
         return;
       }
+      onSubscriptionChange?.(normalized);
       connIds.delete(normalized);
     },
     getAll: () => (connIds.size > 0 ? connIds : empty),
@@ -404,6 +497,7 @@ export function createSessionEventSubscriberRegistry(
 /** Create the per-session message subscriber registry. */
 export function createSessionMessageSubscriberRegistry(
   isConnectionActive?: (connId: string) => boolean,
+  onSubscriptionChange?: (connId: string) => void,
 ): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   // Booleans retain committed approval mode; records own unsettled replays.
@@ -463,6 +557,7 @@ export function createSessionMessageSubscriberRegistry(
       ) {
         return undefined;
       }
+      onSubscriptionChange?.(normalizedConnId);
       const states =
         connections.get(normalizedConnId) ??
         new Map<string, boolean | ProvisionalSubscriptionState>();
@@ -501,6 +596,7 @@ export function createSessionMessageSubscriberRegistry(
         }
         const committed = state.lastSuccess?.includeApprovals ?? state.base;
         if (committed === undefined) {
+          onSubscriptionChange?.(normalizedConnId);
           states.delete(normalizedSessionKey);
           setMessageSubscription(normalizedConnId, normalizedSessionKey, false);
           setApprovalSubscription(normalizedConnId, normalizedSessionKey, false);
@@ -527,6 +623,7 @@ export function createSessionMessageSubscriberRegistry(
       if (!normalizedConnId || !normalizedSessionKey) {
         return;
       }
+      onSubscriptionChange?.(normalizedConnId);
       const states = connections.get(normalizedConnId);
       states?.delete(normalizedSessionKey);
       if (states?.size === 0) {
@@ -540,6 +637,7 @@ export function createSessionMessageSubscriberRegistry(
       if (!normalizedConnId) {
         return;
       }
+      onSubscriptionChange?.(normalizedConnId);
       const states = connections.get(normalizedConnId);
       if (!states) {
         return;

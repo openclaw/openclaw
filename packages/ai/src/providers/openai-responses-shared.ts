@@ -1,8 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// OpenAI Responses shared helpers map runtime messages, tools, and stream events.
 import type {
   ResponseCreateParamsStreaming,
-  ResponseInput,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
@@ -17,7 +15,6 @@ import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js"
 import {
   createOpenAIResponsesAssistantOutput,
   createResponsesStreamWithEncryptedContentRetry,
-  convertProviderResponsesMessages,
 } from "../transports/openai-responses-replay-internal.js";
 import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
@@ -56,13 +53,6 @@ interface OpenAIResponsesStreamOptions {
   ) => void;
 }
 
-interface ConvertResponsesMessagesOptions {
-  includeSystemPrompt?: boolean;
-  replayResponsesItemIds?: boolean;
-  sessionId?: string;
-  authProfileId?: string;
-  replayMode?: OpenAIResponsesReplayMode;
-}
 export { convertResponsesToolPayload };
 
 type ResponsesRequestOptions = {
@@ -106,23 +96,9 @@ type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperatu
 
 type ResponsesLifecycleRequest = OpenAIResponsesRequestParams;
 
-// =============================================================================
-// Message conversion
-// =============================================================================
-
-export function convertResponsesMessages<TApi extends Api>(
-  model: Model<TApi>,
-  context: Context,
-  allowedToolCallProviders: ReadonlySet<string>,
-  options?: ConvertResponsesMessagesOptions,
-): ResponseInput {
-  return convertProviderResponsesMessages(model, context, allowedToolCallProviders, options);
-}
+export { convertProviderResponsesMessages as convertResponsesMessages } from "../transports/openai-responses-replay-internal.js";
 
 export const createResponsesAssistantOutput = createOpenAIResponsesAssistantOutput;
-
-// Stream lifecycle
-// =============================================================================
 
 export function applyResponsesServiceTierPricing(
   usage: Usage,

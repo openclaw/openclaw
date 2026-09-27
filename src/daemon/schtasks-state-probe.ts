@@ -27,6 +27,15 @@ export function probeScheduledTaskState(
   taskName: string,
   timeoutMs?: number,
 ): ScheduledTaskStateProbe {
+  if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 1)) {
+    return {
+      status: "unknown",
+      detail: "Scheduled Task inspection deadline expired.",
+      timeoutMs: 0,
+      diagnostic: { kind: "timeout", timeoutMs: 0 },
+    };
+  }
+  // spawnSync requires an integer; rounding up or using zero would extend the allowance.
   const probeTimeoutMs = resolvePositiveTimerTimeoutMs(timeoutMs, 5_000);
   const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
   const script = [

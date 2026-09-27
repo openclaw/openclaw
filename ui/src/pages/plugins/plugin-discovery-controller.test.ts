@@ -445,3 +445,25 @@ it("surfaces a partial ClawHub failure once for the overview", async () => {
 
   expect(controller.remoteError).toBe("ClawHub is unavailable; local plugins remain available.");
 });
+
+it("keeps category pins ahead of a more popular community result after pagination", async () => {
+  const pinned = entry(1);
+  pinned.catalog.categoryRanks = { models: 0 };
+  const official = entry(2);
+  official.catalog.official = true;
+  official.catalog.downloads = 10;
+  const popular = entry(3);
+  popular.catalog.downloads = 100;
+  const { controller } = setup([
+    { items: [official, pinned], nextCursor: "next" },
+    { items: [popular] },
+  ]);
+  controller.category = "models";
+  await controller.refresh();
+  await controller.loadMore();
+  expect(controller.result?.items.map((item) => item.id)).toEqual([
+    pinned.id,
+    popular.id,
+    official.id,
+  ]);
+});

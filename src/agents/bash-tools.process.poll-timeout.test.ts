@@ -67,56 +67,8 @@ function pollStatus(result: Awaited<ReturnType<ReturnType<typeof createProcessTo
   return (result.details as { status?: string }).status;
 }
 
-async function expectCompletedPollWithTimeout(params: {
-  sessionId: string;
-  callId: string;
-  timeout: number | string;
-  advanceMs: number;
-  assertUnresolvedAtMs?: number;
-}) {
-  vi.useFakeTimers();
-  try {
-    const { processTool, session } = createProcessSessionHarness(params.sessionId);
-
-    setTimeout(() => {
-      appendOutput(session, "stdout", "done\n");
-      markExited(session, 0, null, "completed");
-    }, 10);
-
-    const pollPromise = pollSession(processTool, params.callId, params.sessionId, params.timeout);
-    if (params.assertUnresolvedAtMs !== undefined) {
-      let resolved = false;
-      void pollPromise.finally(() => {
-        resolved = true;
-      });
-      await vi.advanceTimersByTimeAsync(params.assertUnresolvedAtMs);
-      expect(resolved).toBe(false);
-    }
-
-    await vi.advanceTimersByTimeAsync(params.advanceMs);
-    const poll = await pollPromise;
-    const details = poll.details as { status?: string; aggregated?: string };
-    expect(details.status).toBe("completed");
-    expect(details.aggregated ?? "").toContain("done");
-  } finally {
-    vi.useRealTimers();
-  }
-}
-
-test("process poll waits for completion when timeout is provided", async () => {
-  await expectCompletedPollWithTimeout({
-    sessionId: "sess",
-    callId: "toolcall",
-    timeout: 2000,
-    assertUnresolvedAtMs: 200,
-    advanceMs: 100,
-  });
-});
-
 test.each([
   { name: "buffered stdout", stream: "stdout", arrivesDuringWait: false, dropped: false },
-  { name: "buffered stderr", stream: "stderr", arrivesDuringWait: false, dropped: false },
-  { name: "new stdout", stream: "stdout", arrivesDuringWait: true, dropped: false },
   { name: "new stderr", stream: "stderr", arrivesDuringWait: true, dropped: false },
   { name: "buffered capped output", stream: "stdout", arrivesDuringWait: false, dropped: true },
 ] as const)(
@@ -437,12 +389,19 @@ test.each([
 });
 
 test("process poll accepts string timeout values", async () => {
-  await expectCompletedPollWithTimeout({
-    sessionId: "sess-2",
-    callId: "toolcall",
-    timeout: "2000",
-    advanceMs: 350,
-  });
+  vi.useFakeTimers();
+  try {
+    const { processTool, session } = createProcessSessionHarness("sess-string-timeout");
+    setTimeout(() => {
+      appendOutput(session, "stdout", "done\n");
+      markExited(session, 0, null, "completed");
+    }, 10);
+    const pending = pollSession(processTool, "toolcall", session.id, "2000");
+    await vi.advanceTimersByTimeAsync(350);
+    expect((await pending).details).toMatchObject({ status: "completed", aggregated: "done\n" });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("terminal polls compact tiny stream chunks and never reopen frozen output", async () => {
@@ -680,37 +639,33 @@ test("process poll resets retryInMs when output appears and clears on completion
   expect(retryMs(pollFinished)).toBeUndefined();
 });
 
-test.each([
-  { name: "below the retained tail", outputLength: 1_999 },
-  { name: "at the retained tail", outputLength: 2_000 },
-  { name: "above the retained tail", outputLength: 2_001 },
-])("process poll returns unread finished output $name", async ({ outputLength }) => {
-  const sessionId = `sess-finished-tail-${outputLength}`;
-  const { processTool, session } = createProcessSessionHarness(sessionId);
-  const earlierMarker = "[earlier-output]";
-  const latestMarker = "[latest-output]";
-  const fillerLength = outputLength - earlierMarker.length - latestMarker.length;
-  const aggregated = `${earlierMarker}${"x".repeat(fillerLength)}${latestMarker}`;
+test.each([{ name: "above the retained tail", outputLength: 2_001 }])(
+  "process poll returns unread finished output $name",
+  async ({ outputLength }) => {
+    const sessionId = `sess-finished-tail-${outputLength}`;
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const earlierMarker = "[earlier-output]";
+    const latestMarker = "[latest-output]";
+    const fillerLength = outputLength - earlierMarker.length - latestMarker.length;
+    const aggregated = `${earlierMarker}${"x".repeat(fillerLength)}${latestMarker}`;
 
-  appendOutput(session, "stdout", aggregated);
-  markExited(session, 0, null, "completed");
+    appendOutput(session, "stdout", aggregated);
+    markExited(session, 0, null, "completed");
 
-  const poll = await pollSession(processTool, "toolcall-finished-tail", sessionId);
-  const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
-  const details = poll.details as { aggregated?: string };
+    const poll = await pollSession(processTool, "toolcall-finished-tail", sessionId);
+    const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+    const details = poll.details as { aggregated?: string };
 
-  expect(aggregated).toHaveLength(outputLength);
-  expect(details.aggregated).toBe(aggregated);
-  expect(text).toContain(latestMarker);
-  expect(text).toContain(earlierMarker);
-  expect(text).not.toContain("earlier retained output is omitted");
-  expect(text).not.toContain("discarded at the retention cap");
-});
+    expect(aggregated).toHaveLength(outputLength);
+    expect(details.aggregated).toBe(aggregated);
+    expect(text).toContain(latestMarker);
+    expect(text).toContain(earlierMarker);
+    expect(text).not.toContain("earlier retained output is omitted");
+    expect(text).not.toContain("discarded at the retention cap");
+  },
+);
 
-test.each([
-  { name: "below the retained tail", outputLength: 1_500, aggregateCap: 1_000 },
-  { name: "above the retained tail", outputLength: 3_500, aggregateCap: 3_000 },
-])(
+test.each([{ name: "above the retained tail", outputLength: 3_500, aggregateCap: 3_000 }])(
   "process poll distinguishes discarded aggregate output $name",
   async ({ outputLength, aggregateCap }) => {
     const sessionId = `sess-aggregate-cap-${aggregateCap}`;

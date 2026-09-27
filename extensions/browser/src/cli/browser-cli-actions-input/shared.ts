@@ -1,6 +1,3 @@
-/**
- * Shared helpers for Browser CLI action subcommands.
- */
 import fs from "node:fs/promises";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
@@ -72,7 +69,6 @@ export async function runBrowserAction(params: {
   }
 }
 
-/** Requires and trims an element ref, exiting through the CLI runtime on failure. */
 export function requireRef(ref: string | undefined) {
   const refValue = typeof ref === "string" ? ref.trim() : "";
   if (!refValue) {
@@ -99,7 +95,6 @@ async function readFile(filePath: string, maxBytes?: number): Promise<string> {
   }
 }
 
-/** Reads and validates JSON form-field descriptors from inline text or a file. */
 export async function readFields(opts: {
   fields?: string;
   fieldsFile?: string;
@@ -123,7 +118,6 @@ export async function readFields(opts: {
   return normalizeBrowserFormFields(parsed);
 }
 
-/** Cap on batch action JSON read from files or stdin. */
 const ACTIONS_INPUT_MAX_BYTES = 1_000_000;
 
 function createActionsInputTooLargeError(source: string, cause?: unknown): FsSafeError {
@@ -134,7 +128,6 @@ function createActionsInputTooLargeError(source: string, cause?: unknown): FsSaf
   );
 }
 
-/** Reads stdin to a UTF-8 string, throwing once the byte cap is exceeded. */
 async function readStdinText(
   stream: NodeJS.ReadableStream = process.stdin,
   maxBytes = ACTIONS_INPUT_MAX_BYTES,
@@ -152,7 +145,6 @@ async function readStdinText(
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** Reads raw batch actions JSON from inline text, a file path, or stdin (`-`). */
 export async function readActionsPayload(opts: {
   actions?: string;
   actionsFile?: string;

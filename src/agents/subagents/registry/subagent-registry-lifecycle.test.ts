@@ -132,28 +132,6 @@ describe("subagent recovery session-effect ownership", () => {
 
     expect(shouldSuppressSubagentRecoverySessionEffects(entry)).toBe(false);
   });
-
-  it("suppresses retired recovery receipts and legacy kill intents", () => {
-    const recoveryEntry = createRunEntry({
-      execution: {
-        status: "terminal",
-        endedAt: 4_000,
-        restartRecovery: makeRestartRecoveryReceipt({
-          lifecycleGeneration: "retired-generation",
-        }),
-      },
-    });
-    const legacyKillEntry = createRunEntry({
-      killIntent: {
-        requestedAt: 4_000,
-        reason: "legacy kill",
-        sessionId: "session-id",
-      },
-    });
-
-    expect(shouldSuppressSubagentRecoverySessionEffects(recoveryEntry)).toBe(true);
-    expect(shouldSuppressSubagentRecoverySessionEffects(legacyKillEntry)).toBe(true);
-  });
 });
 
 function waitForLifecycleState<T>(assertion: () => T | Promise<T>): Promise<T> {
@@ -906,12 +884,10 @@ describe("subagent registry lifecycle hardening", () => {
     const emitSubagentProgressEndedForRun = vi.fn(async () => {});
     const controller = createLifecycleController({ entry, emitSubagentProgressEndedForRun });
 
-    await controller.completeSubagentRun(
-      makeSubagentCompletion(entry, {
-        outcome: { status: "error", error: "restart interrupted run" },
-        reason: SUBAGENT_ENDED_REASON_ERROR,
-      }),
-    );
+    await completeRun(controller, entry, {
+      outcome: { status: "error", error: "restart interrupted run" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+    });
 
     expect(lifecycleEventMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
     expect(emitSubagentProgressEndedForRun).not.toHaveBeenCalled();
@@ -979,7 +955,6 @@ describe("subagent registry lifecycle hardening", () => {
       makeInterruptedSubagentCompletion(entry, {
         outcome: { status: "error", error: "retired Gateway lifecycle" },
         triggerCleanup: true,
-        suppressSessionEffects: true,
       }),
     );
     await waitForLifecycleState(() => {
@@ -1107,7 +1082,7 @@ describe("subagent registry lifecycle hardening", () => {
     });
     const controller = createLifecycleController({ entry });
 
-    await controller.completeSubagentRun(makeSubagentCompletion(entry));
+    await completeRun(controller, entry);
 
     expect(entry).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
@@ -2002,36 +1977,33 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
-  it.each([false, true])(
-    "defers provisional killed publication when completion delivery is %s",
-    async (expectsCompletionMessage) => {
-      const entry = createRunEntry({ expectsCompletionMessage });
-      const emitSubagentEndedHookForRun = vi.fn(async () => {});
-      const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-      const controller = createLifecycleController({
-        entry,
-        shouldEmitEndedHookForRun: () => true,
-        emitSubagentEndedHookForRun,
-        runSubagentAnnounceFlow,
-      });
+  it("defers provisional killed publication when completion delivery is required", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    const emitSubagentEndedHookForRun = vi.fn(async () => {});
+    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+    const controller = createLifecycleController({
+      entry,
+      shouldEmitEndedHookForRun: () => true,
+      emitSubagentEndedHookForRun,
+      runSubagentAnnounceFlow,
+    });
 
-      await controller.completeSubagentRun(
-        makeKilledSubagentCompletion(entry, {
-          triggerCleanup: true,
-        }),
-      );
+    await controller.completeSubagentRun(
+      makeKilledSubagentCompletion(entry, {
+        triggerCleanup: true,
+      }),
+    );
 
-      expect(entry).toMatchObject({
-        endedReason: SUBAGENT_ENDED_REASON_KILLED,
-        suppressAnnounceReason: "killed",
-      });
-      expect(emitSubagentEndedHookForRun).not.toHaveBeenCalled();
-      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expectFields(firstCallArg(taskExecutorMocks.failTaskRunByRunId), {
-        error: SUBAGENT_KILL_TASK_ERROR,
-      });
-    },
-  );
+    expect(entry).toMatchObject({
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      suppressAnnounceReason: "killed",
+    });
+    expect(emitSubagentEndedHookForRun).not.toHaveBeenCalled();
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expectFields(firstCallArg(taskExecutorMocks.failTaskRunByRunId), {
+      error: SUBAGENT_KILL_TASK_ERROR,
+    });
+  });
 
   it("uses producer reply evidence when success supersedes a killed lifecycle", async () => {
     const entry = createRunEntry({
@@ -2628,12 +2600,10 @@ describe("subagent registry lifecycle hardening", () => {
       const entry = createRunEntry();
       const controller = createLifecycleController({ entry });
 
-      await controller.completeSubagentRun(
-        makeSubagentCompletion(entry, {
-          outcome,
-          reason,
-        }),
-      );
+      await completeRun(controller, entry, {
+        outcome,
+        reason,
+      });
       await controller.completeSubagentRun(
         makeKilledSubagentCompletion(entry, {
           endedAt: 4_001,
@@ -2670,13 +2640,11 @@ describe("subagent registry lifecycle hardening", () => {
       });
       const controller = createLifecycleController({ entry });
 
-      await controller.completeSubagentRun(
-        makeSubagentCompletion(entry, {
-          endedAt: 4_001,
-          outcome,
-          reason,
-        }),
-      );
+      await completeRun(controller, entry, {
+        endedAt: 4_001,
+        outcome,
+        reason,
+      });
 
       expect(entry).toMatchObject({
         endedReason: reason,
@@ -2941,17 +2909,15 @@ describe("subagent registry lifecycle hardening", () => {
         }),
       });
 
-      await controller.completeSubagentRun(
-        makeSubagentCompletion(entry, {
-          reason,
-          outcome:
-            reason === SUBAGENT_ENDED_REASON_KILLED
-              ? { status: "error", error: "agent run aborted" }
-              : { status: "ok" },
-          startedAt: 2_000,
-          endedAt: 6_000,
-        }),
-      );
+      await completeRun(controller, entry, {
+        reason,
+        outcome:
+          reason === SUBAGENT_ENDED_REASON_KILLED
+            ? { status: "error", error: "agent run aborted" }
+            : { status: "ok" },
+        startedAt: 2_000,
+        endedAt: 6_000,
+      });
 
       expect(entry).toMatchObject({
         endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
@@ -3880,13 +3846,11 @@ describe("subagent registry lifecycle hardening", () => {
       captureSubagentCompletionReply: vi.fn(async () => ""),
     });
 
-    await controller.completeSubagentRun(
-      makeSubagentCompletion(entry, {
-        outcome: { status: "error", error: "completed" },
-        reason: SUBAGENT_ENDED_REASON_ERROR,
-        triggerCleanup: true,
-      }),
-    );
+    await completeRun(controller, entry, {
+      outcome: { status: "error", error: "completed" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: true,
+    });
 
     await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
     expect(entry.collectorCompletion).toEqual({ status: "done", structured });
@@ -3907,13 +3871,11 @@ describe("subagent registry lifecycle hardening", () => {
     });
     const controller = createLifecycleController({ entry });
 
-    await controller.completeSubagentRun(
-      makeSubagentCompletion(entry, {
-        outcome: { status: "error", error: "provider failed after tool output" },
-        reason: SUBAGENT_ENDED_REASON_ERROR,
-        triggerCleanup: true,
-      }),
-    );
+    await completeRun(controller, entry, {
+      outcome: { status: "error", error: "provider failed after tool output" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: true,
+    });
 
     await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
     expect(entry.execution.outcome).toMatchObject({
@@ -4166,7 +4128,7 @@ describe("subagent registry lifecycle hardening", () => {
       runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
     });
 
-    await controller.completeSubagentRun(makeSubagentCompletion(entry));
+    await completeRun(controller, entry);
 
     expect(captureSubagentCompletionReply).toHaveBeenCalledWith(
       childSessionKey,
@@ -4199,11 +4161,9 @@ describe("subagent registry lifecycle hardening", () => {
     });
 
     await expect(
-      controller.completeSubagentRun(
-        makeSubagentCompletion(entry, {
-          outcome: { status: "error", error: "All models failed (2): timeout" },
-        }),
-      ),
+      completeRun(controller, entry, {
+        outcome: { status: "error", error: "All models failed (2): timeout" },
+      }),
     ).resolves.toBeUndefined();
 
     expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
@@ -4995,11 +4955,9 @@ describe("subagent registry lifecycle hardening", () => {
       },
     );
 
-    const firstCompletion = controller.completeSubagentRun(
-      makeSubagentCompletion(entry, {
-        triggerCleanup: true,
-      }),
-    );
+    const firstCompletion = completeRun(controller, entry, {
+      triggerCleanup: true,
+    });
     await firstCleanupEntered;
     const staleRecovery = controller.completeSubagentRun(
       makeInterruptedSubagentCompletion(entry, {
@@ -6139,39 +6097,35 @@ describe("requester settle wake trigger", () => {
     expect(runs.has(entry.runId)).toBe(false);
   });
 
-  it.each([false, undefined])(
-    "retires delete cleanup immediately without a completion message: %s",
-    async (expectsCompletionMessage) => {
-      const entry = createRunEntry({
-        requesterTurnRunId: "run-requester",
-        cleanup: "delete",
-        expectsCompletionMessage,
-        completion: { required: false, resultText: "delete-mode findings" },
-      });
-      const runs = new Map([[entry.runId, entry]]);
-      const settleWake = vi.fn(
-        async (params: { completeBatch: (batch: readonly SubagentRunRecord[]) => void }) => {
-          params.completeBatch([entry]);
-          return false;
-        },
-      );
-      const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-      const controller = createLifecycleController({
-        entry,
-        runs,
-        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-        runSubagentAnnounceFlow,
-      });
+  it("retires delete cleanup immediately without a completion message", async () => {
+    const entry = createRunEntry({
+      requesterTurnRunId: "run-requester",
+      cleanup: "delete",
+      completion: { required: false, resultText: "delete-mode findings" },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const settleWake = vi.fn(
+      async (params: { completeBatch: (batch: readonly SubagentRunRecord[]) => void }) => {
+        params.completeBatch([entry]);
+        return false;
+      },
+    );
+    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      runSubagentAnnounceFlow,
+    });
 
-      await completeRun(controller, entry, { triggerCleanup: true });
-      await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(1));
-      expect(runs.has(entry.runId)).toBe(false);
+    await completeRun(controller, entry, { triggerCleanup: true });
+    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(1));
+    expect(runs.has(entry.runId)).toBe(false);
 
-      expect(entry.completion?.resultText).toBe("delete-mode findings");
-      expect(runs.get(entry.runId)?.requesterSettleWake).toBeUndefined();
-      expect(entry.retireAfterRequesterTurn).toBeUndefined();
-    },
-  );
+    expect(entry.completion?.resultText).toBe("delete-mode findings");
+    expect(runs.get(entry.runId)?.requesterSettleWake).toBeUndefined();
+    expect(entry.retireAfterRequesterTurn).toBeUndefined();
+  });
 
   it("retains a reconciled killed row until the settle wake resolves", () => {
     const entry = createRunEntry({

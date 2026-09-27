@@ -207,11 +207,9 @@ export async function executeSnapshotAction(params: {
     input.snapshotFormat === "ai" ? "ai" : input.snapshotFormat === "aria" ? "aria" : undefined;
   const formatExplicit = format !== undefined;
   const mode: "efficient" | undefined =
-    input.mode === "efficient"
+    input.mode === "efficient" || (!formatExplicit && snapshotDefaults?.mode === "efficient")
       ? "efficient"
-      : !formatExplicit && format !== "aria" && snapshotDefaults?.mode === "efficient"
-        ? "efficient"
-        : undefined;
+      : undefined;
   const labels = typeof input.labels === "boolean" ? input.labels : undefined;
   const urls = typeof input.urls === "boolean" ? input.urls : undefined;
   const refs: "aria" | "role" | undefined =
@@ -232,16 +230,11 @@ export async function executeSnapshotAction(params: {
   });
   const selector = normalizeOptionalString(input.selector);
   const frame = normalizeOptionalString(input.frame);
-  const resolvedMaxChars =
-    format === "ai"
-      ? hasMaxChars
-        ? maxChars
-        : mode === "efficient"
-          ? undefined
-          : DEFAULT_AI_SNAPSHOT_MAX_CHARS
-      : hasMaxChars
-        ? maxChars
-        : undefined;
+  const resolvedMaxChars = hasMaxChars
+    ? maxChars
+    : format === "ai" && mode !== "efficient"
+      ? DEFAULT_AI_SNAPSHOT_MAX_CHARS
+      : undefined;
   // AI snapshots have a compact default cap; ARIA snapshots keep full structure
   // unless maxChars is explicit, because agents often need complete node refs.
   const snapshotTimeoutMs =

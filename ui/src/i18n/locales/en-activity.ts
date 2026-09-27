@@ -31,7 +31,7 @@ const enActivity = {
     expandAll: "Expand all",
     collapseAll: "Collapse all",
     clear: "Clear",
-    empty: "No activity yet.",
+    empty: "No activity yet. Only activity received while this view is open appears here.",
     emptyFiltered: "No activity matches these filters.",
     argumentHiddenOne: "1 argument hidden",
     argumentsHidden: "{count} arguments hidden",

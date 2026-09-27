@@ -11,7 +11,6 @@ import {
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-store";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readItemString } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
@@ -44,16 +43,16 @@ export class CodexGeneratedMediaProjection {
     // Image generation is already a billable side effect even if its remote
     // artifact cannot be transferred into this gateway's media store.
     this.itemIds.add(item.id);
-    const savedPath = readItemString(item, "savedPath")?.trim();
+    const savedPath = readString(item, "savedPath")?.trim();
     if (savedPath) {
       this.mediaByItemId.set(item.id, { ...this.mediaByItemId.get(item.id), savedPath });
     }
-    const result = readItemString(item, "result");
+    const result = readString(item, "result");
     if (result) {
       await this.recordImage({
         itemId: item.id,
         result,
-        revisedPrompt: readItemString(item, "revisedPrompt"),
+        revisedPrompt: readString(item, "revisedPrompt"),
         source: "native",
       });
       return;
@@ -82,7 +81,7 @@ export class CodexGeneratedMediaProjection {
           await this.recordImage({
             itemId: item.id,
             result: response.dataBase64,
-            revisedPrompt: readItemString(item, "revisedPrompt"),
+            revisedPrompt: readString(item, "revisedPrompt"),
             source: "native",
           });
         } catch (error) {

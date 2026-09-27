@@ -90,6 +90,3 @@ export type SessionWorkspaceHost = {
   requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarSelection | null) => void;
 };
-
-/** Agent owning the pane's current session: explicit key scope first, then the
- * assistant/default agent. */

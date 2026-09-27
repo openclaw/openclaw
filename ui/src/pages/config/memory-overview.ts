@@ -307,20 +307,15 @@ function renderStatusCards(props: MemoryOverviewProps) {
 function renderShortcuts(props: MemoryOverviewProps) {
   return renderSettingsSection(
     { title: t("memoryPage.overview.shortcuts.title") },
-    html`
-      ${renderSettingsNavRow({
-        title: t("memoryPage.overview.shortcuts.memories"),
-        onClick: () => props.onNavigate("memories"),
-      })}
-      ${renderSettingsNavRow({
-        title: t("memoryPage.overview.shortcuts.diary"),
-        onClick: () => props.onNavigate("dreams"),
-      })}
-      ${renderSettingsNavRow({
-        title: t("memoryPage.overview.shortcuts.settings"),
-        onClick: () => props.onNavigate("settings"),
-      })}
-    `,
+    (
+      [
+        ["memories", "memoryPage.overview.shortcuts.memories"],
+        ["dreams", "memoryPage.overview.shortcuts.diary"],
+        ["settings", "memoryPage.overview.shortcuts.settings"],
+      ] as const
+    ).map(([tab, label]) =>
+      renderSettingsNavRow({ title: t(label), onClick: () => props.onNavigate(tab) }),
+    ),
   );
 }
 

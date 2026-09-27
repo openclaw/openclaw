@@ -28,11 +28,28 @@ export type WorkerSessionPlacementChangeSnapshot = WorkerSessionPlacementIdentit
 export type WorkerPlacementExecutionMode = "worker-turn" | "remote-exec";
 export type WorkerSessionPlacementDispatchIdentity = WorkerSessionPlacementIdentity & {
   executionMode?: WorkerPlacementExecutionMode;
+  expectedPlacement?: Pick<
+    WorkerSessionPlacementRecord,
+    "state" | "generation" | "environmentId" | "activeOwnerEpoch"
+  >;
+};
+
+export type WorkerPlacementDispatchStoreOperations = {
+  "workerPlacements.startDispatch": {
+    input: { placement: WorkerSessionPlacementDispatchIdentity; nowMs: number };
+    output: WorkerSessionPlacementRecord;
+  };
 };
 
 export type WorkerSessionTurnOwner =
   | { kind: "local"; environmentId?: string; ownerEpoch?: number }
   | { kind: "worker"; environmentId: string; ownerEpoch: number };
+
+export type WorkerTurnClaimInput = WorkerSessionPlacementIdentity & {
+  owner: WorkerSessionTurnOwner;
+  claimId: string;
+  runId: string;
+};
 
 export type WorkerSessionTurnClaim = {
   sessionId: string;

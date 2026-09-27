@@ -11,10 +11,14 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultSlackTestConfig,
+  getSlackHandlerOrThrow,
   getSlackClient,
   getSlackTestState,
   resetSlackTestState,
-  runSlackMessageOnce,
+  runSlackHandlerWithDispatch,
+  startSlackMonitor,
+  stopSlackMonitor,
+  waitForSlackTestApp,
 } from "./monitor.test-helpers.js";
 import * as mediaRuntime from "./monitor/media.runtime.js";
 import type { SlackMessageEvent } from "./types.js";
@@ -54,6 +58,20 @@ function captureReplyContexts<T extends Record<string, unknown>>() {
     return undefined;
   });
   return contexts;
+}
+
+async function runHistoryMessage(event: SlackMessageEvent) {
+  const monitor = startSlackMonitor(monitorSlackProvider);
+  try {
+    await waitForSlackTestApp(monitor, "started");
+    const handler = await getSlackHandlerOrThrow("message");
+    // Policy interleavings own these downloads; host load must not expire their deadlines.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await runSlackHandlerWithDispatch(handler, { event });
+  } finally {
+    vi.useRealTimers();
+    await stopSlackMonitor(monitor);
+  }
 }
 
 describe("Slack native history sender policy through monitor dispatch", () => {
@@ -99,16 +117,12 @@ describe("Slack native history sender policy through monitor dispatch", () => {
         InboundHistory?: Array<{ body: string; media?: Array<{ path?: string }> }>;
       }>();
       try {
-        await runSlackMessageOnce(
-          monitorSlackProvider,
-          {
-            event: makeSlackMessageEvent({
-              text: "<@bot-user> inspect prior bot discussion",
-              ts: "103",
-              channel_type: "channel",
-            }),
-          },
-          { awaitDispatch: true },
+        await runHistoryMessage(
+          makeSlackMessageEvent({
+            text: "<@bot-user> inspect prior bot discussion",
+            ts: "103",
+            channel_type: "channel",
+          }),
         );
         expect(captured).toHaveLength(1);
         const visible = contextVisibility === "all" ? messages : messages.slice(2);
@@ -182,17 +196,13 @@ describe("Slack native history sender policy through monitor dispatch", () => {
         };
       });
       try {
-        await runSlackMessageOnce(
-          monitorSlackProvider,
-          {
-            event: makeSlackMessageEvent({
-              text: "<@bot-user> inspect bot discussion",
-              ts: "103",
-              channel_type: "channel",
-              ...(scope === "thread" ? { thread_ts: "100" } : {}),
-            }),
-          },
-          { awaitDispatch: true },
+        await runHistoryMessage(
+          makeSlackMessageEvent({
+            text: "<@bot-user> inspect bot discussion",
+            ts: "103",
+            channel_type: "channel",
+            ...(scope === "thread" ? { thread_ts: "100" } : {}),
+          }),
         ).catch((error: unknown) => {
           expect(error).toBeInstanceOf(Error);
         });
@@ -253,10 +263,8 @@ describe("Slack native history sender policy through monitor dispatch", () => {
       }>();
       const mediaDir = getMediaDir();
       await fs.mkdir(mediaDir, { recursive: true });
-      const run = runSlackMessageOnce(
-        monitorSlackProvider,
-        { event: makeSlackMessageEvent({ ts: "103", text: "<@bot-user> inspect images" }) },
-        { awaitDispatch: true },
+      const run = runHistoryMessage(
+        makeSlackMessageEvent({ ts: "103", text: "<@bot-user> inspect images" }),
       ).catch((error: unknown) => {
         if (!revoke) {
           throw error;
@@ -372,10 +380,8 @@ describe("Slack native history sender policy through monitor dispatch", () => {
     const mediaDir = getMediaDir();
     await fs.mkdir(mediaDir, { recursive: true });
     let settled = false;
-    const run = runSlackMessageOnce(
-      monitorSlackProvider,
-      { event: makeSlackMessageEvent({ ts: "103", text: "<@bot-user> inspect mixed media" }) },
-      { awaitDispatch: true },
+    const run = runHistoryMessage(
+      makeSlackMessageEvent({ ts: "103", text: "<@bot-user> inspect mixed media" }),
     )
       .catch((error: unknown) => {
         expect(error).toBeInstanceOf(Error);

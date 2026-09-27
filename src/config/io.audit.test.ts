@@ -421,74 +421,19 @@ describe("config io audit helpers", () => {
       "--leaks-here-token",
       "this-must-not-land-in-audit-1234567890",
     ];
-    const base = createConfigWriteAuditRecordBase({
-      configPath: "/tmp/openclaw.json",
-      env: {} as NodeJS.ProcessEnv,
-      existsBefore: true,
-      previousHash: "prev",
-      nextHash: "next",
-      previousBytes: 1,
-      nextBytes: 2,
-      previousMetadata: {
-        dev: null,
-        ino: null,
-        mode: null,
-        nlink: null,
-        uid: null,
-        gid: null,
-      },
-      changedPathCount: 0,
-      hasMetaBefore: true,
-      hasMetaAfter: true,
-      gatewayModeBefore: "local",
-      gatewayModeAfter: "local",
-      suspicious: [],
-      now: "2026-04-30T00:00:00.000Z",
-      processInfo: {
-        pid: 1,
-        ppid: 1,
-        cwd: "/work",
-        argv: longArgv,
-        execArgv: [],
-      },
-    });
+    const base = createAuditRecordBase("/tmp/openclaw.json", longArgv);
     expect(base.argv).toHaveLength(8);
     expect(base.argv).not.toContain("this-must-not-land-in-audit-1234567890");
     expect(base.argv).not.toContain("--leaks-here-token");
   });
 
   it("redacts processInfo.argv when explicitly supplied to createConfigWriteAuditRecordBase", () => {
-    const base = createConfigWriteAuditRecordBase({
-      configPath: "/tmp/openclaw.json",
-      env: {} as NodeJS.ProcessEnv,
-      existsBefore: true,
-      previousHash: "prev",
-      nextHash: "next",
-      previousBytes: 1,
-      nextBytes: 2,
-      previousMetadata: {
-        dev: null,
-        ino: null,
-        mode: null,
-        nlink: null,
-        uid: null,
-        gid: null,
-      },
-      changedPathCount: 0,
-      hasMetaBefore: true,
-      hasMetaAfter: true,
-      gatewayModeBefore: "local",
-      gatewayModeAfter: "local",
-      suspicious: [],
-      now: "2026-04-30T00:00:00.000Z",
-      processInfo: {
-        pid: 1,
-        ppid: 1,
-        cwd: "/work",
-        argv: ["node", "openclaw", "--token", "leaked-but-not-anymore-12345"],
-        execArgv: [],
-      },
-    });
+    const base = createAuditRecordBase("/tmp/openclaw.json", [
+      "node",
+      "openclaw",
+      "--token",
+      "leaked-but-not-anymore-12345",
+    ]);
     expect(base.argv).toEqual(["node", "openclaw", "--token", "***"]);
   });
 
@@ -621,27 +566,6 @@ describe("config io audit helpers", () => {
     ],
   ])("redacts $0 in persisted audit process info", (_name, argv, expected) => {
     expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual(expected);
-  });
-
-  it("also accepts flattened audit record params from legacy call sites", async () => {
-    const home = await suiteRootTracker.make("append-flat");
-    const record = createRenameAuditRecord(home);
-
-    await appendConfigAuditRecord({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => home,
-      ...record,
-    });
-
-    const records = listConfigAuditRecordsForTests({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => home,
-    });
-    expect(records).toHaveLength(1);
-    const written = requireAuditRecord(records[0]);
-    expect(written.event).toBe("config.write");
-    expect(written.result).toBe("rename");
-    expect(written.nextHash).toBe("next-hash");
   });
 
   it("redacts historical config audit entries while preserving file and directory modes", async () => {

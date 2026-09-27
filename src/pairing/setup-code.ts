@@ -1,4 +1,3 @@
-// Generates setup codes used to pair external channels with OpenClaw.
 import os from "node:os";
 import {
   isCarrierGradeNatIpv4Address,
@@ -376,9 +375,7 @@ export async function resolvePairingGatewayUrl(
 }
 
 export function encodePairingSetupCode(payload: PairingSetupPayload): string {
-  const json = JSON.stringify(payload);
-  const base64 = Buffer.from(json, "utf8").toString("base64");
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
 
 const PAIRING_SETUP_URL_PREFIX = "oc-pair://";
@@ -387,7 +384,7 @@ const PAIRING_SETUP_CODE_RE = /^[A-Za-z0-9_-]+$/u;
 /** Decode the current setup payload plus additive fields emitted by older pairing surfaces. */
 export function decodePairingSetupCode(
   input: string,
-  options: { nowMs?: number } = {},
+  options: { nowMs?: number; allowExpired?: boolean } = {},
 ): PairingSetupPayload {
   const trimmed = input.trim();
   const setupCode = trimmed.toLowerCase().startsWith(PAIRING_SETUP_URL_PREFIX)
@@ -435,7 +432,7 @@ export function decodePairingSetupCode(
       throw new Error("Invalid pairing setup payload.");
     }
     expiresAtMs = candidate;
-    if (candidate <= (options.nowMs ?? Date.now())) {
+    if (!options.allowExpired && candidate <= (options.nowMs ?? Date.now())) {
       throw new Error("Pairing setup code has expired.");
     }
   }

@@ -10,6 +10,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "../service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
@@ -48,6 +49,7 @@ it("lists behind healthy recovery while a writer is held, and retires a waiting 
   const onEvent = vi.fn();
   const runner = vi.fn(async () => ({ status: "ok" as const }));
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     defaultAgentId: "alpha",

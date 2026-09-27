@@ -69,7 +69,7 @@ describe("sidebar entries", () => {
     );
     expect(
       getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
-        (item) => item.routeId === "updates",
+        (item) => item.action === "nav:updates",
       ),
     ).toBe(true);
     expect(browserGroups.some((group) => group.labelKey === "nav.settingsGroupDevice")).toBe(false);
@@ -146,11 +146,13 @@ describe("sidebar entries", () => {
       expect(isSettingsNavigationRouteVisible(route, canAdmin, capability)).toBe(true);
       expect(browserGroups.flatMap((group) => group.routes)).not.toContain(route);
       expect(
-        getStaticCommandPaletteCatalogItems(canAdmin).some((item) => item.routeId === route),
+        getStaticCommandPaletteCatalogItems(canAdmin).some(
+          (item) => item.action === `nav:${route}`,
+        ),
       ).toBe(false);
       expect(
         getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
-          (item) => item.routeId === route,
+          (item) => item.action === `nav:${route}`,
         ),
       ).toBe(true);
     }

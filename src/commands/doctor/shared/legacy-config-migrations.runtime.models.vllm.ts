@@ -1,3 +1,4 @@
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { ensureRecord, getRecord, type LegacyConfigRule } from "../../../config/legacy.shared.js";
@@ -154,33 +155,10 @@ export function listExistingVllmModelTargets(
 }
 
 export function collectVllmModelIdsFromSelection(value: unknown): string[] {
-  if (typeof value === "string") {
-    const modelId = parseVllmAgentModelKey(value);
+  return listModelRefsFromConfigValue(value).flatMap((ref) => {
+    const modelId = parseVllmAgentModelKey(ref);
     return modelId ? [modelId] : [];
-  }
-  const record = getRecord(value);
-  if (!record) {
-    return [];
-  }
-  const ids: string[] = [];
-  if (typeof record.primary === "string") {
-    const primary = parseVllmAgentModelKey(record.primary);
-    if (primary) {
-      ids.push(primary);
-    }
-  }
-  if (Array.isArray(record.fallbacks)) {
-    for (const fallback of record.fallbacks) {
-      if (typeof fallback !== "string") {
-        continue;
-      }
-      const modelId = parseVllmAgentModelKey(fallback);
-      if (modelId) {
-        ids.push(modelId);
-      }
-    }
-  }
-  return ids;
+  });
 }
 
 export function collectVllmModelIdsFromAgentModelMap(value: unknown): string[] {

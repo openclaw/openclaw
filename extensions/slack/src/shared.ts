@@ -3,7 +3,7 @@ import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-h
 import { isSlackPluginAccountConfigured } from "./account-configured.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
+import { SLACK_CHANNEL_META, type ChannelPlugin } from "./channel-api.js";
 import { slackSetupPlugin } from "./channel.setup.js";
 import { slackBaseConfigAdapter } from "./config-adapter.js";
 import { slackDoctor } from "./doctor.js";
@@ -42,7 +42,7 @@ export function createSlackPluginBase(params: {
   return {
     ...slackSetupPlugin,
     meta: {
-      ...getChatChannelMeta(slackSetupPlugin.id),
+      ...SLACK_CHANNEL_META,
       preferSessionLookupForAnnounceTarget: true,
     },
     setupWizard: params.setupWizard,
@@ -72,7 +72,7 @@ export function createSlackPluginBase(params: {
     config: {
       ...slackSetupPlugin.config,
       ...slackConfigAdapter,
-      isConfigured: (account) => isSlackPluginAccountConfigured(account),
+      isConfigured: isSlackPluginAccountConfigured,
       describeAccount: (account) =>
         describeAccountSnapshot({
           account,

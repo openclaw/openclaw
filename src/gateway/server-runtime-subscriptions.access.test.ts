@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -19,6 +20,9 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { forgetActiveSessionForShutdown } from "./active-sessions-shutdown-tracker.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { handleChatMetadataRequest } from "./server-methods/chat-metadata-handler.js";
+import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import {
   createSubscriptionTestFixture,
@@ -123,6 +127,47 @@ it("invalidates access synchronously for committed create, move, reset, and dele
       }
     } finally {
       observe();
+    }
+  });
+});
+
+it("keeps concurrent draft and saved metadata reads available while another session is created", async () => {
+  await withAccessFixture(async ({ scope, start }) => {
+    await upsertSessionEntryCore(scope, { sessionId: "selected", updatedAt: 1 });
+    start();
+    const metadata = { commands: [], models: [], swarmEnabled: false };
+    const release = createDeferred();
+    const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => {
+      await release.promise;
+      return metadata;
+    });
+    const context = createDirectChatContext({ readChatMetadata });
+    const readers = Array.from({ length: 50 }, (_, index) => {
+      const respond = vi.fn<RespondFn>();
+      const pending = handleChatMetadataRequest({
+        req: { type: "req", id: `metadata-${index}`, method: "chat.metadata" },
+        params: index % 2 === 0 ? { sessionKey: scope.sessionKey } : { agentId: scope.agentId },
+        context,
+        client: null,
+        respond,
+        isWebchatConnect: () => false,
+      });
+      return { respond, pending };
+    });
+    const settled = Promise.allSettled(readers.map(({ pending }) => pending));
+    try {
+      expect(readChatMetadata).toHaveBeenCalledTimes(readers.length);
+      await upsertSessionEntryCore(
+        { ...scope, sessionKey: "agent:main:unrelated-creation" },
+        { sessionId: "unrelated", updatedAt: 1 },
+      );
+    } finally {
+      release.resolve();
+      await settled;
+    }
+    expect((await settled).filter((result) => result.status === "rejected")).toEqual([]);
+    for (const { respond } of readers) {
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, metadata);
     }
   });
 });

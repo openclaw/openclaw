@@ -1,6 +1,5 @@
 import { channel } from "node:diagnostics_channel";
 import { totalmem } from "node:os";
-// Diagnostic memory helpers capture process memory facts for support diagnostics.
 import { getHeapStatistics } from "node:v8";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -10,7 +9,6 @@ import {
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
-// Diagnostic memory sampler with threshold/growth pressure detection and repeat suppression.
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
 const DEFAULT_RSS_WARNING_BYTES = 1536 * MB;
@@ -361,16 +359,36 @@ function logMemoryPressure(
     ` arrayBuffersBytes=${pressure.memory.arrayBuffersBytes}` +
     formatOptionalPressureMetric("workerHeapTotalBytes", pressure.memory.workerHeapTotalBytes) +
     formatOptionalPressureMetric("workerHeapUsedBytes", pressure.memory.workerHeapUsedBytes) +
+    formatOptionalPressureMetric("workerExternalBytes", pressure.memory.workerExternalBytes) +
+    formatOptionalPressureMetric(
+      "workerArrayBuffersBytes",
+      pressure.memory.workerArrayBuffersBytes,
+    ) +
     formatOptionalPressureMetric("workerCount", pressure.memory.workerCount) +
     formatOptionalPressureMetric("workerHeapSampledCount", pressure.memory.workerHeapSampledCount) +
+    formatOptionalPressureMetric(
+      "workerArrayBuffersSampledCount",
+      pressure.memory.workerArrayBuffersSampledCount,
+    ) +
+    (pressure.memory.workerMemoryCoverage
+      ? ` workerMemoryCoverage=${pressure.memory.workerMemoryCoverage} workerMemoryScope=direct`
+      : "") +
+    (pressure.memory.workerMemoryMissing?.length
+      ? ` workerMemoryMissing=${JSON.stringify(pressure.memory.workerMemoryMissing.slice(0, 5))}`
+      : "") +
     (pressure.memory.workerHeaps?.length
       ? ` workerHeaps=${JSON.stringify(
-          pressure.memory.workerHeaps.toSorted((a, b) => b.heapUsed - a.heapUsed).slice(0, 5),
+          pressure.memory.workerHeaps
+            .toSorted((a, b) => b.heapUsed + (b.external ?? 0) - a.heapUsed - (a.external ?? 0))
+            .slice(0, 5),
         )}`
       : "") +
     formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
     formatOptionalPressureMetric("rssGrowthBytes", pressure.rssGrowthBytes) +
     formatOptionalPressureMetric("windowMs", pressure.windowMs) +
+    (pressure.memory.workerCount
+      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested workers are not included."
+      : "") +
     ` ${nextStep}`;
   log.warn(message);
 }

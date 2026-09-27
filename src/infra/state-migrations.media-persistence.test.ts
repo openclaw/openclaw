@@ -34,6 +34,22 @@ afterEach(() => {
   cleanupMediaPersistenceFixtures(tempDirs);
 });
 
+function createSingleMessageFixture(
+  prefix: string,
+  sessionId: string,
+  message: Record<string, unknown>,
+) {
+  const stateDir = makeTempDir(tempDirs, prefix);
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const databasePath = createLegacyDatabaseFixture({
+    env,
+    eventsBySession: {
+      [sessionId]: [createEvent({ id: "event-1", parentId: null, timestamp: 1000, message })],
+    },
+  });
+  return { env, databasePath };
+}
+
 describe("legacy media persistence doctor migration", () => {
   it("preserves the typed maintenance cause when lease acquisition fails", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-lease-");
@@ -423,20 +439,10 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("upgrades the existing v14 structural schema before the media cutover", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-v14-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = createLegacyDatabaseFixture({
-      env,
-      eventsBySession: {
-        legacy: [
-          createEvent({
-            id: "event-1",
-            parentId: null,
-            timestamp: 1000,
-            message: { role: "user", content: "legacy", MediaPath: "/media/a.png" },
-          }),
-        ],
-      },
+    const { env, databasePath } = createSingleMessageFixture("media-persistence-v14-", "legacy", {
+      role: "user",
+      content: "legacy",
+      MediaPath: "/media/a.png",
     });
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
@@ -475,20 +481,10 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("upgrades an owned v0 database through the media prerequisite schema", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-v0-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = createLegacyDatabaseFixture({
-      env,
-      eventsBySession: {
-        legacy: [
-          createEvent({
-            id: "event-1",
-            parentId: null,
-            timestamp: 1000,
-            message: { role: "user", content: "legacy", MediaPath: "/media/a.png" },
-          }),
-        ],
-      },
+    const { env, databasePath } = createSingleMessageFixture("media-persistence-v0-", "legacy", {
+      role: "user",
+      content: "legacy",
+      MediaPath: "/media/a.png",
     });
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
@@ -507,32 +503,22 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("migrates complete PR-1 facts beside a compact legacy projection", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-dual-write-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = createLegacyDatabaseFixture({
-      env,
-      eventsBySession: {
-        dual: [
-          createEvent({
-            id: "event-1",
-            parentId: null,
-            timestamp: 1000,
-            message: {
-              role: "user",
-              content: "dual",
-              MediaPaths: ["/media/a.bin", "/media/b.pdf"],
-              MediaTypes: ["application/pdf"],
-              __openclaw: {
-                media: [
-                  { path: "/media/a.bin", contentType: "application/octet-stream" },
-                  { path: "/media/b.pdf", contentType: "application/pdf" },
-                ],
-              },
-            },
-          }),
-        ],
+    const { env, databasePath } = createSingleMessageFixture(
+      "media-persistence-dual-write-",
+      "dual",
+      {
+        role: "user",
+        content: "dual",
+        MediaPaths: ["/media/a.bin", "/media/b.pdf"],
+        MediaTypes: ["application/pdf"],
+        __openclaw: {
+          media: [
+            { path: "/media/a.bin", contentType: "application/octet-stream" },
+            { path: "/media/b.pdf", contentType: "application/pdf" },
+          ],
+        },
       },
-    });
+    );
 
     const result = await migrateLegacyMediaPersistence({ env });
     expect(result.warnings).toEqual([]);
@@ -557,21 +543,11 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("repairs a missing canonical v15 index before the media cutover", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-v15-index-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = createLegacyDatabaseFixture({
-      env,
-      eventsBySession: {
-        legacy: [
-          createEvent({
-            id: "event-1",
-            parentId: null,
-            timestamp: 1000,
-            message: { role: "user", content: "legacy", MediaPath: "/media/a.png" },
-          }),
-        ],
-      },
-    });
+    const { env, databasePath } = createSingleMessageFixture(
+      "media-persistence-v15-index-",
+      "legacy",
+      { role: "user", content: "legacy", MediaPath: "/media/a.png" },
+    );
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
     database.exec("DROP INDEX idx_agent_transcript_event_parent;");
@@ -665,27 +641,17 @@ describe("legacy media persistence doctor migration", () => {
   );
 
   it("canonicalizes legacy trajectory metadata onto existing facts", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-trajectory-metadata-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = createLegacyDatabaseFixture({
-      env,
-      eventsBySession: {
-        metadata: [
-          createEvent({
-            id: "event-1",
-            parentId: null,
-            timestamp: 1000,
-            message: {
-              role: "user",
-              content: "metadata",
-              __openclaw: {
-                media: [{ path: "/media/a.png", contentType: "image/png" }],
-              },
-            },
-          }),
-        ],
+    const { env, databasePath } = createSingleMessageFixture(
+      "media-persistence-trajectory-metadata-",
+      "metadata",
+      {
+        role: "user",
+        content: "metadata",
+        __openclaw: {
+          media: [{ path: "/media/a.png", contentType: "image/png" }],
+        },
       },
-    });
+    );
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
     database

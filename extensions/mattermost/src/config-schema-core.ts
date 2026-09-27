@@ -1,4 +1,3 @@
-// Mattermost helper module supports config schema core behavior.
 import {
   BlockStreamingCoalesceSchema,
   ChannelImplicitMentionsSchema,
@@ -10,10 +9,12 @@ import {
   buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
+import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
-import { buildSecretInputSchema } from "./secret-input.js";
 
-const MattermostGroupSchema = buildGroupEntrySchema().omit({
+const MattermostGroupSchema = buildGroupEntrySchema({
+  requireMentionInBotThreads: z.boolean().optional(),
+}).omit({
   tools: true,
   toolsBySender: true,
   skills: true,
@@ -21,21 +22,6 @@ const MattermostGroupSchema = buildGroupEntrySchema().omit({
   allowFrom: true,
   systemPrompt: true,
 });
-
-function requireMattermostOpenAllowFrom(params: {
-  policy?: string;
-  allowFrom?: Array<string | number>;
-  ctx: z.RefinementCtx;
-}) {
-  requireOpenAllowFrom({
-    policy: params.policy,
-    allowFrom: params.allowFrom,
-    ctx: params.ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
-  });
-}
 
 const DmChannelRetrySchema = z
   .object({
@@ -143,6 +129,7 @@ export const MattermostAccountSchemaBase = z
     chatmode: z.enum(["oncall", "onmessage", "onchar"]).optional(),
     oncharPrefixes: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     implicitMentions: ChannelImplicitMentionsSchema.optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -178,10 +165,13 @@ export const MattermostAccountSchemaBase = z
 export const MattermostConfigSchema = buildMultiAccountChannelSchema(MattermostAccountSchemaBase, {
   optionalAccount: true,
   refine: (value, ctx) => {
-    requireMattermostOpenAllowFrom({
+    requireOpenAllowFrom({
       policy: value.dmPolicy,
       allowFrom: value.allowFrom,
       ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
     });
   },
 });

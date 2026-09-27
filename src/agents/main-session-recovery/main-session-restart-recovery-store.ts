@@ -222,10 +222,10 @@ export async function recoverStore(params: {
       return result;
     }
     let entry = loadedEntry;
-    const hasRecoveryStateToObserve =
-      entry?.abortedLastRun === true ||
-      (entry !== undefined && isMainRestartRecoveryAggregateTerminalOnly(entry));
-    if (!entry || entry.status !== "running" || !hasRecoveryStateToObserve) {
+    if (
+      entry.status !== "running" ||
+      (entry.abortedLastRun !== true && !isMainRestartRecoveryAggregateTerminalOnly(entry))
+    ) {
       continue;
     }
     if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
@@ -312,11 +312,7 @@ export async function recoverStore(params: {
             ? recoveryView.reason
             : "message-tool-only recovery authority is unavailable",
       });
-      if (tombstone === "notice_failed") {
-        result.failed++;
-      } else {
-        result.skipped++;
-      }
+      result[tombstone === "notice_failed" ? "failed" : "skipped"]++;
       continue;
     }
     if (params.observationOnly) {
@@ -537,40 +533,17 @@ export async function recoverStore(params: {
       continue;
     }
 
-    if (pendingAction === "fail") {
+    const pendingFinal = entry.pendingFinalDelivery;
+    if (pendingAction === "fail" || pendingFinal?.kind === "replayable") {
       if (
         !(await resumeCurrent({
-          ...(entry.pendingFinalDelivery?.kind === "replayable"
-            ? { pendingFinalDeliveryText: entry.pendingFinalDelivery.text }
+          ...(pendingFinal?.kind === "replayable"
+            ? { pendingFinalDeliveryText: pendingFinal.text }
             : {}),
-          forceRestartSafeTools: true,
-        }))
-      ) {
-        return result;
-      }
-      continue;
-    }
-
-    if (
-      entry.pendingFinalDelivery?.kind === "replayable" &&
-      entry.restartRecoveryForceSafeTools === true
-    ) {
-      if (
-        !(await resumeCurrent({
-          pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
-          forceRestartSafeTools: true,
-        }))
-      ) {
-        return result;
-      }
-      continue;
-    }
-
-    if (entry.pendingFinalDelivery?.kind === "replayable") {
-      if (
-        !(await resumeCurrent({
-          pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
-          forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
+          forceRestartSafeTools:
+            pendingAction === "fail" ||
+            entry.restartRecoveryForceSafeTools === true ||
+            hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
         }))
       ) {
         return result;

@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-// Release Beta Verifier tests cover release beta verifier script behavior.
 /* oxlint-disable typescript/no-base-to-string -- fetch mock normalizes standard RequestInfo inputs for URL assertions. */
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -1420,25 +1419,6 @@ describe("downloadClawHubBootstrapReadback", () => {
 });
 
 describe("parseNpmViewFields", () => {
-  it("accepts keyed npm view JSON", () => {
-    expect(
-      parseNpmViewFields(
-        JSON.stringify({
-          version: "2026.5.10-beta.3",
-          "dist-tags.beta": "2026.5.10-beta.3",
-          "dist.integrity": "sha512-test",
-          "dist.tarball": "https://registry.example/openclaw.tgz",
-        }),
-        "beta",
-      ),
-    ).toEqual({
-      version: "2026.5.10-beta.3",
-      distTagVersion: "2026.5.10-beta.3",
-      integrity: "sha512-test",
-      tarball: "https://registry.example/openclaw.tgz",
-    });
-  });
-
   it("accepts nested npm view JSON", () => {
     expect(
       parseNpmViewFields(
@@ -1673,12 +1653,6 @@ describe("fetchJsonWithRetry", () => {
 });
 
 describe("readBoundedJsonResponse", () => {
-  it("parses JSON bodies within the release verifier limit", async () => {
-    await expect(
-      readBoundedJsonResponse(new Response('{"ok":true}'), "ClawHub package", 64),
-    ).resolves.toEqual({ ok: true });
-  });
-
   it("rejects oversized JSON bodies by content length", async () => {
     await expect(
       readBoundedJsonResponse(

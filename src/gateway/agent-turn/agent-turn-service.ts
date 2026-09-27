@@ -91,6 +91,7 @@ export function createAgentTurnService(
       isOneShotModelRun,
       isRawModelRun,
       agentDedupeKeys,
+      swarmExecutionLane,
     } = preflight;
     // Cached replay returns before a new lifecycle generation is observed, matching
     // the idempotency path that preceded this service extraction.
@@ -145,6 +146,10 @@ export function createAgentTurnService(
       preAcceptedReservedSessionKey,
       preAttachmentSession,
     } = routing;
+    const assertRequestCurrent = () => {
+      assertAdmissionCurrent?.();
+      dedupeLifecycle.assertReservationCurrent();
+    };
     let agentId = routing.agentId;
     let requestedSessionKey = routing.requestedSessionKey;
     let gatewayAdmissionTransferred = false;
@@ -244,7 +249,7 @@ export function createAgentTurnService(
       });
       releaseGatewayAdmission = admissionController.release;
       const resetPhase = await runAgentResetPhase({
-        assertAdmissionCurrent,
+        assertAdmissionCurrent: assertRequestCurrent,
         request,
         cfg,
         requestedSessionKey,
@@ -396,7 +401,7 @@ export function createAgentTurnService(
               agentId: sessionAgentId,
               sessionId: committedEntry.sessionId,
             }),
-          assertAdmissionCurrent,
+          assertAdmissionCurrent: assertRequestCurrent,
           request,
           cfg: cfgLocal,
           storePath,
@@ -496,7 +501,7 @@ export function createAgentTurnService(
       const { activeSessionAgentId } = delivery;
 
       const preparedDispatch = await prepareAgentRunDispatch({
-        assertAdmissionCurrent,
+        assertAdmissionCurrent: assertRequestCurrent,
         hasCurrentClientAuthority,
         promptedAt,
         request,
@@ -550,6 +555,7 @@ export function createAgentTurnService(
         setAdmittedRunAbort: admissionController.setAdmittedRunAbort,
         getAdmittedRunAbort: admissionController.getAdmittedRunAbort,
         markAgentRunAccepted: dedupeLifecycle.markAccepted,
+        getOwnedAgentDedupeKeys: dedupeLifecycle.ownedReservationKeys,
       });
       if (!preparedDispatch) {
         return;
@@ -587,6 +593,7 @@ export function createAgentTurnService(
             inputProvenance: preparedDispatch.userTurn.inputProvenance,
             runId,
             agentDedupeKeys,
+            swarmExecutionLane,
             spawnedBy: spawnedByValue,
             groupId: resolvedGroupId,
             groupChannel: resolvedGroupChannel,

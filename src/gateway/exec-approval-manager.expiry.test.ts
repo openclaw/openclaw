@@ -5,7 +5,7 @@ import { copyFile, rename, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi, type TestContext } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { reserveSqliteWorkerInputPreparation } from "../infra/sqlite-worker-store.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
@@ -14,49 +14,28 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import {
   createTestApprovalManager,
+  createApprovalScheduler,
   createPreparedTestApprovalManager,
   installTestApprovalClock,
 } from "./exec-approval-manager.test-support.js";
 import * as operatorApprovalStore from "./operator-approval-store.js";
 
-type TimeoutCallback = Parameters<typeof setTimeout>[0];
-type MockTimerHandle = ReturnType<typeof setTimeout> & {
-  unref: ReturnType<typeof vi.fn>;
-};
-
 describe("ExecApprovalManager timeout expiry publication", () => {
   const tempDirs: string[] = [];
+  let scheduled: ReturnType<typeof createApprovalScheduler>;
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    scheduled = createApprovalScheduler();
+  });
 
   afterEach(async () => {
+    await scheduled.scheduler.stop();
     vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0)) {
       await closeOpenClawStateDatabaseByPathAsync(path.join(dir, "s.sqlite"));
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
-
-  function installTimerMocks() {
-    const timers: Array<{
-      callback: TimeoutCallback;
-      delay: number | undefined;
-      handle: MockTimerHandle;
-    }> = [];
-    vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      callback: TimeoutCallback,
-      delay?: number,
-    ) => {
-      const handle = {
-        unref: vi.fn(),
-        refresh: vi.fn().mockReturnThis(),
-      } as unknown as MockTimerHandle;
-      timers.push({ callback, delay, handle });
-      return handle;
-    }) as unknown as typeof setTimeout);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(
-      (() => undefined) as typeof clearTimeout,
-    );
-    return timers;
-  }
 
   function holdWorkerInputCapacity() {
     const reservations: ReturnType<typeof reserveSqliteWorkerInputPreparation>[] = [];
@@ -87,11 +66,11 @@ describe("ExecApprovalManager timeout expiry publication", () => {
   it.each(["cancellation", "storage repair"] as const)(
     "lets the deadline win when %s waits for transaction admission",
     async (operation) => {
-      installTimerMocks();
       const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-queued-expiry-"));
       tempDirs.push(dir);
       const manager = new ExecApprovalManager({
+        scheduler: scheduled.scheduler,
         persistence: {
           runtimeEpoch: "queued-expiry",
           databaseOptions: { path: path.join(dir, "s.sqlite") },
@@ -150,13 +129,14 @@ describe("ExecApprovalManager timeout expiry publication", () => {
   );
 
   it("publishes timer-driven timeout expiry through onExpired", async () => {
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     installTestApprovalClock();
     const expirations: Array<{ recordId: string; status: string; requestCommand?: string }> = [];
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-expired-"));
     tempDirs.push(dir);
     const manager = new ExecApprovalManager({
+      scheduler: scheduled.scheduler,
       approvalKind: "exec",
       persistence: {
         runtimeEpoch: "runtime-a",
@@ -174,13 +154,13 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     const decisionPromise = (await manager.register(record, 60_000)).decision;
     vi.mocked(Date.now).mockReturnValue(record.expiresAtMs);
 
-    const deadlines = timers.filter(({ handle }) => handle.unref.mock.calls.length === 0);
+    const deadlines = timers.filter(({ delayMs }) => delayMs !== 15_000);
     expect(deadlines).toHaveLength(1);
     const timer = deadlines[0];
-    if (!timer || typeof timer.callback !== "function") {
+    if (!timer || typeof timer.run !== "function") {
       throw new Error("expected timer callback");
     }
-    timer.callback();
+    await timer.run();
 
     await expect(decisionPromise).resolves.toBeNull();
     // The gateway clock owns expiry: reviewer surfaces get the terminal fact
@@ -196,11 +176,12 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     const onLifecycle = vi.fn();
     const onError = vi.fn((error: unknown) => refused.resolve(error));
     const { manager, databaseOptions } = await createPreparedTestApprovalManager(testContext, {
+      scheduler: scheduled.scheduler,
       onExpired,
       onLifecycle,
       onError,
     });
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const record = manager.create({ command: "echo expiry" }, 1_000, "expiry-backpressure");
     const { decision } = await manager.register(record, 1_000);
@@ -209,13 +190,18 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     const decisionSettled = vi.fn();
     void decision.then(decisionSettled, () => undefined);
     void observation.catch(() => undefined);
-    const deadlines = () => timers.filter(({ handle }) => handle.unref.mock.calls.length === 0);
-    const invoke = (timer: (typeof timers)[number] | undefined) => {
+    // Completion can re-arm a pending deadline; only its latest host wake is live.
+    const deadlines = () => [
+      ...new Map(
+        timers.filter(({ delayMs }) => delayMs !== 15_000).map((wake) => [wake.atMs, wake]),
+      ).values(),
+    ];
+    const invoke = async (timer: (typeof timers)[number] | undefined) => {
       expect(timer).toBeDefined();
-      if (typeof timer?.callback !== "function") {
+      if (typeof timer?.run !== "function") {
         throw new Error("expected approval timer callback");
       }
-      timer.callback();
+      await timer.run();
     };
     return {
       manager,
@@ -261,7 +247,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       }
       try {
         clock.mockReturnValue(record.expiresAtMs);
-        invoke(deadlines()[0]);
+        await invoke(deadlines()[0]);
         await expect(Promise.race([refused.promise, decision])).resolves.toBeInstanceOf(Error);
         expect(onError.mock.calls[0]?.[0]).toMatchObject({
           code: code === "unavailable" ? "unavailable" : "overloaded",
@@ -277,16 +263,16 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       }
       expect(deadlines()).toHaveLength(2);
       const retry = deadlines()[1];
-      expect(retry?.delay).toBeGreaterThan(0);
-      clock.mockReturnValue(record.expiresAtMs + (retry?.delay ?? 0));
+      expect(retry?.delayMs).toBeGreaterThan(0);
+      clock.mockReturnValue(record.expiresAtMs + (retry?.delayMs ?? 0));
       const retryFailure = createDeferredCore<unknown>();
       onError.mockImplementationOnce((error) => retryFailure.resolve(error));
       if (code === "coordinator") {
         const otherCoordinator = path.join(path.dirname(databaseOptions.path), "other-coordinator");
         fs.mkdirSync(otherCoordinator);
-        withStateDatabaseCoordinatorRuntimeDirectory(otherCoordinator, () => invoke(retry));
+        await withStateDatabaseCoordinatorRuntimeDirectory(otherCoordinator, () => invoke(retry));
       } else {
-        invoke(retry);
+        await invoke(retry);
       }
       await expect(Promise.race([decision, retryFailure.promise])).resolves.toBeNull();
       await observation;
@@ -318,13 +304,13 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         new SqliteWorkerError("synthetic pre-execution unavailable", "unavailable"),
       );
       clock.mockReturnValue(record.expiresAtMs);
-      invoke(deadlines()[0]);
+      await invoke(deadlines()[0]);
       await refused.promise;
       expect(deadlines()).toHaveLength(2);
       if (action === "retire") {
         await manager.drain();
-        expect(vi.mocked(clearTimeout)).toHaveBeenCalledWith(deadlines()[1]?.handle);
-        invoke(deadlines()[1]);
+        expect(deadlines()[1]?.cancelled).toBe(true);
+        await invoke(deadlines()[1]);
       } else {
         const original = await stat(databaseOptions.path);
         await closeOpenClawStateDatabaseByPathAsync(databaseOptions.path);
@@ -334,8 +320,8 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         expect((await stat(databaseOptions.path)).ino).not.toBe(original.ino);
         const retryRefused = createDeferredCore<unknown>();
         onError.mockImplementationOnce((error) => retryRefused.resolve(error));
-        clock.mockReturnValue(record.expiresAtMs + (deadlines()[1]?.delay ?? 0));
-        invoke(deadlines()[1]);
+        clock.mockReturnValue(record.expiresAtMs + (deadlines()[1]?.delayMs ?? 0));
+        await invoke(deadlines()[1]);
         await expect(retryRefused.promise).resolves.toBeInstanceOf(Error);
       }
       expect(fixture.decisionSettled).not.toHaveBeenCalled();
@@ -366,7 +352,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       const releaseCapacity = holdWorkerInputCapacity();
       try {
         clock.mockReturnValue(record.expiresAtMs);
-        invoke(deadlines()[0]);
+        await invoke(deadlines()[0]);
         await expect(Promise.race([refused.promise, fixture.decision])).resolves.toBeInstanceOf(
           Error,
         );
@@ -452,7 +438,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         expect(
           fixture.onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal"),
         ).toHaveLength(1);
-        expect(vi.mocked(clearTimeout)).toHaveBeenCalledWith(deadlines()[1]?.handle);
+        expect(deadlines()[1]?.cancelled).toBe(true);
       }
       if (operation === "cancel") {
         expect(record.approvalAuthority?.()).toBe(false);
@@ -487,7 +473,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
           new SqliteWorkerError("synthetic definite refusal", "unavailable"),
         );
         clock.mockReturnValue(record.expiresAtMs);
-        invoke(deadlines()[0]);
+        await invoke(deadlines()[0]);
         await refused.promise;
         clock.mockReturnValue(record.createdAtMs + 500);
         databaseOptions.path = redirected.path;
@@ -559,7 +545,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         );
       }
       clock.mockReturnValue(record.expiresAtMs);
-      invoke(deadlines()[0]);
+      await invoke(deadlines()[0]);
       await expect(refused.promise).resolves.toBeInstanceOf(Error);
       expect(deadlines()).toHaveLength(1);
       expect(spy).toHaveBeenCalledTimes(1);
@@ -592,7 +578,6 @@ describe("ExecApprovalManager timeout expiry publication", () => {
   );
 
   it("rejects ask-fallback replay of a run-aborted cancellation", async (testContext) => {
-    installTimerMocks();
     const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-cancelled");
     const decisionPromise = (await manager.register(record, 60_000)).decision;

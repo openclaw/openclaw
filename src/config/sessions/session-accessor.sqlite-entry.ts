@@ -101,18 +101,11 @@ export {
 // Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
 
 type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
-  skipMaintenance?: boolean;
   /** Recheck owner cancellation after async preparation, immediately before committing. */
   shouldCommit?: () => boolean;
   /** Synchronous owner bookkeeping after COMMIT, before identity observers can cancel the caller. */
   onCommitted?: (entry: SessionEntry) => void;
 };
-
-function assertCanonicalSessionWriteScope(
-  scope: Pick<ResolvedSqliteScope, "agentId" | "sessionKey">,
-): void {
-  assertCanonicalSessionKeyWrite(scope.sessionKey, scope.agentId);
-}
 
 /** Loads one session entry from the additive SQLite session store. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
@@ -322,7 +315,7 @@ export async function replaceSessionEntry(
 /** Replaces one entry synchronously for sync session runtimes. */
 export function replaceSessionEntrySync(scope: SessionAccessScope, entry: SessionEntry): void {
   const resolved = resolveSqliteScope(scope);
-  assertCanonicalSessionWriteScope(resolved);
+  assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
   const publish = runOpenClawAgentWriteTransaction((database) => {
     const { previous, current } = replaceSessionEntryInDatabase(
       database,
@@ -337,10 +330,7 @@ export function replaceSessionEntrySync(scope: SessionAccessScope, entry: Sessio
 /** Patches one entry in the additive SQLite session store. */
 export async function patchSessionEntryCore(
   scope: SessionAccessScope,
-  update: (
-    entry: SessionEntry,
-    context: SessionEntryPatchContext,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+  update: SqliteSessionEntrySnapshotPatchParams["update"],
   options: SqliteSessionEntryPatchOptions = {},
 ): Promise<SessionEntry | null> {
   return await patchSessionEntryInScope(scope, update, options);
@@ -356,7 +346,7 @@ async function patchSessionEntryInScope(
   if (databaseAgentId) {
     resolved.databaseAgentId = databaseAgentId;
   }
-  assertCanonicalSessionWriteScope(resolved);
+  assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
   return await patchSqliteSessionEntrySnapshot({
     operationLabel: "session-entry.patch",
     validateCanonicalKeys: options.replaceEntry !== true,
@@ -377,10 +367,7 @@ async function patchSessionEntryInScope(
 /** Patches one logical entry after validating its canonical lifecycle target. */
 export async function patchSessionEntryTarget(
   scope: SessionEntryTargetPatchScope,
-  update: (
-    entry: SessionEntry,
-    context: SessionEntryPatchContext,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+  update: SqliteSessionEntrySnapshotPatchParams["update"],
   options: SqliteSessionEntryPatchOptions = {},
 ): Promise<SessionEntry | null> {
   const source = scope.readSource;
@@ -562,6 +549,16 @@ async function patchSqliteSessionEntrySnapshot(
   return committed;
 }
 
+function buildInboundSessionCreationStamp(ctx: UpdateSessionLastRouteParams["ctx"]) {
+  const senderId = ctx?.SenderId?.trim();
+  return buildSessionCreationStamp(
+    ctx?.SessionCreation ?? {
+      via: "channel",
+      ...(senderId ? { actor: { type: "human", source: "channel", id: senderId } } : {}),
+    },
+  );
+}
+
 export async function recordInboundSessionMeta(
   params: RecordInboundSessionMetaParams,
 ): Promise<SessionEntry | null> {
@@ -579,14 +576,8 @@ export async function recordInboundSessionMeta(
       if (context.existingEntry) {
         return metadataPatch;
       }
-      const senderId = params.ctx.SenderId?.trim();
       return {
-        ...buildSessionCreationStamp(
-          params.ctx.SessionCreation ?? {
-            via: "channel",
-            ...(senderId ? { actor: { type: "human", source: "channel", id: senderId } } : {}),
-          },
-        ),
+        ...buildInboundSessionCreationStamp(params.ctx),
         ...metadataPatch,
       };
     },
@@ -636,16 +627,8 @@ export async function updateSessionLastRouteInScope(
       if (context.existingEntry) {
         return routePatch;
       }
-      const senderId = params.ctx?.SenderId?.trim();
       return {
-        ...buildSessionCreationStamp(
-          params.ctx?.SessionCreation ?? {
-            via: "channel",
-            ...(senderId
-              ? { actor: { type: "human" as const, source: "channel" as const, id: senderId } }
-              : {}),
-          },
-        ),
+        ...buildInboundSessionCreationStamp(params.ctx),
         ...routePatch,
       };
     },

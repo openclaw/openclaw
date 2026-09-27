@@ -44,16 +44,29 @@ type OperatorSource = {
 // Comparison records live only while captured work retains their original authority.
 const operatorSources = new WeakMap<GatewayClient, Set<OperatorSource>>();
 
-function retainOperatorSource(
-  client: GatewayClient,
-  owners: OperatorSource["owners"],
-  membership: string | undefined,
-) {
+function getOperatorSources(client: GatewayClient): Set<OperatorSource> {
   let sources = operatorSources.get(client);
   if (!sources) {
     sources = new Set();
     operatorSources.set(client, sources);
   }
+  return sources;
+}
+
+/** A captured transport principal keeps its source's comparison identity, not new authority. */
+export function transferGatewayOperatorSourceIdentity(
+  source: GatewayClient,
+  target: GatewayClient,
+): void {
+  operatorSources.set(target, getOperatorSources(source));
+}
+
+function retainOperatorSource(
+  client: GatewayClient,
+  owners: OperatorSource["owners"],
+  membership: string | undefined,
+) {
+  const sources = getOperatorSources(client);
   let source =
     membership === undefined
       ? undefined

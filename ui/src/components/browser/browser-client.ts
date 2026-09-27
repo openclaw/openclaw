@@ -352,8 +352,7 @@ export async function requestBrowserScreencast(
 
 export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
   const record = asRecord(error);
-  const details =
-    error instanceof GatewayRequestError ? asRecord(error.details) : asRecord(record?.details);
+  const details = asRecord(record?.details);
   return (
     details?.code === "SCREENCAST_UNSUPPORTED" ||
     asRecord(details?.body)?.code === "SCREENCAST_UNSUPPORTED" ||

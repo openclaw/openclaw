@@ -64,6 +64,15 @@ runners and registries. These helpers reuse their core owners; register the
 session fixture lifecycle explicitly. Use published runtime subpaths when
 they already expose the needed operation.
 
+Await `listChannelIngressQueueAccountIdsForTests` from
+`channel-ingress-test-runtime` or `plugin-state-test-runtime`. It uses the shared
+read-only worker and leaves missing state uncreated. Join asynchronous database
+cleanup before removing a fixture's state directory.
+
+For direct worker fixtures, pair `resolveRuntimeWorkerUrl` from `process-runtime`
+with `resolveRuntimeWorkerThreadExecArgv` from `test-env`. This keeps source and
+built workers on the runtime owner's startup arguments.
+
 ### Available exports
 
 | Export                                                                    | Purpose                                                                                                                                     |

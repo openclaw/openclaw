@@ -1,3 +1,4 @@
+import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
 import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
@@ -17,7 +18,6 @@ import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js"
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
-import { prependSystemPromptAddition } from "./attempt-prompt-helpers.js";
 import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import { estimateRenderedLlmBoundaryTokenPressure } from "./preemptive-compaction.js";
@@ -237,7 +237,7 @@ export async function prepareEmbeddedAttemptHistory(
       }
       if (assembled.systemPromptAddition) {
         setSystemPrompt(
-          prependSystemPromptAddition({
+          prependSystemPromptAdditionAfterCacheBoundary({
             systemPrompt: systemPromptText,
             systemPromptAddition: assembled.systemPromptAddition,
           }),

@@ -1,5 +1,6 @@
 import { hash } from "node:crypto";
 import { type WebClientOptions, WebClient } from "@slack/web-api";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { SlackLookupClientOptions, SlackProxyDispatcher } from "./client-options.js";
 import {
   resolveSlackLookupClientOptions,
@@ -138,13 +139,8 @@ export function getSlackWriteClient(
     return cached;
   }
   const client = new WebClient(token, resolvedOptions);
-  if (slackWriteClientCache.size >= SLACK_WRITE_CLIENT_CACHE_MAX) {
-    const oldestTokenKey = slackWriteClientCache.keys().next().value;
-    if (oldestTokenKey) {
-      slackWriteClientCache.delete(oldestTokenKey);
-    }
-  }
   slackWriteClientCache.set(tokenKey, client);
+  pruneMapToMaxSize(slackWriteClientCache, SLACK_WRITE_CLIENT_CACHE_MAX);
   return client;
 }
 

@@ -1,7 +1,3 @@
-/**
- * Node-host browser.proxy command implementation for delegated Browser control
- * requests.
- */
 import fsPromises from "node:fs/promises";
 import { toUSVString } from "node:util";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
@@ -311,7 +307,6 @@ function formatBrowserProxyTimeoutMessage(params: {
   return parts.join("; ");
 }
 
-/** Executes a serialized browser.proxy command and returns a serialized result payload. */
 export async function runBrowserProxyCommand(
   paramsJSON?: string | null,
   command = BROWSER_PROXY_COMMAND,

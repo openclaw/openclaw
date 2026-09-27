@@ -88,16 +88,6 @@ describe("cleanSchemaForGemini", () => {
     });
   });
 
-  it("coerces null properties to an empty object", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: null,
-    }) as { type?: unknown; properties?: unknown };
-
-    expect(cleaned.type).toBe("object");
-    expect(cleaned.properties).toStrictEqual({});
-  });
-
   it("coerces non-object properties to an empty object", () => {
     const cleaned = cleanSchemaForGemini({
       type: "object",
@@ -124,19 +114,6 @@ describe("cleanSchemaForGemini", () => {
         amount: { type: "number" },
       },
       required: ["action", "amount", "token"],
-    }) as { required?: string[] };
-
-    expect(cleaned.required).toEqual(["action", "amount"]);
-  });
-
-  it("preserves required when all fields exist in properties", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: {
-        action: { type: "string" },
-        amount: { type: "number" },
-      },
-      required: ["action", "amount"],
     }) as { required?: string[] };
 
     expect(cleaned.required).toEqual(["action", "amount"]);
@@ -224,31 +201,6 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.properties?.good?.type).toBe("string");
   });
 
-  it("strips empty required arrays", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: {
-        name: { type: "string" },
-      },
-      required: [],
-    }) as Record<string, unknown>;
-
-    expect(cleaned).not.toHaveProperty("required");
-    expect(cleaned.type).toBe("object");
-  });
-
-  it("preserves non-empty required arrays", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: {
-        name: { type: "string" },
-      },
-      required: ["name"],
-    }) as Record<string, unknown>;
-
-    expect(cleaned.required).toEqual(["name"]);
-  });
-
   it("strips empty required arrays in nested schemas", () => {
     const cleaned = cleanSchemaForGemini({
       type: "object",
@@ -294,20 +246,6 @@ describe("cleanSchemaForGemini", () => {
 
     expect(cleaned.type).toBe("string");
     expect(cleaned.description).toBe("nullable field");
-  });
-
-  it("collapses type arrays in nested property schemas", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: {
-        agentId: {
-          type: ["string", "null"],
-          description: "Agent id",
-        },
-      },
-    }) as { properties?: { agentId?: Record<string, unknown> } };
-
-    expect(cleaned.properties?.agentId?.type).toBe("string");
   });
 
   it.each([

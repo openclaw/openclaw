@@ -1,3 +1,4 @@
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ConfigUiHints } from "../api/types.ts";
 import {
@@ -156,10 +157,7 @@ export function matchesNodeSearch(params: {
   const type = schemaType(schema);
   if (type === "object") {
     const fallback = value ?? schema.default;
-    const obj =
-      fallback && typeof fallback === "object" && !Array.isArray(fallback)
-        ? (fallback as Record<string, unknown>)
-        : {};
+    const obj = asNonArrayRecord(fallback);
     const properties = schema.properties ?? {};
     for (const [propertyKey, node] of Object.entries(properties)) {
       if (

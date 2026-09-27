@@ -531,30 +531,18 @@ export async function maybeRepairLegacyCronStore(params: {
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   // Unresolved agentTurn command prompts are not auto-fixable; keep them out of the
   // --fix preview so the repair note does not promise a fix that never lands (#94655).
-  const commandPromptAdvisory = formatUnresolvedCommandPromptAdvisory(
-    normalized.unresolvedAgentTurnCommandPromptJobs,
-  );
-  if (commandPromptAdvisory) {
-    note(commandPromptAdvisory, "Cron");
-  }
-  const shellPromptAdvisory = formatUnresolvedShellPromptAdvisory(
-    normalized.unresolvedAgentTurnShellToolPromptJobs,
-  );
-  if (shellPromptAdvisory) {
-    note(shellPromptAdvisory, "Cron");
-  }
-  const scheduledToolPolicyAdvisory = formatScheduledToolPolicyAdvisory({
-    legacyJobs: normalized.legacyScheduledToolPolicyJobs,
-    invalidJobs: normalized.invalidScheduledToolPolicyJobs,
-  });
-  if (scheduledToolPolicyAdvisory) {
-    note(scheduledToolPolicyAdvisory, "Cron");
-  }
-  const legacyGatewayExecAdvisory = formatLegacyGatewayExecAdvisory(
-    normalized.legacyGatewayExecJobs,
-  );
-  if (legacyGatewayExecAdvisory) {
-    note(legacyGatewayExecAdvisory, "Cron");
+  for (const advisory of [
+    formatUnresolvedCommandPromptAdvisory(normalized.unresolvedAgentTurnCommandPromptJobs),
+    formatUnresolvedShellPromptAdvisory(normalized.unresolvedAgentTurnShellToolPromptJobs),
+    formatScheduledToolPolicyAdvisory({
+      legacyJobs: normalized.legacyScheduledToolPolicyJobs,
+      invalidJobs: normalized.invalidScheduledToolPolicyJobs,
+    }),
+    formatLegacyGatewayExecAdvisory(normalized.legacyGatewayExecJobs),
+  ]) {
+    if (advisory) {
+      note(advisory, "Cron");
+    }
   }
   const staticMcpByAgentWorkspace = new Map<string, boolean>();
   const incompleteInheritedAuthorityAdvisory = formatIncompleteInheritedAuthorityAdvisory(

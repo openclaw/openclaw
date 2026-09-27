@@ -506,6 +506,7 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
       moves: new Map(),
       environments: new Map(),
       workspaceResultReconcilingSessionIds: new Set(),
+      workspaceRecoveryPendingSessionIds: new Set(),
     };
     let entered = createDeferredCore();
     let paused = createDeferredCore<WorkerSessionPlacementProjection>();

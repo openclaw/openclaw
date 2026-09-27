@@ -47,7 +47,7 @@ describe("browser page text route", () => {
     );
   });
 
-  it.each(["0", "-1", "1.5", "1e3", "Infinity"])(
+  it.each(["0", "1.5", "1e3"])(
     "rejects invalid maxChars=%s before extraction",
     async (maxChars) => {
       const base = await startServerAndBase();

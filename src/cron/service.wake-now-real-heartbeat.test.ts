@@ -32,6 +32,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import * as cronActiveJobs from "./active-jobs.js";
 import {
   getActiveCronJobCount,
@@ -40,12 +44,16 @@ import {
 } from "./active-jobs.js";
 import { CronService, type CronEvent } from "./service.js";
 import type { CronServiceDeps } from "./service/state.js";
-import { loadCronJobsStoreSync } from "./store.js";
+import { loadCronJobsStore } from "./store.js";
 
 installHeartbeatRunnerTestRuntime();
 beforeAll(async () => {
-  // Load the real dispatch graph before this real-time scheduler fixture starts its watchdog.
-  await import("../auto-reply/dispatch.js");
+  // Dispatch lazily loads fast-abort handling even with an injected reply resolver.
+  // Load both graphs before this real-time scheduler fixture starts its watchdog.
+  await Promise.all([
+    import("../auto-reply/dispatch.js"),
+    import("../auto-reply/reply/abort.runtime.js"),
+  ]);
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -157,7 +165,9 @@ async function runMainCronCase(
   };
 
   const heartbeatRunner = startHeartbeatRunner({ cfg, runOnce: runHeartbeatOnceReal });
+  const clock = createGatewaySchedulerClock(Date.now());
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(clock.clock),
     storePath: sandbox.cronStorePath,
     cronEnabled: true,
     log: noopLogger,
@@ -197,6 +207,7 @@ async function runMainCronCase(
     },
   });
   await cron.start();
+  let scheduledTick: Promise<void> | undefined;
 
   const runBody = async () => {
     // Fault cases must unwind the same fixture owner as the normal scheduler cases.
@@ -215,7 +226,9 @@ async function runMainCronCase(
           ? { kind: "every", everyMs: 60 * 60_000 }
           : {
               kind: "at",
-              at: new Date(Date.now() + (mode === "scheduled" ? 250 : 60 * 60_000)).toISOString(),
+              at: new Date(
+                clock.clock.now() + (mode === "scheduled" ? 250 : 60 * 60_000),
+              ).toISOString(),
             },
       sessionTarget: "main",
       wakeMode,
@@ -236,6 +249,8 @@ async function runMainCronCase(
         ok: true,
         enqueued: true,
       });
+    } else {
+      scheduledTick = Promise.resolve(clock.advanceTo(job.state.nextRunAtMs!));
     }
 
     let finishTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -261,7 +276,7 @@ async function runMainCronCase(
         : mode === "scheduled"
           ? terminal.runAtMs! + terminal.durationMs! + 30_000
           : scheduledNextRunAtMs;
-      const persisted = loadCronJobsStoreSync(sandbox.cronStorePath).jobs.find(
+      const persisted = (await loadCronJobsStore(sandbox.cronStorePath)).jobs.find(
         (entry) => entry.id === job.id,
       );
       for (const completed of [cron.getJob(job.id), persisted, terminal.job]) {
@@ -347,6 +362,7 @@ async function runMainCronCase(
     // owner first aborts and retains that wake instead of settling the run.
     const drained = await waitForActiveCronJobs(5_000);
     expect(drained).toEqual({ drained: true, active: 0 });
+    await scheduledTick;
     await vi.waitFor(() => expect(getQueueSize(CommandLane.Cron)).toBe(0), { timeout: 5_000 });
   } catch (error) {
     cleanupFailure = { error };
@@ -401,6 +417,7 @@ describe("main cron with the real heartbeat runner", () => {
       const requested = createDeferred();
       const finished = createDeferred<CronEvent>();
       const deps: CronServiceDeps = {
+        scheduler: createTestGatewayScheduler("fake-timers"),
         storePath: sandbox.cronStorePath,
         cronEnabled: true,
         log: noopLogger,

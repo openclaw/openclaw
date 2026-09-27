@@ -148,7 +148,9 @@ function readPersistedPollTarget(value: unknown): PendingIMessageApprovalReactio
     !approvalId ||
     expiresAtMs === undefined ||
     !allowedDecisions ||
-    (target.approvalKind !== "exec" && target.approvalKind !== "plugin") ||
+    (target.approvalKind !== "exec" &&
+      target.approvalKind !== "plugin" &&
+      target.approvalKind !== "system-agent") ||
     !normalizeConversationKey(conversation)
   ) {
     return null;

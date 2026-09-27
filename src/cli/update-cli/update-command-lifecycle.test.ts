@@ -181,7 +181,8 @@ vi.mock("./update-command-plugins.js", () => ({
 }));
 
 // Process fixtures cover runtime generation with real lifecycle ownership.
-vi.mock("./update-command-runtime.js", () => ({
+vi.mock("./update-command-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-runtime.js")>()),
   completeSourceUpdateRuntime: vi.fn(async () => {
     record("runtime-completion");
     return { changed: false };
@@ -217,6 +218,7 @@ import {
   writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 
 describe("update plugin lifecycle lease boundaries", () => {
   afterEach(() => {
@@ -737,11 +739,20 @@ describe("update plugin lifecycle lease boundaries", () => {
     }
   });
 
-  it.each([undefined, "parent"])(
-    "resumes with completion owner %s before publishing",
-    async (owner) => {
+  it.each([
+    { owner: undefined, sourceRuntimePrepared: false },
+    { owner: "parent", sourceRuntimePrepared: false },
+    { owner: "parent", sourceRuntimePrepared: true },
+  ])(
+    "resumes with completion owner $owner before publishing (prepared=$sourceRuntimePrepared)",
+    async ({ owner, sourceRuntimePrepared }) => {
       vi.mocked(postCoreUpdateParentOwnsCompletion).mockResolvedValue(owner === "parent");
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/post-core-result.json");
+      const handoff = dirs.make("prepared-source-runtime-");
+      await fs.writeFile(
+        path.join(handoff, "handoff.json"),
+        JSON.stringify({ sourceRuntimePrepared }),
+      );
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(handoff, "plugins.json"));
       vi.mocked(writePostCorePluginUpdateResultFile).mockImplementationOnce(async () => {
         record("publish-result");
       });
@@ -753,6 +764,9 @@ describe("update plugin lifecycle lease boundaries", () => {
       });
 
       expectLifecycleBoundary(mocks.events, "handoff-records");
+      expect(completeSourceUpdateRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceRuntimePrepared }),
+      );
       expect(mocks.events.indexOf("runtime-completion:true")).toBeGreaterThan(
         mocks.events.indexOf("lease-enter:false"),
       );

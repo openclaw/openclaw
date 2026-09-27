@@ -1,8 +1,3 @@
-/**
- * Nodes media action executor.
- *
- * Captures camera/photos/screen media from paired nodes and formats media-safe tool results.
- */
 import crypto from "node:crypto";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
@@ -43,30 +38,6 @@ import {
 import type { GatewayCallOptions } from "./gateway.js";
 import { callNodesToolNodeInvoke, resolveNodesToolInvokeTimeouts } from "./nodes-tool-invoke.js";
 import { resolveAgentNode, resolveAgentNodeId } from "./nodes-utils.js";
-
-export const MEDIA_INVOKE_ACTIONS = {
-  "camera.snap": "camera_snap",
-  "camera.clip": "camera_clip",
-  "photos.latest": "photos_latest",
-  "screen.record": "screen_record",
-  "screen.snapshot": "screen_snapshot",
-  // file-transfer commands: redirect to dedicated tools for better result
-  // formatting and media-store handling. The gateway still enforces the
-  // underlying node-invoke path policy for raw callers.
-  "file.fetch": "file_fetch",
-  "dir.list": "dir_list",
-  "dir.fetch": "dir_fetch",
-  "file.write": "file_write",
-} as const;
-
-// Subset of MEDIA_INVOKE_ACTIONS where the dedicated tool is the preferred
-// agent UX. Gateway node-invoke policy still protects raw node.invoke callers.
-export const POLICY_REDIRECT_INVOKE_COMMANDS: ReadonlySet<string> = new Set([
-  "file.fetch",
-  "dir.list",
-  "dir.fetch",
-  "file.write",
-]);
 
 type NodeMediaAction =
   | "camera_snap"
@@ -198,10 +169,7 @@ async function executeCameraSnap({
       message: "quality must be between 0 and 1",
     }) ?? 0.95;
   const delayMs = readNonNegativeIntegerParam(params, "delayMs");
-  const deviceId =
-    typeof params.deviceId === "string" && params.deviceId.trim()
-      ? params.deviceId.trim()
-      : undefined;
+  const deviceId = normalizeOptionalString(params.deviceId);
   if (deviceId && facing === "both" && resolvedNode.platform?.toLowerCase() !== "linux") {
     throw new Error("facing=both is not allowed when deviceId is set");
   }
@@ -315,10 +283,7 @@ async function executeCameraClip({
     MAX_RECORDING_DURATION_MS,
   );
   const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
-  const deviceId =
-    typeof params.deviceId === "string" && params.deviceId.trim()
-      ? params.deviceId.trim()
-      : undefined;
+  const deviceId = normalizeOptionalString(params.deviceId);
   const timeouts = resolveNodesToolInvokeTimeouts({
     input: params,
     gatewayOpts,

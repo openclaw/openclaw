@@ -184,6 +184,93 @@ describe("reply tool authority", () => {
 
   it.each([
     {
+      name: "automatic rotation",
+      source: "auto",
+      nextSource: "auto",
+      nextProfile: "backup",
+      accepted: true,
+    },
+    {
+      name: "unchanged user pin",
+      source: "user",
+      nextSource: "user",
+      nextProfile: "primary",
+      accepted: true,
+    },
+    {
+      name: "changed user pin",
+      source: "user",
+      nextSource: "user",
+      nextProfile: "backup",
+      accepted: false,
+    },
+    {
+      name: "changed legacy pin",
+      source: undefined,
+      nextSource: undefined,
+      nextProfile: "backup",
+      accepted: false,
+    },
+    {
+      name: "explicit pin replacing automatic selection",
+      source: "auto",
+      nextSource: "user",
+      nextProfile: "primary",
+      accepted: false,
+    },
+    {
+      name: "removed automatic selection",
+      source: "auto",
+      nextSource: undefined,
+      nextProfile: undefined,
+      accepted: false,
+    },
+    {
+      name: "permission change during automatic rotation",
+      source: "auto",
+      nextSource: "auto",
+      nextProfile: "backup",
+      accepted: false,
+      permissionMode: "guarded",
+    },
+  ] as const)("preserves steering admission for $name", async (selection) => {
+    const run = createQueueTestRun({ prompt: "running request" });
+    run.run.authProfileId = "openai:primary";
+    run.run.authProfileIdSource = selection.source;
+    run.run.permissionMode = "full";
+    const operation = createTestReplyOperation({ sessionId: "profile-steering" });
+    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+    operation.bindToolAuthorityRoute(run.run);
+    const queueMessage = vi.fn(async () => {});
+    operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
+    operation.setPhase("running");
+    const incoming = {
+      ...run,
+      run: {
+        ...run.run,
+        authProfileId: selection.nextProfile ? `openai:${selection.nextProfile}` : undefined,
+        authProfileIdSource: selection.nextSource,
+        permissionMode:
+          "permissionMode" in selection ? selection.permissionMode : run.run.permissionMode,
+      },
+    };
+
+    await expect(
+      queueCurrentReplyRunMessage("profile-steering", "change direction", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(incoming),
+      }),
+    ).resolves.toMatchObject(
+      selection.accepted
+        ? { status: "accepted" }
+        : { status: "rejected", reason: "tool_authority_mismatch" },
+    );
+    expect(queueMessage).toHaveBeenCalledTimes(selection.accepted ? 1 : 0);
+    expect(run.run.authProfileId).toBe("openai:primary");
+  });
+
+  it.each([
+    {
       label: "provider",
       first: { provider: "openai", model: "gpt-test" },
       second: { provider: "anthropic", model: "gpt-test" },

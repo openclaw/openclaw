@@ -1,8 +1,3 @@
-/**
- * Channel setup plugin registry.
- *
- * Resolves loaded or bundled setup plugins for onboarding flows.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getActivePluginChannelRegistry,
@@ -42,7 +37,7 @@ function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlug
   });
 }
 
-function resolveChannelSetupPlugins(): ChannelPlugin[] {
+export function listChannelSetupPlugins(): ChannelPlugin[] {
   const registry = requireActivePluginRegistry();
 
   const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
@@ -51,13 +46,6 @@ function resolveChannelSetupPlugins(): ChannelPlugin[] {
   return sortChannelSetupPlugins(
     registryPlugins.length > 0 ? registryPlugins : listBundledChannelSetupPlugins(),
   );
-}
-
-/**
- * Lists setup-capable channel plugins, falling back to bundled setup metadata.
- */
-export function listChannelSetupPlugins(): ChannelPlugin[] {
-  return resolveChannelSetupPlugins();
 }
 
 /**
@@ -76,5 +64,5 @@ export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined 
   if (!resolvedId) {
     return undefined;
   }
-  return resolveChannelSetupPlugins().find((plugin) => plugin.id === resolvedId);
+  return listChannelSetupPlugins().find((plugin) => plugin.id === resolvedId);
 }

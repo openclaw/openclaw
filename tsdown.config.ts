@@ -966,6 +966,9 @@ const configs: UserConfig[] = [
   ),
   workerDeployBuildConfig({ "worker/worker": "src/worker/worker-deploy-entry.ts" }),
   workerDeployBuildConfig({
+    "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
+  }),
+  workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
   }),
   workerDeployBuildConfig({

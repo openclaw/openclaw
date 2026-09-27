@@ -21,10 +21,7 @@ import { resolveRunStaleThresholdMs } from "./diagnostic-run-activity-snapshot.j
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import { isRepeatedModelRequestStalled } from "./diagnostic-session-attention.js";
-import {
-  formatStoppedCronSessionDiagnosticFields,
-  resolveCronSessionDiagnosticContext,
-} from "./diagnostic-session-context.js";
+import { logWithSessionDiagnosticContext } from "./diagnostic-session-context.js";
 import {
   formatRecoveryOutcome,
   resolveStuckSessionRecoveryRef,
@@ -214,10 +211,8 @@ export async function recoverStuckDiagnosticSession(
         params.sessionId)
       : (fileActiveWorkSessionId ?? params.sessionId);
     const retireStaleFollowupDrain = prepareStaleFollowupDrainRetirement(key);
-    const sessionLane = key ? resolveEmbeddedSessionLane(key) : null;
-    const preAbortActiveTaskIds = new Set(
-      sessionLane ? getCommandLaneActiveTaskIds(sessionLane) : [],
-    );
+    const sessionLane = resolveEmbeddedSessionLane(key);
+    const preAbortActiveTaskIds = new Set(getCommandLaneActiveTaskIds(sessionLane));
     let aborted = false;
     let drained = true;
     let forceCleared = false;
@@ -393,7 +388,7 @@ export async function recoverStuckDiagnosticSession(
         activeSessionId,
       });
     }
-    if (!activeSessionId && sessionLane) {
+    if (!activeSessionId) {
       const laneSnapshot = getCommandLaneSnapshot(sessionLane);
       if (laneSnapshot.activeCount > 0) {
         const laneStartedFreshTask = getCommandLaneActiveTaskIds(sessionLane).some(
@@ -428,17 +423,16 @@ export async function recoverStuckDiagnosticSession(
       }
     }
 
-    const queuedCount = sessionLane ? getCommandLaneSnapshot(sessionLane).queuedCount : 0;
+    const queuedCount = getCommandLaneSnapshot(sessionLane).queuedCount;
     // A task id active now but not before the abort means the lane already
     // unwedged and pumped fresh work; resetting it would double-run the lane.
-    const laneStartedFreshTask =
-      sessionLane !== null &&
-      getCommandLaneActiveTaskIds(sessionLane).some((id) => !preAbortActiveTaskIds.has(id));
+    const laneStartedFreshTask = getCommandLaneActiveTaskIds(sessionLane).some(
+      (id) => !preAbortActiveTaskIds.has(id),
+    );
     // Queued turns ride the session queue (params.queueDepth), not only the lane
     // queue; without this signal a cleanly aborted wedged lane never resets.
     const hasQueuedSessionWork = (params.queueDepth ?? 0) > 0;
     const released =
-      sessionLane &&
       !laneStartedFreshTask &&
       (queuedCount > 0 || hasQueuedSessionWork || !activeSessionId || !aborted || !drained)
         ? resetCommandLane(sessionLane)
@@ -449,16 +443,18 @@ export async function recoverStuckDiagnosticSession(
     if (aborted || forceCleared || released > 0 || clearStaleSession) {
       retireStaleFollowupDrain?.();
       const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
-      const stoppedFields = formatStoppedCronSessionDiagnosticFields(
-        resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
-      );
-      diag.warn(
-        `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
-          params.sessionKey ?? "unknown"
-        } age=${Math.round(params.ageMs / 1000)}s action=${action} aborted=${aborted} drained=${drained} released=${released}${
-          stoppedFields ? ` ${stoppedFields}` : ""
-        }`,
-      );
+      void logWithSessionDiagnosticContext({
+        level: "warn",
+        sessionKey: params.sessionKey,
+        activeSessionId,
+        cronNameLabel: "stopped",
+        format: (stoppedFields) =>
+          `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
+            params.sessionKey ?? "unknown"
+          } age=${Math.round(params.ageMs / 1000)}s action=${action} aborted=${aborted} drained=${drained} released=${released}${
+            stoppedFields ? ` ${stoppedFields}` : ""
+          }`,
+      });
       return reportRecoveryOutcome(
         aborted || forceCleared
           ? {
@@ -472,7 +468,7 @@ export async function recoverStuckDiagnosticSession(
               drained,
               forceCleared,
               released,
-              lane: sessionLane ?? undefined,
+              lane: sessionLane,
               ...(queuedCount > 0 ? { queuedCount } : {}),
             }
           : {
@@ -481,7 +477,7 @@ export async function recoverStuckDiagnosticSession(
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               released,
-              lane: sessionLane ?? undefined,
+              lane: sessionLane,
               ...(clearStaleSession ? { reason: "no_active_work" as const } : {}),
             },
       );

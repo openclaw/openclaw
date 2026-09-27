@@ -82,11 +82,6 @@ vi.mock("../infra/state-database-coordinator.js", () => ({
   retainHeldStateDatabaseCoordinator: mocks.forbidden,
   withStateDatabaseCoordinatorRuntimeDirectory: mocks.forbidden,
 }));
-vi.mock("../infra/sqlite-coordinator.js", () => ({
-  createSqliteLifecycleAggregateError: (errors: unknown[], message: string, cause: unknown) =>
-    new AggregateError(errors, message, { cause }),
-}));
-
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers({
@@ -130,6 +125,7 @@ function fixture() {
     coordinatorRuntime: { directory: "/synthetic-coordinator", keepAlive: false },
     maintenanceScope: maintenance,
     admission: {
+      coordinationKey: "file:synthetic-state",
       databasePath: "/synthetic-state/lease.sqlite",
       identity: { key: "file:synthetic-state", canonicalPath: "/synthetic-state/lease.sqlite" },
       assertCurrent() {

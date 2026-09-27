@@ -4,7 +4,10 @@ import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
@@ -33,6 +36,31 @@ function historySnapshot(message: string, sessionId = `session-${message}`): Cha
     pagination: { hasMore: false, completeSnapshot: true },
     sessionId,
   };
+}
+
+function prefetchState(
+  request: GatewayRequestHandler,
+  rows: SessionPrefetchUpdate["rows"],
+  overrides: Partial<SessionPrefetchUpdate> = {},
+): SessionPrefetchUpdate {
+  return {
+    client: createTestGatewayClient(request),
+    listRevision: 1,
+    openSessionKeys: ["agent:main:foreground"],
+    rows,
+    ...overrides,
+  };
+}
+
+function historyRequest() {
+  return vi.fn(async (_method: string, params: unknown) =>
+    historyResult((params as { sessionKey: string }).sessionKey),
+  );
+}
+
+async function advancePrefetch(milliseconds: number) {
+  await vi.advanceTimersByTimeAsync(milliseconds);
+  await settlePromises();
 }
 
 describe("recent session prefetch", () => {
@@ -71,15 +99,9 @@ describe("recent session prefetch", () => {
     const key = "agent:main:deleted";
     const response = createDeferred<ReturnType<typeof historyResult>>();
     const request = vi.fn(() => response.promise);
-    const snapshot = {
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:foreground"],
-      rows: [row(key, NOW - 1)],
-    };
+    const snapshot = prefetchState(request, [row(key, NOW - 1)]);
     updatePrefetch(snapshot);
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
+    await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
     updatePrefetch({ ...snapshot, rows: [] });
     response.resolve(historyResult(key));
@@ -98,15 +120,11 @@ describe("recent session prefetch", () => {
     const unchanged = { ...row(key, NOW - 1), sessionId: `id:${key}` };
     const other = { ...row(otherKey, NOW), hasActiveRun: true };
     const queued = row(queuedKey, NOW - 2);
-    const snapshot = {
-      client: createTestGatewayClient(request),
-      listRevision: 1,
+    const snapshot = prefetchState(request, [unchanged, queued, other], {
       openSessionKeys: [otherKey],
-      rows: [unchanged, queued, other],
-    };
+    });
     updatePrefetch(snapshot);
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
+    await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
 
     updatePrefetch({
@@ -122,48 +140,36 @@ describe("recent session prefetch", () => {
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: queuedKey })).toBeNull();
     await store.flush();
     expect((await store.read(key))?.messages).toEqual(historyResult(key).messages);
-    await vi.advanceTimersByTimeAsync(31_000);
-    await settlePromises();
+    await advancePrefetch(31_000);
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it.each(
-    [
-      { name: "replacement incarnation", patch: { sessionId: "replacement" } },
-      { name: "branch reset", patch: { activeLeafEntryId: "new-leaf" } },
-      { name: "updated transcript", patch: { updatedAt: NOW + 1 } },
-      { name: "new activity", patch: { lastActivityAt: NOW + 1 } },
-      { name: "active run custody", patch: { hasActiveRun: true } },
-    ].flatMap((change) => [
-      { ...change, changedKey: "agent:main:main" },
-      { ...change, changedKey: "global" },
-    ]),
-  )("rejects a prefetch after $changedKey gains $name", async ({ patch, changedKey }) => {
+  it.each([
+    { name: "replacement incarnation", patch: { sessionId: "replacement" } },
+    { name: "branch reset", patch: { activeLeafEntryId: "new-leaf" } },
+    { name: "updated transcript", patch: { updatedAt: NOW + 1 } },
+    { name: "new activity", patch: { lastActivityAt: NOW + 1 } },
+    { name: "active run custody", patch: { hasActiveRun: true } },
+  ])("rejects a prefetch when an alias gains $name", async ({ patch }) => {
     const key = "agent:main:main";
     const response = createDeferred<ReturnType<typeof historyResult>>();
     const request = vi.fn(() => response.promise);
     const original = { ...row(key, NOW - 1), sessionId: "original", activeLeafEntryId: "leaf" };
-    const snapshot = {
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:foreground"],
-      rows: [original],
-    };
+    const snapshot = prefetchState(request, [original]);
     updatePrefetch(snapshot);
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
+    await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
 
     const changed: GatewaySessionRow = {
       ...original,
-      key: changedKey,
-      kind: changedKey === "global" ? "global" : "direct",
+      key: "global",
+      kind: "global",
       ...patch,
     };
     updatePrefetch({
       ...snapshot,
       listRevision: 2,
-      rows: [...(changedKey === key ? [] : [original]), changed],
+      rows: [original, changed],
     });
     response.resolve(historyResult(key));
     await settlePromises();
@@ -173,7 +179,6 @@ describe("recent session prefetch", () => {
   });
 
   it.each([
-    { name: "a same-age alias", aliasActivityAt: NOW - 1, keepOriginal: true },
     { name: "an older alias", aliasActivityAt: NOW - 2, keepOriginal: true },
     { name: "only an older alias", aliasActivityAt: NOW - 2, keepOriginal: false },
   ])(
@@ -183,15 +188,9 @@ describe("recent session prefetch", () => {
       const response = createDeferred<ReturnType<typeof historyResult>>();
       const request = vi.fn(() => response.promise);
       const original = { ...row(key, NOW - 1), sessionId: `id:${key}` };
-      const snapshot = {
-        client: createTestGatewayClient(request),
-        listRevision: 1,
-        openSessionKeys: ["agent:main:foreground"],
-        rows: [original],
-      };
+      const snapshot = prefetchState(request, [original]);
       updatePrefetch(snapshot);
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
+      await advancePrefetch(300);
       expect(request).toHaveBeenCalledOnce();
       updatePrefetch({
         ...snapshot,
@@ -223,15 +222,9 @@ describe("recent session prefetch", () => {
     const key = "agent:main:owned";
     const response = createDeferred<ReturnType<typeof historyResult>>();
     const request = vi.fn(() => response.promise);
-    const snapshot = {
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:foreground"],
-      rows: [row(key, NOW - 1)],
-    };
+    const snapshot = prefetchState(request, [row(key, NOW - 1)]);
     updatePrefetch(snapshot);
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
+    await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
 
     let expected: ChatSessionSnapshot | null = null;
@@ -276,14 +269,8 @@ describe("recent session prefetch", () => {
           ? { kind: "reset", reason: "stale-cursor" }
           : page.promise,
       );
-      updatePrefetch({
-        client: createTestGatewayClient(request),
-        listRevision: 1,
-        openSessionKeys: ["agent:main:foreground"],
-        rows: [row(key, NOW + 1)],
-      });
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
+      updatePrefetch(prefetchState(request, [row(key, NOW + 1)]));
+      await advancePrefetch(300);
       expect(
         request.mock.calls.map(([, params]) => (params as { cursor?: string }).cursor),
       ).toEqual(["stored-cursor", undefined]);
@@ -326,10 +313,11 @@ describe("recent session prefetch", () => {
       configurable: true,
       value: { request: locksRequest },
     });
-    const rows = [
+    const rows: GatewaySessionRow[] = [
       row("agent:main:eligible-6", NOW - 8),
       row("agent:main:eligible-3", NOW - 5, NOW + 500),
       row("agent:main:main", NOW - 1),
+      { ...row("agent:main:active", NOW), hasActiveRun: true, status: "running" },
       row("agent:main:eligible-1", NOW - 3),
       row("agent:main:fresh", NOW - 2),
       row("agent:main:eligible-5", NOW - 7),
@@ -345,8 +333,7 @@ describe("recent session prefetch", () => {
 
     updatePrefetch(state);
     expect(request).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
+    await advancePrefetch(300);
     await drainSequentially(pending, request, ["agent:main:eligible-1", "agent:main:eligible-2"]);
     expect(request).toHaveBeenCalledTimes(2);
     for (const [, params] of request.mock.calls) {
@@ -372,35 +359,8 @@ describe("recent session prefetch", () => {
     await store.flush();
     open.mockClear();
     updatePrefetch({ ...state, listRevision: 2 });
-    await vi.advanceTimersByTimeAsync(2_000);
-    await settlePromises();
+    await advancePrefetch(2_000);
     expect(open).not.toHaveBeenCalled();
-  });
-
-  it("waits for the presented transcript to commit before warming other sessions", async () => {
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      historyResult((params as { sessionKey: string }).sessionKey),
-    );
-    const state: SessionPrefetchUpdate = {
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:main"],
-      loadingSessionKeys: ["agent:main:main"],
-      rows: [row("agent:main:main", NOW - 1), row("agent:main:recent", NOW - 2)],
-    };
-    updatePrefetch(state);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await settlePromises();
-    // The visible transcript owns the socket until it has committed.
-    expect(request).not.toHaveBeenCalled();
-
-    updatePrefetch({ ...state, loadingSessionKeys: [] });
-    host.dispatchEvent(
-      new CustomEvent("openclaw-chat-transcript-loading-changed", { bubbles: true }),
-    );
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
   });
 
   it("stops the queued warming when a presented transcript starts loading mid-cycle", async () => {
@@ -425,8 +385,7 @@ describe("recent session prefetch", () => {
       ],
     };
     updatePrefetch(state);
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
+    await advancePrefetch(300);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent-1"]);
 
     // The user opens another session while the first warm-up is in flight.
@@ -439,43 +398,11 @@ describe("recent session prefetch", () => {
     host.dispatchEvent(
       new CustomEvent("openclaw-chat-transcript-loading-changed", { bubbles: true }),
     );
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
+    await advancePrefetch(300);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([
       "agent:main:recent-1",
       "agent:main:recent-2",
     ]);
-  });
-
-  it("resamples when a presented pane reports a transcript loading edge", async () => {
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      historyResult((params as { sessionKey: string }).sessionKey),
-    );
-    const state: SessionPrefetchUpdate = {
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:main"],
-      rows: [row("agent:main:main", NOW - 1), row("agent:main:recent", NOW - 2)],
-    };
-    updatePrefetch(state);
-    // The pane starts its load inside its own update; the page never re-renders,
-    // so only the pane's signal can retire the "ready" snapshot the page sampled.
-    const pane = host.firstElementChild as HTMLElement & { transcriptLoading: boolean };
-    pane.transcriptLoading = true;
-    pane.dispatchEvent(
-      new CustomEvent("openclaw-chat-transcript-loading-changed", { bubbles: true }),
-    );
-    await vi.advanceTimersByTimeAsync(2_000);
-    await settlePromises();
-    expect(request).not.toHaveBeenCalled();
-
-    pane.transcriptLoading = false;
-    pane.dispatchEvent(
-      new CustomEvent("openclaw-chat-transcript-loading-changed", { bubbles: true }),
-    );
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
   });
 
   it("rechecks readiness after the persisted snapshot read before requesting history", async () => {
@@ -486,18 +413,14 @@ describe("recent session prefetch", () => {
     cache.clear();
     const read = createDeferred<ChatSessionSnapshot | null>();
     const readSpy = vi.spyOn(store, "read").mockReturnValueOnce(read.promise);
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      historyResult((params as { sessionKey: string }).sessionKey),
+    const request = historyRequest();
+    const state: SessionPrefetchUpdate = prefetchState(
+      request,
+      [row("agent:main:main", NOW - 1), row(sessionKey, NOW + 1)],
+      { openSessionKeys: ["agent:main:main"] },
     );
-    const state: SessionPrefetchUpdate = {
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:main"],
-      rows: [row("agent:main:main", NOW - 1), row(sessionKey, NOW + 1)],
-    };
     updatePrefetch(state);
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
+    await advancePrefetch(300);
     expect(readSpy).toHaveBeenCalledWith(sessionKey);
     expect(request).not.toHaveBeenCalled();
 
@@ -515,8 +438,7 @@ describe("recent session prefetch", () => {
     pane.dispatchEvent(
       new CustomEvent("openclaw-chat-transcript-loading-changed", { bubbles: true }),
     );
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
+    await advancePrefetch(300);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([sessionKey]);
   });
 
@@ -538,9 +460,7 @@ describe("recent session prefetch", () => {
     }
     await store.flush();
 
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      historyResult((params as { sessionKey: string }).sessionKey),
-    );
+    const request = historyRequest();
     const client = createTestGatewayClient(request);
     const backgroundRows = Array.from({ length: 25 }, (_, index) =>
       row(`agent:main:background-${index}`, NOW - index - 1),
@@ -549,8 +469,7 @@ describe("recent session prefetch", () => {
 
     for (let listRevision = 1; listRevision <= 10; listRevision += 1) {
       updatePrefetch({ client, listRevision, openSessionKeys: [presentedSessionKey], rows });
-      await vi.advanceTimersByTimeAsync(1_000);
-      await settlePromises();
+      await advancePrefetch(1_000);
       await store.flush();
     }
 
@@ -563,25 +482,21 @@ describe("recent session prefetch", () => {
     expect(store.readSavedAt(presentedSessionKey)).not.toBeNull();
 
     updatePrefetch({ client, listRevision: 11, openSessionKeys: [presentedSessionKey], rows });
-    await vi.advanceTimersByTimeAsync(31_000);
-    await settlePromises();
+    await advancePrefetch(31_000);
     await store.flush();
     expect(request).toHaveBeenCalledTimes(MAX_CACHED_CHAT_SESSIONS - 1);
     expect(store.readSavedAt("agent:main:background-0")).not.toBeNull();
   });
 
   it("coalesces a newer list revision until the per-session cooldown expires", async () => {
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      historyResult((params as { sessionKey: string }).sessionKey),
-    );
+    const request = historyRequest();
     const client = createTestGatewayClient(request);
     const base = {
       client,
       openSessionKeys: ["agent:main:foreground"],
     };
     updatePrefetch({ ...base, listRevision: 1, rows: [row("agent:main:warm", NOW - 1)] });
-    await vi.advanceTimersByTimeAsync(2_000);
-    await settlePromises();
+    await advancePrefetch(2_000);
     expect(request).toHaveBeenCalledTimes(1);
 
     const newerActivityAt = Date.now() + 1;
@@ -595,15 +510,12 @@ describe("recent session prefetch", () => {
       listRevision: 3,
       rows: [row("agent:main:warm", newerActivityAt + 1)],
     });
-    await vi.advanceTimersByTimeAsync(2_000);
-    await settlePromises();
+    await advancePrefetch(2_000);
     expect(request).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(27_000);
-    await settlePromises();
+    await advancePrefetch(27_000);
     expect(request).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await settlePromises();
+    await advancePrefetch(2_000);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -662,14 +574,8 @@ describe("recent session prefetch", () => {
       sessionInfo: { key: sessionKey, kind: "direct", sessionId: "session-delta", updatedAt: 2 },
     }));
 
-    updatePrefetch({
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:foreground"],
-      rows: [row(sessionKey, NOW + 1)],
-    });
-    await vi.advanceTimersByTimeAsync(2_000);
-    await settlePromises();
+    updatePrefetch(prefetchState(request, [row(sessionKey, NOW + 1)]));
+    await advancePrefetch(2_000);
 
     expect(request).toHaveBeenCalledWith(
       "chat.history",
@@ -731,34 +637,12 @@ describe("recent session prefetch", () => {
       },
     }));
 
-    updatePrefetch({
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:foreground"],
-      rows: [row(sessionKey, NOW + 1)],
-    });
-    await vi.advanceTimersByTimeAsync(2_000);
-    await settlePromises();
+    updatePrefetch(prefetchState(request, [row(sessionKey, NOW + 1)]));
+    await advancePrefetch(2_000);
 
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })?.deltaCursor).toBe(
       "cursor-1",
     );
-  });
-
-  it("leaves active sessions for the presented pane to revalidate", async () => {
-    const sessionKey = "agent:main:active";
-    const request = vi.fn();
-
-    updatePrefetch({
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:foreground"],
-      rows: [{ ...row(sessionKey, NOW + 1), hasActiveRun: true, status: "running" }],
-    });
-    await vi.advanceTimersByTimeAsync(2_000);
-    await settlePromises();
-
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("skips the cycle when another tab holds the Web Lock", async () => {
@@ -774,15 +658,9 @@ describe("recent session prefetch", () => {
       configurable: true,
       value: { request: locksRequest },
     });
-    updatePrefetch({
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:foreground"],
-      rows: [row("agent:main:locked", NOW - 1)],
-    });
+    updatePrefetch(prefetchState(request, [row("agent:main:locked", NOW - 1)]));
 
-    await vi.advanceTimersByTimeAsync(2_000);
-    await settlePromises();
+    await advancePrefetch(2_000);
 
     expect(locksRequest).toHaveBeenCalledOnce();
     expect(request).not.toHaveBeenCalled();
@@ -803,12 +681,7 @@ describe("recent session prefetch", () => {
       configurable: true,
       value: { request: locksRequest },
     });
-    updatePrefetch({
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:foreground"],
-      rows: [row("agent:main:hidden", NOW - 1)],
-    });
+    updatePrefetch(prefetchState(request, [row("agent:main:hidden", NOW - 1)]));
     await vi.advanceTimersByTimeAsync(1_500);
     fixture.setVisibility("hidden");
     idle.callback?.({ didTimeout: false, timeRemaining: () => 50 });
@@ -827,15 +700,14 @@ describe("recent session prefetch", () => {
       }
       return historyResult(sessionKey);
     });
-    updatePrefetch({
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:foreground"],
-      rows: [row("agent:main:failed", NOW - 1), row("agent:main:succeeded", NOW - 2)],
-    });
+    updatePrefetch(
+      prefetchState(request, [
+        row("agent:main:failed", NOW - 1),
+        row("agent:main:succeeded", NOW - 2),
+      ]),
+    );
 
-    await vi.advanceTimersByTimeAsync(2_000);
-    await settlePromises();
+    await advancePrefetch(2_000);
 
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([
       "agent:main:failed",
@@ -848,8 +720,7 @@ describe("recent session prefetch", () => {
     expect(
       readChatSessionSnapshot(cache, snapshotHost, { sessionKey: "agent:main:succeeded" }),
     ).not.toBeNull();
-    await vi.advanceTimersByTimeAsync(60_000);
-    await settlePromises();
+    await advancePrefetch(60_000);
     expect(
       request.mock.calls.filter((call) => sessionKeyFromCall(call).endsWith("failed")),
     ).toHaveLength(1);

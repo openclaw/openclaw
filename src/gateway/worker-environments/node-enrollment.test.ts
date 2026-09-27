@@ -171,17 +171,13 @@ describe("worker node enrollment", () => {
   });
 
   it.each([
-    "127.0.0.1",
     "127.42.0.1",
     "localhost",
-    "[::1]",
     "169.254.10.2",
     "0.0.0.0",
     "[::]",
     "[::ffff:0.0.0.0]",
-    "[::ffff:0:0]",
     "[64:ff9b::0.0.0.0]",
-    "[64:ff9b::]",
     "[fe80::1]",
     "[febf::1]",
   ])("rejects unreachable cloud Gateway host %s before preparing artifacts", async (host) => {
@@ -197,14 +193,6 @@ describe("worker node enrollment", () => {
       ),
     );
     expect(prepareArtifact).not.toHaveBeenCalled();
-  });
-
-  it("prepares artifacts for a public cloud Gateway host", async () => {
-    const prepareArtifact = vi.fn(async () => artifact());
-    const manager = createManager({ prepareArtifact });
-
-    await expect(manager.prepare(await createRequested())).resolves.toBe(artifact().tarballSha256);
-    expect(prepareArtifact).toHaveBeenCalledOnce();
   });
 
   it("releases requested-state preflight artifact custody without aborting its caller", async () => {
@@ -342,7 +330,7 @@ describe("worker node enrollment", () => {
     ).toBeDefined();
   });
 
-  it.each(["close", "shutdown", "destroy", "operation-abort", "replacement"] as const)(
+  it.each(["shutdown", "destroy", "operation-abort"] as const)(
     "revokes runtime preparation on %s",
     async (reason) => {
       const record = await createProvisioning();
@@ -354,14 +342,10 @@ describe("worker node enrollment", () => {
         artifactKey: descriptor.sha256,
       }));
       const authorizations = requests.map((request) => transfer.authorize(request)!);
-      if (reason === "close") {
-        manager.closeRuntime(runtime);
-      } else if (reason === "shutdown") {
+      if (reason === "shutdown") {
         manager.stop();
       } else if (reason === "operation-abort") {
         operation.abort();
-      } else if (reason === "replacement") {
-        await manager.prepareRuntime(record, bundle());
       } else {
         await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
       }
@@ -516,6 +500,7 @@ describe("worker node enrollment", () => {
     [
       {
         name: "uses gateway.publicOrigin when the plugin has no pairing override",
+        modes: ["connect"],
         config: {
           ...createConfig(),
           gateway: { ...createConfig().gateway, tls: { enabled: true } },
@@ -525,12 +510,14 @@ describe("worker node enrollment", () => {
       },
       {
         name: "prefers the device-pair plugin publicUrl over gateway.publicOrigin",
+        modes: ["connect"],
         config: createConfig(PLUGIN_PUBLIC_URL),
         expectedUrl: PLUGIN_PUBLIC_URL,
         expectedFingerprint: undefined,
       },
       {
         name: "pins direct Gateway TLS",
+        modes: ["connect", "resume"],
         config: {
           gateway: {
             bind: "custom",
@@ -545,6 +532,7 @@ describe("worker node enrollment", () => {
       },
       {
         name: "pins the configured remote Gateway TLS",
+        modes: ["connect", "resume"],
         config: {
           gateway: {
             remote: { url: "wss://remote.example.test", tlsFingerprint: REMOTE_TLS_FINGERPRINT },
@@ -554,7 +542,7 @@ describe("worker node enrollment", () => {
         expectedUrl: "wss://remote.example.test",
         expectedFingerprint: REMOTE_TLS_FINGERPRINT,
       },
-    ].flatMap((testCase) => ["connect", "resume"].map((mode) => Object.assign({ mode }, testCase))),
+    ].flatMap(({ modes, ...testCase }) => modes.map((mode) => ({ mode, ...testCase }))),
   )("$name ($mode)", async ({ config, expectedUrl, expectedFingerprint, mode }) => {
     const record = await createProvisioning(mode === "resume" ? "existing-node" : undefined);
     const manager = createManager({

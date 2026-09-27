@@ -8,6 +8,7 @@ import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admiss
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { getSuspensionVisibleCronTaskRunCount } from "./active-run-cancellation.js";
 import { stop } from "./ops-lifecycle.js";
 import {
@@ -59,6 +60,7 @@ describe("cron service timer task ledger", () => {
     });
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       nowMs: () => now,
       enqueueSystemEvent,
@@ -116,6 +118,7 @@ describe("cron service timer task ledger", () => {
     });
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
@@ -147,6 +150,7 @@ describe("cron service timer task ledger", () => {
     });
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       nowMs: () => now,
       enqueueSystemEvent,
@@ -204,6 +208,7 @@ describe("cron service timer task ledger", () => {
       });
 
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       nowMs: () => now,
       enqueueSystemEvent,

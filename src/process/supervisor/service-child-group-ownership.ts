@@ -5,7 +5,7 @@ import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 
 export type ProcessCommand =
   | { argv: string[]; serviceMarker?: string }
-  | { argvUnavailable: true; executable: string; uid: number };
+  | { argvUnavailable: true; uid: number };
 
 type GroupMember = {
   pid: number;

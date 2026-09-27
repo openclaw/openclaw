@@ -1,3 +1,4 @@
+import type { AgentToolParam } from "openai/resources/beta/agents/agents";
 import {
   applyEmbeddedAttemptToolsAllow,
   buildAgentHookContextChannelFields,
@@ -50,11 +51,7 @@ import {
   resolveLiveToolResultMaxChars,
   sliceToolResultTextToBudget,
 } from "openclaw/plugin-sdk/text-utility-runtime";
-import type {
-  AgentsApiFunctionCall,
-  AgentsApiFunctionDeclaration,
-  AgentsApiFunctionResult,
-} from "./agentsapi-client.js";
+import type { AgentsApiFunctionCall, AgentsApiFunctionResult } from "./agentsapi-client.js";
 import { recordAgentsApiToolTranscript } from "./agentsapi-transcript.js";
 
 type ToolDelivery = AgentHarnessMessagingDeliveryFacts &
@@ -70,7 +67,7 @@ export type AgentsApiToolExecutionResult = AgentsApiFunctionResult & {
 };
 
 export type AgentsApiToolSurface = {
-  declarations: AgentsApiFunctionDeclaration[];
+  declarations: AgentToolParam.AgentToolConfigParamFunction[];
   execute: (call: AgentsApiFunctionCall) => Promise<AgentsApiToolExecutionResult>;
   delivery: ToolDelivery;
   runtimeFacts: Pick<AgentHarnessAttemptResult, "acceptedSessionSpawns">;
@@ -210,12 +207,14 @@ export function buildAgentsApiToolSurface(
       };
     });
   const toolMap = new Map(entries.map((entry) => [entry.tool.name, entry]));
-  const declarations: AgentsApiFunctionDeclaration[] = entries.map(({ tool, schema }) => ({
-    type: "function",
-    name: tool.name,
-    description: tool.description,
-    parameters: schema,
-  }));
+  const declarations: AgentToolParam.AgentToolConfigParamFunction[] = entries.map(
+    ({ tool, schema }) => ({
+      type: "function",
+      name: tool.name,
+      description: tool.description,
+      parameters: schema,
+    }),
+  );
   const middleware = createAgentToolResultMiddlewareRunner({
     runtime: "agentsapi",
     agentId,

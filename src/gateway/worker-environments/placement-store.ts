@@ -7,6 +7,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { startWorkerPlacementDispatch } from "./placement-dispatch-store.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
 import { createPlacementMoveOps } from "./placement-move-intent.js";
 import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
@@ -15,8 +16,6 @@ import {
   isCurrentPlacementTurnClaim,
   nextGeneration,
   normalizeEpoch,
-  normalizeWorkerPlacementExecutionMode,
-  normalizeIdentity,
   placementTurnOwner,
   projectWorkerSessionTurnClaim,
   required,
@@ -27,7 +26,6 @@ import {
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import {
-  ensureLocal,
   find,
   fromRow,
   getRequired,
@@ -54,15 +52,13 @@ import {
   attachWorkerTurnExecutionIdentityStore,
   deferWorkerTurnClaimClosed,
 } from "./placement-turn-claim-events.js";
+import { createPlacementTurnClaimWorkerOps } from "./placement-turn-claims-store.js";
 import {
   createPlacementTurnClaimOps,
   registerWorkerTurnClaimClosedHandler,
 } from "./placement-turn-claims.js";
 import { createPlacementWorkspaceJournalOps } from "./placement-workspace-journal.js";
-import {
-  assertSessionWorkspaceUnreserved,
-  createPlacementWorkspaceReservationOps,
-} from "./placement-workspace-reservation.js";
+import { createPlacementWorkspaceReservationOps } from "./placement-workspace-reservation.js";
 import {
   createPlacementWorkspaceResultOps,
   hasCurrentWorkspaceResultClaim,
@@ -128,6 +124,7 @@ export function createWorkerSessionPlacementStore(
   const store = {
     ...createPlacementWorkspaceReservationOps(runtime),
     ...createPlacementTurnClaimOps(runtime),
+    ...createPlacementTurnClaimWorkerOps({ path, now: options.now }),
     ...createPlacementPendingFailureOps(runtime),
     ...createPlacementMoveOps(runtime),
     ...createPlacementWorkspaceJournalOps(runtime),
@@ -197,14 +194,21 @@ export function createWorkerSessionPlacementStore(
         }
         return requested;
       };
+      const byRequestedSet = (normalizedSessionIds: ReadonlySet<string>) =>
+        new Set(
+          [...requestedIds].flatMap(([original, normalized]) =>
+            normalizedSessionIds.has(normalized) ? [original] : [],
+          ),
+        );
       return {
         ...projection,
         placements: byRequestedId(placements),
         moves: byRequestedId(projection.moves),
-        workspaceResultReconcilingSessionIds: new Set(
-          [...requestedIds].flatMap(([original, normalized]) =>
-            projection.workspaceResultReconcilingSessionIds.has(normalized) ? [original] : [],
-          ),
+        workspaceResultReconcilingSessionIds: byRequestedSet(
+          projection.workspaceResultReconcilingSessionIds,
+        ),
+        workspaceRecoveryPendingSessionIds: byRequestedSet(
+          projection.workspaceRecoveryPendingSessionIds,
         ),
       };
     },
@@ -316,58 +320,11 @@ export function createWorkerSessionPlacementStore(
       });
     },
 
-    startDispatch(input: WorkerSessionPlacementDispatchIdentity): WorkerSessionPlacementRecord {
-      const identity = normalizeIdentity(input);
-      const executionMode = normalizeWorkerPlacementExecutionMode(input.executionMode);
-      return write((db) => {
-        const current = ensureLocal(db, identity, now());
-        assertSessionWorkspaceUnreserved(db, identity.sessionId);
-        if (
-          current.state !== "local" &&
-          current.state !== "reclaimed" &&
-          current.state !== "failed"
-        ) {
-          throw new Error(
-            `Cannot dispatch session ${identity.sessionId} from placement ${current.state}`,
-          );
-        }
-        const updatedAtMs = now();
-        // Preserve an in-flight local claim while closing admission. Reclaimed
-        // and failed placements have no live worker owner and start a fresh generation.
-        const result = executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_session_placements")
-            .set({
-              state: "requested",
-              execution_mode: executionMode,
-              environment_id: null,
-              transition_generation: nextGeneration(current.generation),
-              active_owner_epoch: null,
-              workspace_base_manifest_ref: null,
-              remote_workspace_dir: null,
-              worker_bundle_hash: null,
-              last_transcript_ack_cursor: null,
-              last_live_event_ack_cursor: null,
-              recovery_error: null,
-              terminal_reason: null,
-              terminal_at_ms: null,
-              updated_at_ms: updatedAtMs,
-              state_changed_at_ms: updatedAtMs,
-            })
-            .where("session_id", "=", current.sessionId)
-            .where("state", "=", current.state)
-            .where("transition_generation", "=", current.generation),
-        );
-        if (result.numAffectedRows !== 1n) {
-          throw new Error(
-            `Session ${identity.sessionId} placement changed during dispatch barrier`,
-          );
-        }
-        const updated = getRequired(db, identity.sessionId);
-        publishPlacementTurnClaimState(db, updated);
-        return updated;
-      });
+    startDispatch(
+      input: WorkerSessionPlacementDispatchIdentity,
+      dispatchOptions: { assertCurrent?: () => void } = {},
+    ): Promise<WorkerSessionPlacementRecord> {
+      return startWorkerPlacementDispatch(path, input, now(), dispatchOptions.assertCurrent);
     },
 
     transition(input: {

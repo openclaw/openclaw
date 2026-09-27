@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as fsSafe from "./fs-safe.js";
+import { hasNodeErrorCode } from "./path-guards.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
@@ -43,28 +44,86 @@ async function fixture(hardlink = false, beforePlan?: (source: string) => Promis
   };
 }
 
-function atCopyMutation(mutate: () => void) {
+function atCopyBoundary(mutate: () => void, phase: "admission" | "mutation" = "mutation") {
   const openRoot = fsSafe.root;
   vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
     const root = await openRoot(...args);
     const copyIn = root.copyIn.bind(root);
-    vi.spyOn(root, "copyIn").mockImplementation((relative, source, options) =>
-      copyIn(relative, source, {
+    vi.spyOn(root, "copyIn").mockImplementation((relative, source, options) => {
+      if (phase === "admission") {
+        mutate();
+        return copyIn(relative, source, options);
+      }
+      return copyIn(relative, source, {
         ...options,
         assertBeforeMutation: () => {
           mutate();
           options?.assertBeforeMutation?.();
         },
-      }),
-    );
+      });
+    });
     return root;
   });
 }
 
-it("copies a nonempty plugin without native support or sharing its source inode", async () => {
-  const f = await fixture(true);
+it.for([".MODULES.YAML", ".moduleſ.yaml"])(
+  "discovers external stores through the filesystem metadata alias %s",
+  async (alias, context) => {
+    let store = "";
+    const f = await fixture(false, async (source) => {
+      store = path.join(path.dirname(source), "external-store");
+      await fs.mkdir(store);
+      await fs.writeFile(path.join(store, "entry.js"), "export const value = 1;");
+      await fs.writeFile(path.join(source, alias), `virtualStoreDir: ${JSON.stringify(store)}\n`);
+      const canonical = await fs
+        .stat(path.join(source, ".modules.yaml"))
+        .catch((error: unknown) => {
+          if (hasNodeErrorCode(error, "ENOENT")) {
+            return undefined;
+          }
+          throw error;
+        });
+      if (!canonical) {
+        context.skip("Requires this metadata alias to resolve on the fixture filesystem");
+      }
+    });
+    expect(f.plan.copies.map(([source]) => source)).toContain(store);
+    expect(f.plan.entries.map((entry) => entry.path)).toContain(path.join(store, "entry.js"));
+  },
+);
+
+it.each(["directory", "invalid YAML"])("rejects a listed .modules.yaml %s", async (kind) => {
+  await expect(
+    fixture(false, async (source) => {
+      const manifest = path.join(source, ".modules.yaml");
+      if (kind === "directory") {
+        await fs.mkdir(manifest);
+      } else {
+        await fs.writeFile(manifest, "virtualStoreDir: [");
+      }
+    }),
+  ).rejects.toThrow();
+});
+
+it("copies a plugin portably without repeated parent creation or shared inodes", async () => {
+  const metadataStat = vi.spyOn(fsSync, "lstatSync");
+  const metadataRead = vi.spyOn(fs, "readFile");
+  const f = await fixture(true, async (source) => {
+    await fs.mkdir(path.join(source, "nested"));
+    for (let index = 0; index < 8; index++) {
+      await fs.writeFile(path.join(source, "nested", `${index}.txt`), `payload ${index}`);
+    }
+  });
+  const source = path.dirname(f.file);
+  expect(
+    metadataStat.mock.calls.filter(([file]) => file === path.join(source, "package.json")),
+  ).toHaveLength(0);
+  expect(
+    metadataRead.mock.calls.filter(([file]) => file === path.join(source, ".modules.yaml")),
+  ).toHaveLength(0);
   const linked = `${f.file}.linked`;
   const before = await fs.stat(f.file, { bigint: true });
+  const mkdir = vi.spyOn(fs, "mkdir");
   vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   try {
     // FreeBSD has no fs-safe native binding. Exercise its real portable backend.
@@ -72,6 +131,14 @@ it("copies a nonempty plugin without native support or sharing its source inode"
     await f.copy();
   } finally {
     vi.unstubAllEnvs();
+  }
+  expect(mkdir.mock.calls.length).toBeLessThanOrEqual(
+    f.plan.entries.filter((entry) => entry.kind === "directory").length + 1,
+  );
+  for (let index = 0; index < 8; index++) {
+    expect(await fs.readFile(path.join(f.destination, "nested", `${index}.txt`), "utf8")).toBe(
+      `payload ${index}`,
+    );
   }
   const copied = path.join(f.destination, "payload.txt");
   const after = await fs.stat(f.file, { bigint: true });
@@ -90,16 +157,16 @@ it("copies a nonempty plugin without native support or sharing its source inode"
   if (process.platform !== "win32") {
     expect(snapshot.mode & 0o777n).toBe(0o444n);
   }
-  expect(await fs.readdir(f.destination)).toEqual(["payload.txt", "payload.txt.linked"]);
+  expect(await fs.readdir(f.destination)).toEqual(["nested", "payload.txt", "payload.txt.linked"]);
 });
 
 it.each(["file", "symlink"] as const)(
-  "preserves a %s that appears after missing-entry planning and cleans copy staging",
+  "preserves a %s that appears after planning before copy admission",
   async (kind) => {
     const f = await fixture();
     const target = path.join(f.destination, "payload.txt");
     let inserted = false;
-    atCopyMutation(() => {
+    atCopyBoundary(() => {
       if (inserted) {
         return;
       }
@@ -109,7 +176,7 @@ it.each(["file", "symlink"] as const)(
       } else {
         fsSync.symlinkSync(f.file, target);
       }
-    });
+    }, "admission");
     await expect(f.copy()).rejects.toThrow();
     expect(inserted).toBe(true);
     expect(await fs.readdir(f.destination)).toEqual(["payload.txt"]);
@@ -127,7 +194,7 @@ it.each(["mode", "same-size content with changed mtime", "identity"] as const)(
   async (change) => {
     const f = await fixture();
     let mutated = false;
-    atCopyMutation(() => {
+    atCopyBoundary(() => {
       if (mutated) {
         return;
       }

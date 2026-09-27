@@ -185,9 +185,14 @@ it("holds Gateway startup custody until the automatic source build exits", () =>
     expect(builds).toBe(1);
   }));
 
-it.each([true, false])(
-  "parks the foreground Gateway before source runtime publication only when artifacts change: %s",
-  (changed) =>
+it.each([
+  { changed: true, sourceRuntimePrepared: undefined },
+  { changed: false, sourceRuntimePrepared: undefined },
+  { changed: true, sourceRuntimePrepared: false },
+  { changed: true, sourceRuntimePrepared: true },
+])(
+  "parks before changed runtime publication (changed=$changed, prepared=$sourceRuntimePrepared)",
+  ({ changed, sourceRuntimePrepared }) =>
     withRuntimePublicationFixture(async ({ root, env, service }) => {
       vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("git");
       const scripts = path.join(root, "scripts");
@@ -197,6 +202,7 @@ it.each([true, false])(
         path.join(scripts, "stage-bundled-plugin-runtime.mts"),
         `import fs from "node:fs/promises";
 export function prepareBundledPluginRuntime() {
+  if (${sourceRuntimePrepared === true}) throw new Error("Prepared runtime must not be staged again");
   return {
     changed: ${changed},
     async publish(assertCurrent) {
@@ -210,7 +216,9 @@ export function prepareBundledPluginRuntime() {
       );
       await fs.writeFile(
         path.join(scripts, "lib", "dist-artifact-ownership.mts"),
-        "export async function withDistArtifactOwnership(_root, run) { return await run(); }\n",
+        sourceRuntimePrepared === false
+          ? "throw new Error('The admitted runtime must not load the legacy lock owner');\n"
+          : "export async function withDistArtifactOwnership(_root, run) { return await run(); }\n",
       );
       await fs.writeFile(artifact, "original");
       const lock = vi.mocked(gatewayLocks.readActiveGatewayLockIdentity);
@@ -226,15 +234,17 @@ export function prepareBundledPluginRuntime() {
           withPluginLifecycleLease({ env, waitMs: 0 }, (lease) =>
             completeSourceUpdateRuntime({
               root,
+              sourceRuntimePrepared,
               timeoutMs: 1_000,
               lease,
               beforePublication: park,
             }),
           ),
-        ).resolves.toEqual({ changed });
-        expect(park).toHaveBeenCalledTimes(changed ? 1 : 0);
-        expect(await fs.readFile(artifact, "utf8")).toBe(changed ? "candidate" : "original");
-        if (changed) {
+        ).resolves.toEqual({ changed: changed && sourceRuntimePrepared !== true });
+        const published = changed && sourceRuntimePrepared !== true;
+        expect(park).toHaveBeenCalledTimes(published ? 1 : 0);
+        expect(await fs.readFile(artifact, "utf8")).toBe(published ? "candidate" : "original");
+        if (published) {
           expect(lock).toHaveBeenCalled();
         } else {
           expect(service.readRuntime).not.toHaveBeenCalled();

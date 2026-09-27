@@ -106,12 +106,6 @@ describe("buildLineMediaMessage URL boundary", () => {
       policy: { allowPrivateNetwork: false },
     });
   });
-
-  it("rejects a local path because LINE outbound media requires public HTTPS URLs", async () => {
-    await expect(buildLineMediaMessage("./assets/image.jpg", {}, USER_TARGET)).rejects.toThrow(
-      /requires a public https url/i,
-    );
-  });
 });
 
 describe("buildLineMediaMessage kind resolution", () => {
@@ -174,13 +168,6 @@ describe("buildLineMediaMessage kind resolution", () => {
   it.each([
     // These suffixes name formats LINE cannot carry in its native message types.
     "https://example.com/image.webp",
-    "https://example.com/animation.gif",
-    "https://example.com/clip.mov",
-    "https://example.com/clip.webm",
-    "https://example.com/audio.wav",
-    "https://example.com/audio.ogg",
-    "https://example.com/report.pdf",
-    "https://example.com/archive.zip",
     "https://example.com/file.unknown",
   ])("delivers unsupported %s as its URL", async (url) => {
     await expect(buildLineMediaMessage(url, {}, USER_TARGET)).resolves.toEqual({

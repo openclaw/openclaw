@@ -2,7 +2,9 @@ import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { PreparedModelRuntimeLeaseOptions } from "../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ImageDescriptionRequest } from "./types.js";
 
 export const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
@@ -257,3 +259,32 @@ export function installImageRuntimeTestHooks({
 }
 
 export { imageRuntimeMocks, imageTestFetchWithSsrFGuardMock };
+
+export function imageRequestDefaults(): Omit<ImageDescriptionRequest, "provider" | "model"> {
+  return {
+    cfg: {},
+    agentDir: "/tmp/openclaw-agent",
+    buffer: Buffer.from("png-bytes"),
+    fileName: "image.png",
+    mime: "image/png",
+    timeoutMs: 1000,
+  };
+}
+
+export function imageCompletion(api: string, provider: string, model: string, text: string) {
+  return {
+    role: "assistant",
+    api,
+    provider,
+    model,
+    stopReason: "stop",
+    timestamp: Date.now(),
+    content: [{ type: "text", text }],
+  };
+}
+
+export function mockImageModel(model: Pick<Model, "provider" | "id"> & Partial<Model>) {
+  discoverModelsMock.mockReturnValue({
+    find: vi.fn(() => ({ input: ["text", "image"], ...model })),
+  });
+}

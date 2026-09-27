@@ -1,8 +1,3 @@
-/**
- * Session key resolution helpers.
- *
- * Normalizes display/internal/current-session aliases and resolves session-id inputs through Gateway.
- */
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -52,13 +47,7 @@ export function resolveMainSessionAlias(cfg: OpenClawConfig) {
 }
 
 export function resolveDisplaySessionKey(params: { key: string; alias: string; mainKey: string }) {
-  if (params.key === params.alias) {
-    return "main";
-  }
-  if (params.key === params.mainKey) {
-    return "main";
-  }
-  return params.key;
+  return params.key === params.alias || params.key === params.mainKey ? "main" : params.key;
 }
 
 export function resolveInternalSessionKey(params: {

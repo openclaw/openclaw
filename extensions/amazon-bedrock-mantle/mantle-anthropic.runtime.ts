@@ -45,10 +45,6 @@ function isClaudeSonnet5Model(model: Model): boolean {
   return resolveClaudeSonnet5ModelIdentity(model) !== undefined;
 }
 
-function requiresDefaultSampling(model: Model): boolean {
-  return requiresClaudeDefaultSampling(model);
-}
-
 function isClaudeMythosPreviewModel(model: Model): boolean {
   return [model.id, model.name, model.params?.canonicalModelId]
     .filter((value): value is string => typeof value === "string")
@@ -110,25 +106,13 @@ function mapModernClaudeEffort(
   return "high";
 }
 
-function mergeHeaders(
-  ...headerSources: Array<Record<string, string> | undefined>
-): Record<string, string> {
-  const merged: Record<string, string> = {};
-  for (const headers of headerSources) {
-    if (headers) {
-      Object.assign(merged, headers);
-    }
-  }
-  return merged;
-}
-
 function buildMantleAnthropicBaseOptions(
   model: Model,
   options: SimpleStreamOptions | undefined,
   apiKey: string,
 ) {
   return copyProviderAcceptanceObserver(options, {
-    ...(requiresDefaultSampling(model) ? {} : { temperature: options?.temperature }),
+    ...(requiresClaudeDefaultSampling(model) ? {} : { temperature: options?.temperature }),
     maxTokens:
       options?.maxTokens ||
       (isClaudeOpus5Model(model) || isClaudeSonnet5Model(model) || isClaudeMythos5Model(model)
@@ -183,15 +167,13 @@ export function createMantleAnthropicStreamFn(deps?: {
       authToken: apiKey,
       baseURL: resolveMantleAnthropicBaseUrl(model.baseUrl),
       dangerouslyAllowBrowser: true,
-      defaultHeaders: mergeHeaders(
-        {
-          accept: "application/json",
-          "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": MANTLE_ANTHROPIC_BETA,
-        },
-        model.headers,
-        options?.headers,
-      ),
+      defaultHeaders: {
+        accept: "application/json",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "anthropic-beta": MANTLE_ANTHROPIC_BETA,
+        ...model.headers,
+        ...options?.headers,
+      },
       fetch: buildGuardedModelFetch(model),
     });
     const base = buildMantleAnthropicBaseOptions(model, options, apiKey);

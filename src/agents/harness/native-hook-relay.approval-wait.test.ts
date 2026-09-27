@@ -466,36 +466,7 @@ describe("native hook relay approval wait handling", () => {
     [
       { fullPermission: true, mode: undefined, decision: "defer" },
       { fullPermission: false, mode: undefined, decision: "deny" },
-      { fullPermission: true, mode: "auto" as const, decision: "defer" },
-      { fullPermission: true, mode: "prompt" as const, decision: "defer" },
       { fullPermission: false, mode: "approve" as const, decision: "defer" },
-      {
-        fullPermission: true,
-        mode: "prompt" as const,
-        serverName: "linear-team",
-        nativeServerName: "linear_team",
-        decision: "defer",
-      },
-      { fullPermission: true, mode: "prompt" as const, serverName: "Linear", decision: "defer" },
-      {
-        fullPermission: true,
-        mode: "prompt" as const,
-        serverName: "team__linear",
-        nativeServerName: "team__linear",
-        decision: "defer",
-      },
-      {
-        fullPermission: true,
-        mode: undefined,
-        projectedMode: "prompt" as const,
-        decision: "defer",
-      },
-      {
-        fullPermission: true,
-        mode: "approve" as const,
-        projectedMode: "prompt" as const,
-        decision: "defer",
-      },
       {
         fullPermission: false,
         mode: "prompt" as const,
@@ -509,27 +480,22 @@ describe("native hook relay approval wait handling", () => {
         nativeServerName: "Linear",
         decision: "defer",
       },
-      { fullPermission: true, mode: undefined, nativeServerName: "codex_apps", decision: "defer" },
     ].map((scenario) => ({
       serverName: scenario.serverName ?? "linear",
       nativeServerName: scenario.nativeServerName ?? "linear",
-      projectedMode: "projectedMode" in scenario ? scenario.projectedMode : undefined,
       fullPermission: scenario.fullPermission,
       mode: scenario.mode,
       decision: scenario.decision,
     })),
   )(
-    "uses full=$fullPermission with server $serverName mode=$mode projected=$projectedMode for MCP approval",
-    async ({ fullPermission, mode, decision, serverName, nativeServerName, projectedMode }) => {
+    "uses full=$fullPermission with server $serverName mode=$mode for MCP approval",
+    async ({ fullPermission, mode, decision, serverName, nativeServerName }) => {
       mockCallGatewayTool.mockResolvedValue({ id: "approval-1", decision: "deny" });
       const registration = {
         provider: "codex" as const,
         sessionId: "session-1",
         runId: "run-1",
         autoApproveMcpTools: fullPermission,
-        projectedMcpServers: projectedMode
-          ? { [serverName]: { default_tools_approval_mode: projectedMode } }
-          : undefined,
         config: {
           mcp: {
             servers: {

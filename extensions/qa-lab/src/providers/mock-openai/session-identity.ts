@@ -1,10 +1,6 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaMockProviderDispatchRequest, ResponsesInputItem } from "./mock-openai-contracts.js";
-import {
-  extractAllRequestTexts,
-  isResponsesToolCallOutput,
-  parseToolOutputJson,
-} from "./mock-openai-input.js";
+import { extractAllRequestTexts, parseToolOutputJson } from "./mock-openai-input.js";
 import { unwrapScenarioCatalogOutput } from "./mock-openai-tool-routing.js";
 
 export function resolveAcceptedChildSessionKey(input: ResponsesInputItem[]) {
@@ -25,10 +21,25 @@ export function resolveQaChildSessionKey(
   return /^- Your session:\s*(.+?)\.\s*$/mu.exec(systemPrompt)?.[1]?.trim();
 }
 
+function isTextInputMessage(item: ResponsesInputItem): boolean {
+  return (
+    (item.type === undefined || item.type === "message") &&
+    (typeof item.content === "string" ||
+      (Array.isArray(item.content) &&
+        item.content.every((part) => {
+          const block = asOptionalRecord(part);
+          return block?.type === "input_text" && typeof block.text === "string";
+        })))
+  );
+}
+
 export function createQaSessionIdentityResolver() {
   const observed = new Set<string>();
   let sessionScoped = false;
-  const resolve = (request: QaMockProviderDispatchRequest): string | undefined => {
+  const resolve = (
+    request: QaMockProviderDispatchRequest,
+    normalized: { body: Record<string, unknown>; input: ResponsesInputItem[] },
+  ): string | undefined => {
     const fullId =
       asOptionalRecord(request.body.client_metadata)?.session_id ??
       request.headers?.["x-session-affinity"];
@@ -38,18 +49,33 @@ export function createQaSessionIdentityResolver() {
     }
     const affinity = request.headers?.session_id;
     if (typeof affinity !== "string" || !affinity.trim()) {
-      // Host-prepared utility completions have no conversation identity or tools.
-      // Recognize only their system contracts, never quoted user/history text.
-      const input: ResponsesInputItem[] = Array.isArray(request.body.input)
-        ? request.body.input
-        : [];
-      const instructions = extractAllRequestTexts(
-        input.filter((item) => item.role === "developer" || item.role === "system"),
-        request.body,
-      );
+      // All three host-prepared utilities send one text user turn and a system
+      // prompt, with no tools or retained conversation. Use the dispatcher's
+      // normalized wire shape, but keep transport identity on the original request.
+      // Anthropic normalization can erase non-text history, so require the raw
+      // request to contain exactly one user turn before trusting that projection.
+      const rawMessages = request.body.messages;
+      const historyFree =
+        request.route !== "anthropic-messages" ||
+        (Array.isArray(rawMessages) &&
+          rawMessages.length === 1 &&
+          asOptionalRecord(rawMessages[0])?.role === "user");
+      const { body, input } = normalized;
+      const userInput = input.at(-1);
+      const systemInput = input.slice(0, -1);
+      const instructions = extractAllRequestTexts(systemInput, body);
       const standalone =
-        (!Array.isArray(request.body.tools) || request.body.tools.length === 0) &&
-        !input.some(isResponsesToolCallOutput) &&
+        historyFree &&
+        (body.tools === undefined || (Array.isArray(body.tools) && body.tools.length === 0)) &&
+        request.body.previous_response_id == null &&
+        request.body.conversation == null &&
+        userInput !== undefined &&
+        systemInput.every(
+          (item) =>
+            (item.role === "developer" || item.role === "system") && isTextInputMessage(item),
+        ) &&
+        userInput.role === "user" &&
+        isTextInputMessage(userInput) &&
         [
           "You are a JSON-only function.",
           "You are keeping a dream diary.",

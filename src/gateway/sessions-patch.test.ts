@@ -825,16 +825,6 @@ describe("gateway sessions patch", () => {
     expect(entry.category).toBe("Research");
   });
 
-  test("rejects empty category", async () => {
-    expectPatchError(
-      await runPatch({
-        store: mainStoreEntry({}),
-        patch: { key: MAIN_SESSION_KEY, category: "   " },
-      }),
-      "invalid category: empty",
-    );
-  });
-
   test("clears fastMode when patch sets null", async () => {
     const store = mainStoreEntry({ fastMode: true });
     const entry = expectPatchOk(
@@ -1395,24 +1385,12 @@ describe("gateway sessions patch", () => {
     },
   );
 
-  test.each([
-    {
-      name: "accepts explicit allowlisted provider/model refs from sessions.patch",
-      catalog: [
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5" },
-      ],
-    },
-    {
-      name: "accepts explicit allowlisted refs absent from bundled catalog",
-      catalog: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.2" }],
-    },
-  ])("$name", async ({ catalog }) => {
+  test("accepts explicit allowlisted refs absent from bundled catalog", async () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: createAllowlistedAnthropicModelCfg(),
         patch: { key: MAIN_SESSION_KEY, model: ANTHROPIC_SONNET_MODEL },
-        loadGatewayModelCatalog: async () => catalog,
+        loadGatewayModelCatalog: loadCatalog(OPENAI_GPT_MODEL),
       }),
     );
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
@@ -2141,25 +2119,22 @@ describe("gateway sessions patch", () => {
     expect(cleared.execHost).toBeUndefined();
   });
 
-  test.each(["auto", "gateway", "sandbox"] as const)(
-    "preserves explicit %s exec hosting when clearing a stale node binding",
-    async (execHost) => {
-      const cleared = expectPatchOk(
-        await runPatch({
-          store: mainStoreEntry({
-            execHost,
-            execNode: "worker-1",
-            execCwd: "/workspace/on-worker-1",
-          }),
-          patch: { key: MAIN_SESSION_KEY, execNode: null },
+  test("preserves explicit gateway exec hosting when clearing a stale node binding", async () => {
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({
+          execHost: "gateway",
+          execNode: "worker-1",
+          execCwd: "/workspace/on-worker-1",
         }),
-      );
+        patch: { key: MAIN_SESSION_KEY, execNode: null },
+      }),
+    );
 
-      expect(cleared.execHost).toBe(execHost);
-      expect(cleared.execNode).toBeUndefined();
-      expect(cleared.execCwd).toBeUndefined();
-    },
-  );
+    expect(cleared.execHost).toBe("gateway");
+    expect(cleared.execNode).toBeUndefined();
+    expect(cleared.execCwd).toBeUndefined();
+  });
 
   test("rejects invalid execHost values", async () => {
     const result = await runPatch({

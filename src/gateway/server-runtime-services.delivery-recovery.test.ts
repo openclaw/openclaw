@@ -14,6 +14,7 @@ import {
   findDeliveryIntentOwner,
   loadPendingDelivery,
 } from "../infra/outbound/delivery-queue-storage.js";
+import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -28,6 +29,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import * as lifecycleNotices from "./server-restart-sentinel-notice.js";
 import { activateGatewayScheduledServices } from "./server-runtime-services.js";
@@ -52,13 +54,19 @@ vi.mock("./server-restart-sentinel.js", () => ({
 
 let services: ReturnType<typeof activateGatewayScheduledServices> | undefined;
 let watcher: ReturnType<typeof startUpdateRunWatcher> | undefined;
+let scheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
+let lifecycle: ReturnType<typeof createGatewayUpdateLifecycle> | undefined;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     await watcher?.stop();
+    await lifecycle?.stop();
     await services?.stopDeliveryRecovery();
     services?.heartbeatRunner.stop();
+    await scheduler?.stop();
     watcher = undefined;
     services = undefined;
+    scheduler = undefined;
+    lifecycle = undefined;
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     closeOpenClawAgentDatabasesForTest();
@@ -76,6 +84,8 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   vi.useFakeTimers({
     toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
+  scheduler = createTestGatewayScheduler("fake-timers");
+  lifecycle = createGatewayUpdateLifecycle(scheduler);
   resetGatewayWorkAdmission();
   const rootA = tempDirs.make("openclaw-runtime-recovery-a-");
   const rootB = tempDirs.make("openclaw-runtime-recovery-b-");
@@ -128,6 +138,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   const admittedWork = vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission");
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   services = activateGatewayScheduledServices({
+    scheduler,
     minimalTestGateway: false,
     cfgAtStart: cfg,
     deps: {},
@@ -144,7 +155,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   });
   recordUpdateRunStep(run.runId, { step: "notice:ack", status: "completed" });
   const broadcast = vi.fn();
-  watcher = startUpdateRunWatcher({ broadcast, log });
+  watcher = startUpdateRunWatcher({ lifecycle, broadcast, log });
   expect(broadcast).toHaveBeenCalledWith(
     "update.run.changed",
     expect.objectContaining({ runId: run.runId, status: "running" }),

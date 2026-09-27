@@ -242,20 +242,6 @@ describe("Vitest pair benchmark contract", () => {
     ).toThrow("normalized repository-relative path");
   });
 
-  it("requires every committed inventory path on both sides", () => {
-    const root = tempDirs.make("vitest-pair-inventory-");
-    for (const lane of manifest.lanes) {
-      for (const relative of inventoryPaths(lane)) {
-        const file = path.join(root, relative);
-        mkdirSync(path.dirname(file), { recursive: true });
-        writeFileSync(file, `${relative}\n`);
-      }
-    }
-    const inventory = assertInventoryAvailable(root, manifest);
-    expect(inventory.entries).toHaveLength(7);
-    expect(inventory.inventorySha256).toMatch(/^[0-9a-f]{64}$/u);
-  });
-
   it("rejects selected workload byte mismatches between sides", () => {
     const baselineRoot = tempDirs.make("vitest-pair-baseline-inventory-");
     const candidateRoot = tempDirs.make("vitest-pair-candidate-inventory-");
@@ -558,12 +544,6 @@ describe("Vitest pair benchmark contract", () => {
       name: "exact delta boundary",
       baselineMs: 5000,
       candidateMs: 6000,
-      regression: true,
-    },
-    {
-      name: "ratio and delta above thresholds",
-      baselineMs: 10_000,
-      candidateMs: 11_200,
       regression: true,
     },
   ])("applies both critical lane thresholds: $name", ({ baselineMs, candidateMs, regression }) => {

@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -10,6 +11,7 @@ import {
   takeSqliteWorkerOperationAdmissionAttachment,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabase,
@@ -25,6 +27,7 @@ import { withLeaseWriteTransaction } from "./openclaw-state-lease-storage.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
   readOpenClawStateLeaseExpiry,
+  reclaimDeadOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
   type OpenClawStateLeaseIdentity,
@@ -150,6 +153,19 @@ export function acquireOpenClawStateLeaseInWorker(
 ) {
   const { identity, leaseMs, operationLabel, schemaPolicy } = input;
   const shared = input.observeExpiry ? takeLeaseExpiryObservation(identity) : undefined;
+  // Worker threads share the process lifetime; arbitrary subprocess work does not.
+  const payloadJson = input.processBound
+    ? JSON.stringify({
+        owner: {
+          pid: process.pid,
+          host: hostname(),
+          startedAt: getFileLockProcessStartTime(
+            process.pid,
+            getSqliteWorkerStateContext().environment,
+          ),
+        },
+      })
+    : null;
   try {
     return withLeaseWriteTransaction(
       {
@@ -165,7 +181,8 @@ export function acquireOpenClawStateLeaseInWorker(
       (db) => {
         const facts = { kind: "state-lease-acquire", identity };
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
-        const result = acquireOpenClawStateLeaseInTransaction(db, identity, leaseMs);
+        reclaimDeadOpenClawStateLeaseInTransaction(db, identity);
+        const result = acquireOpenClawStateLeaseInTransaction(db, identity, leaseMs, payloadJson);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
         if (shared && result.kind === "acquired") {
           stageLeaseExpiryObservation(db, shared, result.expiresAt);

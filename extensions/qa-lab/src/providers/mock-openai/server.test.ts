@@ -646,31 +646,28 @@ describe("qa mock openai server", () => {
     expect(outputItems(body).some((item) => item.type === "function_call")).toBe(false);
   });
 
-  it.each(["", "@openclaw ", "@sut_bot "])(
-    "keeps final-only marker preview deltas separate from the final answer with prefix %j",
-    async (prefix) => {
-      const server = await startMockServer({ finalOnlyMarkerPauseMs: 1 });
-      const response = await expectStreamingResponses(server, {
-        input: [
-          makeUserInput(
-            `${prefix}Final-only marker streaming QA check. Reply exactly: QA-FINAL-ONLY-STREAMING-OK`,
-          ),
-        ],
-      });
+  it("keeps final-only marker preview deltas separate from the final answer after a mention", async () => {
+    const server = await startMockServer({ finalOnlyMarkerPauseMs: 1 });
+    const response = await expectStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "@sut_bot Final-only marker streaming QA check. Reply exactly: QA-FINAL-ONLY-STREAMING-OK",
+        ),
+      ],
+    });
 
-      const responseBody = await response.text();
-      const deltaText = responseBody
-        .split("\n")
-        .filter((line) => line.startsWith("data: {"))
-        .map((line) => JSON.parse(line.slice("data: ".length)) as { type?: string; delta?: string })
-        .filter((event) => event.type === "response.output_text.delta")
-        .map((event) => event.delta ?? "")
-        .join("");
-      expect(deltaText).toBe("QA streaming preview in progress");
-      expect(deltaText).not.toContain("QA-FINAL-ONLY-STREAMING-OK");
-      expect(responseBody).toContain('"text":"QA-FINAL-ONLY-STREAMING-OK"');
-    },
-  );
+    const responseBody = await response.text();
+    const deltaText = responseBody
+      .split("\n")
+      .filter((line) => line.startsWith("data: {"))
+      .map((line) => JSON.parse(line.slice("data: ".length)) as { type?: string; delta?: string })
+      .filter((event) => event.type === "response.output_text.delta")
+      .map((event) => event.delta ?? "")
+      .join("");
+    expect(deltaText).toBe("QA streaming preview in progress");
+    expect(deltaText).not.toContain("QA-FINAL-ONLY-STREAMING-OK");
+    expect(responseBody).toContain('"text":"QA-FINAL-ONLY-STREAMING-OK"');
+  });
 
   it.each([
     { label: "structured", output: JSON.stringify({ ok: true }) },
@@ -845,6 +842,9 @@ describe("qa mock openai server", () => {
       "response.output_text.delta",
       "response.failed",
     ]);
+    expect(visibleEvents[1]).toMatchObject({
+      item: { type: "message", role: "assistant", status: "in_progress" },
+    });
     expect(visibleEvents[3]).toMatchObject({
       type: "response.output_text.delta",
       delta: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
@@ -854,22 +854,6 @@ describe("qa mock openai server", () => {
       "response.failed",
     ]);
     expect(unsentEvents.some((event) => event.type === "response.output_text.delta")).toBe(false);
-  });
-
-  it("plans deterministic tool-progress reads from prompt paths", async () => {
-    const server = await startMockServer();
-
-    const response = await expectStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "Tool progress QA check: read `qa-progress-target.txt` before answering. After the read completes, reply exactly `TOOL_PROGRESS_OK`.",
-        ),
-      ],
-    });
-
-    const body = await response.text();
-    expect(body).toContain('"name":"read"');
-    expect(body).toContain("qa-progress-target.txt");
   });
 
   it("plans deterministic tool-progress reads for exact-marker prompts", async () => {
@@ -1631,36 +1615,6 @@ describe("qa mock openai server", () => {
     expect(payload.output?.[0]?.content?.[0]?.text).toContain("Read: AGENT.md, SOUL.md");
     expect(payload.output?.[0]?.content?.[0]?.text).toContain("Wrote: repo-contract-summary.txt");
     expect(payload.output?.[0]?.content?.[0]?.text).toContain("Status: complete");
-  });
-
-  it("uses argument-scoped tool call ids for repeated tool names", async () => {
-    const server = await startMockServer();
-
-    const prompt =
-      "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
-
-    const first = await expectOpenAiNonStreamingResponses(server, {
-      input: [makeUserInput(prompt)],
-    });
-    const firstPayload = (await first.json()) as {
-      output?: Array<{ call_id?: string }>;
-    };
-
-    const second = await expectOpenAiNonStreamingResponses(server, {
-      input: [
-        makeUserInput(prompt),
-        makeToolOutput(
-          "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
-        ),
-      ],
-    });
-    const secondPayload = (await second.json()) as {
-      output?: Array<{ call_id?: string }>;
-    };
-
-    expect(firstPayload.output?.[0]?.call_id).toMatch(/^call_mock_read_/);
-    expect(secondPayload.output?.[0]?.call_id).toMatch(/^call_mock_read_/);
-    expect(firstPayload.output?.[0]?.call_id).not.toBe(secondPayload.output?.[0]?.call_id);
   });
 
   it("uses unique ids for repeated identical tool calls", async () => {
@@ -3320,27 +3274,6 @@ Update and merge these partial structured summaries.`,
     expect(outputText(payload)).toBe("QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED");
   });
 
-  it.each(["visible", "silent", "fallback", "restart", "empty"])(
-    "acknowledges the %s worker before direct terminal delivery",
-    async (terminalCase) => {
-      const server = await startMockServer();
-      const prompt = `Subagent terminal reply QA check: ${terminalCase}.`;
-      const payload = await expectNonStreamingResponsesJson(server, {
-        tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
-        input: [
-          makeUserInput(prompt),
-          makeToolOutputWithCallId(
-            "call_mock_sessions_spawn_1",
-            JSON.stringify({ status: "accepted", runId: `run-${terminalCase}` }),
-          ),
-        ],
-      });
-
-      expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
-      expect(outputText(payload)).toBe("Worker started.");
-    },
-  );
-
   it("acknowledges the empty worker before its intentional non-delivery", async () => {
     const server = await startMockServer();
     const payload = await expectNonStreamingResponsesJson(server, {
@@ -3363,8 +3296,6 @@ Update and merge these partial structured summaries.`,
   it.each([
     ["visible", "NO_REPLY"],
     ["silent", "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED"],
-    ["fallback", "NO_REPLY"],
-    ["restart", "NO_REPLY"],
   ])(
     "uses the expected representation for the %s completion-agent direct fallback",
     async (terminalCase, expected) => {
@@ -6197,22 +6128,6 @@ Update and merge these partial structured summaries.`,
         tool_mode: "direct",
       }),
     ]);
-  });
-
-  it("serves deterministic OpenAI-compatible audio transcription responses", async () => {
-    const server = await startMockServer();
-
-    const response = await fetchOk(`${server.baseUrl}/v1/audio/transcriptions`, {
-      method: "POST",
-      headers: {
-        "content-type": "multipart/form-data; boundary=qa",
-      },
-      body: "--qa\r\n--qa--\r\n",
-    });
-
-    await expect(response.json()).resolves.toEqual({
-      text: "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK",
-    });
   });
 
   it("serves deterministic WhatsApp group audio transcription for the trigger fixture", async () => {

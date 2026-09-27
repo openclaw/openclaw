@@ -60,21 +60,11 @@ public enum ToolDisplayRegistry {
         if key == "read" {
             detail = self.readDetail(args)
         } else if key == "write" || key == "edit" || key == "attach" {
-            detail = self.pathDetail(args)
+            detail = self.valueForKeyPath(args, path: "path") as? String
         }
 
         let detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallback?.detailKeys ?? []
-        if detail == nil {
-            detail = self.firstValue(args, keys: detailKeys)
-        }
-
-        if detail == nil {
-            detail = meta
-        }
-
-        if let detailValue = detail {
-            detail = self.shortenHomeInString(detailValue)
-        }
+        detail = (detail ?? self.firstValue(args, keys: detailKeys) ?? meta).map(self.shortenHomeInString)
 
         return ToolDisplaySummary(
             name: trimmedName,
@@ -109,10 +99,6 @@ public enum ToolDisplayRegistry {
             return Bundle.main
         }
 
-        return self.loadModuleBundleSafely() ?? Bundle.main
-    }
-
-    private static func loadModuleBundleSafely() -> Bundle? {
         let candidates: [URL?] = [
             Bundle.main.resourceURL,
             Bundle.main.bundleURL,
@@ -120,32 +106,25 @@ public enum ToolDisplayRegistry {
             Bundle(for: ToolDisplayBundleLocator.self).bundleURL,
         ]
 
-        for candidate in candidates {
-            guard let baseURL = candidate else { continue }
-
-            var roots = [
-                baseURL,
-                baseURL.appendingPathComponent("Resources"),
-                baseURL.appendingPathComponent("Contents/Resources"),
-            ]
+        for baseURL in candidates.compactMap(\.self) {
             var current = baseURL
-            for _ in 0..<5 {
-                current = current.deletingLastPathComponent()
-                roots.append(current)
-                roots.append(current.appendingPathComponent("Resources"))
-                roots.append(current.appendingPathComponent("Contents/Resources"))
-            }
-
-            for root in roots {
-                if let bundle = Bundle(
-                    url: root.appendingPathComponent("\(self.resourceBundleName).bundle"))
-                {
-                    return bundle
+            for _ in 0...5 {
+                for root in [
+                    current,
+                    current.appendingPathComponent("Resources"),
+                    current.appendingPathComponent("Contents/Resources"),
+                ] {
+                    if let bundle = Bundle(
+                        url: root.appendingPathComponent("\(self.resourceBundleName).bundle"))
+                    {
+                        return bundle
+                    }
                 }
+                current = current.deletingLastPathComponent()
             }
         }
 
-        return nil
+        return Bundle.main
     }
 
     private static func defaultConfig() -> ToolDisplayConfig {
@@ -205,15 +184,13 @@ public enum ToolDisplayRegistry {
         let limitAny = self.valueForKeyPath(args, path: "limit")
         let offset = (offsetAny as? Double) ?? (offsetAny as? Int).map(Double.init)
         let limit = (limitAny as? Double) ?? (limitAny as? Int).map(Double.init)
-        if let offset, let limit {
-            let end = offset + limit
-            return "\(path):\(Int(offset))-\(Int(end))"
+        if let offset, let limit,
+           let start = Int(exactly: offset.rounded(.towardZero)),
+           let end = Int(exactly: (offset + limit).rounded(.towardZero))
+        {
+            return "\(path):\(start)-\(end)"
         }
         return path
-    }
-
-    private static func pathDetail(_ args: AnyCodable?) -> String? {
-        self.valueForKeyPath(args, path: "path") as? String
     }
 
     private static func firstValue(_ args: AnyCodable?, keys: [String]) -> String? {

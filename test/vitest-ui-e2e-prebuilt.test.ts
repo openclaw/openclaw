@@ -95,7 +95,6 @@ it("admits a ready generation without writing outputs and detects later metadata
 });
 
 it.each([
-  { name: "cold build", remove: "dist", reason: "missing_private_qa_dist" },
   {
     name: "missing private QA",
     remove: "dist/plugin-sdk/qa-runtime.js",

@@ -5,9 +5,12 @@ import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "../comman
 import { editorTheme } from "../theme/theme.js";
 import { CustomEditor } from "./custom-editor.js";
 
+function createEditor() {
+  return new CustomEditor({ requestRender: vi.fn() } as unknown as TUI, editorTheme);
+}
+
 function createAutocompleteEditor() {
-  const tui = { requestRender: vi.fn() } as unknown as TUI;
-  const editor = new CustomEditor(tui, editorTheme);
+  const editor = createEditor();
   const commands = getSlashCommands();
   editor.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, process.cwd()));
   editor.shouldSubmitAutocomplete = (text) => shouldSubmitExactArgumentCompletion(text, commands);
@@ -30,8 +33,7 @@ describe("CustomEditor", () => {
     { name: "Kitty Shift+Enter", input: "\u001b[13;2u" },
     { name: "Ctrl+J", input: "\n" },
   ])("inserts a newline without submitting on $name", ({ input }) => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
+    const editor = createEditor();
     const onSubmit = vi.fn();
     editor.onSubmit = onSubmit;
     editor.setText("first line");
@@ -43,8 +45,7 @@ describe("CustomEditor", () => {
   });
 
   it("routes alt+enter to the follow-up handler", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
+    const editor = createEditor();
     const onAltEnter = vi.fn();
     editor.onAltEnter = onAltEnter;
 
@@ -54,8 +55,7 @@ describe("CustomEditor", () => {
   });
 
   it("routes alt+up to the dequeue handler", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
+    const editor = createEditor();
     const onAltUp = vi.fn();
     editor.onAltUp = onAltUp;
 
@@ -64,25 +64,8 @@ describe("CustomEditor", () => {
     expect(onAltUp).toHaveBeenCalledTimes(1);
   });
 
-  it("uses Ctrl+D to delete the character after a nonempty input cursor", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
-    const onCtrlD = vi.fn();
-    editor.onCtrlD = onCtrlD;
-    editor.setText("keepXword");
-
-    for (let index = 0; index < 5; index += 1) {
-      editor.handleInput("\u001b[D");
-    }
-    editor.handleInput("\u0004");
-
-    expect(editor.getText()).toBe("keepword");
-    expect(onCtrlD).not.toHaveBeenCalled();
-  });
-
   it("uses Ctrl+D to request exit only when the editor is empty", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
+    const editor = createEditor();
     const onCtrlD = vi.fn();
     editor.onCtrlD = onCtrlD;
 
@@ -92,51 +75,31 @@ describe("CustomEditor", () => {
     expect(editor.getText()).toBe("");
   });
 
-  it("uses Ctrl+D to join multiline input at the end of a nonempty line", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
+  it.each([
+    { name: "joins lines", text: "first\nsecond", keys: ["\u001b[A"], expected: "firstsecond" },
+    {
+      name: "deletes a complete grapheme",
+      text: "a👨‍👩‍👧‍👦b",
+      keys: ["\u001b[D", "\u001b[D"],
+      expected: "ab",
+    },
+    { name: "does nothing at the final cursor", text: "keepword", keys: [], expected: "keepword" },
+  ])("Ctrl+D $name without exiting nonempty input", ({ text, keys, expected }) => {
+    const editor = createEditor();
     const onCtrlD = vi.fn();
     editor.onCtrlD = onCtrlD;
-    editor.setText("first\nsecond");
-
-    editor.handleInput("\u001b[A");
+    editor.setText(text);
+    for (const key of keys) {
+      editor.handleInput(key);
+    }
     editor.handleInput("\u0004");
 
-    expect(editor.getText()).toBe("firstsecond");
-    expect(onCtrlD).not.toHaveBeenCalled();
-  });
-
-  it("uses Ctrl+D to delete one complete grapheme from nonempty input", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
-    const onCtrlD = vi.fn();
-    editor.onCtrlD = onCtrlD;
-    editor.setText("a👨‍👩‍👧‍👦b");
-
-    editor.handleInput("\u001b[D");
-    editor.handleInput("\u001b[D");
-    editor.handleInput("\u0004");
-
-    expect(editor.getText()).toBe("ab");
-    expect(onCtrlD).not.toHaveBeenCalled();
-  });
-
-  it("does not exit or change nonempty input when Ctrl+D is at its final cursor", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
-    const onCtrlD = vi.fn();
-    editor.onCtrlD = onCtrlD;
-    editor.setText("keepword");
-
-    editor.handleInput("\u0004");
-
-    expect(editor.getText()).toBe("keepword");
+    expect(editor.getText()).toBe(expected);
     expect(onCtrlD).not.toHaveBeenCalled();
   });
 
   it("uses Ctrl+D to edit recalled input history without requesting exit", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
+    const editor = createEditor();
     const onCtrlD = vi.fn();
     editor.onCtrlD = onCtrlD;
     editor.addToHistory("history");
@@ -150,8 +113,7 @@ describe("CustomEditor", () => {
   });
 
   it("inserts German AltGr printable Kitty CSI-u input", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
+    const editor = createEditor();
 
     editor.handleInput("\u001b[64::113;7u");
     editor.handleInput("\u001b[8364::101;7u");
@@ -160,8 +122,7 @@ describe("CustomEditor", () => {
   });
 
   it("does not insert ordinary Alt-modified Kitty CSI-u input", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
+    const editor = createEditor();
 
     editor.handleInput("\u001b[113;3u");
 
@@ -169,8 +130,7 @@ describe("CustomEditor", () => {
   });
 
   it("ignores printable Kitty key release events", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
+    const editor = createEditor();
 
     editor.handleInput("\u001b[214;1u");
     editor.handleInput("\u001b[214;1:3u");
@@ -227,8 +187,7 @@ describe("CustomEditor", () => {
   });
 
   it("does not expand stored paste text for ordinary input", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
+    const editor = createEditor();
     editor.setText("draft");
     const getExpandedText = vi.spyOn(editor, "getExpandedText");
 

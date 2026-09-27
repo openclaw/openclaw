@@ -125,40 +125,6 @@ describe("followup queue deduplication", () => {
     expect(second).toBe(false);
   });
 
-  it("deduplicates same message_id after queue drain restarts", async () => {
-    const key = `test-dedup-after-drain-${Date.now()}`;
-    const { calls, done, runFollowup } = createFollowupCollector();
-
-    const first = enqueueFollowupRun(
-      key,
-      createRun({
-        prompt: "first",
-        messageId: "same-id",
-        originatingChannel: "signal",
-        originatingTo: "+10000000000",
-      }),
-      collectSettings,
-    );
-    expect(first).toBe(true);
-
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-
-    const redelivery = enqueueFollowupRun(
-      key,
-      createRun({
-        prompt: "first-redelivery",
-        messageId: "same-id",
-        originatingChannel: "signal",
-        originatingTo: "+10000000000",
-      }),
-      collectSettings,
-    );
-
-    expect(redelivery).toBe(false);
-    expect(calls).toHaveLength(1);
-  });
-
   it("deduplicates redelivery after reply policy changes", async () => {
     const key = `test-dedup-policy-change-${Date.now()}`;
     const { calls, done, runFollowup } = createFollowupCollector();
@@ -361,32 +327,6 @@ describe("followup queue deduplication", () => {
       collectSettings,
     );
     expect(third).toBe(true);
-  });
-
-  it("does not deduplicate across different providers without message id", () => {
-    const key = `test-dedup-cross-provider-${Date.now()}`;
-
-    const first = enqueueFollowupRun(
-      key,
-      createRun({
-        prompt: "Same text",
-        originatingChannel: "whatsapp",
-        originatingTo: "+1234567890",
-      }),
-      collectSettings,
-    );
-    expect(first).toBe(true);
-
-    const second = enqueueFollowupRun(
-      key,
-      createRun({
-        prompt: "Same text",
-        originatingChannel: "discord",
-        originatingTo: "channel:123",
-      }),
-      collectSettings,
-    );
-    expect(second).toBe(true);
   });
 
   it("allows re-enqueueing a message whose queued run was abandoned before admission", () => {

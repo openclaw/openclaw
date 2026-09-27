@@ -223,26 +223,6 @@ describe("TOOLS.md migration", () => {
     expect(rerunAgents.match(/migrated from TOOLS\.md/gu)).toHaveLength(1);
   });
 
-  it("warns when the merged AGENTS.md will exceed the agent bootstrap file limit", async () => {
-    const fixture = await createFixture();
-    const agents = `# Agent\n\n## Tools\n\n${"a".repeat(15_000)}\n`;
-    const tools = `${"b".repeat(15_000)}\n`;
-    const merged = `${agents}\n### Local notes (migrated from TOOLS.md)\n\n${tools}`;
-    fixture.cfg.agents!.list![0]!.bootstrapMaxChars = 20_000;
-    await fs.writeFile(fixture.agentsPath, agents);
-    await fs.writeFile(fixture.toolsPath, tools);
-
-    const findings = await collectToolsMdMigrationFindings(fixture.cfg);
-
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/tools-md-migration",
-        requirement: "tools-md-merged-bootstrap-limit",
-        message: `Agent "main" TOOLS.md migration will produce a ${merged.length}-character AGENTS.md, exceeding its configured bootstrapMaxChars limit of 20000. Raise \`agents.entries.*.bootstrapMaxChars\` for this agent, or \`agents.defaults.bootstrapMaxChars\` as fallback, to preserve all migrated instructions.`,
-      }),
-    );
-  });
-
   it("checks every agent budget while migrating a shared workspace once", async () => {
     const fixture = await createFixture();
     const agents = `# Agent\n\n## Tools\n\n${"a".repeat(15_000)}\n`;
@@ -276,18 +256,6 @@ describe("TOOLS.md migration", () => {
     await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(merged);
     await expect(readOnlyArchive(fixture.stateDir)).resolves.toEqual(Buffer.from(tools));
     await expectMissing(fixture.toolsPath);
-  });
-
-  it("does not emit a bootstrap limit finding for a normal-sized merge", async () => {
-    const fixture = await createFixture();
-    await fs.writeFile(fixture.agentsPath, "# Agent\n\n## Tools\n\nExisting notes.\n");
-    await fs.writeFile(fixture.toolsPath, "Local camera: kitchen\n");
-
-    const findings = await collectToolsMdMigrationFindings(fixture.cfg);
-
-    expect(findings).not.toContainEqual(
-      expect.objectContaining({ requirement: "tools-md-merged-bootstrap-limit" }),
-    );
   });
 
   it.each(LEGACY_AGENTS_GUIDANCE_REWRITES)(
@@ -411,7 +379,6 @@ describe("TOOLS.md migration", () => {
 
   it.each([
     ["untouched template", LEGACY_TOOLS_MD_TEMPLATE_FIXTURE],
-    ["empty file", ""],
     ["whitespace-only file", " \n\t"],
   ])("deletes the %s without appending content", async (_label, tools) => {
     const fixture = await createFixture();

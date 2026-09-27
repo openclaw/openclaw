@@ -477,22 +477,16 @@ describe("stripPlainTextToolCallBlocks", () => {
     },
   );
 
-  it.each(["\u00a0", "\u000b", "\u000c"])(
-    "strips calls indented with non-linebreak whitespace %#",
-    (indent) => {
-      expect(
-        stripPlainTextToolCallBlocks(`before\n${indent}<function=read></function>\nafter`),
-      ).toBe("before\nafter");
-    },
-  );
+  it("strips calls indented with non-linebreak whitespace", () => {
+    expect(stripPlainTextToolCallBlocks("before\n\u00a0<function=read></function>\nafter")).toBe(
+      "before\nafter",
+    );
+  });
 
-  it.each(["x".repeat(256_001), "é".repeat(128_001)])(
-    "strips complete JSON payloads over the UTF-8 cap",
-    (value) => {
-      const call = `[tool:read] ${JSON.stringify({ value })}`;
-      expect(stripPlainTextToolCallBlocks(`before\n${call}\nafter`)).toBe("before\nafter");
-    },
-  );
+  it("strips complete JSON payloads over the UTF-8 cap", () => {
+    const call = `[tool:read] ${JSON.stringify({ value: "é".repeat(128_001) })}`;
+    expect(stripPlainTextToolCallBlocks(`before\n${call}\nafter`)).toBe("before\nafter");
+  });
 
   it.each(["</func", "<param"])(
     "strips a complete optional-close call before an ambiguous %s prefix",

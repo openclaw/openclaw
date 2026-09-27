@@ -1,4 +1,3 @@
-// Tts Local Cli provider module implements model/runtime integration.
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import type {

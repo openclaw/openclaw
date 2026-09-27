@@ -16,12 +16,9 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
-import "../infra/browser-open.js";
-import "../infra/detect-binary.js";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
@@ -193,9 +190,7 @@ export function formatControlUiSshHint(params: {
     "Docs:",
     "https://docs.openclaw.ai/gateway/remote",
     "https://docs.openclaw.ai/web/control-ui",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].join("\n");
 }
 
 /** Ensures workspace bootstrap files and session transcript directories exist. */
@@ -211,8 +206,8 @@ export async function ensureWorkspaceAndSessions(
 ): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
-    ensureBootstrapFiles: !options?.skipBootstrap,
-    skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
+    ensureBootstrapFiles: !options.skipBootstrap,
+    skipOptionalBootstrapFiles: options.skipOptionalBootstrapFiles,
     beforePersistentApply: options.beforePersistentApply,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);

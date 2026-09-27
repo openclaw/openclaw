@@ -16,7 +16,6 @@ import { getAiTransportHost } from "../host.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
-// Mistral provider adapts Mistral streams and tool calls to the runtime.
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
   assignTransportErrorDetails,
@@ -59,25 +58,10 @@ import {
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
 
-// 16 MiB cap on Mistral streaming success bodies, matching the
-// `PROVIDER_TEXT_RESPONSE_MAX_BYTES` / `PROVIDER_JSON_RESPONSE_MAX_BYTES`
-// 16 MiB cap used elsewhere. A hostile or malfunctioning Mistral-compatible
-// endpoint cannot exhaust memory by streaming an unbounded SSE body;
-// `createSseByteGuard` cancels the upstream reader and throws once the
-// accumulated byte count exceeds this cap.
+// Bound compatible endpoints as well as the first-party streaming API.
 const MISTRAL_STREAM_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
-/**
- * Builds a `Fetcher` that wraps the default `fetch` with a 16 MiB byte cap
- * on streamed response bodies. The wrapped `Response.body` exposes a
- * `ReadableStream` whose chunks flow through `createSseByteGuard`, so the
- * SDK's internal SSE parser (`EventStream` in
- * `@mistralai/mistralai/lib/event-streams.ts`) reads exactly as it would on
- * an unbounded body — but bounded.
- *
- * Bodyless responses (no `body` or no `getReader`) are returned unchanged so
- * the SDK's error-path `res.arrayBuffer()` call still works.
- */
+/** Cap the SDK's response reader while preserving bodyless error responses. */
 export function createBoundedMistralFetcher(
   maxBytes: number = MISTRAL_STREAM_BODY_MAX_BYTES,
   upstreamFetch: Fetcher = fetch,
@@ -93,9 +77,6 @@ export function createBoundedMistralFetcher(
       onOverflow: ({ size, maxBytes: cap }) =>
         new Error(`mistral: stream body exceeds ${cap} bytes (got ${size})`),
     });
-    // Re-shape the response body so the SDK's `responseBody.getReader()`
-    // call inside `EventStream` resolves to a stream whose `read()` is
-    // routed through `guard.read()`. Cancellation is also forwarded.
     const guardedStream = new ReadableStream<Uint8Array>({
       async pull(controller) {
         const { done, value } = await guard.read();
@@ -117,9 +98,6 @@ export function createBoundedMistralFetcher(
   };
 }
 
-/**
- * Provider-specific options for the Mistral API.
- */
 interface MistralOptions extends StreamOptions {
   toolChoice?:
     | "auto"
@@ -131,9 +109,6 @@ interface MistralOptions extends StreamOptions {
   reasoningEffort?: ReasoningEffort;
 }
 
-/**
- * Stream responses from Mistral using `chat.stream`.
- */
 export const streamMistral: StreamFunction<"mistral-conversations", MistralOptions> = (
   model: Model<"mistral-conversations">,
   context: Context,
@@ -175,8 +150,10 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
-      const transformedMessages = transformMessages(context.messages, model, (id) =>
-        normalizeMistralToolCallId(id),
+      const transformedMessages = transformMessages(
+        context.messages,
+        model,
+        normalizeMistralToolCallId,
       );
 
       let payload = buildChatPayload(model, context, transformedMessages, options);
@@ -227,9 +204,6 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
   return stream;
 };
 
-/**
- * Maps provider-agnostic `SimpleStreamOptions` to Mistral options.
- */
 export const streamSimpleMistral: StreamFunction<"mistral-conversations", SimpleStreamOptions> = (
   model: Model<"mistral-conversations">,
   context: Context,
@@ -958,13 +932,7 @@ function usesReasoningEffort(model: Model<"mistral-conversations">): boolean {
 function mapToolChoice(
   choice: MistralOptions["toolChoice"],
   convertedToolNames?: ReadonlySet<string>,
-):
-  | "auto"
-  | "none"
-  | "any"
-  | "required"
-  | { type: "function"; function: { name: string } }
-  | undefined {
+): MistralOptions["toolChoice"] {
   if (!choice) {
     return undefined;
   }

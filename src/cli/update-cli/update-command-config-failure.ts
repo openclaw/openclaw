@@ -1,3 +1,4 @@
+import { isConfigReadFailure } from "../../config/io.invalid-config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { normalizeSupportDiagnosticErrorCode } from "../../logging/diagnostic-support-redaction.js";
@@ -7,10 +8,7 @@ import { UpdatePreMutationError } from "./shared.js";
 export function createUpdateConfigFailure(
   snapshot: ConfigFileSnapshot,
 ): UpdatePreMutationError<"invalid-config" | "config-read-failed"> {
-  if (
-    snapshot.readError ||
-    snapshot.issues.some((issue) => issue.errorCode === "CONFIG_READ_FAILED")
-  ) {
+  if (isConfigReadFailure(snapshot)) {
     const code = normalizeSupportDiagnosticErrorCode(snapshot.readError?.code ?? undefined);
     const nextAction = snapshot.readError
       ? "Check configuration file access before retrying."

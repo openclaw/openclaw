@@ -56,6 +56,7 @@ export function buildGatewaySnapshot(opts: {
   includeSensitive?: boolean;
   includeUpdateDetails?: boolean;
   revisionProjector: GatewayConfigRevisionProjector;
+  sessionRowProjection?: SessionRowProjection;
 }): Snapshot {
   const cfg = getRuntimeConfig();
   const selection = resolveGatewayAgentSelectionState(cfg);
@@ -64,9 +65,11 @@ export function buildGatewaySnapshot(opts: {
   const scope = cfg.session?.scope ?? "per-sender";
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
-  const presence = createPresenceRecipientProjection({ cfg, presence: listSystemPresence() })(
-    opts.client,
-  );
+  const presence = createPresenceRecipientProjection({
+    cfg,
+    presence: listSystemPresence(),
+    projection: opts.sessionRowProjection,
+  })(opts.client);
   const uptimeMs = Math.round(process.uptime() * 1000);
   const includeUpdateDetails = opts?.includeUpdateDetails === true;
   const updateAvailable =

@@ -46,7 +46,13 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
       const scope = { agentId: "main", sessionKey, sessionId, env: state.env };
       const binary = Buffer.from(Array.from({ length: 8192 }, (_, index) => index % 256));
       const fixtures = [
-        { title: "binary.bin", type: "file", mimeType: "application/octet-stream", bytes: binary },
+        {
+          title: "binary.bin",
+          type: "file",
+          mimeType: "application/octet-stream",
+          bytes: binary,
+          sizeBytes: 1,
+        },
         {
           title: "drawing.svg",
           type: "image",
@@ -76,6 +82,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
               type: fixture.type,
               title: fixture.title,
               mimeType: fixture.mimeType,
+              ...(fixture.sizeBytes !== undefined ? { sizeBytes: fixture.sizeBytes } : {}),
               ...(fixture.type === "image"
                 ? {
                     source: {
@@ -157,6 +164,9 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
           for (const fixture of fixtures) {
             const artifact = listed.artifacts.find((entry) => entry.title === fixture.title);
             expect(artifact).toBeDefined();
+            if (fixture.sizeBytes !== undefined) {
+              expect(artifact!.sizeBytes).toBe(fixture.sizeBytes);
+            }
             const params = { ...query, artifactId: artifact!.id };
             const inline = await client.request<ArtifactsDownloadResult>(
               "artifacts.download",
@@ -199,9 +209,12 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
           expect(mounted.bytes).toEqual(binary);
           const ranged = await request(url, { headers: { Range: "bytes=253-258" } });
           expect(ranged.status).toBe(206);
+          expect(ranged.headers.get("content-length")).toBe("6");
           expect(ranged.headers.get("content-range")).toBe(`bytes 253-258/${binary.length}`);
           expect(ranged.bytes).toEqual(binary.subarray(253, 259));
-          expect((await request(url, { headers: { Range: "bytes=8192-" } })).status).toBe(416);
+          const outOfRange = await request(url, { headers: { Range: "bytes=8192-" } });
+          expect(outOfRange.status).toBe(416);
+          expect(outOfRange.headers.get("content-range")).toBe(`bytes */${binary.length}`);
           expect((await request(url, { method: "POST" })).status).toBe(405);
           const tamperedUrl = `${url.slice(0, -1)}${url.endsWith("a") ? "b" : "a"}`;
           expect((await request(tamperedUrl)).status).toBe(404);
@@ -251,10 +264,18 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
               : event,
           );
           await replaceTranscriptEvents(scope, replacedEvents);
-          expect(
-            (await request(renewed.url!)).status,
-            "an existing ticket cannot download replaced bytes under the same artifact ID",
-          ).toBe(404);
+          const staleRequests: Array<[string, Parameters<typeof request>[1]]> = [
+            ["GET", {}],
+            ["HEAD", { method: "HEAD" }],
+            ["range", { headers: { Range: "bytes=253-258" } }],
+            ["conditional GET", { headers: { "If-None-Match": "*" } }],
+          ];
+          for (const [label, init] of staleRequests) {
+            expect(
+              (await request(renewed.url!, init)).status,
+              `${label} must reject replaced bytes under the same artifact ID`,
+            ).toBe(404);
+          }
           const replaced = await client.request<ArtifactsDownloadResult>("artifacts.download", {
             ...query,
             artifactId: download.artifact.id,

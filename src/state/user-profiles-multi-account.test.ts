@@ -21,11 +21,11 @@ import {
 } from "./user-profile-github-identity.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
 import { resolveCanonicalCachedGitHubIdentity } from "./user-profile-reads.js";
+import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
-  getProfileAvatar,
   getUserProfileDisplay,
   getUserProfileListItem,
   linkEmail,

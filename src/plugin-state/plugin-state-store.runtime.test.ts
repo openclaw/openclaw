@@ -1,11 +1,14 @@
 // Plugin state runtime tests cover runtime-backed plugin state storage.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { resolveStateDir } from "../config/paths.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { markPluginRegistryActive, revokePluginRecord } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord } from "../plugins/registry-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -225,6 +228,130 @@ describe("plugin runtime state proxy", () => {
       expect(await canonicalRetained.lookup("denied")).toBeUndefined();
     });
   });
+
+  it.each([true, false])(
+    "fences revoked ingress reads, admission, and recovery (policy=%s)",
+    async (policy) => {
+      await withOpenClawTestState({ label: "plugin-ingress-runtime-closure" }, async (state) => {
+        const registry = createTestPluginRegistry();
+        const record = createPluginRecord("ingress-owner");
+        registry.registry.plugins.push(record);
+        markPluginRegistryActive(registry.registry);
+        const api = registry.createApi(record, { config: {} });
+        const queue = api.runtime.state.openChannelIngressQueue<{ text: string }>({
+          now: () => 10,
+        });
+        await queue.enqueue("claimed", { text: "retained" });
+        const claimed = await queue.claim("claimed", { ownerId: "previous" });
+        expect(claimed).not.toBeNull();
+        const entered = createDeferredCore();
+        const releasePolicy = createDeferredCore<boolean>();
+        const recovering = queue.recoverStaleClaims({
+          now: 20,
+          staleMs: 5,
+          shouldRecover: () => {
+            entered.resolve();
+            return releasePolicy.promise;
+          },
+        });
+        try {
+          await entered.promise;
+          const listing = queue.listClaims();
+          const admission = queue.enqueue("denied", { text: "revoked" });
+          revokePluginRecord(registry.registry, record);
+          releasePolicy.resolve(policy);
+          await Promise.all([
+            expect(recovering).rejects.toThrow(
+              'Plugin "ingress-owner" runtime is no longer active',
+            ),
+            expect(listing).rejects.toThrow('Plugin "ingress-owner" runtime is no longer active'),
+            expect(admission).rejects.toThrow('Plugin "ingress-owner" runtime is no longer active'),
+          ]);
+          const maintenance = createChannelIngressQueue({
+            channelId: record.id,
+            stateDir: state.stateDir,
+          });
+          expect(await maintenance.listClaims()).toEqual([claimed]);
+          expect(await maintenance.listPending()).toEqual([]);
+        } finally {
+          releasePolicy.resolve(false);
+          await recovering.catch(() => {});
+        }
+      });
+    },
+  );
+
+  it.each(
+    (["enqueue", "recovery"] as const).flatMap((operation) =>
+      (["before", "after"] as const).map((revocation) => ({ operation, revocation })),
+    ),
+  )(
+    "settles ingress $operation when its owner is revoked $revocation the commit grant",
+    async ({ operation, revocation }) => {
+      await withOpenClawTestState({ label: "plugin-ingress-commit-authority" }, async (state) => {
+        const registry = createTestPluginRegistry();
+        const record = createPluginRecord("ingress-owner");
+        registry.registry.plugins.push(record);
+        markPluginRegistryActive(registry.registry);
+        const api = registry.createApi(record, { config: {} });
+        const queue = api.runtime.state.openChannelIngressQueue<{ text: string }>({
+          now: () => 10,
+        });
+        await queue.enqueue("retained", { text: "retained" });
+        const claimed = await queue.claim("retained", { ownerId: "previous" });
+        expect(claimed).not.toBeNull();
+        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+        const stages: string[] = [];
+        const admission = vi
+          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) =>
+            createAdmission((request, grant) => {
+              stages.push(request.stage);
+              if (request.stage === "commit" && revocation === "before") {
+                revokePluginRecord(registry.registry, record);
+              }
+              admit(request, grant);
+              if (request.stage === "commit" && revocation === "after") {
+                revokePluginRecord(registry.registry, record);
+              }
+            }, attachment),
+          );
+        try {
+          const writing =
+            operation === "enqueue"
+              ? queue.enqueue("admitted", { text: "new event" })
+              : queue.recoverStaleClaims({ now: 20, staleMs: 5 });
+          if (revocation === "before") {
+            await expect(writing).rejects.toThrow(
+              'Plugin "ingress-owner" runtime is no longer active',
+            );
+          } else if (operation === "enqueue") {
+            await expect(writing).resolves.toMatchObject({
+              kind: "accepted",
+              duplicate: false,
+              record: { id: "admitted" },
+            });
+          } else {
+            await expect(writing).resolves.toBe(1);
+          }
+          expect(stages).toEqual(["transaction", "commit"]);
+          const inspector = createChannelIngressQueue({
+            channelId: record.id,
+            stateDir: state.stateDir,
+            access: "read-only",
+          });
+          expect((await inspector.listPending()).map((row) => row.id)).toEqual(
+            revocation === "before" ? [] : [operation === "enqueue" ? "admitted" : "retained"],
+          );
+          expect(await inspector.listClaims()).toEqual(
+            operation === "recovery" && revocation === "after" ? [] : [claimed],
+          );
+        } finally {
+          admission.mockRestore();
+        }
+      });
+    },
+  );
 
   it("binds blob stores to the trusted plugin id", async () => {
     await withOpenClawTestState({ label: "plugin-blob-runtime" }, async () => {

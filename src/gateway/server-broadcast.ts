@@ -169,8 +169,14 @@ type ClientDelivery = {
   pending: Set<PendingLiveText>;
 };
 
+export type SessionEventProjection = {
+  payload: unknown;
+  delivered?: () => void;
+};
+
 export function createGatewayBroadcaster(params: {
   clients: GatewayClientRegistry;
+  // Reused arrays are immutable snapshots; the projection still checks each recipient's authority.
   preparePresenceProjection?: (
     presence: SystemPresence[],
   ) => (client: GatewayWsClient) => SystemPresence[];
@@ -178,7 +184,7 @@ export function createGatewayBroadcaster(params: {
     event: string,
     payload: unknown,
     scope: { sessionKeys: readonly string[]; agentId?: string },
-  ) => ((client: GatewayWsClient) => unknown) | undefined;
+  ) => ((client: GatewayWsClient) => SessionEventProjection | undefined) | undefined;
   sessionMessageSubscribers?: SessionMessageSubscriberRegistry;
   canReceiveSessionEvent?: (
     client: GatewayWsClient,
@@ -300,7 +306,10 @@ export function createGatewayBroadcaster(params: {
         metadataInvalidation !== undefined ||
         isSessionReadInvalidation(event, payload, isTargeted));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
-    let projectSession: ((client: GatewayWsClient) => unknown) | undefined;
+    let presenceFragments: Map<SystemPresence[], string> | undefined;
+    let projectSession:
+      | ((client: GatewayWsClient) => SessionEventProjection | undefined)
+      | undefined;
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;
@@ -560,6 +569,7 @@ export function createGatewayBroadcaster(params: {
       // advancing seqs for a frame that never existed would fire every gap
       // detector at once — a synchronized reconnect storm with no evidence.
       let frame: string;
+      let delivered: (() => void) | undefined;
       try {
         if (!sessionProjectionPrepared) {
           // Headers precede source hooks and reads performed while preparing projection.
@@ -595,10 +605,15 @@ export function createGatewayBroadcaster(params: {
             throw new Error("presence recipient projection unavailable");
           }
           projectPresence ??= params.preparePresenceProjection(presencePayload.presence);
-          payloadFragment = serializeFrameField("payload", {
-            ...presencePayload,
-            presence: projectPresence(c),
-          });
+          // Preserve source reads before checking the recipient's current authority.
+          const projectedPayload = { ...presencePayload, presence: projectPresence(c) };
+          const reusable =
+            Object.keys(projectedPayload).length === 1 && !("toJSON" in projectedPayload);
+          const cached = reusable ? presenceFragments?.get(projectedPayload.presence) : undefined;
+          payloadFragment = cached ?? serializeFrameField("payload", projectedPayload);
+          if (reusable && cached === undefined) {
+            (presenceFragments ??= new Map()).set(projectedPayload.presence, payloadFragment);
+          }
         }
         if (projectSession) {
           const projected = projectSession(c);
@@ -607,9 +622,10 @@ export function createGatewayBroadcaster(params: {
           }
           payloadFragment = serializeFrameField(
             "payload",
-            projected,
+            projected.payload,
             messageStrings?.capture || messageStrings?.values.size ? messageStrings : undefined,
           );
+          delivered = projected.delivered;
           if (messageStrings) {
             messageStrings.capture = false;
           }
@@ -666,6 +682,8 @@ export function createGatewayBroadcaster(params: {
         }
       };
       try {
+        // Publish the baseline before send can reenter; failures retire this transport.
+        delivered?.();
         state.socket.send(frame, sent);
       } catch (err) {
         sent(err instanceof Error ? err : new Error(String(err)));

@@ -1,7 +1,3 @@
-/**
- * Claude CLI setup migration helpers. They rewrite legacy Claude CLI model refs
- * to Anthropic refs while preserving runtime allowlist entries for CLI execution.
- */
 import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig, ProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -10,8 +6,11 @@ import {
   resolveClaudeCliAnthropicModelRefs,
   splitTrailingModelAuthProfile,
 } from "./claude-model-refs.js";
-import { CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF } from "./cli-constants.js";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
+} from "./cli-constants.js";
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
 type AgentDefaultsModels = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
@@ -161,7 +160,6 @@ function seedClaudeCliAllowlist(
   return next;
 }
 
-/** Build the config migration result for adopting Claude CLI-backed Anthropic defaults. */
 export function buildAnthropicCliMigrationResult(config: OpenClawConfig): ProviderAuthResult {
   const defaults = config.agents?.defaults;
   const rewrittenModel = rewriteModelSelection(config);

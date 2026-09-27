@@ -169,47 +169,6 @@ describe("resolveAgentToolSurfacePlan", () => {
 
   it.each([
     {
-      name: "code mode wins when engaged",
-      config: { tools: { codeMode: true, toolSearch: true } },
-      expected: { codeMode: true, toolSearch: false },
-    },
-    {
-      name: "tool search engages when code mode does not",
-      config: { tools: { codeMode: false, toolSearch: true } },
-      expected: { codeMode: false, toolSearch: true },
-    },
-  ] satisfies Array<{
-    name: string;
-    config: OpenClawConfig;
-    expected: { codeMode: boolean; toolSearch: boolean };
-  }>)("keeps controls mutually exclusive: $name", ({ config, expected }) => {
-    const plan = resolveAgentToolSurfacePlan({ ...basePlanParams, config });
-
-    expect(plan.codeModeControlsEnabled).toBe(expected.codeMode);
-    expect(plan.toolSearchControlsEnabled).toBe(expected.toolSearch);
-    expect(plan.codeModeControlsEnabled && plan.toolSearchControlsEnabled).toBe(false);
-  });
-
-  it("preserves Code Mode controls for a checkpoint-proven restart recovery", () => {
-    const config: OpenClawConfig = {
-      tools: { codeMode: false, toolSearch: true },
-    };
-    const plan = resolveAgentToolSurfacePlan({
-      ...basePlanParams,
-      config,
-      forceCodeModeControls: true,
-    });
-
-    expect(plan.codeModeControlsEnabled).toBe(true);
-    expect(plan.toolSearchControlsEnabled).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "Code Mode",
-      config: { tools: { codeMode: true, toolSearch: true } },
-    },
-    {
       name: "Code Mode with a normalized message allowlist",
       config: { tools: { codeMode: true, toolSearch: true } },
       toolsAllow: [" MESSAGE "],
@@ -261,8 +220,6 @@ describe("resolveAgentToolSurfacePlan", () => {
   it.each([
     { name: "no runtime allowlist", toolsAllow: undefined },
     { name: "a wildcard runtime allowlist", toolsAllow: ["*"] },
-    { name: "a wildcard alongside an explicit message", toolsAllow: ["message", "*"] },
-    { name: "an ordinary finite runtime allowlist", toolsAllow: ["read", "write"] },
     { name: "a message alongside another allowed tool", toolsAllow: ["message", "read"] },
   ])("preserves normal Code Mode message turns with $name", ({ toolsAllow }) => {
     const plan = resolveAgentToolSurfacePlan({

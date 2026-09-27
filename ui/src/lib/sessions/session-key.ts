@@ -1,4 +1,3 @@
-// Control UI module implements session key behavior.
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -428,27 +427,19 @@ export function isSessionKeyTiedToAgent(
   return normalizedAgentId === normalizeAgentId(defaultAgentId);
 }
 
+function hasSessionKeyPrefix(sessionKey: string | undefined | null, prefix: string): boolean {
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
+  return (
+    raw.startsWith(prefix) ||
+    normalizeLowercaseStringOrEmpty(parseAgentSessionKey(raw)?.rest).startsWith(prefix)
+  );
+}
+
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
-  const raw = normalizeOptionalString(sessionKey) ?? "";
-  if (!raw) {
-    return false;
-  }
-  if (normalizeLowercaseStringOrEmpty(raw).startsWith("subagent:")) {
-    return true;
-  }
-  const parsed = parseAgentSessionKey(raw);
-  return normalizeLowercaseStringOrEmpty(parsed?.rest).startsWith("subagent:");
+  return hasSessionKeyPrefix(sessionKey, "subagent:");
 }
 
 /** ACP-backed sessions (`agent:<id>:acp:<uuid>`) belong to the Coding zone, not chat threads. */
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
-  const raw = normalizeOptionalString(sessionKey) ?? "";
-  if (!raw) {
-    return false;
-  }
-  if (normalizeLowercaseStringOrEmpty(raw).startsWith("acp:")) {
-    return true;
-  }
-  const parsed = parseAgentSessionKey(raw);
-  return normalizeLowercaseStringOrEmpty(parsed?.rest).startsWith("acp:");
+  return hasSessionKeyPrefix(sessionKey, "acp:");
 }

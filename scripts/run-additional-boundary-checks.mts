@@ -55,40 +55,20 @@ type RunChecksOptions = Partial<CheckExecutionOptions> & {
 export const BOUNDARY_CHECKS = (
   [
     ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
-    ["lint:docker-e2e", "pnpm", ["run", "lint:docker-e2e"]],
-    ["lint:tmp:no-random-messaging", "pnpm", ["run", "lint:tmp:no-random-messaging"]],
-    [
-      "lint:tmp:channel-agnostic-boundaries",
-      "pnpm",
-      ["run", "lint:tmp:channel-agnostic-boundaries"],
-    ],
-    ["lint:tmp:tsgo-core-boundary", "pnpm", ["run", "lint:tmp:tsgo-core-boundary"]],
-    ["lint:tmp:no-raw-channel-fetch", "pnpm", ["run", "lint:tmp:no-raw-channel-fetch"]],
-    ["lint:tmp:no-raw-http2-imports", "pnpm", ["run", "lint:tmp:no-raw-http2-imports"]],
-    ["lint:agent:ingress-owner", "pnpm", ["run", "lint:agent:ingress-owner"]],
+    "lint:docker-e2e",
+    "lint:tmp:no-random-messaging",
+    "lint:tmp:channel-agnostic-boundaries",
+    "lint:tmp:tsgo-core-boundary",
+    "lint:tmp:no-raw-channel-fetch",
+    "lint:tmp:no-raw-http2-imports",
+    "lint:agent:ingress-owner",
     // This full-root pass runs all four focused rules, including the narrower
     // HTTP/window.open guards and both public assertion aliases.
-    ["lint:no-chained-type-assertions", "pnpm", ["run", "lint:no-chained-type-assertions"]],
-    [
-      "lint:plugins:no-monolithic-plugin-sdk-entry-imports",
-      "pnpm",
-      ["run", "lint:plugins:no-monolithic-plugin-sdk-entry-imports"],
-    ],
-    [
-      "lint:plugins:no-extension-src-imports",
-      "pnpm",
-      ["run", "lint:plugins:no-extension-src-imports"],
-    ],
-    [
-      "lint:plugins:no-extension-test-core-imports",
-      "pnpm",
-      ["run", "lint:plugins:no-extension-test-core-imports"],
-    ],
-    [
-      "lint:plugins:plugin-sdk-subpaths-exported",
-      "pnpm",
-      ["run", "lint:plugins:plugin-sdk-subpaths-exported"],
-    ],
+    "lint:no-chained-type-assertions",
+    "lint:plugins:no-monolithic-plugin-sdk-entry-imports",
+    "lint:plugins:no-extension-src-imports",
+    "lint:plugins:no-extension-test-core-imports",
+    "lint:plugins:plugin-sdk-subpaths-exported",
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
@@ -96,18 +76,17 @@ export const BOUNDARY_CHECKS = (
       "node",
       ["--import", "./scripts/tsx.mjs", "scripts/check-extension-plugin-sdk-boundary.mts", "--all"],
     ],
-    [
-      "lint:extensions:telegram-grammy-types",
-      "pnpm",
-      ["run", "lint:extensions:telegram-grammy-types"],
-    ],
+    "lint:extensions:telegram-grammy-types",
     ["native-state-schema-version", "node", ["scripts/check-native-state-schema-version.mjs"]],
-  ] satisfies Array<[label: string, command: string, args: string[]]>
-).map(([label, command, args]) => ({ label, command, args }));
+  ] satisfies Array<string | [label: string, command: string, args: string[]]>
+).map((check) => {
+  if (typeof check === "string") {
+    return { label: check, command: "pnpm", args: ["run", check] };
+  }
+  const [label, command, args] = check;
+  return { label, command, args };
+});
 
-/**
- * Resolves the configured boundary-check concurrency.
- */
 export function resolveConcurrency(value: unknown, fallback = 4, label = "concurrency") {
   return resolvePositiveInteger(value, fallback, label);
 }
@@ -125,9 +104,6 @@ function displayValue(value: unknown): string {
   return scalarText(value) ?? JSON.stringify(value) ?? "<unserializable>";
 }
 
-/**
- * Parses positive integer CLI/env options with a fallback.
- */
 export function resolvePositiveInteger(value: unknown, fallback: number, label = "value") {
   if (value === undefined || value === null || value === "") {
     return fallback;
@@ -143,9 +119,6 @@ export function resolvePositiveInteger(value: unknown, fallback: number, label =
   return parsed;
 }
 
-/**
- * Parses one N/TOTAL shard selector into zero-based index form.
- */
 export function parseShardSpec(value: unknown): BoundaryShard | null {
   if (!value) {
     return null;
@@ -168,9 +141,6 @@ export function parseShardSpec(value: unknown): BoundaryShard | null {
   return { count, index: index - 1, label: `${index}/${count}` };
 }
 
-/**
- * Parses a comma-separated list of N/TOTAL shard selectors.
- */
 export function parseShardSelection(value: unknown) {
   if (!value) {
     return null;
@@ -192,9 +162,6 @@ export function parseShardSelection(value: unknown) {
     });
 }
 
-/**
- * Selects checks whose ordinal belongs to the requested shard set.
- */
 export function selectChecksForShard(
   checks: BoundaryCheck[],
   shardSpec: string | BoundaryShard | BoundaryShard[] | null,
@@ -216,9 +183,6 @@ export function selectChecksForShard(
   );
 }
 
-/**
- * Formats a check command for CI group output.
- */
 export function formatCommand({ command, args }: Pick<BoundaryCheck, "args" | "command">) {
   return [command, ...args].join(" ");
 }
@@ -232,9 +196,6 @@ function decodeUtf8Tail(buffer: Buffer) {
   return buffer.subarray(start).toString("utf8");
 }
 
-/**
- * Keeps only the tail of noisy check output so failure logs stay bounded.
- */
 export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
   const limit = Math.max(1, maxBytes);
   const chunks: string[] = [];
@@ -397,9 +358,6 @@ function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
   };
 }
 
-/**
- * Runs one boundary check with timeout and process-group termination.
- */
 export function runSingleCheck(
   check: BoundaryCheck,
   {
@@ -526,9 +484,6 @@ function writeTimingSummary(results: BoundaryCheckResult[], output: OutputWriter
   }
 }
 
-/**
- * Runs boundary checks with bounded concurrency and returns the failure count.
- */
 export async function runChecks(
   checks: BoundaryCheck[] = BOUNDARY_CHECKS,
   {

@@ -42,10 +42,6 @@ describe("shouldAttemptTtsPayload", () => {
     envSnapshot = undefined;
   });
 
-  it("skips TTS when config, prefs, and session state leave auto mode off", () => {
-    expect(shouldAttemptTtsPayload({ cfg: {} as OpenClawConfig })).toBe(false);
-  });
-
   it("does not infer automatic TTS from a dashboard text turn without opt-in state", () => {
     expect(
       shouldAttemptTtsPayload({

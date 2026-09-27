@@ -63,10 +63,6 @@ import {
 
 export type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 
-function formatPluginUpdateWarning(message: string): string {
-  return message.includes("╭─") ? message : theme.warn(message);
-}
-
 function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): string {
   if (entry.reason === "missing-install-path") {
     return "installPath is missing";
@@ -75,14 +71,6 @@ function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): s
     return `package.json is missing under ${entry.installPath}`;
   }
   return `package directory is missing: ${entry.installPath}`;
-}
-
-function collectPluginChannelFallbackMessages(outcomes: readonly PluginUpdateOutcome[]): string[] {
-  return uniqueStrings(
-    outcomes.flatMap(({ channelFallback }) =>
-      channelFallback?.message ? [channelFallback.message] : [],
-    ),
-  );
 }
 
 function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
@@ -147,6 +135,13 @@ async function updatePluginsAfterCoreUpdateWithLease(
   const referenceSource = prepareDoctorConfigReferenceSource(params.configSnapshot);
   const clawHubTrustNotices = new Set<string>();
   const loggedPluginWarnings = new Set<string>();
+  const logPluginWarning = (message: string) => {
+    const plain = stripAnsi(message);
+    if (!params.json && !loggedPluginWarnings.has(plain)) {
+      runtime.log(message.includes("╭─") ? message : theme.warn(message));
+      loggedPluginWarnings.add(plain);
+    }
+  };
   const pluginLogger = {
     ...(params.json ? { terminalLinks: false } : {}),
     info: (msg: string) => {
@@ -162,14 +157,8 @@ async function updatePluginsAfterCoreUpdateWithLease(
       ) {
         clawHubTrustNotices.add(plain);
       }
-      if (
-        !params.json &&
-        plain.includes("ClawHub") &&
-        plain.includes("╭─") &&
-        !loggedPluginWarnings.has(plain)
-      ) {
-        runtime.log(formatPluginUpdateWarning(msg));
-        loggedPluginWarnings.add(plain);
+      if (plain.includes("ClawHub") && plain.includes("╭─")) {
+        logPluginWarning(msg);
       }
     },
   };
@@ -235,7 +224,6 @@ async function updatePluginsAfterCoreUpdateWithLease(
       status: "error",
       message: warning.message,
     });
-    return warning;
   };
 
   const onPluginIntegrityDrift = async (drift: PluginUpdateIntegrityDriftParams) => {
@@ -594,23 +582,16 @@ async function updatePluginsAfterCoreUpdateWithLease(
     return `${list.slice(0, 6).join(", ")} +${list.length - 6} more`;
   };
 
-  if (cohort.sync.summary.switchedToBundled.length > 0) {
-    runtime.log(
-      theme.muted(
-        `Switched to bundled plugins: ${summarizeList(cohort.sync.summary.switchedToBundled)}.`,
-      ),
-    );
-  }
-  if (cohort.sync.summary.switchedToNpm.length > 0) {
-    runtime.log(
-      theme.muted(`Restored plugins: ${summarizeList(cohort.sync.summary.switchedToNpm)}.`),
-    );
+  for (const [label, plugins] of [
+    ["Switched to bundled plugins", cohort.sync.summary.switchedToBundled],
+    ["Restored plugins", cohort.sync.summary.switchedToNpm],
+  ] as const) {
+    if (plugins.length > 0) {
+      runtime.log(theme.muted(`${label}: ${summarizeList(plugins)}.`));
+    }
   }
   for (const warning of cohort.sync.summary.warnings) {
-    if (!loggedPluginWarnings.has(stripAnsi(warning))) {
-      runtime.log(formatPluginUpdateWarning(warning));
-      loggedPluginWarnings.add(stripAnsi(warning));
-    }
+    logPluginWarning(warning);
   }
   const updated = finalPluginOutcomes.filter((entry) => entry.status === "updated").length;
   const unchanged = finalPluginOutcomes.filter((entry) => entry.status === "unchanged").length;
@@ -630,16 +611,16 @@ async function updatePluginsAfterCoreUpdateWithLease(
     runtime.log(theme.muted(`Plugin updates: ${parts.join(", ")}.`));
   }
 
-  for (const message of collectPluginChannelFallbackMessages(pluginUpdateOutcomes)) {
+  for (const message of uniqueStrings(
+    pluginUpdateOutcomes.flatMap(({ channelFallback }) =>
+      channelFallback?.message ? [channelFallback.message] : [],
+    ),
+  )) {
     runtime.log(theme.warn(message));
   }
 
   for (const warning of warnings) {
-    const message = stripAnsi(warning.message);
-    if (!loggedPluginWarnings.has(message)) {
-      runtime.log(formatPluginUpdateWarning(warning.message));
-      loggedPluginWarnings.add(message);
-    }
+    logPluginWarning(warning.message);
   }
 
   return result;

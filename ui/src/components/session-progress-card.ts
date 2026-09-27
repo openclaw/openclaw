@@ -4,6 +4,7 @@ import { html, nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import type { SessionProgressCardRefreshState } from "../lib/session-progress-cards.ts";
@@ -81,13 +82,7 @@ function sanitizedProgressMarkdown(markdown: string): string {
   }
   const sanitized = toSanitizedMarkdownHtml(markdown, { progressBars: true });
   progressMarkdownCache.set(key, sanitized);
-  while (progressMarkdownCache.size > PROGRESS_MARKDOWN_CACHE_LIMIT) {
-    const oldest = progressMarkdownCache.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    progressMarkdownCache.delete(oldest);
-  }
+  pruneMapToMaxSize(progressMarkdownCache, PROGRESS_MARKDOWN_CACHE_LIMIT);
   return sanitized;
 }
 

@@ -42,14 +42,14 @@ import {
   writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
-function afterSessionStateMaterialization(after: () => void) {
+function afterSessionStateMaterialization(after: () => void | Promise<void>) {
   const materialize = sessionArchive.materializeSessionStateDeletePlans;
   // Earlier files can load the owner in this non-isolated shard. Observe its
   // real export instead of replacing a module after that owner has captured it.
   vi.spyOn(sessionArchive, "materializeSessionStateDeletePlans").mockImplementation(
     async (...args) => {
       const result = await materialize(...args);
-      after();
+      await after();
       return result;
     },
   );
@@ -270,11 +270,11 @@ test.each(["authorization", "placement"] as const)(
     await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     let authorized = true;
-    afterSessionStateMaterialization(() => {
+    afterSessionStateMaterialization(async () => {
       if (change === "authorization") {
         authorized = false;
       } else {
-        placementStore.startDispatch({ sessionId, sessionKey, agentId: "main" });
+        await placementStore.startDispatch({ sessionId, sessionKey, agentId: "main" });
       }
     });
     await expect(
@@ -309,7 +309,7 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
   const sessionId = "postcommit-retirement-session";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const claim = placementStore.claimTurn({
+  const claim = await placementStore.claimTurn({
     sessionId,
     sessionKey,
     agentId: "main",
@@ -317,7 +317,7 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
     claimId: "postcommit-claim",
     runId: "postcommit-run",
   });
-  placementStore.releaseTurn(claim);
+  await placementStore.releaseTurn(claim);
   let retired = false;
   const publish = sessionArchiveStore.publishSessionStateArchives;
   vi.spyOn(sessionArchiveStore, "publishSessionStateArchives").mockImplementation(

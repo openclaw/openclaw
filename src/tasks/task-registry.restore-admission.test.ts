@@ -45,6 +45,7 @@ beforeEach(() => {
       const capturedGeneration = generation;
       identities.set(databasePath, identity);
       return {
+        coordinationKey: identity.key,
         databasePath,
         identity,
         assertCurrent() {

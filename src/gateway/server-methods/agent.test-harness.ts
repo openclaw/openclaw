@@ -31,7 +31,6 @@ import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-registry-runtime.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import type { SessionRowProjection } from "../session-row-projection.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import {
   setDateOnlyFakeClockActive,
@@ -413,8 +412,9 @@ vi.mock("../../channels/message/runtime.js", async () => {
 export const makeContext = (session?: {
   agentId: string;
   row: GatewaySessionRow;
-}): GatewayRequestContext =>
-  ({
+}): GatewayRequestContext => {
+  const projection = createAgentTestSessionRowProjection(resolveAgentTestConfig, session);
+  return {
     trackExecution: trackAsyncWork,
     dedupe: new Map(),
     addChatRun: vi.fn(),
@@ -429,15 +429,9 @@ export const makeContext = (session?: {
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
     getRuntimeConfig: () => resolveAgentTestConfig(),
-    ...bindSessionRowProjection(
-      {},
-      () =>
-        createAgentTestSessionRowProjection(
-          resolveAgentTestConfig,
-          session,
-        ) as unknown as SessionRowProjection,
-    ),
-  }) as unknown as GatewayRequestContext;
+    ...bindSessionRowProjection({}, () => projection),
+  } as unknown as GatewayRequestContext;
+};
 
 type AgentHandler = NonNullable<typeof agentHandlers.agent>;
 

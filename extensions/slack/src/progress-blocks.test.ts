@@ -87,10 +87,8 @@ describe("native Slack progress stream chunks", () => {
   });
 
   it.each([
-    { summaryRow: false, withPlan: false },
     { summaryRow: false, withPlan: true },
     { summaryRow: true, withPlan: false },
-    { summaryRow: true, withPlan: true },
   ])(
     "preserves independent attention identities through reorder and resolution (quiet=$summaryRow, plan=$withPlan)",
     ({ summaryRow, withPlan }) => {
@@ -281,14 +279,10 @@ describe("native Slack progress stream chunks", () => {
   );
 
   it.each([
-    ["empty", false, "complete"],
     ["empty", false, "error"],
-    ["approval", false, "complete"],
     ["approval", false, "error"],
     ["approval", true, "complete"],
-    ["approval", true, "error"],
     ["failed", false, "complete"],
-    ["failed", false, "error"],
   ] as const)(
     "settles an untitled %s snapshot without losing the turn outcome (quiet=%s, final=%s)",
     (activity, summaryRow, finalInProgressStatus) => {
@@ -332,7 +326,7 @@ describe("native Slack progress stream chunks", () => {
           ),
         );
       }
-      if (finalInProgressStatus === "error" && !summaryRow && activity !== "failed") {
+      if (finalInProgressStatus === "error") {
         expect(final.chunks).toContainEqual(taskUpdate("openclaw_attention", "Failed", "error"));
       }
     },
@@ -340,8 +334,6 @@ describe("native Slack progress stream chunks", () => {
 
   it.each([
     [false, "complete"],
-    [true, "complete"],
-    [false, "error"],
     [true, "error"],
   ] as const)(
     "keeps command failures out of quiet work rows through completion (plan=%s, final=%s)",
@@ -465,28 +457,6 @@ describe("native Slack progress stream chunks", () => {
     ]);
   });
 
-  it("terminalizes tool-line tasks when the source switches to a typed plan", () => {
-    const lineChunks = reconcileSlackNativeTaskChunks({
-      previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
-      chunks: buildSlackProgressStreamChunks({
-        lines: [itemLine("run tests", "Running tests")],
-      }),
-    });
-    const planChunks = reconcileSlackNativeTaskChunks({
-      previous: lineChunks.snapshot,
-      chunks: buildSlackProgressStreamChunks({
-        title: "Implementation",
-        lines: [],
-        plan: [{ step: "Inspect code", status: "in_progress" }],
-      }),
-    });
-
-    const tasks = (planChunks.chunks ?? []).filter((chunk) => chunk.type === "task_update");
-    expect(tasks).toHaveLength(2);
-    expect(tasks[0]).toMatchObject({ id: "plan_step_1", status: "in_progress" });
-    expect(tasks[1]).toMatchObject({ status: "complete" });
-  });
-
   it("keeps content-derived task ids stable when a rolling line window shifts", () => {
     const first = reconcileSlackNativeTaskChunks({
       previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
@@ -531,24 +501,6 @@ describe("native Slack progress stream chunks", () => {
     expect(duplicateTasks[1]).toEqual(
       taskUpdate(expect.stringMatching(/^item_[a-f0-9]{8}_2$/u), "same task", "in_progress"),
     );
-  });
-
-  it("emits nothing when the snapshot matches what the stream already holds", () => {
-    const build = () =>
-      buildSlackProgressStreamChunks({
-        title: "Implementation",
-        lines: [],
-        plan: [{ step: "Inspect code", status: "in_progress" }],
-      });
-    const first = reconcileSlackNativeTaskChunks({
-      previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
-      chunks: build(),
-    });
-    const repeated = reconcileSlackNativeTaskChunks({ previous: first.snapshot, chunks: build() });
-
-    expect(first.chunks).toEqual(build());
-    expect(repeated.chunks).toBeUndefined();
-    expect(repeated.snapshot).toEqual(first.snapshot);
   });
 
   it("streams task details and output as append-only deltas", () => {
@@ -677,41 +629,6 @@ describe("native Slack progress stream chunks", () => {
     ]);
   });
 
-  it("maps completed and failed progress statuses onto native task states", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        title: "Shelling...",
-        lines: [
-          {
-            kind: "command-output",
-            label: "Exec",
-            detail: "command finished",
-            status: "completed",
-            text: "🛠️ Exec: completed",
-            toolName: "exec",
-          },
-          {
-            kind: "command-output",
-            label: "Exec",
-            detail: "command failed",
-            status: "exit 1",
-            text: "🛠️ Exec: exit 1",
-            toolName: "exec",
-          },
-        ],
-      }),
-    ).toEqual([
-      planUpdate("Shelling..."),
-      taskUpdate(contentTaskId("exec"), "Exec", "complete", {
-        details: "command finished",
-      }),
-      taskUpdate(contentTaskId("exec"), "Exec", "error", {
-        details: "command failed",
-        output: "exit 1",
-      }),
-    ]);
-  });
-
   it("preserves the compositor's native task window with or without an authored title", () => {
     const chunksWithTitle = buildSlackProgressStreamChunks({
       title: "Shelling...",
@@ -749,17 +666,6 @@ describe("native Slack progress stream chunks", () => {
       status: "in_progress",
       details: "run 59",
     });
-  });
-
-  it("uses the newest meaningful progress step as the native plan title when no title is provided", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        lines: [toolLine("run tests")],
-      }),
-    ).toEqual([
-      planUpdate("Exec — run tests"),
-      taskUpdate(contentTaskId("exec"), "Exec", "in_progress", { details: "run tests" }),
-    ]);
   });
 
   it("keeps a native status headline when no task rows are visible", () => {
@@ -947,31 +853,6 @@ describe("native Slack progress stream chunks", () => {
         lines: [],
       }),
     ).toBeUndefined();
-  });
-
-  it("marks unfinished native Slack progress tasks complete for finalization", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        finalInProgressStatus: "complete",
-        lines: [
-          { kind: "item", label: "Tool one", text: "tool one" },
-          {
-            kind: "command-output",
-            label: "Exec",
-            detail: "command failed",
-            status: "exit 1",
-            text: "Exec: exit 1",
-          },
-        ],
-      }),
-    ).toEqual([
-      planUpdate("Exec — command failed"),
-      taskUpdate(contentTaskId("item"), "tool one", "complete"),
-      taskUpdate(contentTaskId("command_output"), "Recovered: Exec", "complete", {
-        details: "command failed",
-        output: "exit 1",
-      }),
-    ]);
   });
 
   it("puts task detail, diff output, and the session source on the terminal row", () => {

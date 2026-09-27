@@ -238,7 +238,7 @@ export async function reconcileManagedCodexComputerUseCache(params: {
     bundledMarketplacePath ?? "default",
     config.pluginName,
   ].join("\0");
-  const cache = await ensureCodexComputerUseSharedPluginCache({
+  const shared = await ensureCodexComputerUseSharedPluginCache({
     codexHome: params.codexHome,
     config,
     ...(params.ownershipRoot ? { ownershipRoot: params.ownershipRoot } : {}),
@@ -247,5 +247,5 @@ export async function reconcileManagedCodexComputerUseCache(params: {
     forceRefresh: params.forceRefresh === true || params.previousCacheBinding !== cacheBinding,
   });
   params.assertCurrent();
-  return cache.status === "shared" ? cacheBinding : undefined;
+  return shared ? cacheBinding : undefined;
 }

@@ -101,6 +101,13 @@ function scanDts(
   fileName: string,
   parser?: NativeTypeScriptParser,
 ): DtsSanitization {
+  // Escaped identifiers and string names still need the native parser.
+  if (
+    !sourceText.includes("\\") &&
+    !BUNDLER_RUNTIME_HELPER_EXPORT_NAMES.some((name) => sourceText.includes(name))
+  ) {
+    return { edits: [], removed: [] };
+  }
   using ownedParser = parser ? undefined : createNativeTypeScriptParser();
   const sourceFile = (parser ?? ownedParser!).parseSourceFile(fileName, sourceText);
   const helperIsDeclared = hasLocalHelperBinding(sourceFile, "__exportAll");

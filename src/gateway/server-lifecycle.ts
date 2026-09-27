@@ -46,12 +46,7 @@ import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.j
 import { resolveGatewayShutdownNotice, runGatewayCloseSteps } from "./server-shutdown.js";
 import type { GatewayShutdownRuntime } from "./server-shutdown.runtime.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import {
-  getHealthVersion,
-  incrementPresenceVersion,
-  refreshGatewayHealthSnapshot,
-} from "./server/health-state.js";
-import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import { refreshGatewayHealthSnapshot } from "./server/health-state.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayKernelState>>;
@@ -113,20 +108,7 @@ export async function prepareGatewayLifecycle(params: {
     current?: import("./desktop/node-source.js").NodeDesktopService;
   } = {};
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
-  const {
-    nodeRegistry,
-    nodeWorkerSupervisorTransport,
-    nodePresenceTimers,
-    nodeHasSessionSubscribers,
-    nodeSendToSession,
-    nodeSendToAllSubscribed,
-    nodeSubscribe,
-    nodeUnsubscribe,
-    nodeUnsubscribeAll,
-    broadcastVoiceWakeChanged,
-    broadcastVoiceWakeRoutingChanged,
-    hasTalkNodeConnected,
-  } = createGatewayNodeSessionRuntime({
+  const { nodeWorkerSupervisorTransport, ...nodeRuntime } = createGatewayNodeSessionRuntime({
     broadcast,
     sessionEventSubscribers,
     sessionMessageSubscribers,
@@ -143,13 +125,14 @@ export async function prepareGatewayLifecycle(params: {
     onPairingInvalidated: ({ nodeId, connId }) => {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
       upsertPresence(nodeId, { reason: "disconnect" });
-      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+      runtime.publishPresence();
       removeRemoteNodeInfoForConnection(nodeId, connId);
     },
     onPairingGenerationChanged: ({ nodeId }) => {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
     },
   });
+  const { nodeRegistry, nodePresenceTimers, nodeSendToSession, nodeUnsubscribeAll } = nodeRuntime;
   const nodeDesktopService = (await import("./desktop/node-source.js")).createNodeDesktopService({
     getConfig: getRuntimeConfig,
     nodeRegistry,
@@ -192,7 +175,7 @@ export async function prepareGatewayLifecycle(params: {
         instanceId: session.nodeId,
         reason: "connect",
       });
-      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+      runtime.publishPresence();
       recordRemoteNodeInfo({
         nodeId: session.nodeId,
         connId: session.connId,
@@ -206,7 +189,7 @@ export async function prepareGatewayLifecycle(params: {
     },
     onNodeDisconnected: (nodeId) => {
       upsertPresence(nodeId, { reason: "disconnect" });
-      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+      runtime.publishPresence();
       removeRemoteNodeInfo(nodeId);
       nodeUnsubscribeAll(nodeId);
       clearNodeWakeState(nodeId);
@@ -229,6 +212,7 @@ export async function prepareGatewayLifecycle(params: {
     hooksConfig: initialHooksConfig,
     hookClientIpConfig: initialHookClientIpConfig,
     cronState: createLazyGatewayCronState({
+      scheduler: runtime.scheduler,
       cfg: cfgAtStart,
       deps,
       broadcast,
@@ -334,6 +318,7 @@ export async function prepareGatewayLifecycle(params: {
     },
   };
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
+    scheduler: runtime.scheduler,
     broadcastToConnIds,
     isConnectionActive,
     prepareRead: async (connId, session) => {
@@ -351,9 +336,7 @@ export async function prepareGatewayLifecycle(params: {
   });
   runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
     clients,
-    broadcast,
-    incrementPresenceVersion,
-    getHealthVersion,
+    publishPresence: runtime.publishPresence,
   });
   deps.cron = runtimeState.cronState.cron;
   const pluginHostServices = {
@@ -379,11 +362,6 @@ export async function prepareGatewayLifecycle(params: {
       }
     },
   });
-  const postReadyState: {
-    maintenanceTimer: ReturnType<typeof setTimeout> | null;
-  } = {
-    maintenanceTimer: null,
-  };
   let deliveryRecoveryStopPromise: Promise<void> | null = null;
   const stopDeliveryRecoveryForClose = () =>
     (deliveryRecoveryStopPromise ??= runtimeState.stopDeliveryRecovery());
@@ -419,11 +397,10 @@ export async function prepareGatewayLifecycle(params: {
     void runtimeState.stopGatewayUpdateCheck().catch(() => {});
     void runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
+    runtime.stopPresencePublications();
     kernel.setDispatchReady(false);
     gatewayInstanceRuntimeRef.current?.close();
     cronReconciliation.invalidate();
-    clearTimeout(postReadyState.maintenanceTimer ?? undefined);
-    postReadyState.maintenanceTimer = null;
     return prelude;
   };
   let configReloaderStopPromise: Promise<void> | null = null;
@@ -675,18 +652,8 @@ export async function prepareGatewayLifecycle(params: {
     subscribeSessionMessageEvents: sessionMessageSubscribers.subscribe,
     unsubscribeSessionMessageEvents: sessionMessageSubscribers.unsubscribe,
     restartRecoveryCandidates,
-    nodeRegistry,
+    ...nodeRuntime,
     nodeDesktopService,
-    nodePresenceTimers,
-    nodeHasSessionSubscribers,
-    nodeSendToSession,
-    nodeSendToAllSubscribed,
-    nodeSubscribe,
-    nodeUnsubscribe,
-    nodeUnsubscribeAll,
-    broadcastVoiceWakeChanged,
-    broadcastVoiceWakeRoutingChanged,
-    hasTalkNodeConnected,
     watchNodeHttpRuntime,
     terminalSessions,
     runtimeState,
@@ -695,7 +662,6 @@ export async function prepareGatewayLifecycle(params: {
     pluginHostServices,
     shutdownRuntime,
     lifecycle,
-    postReadyState,
     cronReconciliation,
     beginClosePrelude,
     getRuntimeSnapshot,

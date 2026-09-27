@@ -1,4 +1,3 @@
-// QA Lab WhatsApp native approval scenarios.
 import { randomUUID } from "node:crypto";
 import type {
   WhatsAppQaDriverObservedMessage,

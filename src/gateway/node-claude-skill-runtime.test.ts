@@ -112,7 +112,7 @@ async function fixture(
   };
   await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
   const runId = "node-skill-turn";
-  const claim = placements.claimTurn({
+  const claim = await placements.claimTurn({
     agentId: "main",
     sessionKey,
     sessionId,
@@ -530,7 +530,7 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
           f.admission.close();
         }
         if (failure === "claim-loss") {
-          f.placements.releaseTurn(f.claim);
+          await f.placements.releaseTurn(f.claim);
         }
         if (failure === "disconnect") {
           f.registry.unregister("connection-1");

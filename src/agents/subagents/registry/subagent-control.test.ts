@@ -155,6 +155,15 @@ function cfgWithSessionStore(storePath = nextSessionStorePath("sessions")): Open
   } as OpenClawConfig;
 }
 
+function controllerFor(controllerSessionKey = "agent:main:main") {
+  return {
+    controllerSessionKey,
+    callerSessionKey: controllerSessionKey,
+    callerIsSubagent: false,
+    controlScope: "children" as const,
+  };
+}
+
 async function writeSessionStoreFixture(label: string, store: Record<string, unknown>) {
   const storePath = nextSessionStorePath(label);
   for (const [sessionKey, entry] of Object.entries(store)) {
@@ -221,7 +230,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:other-requester",
       requesterDisplayKey: "other-requester",
       task: "do the work",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
@@ -270,10 +278,7 @@ describe("killSubagentRunAdmin", () => {
       runId: "run-current",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "replacement work",
-      cleanup: "keep",
       createdAt: Date.now() - 1_000,
       startedAt: Date.now() - 900,
     });
@@ -294,10 +299,7 @@ describe("killSubagentRunAdmin", () => {
       runId: "run-reused",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "replacement work",
-      cleanup: "keep",
       generation: 2,
       createdAt: Date.now() - 1_000,
       startedAt: Date.now() - 900,
@@ -340,7 +342,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
       task: "source recovery task",
-      cleanup: "keep",
       generation: 1,
       createdAt: Date.now() - 2_000,
       execution: {
@@ -412,7 +413,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
       task: "same-id recovery source",
-      cleanup: "keep",
       generation: 1,
       createdAt: Date.now() - 2_000,
       execution: {
@@ -461,47 +461,6 @@ describe("killSubagentRunAdmin", () => {
     expect(abort).not.toHaveBeenCalled();
   });
 
-  it("retries task reconciliation for an already-killed run", async () => {
-    const childSessionKey = "agent:main:subagent:already-killed";
-    const endedAt = Date.now() - 1_000;
-    addSubagentRunForTests({
-      runId: "run-already-killed",
-      childSessionKey,
-      controllerSessionKey: "agent:main:controller",
-      requesterSessionKey: "agent:main:requester",
-      requesterDisplayKey: "requester",
-      task: "repair task projection",
-      cleanup: "keep",
-      createdAt: endedAt - 4_000,
-      startedAt: endedAt - 3_000,
-      endedAt,
-      endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "error", error: "killed" },
-      suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt: endedAt },
-      cleanupCompletedAt: endedAt + 500,
-    });
-
-    const first = await killSubagentRunAdmin({ cfg: {}, sessionKey: childSessionKey });
-    const second = await killSubagentRunAdmin({ cfg: {}, sessionKey: childSessionKey });
-
-    for (const result of [first, second]) {
-      expect(result).toMatchObject({
-        found: true,
-        killed: false,
-        targetState: {
-          state: "terminal",
-          task: {
-            status: "cancelled",
-            endedAt,
-            error: SUBAGENT_KILL_TASK_ERROR,
-          },
-        },
-      });
-    }
-    expect(detachedTaskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps a killed steer-restart run on its failed projection", async () => {
     const childSessionKey = "agent:main:subagent:steer-restart";
     const endedAt = Date.now() - 1_000;
@@ -512,7 +471,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
       task: "replace active run",
-      cleanup: "keep",
       createdAt: endedAt - 4_000,
       startedAt: endedAt - 3_000,
       endedAt,
@@ -554,7 +512,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
       task: "finish while aborting",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
@@ -615,7 +572,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
       task: "finish while cancellation starts",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
@@ -698,7 +654,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
       task: "finish while descendant cancellation settles",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
@@ -711,7 +666,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: childSessionKey,
       requesterDisplayKey: "parent",
       task: "descendant",
-      cleanup: "keep",
       createdAt: Date.now() - 3_000,
       startedAt: Date.now() - 2_000,
     });
@@ -784,7 +738,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
       task: "yield while cancellation starts",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
@@ -848,6 +801,7 @@ describe("killSubagentRunAdmin", () => {
     const [repeatedFinalizeArgs] =
       detachedTaskRuntimeMocks.finalizeTaskRunByRunId.mock.calls.at(-1) ?? [];
     expect((repeatedFinalizeArgs as { endedAt?: number } | undefined)?.endedAt).toBe(killedAt);
+    expect(detachedTaskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalledTimes(2);
   });
 
   it("does not mark a finalizing run killed when its abort is rejected", async () => {
@@ -873,7 +827,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:other-requester",
       requesterDisplayKey: "other-requester",
       task: "finish the reply",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
@@ -904,7 +857,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:other-requester",
       requesterDisplayKey: "other-requester",
       task: "stale admin task",
-      cleanup: "keep",
       createdAt: Date.now() - 9_000,
       startedAt: Date.now() - 8_000,
     });
@@ -915,7 +867,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:other-requester",
       requesterDisplayKey: "other-requester",
       task: "current admin task",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
       endedAt: Date.now() - 1_000,
@@ -949,7 +900,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
       task: "admin source",
-      cleanup: "keep",
       generation: 1,
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
@@ -1003,7 +953,6 @@ describe("killSubagentRunAdmin", () => {
       requesterSessionKey: "agent:main:other-requester",
       requesterDisplayKey: "other-requester",
       task: "do the work",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
@@ -1050,31 +999,20 @@ describe("controlled subagent cancellation races", () => {
       runId: "run-current",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "current task",
-      cleanup: "keep",
       createdAt: Date.now() - 4_000,
       startedAt: Date.now() - 3_000,
     });
 
     const result = await killAllControlledSubagentRuns({
       cfg: cfgWithSessionStore(storePath),
-      controller: {
-        controllerSessionKey: "agent:main:main",
-        callerSessionKey: "agent:main:main",
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
+      controller: controllerFor(),
       runs: [
         createSubagentRunRecord({
           runId: "run-stale",
           childSessionKey,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
           controllerSessionKey: "agent:main:main",
           task: "stale task",
-          cleanup: "keep",
           createdAt: Date.now() - 9_000,
           startedAt: Date.now() - 8_000,
         }),
@@ -1100,9 +1038,7 @@ describe("controlled subagent cancellation races", () => {
         childSessionKey: `agent:main:subagent:generation-race-${index}`,
         controllerSessionKey,
         requesterSessionKey: controllerSessionKey,
-        requesterDisplayKey: "main",
         task: `old task ${index}`,
-        cleanup: "keep",
         generation: 1,
         createdAt: Date.now() - 5_000,
         startedAt: Date.now() - 4_000,
@@ -1133,12 +1069,7 @@ describe("controlled subagent cancellation races", () => {
     const pendingKills = oldRuns.map((entry) =>
       killAllControlledSubagentRuns({
         cfg: cfgWithSessionStore(storePath),
-        controller: {
-          controllerSessionKey,
-          callerSessionKey: controllerSessionKey,
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
+        controller: controllerFor(controllerSessionKey),
         runs: [entry],
       }),
     );
@@ -1203,9 +1134,7 @@ describe("controlled subagent cancellation races", () => {
       childSessionKey,
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
-      requesterDisplayKey: "main",
       task: "old persisted task",
-      cleanup: "keep",
       generation: 1,
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
@@ -1243,12 +1172,7 @@ describe("controlled subagent cancellation races", () => {
 
     const pendingKill = killAllControlledSubagentRuns({
       cfg: cfgWithSessionStore(storePath),
-      controller: {
-        controllerSessionKey,
-        callerSessionKey: controllerSessionKey,
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
+      controller: controllerFor(controllerSessionKey),
       runs: [oldRun],
     });
     await persistenceStarted;
@@ -1311,10 +1235,7 @@ describe("controlled subagent cancellation races", () => {
       runId: "run-kill-session-reset",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "old session work",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
@@ -1340,12 +1261,7 @@ describe("controlled subagent cancellation races", () => {
     await expect(
       killAllControlledSubagentRuns({
         cfg: cfgWithSessionStore(storePath),
-        controller: {
-          controllerSessionKey: "agent:main:main",
-          callerSessionKey: "agent:main:main",
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
+        controller: controllerFor(),
         runs: [entry],
       }),
     ).resolves.toMatchObject({
@@ -1375,10 +1291,7 @@ describe("controlled subagent cancellation races", () => {
       runId: "run-kill-session-patch-reset",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "do not patch successor",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
@@ -1398,12 +1311,7 @@ describe("controlled subagent cancellation races", () => {
     await expect(
       killAllControlledSubagentRuns({
         cfg: cfgWithSessionStore(storePath),
-        controller: {
-          controllerSessionKey: "agent:main:main",
-          callerSessionKey: "agent:main:main",
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
+        controller: controllerFor(),
         runs: [entry],
       }),
     ).resolves.toMatchObject({ status: "ok", killed: 1 });
@@ -1424,10 +1332,7 @@ describe("controlled subagent cancellation races", () => {
       runId: "run-parent-current",
       childSessionKey: parentSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "current parent task",
-      cleanup: "keep",
       createdAt: Date.now() - 8_000,
       startedAt: Date.now() - 7_000,
       endedAt: Date.now() - 6_000,
@@ -1441,7 +1346,6 @@ describe("controlled subagent cancellation races", () => {
       requesterSessionKey: parentSessionKey,
       requesterDisplayKey: parentSessionKey,
       task: "stale child task",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
@@ -1452,7 +1356,6 @@ describe("controlled subagent cancellation races", () => {
       requesterSessionKey: parentSessionKey,
       requesterDisplayKey: parentSessionKey,
       task: "current child task",
-      cleanup: "keep",
       createdAt: Date.now() - 3_000,
       startedAt: Date.now() - 2_000,
       endedAt: Date.now() - 1_500,
@@ -1465,7 +1368,6 @@ describe("controlled subagent cancellation races", () => {
       requesterSessionKey: childSessionKey,
       requesterDisplayKey: childSessionKey,
       task: "leaf task",
-      cleanup: "keep",
       createdAt: Date.now() - 1_000,
       startedAt: Date.now() - 900,
       endedAt: Date.now() - 800,
@@ -1474,12 +1376,7 @@ describe("controlled subagent cancellation races", () => {
 
     const result = await killAllControlledSubagentRuns({
       cfg: cfgWithSessionStore(),
-      controller: {
-        controllerSessionKey: "agent:main:main",
-        callerSessionKey: "agent:main:main",
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
+      controller: controllerFor(),
       runs: [parentRun],
     });
 
@@ -1501,10 +1398,7 @@ describe("controlled subagent cancellation races", () => {
       runId: "run-old-parent-current",
       childSessionKey: oldParentSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "old parent task",
-      cleanup: "keep",
       createdAt: Date.now() - 8_000,
       startedAt: Date.now() - 7_000,
       endedAt: Date.now() - 6_000,
@@ -1515,10 +1409,7 @@ describe("controlled subagent cancellation races", () => {
       runId: "run-new-parent-current",
       childSessionKey: newParentSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "new parent task",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
@@ -1529,7 +1420,6 @@ describe("controlled subagent cancellation races", () => {
       requesterSessionKey: oldParentSessionKey,
       requesterDisplayKey: oldParentSessionKey,
       task: "stale shared child task",
-      cleanup: "keep",
       createdAt: Date.now() - 4_000,
       startedAt: Date.now() - 3_500,
       endedAt: Date.now() - 3_000,
@@ -1542,7 +1432,6 @@ describe("controlled subagent cancellation races", () => {
       requesterSessionKey: newParentSessionKey,
       requesterDisplayKey: newParentSessionKey,
       task: "current shared child task",
-      cleanup: "keep",
       createdAt: Date.now() - 2_000,
       startedAt: Date.now() - 1_500,
     });
@@ -1553,19 +1442,13 @@ describe("controlled subagent cancellation races", () => {
       requesterSessionKey: childSessionKey,
       requesterDisplayKey: childSessionKey,
       task: "leaf task",
-      cleanup: "keep",
       createdAt: Date.now() - 1_000,
       startedAt: Date.now() - 900,
     });
 
     const result = await killAllControlledSubagentRuns({
       cfg: cfgWithSessionStore(),
-      controller: {
-        controllerSessionKey: "agent:main:main",
-        callerSessionKey: "agent:main:main",
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
+      controller: controllerFor(),
       runs: [oldParentRun],
     });
 
@@ -1586,9 +1469,7 @@ describe("controlled subagent cancellation races", () => {
       childSessionKey,
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
-      requesterDisplayKey: "main",
       task: "kill recovery admission",
-      cleanup: "keep",
       createdAt: Date.now() - 2_000,
       execution: { status: "running", startedAt: Date.now() - 1_000 },
     });
@@ -1612,12 +1493,7 @@ describe("controlled subagent cancellation races", () => {
 
     const pendingKill = killAllControlledSubagentRuns({
       cfg: cfgWithSessionStore(storePath),
-      controller: {
-        controllerSessionKey,
-        callerSessionKey: controllerSessionKey,
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
+      controller: controllerFor(controllerSessionKey),
       runs: [entry],
     });
     await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0));
@@ -1652,9 +1528,7 @@ describe("controlled subagent cancellation races", () => {
         childSessionKey,
         controllerSessionKey,
         requesterSessionKey: controllerSessionKey,
-        requesterDisplayKey: "main",
         task: "hold admission during kill",
-        cleanup: "keep",
         createdAt: Date.now() - 2_000,
         collect: queued,
         execution: queued
@@ -1691,12 +1565,7 @@ describe("controlled subagent cancellation races", () => {
       try {
         const pendingKill = killAllControlledSubagentRuns({
           cfg: cfgWithSessionStore(storePath),
-          controller: {
-            controllerSessionKey,
-            callerSessionKey: controllerSessionKey,
-            callerIsSubagent: false,
-            controlScope: "children",
-          },
+          controller: controllerFor(controllerSessionKey),
           runs: [entry],
         });
         await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0));
@@ -1734,9 +1603,7 @@ describe("controlled subagent cancellation races", () => {
       childSessionKey,
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
-      requesterDisplayKey: "main",
       task: "kill tombstone failure",
-      cleanup: "keep",
       createdAt: Date.now() - 2_000,
       execution: {
         status: "interrupted",
@@ -1774,12 +1641,7 @@ describe("controlled subagent cancellation races", () => {
     await expect(
       killAllControlledSubagentRuns({
         cfg: cfgWithSessionStore(storePath),
-        controller: {
-          controllerSessionKey,
-          callerSessionKey: controllerSessionKey,
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
+        controller: controllerFor(controllerSessionKey),
         runs: [entry],
       }),
     ).resolves.toMatchObject({
@@ -1820,9 +1682,7 @@ describe("killAllControlledSubagentRuns", () => {
         childSessionKey: "agent:main:subagent:running-collector",
         controllerSessionKey,
         requesterSessionKey: controllerSessionKey,
-        requesterDisplayKey: "main",
         task: "running collector",
-        cleanup: "keep",
         collect: true,
         createdAt: 1,
         startedAt: 2,
@@ -1974,9 +1834,7 @@ describe("killAllControlledSubagentRuns", () => {
       childSessionKey: "agent:main:subagent:failure-queued",
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
-      requesterDisplayKey: "main",
       task: "queued failure",
-      cleanup: "keep",
       createdAt: 1,
       generation: 1,
       collect: true,
@@ -2111,9 +1969,7 @@ describe("killAllControlledSubagentRuns", () => {
         childSessionKey,
         controllerSessionKey,
         requesterSessionKey: controllerSessionKey,
-        requesterDisplayKey: "main",
         task: "launch remap",
-        cleanup: "keep",
         createdAt: 1,
         collect: true,
         swarmLaunchPending: true,
@@ -2205,7 +2061,6 @@ describe("killAllControlledSubagentRuns", () => {
         requesterAgentId,
         requesterDisplayKey: "global",
         task: requesterAgentId,
-        cleanup: "keep",
         createdAt: 1,
         collect: true,
         execution: { status: "queued" },
@@ -2265,10 +2120,7 @@ describe("killAllControlledSubagentRuns", () => {
         runId: "run-bulk-persistence-failure-first",
         childSessionKey: "agent:main:subagent:bulk-persistence-failure-first",
         controllerSessionKey: "agent:main:main",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
         task: "first bulk task",
-        cleanup: "keep",
         createdAt: Date.now() - 2_000,
         startedAt: Date.now() - 1_900,
       });
@@ -2293,12 +2145,7 @@ describe("killAllControlledSubagentRuns", () => {
       } else {
         const result = await killAllControlledSubagentRuns({
           cfg: cfgWithSessionStore(),
-          controller: {
-            controllerSessionKey: "agent:main:main",
-            callerSessionKey: "agent:main:main",
-            callerIsSubagent: false,
-            controlScope: "children",
-          },
+          controller: controllerFor(),
           runs: [first, second],
         });
 
@@ -2332,10 +2179,7 @@ describe("killAllControlledSubagentRuns", () => {
       runId: "run-same-bulk",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "current bulk task",
-      cleanup: "keep",
       generation: 2,
       createdAt: Date.now() - 4_000,
       startedAt: Date.now() - 3_000,
@@ -2343,21 +2187,13 @@ describe("killAllControlledSubagentRuns", () => {
 
     const result = await killAllControlledSubagentRuns({
       cfg: cfgWithSessionStore(storePath),
-      controller: {
-        controllerSessionKey: "agent:main:main",
-        callerSessionKey: "agent:main:main",
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
+      controller: controllerFor(),
       runs: [
         createSubagentRunRecord({
           runId: "run-same-bulk",
           childSessionKey,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
           controllerSessionKey: "agent:main:main",
           task: "stale bulk task",
-          cleanup: "keep",
           generation: 1,
           createdAt: Date.now() - 9_000,
           startedAt: Date.now() - 8_000,
@@ -2390,10 +2226,7 @@ describe("killAllControlledSubagentRuns", () => {
       runId: "run-current-shadow",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "current shadow task",
-      cleanup: "keep",
       createdAt: Date.now() - 4_000,
       startedAt: Date.now() - 3_000,
       endedAt: Date.now() - 2_000,
@@ -2403,21 +2236,13 @@ describe("killAllControlledSubagentRuns", () => {
 
     const result = await killAllControlledSubagentRuns({
       cfg: cfgWithSessionStore(storePath),
-      controller: {
-        controllerSessionKey: "agent:main:main",
-        callerSessionKey: "agent:main:main",
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
+      controller: controllerFor(),
       runs: [
         createSubagentRunRecord({
           runId: "run-stale-shadow",
           childSessionKey,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
           controllerSessionKey: "agent:main:main",
           task: "stale shadow task",
-          cleanup: "keep",
           createdAt: Date.now() - 9_000,
           startedAt: Date.now() - 8_000,
         }),
@@ -2442,10 +2267,7 @@ describe("killAllControlledSubagentRuns", () => {
       runId: "run-stale-bulk-finished",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "stale bulk finished task",
-      cleanup: "keep",
       createdAt: Date.now() - 9_000,
       startedAt: Date.now() - 8_000,
     });
@@ -2453,10 +2275,7 @@ describe("killAllControlledSubagentRuns", () => {
       runId: "run-current-bulk-finished",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "current bulk finished task",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
       endedAt: Date.now() - 1_000,
@@ -2466,12 +2285,7 @@ describe("killAllControlledSubagentRuns", () => {
 
     const result = await killAllControlledSubagentRuns({
       cfg: cfgWithSessionStore(),
-      controller: {
-        controllerSessionKey: "agent:main:main",
-        callerSessionKey: "agent:main:main",
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
+      controller: controllerFor(),
       runs: [currentBulkFinishedRun],
     });
 
@@ -2490,10 +2304,7 @@ describe("killAllControlledSubagentRuns", () => {
       runId: "run-stale-bulk-desc-parent",
       childSessionKey: parentSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "stale bulk parent task",
-      cleanup: "keep",
       createdAt: Date.now() - 9_000,
       startedAt: Date.now() - 8_000,
     });
@@ -2501,10 +2312,7 @@ describe("killAllControlledSubagentRuns", () => {
       runId: "run-current-bulk-desc-parent",
       childSessionKey: parentSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "current bulk parent task",
-      cleanup: "keep",
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
       endedAt: Date.now() - 1_000,
@@ -2518,19 +2326,13 @@ describe("killAllControlledSubagentRuns", () => {
       requesterSessionKey: parentSessionKey,
       requesterDisplayKey: parentSessionKey,
       task: "active bulk child task",
-      cleanup: "keep",
       createdAt: Date.now() - 3_000,
       startedAt: Date.now() - 2_000,
     });
 
     const result = await killAllControlledSubagentRuns({
       cfg: cfgWithSessionStore(),
-      controller: {
-        controllerSessionKey: "agent:main:main",
-        callerSessionKey: "agent:main:main",
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
+      controller: controllerFor(),
       runs: [currentBulkParentRun],
     });
 
@@ -2580,7 +2382,6 @@ describe("controlled subagent reads", () => {
         requesterSessionKey,
         requesterDisplayKey: requesterSessionKey,
         task: "visibility test",
-        cleanup: "keep",
         createdAt: Date.now(),
         startedAt: Date.now(),
       });
@@ -2604,7 +2405,6 @@ describe("controlled subagent reads", () => {
       requesterSessionKey: rootSessionKey,
       requesterDisplayKey: rootSessionKey,
       task: "status parent",
-      cleanup: "keep",
       createdAt: now - 4_000,
       startedAt: now - 3_500,
       endedAt: now - 3_000,
@@ -2616,7 +2416,6 @@ describe("controlled subagent reads", () => {
       requesterSessionKey: parentSessionKey,
       requesterDisplayKey: parentSessionKey,
       task: "status child 1",
-      cleanup: "keep",
       createdAt: now - 2_000,
       startedAt: now - 1_500,
     });
@@ -2630,7 +2429,6 @@ describe("controlled subagent reads", () => {
       requesterSessionKey: parentSessionKey,
       requesterDisplayKey: parentSessionKey,
       task: "status child 2",
-      cleanup: "keep",
       createdAt: now - 1_000,
       startedAt: now - 500,
     });
@@ -2655,7 +2453,6 @@ describe("controlled subagent reads", () => {
         requesterAgentId: agentId,
         requesterDisplayKey: "global",
         task: `${agentId} task`,
-        cleanup: "keep",
         createdAt: now,
         startedAt: now,
       });

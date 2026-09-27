@@ -32,18 +32,12 @@ type GatewayAgentSelectionState = {
   selectionRequired: boolean;
 };
 
-const OWNER_ROSTER_ENTRIES = SYSTEM_AGENT_ROSTER_ENTRIES satisfies ReadonlyArray<{
-  id: string;
-  kind: GatewayAgentKind;
-}>;
-
 async function listExistingAgentIdsFromDisk(): Promise<string[]> {
   const agentsDir = path.join(resolveStateDir(), "agents");
   try {
     return (await fs.readdir(agentsDir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
-      .map((entry) => normalizeAgentId(entry.name))
-      .filter(Boolean);
+      .map((entry) => normalizeAgentId(entry.name));
   } catch {
     return [];
   }
@@ -81,7 +75,7 @@ export async function listGatewayAgentsBasic(cfg: OpenClawConfig): Promise<
   }
 > {
   const ownerEntries = new Map(
-    OWNER_ROSTER_ENTRIES.map((entry) => [normalizeAgentId(entry.id), entry] as const),
+    SYSTEM_AGENT_ROSTER_ENTRIES.map((entry) => [normalizeAgentId(entry.id), entry] as const),
   );
   const selection = resolveGatewayAgentSelectionState(cfg);
   const defaultId = selection.defaultId;

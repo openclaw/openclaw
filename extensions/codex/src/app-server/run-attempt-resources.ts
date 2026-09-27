@@ -652,7 +652,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       state.trajectoryEndRecorded = true;
     },
     activateNativePreToolUseFailureFallback,
-    releaseSharedClientLeaseOnce,
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
     runCleanupStep,

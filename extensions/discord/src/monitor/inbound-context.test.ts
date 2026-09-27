@@ -1,74 +1,8 @@
 // Discord tests cover inbound context plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  createDiscordSupplementalContextAccessChecker,
-  buildDiscordGroupSystemPrompt,
-  buildDiscordInboundAccessContext,
-} from "./inbound-context.js";
+import { createDiscordSupplementalContextAccessChecker } from "./inbound-context.js";
 
 describe("Discord inbound context helpers", () => {
-  it("builds guild access context from channel config and topic", () => {
-    const accessContext = buildDiscordInboundAccessContext({
-      channelConfig: {
-        allowed: true,
-        users: ["discord:user-1"],
-        systemPrompt: "Use the runbook.",
-      },
-      guildInfo: { id: "guild-1" },
-      sender: {
-        id: "user-1",
-        name: "tester",
-        tag: "tester#0001",
-      },
-      isGuild: true,
-      channelTopic: "Production alerts only",
-    });
-
-    expect(accessContext.groupSystemPrompt).toBe("Use the runbook.");
-    expect(accessContext.ownerAllowFrom).toEqual(["user-1"]);
-    expect(accessContext.channelStructuredContext).toEqual([
-      {
-        label: "Discord channel metadata",
-        source: "discord",
-        type: "channel_metadata",
-        payload: { topic: "Production alerts only" },
-      },
-    ]);
-  });
-
-  it("omits guild-only metadata for direct messages", () => {
-    expect(
-      buildDiscordInboundAccessContext({
-        sender: {
-          id: "user-1",
-        },
-        isGuild: false,
-        channelTopic: "ignored",
-      }),
-    ).toEqual({
-      groupSystemPrompt: undefined,
-      channelStructuredContext: undefined,
-      ownerAllowFrom: undefined,
-    });
-  });
-
-  it("keeps direct helper behavior consistent", () => {
-    expect(buildDiscordGroupSystemPrompt({ allowed: true, systemPrompt: "  hi  " })).toBe("hi");
-    const channelStructuredContext = buildDiscordInboundAccessContext({
-      sender: { id: "user-1" },
-      isGuild: true,
-      channelTopic: "topic",
-    }).channelStructuredContext;
-    expect(channelStructuredContext).toEqual([
-      {
-        label: "Discord channel metadata",
-        source: "discord",
-        type: "channel_metadata",
-        payload: { topic: "topic" },
-      },
-    ]);
-  });
-
   it("matches supplemental context senders through role allowlists", () => {
     const isAllowed = createDiscordSupplementalContextAccessChecker({
       channelConfig: {

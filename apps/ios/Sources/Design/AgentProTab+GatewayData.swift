@@ -15,11 +15,7 @@ extension AgentProTab {
             return normalizedEmoji
         }
 
-        let words = self.agentName(for: agent)
-            .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })
-            .prefix(2)
-        let initials = words.compactMap(\.first).map(String.init).joined()
-        return initials.isEmpty ? "OC" : initials.uppercased()
+        return AgentIdentityPresentation.initialsBadge(for: self.agentName(for: agent))
     }
 
     func agentTint(for agent: AgentSummary, state: AgentRosterState) -> Color {
@@ -29,7 +25,7 @@ extension AgentProTab {
 
     func agentDetail(for agent: AgentSummary) -> String {
         let parts = [
-            self.modelLabel(for: agent),
+            RootSidebar.agentModelLabel(agent),
             agent.id == self.appModel.gatewayDefaultAgentId ? "Default" : nil,
         ].compactMap(\.self)
         return parts.isEmpty ? agent.id : parts.joined(separator: " • ")
@@ -49,18 +45,6 @@ extension AgentProTab {
         guard self.gatewayConnected else { return .ready }
         if agent.id == self.activeAgentID { return .online }
         return .ready
-    }
-
-    func modelLabel(for agent: AgentSummary) -> String? {
-        guard let model = agent.model else { return nil }
-        for key in ["primary", "name", "id", "model"] {
-            if let value = model[key]?.value as? String,
-               let normalized = self.normalized(value)
-            {
-                return normalized
-            }
-        }
-        return nil
     }
 
     @MainActor

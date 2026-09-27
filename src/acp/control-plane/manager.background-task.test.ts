@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { drainSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -45,6 +46,7 @@ afterEach(async () => {
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   resetDetachedTaskLifecycleRuntimeForTests();
+  resetSystemEventsForTest();
 });
 
 const HIGH_SURROGATE_WITHOUT_LOW = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
@@ -149,6 +151,11 @@ describe("ACP background task execution binding", () => {
         throw new Error("Expected the first ACP task");
       }
       markBackgroundTaskTerminal(first, { status: "cancelled", endedAt: 200 });
+      await deliveries.settle();
+      expect(getTaskById(first.taskId)?.deliveryStatus).toBe("session_queued");
+      expect(drainSystemEvents(context.requesterSessionKey)).toEqual([
+        expect.stringContaining("Background task cancelled"),
+      ]);
       const original = getTaskById(first.taskId);
       const second = createBackgroundTaskRecord(context, 300, "instance-second");
       if (!second) {
@@ -168,6 +175,11 @@ describe("ACP background task execution binding", () => {
       markBackgroundTaskRunning(first, { progressSummary: "late predecessor output" });
       markBackgroundTaskRunning(second, { progressSummary: "current output" });
       markBackgroundTaskTerminal(second, { status: "succeeded", endedAt: 500 });
+      await deliveries.settle();
+      expect(getTaskById(second.taskId)?.deliveryStatus).toBe("session_queued");
+      expect(drainSystemEvents(context.requesterSessionKey)).toEqual([
+        expect.stringContaining("Background task ready for review"),
+      ]);
       expect(getTaskById(first.taskId)).toEqual(original);
       expect(getTaskById(second.taskId)).toMatchObject({
         status: "succeeded",
