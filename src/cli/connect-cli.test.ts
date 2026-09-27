@@ -164,6 +164,45 @@ describe("connect cli", () => {
     },
   );
 
+  it.each([
+    {
+      name: "foreground session host",
+      args: ["--session-host", "--display-name", "Build Node"],
+      reconnect: "openclaw node run --session-host --display-name 'Build Node'",
+      pair: "openclaw connect <join-url> --session-host --display-name 'Build Node'",
+    },
+    {
+      name: "session-host service",
+      args: ["--service", "--session-host"],
+      reconnect:
+        "openclaw config set nodeHost.workerRuns.enabled true, then openclaw node install --force",
+      pair: "openclaw connect <join-url> --service --session-host",
+    },
+  ])(
+    "points a $name without a target at its saved Gateway connection",
+    async ({ args, reconnect, pair }) => {
+      mocks.loadNodeHostConfig.mockResolvedValueOnce({
+        version: 1,
+        nodeId: "node-1",
+        gateway: { host: "gateway.example", port: 443, tls: true },
+      });
+
+      await runConnect(args);
+
+      expect(mocks.runtime.error).toHaveBeenCalledWith(
+        [
+          "Connect target is required. This machine has a saved Gateway connection (wss://gateway.example:443); join URLs and setup codes are single-use.",
+          `To reconnect with it, run: ${reconnect}`,
+          `To pair again, mint a join URL on the Gateway host with openclaw devices join-code, then run: ${pair}`,
+        ].join("\n"),
+      );
+      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.runNodeHost).not.toHaveBeenCalled();
+      expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+      expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+    },
+  );
+
   it("consumes an environment-managed target file before connecting", async () => {
     const root = tempDirs.make("openclaw-connect-target-");
     const targetFile = path.join(root, "setup-code");

@@ -15,6 +15,7 @@ import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-b
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { loadNodeHostConfig, type NodeHostGatewayConfig } from "../node-host/config.js";
+import { formatGatewayCandidateUrl } from "../node-host/gateway-candidate-connection.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,
   nodeHostGatewayMatchesUrl,
@@ -26,10 +27,12 @@ import { runNodeHost } from "../node-host/runner.js";
 import { isDevicePairingJoinCode } from "../pairing/join-code.js";
 import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatCliCommand } from "./command-format.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 import { addNodeCommandOptions } from "./node-cli/command-options.js";
 import { runNodeDaemonInstall } from "./node-cli/daemon.js";
 import { resolveNodePairGatewayPayload } from "./node-cli/gateway-options.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
 
 type ConnectCommandOptions = {
   service?: boolean;
@@ -141,10 +144,47 @@ function selectCloudflareAccessConfig(params: {
   );
 }
 
+/** Connect only redeems one-shot targets; a saved connection resumes through `openclaw node`. */
+function formatMissingTargetError(
+  opts: ConnectCommandOptions,
+  savedGateway: NodeHostGatewayConfig | undefined,
+): string {
+  const missing = "Connect target is required.";
+  // Provider-managed ephemeral nodes always replay their own setup code.
+  if (opts.ephemeral) {
+    return missing;
+  }
+  const command = (...parts: string[]) => formatCliCommand(parts.join(" "));
+  const sessionHostFlags = opts.sessionHost ? ["--session-host"] : [];
+  const hostFlags = [
+    ...(opts.displayName !== undefined ? ["--display-name", quoteCliArg(opts.displayName)] : []),
+    ...(opts.commands ? ["--commands", quoteCliArg(opts.commands.join(","))] : []),
+    ...(opts.allCommands ? ["--all-commands"] : []),
+  ];
+  const pair = `mint a join URL on the Gateway host with ${command("openclaw devices join-code")}, then run: ${command("openclaw connect <join-url>", ...(opts.service ? ["--service"] : []), ...sessionHostFlags, ...hostFlags)}`;
+  if (!savedGateway) {
+    return `${missing} To pair this machine, ${pair}`;
+  }
+  // Mirror the post-pairing steps of `connect --service [--session-host]`.
+  const reconnect = opts.service
+    ? [
+        ...(opts.sessionHost
+          ? [command("openclaw config set nodeHost.workerRuns.enabled true")]
+          : []),
+        command("openclaw node install --force", ...hostFlags),
+      ].join(", then ")
+    : command("openclaw node run", ...sessionHostFlags, ...hostFlags);
+  return [
+    `${missing} This machine has a saved Gateway connection (${formatGatewayCandidateUrl(savedGateway)}); join URLs and setup codes are single-use.`,
+    `To reconnect with it, run: ${reconnect}`,
+    `To pair again, ${pair}`,
+  ].join("\n");
+}
+
 async function resolveConnectTarget(
   target: string | undefined,
   targetFile: string | undefined,
-): Promise<string> {
+): Promise<string | undefined> {
   if (target && targetFile) {
     throw new Error("Provide the connect target or --target-file, not both.");
   }
@@ -153,7 +193,7 @@ async function resolveConnectTarget(
   }
   const filePath = targetFile?.trim();
   if (!filePath) {
-    throw new Error("Connect target is required.");
+    return undefined;
   }
   let buffer: Buffer;
   try {
@@ -191,6 +231,9 @@ async function runConnectCommand(
     throw new Error("--ephemeral cannot be combined with --service.");
   }
   const resolvedTarget = await resolveConnectTarget(target, opts.targetFile);
+  if (!resolvedTarget) {
+    throw new Error(formatMissingTargetError(opts, (await loadNodeHostConfig())?.gateway));
+  }
   const joinTarget = parseJoinTarget(resolvedTarget);
   const saved = await loadNodeHostConfig();
   const initialCloudflareAccess = joinTarget
