@@ -1,10 +1,17 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
   prepareRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
+import { clearFinishedSessionsForScopes } from "../agents/bash-process-registry.js";
+import { runExecProcess, type ExecProcessHandle } from "../agents/bash-tools.exec-runtime.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -48,6 +55,7 @@ import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-pol
 
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 const registry = createEmptyPluginRegistry();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   registrySnapshot = captureActivePluginRegistrySnapshot();
   setActivePluginRegistry(registry);
@@ -68,6 +76,15 @@ afterEach(() => {
 it("keeps unrelated identity reloads out of retained operator and delegated run authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const effectDir = tempDirs.make("openclaw-identity-scope-effects-");
+    const effectScript = path.join(effectDir, "effect.cjs");
+    await fs.writeFile(
+      effectScript,
+      'require("node:fs").writeFileSync(process.argv[2], "accepted effect");',
+    );
+    const processes: ExecProcessHandle[] = [];
+    const releaseEffects: Array<() => void> = [];
+    const pendingEffects: Promise<unknown>[] = [];
     const identity = "retained@example.test";
     const profile = ensureProfileForEmail(identity);
     const initialConfig: OpenClawConfig = {
@@ -211,6 +228,59 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
         context,
       });
       assert(delegated);
+      const prepareEffect = async (name: string, authority: typeof original.authority) => {
+        const entered = createDeferred();
+        const resume = createDeferred();
+        releaseEffects.push(() => resume.resolve());
+        const marker = path.join(effectDir, name);
+        const command = [process.execPath, effectScript, marker]
+          .map((arg) => JSON.stringify(arg))
+          .join(" ");
+        const outcome = withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:identity-scope-effect",
+            operatorAuthority: authority,
+          },
+          async () => {
+            const process = await runExecProcess({
+              command,
+              execCommand: command,
+              workdir: effectDir,
+              env: {},
+              usePty: false,
+              warnings: [],
+              maxOutput: 1000,
+              pendingMaxOutput: 1000,
+              notifyOnExit: false,
+              timeoutSec: null,
+              scopeKey: effectDir,
+              beforeSpawn: async () => {
+                entered.resolve();
+                await resume.promise;
+                return undefined;
+              },
+            });
+            processes.push(process);
+            expect(process.pid).toBeGreaterThan(0);
+            return await process.promise;
+          },
+        ).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        pendingEffects.push(outcome);
+        // Only pause the existing asynchronous prelaunch hook. The exec runtime,
+        // supervisor, native child launch, and filesystem effect remain real.
+        await Promise.race([
+          entered.promise,
+          outcome.then(() => {
+            throw new Error("exec settled before its prelaunch boundary");
+          }),
+        ]);
+        await expect(fs.readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+        return { marker, outcome, release: () => resume.resolve() };
+      };
       let revision = 0;
       const write = async (candidate: OpenClawConfig) => {
         const listener = fixture.ref.current;
@@ -229,9 +299,15 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
         await vi.advanceTimersByTimeAsync(0);
         await expect(application).resolves.toBe("applied");
       };
+      const allowedEffect = await prepareEffect("allowed.txt", original.authority);
       const unrelated = structuredClone(initialConfig);
       unrelated.gateway!.auth!.identityScopes!["other@example.test"] = ["operator.admin"];
       await write(unrelated);
+      allowedEffect.release();
+      await expect(allowedEffect.outcome).resolves.toMatchObject({
+        value: { status: "completed", exitCode: 0 },
+      });
+      expect(await fs.readFile(allowedEffect.marker, "utf8")).toBe("accepted effect");
       expect(original.authority.signal?.aborted).toBe(false);
       expect(delegated.authority.signal?.aborted).toBe(false);
       expect(original.authority.assertCurrent).not.toThrow();
@@ -252,11 +328,20 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
       expect(original.authority.assertCurrent).not.toThrow();
       await capture(); // The original connection must also admit subsequent requests.
       expect(captures).toHaveLength(2);
+      const revokedEffect = await prepareEffect("revoked.txt", delegated.authority);
       const removed = structuredClone(reordered);
       delete removed.gateway!.auth!.identityScopes![identity];
       await write(removed);
       // Restore before consuming either continuation: a committed revocation is irreversible.
       await write(initialConfig);
+      revokedEffect.release();
+      const denied = await revokedEffect.outcome;
+      expect(denied).toHaveProperty("error");
+      if ("error" in denied) {
+        expect(denied.error).toBeInstanceOf(Error);
+        expect(String(denied.error)).toMatch(/authority is no longer active/);
+      }
+      await expect(fs.readFile(revokedEffect.marker)).rejects.toMatchObject({ code: "ENOENT" });
       expect(original.authority.signal?.aborted).toBe(true);
       expect(delegated.authority.signal?.aborted).toBe(true);
       expect(original.authority.assertCurrent).toThrow(/authority is no longer active/);
@@ -264,6 +349,16 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
       expect(close).toHaveBeenCalledWith(4001, "gateway policy changed");
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
     } finally {
+      for (const release of releaseEffects) {
+        release();
+      }
+      for (const process of processes) {
+        if (!process.session.exited) {
+          process.kill();
+        }
+      }
+      await Promise.allSettled(pendingEffects);
+      clearFinishedSessionsForScopes([effectDir]);
       await reloader.stop();
       delegated?.release();
       for (const captured of captures) {
