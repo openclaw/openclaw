@@ -17,7 +17,7 @@ permissions:
   actions: read
   statuses: write
 
-# Use the event's trusted default-branch checkout in both jobs. An explicit SHA
+# Use the event's trusted default-branch checkout in resolver and review. A SHA
 # can be mistaken for fork code after a merge when it matches merge_commit_sha.
 # Sparse checkout also enables blobless fetches. PR contents come from the API,
 # so neither job needs the product source tree.
@@ -49,6 +49,7 @@ jobs:
     outputs:
       matrix: ${{ steps.event.outputs.matrix }}
       has-prs: ${{ steps.event.outputs.has-prs }}
+      truncated: ${{ steps.event.outputs.truncated }}
     steps:
       - name: Check out trusted workflow scripts
         id: checkout
@@ -102,6 +103,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/github/security-review-event.mjs
+
+  # A failed pass keeps the anchor. Reviewed heads now have fresh statuses, so
+  # the next scheduled pass can select the remaining backlog from the same window.
+  reconcile-backlog:
+    needs: [resolve, review]
+    if: ${{ always() && needs.resolve.outputs.truncated == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Keep the reconciliation window open
+        run: |
+          echo "::error::Reconciliation selected the per-pass maximum; failing this pass so the next scheduled pass continues from the same window."
+          exit 1
 
   review:
     needs: resolve

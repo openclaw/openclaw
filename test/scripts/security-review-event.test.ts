@@ -63,21 +63,21 @@ function evaluate(options: Options = {}) {
     [`${prefix}/actions/workflows/ci.yml`]: { body: { id: 456, path: run.path } },
     [`${prefix}/pulls/42`]: { body: { ...pullRequest, ...options.pullRequest } },
     [`${prefix}/commits/${head}/pulls?per_page=100&page=1`]: { body: [{ number: 42 }] },
-    [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: { body: [] },
+    [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
+      body:
+        options.eventName === "schedule"
+          ? [
+              {
+                ...recordedPullRequest(42),
+                description: "PR #42: Waiting for CI; review updates automatically",
+                created_at: "2026-01-01T23:30:00Z",
+              },
+            ]
+          : [],
+    },
     [scheduledRunsPath]: { body: { workflow_runs: [] } },
     [ciRunsPath]: {
       body: { total_count: 1, workflow_runs: [{ ...completedRun, ...options.run }] },
-    },
-    [`${prefix}/commits/${head}/status?per_page=100&page=1`]: {
-      body: {
-        statuses: [
-          {
-            ...recordedPullRequest(42),
-            description: "PR #42: Waiting for CI; review updates automatically",
-            created_at: "2026-01-01T23:30:00Z",
-          },
-        ],
-      },
     },
     ...options.responses,
   };
@@ -208,7 +208,7 @@ describe("automatic security review event resolution", () => {
     expect(result.published.every(({ hadOutput }) => !hadOutput)).toBe(true);
     expect(result.published.at(-1)?.body?.state).toBe("pending");
     expect(result.output).toBe(
-      `matrix={"include":[{"pr":42,"head":"${nextHead}"}]}\nhas-prs=true\n`,
+      `matrix={"include":[{"pr":42,"head":"${nextHead}"}]}\nhas-prs=true\ntruncated=false\n`,
     );
   });
 
@@ -229,7 +229,9 @@ describe("automatic security review event resolution", () => {
         matrix: { include: [{ pr: 42, head }] },
         error: "",
       });
-      expect(result.output).toBe(`matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\n`);
+      expect(result.output).toBe(
+        `matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\ntruncated=false\n`,
+      );
       expect(result.requests).toEqual([
         { path: `${prefix}/pulls/42`, method: "GET" },
         { path: `${prefix}/statuses/${head}`, method: "POST" },
@@ -584,8 +586,8 @@ describe("scheduled reconciliation", () => {
     });
     expect(result.status, result.error).toBe(0);
     expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
-    expect(result.requests.filter(({ path }) => path.includes("/status?"))).toEqual([
-      { path: `${prefix}/commits/${head}/status?per_page=100&page=1`, method: "GET" },
+    expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toEqual([
+      { path: `${prefix}/commits/${head}/statuses?per_page=100&page=1`, method: "GET" },
     ]);
   });
 
@@ -593,7 +595,9 @@ describe("scheduled reconciliation", () => {
     const result = evaluate({ eventName: "schedule" });
     expect(result.status, result.error).toBe(0);
     expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
-    expect(result.output).toBe(`matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\n`);
+    expect(result.output).toBe(
+      `matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\ntruncated=false\n`,
+    );
     expect(result.published).toMatchObject([
       {
         path: `${prefix}/statuses/${head}`,
@@ -612,6 +616,38 @@ describe("scheduled reconciliation", () => {
   });
 
   it.each([
+    { state: "pending", created_at: "2026-01-01T23:41:00Z" },
+    { state: "success", created_at: "2026-01-01T23:30:00Z" },
+  ])("ignores newer foreign successes before the newest Actions status: %j", (owned) => {
+    const result = evaluate({
+      eventName: "schedule",
+      responses: {
+        [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
+          body: [
+            {
+              ...recordedPullRequest(42),
+              state: "success",
+              created_at: "2026-01-01T23:45:00Z",
+              creator: { login: "foreign-bot[bot]", type: "Bot" },
+            },
+            {
+              ...recordedPullRequest(42),
+              state: "success",
+              created_at: "2026-01-01T23:44:00Z",
+              creator: { login: "github-actions[bot]", type: "User" },
+            },
+            { ...recordedPullRequest(42), ...owned },
+            { ...recordedPullRequest(42), state: "success", created_at: "2026-01-01T23:20:00Z" },
+          ],
+        },
+      },
+    });
+    expect(result.status, result.error).toBe(0);
+    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
+    expect(result.published).toHaveLength(1);
+  });
+
+  it.each([
     { state: "success", created_at: "2026-01-01T23:41:00Z" },
     { state: "failure", created_at: "2026-01-01T23:41:00Z" },
     { state: "error", created_at: "2026-01-01T23:41:00Z" },
@@ -620,8 +656,8 @@ describe("scheduled reconciliation", () => {
     const result = evaluate({
       eventName: "schedule",
       responses: {
-        [`${prefix}/commits/${head}/status?per_page=100&page=1`]: {
-          body: { statuses: [{ context: "OpenClaw/CI-Gate", ...status }] },
+        [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
+          body: [{ ...recordedPullRequest(42), context: "OpenClaw/CI-Gate", ...status }],
         },
       },
     });
@@ -652,22 +688,17 @@ describe("scheduled reconciliation", () => {
     const result = evaluate({
       eventName: "schedule",
       responses: {
-        [`${prefix}/commits/${head}/status?per_page=100&page=1`]: {
-          body: {
-            statuses: [
-              {
-                context: "openclaw/ci-gate",
-                ...status,
-              },
-            ],
-          },
+        [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
+          body: [{ ...recordedPullRequest(42), ...status }],
         },
       },
     });
     expect(result.status, result.error).toBe(0);
     expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
     expect(result.published).toHaveLength(1);
-    expect(result.output).toBe(`matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\n`);
+    expect(result.output).toBe(
+      `matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\ntruncated=false\n`,
+    );
   });
 
   it.each([
@@ -691,8 +722,8 @@ describe("scheduled reconciliation", () => {
     const result = evaluate({
       eventName: "schedule",
       responses: {
-        [`${prefix}/commits/${head}/status?per_page=100&page=1`]: {
-          body: { statuses: [{ context: "unrelated/status", state: "success" }] },
+        [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
+          body: [{ context: "unrelated/status", state: "success" }],
         },
       },
     });
@@ -704,7 +735,7 @@ describe("scheduled reconciliation", () => {
     {
       gate: "settled",
       statuses: [
-        { context: "openclaw/ci-gate", state: "success", created_at: completedRun.updated_at },
+        { ...recordedPullRequest(42), state: "success", created_at: completedRun.updated_at },
       ],
       selected: false,
     },
@@ -713,25 +744,25 @@ describe("scheduled reconciliation", () => {
     const result = evaluate({
       eventName: "schedule",
       responses: {
-        [`${prefix}/commits/${head}/status?per_page=100&page=1`]: {
-          body: {
-            statuses: Array.from({ length: 100 }, (_, index) => ({
-              context: `unrelated/status-${index}`,
-              state: "success",
-            })),
-          },
+        [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
+          body: Array.from({ length: 100 }, () => ({
+            ...recordedPullRequest(42),
+            state: "success",
+            created_at: "2026-01-01T23:45:00Z",
+            creator: { login: "foreign-bot[bot]", type: "Bot" },
+          })),
         },
-        [`${prefix}/commits/${head}/status?per_page=100&page=2`]: {
-          body: { statuses },
+        [`${prefix}/commits/${head}/statuses?per_page=100&page=2`]: {
+          body: statuses,
         },
       },
     });
     expect(result.status, result.error).toBe(0);
     expect(result.matrix).toEqual({ include: selected ? [{ pr: 42, head }] : [] });
     expect(result.published).toHaveLength(selected ? 1 : 0);
-    expect(result.requests.filter(({ path }) => path.includes("/status?"))).toEqual([
-      { path: `${prefix}/commits/${head}/status?per_page=100&page=1`, method: "GET" },
-      { path: `${prefix}/commits/${head}/status?per_page=100&page=2`, method: "GET" },
+    expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toEqual([
+      { path: `${prefix}/commits/${head}/statuses?per_page=100&page=1`, method: "GET" },
+      { path: `${prefix}/commits/${head}/statuses?per_page=100&page=2`, method: "GET" },
     ]);
   });
 
@@ -751,8 +782,8 @@ describe("scheduled reconciliation", () => {
       },
     });
     expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
-    expect(result.requests.filter(({ path }) => path.includes("/status?"))).toEqual([
-      { path: `${prefix}/commits/${head}/status?per_page=100&page=1`, method: "GET" },
+    expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toEqual([
+      { path: `${prefix}/commits/${head}/statuses?per_page=100&page=1`, method: "GET" },
     ]);
     expect(result.published).toHaveLength(1);
   });
@@ -768,13 +799,13 @@ describe("scheduled reconciliation", () => {
       [firstSlice, 800, 0],
       [secondSlice, 700, 800],
     ] as const) {
-      for (let page = 1; page <= count / 100; page += 1) {
+      for (let page = 1; page <= count / 100 + 1; page += 1) {
         const path = slice.replace(/&page=1$/u, `&page=${page}`);
         listingPaths.push(path);
         responses[path] = {
           body: {
             total_count: count,
-            workflow_runs: Array.from({ length: 100 }, (_, index) => ({
+            workflow_runs: Array.from({ length: page <= count / 100 ? 100 : 0 }, (_, index) => ({
               ...completedRun,
               id: offset + (page - 1) * 100 + index + 1,
               created_at: offset === 0 ? "2026-01-01T21:00:00Z" : "2026-01-01T23:00:00Z",
@@ -793,13 +824,15 @@ describe("scheduled reconciliation", () => {
   });
 
   it.each([
-    { total: 0, sizes: [0] },
-    { total: 200, sizes: [100, 100] },
-    { total: 201, sizes: [100, 100, 1] },
-    { total: 201, sizes: [100, 100, 0] },
+    { total: 0, sizes: [0], complete: true },
+    { total: 200, sizes: [100, 100, 0], complete: true },
+    { total: 201, sizes: [100, 100, 1], complete: true },
+    { total: 201, sizes: [100, 100, 0], complete: false },
+    { total: 150, sizes: [100, 100, 5], complete: true },
+    { total: 150, sizes: Array.from({ length: 10 }, () => 100), complete: false },
   ])(
-    "pages exactly the reported total $total and tolerates a shorter final page",
-    ({ total, sizes }) => {
+    "pages until short for total $total, sizes $sizes, complete $complete",
+    ({ total, sizes, complete }) => {
       const responses: Record<string, Reply> = {};
       const listingPaths = sizes.map((size, index) => {
         const path = ciRunsPath.replace(/&page=1$/u, `&page=${index + 1}`);
@@ -808,25 +841,42 @@ describe("scheduled reconciliation", () => {
             total_count: total,
             workflow_runs: Array.from({ length: size }, (_, runIndex) => ({
               ...completedRun,
-              // Duplicate IDs across pages still produce only one head evaluation.
-              id: runIndex + 1,
+              id: index * 100 + runIndex + 1,
             })),
           },
         };
         return path;
       });
       const result = evaluate({ eventName: "schedule", responses });
-      expect(result.status, result.error).toBe(0);
       expect(result.requests.filter(({ path }) => path.includes("/workflows/ci.yml/runs"))).toEqual(
         listingPaths.map((path) => ({ path, method: "GET" })),
       );
+      if (!complete) {
+        expect(result).toMatchObject({ status: 1, output: "", published: [] });
+        expect(result.error).toContain("covered window does not advance");
+        expect(result.matrix).toBeUndefined();
+        return;
+      }
+      expect(result.status, result.error).toBe(0);
       expect(result.matrix).toEqual({ include: total === 0 ? [] : [{ pr: 42, head }] });
-      expect(result.requests.filter(({ path }) => path.includes("/status?"))).toHaveLength(
+      expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toHaveLength(
         total === 0 ? 0 : 1,
       );
       expect(result.published).toHaveLength(total === 0 ? 0 : 1);
+      expect(result.output).toContain("truncated=false\n");
     },
   );
+
+  it("fails a leaf with fewer distinct run IDs than its reported total", () => {
+    const result = evaluate({
+      eventName: "schedule",
+      responses: {
+        [ciRunsPath]: { body: { total_count: 2, workflow_runs: [completedRun, completedRun] } },
+      },
+    });
+    expect(result).toMatchObject({ status: 1, output: "", published: [] });
+    expect(result.error).toContain("covered window does not advance");
+  });
 
   it("fails an overfull sub-ten-minute slice before status publication or matrix output", () => {
     const ends = [
@@ -896,7 +946,7 @@ describe("scheduled reconciliation", () => {
       });
       expect(result.status, result.error).toBe(0);
       expect(result.matrix).toEqual({ include: selected ? [{ pr: 42, head }] : [] });
-      expect(result.requests.some(({ path }) => path.includes("/status?"))).toBe(selected);
+      expect(result.requests.some(({ path }) => path.includes("/statuses?"))).toBe(selected);
     },
   );
 
@@ -908,12 +958,64 @@ describe("scheduled reconciliation", () => {
           eventName: "schedule",
           run: { updated_at },
           responses: {
-            [`${prefix}/commits/${head}/status?per_page=100&page=1`]: { body: { statuses: [] } },
+            [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: { body: [] },
           },
         }),
       ).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
     },
   );
+
+  it.each([99, 100, 101])("selects at most 100 of %s stale candidates, oldest first", (count) => {
+    const candidates = Array.from({ length: count }, (_, index) => ({
+      ...completedRun,
+      id: index + 1,
+      head_sha: (index + 1).toString(16).padStart(40, "0"),
+      updated_at: new Date(
+        Date.parse("2026-01-01T23:00:00Z") + Math.floor(index / 2) * 1000,
+      ).toISOString(),
+      pull_requests: [{ number: 1000 - index }],
+    }));
+    const responses: Record<string, Reply> = {};
+    const newestFirst = candidates.toReversed();
+    for (let page = 1; page <= Math.floor(count / 100) + 1; page += 1) {
+      responses[ciRunsPath.replace(/&page=1$/u, `&page=${page}`)] = {
+        body: {
+          total_count: count,
+          workflow_runs: newestFirst.slice((page - 1) * 100, page * 100),
+        },
+      };
+    }
+    for (const candidate of candidates) {
+      responses[`${prefix}/commits/${candidate.head_sha}/statuses?per_page=100&page=1`] = {
+        body: [],
+      };
+      responses[`${prefix}/pulls/${candidate.pull_requests[0]!.number}`] = {
+        body: {
+          ...pullRequest,
+          number: candidate.pull_requests[0]!.number,
+          head: { ...pullRequest.head, sha: candidate.head_sha },
+        },
+      };
+    }
+    const result = evaluate({ eventName: "schedule", responses });
+    const selected = candidates.slice(0, 100);
+    expect(result.status, result.error).toBe(0);
+    expect(result.matrix).toEqual({
+      include: selected.map((candidate) => ({
+        pr: candidate.pull_requests[0]!.number,
+        head: candidate.head_sha,
+      })),
+    });
+    expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toEqual(
+      selected.map((candidate) => ({
+        path: `${prefix}/commits/${candidate.head_sha}/statuses?per_page=100&page=1`,
+        method: "GET",
+      })),
+    );
+    expect(result.published).toHaveLength(selected.length);
+    expect(result.published.every(({ hadOutput }) => !hadOutput)).toBe(true);
+    expect(result.output).toContain(`truncated=${count > 100}\n`);
+  });
 
   it("uses the current PR head when multiple completed heads name the same PR", () => {
     const oldHead = "b".repeat(40);
@@ -926,7 +1028,7 @@ describe("scheduled reconciliation", () => {
             workflow_runs: [completedRun, { ...completedRun, id: 122, head_sha: oldHead }],
           },
         },
-        [`${prefix}/commits/${oldHead}/status?per_page=100&page=1`]: { body: { statuses: [] } },
+        [`${prefix}/commits/${oldHead}/statuses?per_page=100&page=1`]: { body: [] },
       },
     });
     expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });

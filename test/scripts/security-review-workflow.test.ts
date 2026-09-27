@@ -38,6 +38,8 @@ type Workflow = {
     string,
     {
       if?: string;
+      needs?: string | string[];
+      outputs?: Record<string, string>;
       permissions?: Record<string, string>;
       env?: Record<string, string>;
       concurrency?: { group: string; "cancel-in-progress": boolean };
@@ -171,7 +173,8 @@ describe("security review workflow trust boundaries", () => {
       OPENCLAW_SECURITY_REVIEW_PR_NUMBER: "${{ matrix.pr }}",
       OPENCLAW_SECURITY_REVIEW_HEAD_SHA: "${{ matrix.head }}",
     });
-    for (const [name, job] of Object.entries(workflow.jobs)) {
+    for (const name of ["resolve", "review"]) {
+      const job = workflow.jobs[name]!;
       const checkouts = job.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
       expect(checkouts).toHaveLength(2);
       expect(checkouts[1]?.with).toEqual({
@@ -251,7 +254,8 @@ describe("security review workflow trust boundaries", () => {
   ])(
     "bounds checkout recovery ($failures failures, cancelled=$cancelled)",
     ({ failures, attempts, jobFailed, cancelled }) => {
-      for (const job of Object.values(readWorkflow("security-review").jobs)) {
+      for (const name of ["resolve", "review"]) {
+        const job = readWorkflow("security-review").jobs[name]!;
         const steps: Record<string, { outcome: string }> = {};
         let failed = false;
         let executed = 0;
@@ -470,6 +474,29 @@ describe("security review workflow trust boundaries", () => {
       });
       expect(Boolean(result), JSON.stringify(event)).toBe(event.allowed);
     }
+  });
+
+  it("fails a truncated reconciliation after the selected reviews finish", () => {
+    const workflow = readWorkflow("security-review");
+    expect(workflow.jobs.resolve!.outputs?.truncated).toBe("${{ steps.event.outputs.truncated }}");
+    const backlog = workflow.jobs["reconcile-backlog"]!;
+    expect(backlog.needs).toEqual(["resolve", "review"]);
+    expect(backlog.if).toBe("${{ always() && needs.resolve.outputs.truncated == 'true' }}");
+    expect(backlog.permissions).toEqual({});
+    for (const truncated of ["true", "false", undefined]) {
+      expect(
+        runInNewContext(backlog.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
+          always: () => true,
+          needs: { resolve: { outputs: { truncated } } },
+        }),
+      ).toBe(truncated === "true");
+    }
+    const result = spawnSync("bash", ["-e", "-c", backlog.steps[0]!.run!], {
+      env: {},
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout).toContain("next scheduled pass continues from the same window");
   });
 
   it("limits autoscrub writes to PR events and always enforces after failures", () => {

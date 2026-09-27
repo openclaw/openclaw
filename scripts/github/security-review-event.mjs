@@ -19,6 +19,7 @@ const CREATION_MARGIN_MS = 3 * 60 * 60_000;
 const PAGE_SIZE = 100;
 const MAX_QUERY_RUNS = 1000;
 const MIN_SLICE_MS = 10 * 60_000;
+const MAX_SELECTED_HEADS = 100;
 
 function positiveInteger(value) {
   return Number.isSafeInteger(value) && value > 0;
@@ -129,8 +130,8 @@ async function reconcileCompletedRuns(api, prefix, repository, defaultBranch) {
       await readRange(midpoint + 1000, end);
       return;
     }
-    const pages = Math.max(1, Math.ceil(first.total_count / PAGE_SIZE));
-    for (let page = 1; page <= pages; page += 1) {
+    const rangeRunIds = new Set();
+    for (let page = 1; ; page += 1) {
       const response = page === 1 ? first : await api.request(`${path}&page=${page}`);
       if (!Array.isArray(response.workflow_runs)) {
         throw new Error("CI workflow response has no workflow run list.");
@@ -147,7 +148,21 @@ async function reconcileCompletedRuns(api, prefix, repository, defaultBranch) {
           throw new Error("CI completion does not match the repository's CI workflow.");
         }
         runsById.set(run.id, run);
+        rangeRunIds.add(run.id);
       }
+      if (response.workflow_runs.length < PAGE_SIZE) {
+        break;
+      }
+      if (page * PAGE_SIZE >= MAX_QUERY_RUNS) {
+        throw new Error(
+          "CI reconciliation read ten full pages in a creation range; the covered window does not advance because the listing may exceed GitHub's search limit.",
+        );
+      }
+    }
+    if (rangeRunIds.size < first.total_count) {
+      throw new Error(
+        "CI reconciliation listing contains fewer distinct runs than its reported total; the covered window does not advance.",
+      );
     }
   }
   await readRange(createdSince, now);
@@ -165,20 +180,31 @@ async function reconcileCompletedRuns(api, prefix, repository, defaultBranch) {
     }
   }
   const selected = new Map();
-  for (const run of runsByHead.values()) {
+  let truncated = false;
+  const candidates = [...runsByHead.values()].toSorted(
+    (left, right) => timestamp(left.updated_at) - timestamp(right.updated_at) || left.id - right.id,
+  );
+  for (const run of candidates) {
+    if (selected.size === MAX_SELECTED_HEADS) {
+      truncated = true;
+      break;
+    }
     let status;
     for (let page = 1; ; page += 1) {
-      const combined = await api.request(
-        `${prefix}/commits/${run.head_sha}/status?per_page=${PAGE_SIZE}&page=${page}`,
+      const statuses = await api.request(
+        `${prefix}/commits/${run.head_sha}/statuses?per_page=${PAGE_SIZE}&page=${page}`,
       );
-      if (!Array.isArray(combined.statuses)) {
+      if (!Array.isArray(statuses)) {
         throw new Error("Commit status response has no status list.");
       }
-      status = combined.statuses.find(
+      status = statuses.find(
         (entry) =>
-          typeof entry.context === "string" && entry.context.toLowerCase() === "openclaw/ci-gate",
+          typeof entry.context === "string" &&
+          entry.context.toLowerCase() === "openclaw/ci-gate" &&
+          entry.creator?.login === "github-actions[bot]" &&
+          entry.creator?.type === "Bot",
       );
-      if (status || combined.statuses.length < PAGE_SIZE) {
+      if (status || statuses.length < PAGE_SIZE) {
         break;
       }
     }
@@ -200,11 +226,18 @@ async function reconcileCompletedRuns(api, prefix, repository, defaultBranch) {
       defaultBranch,
     )) {
       if (!selected.has(number)) {
+        if (selected.size === MAX_SELECTED_HEADS) {
+          truncated = true;
+          break;
+        }
         selected.set(number, entry);
       }
     }
+    if (truncated) {
+      break;
+    }
   }
-  return [...selected.values()].toSorted((left, right) => left.pr - right.pr);
+  return { selected: [...selected.values()], truncated };
 }
 
 async function resolvePullRequests(api, event, eventName, repository) {
@@ -224,7 +257,7 @@ async function resolvePullRequests(api, event, eventName, repository) {
           (event.action !== "edited" ||
             parseApprovalCommands(event.changes?.body?.from).length === 0)))
     ) {
-      return [];
+      return { selected: [], truncated: false };
     }
     const number =
       eventName === "pull_request_target" ? event.pull_request?.number : event.issue?.number;
@@ -268,7 +301,10 @@ async function resolvePullRequests(api, event, eventName, repository) {
         }
       }
     }
-    return [...selected.values()].toSorted((left, right) => left.pr - right.pr);
+    return {
+      selected: [...selected.values()].toSorted((left, right) => left.pr - right.pr),
+      truncated: false,
+    };
   }
   if (eventName === "schedule") {
     return reconcileCompletedRuns(api, prefix, repository, defaultBranch);
@@ -297,10 +333,13 @@ async function resolvePullRequests(api, event, eventName, repository) {
   const exactHeadReleaseGate =
     run.event === "workflow_dispatch" && run.display_title === `CI release gate ${run.head_sha}`;
   if ((run.event !== "pull_request" && !exactHeadReleaseGate) || run.status !== "completed") {
-    return [];
+    return { selected: [], truncated: false };
   }
   const selected = await selectRunPullRequests(api, prefix, run, repository, defaultBranch);
-  return [...selected.values()].toSorted((left, right) => left.pr - right.pr);
+  return {
+    selected: [...selected.values()].toSorted((left, right) => left.pr - right.pr),
+    truncated: false,
+  };
 }
 
 async function main() {
@@ -317,7 +356,12 @@ async function main() {
   }
   const api = createGitHubApi(GITHUB_TOKEN, { userAgent: "openclaw-security-review-event" });
   const event = JSON.parse(await readFile(GITHUB_EVENT_PATH, "utf8"));
-  const selected = await resolvePullRequests(api, event, GITHUB_EVENT_NAME, GITHUB_REPOSITORY);
+  const { selected, truncated } = await resolvePullRequests(
+    api,
+    event,
+    GITHUB_EVENT_NAME,
+    GITHUB_REPOSITORY,
+  );
   const [owner, repo] = GITHUB_REPOSITORY.split("/");
   for (const entry of selected) {
     // Record every PR before concurrency can replace its pending review job.
@@ -336,7 +380,10 @@ async function main() {
   }
   const matrix = JSON.stringify({ include: selected });
   if (GITHUB_OUTPUT) {
-    await appendFile(GITHUB_OUTPUT, `matrix=${matrix}\nhas-prs=${selected.length > 0}\n`);
+    await appendFile(
+      GITHUB_OUTPUT,
+      `matrix=${matrix}\nhas-prs=${selected.length > 0}\ntruncated=${truncated}\n`,
+    );
   }
   console.log(matrix);
 }
