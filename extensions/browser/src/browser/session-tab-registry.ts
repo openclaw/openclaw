@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 /**
  * Session-owned browser tabs. Host-local durable ownership is canonical in
  * plugin SQLite; all other tabs remain process-local.
@@ -42,6 +43,18 @@ export {
 } from "./session-tab-tracking.js";
 
 type TrackedTab = VolatileTab | DurableTab;
+
+function readVolatileTabs(sessionKeys?: ReadonlySet<string>): Map<string, VolatileTab[]> {
+  const current = volatileTabsBySession();
+  const volatile = new Map<string, VolatileTab[]>();
+  for (const sessionKey of sessionKeys ?? current.keys()) {
+    const tabs = current.get(sessionKey);
+    if (tabs) {
+      volatile.set(sessionKey, Array.from(tabs.values()));
+    }
+  }
+  return volatile;
+}
 
 async function performVolatileCleanup(
   candidate: VolatileTab,
@@ -222,17 +235,27 @@ export async function closeTrackedBrowserTabsForSessions(
       runtime: input.authority?.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
     },
   };
+  const sessionKeys = new Set(
+    params.sessionKeys
+      .map((key) => normalizeOptionalLowercaseString(key))
+      .filter((key) => key !== undefined),
+  );
+  const volatile = readVolatileTabs(sessionKeys);
   return await withTrackedTabCleanup(params.authority, async () => {
     if (params.isCurrent?.() === false) {
       return 0;
     }
-    const { dashboardClosed, durable } = await prepareTrackedTabCleanup(params);
+    // Without durable state, preserve immediate dispatch of the captured registration.
+    const { dashboardClosed, durable } = params.authority.runtime
+      ? await prepareTrackedTabCleanup(params)
+      : { dashboardClosed: 0, durable: [] };
     if (!durable || !isCleanupCurrent(params)) {
       return dashboardClosed;
     }
     const tabs = selectTrackedTabsForSessions({
       durable,
-      sessionKeys: params.sessionKeys,
+      volatile,
+      sessionKeys,
     });
     return (
       dashboardClosed +
@@ -261,9 +284,13 @@ export async function sweepTrackedBrowserTabs(
       runtime: input.authority?.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
     },
   };
+  const volatile =
+    params.ordinaryCleanup === false ? [] : Array.from(readVolatileTabs().values()).flat();
   return await withTrackedTabCleanup(params.authority, async () => {
     const now = params.now ?? Date.now();
-    const { dashboardClosed, durable } = await prepareTrackedTabCleanup(params);
+    const { dashboardClosed, durable } = params.authority.runtime
+      ? await prepareTrackedTabCleanup(params)
+      : { dashboardClosed: 0, durable: [] };
     if (!durable || !isCleanupCurrent(params)) {
       return dashboardClosed;
     }
@@ -275,10 +302,6 @@ export async function sweepTrackedBrowserTabs(
           { ...params, now, cleanupKind: "lifecycle" },
         ))
       );
-    }
-    const volatile: VolatileTab[] = [];
-    for (const tabs of volatileTabsBySession().values()) {
-      volatile.push(...tabs.values());
     }
     return (
       dashboardClosed +

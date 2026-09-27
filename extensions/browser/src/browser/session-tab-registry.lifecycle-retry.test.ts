@@ -15,6 +15,66 @@ import { durableOwnership as ownership } from "./session-tab-registry.sqlite.tes
 describe("session tab lifecycle cleanup", () => {
   const { freshRegistry, openStore, installRuntime } = installSessionTabRegistrySqliteHarness();
 
+  it.each(["lifecycle", "sweep"] as const)(
+    "does not adopt a replacement volatile registration while %s cleanup prepares",
+    async (kind) => {
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      let holdRead = false;
+      await installRuntime((options) => {
+        const store = createPluginStateKeyedStoreForTests("browser", options);
+        return {
+          ...store,
+          withCurrent: (authority) => {
+            const bound = store.withCurrent!(authority);
+            return {
+              ...bound,
+              entries: async () => {
+                const rows = await bound.entries();
+                if (holdRead) {
+                  holdRead = false;
+                  entered.resolve();
+                  await release.promise;
+                }
+                return rows;
+              },
+            };
+          },
+        };
+      });
+      const registry = await freshRegistry(`replacement-during-${kind}-preparation`);
+      const tab = {
+        sessionKey: "agent:main:main",
+        targetId: "replaced-tab",
+        route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" } as const,
+      };
+      await registry.trackSessionBrowserTab({ ...tab, now: 1_000 });
+      const closeTab = vi.fn(async () => {});
+      const cleanup = () =>
+        kind === "lifecycle"
+          ? registry.closeTrackedBrowserTabsForSessions({
+              sessionKeys: [tab.sessionKey],
+              closeTab,
+            })
+          : registry.sweepTrackedBrowserTabs({ now: 2_000, idleMs: 1_000, closeTab });
+      holdRead = true;
+      const pending = cleanup();
+      try {
+        await entered.promise;
+        await registry.untrackSessionBrowserTab(tab);
+        await registry.trackSessionBrowserTab({ ...tab, now: 1_000 });
+        release.resolve();
+        await expect(pending).resolves.toBe(0);
+        expect(closeTab).not.toHaveBeenCalled();
+        await expect(cleanup()).resolves.toBe(1);
+        expect(closeTab).toHaveBeenCalledOnce();
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    },
+  );
+
   it.each(["successful", "failed"] as const)(
     "closes a durable tab after reopening with a %s initial store read",
     async (initialRead) => {
