@@ -282,6 +282,32 @@ describe("sessionsTailCommand", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])("rejects a missing explicit session with follow=%s", async (follow) => {
+    const runtime = createTestRuntime();
+    await writeSessionEntry();
+
+    await sessionsTailCommand(
+      { agent: "main", store: storePath, sessionKey: "agent:main:missing", follow },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Session not found: agent:main:missing. Run openclaw sessions list --all-agents --json to choose a valid key.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("reports an empty default selection without failing or following", async () => {
+    const runtime = createTestRuntime();
+
+    await sessionsTailCommand({ agent: "main", follow: true }, runtime);
+
+    expect(runtimeOutput(runtime)).toBe("No sessions found.");
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it.each(["explicit", "running", "latest", "acp"])(
     "selects %s sessions without decoding unrelated saved prompts",
     async (selection) => {

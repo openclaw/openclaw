@@ -233,6 +233,10 @@ A fully qualified `--session-key` selects its agent only when `--agent`, `--stor
 and `--all-agents` are absent. An explicitly empty or whitespace-only `--agent`
 is rejected instead of selecting an inferred agent.
 
+An explicit `--session-key` that matches no stored session exits non-zero with
+guidance for listing valid keys. Without a key, an empty selection prints
+`No sessions found.` and exits successfully, including with `--follow`.
+
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with
 `{...redacted...}`; tool results show status such as `ok`, `error`, or `done`;

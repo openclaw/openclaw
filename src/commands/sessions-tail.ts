@@ -7,6 +7,7 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -320,8 +321,15 @@ export async function sessionsTailCommand(
   }
   const selected = selectSessionsToTail(selections, opts.sessionKey);
   if (selected.length === 0) {
-    const suffix = opts.sessionKey ? ` for ${opts.sessionKey}` : "";
-    runtime.log(`No sessions found${suffix}.`);
+    const requestedKey = opts.sessionKey?.trim();
+    if (requestedKey) {
+      runtime.error(
+        `Session not found: ${requestedKey}. Run ${formatCliCommand("openclaw sessions list --all-agents --json")} to choose a valid key.`,
+      );
+      runtime.exit(1);
+    } else {
+      runtime.log("No sessions found.");
+    }
     return;
   }
 
