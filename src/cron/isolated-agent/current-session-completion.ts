@@ -1,5 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import {
   attachManagedOutgoingMediaToMessage,
   removeManagedOutgoingMediaBlocks,
@@ -38,7 +40,8 @@ export async function commitCurrentSessionCronCompletion(
   if (!sourceSessionKey) {
     return { ok: false, reason: "current cron delivery is missing its source session binding" };
   }
-  if (!params.sourceSessionGeneration) {
+  const sourceSessionGeneration = params.sourceSessionGeneration;
+  if (!sourceSessionGeneration) {
     return { ok: false, reason: "current cron delivery is missing its source session generation" };
   }
   const transcriptPayloads = buildDirectCronTranscriptMirrorPayloads(params.deliveryPayloads);
@@ -52,58 +55,79 @@ export async function commitCurrentSessionCronCompletion(
   let preparedContent: Record<string, unknown>[] | undefined;
   let appended = false;
   try {
-    const committed = await commitBackgroundResultToSession({
-      agentId: params.agentId,
-      sessionKey: sourceSessionKey,
-      expectedGeneration: params.sourceSessionGeneration,
-      text: completionText,
-      prepareDisplayContent: async () => {
-        const { assistantContent } = await buildAssistantReplyContent({
-          sessionKey: sourceSessionKey,
+    await params.deliveryAttemptFence?.beforeAttempt();
+    const committed = await withSessionTranscriptWriteAssertion(
+      {
+        agentId: params.agentId,
+        sessionKey: sourceSessionKey,
+        sessionId: sourceSessionGeneration.sessionId,
+        storePath: resolveSessionStorePathCore(params.cfgWithAgentDefaults.session?.store, {
           agentId: params.agentId,
-          // Enrich each payload before rendering so rich text, media order, and
-          // preparation notices all stay in the display builder's canonical flow.
-          payloads: transcriptPayloads.map((payload) =>
-            copyReplyPayloadMetadata(payload, {
-              ...payload,
-              text: resolveOutboundPayloadMirrorText(payload),
-            }),
-          ),
-          managedMediaLocalRoots: getAgentScopedMediaLocalRootsForSources({
-            cfg: params.cfgWithAgentDefaults,
-            agentId: params.agentId,
-            mediaSources: mirror.mediaUrls,
-          }),
-          includeSensitiveMedia: false,
-          onManagedMediaPrepareError: (message) => {
-            void logCronDeliveryWarn(
-              `[cron:${params.job.id}] current-session completion media embedding skipped: ${message}`,
-            );
+        }),
+      },
+      () => {
+        params.abortSignal?.throwIfAborted();
+        params.deliveryAttemptFence?.assertCurrent();
+      },
+      () =>
+        commitBackgroundResultToSession({
+          agentId: params.agentId,
+          sessionKey: sourceSessionKey,
+          expectedGeneration: sourceSessionGeneration,
+          text: completionText,
+          prepareDisplayContent: async () => {
+            const { assistantContent } = await buildAssistantReplyContent({
+              sessionKey: sourceSessionKey,
+              agentId: params.agentId,
+              // Enrich each payload before rendering so rich text, media order, and
+              // preparation notices all stay in the display builder's canonical flow.
+              payloads: transcriptPayloads.map((payload) =>
+                copyReplyPayloadMetadata(payload, {
+                  ...payload,
+                  text: resolveOutboundPayloadMirrorText(payload),
+                }),
+              ),
+              managedMediaLocalRoots: getAgentScopedMediaLocalRootsForSources({
+                cfg: params.cfgWithAgentDefaults,
+                agentId: params.agentId,
+                mediaSources: mirror.mediaUrls,
+              }),
+              includeSensitiveMedia: false,
+              onManagedMediaPrepareError: (message) => {
+                void logCronDeliveryWarn(
+                  `[cron:${params.job.id}] current-session completion media embedding skipped: ${message}`,
+                );
+              },
+            });
+            preparedContent = assistantContent;
+            return hasAssistantDisplayMediaContent(preparedContent) ? preparedContent : undefined;
           },
-        });
-        preparedContent = assistantContent;
-        return hasAssistantDisplayMediaContent(preparedContent) ? preparedContent : undefined;
-      },
-      idempotencyKey: `cron-current-completion:${runId}`,
-      provenance: { kind: "cron", jobId: params.job.id, runId },
-      config: params.cfgWithAgentDefaults,
-      signal: params.abortSignal,
-      onMessageCommitted: (result, acceptCompletion) => {
-        // Promote before publication; retries own the original committed blocks.
-        // Preserve committed media even when promotion or the later drain fails.
-        appended = result.appended;
-        const blocks = readAssistantDisplayContent(result.message);
-        if (hasManagedOutgoingAssistantContent(blocks)) {
-          acceptCompletion(async () => {
-            if (
-              !(await attachManagedOutgoingMediaToMessage({ messageId: result.messageId, blocks }))
-            ) {
-              throw new Error("Current-session completion media ownership could not be persisted");
+          idempotencyKey: `cron-current-completion:${runId}`,
+          provenance: { kind: "cron", jobId: params.job.id, runId },
+          config: params.cfgWithAgentDefaults,
+          signal: params.abortSignal,
+          onMessageCommitted: (result, acceptCompletion) => {
+            // Promote before publication; retries own the original committed blocks.
+            // Preserve committed media even when promotion or the later drain fails.
+            appended = result.appended;
+            const blocks = readAssistantDisplayContent(result.message);
+            if (hasManagedOutgoingAssistantContent(blocks)) {
+              acceptCompletion(async () => {
+                if (
+                  !(await attachManagedOutgoingMediaToMessage({
+                    messageId: result.messageId,
+                    blocks,
+                  }))
+                ) {
+                  throw new Error(
+                    "Current-session completion media ownership could not be persisted",
+                  );
+                }
+              });
             }
-          });
-        }
-      },
-    });
+          },
+        }),
+    );
     if (!committed.ok) {
       return committed;
     }

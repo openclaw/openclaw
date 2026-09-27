@@ -39,6 +39,7 @@ import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owne
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
+  captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptWriterFence,
   runWithOwnedSessionTranscriptWrite,
 } from "./transcript-write-context.js";
@@ -291,6 +292,11 @@ async function persistExpectedSessionTranscriptTurn(
   const { selectedSessionId, selectedLifecycleRevision, ...target } =
     preparedTarget ??
     (await prepareTranscriptTurnTarget({ ...scope, sessionId: expectedSessionId }, options.config));
+  const assertCurrent = captureOwnedTranscriptWriteAssertion({
+    ...target,
+    sessionKey: requestedSessionKey,
+  });
+  assertCurrent();
   const inheritedWriterFence = getOwnedSessionTranscriptWriterFence({
     sessionFile: target.sessionKey,
     sessionKey: target.sessionKey,
@@ -322,6 +328,12 @@ async function persistExpectedSessionTranscriptTurn(
         messages: options.messages.map((append) => ({
           ...append,
           message: attachSessionTranscriptRunId(append.message, options.runId),
+          shouldAppendInTransaction: (latestAssistantMessage) => {
+            assertCurrent();
+            const shouldAppend = append.shouldAppendInTransaction?.(latestAssistantMessage) ?? true;
+            assertCurrent();
+            return shouldAppend;
+          },
         })),
         onMessageCommitted: options.onMessageCommitted,
         sessionLifecyclePatch: options.sessionLifecyclePatch,

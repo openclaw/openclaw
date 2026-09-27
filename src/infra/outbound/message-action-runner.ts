@@ -15,7 +15,10 @@ import {
   appendReplyMediaFailures,
   getReplyPayloadMetadata,
 } from "../../auto-reply/reply-payload.js";
+import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPollCreationParams } from "../../poll-params.js";
@@ -88,6 +91,23 @@ function withMessageTargetPreparation<T>(
     assertOutboundHandoffCurrent(assertCurrent);
     throw error;
   });
+}
+
+function assertMessageDeliveryCurrent(input: MessageActionInput): void {
+  throwIfAborted(input.abortSignal);
+  input.assertDirectAdapterHandoff?.();
+  input.messageActionAuthorization?.scheduled?.assertCurrent();
+  input.messageActionAuthorization?.deliveryAttempt?.assertCurrent();
+}
+
+async function beforeMessageDeliveryAttempt(input: MessageActionInput): Promise<void> {
+  const deliveryAttempt = input.messageActionAuthorization?.deliveryAttempt;
+  if (!deliveryAttempt) {
+    return;
+  }
+  assertMessageDeliveryCurrent(input);
+  await deliveryAttempt.beforeAttempt();
+  assertMessageDeliveryCurrent(input);
 }
 
 async function handleBroadcastAction(
@@ -420,24 +440,45 @@ async function handleInternalSourceReplySendAction(
   const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
   let persistedIdempotencyKey: string | undefined;
   let persistedTranscriptOwner = false;
+  if (!dryRun) {
+    await beforeMessageDeliveryAttempt(input);
+  }
   if (!dryRun && input.sessionId) {
     const sessionKey = input.sourceReplySessionKey ?? input.sessionKey;
     if (!sessionKey) {
       throw new Error("Internal source reply requires a session key");
     }
     const { persistInternalSourceReply } = await loadInternalSourceReplyPersistence();
-    await persistInternalSourceReply({
-      cfg: input.cfg,
-      sessionKey,
-      expectedSessionId: input.sessionId,
-      agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
-      payload: sourceReplyPayload,
-      idempotencyKey,
-      runId: input.runId,
-      sourceReplyFinal: input.sourceReplyFinal,
-      toolCallId: input.sourceReplyToolCallId,
-      sourceTurnId: input.messageActionAuthorization?.toolContext?.currentSourceTurnId,
-    });
+    const persist = () =>
+      persistInternalSourceReply({
+        cfg: input.cfg,
+        sessionKey,
+        expectedSessionId: input.sessionId,
+        agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
+        payload: sourceReplyPayload,
+        idempotencyKey,
+        runId: input.runId,
+        sourceReplyFinal: input.sourceReplyFinal,
+        toolCallId: input.sourceReplyToolCallId,
+        sourceTurnId: input.messageActionAuthorization?.toolContext?.currentSourceTurnId,
+      });
+    if (
+      input.messageActionAuthorization?.scheduled ||
+      input.messageActionAuthorization?.deliveryAttempt
+    ) {
+      await withSessionTranscriptWriteAssertion(
+        {
+          agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
+          sessionKey,
+          sessionId: input.sessionId,
+          storePath: resolveSessionStorePathCore(input.cfg.session?.store, { agentId }),
+        },
+        () => assertMessageDeliveryCurrent(input),
+        persist,
+      );
+    } else {
+      await persist();
+    }
     persistedIdempotencyKey = idempotencyKey;
     persistedTranscriptOwner = true;
   }
@@ -656,6 +697,19 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
         },
         input.abortSignal,
       );
+      if (!context.dryRun && !isFencedProviderReadAction(action)) {
+        await beforeMessageDeliveryAttempt(context.input);
+        if (
+          context.input.messageActionAuthorization?.scheduled ||
+          context.input.messageActionAuthorization?.deliveryAttempt
+        ) {
+          const deliveryInput = context.input;
+          context.input = {
+            ...deliveryInput,
+            assertDirectAdapterHandoff: () => assertMessageDeliveryCurrent(deliveryInput),
+          };
+        }
+      }
       if (action === "send") {
         return executeMessageSend(context);
       }
