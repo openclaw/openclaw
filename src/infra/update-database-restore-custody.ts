@@ -44,6 +44,7 @@ export function acquireUpdateDatabaseRestoreCustody(paths: readonly string[]) {
       const errors: unknown[] = [];
       try {
         if (database.isTransaction) {
+          // sqlite-allow-raw -- Settle the retained native transaction before releasing custody.
           database.exec("ROLLBACK");
         }
       } catch (error) {
@@ -58,6 +59,7 @@ export function acquireUpdateDatabaseRestoreCustody(paths: readonly string[]) {
     });
     // EXCLUSIVE locking mode retains the main-file lock even between native
     // transactions. Unlike BEGIN IMMEDIATE alone, it excludes WAL readers too.
+    // sqlite-allow-raw -- Native EXCLUSIVE mode retains inode exclusion across journal settlement.
     database.exec(
       "PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; PRAGMA synchronous=FULL; BEGIN EXCLUSIVE",
     );
@@ -108,10 +110,15 @@ export function acquireUpdateDatabaseRestoreCustody(paths: readonly string[]) {
         // the native main-file lock. MEMORY is connection-local and this owner
         // performs no SQL data writes. Close can no longer unlink a new live
         // database's WAL/journal using the old connection's original pathname.
+        // sqlite-allow-raw -- End the transaction without releasing EXCLUSIVE connection custody.
         database.exec("ROLLBACK");
-        if (database.prepare("PRAGMA journal_mode=MEMORY").get()?.journal_mode !== "memory") {
+        if (
+          // sqlite-allow-raw -- Settle the old journal under custody before displacing its pathname.
+          database.prepare("PRAGMA journal_mode=MEMORY").get()?.journal_mode !== "memory"
+        ) {
           throw new Error("Database restore could not settle native journal custody: " + pathname);
         }
+        // sqlite-allow-raw -- Reenter native exclusion before displacement, without application writes.
         database.exec("BEGIN EXCLUSIVE");
         // EXCLUSIVE WAL uses heap coordination; an earlier process may have
         // left SHM bookkeeping that this connection never mapped. Retain it with

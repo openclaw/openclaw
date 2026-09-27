@@ -160,6 +160,7 @@ function readUpdateDatabaseImages(paths: readonly string[]): UpdateDatabaseGener
             { release: () => database.close() },
             "Database write image reader",
             () => {
+              // sqlite-allow-raw -- Connection-local read-only inspection policy, not application SQL.
               database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF");
               return runSqliteDeferredTransactionSync(database, () => {
                 const generation = readUpdateDatabaseImage(database);
