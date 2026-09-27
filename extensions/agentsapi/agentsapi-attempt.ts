@@ -290,7 +290,9 @@ export async function runAgentsApiAttempt(
           files: inputs.files,
           reasoning: {
             effort: reasoningEffort,
-            ...(params.reasoningLevel && params.reasoningLevel !== "off" ? { summary: "auto" } : {}),
+            ...(params.reasoningLevel && params.reasoningLevel !== "off"
+              ? { summary: "auto" }
+              : {}),
           },
         },
       );
