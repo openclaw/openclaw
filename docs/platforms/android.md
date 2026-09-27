@@ -433,15 +433,15 @@ The draft has its own full-width row above the attachment and voice/send control
 so larger text and narrow screens do not squeeze it between buttons. The empty
 hint stays on one line; drafts show up to six lines and scroll when space is limited.
 The composer has narrower side gutters than the transcript. **+**, model, and
-reasoning stay together on the left; the context ring, microphone, and Talk/send
+reasoning stay together on the left; the microphone and Talk/send
 stay on the right in one row. Controls remain 48dp tall; very short views use
 narrower icon buttons to make room for **Details** while retaining an editable line.
 The placeholder and typed text share the same alignment.
 
 Open **+** for a compact icon list with Camera, Gallery, Files, Location, and
-Permissions. The Permissions row shows the current access mode. The
-context ring remains directly accessible on narrow screens and opens context
-usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
+Permissions. The Permissions row shows the current access mode. Open the top-right
+**Chat actions** (⋮) menu to see the live Context usage ring. Choose **Context** to
+open context usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
 permission to change session settings. A reported model-call total remains visible
 when no cost breakdown is available. Missing usage is shown as unknown.
 Tap the model name to open a compact menu above the composer, search by model name,

@@ -203,6 +203,13 @@ remain unattributed. If authenticated user evidence promises a durable profile
 but profile resolution fails, the invoker is `unknown` rather than guessed from
 headers, device ids, connection ids, or credentials.
 
+Control UI `chat.send`, including queued replies and ACP turns, carries the
+original prepared attach facts into execution admission. Later profile changes
+or reconnects do not rewrite an admitted context. Collected replies retain
+attribution only when every source supplies equivalent attach facts; conflicting
+or missing evidence remains unknown. These facts do not grant sender or tool
+authority and do not create a channel-admission enforcement receipt.
+
 Each present context projects one run-admission receipt. Its outcome
 is `not-applicable`, its policy and grant references are empty, and its reason
 states that no identity-aware policy or grant evaluation was proven. This is

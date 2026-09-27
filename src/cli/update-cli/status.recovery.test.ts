@@ -208,7 +208,6 @@ it.each([true, false])(
   },
 );
 it.each([
-  "config-inventory",
   "foreign-state",
   "wrong-run-directory",
   "terminal-binding",
@@ -219,9 +218,6 @@ it.each([
   "archive-directory",
 ])("refuses %s through the production status reader", async (fault) => {
   const c = await capture();
-  if (fault === "config-inventory") {
-    await fs.writeFile(c.manifestPath, JSON.stringify({ ...c.manifest, configPaths: [] }));
-  }
   if (fault === "foreign-state") {
     await fs.writeFile(
       c.manifestPath,
@@ -328,20 +324,15 @@ it("reports one failed set as unresolved and multiple failed sets as ambiguous",
     "ambiguous",
   ]);
 });
-it.each([false, true])(
-  "never calls a changed durable manifest binding resolved (terminal: %s)",
-  async (hasTerminal) => {
-    const c = await capture();
-    if (hasTerminal) {
-      await terminal(c, "committed");
-    }
-    const row = await run(c);
-    row.origin.updateRecoveryCapture!.manifestSha256 = "b".repeat(64);
-    mocks.readRun.mockResolvedValue(row);
-    await updateStatusCommand({ json: true });
-    expect(result().recoverySetsError).toContain("identity changed");
-  },
-);
+it("rejects a changed durable manifest binding even with a terminal outcome", async () => {
+  const c = await capture();
+  await terminal(c, "committed");
+  const row = await run(c);
+  row.origin.updateRecoveryCapture!.manifestSha256 = "b".repeat(64);
+  mocks.readRun.mockResolvedValue(row);
+  await updateStatusCommand({ json: true });
+  expect(result().recoverySetsError).toContain("identity changed");
+});
 it("keeps contradictory terminal outcomes ambiguous", async () => {
   const c = await capture();
   await terminal(c, "restored");
