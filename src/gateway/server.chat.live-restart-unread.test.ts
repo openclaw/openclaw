@@ -110,8 +110,7 @@ it("LIVE: a terminal restart-safe admission marks the Control UI session unread"
     );
 
     const row = loadSessionEntry(target);
-    // eslint-disable-next-line no-console
-    console.log(
+    console.info(
       `LIVE_RESTART_UNREAD status=${String(row?.status)} claim=${String(row?.restartRecoveryDeliveryRunId)} unread=${deriveSessionUnread(row)} lastActivityAt=${String(row?.lastActivityAt)} lastInteractionAt=${String(row?.lastInteractionAt)} lastReadAt=${String(row?.lastReadAt)} createdAt=${String(row?.createdAt)}`,
     );
     // lastActivityAt is the #155690 gate: without controlUiVisible the terminal
