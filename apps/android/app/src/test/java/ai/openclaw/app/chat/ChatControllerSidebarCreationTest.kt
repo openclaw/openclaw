@@ -7,12 +7,14 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -20,7 +22,7 @@ class ChatControllerSidebarCreationTest {
   @Test
   fun sidebarCreationKeepsRootsIndependentAndChildrenLinkedForTheSelectedAgent() =
     runTest {
-      val parent = "agent:ops:dashboard:parent"
+      val parent = "agent:ops:main"
       for (creation in listOf(ChatSessionCreation.Independent, ChatSessionCreation.Child(parent))) {
         val (controller, requests) =
           chatControllerTestSetup {
@@ -36,6 +38,9 @@ class ChatControllerSidebarCreationTest {
         if (creation == ChatSessionCreation.Independent) {
           assertEquals(setOf("agentId"), params.keys)
         } else {
+          val key = params["key"]?.jsonPrimitive?.content.orEmpty()
+          assertTrue(key.startsWith("agent:ops:dashboard:"))
+          UUID.fromString(key.removePrefix("agent:ops:dashboard:"))
           assertEquals(JsonPrimitive(parent), params["parentSessionKey"])
           assertEquals(JsonPrimitive(false), params["succeedsParent"])
           assertEquals(JsonPrimitive(true), params["emitCommandHooks"])
