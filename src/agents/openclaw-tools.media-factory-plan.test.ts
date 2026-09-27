@@ -587,19 +587,46 @@ describe("optional media tool factory planning", () => {
     ).toBe(true);
   });
 
-  it("defers PDF model resolution from the tool-prep hot path", async () => {
+  it("defers PDF resolution and passes the active model at execution", async () => {
     const config: OpenClawConfig = {};
     installSnapshot(config, createImageAndPdfPlugins());
     const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
 
-    const tools = await createOpenClawToolsForTest({
-      config,
-      agentDir: "/tmp/openclaw-agent-main",
-      authProfileStore: createAuthStore(["anthropic"]),
-    });
+    for (const modelHasVision of [true, false]) {
+      const callCountBeforePrep = resolveSpy.mock.calls.length;
+      const tools = await createOpenClawToolsForTest({
+        config,
+        agentDir: "/tmp/openclaw-agent-main",
+        authProfileStore: createAuthStore(["openrouter"]),
+        modelProvider: "openrouter",
+        modelId: "deepseek/deepseek-v4.1-flash",
+        modelHasVision,
+      });
 
-    expect(tools.map((tool) => tool.name)).toContain("pdf");
-    expect(resolveSpy).not.toHaveBeenCalled();
+      const pdfTool = tools.find((tool) => tool.name === "pdf");
+      expect(pdfTool).toBeDefined();
+      expect(resolveSpy).toHaveBeenCalledTimes(callCountBeforePrep);
+
+      const execution = pdfTool?.execute("pdf-active-model-handoff", {
+        pdf: "ftp://example.com/active-model-handoff.pdf",
+      });
+      if (modelHasVision) {
+        await expect(execution).resolves.toMatchObject({
+          details: { error: "unsupported_pdf_reference" },
+        });
+      } else {
+        await expect(execution).rejects.toThrow("No PDF model configured.");
+      }
+      expect(resolveSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          activeModel: {
+            provider: "openrouter",
+            model: "deepseek/deepseek-v4.1-flash",
+            supportsImages: modelHasVision,
+          },
+        }),
+      );
+    }
   });
 
   it("keeps enabled external manifest capability providers on the factory path", () => {
