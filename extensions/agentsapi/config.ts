@@ -8,7 +8,7 @@ export const agentsApiConfigSchema = z.strictObject({
     .array(
       z
         .string()
-        .regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/)
+        .regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/)
         .refine(
           (directory) =>
             !directory
