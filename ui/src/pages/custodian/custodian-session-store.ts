@@ -311,15 +311,16 @@ export class CustodianSessionStore {
   }
 
   dismissChannelOnboardingNudge(): void {
-    nudgeActions.dismissChannelOnboardingNudge(this, () => this.context?.replace("custodian"));
+    this.channelOnboardingNudgeClosed = true;
+    this.emit();
+    this.context?.replace("custodian");
   }
 
   openChannelsFromOnboarding(): void {
-    nudgeActions.openChannelsFromOnboarding(
-      this,
-      () => this.revokeNavigationAuthority(),
-      () => this.context?.navigate("channels"),
-    );
+    this.channelOnboardingNudgeClosed = true;
+    this.revokeNavigationAuthority();
+    this.emit();
+    this.context?.navigate("channels");
   }
 
   async dismissQuestion(message: CustodianMessage): Promise<void> {

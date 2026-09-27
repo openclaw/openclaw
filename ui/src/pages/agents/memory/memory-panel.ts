@@ -44,18 +44,10 @@ import {
   renderDreaming,
   resetWikiPreview,
   type DreamingViewState,
+  type WikiPagePreview,
 } from "./view.ts";
 
 registerDreamingEnglish();
-
-type WikiPagePreview = {
-  title: string;
-  path: string;
-  content: string;
-  totalLines?: number;
-  truncated?: boolean;
-  updatedAt?: string;
-};
 
 type DreamingTaskScope = {
   gateway: ApplicationGateway;
@@ -63,16 +55,13 @@ type DreamingTaskScope = {
   state: DreamingState;
 };
 
-function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
-  return formatTimeMs(nextRunAtMs, { hour: "numeric", minute: "2-digit" }, "") || null;
-}
-
 function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): string | null {
   const nextRunAtMs = Object.values(status?.phases ?? {})
-    .filter((phase) => phase.enabled && typeof phase.nextRunAtMs === "number")
-    .map((phase) => phase.nextRunAtMs as number)
+    .flatMap((phase) =>
+      phase.enabled && typeof phase.nextRunAtMs === "number" ? [phase.nextRunAtMs] : [],
+    )
     .toSorted((a, b) => a - b)[0];
-  return nextRunAtMs === undefined ? null : formatDreamNextCycle(nextRunAtMs);
+  return formatTimeMs(nextRunAtMs, { hour: "numeric", minute: "2-digit" }, "") || null;
 }
 
 function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
@@ -200,7 +189,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   ) {
     const clientChanged = this.dreaming.client !== snapshot.client;
     const connectionChanged = this.dreaming.connected !== (snapshot.phase === "connected");
-    const becameConnected = snapshot.phase === "connected" && !this.dreaming.connected;
     const replaceState = sourceBind === "replacement" || clientChanged || connectionChanged;
     if (replaceState) {
       this.dreaming = this.createGatewayState(snapshot);
@@ -212,11 +200,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       this.dreaming.hello = snapshot.hello;
       this.dreaming.applySessionKey = snapshot.sessionKey;
     }
-    if (
-      snapshot.phase === "connected" &&
-      this.selectedAgentId &&
-      (replaceState || becameConnected)
-    ) {
+    if (snapshot.phase === "connected" && this.selectedAgentId && replaceState) {
       void this.loadAll();
     }
     this.requestUpdate();

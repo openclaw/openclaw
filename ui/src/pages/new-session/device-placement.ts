@@ -142,12 +142,10 @@ export function projectDevicePlacements(
   const subtitles = disambiguate(devices, (device) => device.label, [
     (device) => device.deviceId.slice(0, 8),
   ]);
-  const projected: DevicePlacementOption[] = [];
-  for (const [index, device] of devices.entries()) {
+  return devices.map((device, index) => {
     const subtitle = subtitles[index];
-    projected.push(subtitle ? { ...device, subtitle } : device);
-  }
-  return projected;
+    return subtitle ? { ...device, subtitle } : device;
+  });
 }
 
 export function resolveAutomaticDevicePlacementDisabledReason(

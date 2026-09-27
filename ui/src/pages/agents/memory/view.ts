@@ -83,6 +83,15 @@ type DreamingPhaseInfo = {
   nextRunAtMs?: number;
 };
 
+export type WikiPagePreview = {
+  title: string;
+  path: string;
+  content: string;
+  totalLines?: number;
+  truncated?: boolean;
+  updatedAt?: string;
+};
+
 type DreamingProps = {
   access: {
     canOpenConfig: boolean;
@@ -126,14 +135,7 @@ type DreamingProps = {
   onRefreshImports: () => void;
   onRefreshWikiOverview: () => void;
   onOpenConfig: () => void;
-  onOpenWikiPage: (lookup: string) => Promise<{
-    title: string;
-    path: string;
-    content: string;
-    totalLines?: number;
-    truncated?: boolean;
-    updatedAt?: string;
-  } | null>;
+  onOpenWikiPage: (lookup: string) => Promise<WikiPagePreview | null>;
   onBackfillDiary: () => void;
   onCopyDreamingArchivePath: () => void;
   onDedupeDreamDiary: () => void;

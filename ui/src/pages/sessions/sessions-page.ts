@@ -675,9 +675,7 @@ class SessionsPage extends OpenClawLightDomElement {
         return;
       }
     }
-    this.sessionMutationPending = true;
-    let mutationError: string | null = null;
-    try {
+    await this.runSessionMutation(scope, async () => {
       const request = async () => {
         const result = await scope.sessions.deleteMany(requests);
         if (rows.length === 1 && result.errors.length > 0) {
@@ -700,10 +698,7 @@ class SessionsPage extends OpenClawLightDomElement {
               request,
             })
           : await request();
-      if (!this.isRequestScopeCurrent(scope)) {
-        return;
-      }
-      if (!result) {
+      if (!this.isRequestScopeCurrent(scope) || !result) {
         return;
       }
       if (result.preservedWorktrees.length > 0) {
@@ -746,23 +741,9 @@ class SessionsPage extends OpenClawLightDomElement {
       }
       await this.refreshSessionList(scope);
       if (result.errors.length > 0) {
-        mutationError = result.errors
-          .map(({ error }) => formatBatchSessionRemovalError(error))
-          .join("; ");
+        return result.errors.map(({ error }) => formatBatchSessionRemovalError(error)).join("; ");
       }
-    } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        mutationError = formatUiError(error);
-      }
-    } finally {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.sessionMutationPending = false;
-        this.adoptCurrentListSnapshot();
-        if (mutationError) {
-          this.error = mutationError;
-        }
-      }
-    }
+    });
   }
 
   private async deleteAllArchived() {
@@ -862,9 +843,7 @@ class SessionsPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    this.sessionMutationPending = true;
-    let mutationError: string | null = null;
-    try {
+    await this.runSessionMutation(scope, async () => {
       const agentId = parseAgentSessionKey(row.key)?.agentId;
       await requestCloudWorkerStop(
         scope.client,
@@ -877,6 +856,17 @@ class SessionsPage extends OpenClawLightDomElement {
       if (this.isRequestScopeCurrent(scope)) {
         await this.refreshSessionList(scope);
       }
+    });
+  }
+
+  private async runSessionMutation(
+    scope: SessionsPageRequestScope,
+    mutate: () => Promise<string | void>,
+  ) {
+    this.sessionMutationPending = true;
+    let mutationError: string | void = undefined;
+    try {
+      mutationError = await mutate();
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
         mutationError = formatUiError(error);
@@ -949,21 +939,29 @@ class SessionsPage extends OpenClawLightDomElement {
   /** Only one dialog is open at a time; disconnect closes whichever it is. */
   private dialogLifecycle: AbortController | null = null;
 
-  private async withDialogLifecycle<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    // A second open while one is live must not take ownership. showInputDialog
-    // drops the reentrant request anyway, and if it installed its own controller
-    // it would clear this field on the way out, leaving the dialog that is
-    // actually on screen with nothing for disconnect to abort.
+  private async openInputDialog(
+    options: () => Parameters<InputDialogOpener>[0],
+  ): Promise<string | null> {
+    // Reentrant opens share the live controller but must not retire it on completion.
     const active = this.dialogLifecycle;
-    if (active) {
-      return run(active.signal);
-    }
-    const lifecycle = new AbortController();
+    const lifecycle = active ?? new AbortController();
     this.dialogLifecycle = lifecycle;
     try {
-      return await run(lifecycle.signal);
+      const showInputDialog = await this.loadInputDialog();
+      if (!showInputDialog) {
+        return null;
+      }
+      const resolved = options();
+      return (
+        (await showInputDialog({
+          ...resolved,
+          signal: resolved.signal
+            ? AbortSignal.any([lifecycle.signal, resolved.signal])
+            : lifecycle.signal,
+        })) ?? null
+      );
     } finally {
-      if (this.dialogLifecycle === lifecycle) {
+      if (!active && this.dialogLifecycle === lifecycle) {
         this.dialogLifecycle = null;
       }
     }
@@ -987,17 +985,13 @@ class SessionsPage extends OpenClawLightDomElement {
       this.error = t("common.refresh");
       return;
     }
-    await this.withDialogLifecycle(async (signal) => {
-      const showInputDialog = await this.loadInputDialog();
-      await showInputDialog?.({
-        signal,
-        title: t("sessionsView.newGroupTitle"),
-        label: t("sessionsView.newGroupPrompt"),
-        submitLabel: t("sessionsView.newGroupCreate"),
-        requireValue: true,
-        submit: (name) => this.writeNewCategory(name, session),
-      });
-    });
+    await this.openInputDialog(() => ({
+      title: t("sessionsView.newGroupTitle"),
+      label: t("sessionsView.newGroupPrompt"),
+      submitLabel: t("sessionsView.newGroupCreate"),
+      requireValue: true,
+      submit: (name) => this.writeNewCategory(name, session),
+    }));
   }
 
   /**
@@ -1043,16 +1037,11 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     const initialValue = resolveSessionRenameValue(row);
     const requestSignal = this.pluginActionLifetime.signal;
-    const value = await this.withDialogLifecycle(async (signal) => {
-      const showInputDialog = await this.loadInputDialog();
-      return (
-        (await showInputDialog?.({
-          signal: AbortSignal.any([signal, requestSignal]),
-          title: t("sessionsView.renameSessionPrompt"),
-          defaultValue: initialValue,
-        })) ?? null
-      );
-    });
+    const value = await this.openInputDialog(() => ({
+      signal: requestSignal,
+      title: t("sessionsView.renameSessionPrompt"),
+      defaultValue: initialValue,
+    }));
     if (value === null || !this.isRequestScopeCurrent(scope)) {
       return;
     }
