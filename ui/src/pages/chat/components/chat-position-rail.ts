@@ -407,10 +407,12 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.followActive = true;
       this.scheduleLayout();
     }
-    const visibleOrder = [...visibleMessageIds].toSorted(
-      (left, right) =>
-        this.positionMessageIndexes.get(left)! - this.positionMessageIndexes.get(right)!,
-    );
+    const visibleOrder = [...visibleMessageIds]
+      .filter((id) => this.positionMessageIndexes.has(id))
+      .toSorted(
+        (left, right) =>
+          this.positionMessageIndexes.get(left)! - this.positionMessageIndexes.get(right)!,
+      );
     // A continuation, folded tool row, or virtualized jump still belongs to a transcript position.
     const activeMessageId = this.session?.activeMessageId(
       visibleOrder.length ? visibleOrder : this.positionMessageIds,

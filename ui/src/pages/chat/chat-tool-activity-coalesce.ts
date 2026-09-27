@@ -46,7 +46,10 @@ type Invocation = {
 type PreparedSource = Omit<Source, "item" | "index"> & {
   projections: Omit<Projection, "source">[];
 };
-const preparedSources = new WeakMap<object, PreparedSource | null>();
+const preparedSources = new WeakMap<
+  object,
+  { content: unknown; blocks?: unknown[]; prepared: PreparedSource | null }
+>();
 
 function resultBlock(card: ToolCard): Record<string, unknown> {
   return {
@@ -70,11 +73,24 @@ function readProjections(item: MessageItem, index: number): Projection[] {
   if (!message) {
     return [];
   }
-  let prepared = preparedSources.get(message);
-  if (prepared === undefined) {
-    prepared = prepareSource(message);
-    preparedSources.set(message, prepared);
+  const content = message.content;
+  let cached = preparedSources.get(message);
+  const cachedBlocks = cached?.blocks;
+  if (
+    !cached ||
+    cached.content !== content ||
+    (Array.isArray(content) &&
+      (cachedBlocks?.length !== content.length ||
+        content.some((block, index) => block !== cachedBlocks?.[index])))
+  ) {
+    cached = {
+      content,
+      blocks: Array.isArray(content) ? [...content] : undefined,
+      prepared: prepareSource(message),
+    };
+    preparedSources.set(message, cached);
   }
+  const prepared = cached.prepared;
   if (!prepared) {
     return [];
   }
@@ -85,7 +101,8 @@ function readProjections(item: MessageItem, index: number): Projection[] {
 }
 
 function prepareSource(originalMessage: Record<string, unknown>): PreparedSource | null {
-  let message = originalMessage;
+  // Card extraction has its own identity cache; replaced content needs a fresh snapshot too.
+  let message = { ...originalMessage };
   let content = Array.isArray(message.content) ? message.content : [];
   const isToolBlock = (block: unknown) => {
     const type = asRecord(block)?.type;
