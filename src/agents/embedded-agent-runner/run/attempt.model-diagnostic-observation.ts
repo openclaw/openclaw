@@ -1,6 +1,10 @@
+import type { ProviderAcceptance } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { DiagnosticModelCallContent } from "../../../infra/diagnostic-events.js";
+import type {
+  DiagnosticEventInput,
+  DiagnosticModelCallContent,
+} from "../../../infra/diagnostic-events.js";
 import {
   cloneDiagnosticContentValue,
   type DiagnosticModelContentCapturePolicy,
@@ -8,12 +12,36 @@ import {
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../../../infra/diagnostic-semantic-run-progress.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.js";
-import type {
-  ModelCallEventBase,
-  ModelCallObservationState,
-  ModelCallPromptStats,
-  ModelCallUsage,
-} from "./attempt.model-diagnostic-lifecycle.js";
+
+export type ModelCallEventBase = Omit<
+  Extract<DiagnosticEventInput, { type: "model.call.started" }>,
+  "type"
+>;
+type ModelCallPromptStats = NonNullable<
+  Extract<DiagnosticEventInput, { type: "model.call.started" }>["promptStats"]
+>;
+type ModelCallUsage = NonNullable<
+  Extract<DiagnosticEventInput, { type: "model.call.completed" }>["usage"]
+>;
+export type ModelCallObservationState = {
+  requestPayloadBytes?: number;
+  providerAcceptanceKind?: ProviderAcceptance["kind"];
+  responseStatus?: number;
+  responseStreamBytes: number;
+  /** Observed provider callbacks/chunks, not recovery or visible-content progress. */
+  lastProviderActivityAtMs?: number;
+  terminalReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
+  timeToFirstByteMs?: number;
+  modelContent?: DiagnosticModelCallContent;
+  outputMessages?: unknown[];
+  usage?: ModelCallUsage;
+  contentCapture?: DiagnosticModelContentCapturePolicy;
+  semanticProgressEmitted?: boolean;
+  terminalEventEmitted?: boolean;
+  terminalError?: Error;
+  terminalSucceeded?: boolean;
+  suppressPluginHooks?: boolean;
+};
 
 const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 

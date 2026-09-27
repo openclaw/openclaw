@@ -1,5 +1,5 @@
 import { modelRequestBodyState } from "@openclaw/ai/internal/openai";
-import { withProviderAcceptanceObserver, type ProviderAcceptance } from "@openclaw/ai/transports";
+import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -37,7 +37,11 @@ import type {
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
 import type { StreamFn } from "../../runtime/index.js";
-import type { createModelObserver } from "./attempt.model-diagnostic-observation.js";
+import type {
+  createModelObserver,
+  ModelCallEventBase,
+  ModelCallObservationState,
+} from "./attempt.model-diagnostic-observation.js";
 
 export type ModelCallDiagnosticContext = {
   config?: OpenClawConfig;
@@ -63,10 +67,6 @@ export type ModelCallDiagnosticContext = {
   requestTimeoutMs?: number;
 };
 
-export type ModelCallEventBase = Omit<
-  Extract<DiagnosticEventInput, { type: "model.call.started" }>,
-  "type"
->;
 type ModelCallErrorFields = Pick<
   Extract<DiagnosticEventInput, { type: "model.call.error" }>,
   "errorCategory" | "failureKind" | "memory" | "upstreamRequestIdHash"
@@ -75,31 +75,6 @@ type ModelCallEndedHookFields = Omit<
   PluginHookModelCallEndedEvent,
   keyof PluginHookModelCallStartedEvent
 >;
-export type ModelCallPromptStats = NonNullable<
-  Extract<DiagnosticEventInput, { type: "model.call.started" }>["promptStats"]
->;
-export type ModelCallUsage = NonNullable<
-  Extract<DiagnosticEventInput, { type: "model.call.completed" }>["usage"]
->;
-export type ModelCallObservationState = {
-  requestPayloadBytes?: number;
-  providerAcceptanceKind?: ProviderAcceptance["kind"];
-  responseStatus?: number;
-  responseStreamBytes: number;
-  /** Observed provider callbacks/chunks, not recovery or visible-content progress. */
-  lastProviderActivityAtMs?: number;
-  terminalReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
-  timeToFirstByteMs?: number;
-  modelContent?: DiagnosticModelCallContent;
-  outputMessages?: unknown[];
-  usage?: ModelCallUsage;
-  contentCapture?: DiagnosticModelContentCapturePolicy;
-  semanticProgressEmitted?: boolean;
-  terminalEventEmitted?: boolean;
-  terminalError?: Error;
-  terminalSucceeded?: boolean;
-  suppressPluginHooks?: boolean;
-};
 type ModelCallObserver = ReturnType<typeof createModelObserver>;
 
 const TRACEPARENT_HEADER_NAME = "traceparent";
